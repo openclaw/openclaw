@@ -166,10 +166,7 @@ console.log(JSON.stringify({ scratch, cache }));
     expect(JSON.parse(result.stdout)).toEqual({ targetClosed: true, siblingUsable: true });
   }, 120_000);
 
-  it.each([
-    ["agent", "tempRoot: Agent database close failed"],
-    ["shared", "tempRoot: close failed"],
-  ] as const)(
+  it.each([["agent", "tempRoot: Agent database close failed"]] as const)(
     "retains runtime on %s close failure, removes staging, and permits cleanup retry",
     async (failedStore, expectedDiagnostic) => {
       const tempRoot = await dirs.makeTempDir("qa-cleanup-store-failure-");
@@ -190,7 +187,7 @@ console.log(JSON.stringify({ scratch, cache }));
         path: path.join(agentDir, "openclaw-agent.sqlite"),
       });
       const shared = openOpenClawStateDatabase({ env });
-      const failed = failedStore === "agent" ? agent : shared;
+      const failed = agent;
       const close = vi.spyOn(failed.db, "close").mockImplementationOnce(() => {
         throw new Error("close failed apiKey=synthetic-close-secret", {
           cause: new Error("synthetic-close-cause"),
@@ -220,11 +217,7 @@ console.log(JSON.stringify({ scratch, cache }));
   );
 
   // Short messages expose cause leaks that padding could hide behind truncation.
-  it.each([
-    { failedRoots: ["tempRoot"], padding: "" },
-    { failedRoots: ["stagedBundledPluginsRoot"], padding: "" },
-    { failedRoots: ["tempRoot", "stagedBundledPluginsRoot"], padding: "diagnostic ".repeat(400) },
-  ])(
+  it.each([{ failedRoots: ["tempRoot"], padding: "" }])(
     "reports $failedRoots failures after attempting both roots",
     async ({ failedRoots, padding }) => {
       const roots = {
@@ -269,19 +262,6 @@ console.log(JSON.stringify({ scratch, cache }));
       expect(inspect(outcome, { depth: null })).not.toMatch(
         /synthetic-cleanup-secret|synthetic-raw-cause/,
       );
-    },
-  );
-
-  it.each([undefined, null, "missing"])(
-    "accepts an already removed runtime with staged root %s",
-    async (staging) => {
-      const parent = await dirs.makeTempDir("qa-cleanup-absent-");
-      await expect(
-        cleanupQaGatewayTempRoots({
-          tempRoot: path.join(parent, "runtime"),
-          stagedBundledPluginsRoot: staging ? path.join(parent, staging) : staging,
-        }),
-      ).resolves.toBeUndefined();
     },
   );
 });

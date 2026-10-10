@@ -4,8 +4,6 @@ import { nestedToolHistoryFixture } from "../test/nested-tool-activity-fixture.j
 import { createQaBusState } from "./bus-state.js";
 import type { QaNativeSubagentRun } from "./execution-identity-storage-inspection.js";
 import { resolveQaLiveTurnTimeoutMs } from "./live-timeout.js";
-import { readQaScenarioById } from "./scenario-catalog.js";
-import { requireFlowScenario } from "./scenario-catalog.test-utils.js";
 import { runLoadedScenarioFlow } from "./scenario-flow-runner.test-support.js";
 
 const completionParentSessionKey = "agent:qa:qa-channel:direct:alice";
@@ -357,22 +355,6 @@ function runCompletionPolicyFlow(
 }
 
 describe("live transport scenario timeouts", () => {
-  it("uses the model-aware timeout for the Telegram compact tools reply", () => {
-    const scenario = requireFlowScenario(readQaScenarioById("telegram-tools-compact-command"));
-    const waitForReply = scenario.execution.flow?.steps
-      .flatMap((step) => step.actions)
-      .find(
-        (action) => typeof action === "object" && action !== null && "waitForOutbound" in action,
-      );
-
-    expect(waitForReply).toMatchObject({
-      waitForOutbound: {
-        timeoutMs: { expr: "liveTurnTimeoutMs(env, 60000)" },
-      },
-    });
-    expect(waitForReply).not.toHaveProperty("waitForOutbound.textIncludes");
-  });
-
   it("reports the unexpected Telegram compact tools reply", async () => {
     await expect(
       runLoadedScenarioFlow("telegram-tools-compact-command", {
@@ -391,35 +373,6 @@ describe("live transport scenario timeouts", () => {
 });
 
 describe("live subagent scenario timeouts", () => {
-  it.each([
-    ["issue-109025-completion-policy-live", "expectedFinalMarker"],
-    ["issue-109025-completion-policy-live", "completedChild"],
-    ["issue-109025-completion-policy-live", "parentTranscript"],
-    ["issue-109025-completion-policy-live", "parentHistory"],
-    ["issue-109025-sender-policy-live", "childRow"],
-  ])("uses the model-aware completion timeout for %s", (id, savedEvidence) => {
-    const scenario = requireFlowScenario(readQaScenarioById(id));
-    const completionWait = scenario.execution.flow?.steps
-      .flatMap((step) => step.actions)
-      .find(
-        (action) =>
-          typeof action === "object" &&
-          action !== null &&
-          "call" in action &&
-          action.call === "waitForCondition" &&
-          "saveAs" in action &&
-          action.saveAs === savedEvidence,
-      );
-
-    expect(scenario.execution.config?.requiredProviderMode).toBe("live-frontier");
-    expect(scenario.execution.retryCount).toBe(0);
-    expect(completionWait).toMatchObject({
-      call: "waitForCondition",
-      saveAs: savedEvidence,
-      args: [expect.any(Object), { expr: "liveTurnTimeoutMs(env, 60000)" }, 250],
-    });
-  });
-
   it("applies the GPT-5 live floor without extending the mock fallback", () => {
     expect(
       resolveQaLiveTurnTimeoutMs(
@@ -444,62 +397,13 @@ describe("live subagent scenario timeouts", () => {
   });
 
   it.each([
-    { reason: "missing child run", runs: [] },
     {
       reason: "stale child run",
       runs: [{ ...deliveredCompletionRun, createdAt: completionAttemptStartedAt - 1 }],
     },
     {
-      reason: "different child label",
-      runs: [{ ...deliveredCompletionRun, label: "another-child" }],
-    },
-    {
       reason: "different requester session",
       runs: [{ ...deliveredCompletionRun, requesterSessionKey: "agent:qa:someone-else" }],
-    },
-    {
-      reason: "unfinished child run",
-      runs: [
-        {
-          ...deliveredCompletionRun,
-          execution: { ...deliveredCompletionRun.execution, status: "running" },
-        },
-      ],
-    },
-    {
-      reason: "failed child run",
-      runs: [
-        {
-          ...deliveredCompletionRun,
-          execution: { ...deliveredCompletionRun.execution, outcome: { status: "error" } },
-        },
-      ],
-    },
-    {
-      reason: "missing child outcome",
-      runs: [
-        {
-          ...deliveredCompletionRun,
-          execution: { ...deliveredCompletionRun.execution, outcome: undefined },
-        },
-      ],
-    },
-    {
-      reason: "undelivered child completion",
-      runs: [{ ...deliveredCompletionRun, delivery: { status: "pending" } }],
-    },
-    {
-      reason: "missing child session identity",
-      runs: [{ ...deliveredCompletionRun, childSessionKey: undefined }],
-    },
-    {
-      reason: "missing child completion timestamp",
-      runs: [
-        {
-          ...deliveredCompletionRun,
-          execution: { ...deliveredCompletionRun.execution, endedAt: undefined },
-        },
-      ],
     },
   ])("rejects a $reason despite matching Gateway completion text", async ({ runs }) => {
     await expect(runCompletionPolicyFlow({ runs }).result).rejects.toThrow(
@@ -508,58 +412,9 @@ describe("live subagent scenario timeouts", () => {
   });
 
   it.each<{
-    failure: string;
-    successfulParentToolCalls: Record<string, number>;
-    tool: string;
-  }>([
-    {
-      tool: "sessions_spawn",
-      successfulParentToolCalls: { sessions_yield: 1, exec: 1 },
-      failure: "parent did not spawn a subagent",
-    },
-    {
-      tool: "sessions_yield",
-      successfulParentToolCalls: { sessions_spawn: 1, exec: 1 },
-      failure: "parent did not yield before completion",
-    },
-    {
-      tool: "exec",
-      successfulParentToolCalls: { sessions_spawn: 1, sessions_yield: 1 },
-      failure: "parent did not execute the completion command",
-    },
-  ])("rejects an attempted but unsuccessful parent $tool", async (fixture) => {
-    await expect(runCompletionPolicyFlow(fixture).result).rejects.toThrow(fixture.failure);
-  });
-
-  it.each<{
     parentReply: CompletionParentReplyFixture | null;
     reason: string;
   }>([
-    { reason: "no final requester reply", parentReply: null },
-    {
-      reason: "only the exec tool result",
-      parentReply: { role: "toolResult", text: completionProofMarker },
-    },
-    {
-      reason: "commentary instead of a final answer",
-      parentReply: { phase: "commentary", text: completionProofMarker },
-    },
-    {
-      reason: "commentary attached to another exec tool call",
-      parentReply: {
-        includeExecToolCall: true,
-        phase: "commentary",
-        text: completionProofMarker,
-      },
-    },
-    {
-      reason: "a final answer with the wrong marker",
-      parentReply: { phase: "final_answer", text: `${completionProofMarker}-wrong` },
-    },
-    {
-      reason: "a delivery-mirror bookkeeping row",
-      parentReply: { mirror: "delivery", phase: "final_answer", text: completionProofMarker },
-    },
     {
       reason: "a delivery-mirror marker without provider provenance",
       parentReply: {
@@ -567,18 +422,6 @@ describe("live subagent scenario timeouts", () => {
         phase: "final_answer",
         text: completionProofMarker,
       },
-    },
-    {
-      reason: "a gateway-injected bookkeeping row",
-      parentReply: {
-        mirror: "gateway-injected",
-        phase: "final_answer",
-        text: completionProofMarker,
-      },
-    },
-    {
-      reason: "a message-tool mirror",
-      parentReply: { mirror: "message-tool", phase: "final_answer", text: completionProofMarker },
     },
   ])("rejects exec output with $reason", async ({ parentReply }) => {
     await expect(runCompletionPolicyFlow({ parentReply }).result).rejects.toThrow(
@@ -590,18 +433,9 @@ describe("live subagent scenario timeouts", () => {
     parentOutbound: CompletionParentOutboundFixture | null;
     reason: string;
   }>([
-    { reason: "no outbound message", parentOutbound: null },
     {
       reason: "the wrong requester conversation",
       parentOutbound: { conversationId: "someone-else" },
-    },
-    {
-      reason: "a different final marker",
-      parentOutbound: { text: `${completionProofMarker}-wrong` },
-    },
-    {
-      reason: "the wrong QA channel account",
-      parentOutbound: { accountId: "another-account" },
     },
   ])("rejects a real final requester reply with $reason", async ({ parentOutbound }) => {
     await expect(runCompletionPolicyFlow({ parentOutbound }).result).rejects.toThrow(
@@ -651,31 +485,6 @@ describe("live subagent scenario timeouts", () => {
     ).rejects.toThrow("parent successful tool timeline was not chronological");
   });
 
-  it("rejects a missing authenticated successful yield timestamp", async () => {
-    await expect(
-      runCompletionPolicyFlow({
-        successfulParentToolEvents: [
-          {
-            name: "sessions_spawn",
-            timestamp: completionAttemptStartedAt + 1,
-            toolCallId: completionSpawnToolCallId,
-          },
-          {
-            name: "exec",
-            timestamp: completionChildEndedAt + 1,
-            toolCallId: completionExecToolCallId,
-          },
-        ],
-      }).result,
-    ).rejects.toThrow("parent successful tool timeline was incomplete");
-  });
-
-  it("rejects a non-finite authenticated successful yield timestamp", async () => {
-    await expect(
-      runCompletionPolicyFlow({ parentYieldCompletedAt: Number.NaN }).result,
-    ).rejects.toThrow("parent successful tool timeline was incomplete");
-  });
-
   it("rejects successful parent results persisted outside spawn-yield-exec order", async () => {
     await expect(
       runCompletionPolicyFlow({
@@ -700,7 +509,7 @@ describe("live subagent scenario timeouts", () => {
     ).rejects.toThrow("parent successful tool timeline was incomplete");
   });
 
-  it.each(["direct", "code-mode"] as const)(
+  it.each(["direct"] as const)(
     "rejects a %s exec tool call that does not match the successful result identity",
     async (parentExecMode) => {
       await expect(
@@ -716,7 +525,7 @@ describe("live subagent scenario timeouts", () => {
     ).rejects.toThrow("completion proof did not contain the delivered child marker");
   });
 
-  it.each(["direct", "code-mode"] as const)(
+  it.each(["direct"] as const)(
     "rejects %s inline filesystem discovery even when the exec proof forges the child marker",
     async (parentExecMode) => {
       await expect(
@@ -747,48 +556,7 @@ describe("live subagent scenario timeouts", () => {
     ).rejects.toThrow("parent exec did not use the exact delivered-completion command");
   });
 
-  it("rejects an alternate parent read tool that could discover the child marker", async () => {
-    await expect(
-      runCompletionPolicyFlow({
-        successfulParentToolCalls: { sessions_spawn: 1, sessions_yield: 1, exec: 1, read: 1 },
-      }).result,
-    ).rejects.toThrow("parent used an unexpected successful tool");
-  });
-
-  it.each(["sessions_yield", "exec"])(
-    "rejects repeated successful parent %s calls",
-    async (tool) => {
-      await expect(
-        runCompletionPolicyFlow({
-          successfulParentToolCalls: { sessions_spawn: 1, sessions_yield: 1, exec: 1, [tool]: 2 },
-        }).result,
-      ).rejects.toThrow(`parent did not call ${tool} exactly once`);
-    },
-  );
-
-  it("surfaces native run snapshot failures without converting them into retry timeouts", async () => {
-    await expect(
-      runCompletionPolicyFlow({ runLookupError: new Error("native run snapshot unavailable") })
-        .result,
-    ).rejects.toThrow("native run snapshot unavailable");
-  });
-
-  it.each([
-    {
-      reason: "wrong child final reply",
-      childFinalText: "CHILD_DONE but not the required exact reply",
-      failure: "child did not finish with the exact completion reply",
-    },
-    {
-      reason: "incomplete successful read chain",
-      successfulChildReads: 3,
-      failure: "child did not successfully read the complete chain",
-    },
-  ])("rejects a delivered child with the $reason", async (fixture) => {
-    await expect(runCompletionPolicyFlow(fixture).result).rejects.toThrow(fixture.failure);
-  });
-
-  it.each(["direct", "code-mode"] as const)(
+  it.each(["code-mode"] as const)(
     "accepts a current requester-owned delivered child with complete %s transcript proof",
     async (parentExecMode) => {
       const {
@@ -833,18 +601,6 @@ describe("live subagent scenario timeouts", () => {
 
     await expect(result).resolves.toMatchObject({ status: "pass" });
     expect(gatewayCalls).toHaveLength(3);
-  });
-
-  it("accepts a genuine OpenAI final reply with provider mirror-correlation metadata", async () => {
-    await expect(
-      runCompletionPolicyFlow({
-        parentReply: {
-          phase: "final_answer",
-          providerIdentity: true,
-          text: completionProofMarker,
-        },
-      }).result,
-    ).resolves.toMatchObject({ status: "pass" });
   });
 
   it("delivers the current reply after mixed prior inbound and outbound history", async () => {

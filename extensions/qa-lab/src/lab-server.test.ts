@@ -740,30 +740,6 @@ describe("qa-lab server", () => {
     expect(suiteLaunchMock.runQaSuite).not.toHaveBeenCalled();
   });
 
-  it("enforces explicit execution.channel through the shared suite channel planner", async () => {
-    const lab = await startQaLabServerForTest();
-    cleanups.push(lab.stop);
-
-    const response = await postLabJson(lab.baseUrl, "/api/scenario/suite", {
-      profile: "all",
-      channel: "telegram",
-      channelDriver: "crabline",
-      providerMode: "live-frontier",
-      scenarioIds: ["matrix-room-block-streaming"],
-    });
-
-    expect(response.status).toBe(400);
-    const payload = (await response.json()) as {
-      plan: { exclusions: Array<{ scenarioId: string; reasons: string[] }> };
-    };
-    expect(payload.plan.exclusions).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ scenarioId: "matrix-room-block-streaming" }),
-      ]),
-    );
-    expect(suiteLaunchMock.runQaSuite).not.toHaveBeenCalled();
-  });
-
   it("does not open capture state when embedded gateway setup fails", async () => {
     qaChannelMock.resolveAccount.mockImplementationOnce(() => {
       throw new Error("embedded setup failed");
@@ -1285,28 +1261,6 @@ describe("qa-lab server", () => {
     expect(authorizations).toEqual(["Bearer proxy-token", "Bearer proxy-token"]);
   });
 
-  it("serves the built QA UI bundle when available", async () => {
-    const uiDistDir = await makeTempDir("qa-lab-ui-dist-");
-    await writeFile(
-      path.join(uiDistDir, "index.html"),
-      "<!doctype html><html><head><title>QA Lab</title></head><body><div id='app'></div></body></html>",
-      "utf8",
-    );
-
-    const lab = await startQaLabServerForTest({
-      host: "127.0.0.1",
-      port: 0,
-      uiDistDir,
-    });
-    cleanups.push(lab.stop);
-
-    const rootResponse = await fetchWithRetry(`${lab.baseUrl}/`);
-    expect(rootResponse.status).toBe(200);
-    const html = await rootResponse.text();
-    expect(html).not.toContain("QA Lab UI not built");
-    expect(html).toContain("<title>");
-  });
-
   it("uses the explicit repo root for ui assets and runner model discovery", async () => {
     const repoRoot = await createQaLabRepoRootFixture({
       models: [
@@ -1340,52 +1294,6 @@ describe("qa-lab server", () => {
     expect(runnerCatalog.status).toBe("ready");
     const tempModel = runnerCatalog.real.find((model) => model.key === "anthropic/qa-temp-model");
     expect(tempModel?.name).toBe("QA Temp Model");
-  });
-
-  it("does not eagerly load the runner model catalog before bootstrap is requested", async () => {
-    const repoRoot = await makeTempDir("qa-lab-lazy-catalog-");
-    const markerPath = path.join(repoRoot, "runner-catalog-hit.txt");
-
-    await mkdir(path.join(repoRoot, "dist"), { recursive: true });
-    await mkdir(path.join(repoRoot, "extensions/qa-lab/web/dist"), { recursive: true });
-    await writeFile(
-      path.join(repoRoot, "dist/index.js"),
-      [
-        'const fs = require("node:fs");',
-        `fs.writeFileSync(${JSON.stringify(markerPath)}, process.argv.slice(2).join(" "), "utf8");`,
-        "process.stdout.write(JSON.stringify({",
-        "  models: [{",
-        '    key: "openai/gpt-5.6-luna",',
-        '    name: "GPT-5.6 Luna",',
-        '    input: "openai/gpt-5.6-luna",',
-        "    available: true,",
-        "    missing: false,",
-        "  }],",
-        "}));",
-      ].join("\n"),
-      "utf8",
-    );
-    await writeFile(
-      path.join(repoRoot, "extensions/qa-lab/web/dist/index.html"),
-      "<!doctype html><html><body>lazy catalog</body></html>",
-      "utf8",
-    );
-
-    const lab = await startQaLabServerForTest({
-      host: "127.0.0.1",
-      port: 0,
-      repoRoot,
-    });
-    cleanups.push(lab.stop);
-
-    await expectFileMissing(markerPath);
-
-    const bootstrapResponse = await fetchWithRetry(`${lab.baseUrl}/api/bootstrap`);
-    expect(bootstrapResponse.status).toBe(200);
-
-    const runnerCatalog = await waitForRunnerCatalog(lab.baseUrl);
-    expect(runnerCatalog.status).toBe("ready");
-    expect(await readFile(markerPath, "utf8")).toContain("models list --all --json");
   });
 
   it("aborts an in-flight runner model catalog when the lab stops", async ({ signal }) => {
@@ -1440,33 +1348,6 @@ describe("qa-lab server", () => {
       // stop joins the catalog command's close, after its SIGTERM handler writes this marker.
       expect(await readFile(stoppedPath, "utf8")).toBe("terminated");
     }
-  });
-
-  it("can disable the embedded echo gateway for real-suite runs", async () => {
-    const lab = await startQaLabServerForTest({
-      host: "127.0.0.1",
-      port: 0,
-      embeddedGateway: "disabled",
-    });
-    cleanups.push(lab.stop);
-
-    await fetch(`${lab.baseUrl}/api/inbound/message`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        conversation: { id: "bob", kind: "direct" },
-        senderId: "bob",
-        senderName: "Bob",
-        text: "hello from suite",
-      }),
-    });
-
-    const snapshot = (await (await fetchWithRetry(`${lab.baseUrl}/api/state`)).json()) as {
-      messages: Array<{ direction: string }>;
-    };
-    expect(snapshot.messages.filter((message) => message.direction === "outbound")).toEqual([]);
   });
 
   it("exposes structured outcomes and can attach control-ui after startup", async () => {

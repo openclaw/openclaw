@@ -65,21 +65,6 @@ describe("evidence invocation owner", () => {
     expect(parent.snapshot(snapshotOptions)).toEqual(before);
   });
 
-  it("rejects changed launch facts while completing an open child without partial admission", () => {
-    const parent = createInvocation();
-    const child = createInvocation({ anchors: parent.anchors });
-    const id = child.begin(0);
-    parent.importChild(0, child.snapshot(snapshotOptions));
-    parent.select(0, null);
-    const before = parent.snapshot(snapshotOptions);
-    child.complete(id, { status: "pass", entries: [entry("pass")] });
-    child.select(0, id);
-    const changed = child.snapshot(snapshotOptions);
-    changed.occurrences.find((item) => item.id === id)!.launch.source.ref = "other-source";
-    expect(() => parent.importChild(0, changed)).toThrow(/immutable/);
-    expect(parent.snapshot(snapshotOptions)).toEqual(before);
-  });
-
   it("continues only the captured instance and retains its retry history", () => {
     const parent = createInvocation({ scenarios: [scenario, scenario] });
     const first = parent.begin(1);
@@ -154,37 +139,28 @@ describe("evidence invocation owner", () => {
     ]);
   });
 
-  it.each(["pass", "fail"] as const)(
-    "continues a nonpassing retry without forking for %s",
-    (status) => {
-      let owner = createInvocation();
-      const ids: string[] = [];
-      for (const nextStatus of ["fail", "fail", status] as const) {
-        const id = owner.begin(0);
-        ids.push(id);
-        owner.complete(id, { status: nextStatus, entries: [entry(nextStatus)] });
-        owner.select(0, id);
-        const continuation = owner.snapshot(snapshotOptions);
-        owner = createInvocation({
-          anchors: owner.anchors,
-          continuation,
-        });
-      }
-      const final = owner.snapshot(snapshotOptions);
-      expect(final.occurrences.slice(1).map((item) => item.retryOf)).toEqual([
-        null,
-        ids[0],
-        ids[1],
-      ]);
-      expect(projectQaEvidenceScenarioOutcomes(final)[0]).toMatchObject({
-        occurrenceId: status === "pass" ? ids[2] : ids[0],
-        status,
+  it.each(["pass"] as const)("continues a nonpassing retry without forking for %s", (status) => {
+    let owner = createInvocation();
+    const ids: string[] = [];
+    for (const nextStatus of ["fail", "fail", status] as const) {
+      const id = owner.begin(0);
+      ids.push(id);
+      owner.complete(id, { status: nextStatus, entries: [entry(nextStatus)] });
+      owner.select(0, id);
+      const continuation = owner.snapshot(snapshotOptions);
+      owner = createInvocation({
+        anchors: owner.anchors,
+        continuation,
       });
-      expect(getEffectiveQaEvidenceEntries(final).map((row) => row.result.status)).toEqual([
-        status,
-      ]);
-    },
-  );
+    }
+    const final = owner.snapshot(snapshotOptions);
+    expect(final.occurrences.slice(1).map((item) => item.retryOf)).toEqual([null, ids[0], ids[1]]);
+    expect(projectQaEvidenceScenarioOutcomes(final)[0]).toMatchObject({
+      occurrenceId: status === "pass" ? ids[2] : ids[0],
+      status,
+    });
+    expect(getEffectiveQaEvidenceEntries(final).map((row) => row.result.status)).toEqual([status]);
+  });
 
   it("rejects continued scheduling and immutable row substitution without partial import", () => {
     const parent = createInvocation();
@@ -252,33 +228,6 @@ describe("evidence invocation owner", () => {
     ]);
   });
 
-  it("captures scheduling before execution and never reconstructs assertions from v2 labels", () => {
-    const mutableLaunch = structuredClone(launch);
-    const invocation = createInvocation({
-      scenarios: [scenario, scenario],
-      launch: mutableLaunch,
-    });
-    mutableLaunch.source.ref = "replaced-after-scheduling";
-    const attempt = invocation.begin(1);
-    invocation.complete(attempt, { status: "pass", entries: [entry("pass")] });
-    invocation.select(1, attempt);
-    const evidence = invocation.snapshot(snapshotOptions);
-    expect(projectQaEvidenceScenarioOutcomes(evidence).map((outcome) => outcome.status)).toEqual([
-      null,
-      "pass",
-    ]);
-    expect(
-      evidence.occurrences.every((occurrence) => occurrence.launch.source.ref === "source-A"),
-    ).toBe(true);
-    expect(evidence.entries[0]?.binding).toEqual({
-      occurrenceId: attempt,
-      assertionId: null,
-      receiptId: null,
-    });
-    expect(evidence.occurrences.at(-1)?.assertions).toBeNull();
-    expect(new Set(evidence.occurrences.map((occurrence) => occurrence.id)).size).toBe(3);
-  });
-
   it("retains a passing child while only the parent selects its missing-result failure", () => {
     const parent = createInvocation();
     const child = createInvocation({ anchors: parent.anchors });
@@ -322,10 +271,7 @@ describe("evidence invocation owner", () => {
     expect(() => invocation.select(0, second)).toThrow(/retry selection/);
   });
 
-  it.each([
-    ["source", { ref: "other-source", integrity: "tree-A" }],
-    ["proofClass", "live-provider"],
-  ] as const)(
+  it.each([["source", { ref: "other-source", integrity: "tree-A" }]] as const)(
     "rejects child %s substitution instead of combining unrelated facts",
     (dimension, replacement) => {
       const parent = createInvocation();

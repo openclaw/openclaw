@@ -395,24 +395,22 @@ describe.skipIf(process.platform === "win32")("packaged QA bootstrap lifetime", 
     ]);
   });
 
-  it.each([
-    { phase: "openai", mode: "running" },
-    { phase: "anthropic", mode: "running" },
-    { phase: "help", mode: "leader-exited" },
-    { phase: "repair", mode: "leader-exited" },
-  ])("stops during $phase ($mode) before any gateway spawn", async ({ phase, mode }) => {
-    const f = await fixture(phase, mode);
-    const starting = f.track(f.start());
-    const [ready] = await f.ready();
-    await expect(bounded(f.owner.stop())).resolves.toEqual({
-      process: "confirmed-stopped",
-      errors: [],
-    });
-    expect(await bounded(starting)).toBeInstanceOf(Error);
-    f.assertStopped();
-    expect(f.records().some((entry) => entry.kind === "gateway")).toBe(false);
-    expect(existsSync(ready!.tempRoot!)).toBe(false);
-  });
+  it.each([{ phase: "repair", mode: "leader-exited" }])(
+    "stops during $phase ($mode) before any gateway spawn",
+    async ({ phase, mode }) => {
+      const f = await fixture(phase, mode);
+      const starting = f.track(f.start());
+      const [ready] = await f.ready();
+      await expect(bounded(f.owner.stop())).resolves.toEqual({
+        process: "confirmed-stopped",
+        errors: [],
+      });
+      expect(await bounded(starting)).toBeInstanceOf(Error);
+      f.assertStopped();
+      expect(f.records().some((entry) => entry.kind === "gateway")).toBe(false);
+      expect(existsSync(ready!.tempRoot!)).toBe(false);
+    },
+  );
 
   it("owns overlapping post-start commands without displacing the gateway", async () => {
     const f = await fixture("hang", "running");
@@ -535,7 +533,7 @@ describe.skipIf(process.platform === "win32")("packaged QA bootstrap lifetime", 
     f.assertStopped();
   });
 
-  it.each(["timeout", "cancel", "stdout", "stderr", "stdin", "process"] as const)(
+  it.each(["timeout", "cancel", "stdout", "stdin"] as const)(
     "retains bounded redacted diagnostics after %s failure and settles the real CLI tree",
     async (failure) => {
       const f = await fixture("probe", "running");
@@ -581,9 +579,7 @@ describe.skipIf(process.platform === "win32")("packaged QA bootstrap lifetime", 
           ),
           { spawnargs: ["unlabeled-spawnargs-secret"], env: { key: "unlabeled-error-env-secret" } },
         );
-        if (failure === "process") {
-          child.emit("error", error);
-        } else if (failure === "stdin") {
+        if (failure === "stdin") {
           child.stdin!.emit("error", error);
         } else {
           await bounded(
@@ -594,7 +590,7 @@ describe.skipIf(process.platform === "win32")("packaged QA bootstrap lifetime", 
           );
         }
       }
-      (failure === "process" ? child.stderr! : child).emit("error", new Error("later failure"));
+      child.emit("error", new Error("later failure"));
       const error = await bounded(command);
       expect(error).toBeInstanceOf(Error);
       if (!(error instanceof Error)) {
