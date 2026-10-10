@@ -240,8 +240,7 @@ export async function createMSTeamsQaTransportAdapter(
       conversationKindByNativeId.clear();
       logicalConversationByNativeId.clear();
     },
-    createGatewayConfig: ({ baseUrl }) => {
-      webhookUrl = new URL("/api/messages", baseUrl).toString();
+    createGatewayConfig: () => {
       return {
         channels: {
           msteams: {
@@ -267,6 +266,10 @@ export async function createMSTeamsQaTransportAdapter(
         .join(" "),
     }),
     createRuntimePreloads: () => [bootstrapUrl],
+    prepareFlow: async ({ gateway }) => {
+      // createGatewayConfig receives the Lab origin; flow preparation owns the actual Gateway URL.
+      webhookUrl = new URL("/api/messages", gateway.baseUrl).toString();
+    },
     waitReady: ({ gateway, timeoutMs, pollIntervalMs }) =>
       waitForMSTeamsChannelReady(gateway, timeoutMs, pollIntervalMs),
     buildAgentDelivery: ({ target }) => ({

@@ -4,6 +4,7 @@ import {
   type SkillLibrarySelection,
   type SkillsLibraryActivateParams,
 } from "../../../packages/gateway-protocol/src/schema/skill-library.js";
+import { getAdmittedSqliteSchemaFacts } from "../../infra/sqlite-schema-facts.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 import { SkillLibraryError } from "../skill-library-error.js";
@@ -24,11 +25,15 @@ import {
   type SkillLibraryAuthority,
 } from "./store.js";
 
-function seed(db: DatabaseSync, authority: SkillLibraryAuthority): SkillLibrarySelection[] {
+function seed(
+  db: DatabaseSync,
+  authority: SkillLibraryAuthority,
+  preparedActor?: ReturnType<typeof resolveSkillLibraryActor>,
+): SkillLibrarySelection[] {
   if (!authority.profileId || !tableExists(db, "skill_library_entries")) {
     return [];
   }
-  const actor = resolveSkillLibraryActor(db, authority);
+  const actor = preparedActor ?? resolveSkillLibraryActor(db, authority);
   const { profileId } = actor;
   return selectSkillLibraryEntries(db, authority, { enabledOnly: true }, actor)
     .filter(
@@ -87,11 +92,18 @@ function change(
 
 export const skillLibraryReadOperations = {
   "skillLibrary.read": (input: SkillLibraryReadInput, db: DatabaseSync): SkillLibraryReadOutput => {
+    if (
+      input.kind === "seed" &&
+      (!input.authority.profileId ||
+        getAdmittedSqliteSchemaFacts(db)?.tables.has("skill_library_entries") === false)
+    ) {
+      return { type: "skillLibrary.read", kind: "seed", value: [], profileIds: [] };
+    }
     const profileIds = new Set<string>();
     const authority = hydrateSkillLibraryWorkerAuthority(input.authority, profileIds);
     const value = runSqliteDeferredTransactionSync(db, () => {
       if (
-        !["profile", "presentation", "list", "seed"].includes(input.kind) &&
+        !["profile", "presentation", "list", "seed", "session"].includes(input.kind) &&
         !tableExists(db, "skill_library_entries")
       ) {
         if (input.kind === "pins" && !input.params.length) {
@@ -120,6 +132,13 @@ export const skillLibraryReadOperations = {
           return requireSkillLibraryUpload(db, input.params.uploadId, authority);
         case "seed":
           return seed(db, authority);
+        case "session": {
+          const actor = resolveSkillLibraryActor(db, authority);
+          return {
+            selections: seed(db, authority, actor),
+            presentation: resolveSkillLibraryPresentationInDatabase(db, authority, actor),
+          };
+        }
         case "change":
           return change(db, authority, input.params.current, input.params.params);
         case "pins":

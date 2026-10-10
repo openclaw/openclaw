@@ -25,9 +25,12 @@ import { NODE_WORKER_BUNDLE_TRANSFER_PATH } from "../worker/node-bundle-install-
 import { resolveAssistantAgentId } from "./assistant-identity.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
-import { parseControlUiUserAvatarPath, parseControlUiResourcePath } from "./control-ui-contract.js";
+import { parseControlUiResourcePath } from "./control-ui-contract.js";
 import { respondNotFound, respondPlainText } from "./control-ui-http-utils.js";
-import { CONTROL_UI_IMAGE_HTTP_ROUTES } from "./control-ui-image-http-routes.js";
+import {
+  CONTROL_UI_IMAGE_HTTP_ROUTES,
+  CONTROL_UI_USER_IMAGE_HTTP_ROUTES,
+} from "./control-ui-image-http-routes.js";
 import { controlUiPluginAssetRoot } from "./control-ui-plugin-assets-contract.js";
 import { resolveAssistantMediaRoutePath } from "./control-ui-resource-routes.js";
 import {
@@ -87,7 +90,6 @@ import {
   getSessionHistoryHttpModule,
   getSessionKillHttpModule,
   getToolsInvokeHttpModule,
-  getUserProfilesHttpModule,
   getDevicePairingJoinHttpModule,
   getPluginNodeCapabilityAuthModule,
   getHttpAuthUtilsModule,
@@ -411,7 +413,8 @@ export function createGatewayHttpServer(opts: {
       const addAdmittedStage = (enabled: boolean, stage: GatewayHttpRequestStage) =>
         addRequestStage(enabled, stage, true);
 
-      addRequestStage(classifyWorkerGatewayPath(scopedRequestPath) !== "outside", () => {
+      const workerGatewayRoute = classifyWorkerGatewayPath(scopedRequestPath);
+      addRequestStage(workerGatewayRoute !== "outside", () => {
         respondNotFound(res);
         return true;
       });
@@ -527,16 +530,14 @@ export function createGatewayHttpServer(opts: {
           await getControlUiPluginAssetsModule()
         ).handleControlUiPluginAssetRequest(req, res, controlUiRouteOptions);
       });
-      addAdmittedStage(
-        parseControlUiUserAvatarPath(scopedRequestPath, controlUiRouteBasePath).matched,
-        async () =>
-          (await getUserProfilesHttpModule()).handleUserProfileAvatarHttpRequest(
-            req,
-            res,
-            scopedRequestPath,
-            { ...routeAuth, basePath: controlUiRouteBasePath },
-          ),
-      );
+      for (const [parse, loadHandler] of CONTROL_UI_USER_IMAGE_HTTP_ROUTES) {
+        addAdmittedStage(parse(scopedRequestPath, controlUiRouteBasePath).matched, async () =>
+          (await loadHandler())(req, res, scopedRequestPath, {
+            ...routeAuth,
+            basePath: controlUiRouteBasePath,
+          }),
+        );
+      }
       addAdmittedStage(openResponsesEnabled && scopedRequestPath === "/v1/responses", async () =>
         (await getOpenResponsesHttpModule()).handleOpenResponsesHttpRequest(req, res, {
           ...operatorAuth(),

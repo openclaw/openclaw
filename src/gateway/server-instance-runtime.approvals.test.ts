@@ -166,7 +166,9 @@ it.each([
     sales: { appId: "sales-app", appPassword: "synthetic-sales", allowFrom: [senderId] },
   };
   let cfg: OpenClawConfig = {
-    channels: { msteams: { enabled: true, tenantId: "synthetic-tenant", accounts } },
+    channels: {
+      msteams: { enabled: true, tenantId: "synthetic-tenant", allowFrom: [senderId], accounts },
+    },
   };
   setRuntimeConfigSnapshot(cfg);
   setActivePluginRegistry(
@@ -202,6 +204,7 @@ it.each([
             msteams: {
               enabled: true,
               tenantId: "synthetic-tenant",
+              allowFrom: [senderId],
               accounts: { ...accounts, support: { ...accounts.support, enabled: false } },
             },
           },
@@ -213,6 +216,8 @@ it.each([
             msteams: {
               enabled: scenario !== "channel-disabled",
               tenantId: "synthetic-tenant",
+              // Root approvers must not authorize a named account that no longer exists.
+              allowFrom: [senderId],
               accounts: scenario === "account-removed" ? { sales: accounts.sales } : accounts,
             },
           },

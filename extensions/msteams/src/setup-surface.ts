@@ -15,7 +15,6 @@ import type { MSTeamsTeamConfig } from "../runtime-api.js";
 import { patchMSTeamsAccountConfig } from "./accounts-mutations.js";
 import {
   resolveDefaultMSTeamsAccountId,
-  resolveMSTeamsAccount,
   resolveMSTeamsAccountConfigPath,
   resolveMSTeamsAccountConfig,
   resolveMSTeamsAccountEntryKey,
@@ -285,7 +284,13 @@ const msteamsDmPolicy: ChannelSetupDmPolicy = createChannelDmPolicy({
   channel,
   policyKey: "channels.msteams.dmPolicy",
   allowFromKey: "channels.msteams.allowFrom",
-  resolveAccount: (cfg, accountId) => resolveMSTeamsAccount({ cfg, accountId }),
+  resolveAccount: (cfg, accountId) => {
+    const resolvedAccountId = normalizeAccountId(accountId ?? resolveDefaultMSTeamsAccountId(cfg));
+    return {
+      accountId: resolvedAccountId,
+      config: resolveMSTeamsAccountConfig(cfg, resolvedAccountId),
+    };
+  },
   resolveConfigKeys: ({ cfg, account }) => {
     const rawAccountKey = resolveMSTeamsAccountEntryKey(
       cfg.channels?.msteams?.accounts,

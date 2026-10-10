@@ -13,9 +13,10 @@ import { renderAgentScopeControl } from "../../components/agent-scope-control.ts
 import { requestCloudWorkerStop } from "../../components/cloud-worker-stop.runtime.ts";
 import { resolveCloudWorkerStopAction } from "../../components/cloud-worker-stop.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
+import { SessionDetailsController } from "../../components/session-details-controller.ts";
 import { fetchSessionMenuWork } from "../../components/session-menu-work.ts";
-import type { SessionMenuWork } from "../../components/session-menu.ts";
 import "../../components/session-menu.ts";
+import type { SessionMenuWork } from "../../components/session-menu.ts";
 import {
   formatBatchSessionRemovalError,
   withSessionWorkspaceRecovery,
@@ -26,10 +27,8 @@ import { renderSettingsWorkspace } from "../../components/settings-workspace.ts"
 import { t } from "../../i18n/index.ts";
 import { registerSessionOrganizationEnglish } from "../../i18n/locales/en-session-organization.ts";
 import { watchAgentScope } from "../../lib/agents/index.ts";
-import { openEditor } from "../../lib/editor-links.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
-import { openExternalUrlSafe } from "../../lib/open-external-url.ts";
 import {
   readSessionMethodAccess,
   type SessionMethodAccessRequest,
@@ -63,7 +62,6 @@ import {
   resolveUiConfiguredMainKey,
   scopedSessionArtifactKey,
 } from "../../lib/sessions/session-key.ts";
-import { runSessionNavigationAction } from "../../lib/sessions/session-menu-navigation.ts";
 import { requestSessionInvolvement } from "../../lib/sessions/session-requests.ts";
 import { searchVisibleSessionTranscripts } from "../../lib/sessions/transcript-search.ts";
 import { formatPreservedWorktreesNotice } from "../../lib/sessions/worktree-preservation.ts";
@@ -84,8 +82,10 @@ import {
   updateSelectedSessions,
   type SessionDeleteRow,
 } from "./selection.ts";
-import { SessionDetailsController } from "./session-details-controller.ts";
-import { renderSessionManagementMenu } from "./session-menu.ts";
+import {
+  handleSessionManagementNavigationAction,
+  renderSessionManagementMenu,
+} from "./session-menu.ts";
 import { renderSessions, type SessionsProps } from "./view.ts";
 
 registerSessionOrganizationEnglish();
@@ -1208,29 +1208,16 @@ class SessionsPage extends OpenClawLightDomElement {
       groups: this.knownCategories(),
       work: this.sessionMenuWork,
       onClose: () => this.closeSessionMenu(),
-      onAction: (action) => {
+      onAction: (requestedAction) => {
+        const action = handleSessionManagementNavigationAction(requestedAction, {
+          context,
+          row,
+          isCurrent: () => this.isConnected && this.context === context,
+        });
+        if (!action) {
+          return;
+        }
         switch (action.kind) {
-          case "open-pr":
-            openExternalUrlSafe(action.url);
-            break;
-          case "open-in":
-            openEditor(action.editor, action.path);
-            break;
-          case "copy-session-id":
-          case "copy-session-link":
-          case "copy-session-preview-link":
-          case "copy-markdown":
-          case "open-new-tab":
-          case "open-new-window":
-          case "split-right":
-          case "split-below":
-            void runSessionNavigationAction(action.kind, {
-              context,
-              session: row,
-              agentId: row.agentId,
-              isCurrent: () => this.isConnected && this.context === context,
-            });
-            break;
           case "toggle-pin":
             void this.patchSession(row.key, { pinned: row.pinned !== true }, undefined, undefined, {
               sessionScope: true,
@@ -1267,6 +1254,14 @@ class SessionsPage extends OpenClawLightDomElement {
             break;
           case "set-icon":
             void this.patchSession(row.key, { icon: action.icon });
+            break;
+          case "set-communication":
+            void this.patchSession(
+              row.key,
+              { communication: action.communication },
+              undefined,
+              row.sessionId,
+            );
             break;
           case "reset-appearance":
             void this.patchSession(row.key, { icon: null, color: null });

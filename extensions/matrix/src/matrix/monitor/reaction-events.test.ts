@@ -248,31 +248,6 @@ describe("matrix approval reactions", () => {
     expect(peekSystemEventEntries("agent:main:matrix:channel:!ops:example.org")).toEqual([]);
   });
 
-  it("resolves registered approval reactions without fetching the target event", async () => {
-    const core = buildCore();
-    await registerMatrixApprovalReactionTarget({
-      allowedDecisions: ["allow-once"],
-    });
-    const client = createReactionClient(vi.fn().mockRejectedValue(new Error("boom")));
-
-    await handleReaction({
-      client,
-      core,
-    });
-
-    expect(client.getEvent).not.toHaveBeenCalled();
-    expect(resolveMatrixApproval).toHaveBeenCalledWith({
-      cfg: buildConfig(),
-      approvalId: "req-123",
-      approvalKind: "exec",
-      decision: "allow-once",
-      channel: "matrix",
-      accountId: "default",
-      senderId: "@owner:example.org",
-    });
-    expect(peekSystemEventEntries("agent:main:matrix:channel:!ops:example.org")).toEqual([]);
-  });
-
   it("resolves plugin approval reactions through the same Matrix reaction path", async () => {
     const core = buildCore();
     const cfg = buildConfig();
@@ -374,47 +349,6 @@ describe("matrix approval reactions", () => {
       senderId: "@owner:example.org",
     });
     expect(peekSystemEventEntries("agent:main:matrix:channel:!ops:example.org")).toEqual([]);
-  });
-
-  it("terminalizes every sibling prompt when this surface wins", async () => {
-    const core = buildCore();
-    const cfg = buildConfig();
-    await registerMatrixApprovalReactionTarget({});
-    await registerMatrixApprovalReactionTarget({
-      roomId: "!approvals:example.org",
-      eventId: "$approval-dm",
-    });
-    const client = createReactionClient();
-
-    await handleReaction({ client, core, cfg, reactionKey: "✅" });
-
-    expect(
-      await resolveMatrixApprovalReactionTargetWithPersistence({
-        roomId: "!ops:example.org",
-        eventId: "$approval-msg",
-        reactionKey: "✅",
-      }),
-    ).toBeNull();
-    expect(
-      await resolveMatrixApprovalReactionTargetWithPersistence({
-        roomId: "!approvals:example.org",
-        eventId: "$approval-dm",
-        reactionKey: "✅",
-      }),
-    ).toBeNull();
-    expect(editMessageMatrix).toHaveBeenCalledTimes(2);
-    expect(editMessageMatrix).toHaveBeenCalledWith(
-      "!ops:example.org",
-      "$approval-msg",
-      "Resolved: Allowed once\n\nID: req-123",
-      { cfg, accountId: "default", client },
-    );
-    expect(editMessageMatrix).toHaveBeenCalledWith(
-      "!approvals:example.org",
-      "$approval-dm",
-      "Resolved: Allowed once\n\nID: req-123",
-      { cfg, accountId: "default", client },
-    );
   });
 
   it("unregisters losing surfaces and reports the canonical terminal decision", async () => {

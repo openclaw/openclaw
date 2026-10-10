@@ -3,21 +3,19 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { renderPublicSessionDocument } from "./control-ui-public-session-render.js";
 
-const html = renderPublicSessionDocument({
+// Exercise the exact inline script the rendered page ships (and its CSP hash covers).
+const renderedEntryScript = renderPublicSessionDocument({
   messages: [],
-  title: "Shared conversation",
+  title: "Shared",
   truncated: false,
-  latestUrl: "/chat/main/topic",
-  cardUrl: "/chat/main/topic/card",
-  assetBasePath: "",
-});
-const entryScript = (() => {
-  const script = /<script>([\s\S]*?)<\/script>/u.exec(html)?.[1];
-  if (!script) {
-    throw new Error("Expected public reader script in the served document");
-  }
-  return script;
-})();
+  latestUrl: "/share/session",
+  cardUrl: "https://example.test/card.png",
+  assetBasePath: "/control",
+}).match(/<script>([\s\S]*)<\/script><\/body>/)?.[1];
+if (renderedEntryScript === undefined) {
+  throw new Error("rendered public session page has no entry script");
+}
+const PUBLIC_SESSION_ENTRY_SCRIPT: string = renderedEntryScript;
 
 afterEach(() => vi.useRealTimers());
 function fixture() {
@@ -50,7 +48,7 @@ function fixture() {
   const response = (status: number, body = "updated", etag = '"revision-1"') =>
     new Response(status === 304 ? null : body, { status, headers: { ETag: etag } });
   fetch.mockResolvedValue(response(200));
-  runInNewContext(entryScript, {
+  runInNewContext(PUBLIC_SESSION_ENTRY_SCRIPT, {
     document,
     fetch,
     location: { href: "https://example.test/chat/main/topic" },

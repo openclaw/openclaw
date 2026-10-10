@@ -1,4 +1,3 @@
-import type { DatabaseSync } from "node:sqlite";
 import { isNativeError, isProxy } from "node:util/types";
 import type { MessagePort } from "node:worker_threads";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
@@ -12,36 +11,6 @@ import type { SqliteWalCheckpointSnapshot } from "./sqlite-wal-checkpoint.js";
 import type { DatabasePathIdentity } from "./sqlite-worker-identity.js";
 import type { SqliteWorkerStateContext } from "./sqlite-worker-state-context.js";
 import type { SqliteWorkerTransferHandle } from "./sqlite-worker-transfer.js";
-
-export type SqliteWorkerOperationContext = {
-  port: MessagePort;
-  attachment?: { value: unknown };
-  refusal?: SqliteWorkerError;
-  committed?: { facts: unknown };
-  settled?: true;
-  sourceReservations?: true;
-  pendingReceipts?: Map<DatabaseSync, number>;
-};
-
-export type SqliteWorkerAdmissionRequest = {
-  stage: "open" | "prepare" | "transaction" | "commit";
-  facts: unknown;
-};
-
-export type SqliteWorkerDatabaseAuthority = {
-  databasePath: string;
-  assertRequest?(): void;
-  assertAccess(): void;
-  assertCreate?(databasePath: string): void;
-  acquireSchema(): { assertCurrent(): void; release(): void };
-};
-
-export type SqliteWorkerAdmissionScope = {
-  // Published SDK request helpers share these port/active carrier fields.
-  port: MessagePort;
-  owner: SqliteWorkerOperationContext;
-  active: boolean;
-};
 
 export type SqliteWorkerOperations = Record<string, { input: unknown; output: unknown }>;
 /** Process-private locator; live owner admission remains separate from this identity. */
@@ -170,6 +139,20 @@ export const SqliteWorkerOpenRefusedError = resolveGlobalSingleton(
       constructor(readonly originalError: unknown) {
         super("SQLite worker admission was refused before agent open", { cause: originalError });
         this.name = "SqliteWorkerOpenRefusedError";
+      }
+    },
+);
+
+export const SqliteWorkerAdmissionTimeoutError = resolveGlobalSingleton(
+  Symbol.for("openclaw.sqliteWorkerAdmissionTimeoutError"),
+  () =>
+    class AdmissionTimeoutError extends Error {
+      // Broker overload certifies non-execution; a timeout rolls back only its current transaction.
+      readonly code = "admission-timeout";
+
+      constructor() {
+        super("SQLite host admission timed out; retry after transaction rollback");
+        this.name = "SqliteWorkerAdmissionTimeoutError";
       }
     },
 );

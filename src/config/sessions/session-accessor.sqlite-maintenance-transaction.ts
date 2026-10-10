@@ -88,8 +88,8 @@ function captureWorkerAgeSnapshotInTransaction(
   database: Pick<OpenClawAgentDatabase, "db" | "path" | "agentId">,
   maintenance: SessionEntryMaintenanceInput["maintenance"],
 ) {
-  // The transaction owner refreshed after BEGIN; capture the same admitted snapshot.
-  const revision = readSessionEntryCacheValidityToken(database.db, "cached");
+  // Capture the writer receipt and local generation alongside this snapshot.
+  const revision = readSessionEntryCacheValidityToken(database.db);
   const capture = captureSessionEntryMaintenanceAgeFact(database.db, maintenance);
   let id = ageCaptureIds.get(capture);
   if (id === undefined) {
@@ -209,7 +209,7 @@ export function readSessionMaintenanceInWorker(
                 previous &&
                 previous.incarnation === observed.incarnation &&
                 previous.capture === ageCaptureIds.get(capture) &&
-                // Final deadline publication retains the owner's foreign-write cadence.
+                // Final deadline publication must still match the owning writer's receipt.
                 (!plan.expected ||
                   cacheValidityTokensEqual(
                     previous.revision,

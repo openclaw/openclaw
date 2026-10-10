@@ -126,6 +126,12 @@ plugin code registered with `api.registerCliBackend(...)`.
 4. Parses output (JSON or plain text) and returns the final text.
 5. Persists session ids per backend so follow-ups reuse the same CLI session.
 
+Claude stream-json backends also emit live line-count progress while `write`,
+`edit`, and `apply_patch` arguments stream. Progress contains only the tool id,
+name, and added/removed line counts, with at most four updates per second per
+call. The execution-start event still waits for complete arguments; input
+progress does not mean the tool has begun executing.
+
 Direct agent calls and child-completion updates share the same session reply policy.
 A completion turn's delivery override does not by itself start a fresh CLI session;
 authentication, workspace, and tool compatibility checks still apply.

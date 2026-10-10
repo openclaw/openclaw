@@ -104,7 +104,7 @@ describe("monitorMSTeamsProvider lifecycle", () => {
           path: accountId === "default" ? "/api/messages" : "/teams/support",
         });
         expect(getMSTeamsIngressMockState().instances.at(-1)?.options.accountId).toBe(
-          accountId === "default" ? "app-id" : "support",
+          accountId === "default" ? "app-id" : "support-app",
         );
         expect(createMSTeamsActivityHandler.mock.calls[0]?.[0].accountId).toBe(accountId);
       } finally {
@@ -113,6 +113,27 @@ describe("monitorMSTeamsProvider lifecycle", () => {
       }
     },
   );
+
+  it("does not reopen a retired default bot inbox through a reused logical account id", async () => {
+    const abort = new AbortController();
+    const cfg = createConfig();
+    updateMSTeamsConfig(cfg, {
+      appId: undefined,
+      appPassword: undefined,
+      accounts: {
+        "retired-app": { appId: "new-bot-app", appPassword: "synthetic-secret" },
+      },
+    });
+    const task = runProvider(abort, cfg, { accountId: "retired-app" });
+    try {
+      await routeState.ready.promise;
+      expect(getMSTeamsIngressMockState().instances.at(-1)?.options.accountId).toBe("new-bot-app");
+      expect(createMSTeamsActivityHandler.mock.calls[0]?.[0].accountId).toBe("retired-app");
+    } finally {
+      abort.abort();
+      await task;
+    }
+  });
 
   it("keeps default and two named routes independent through shutdown", async () => {
     const cfg = createConfig();

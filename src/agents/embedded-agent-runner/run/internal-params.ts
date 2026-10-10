@@ -33,6 +33,8 @@ export type CompactionAccountingFact = Readonly<
         target: CompactionAccountingTarget;
         /** Present only when the host committed a successor session rotation. */
         previousSessionId?: string;
+        /** Native-thread compaction leaves the host transcript unchanged. */
+        hostCompactionCommitted?: boolean;
       }
     | { kind: "presentation-only" }
   )

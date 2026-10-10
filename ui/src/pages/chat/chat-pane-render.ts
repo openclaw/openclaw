@@ -47,6 +47,7 @@ import {
   chatSubmitState,
   dismissChatError,
   resolveChatPaneFollowUpMode,
+  projectChatPaneTranscript,
 } from "./chat-pane-state.ts";
 import { ChatProviderReviewController } from "./chat-provider-review-controller.ts";
 import { createChatQuestionActions } from "./chat-question-actions.ts";
@@ -74,8 +75,6 @@ export class ChatPane extends ChatPaneLayoutRender {
     () => this.state ?? undefined,
   );
   private presentationUserId: string | null = null;
-  // Stable absent inputs let catalog renders reuse the transcript cache.
-  private readonly emptyTranscriptItems: [] = [];
   private readonly retrySessionPlacementStartup = () => {
     const sessionKey = this.state?.sessionKey;
     if (sessionKey) {
@@ -390,7 +389,9 @@ export class ChatPane extends ChatPaneLayoutRender {
       // Keep its pane loading until startup can display the retained message again.
       loading: catalogKey
         ? this.catalogLoading
-        : state.chatLoading || (!runActive && pendingReason !== null && placementStartup === null),
+        : (!state.connected && !state.currentSessionId) ||
+          state.chatLoading ||
+          (!runActive && pendingReason !== null && placementStartup === null),
       routeLoadingSkeleton: this.routeLoadingSkeleton && initialHistoryUnavailable,
       sending:
         state.chatSending ||
@@ -416,6 +417,7 @@ export class ChatPane extends ChatPaneLayoutRender {
       progressCardInitialLoading: this.progressCardInitialLoading,
       progressCardRefresh,
       collapseTaskProgress: state.settings.chatCollapseTaskProgress === true,
+      ...this.captureProgressCardActions(canWriteProgressCard),
       readingHistory: state.chatReadingHistory,
       onProgressManipulate: () => {
         lockChatScroll(state);
@@ -424,7 +426,6 @@ export class ChatPane extends ChatPaneLayoutRender {
       onDismissProgressCard: progressPresentation
         ? (card) => this.hideProgressCard(card)
         : undefined,
-      onClearSavedProgressCard: canWriteProgressCard ? this.clearSavedProgressCard : undefined,
       gatewayQuestionPrompts,
       asyncQuestionStorage:
         !catalogKey && !suggestionViewer ? this.chatState.composerPersistence.durableScope : null,
@@ -435,7 +436,6 @@ export class ChatPane extends ChatPaneLayoutRender {
           composerAvailability.canSend && !catalogKey && !suggestionViewer && state.connected,
         isCurrent: () => this.state === state,
       }),
-      messages: catalogKey ? this.catalogMessages : state.chatMessages,
       historyPagination:
         historyHasMore || this.loadingOlder
           ? {
@@ -444,13 +444,11 @@ export class ChatPane extends ChatPaneLayoutRender {
               onShowEarlier: () => void this.loadOlderMessages(),
             }
           : undefined,
-      toolMessages: catalogKey ? this.emptyTranscriptItems : state.chatToolMessages,
-      guardianNotices: catalogKey ? this.emptyTranscriptItems : state.guardianNotices,
-      streamSegments: catalogKey ? this.emptyTranscriptItems : state.chatStreamSegments,
-      stream: catalogKey ? null : state.chatStream,
-      streamStartedAt: catalogKey ? null : state.chatStreamStartedAt,
-      runId: catalogKey ? null : projectionRunId,
-      runUsageById: catalogKey ? undefined : state.chatRunUsageById,
+      ...projectChatPaneTranscript(
+        state,
+        catalogKey ? this.catalogMessages : null,
+        projectionRunId,
+      ),
       assistantAvatarUrl: resolveChatAvatarUrl(state),
       sendShortcut: state.settings.chatSendShortcut,
       followUpMode: state.chatFollowUpMode,

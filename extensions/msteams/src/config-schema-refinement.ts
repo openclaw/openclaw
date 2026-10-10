@@ -232,15 +232,6 @@ export function refineMSTeamsConfig(value: MSTeamsRefinementConfig, ctx: z.Refin
     if (canonicalAccountId === DEFAULT_ACCOUNT_ID) {
       continue;
     }
-    if (defaultAccountConfigured && effectiveDefaultAppId?.trim() === canonicalAccountId) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path,
-        message:
-          `channels.msteams.accounts.${accountId} collides with the default account's ` +
-          "shipped durable inbox namespace; choose a different account id",
-      });
-    }
     const accountEnabled = value.enabled !== false && account.enabled !== false;
     if (!accountEnabled) {
       continue;

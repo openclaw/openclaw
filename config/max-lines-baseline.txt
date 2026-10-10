@@ -571,6 +571,5 @@ ui/src/pages/config/view.browser.test.ts
 ui/src/pages/cron/view.ts
 ui/src/pages/sessions/sessions-page.ts
 ui/src/pages/sessions/view.ts
-ui/src/pages/usage/view-overview.ts
 ui/src/pages/usage/view.ts
 ui/src/test-helpers/control-ui-e2e.ts

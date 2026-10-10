@@ -12,6 +12,8 @@ export type RecordInboundSessionMetaParams = {
   sessionKey: string;
   /** Explicit store target for file-backed stores and SQLite migration adapters. */
   storePath: string;
+  /** Live caller authority checked by the existing write admission owner. */
+  assertCommitAllowed?: () => void;
 };
 
 export type UpdateSessionLastRouteParams = Omit<RecordInboundSessionMetaParams, "ctx"> & {

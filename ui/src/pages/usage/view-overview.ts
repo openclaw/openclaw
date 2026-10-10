@@ -121,26 +121,12 @@ function renderCostWindowComparison(
   rangeEndDate: string,
   timeZone: "local" | "utc",
 ) {
-  const [range, ...windows] = buildUsageCostWindows(daily, rangeStartDate, rangeEndDate);
-  if (!range || daily.length === 0) {
+  const windows = buildUsageCostWindows(daily, rangeStartDate, rangeEndDate);
+  if (windows.length === 0 || daily.length === 0) {
     return nothing;
   }
 
   const today = formatIsoDate(new Date(), timeZone);
-  const labelForWindow = (days: number, endDate: string) => {
-    if (days === 1) {
-      return endDate === today ? t("usage.presets.today") : formatDayLabel(endDate);
-    }
-    return t("usage.costWindows.lastDays", { count: String(days) });
-  };
-  const cards = [
-    { label: t("usage.costWindows.selectedRange"), summary: range, range: true },
-    ...windows.map((summary) => ({
-      label: labelForWindow(summary.days, summary.endDate),
-      summary,
-      range: false,
-    })),
-  ];
 
   return html`
     <section class="cost-window-analysis">
@@ -156,7 +142,15 @@ function renderCostWindowComparison(
         </div>
       </div>
       <div class="cost-window-grid">
-        ${cards.map(({ label, summary, range: isRange }) => {
+        ${windows.map((summary, index) => {
+          const isRange = index === 0;
+          const label = isRange
+            ? t("usage.costWindows.selectedRange")
+            : summary.days === 1
+              ? summary.endDate === today
+                ? t("usage.presets.today")
+                : formatDayLabel(summary.endDate)
+              : t("usage.costWindows.lastDays", { count: String(summary.days) });
           const averageDailyCost = summary.totals.totalCost / summary.days;
           return html`
             <div class="cost-window-card ${isRange ? "cost-window-card--range" : ""}">
@@ -329,18 +323,13 @@ function renderUsageInsights(
       : t("usage.common.emptyValue");
   const errorDays = aggregates.daily
     .filter((day) => day.messages > 0 && day.errors > 0)
-    .map((day) => {
-      const rate = day.errors / day.messages;
-      return {
-        label: formatDayLabel(day.date),
-        value: `${(rate * 100).toFixed(2)}%`,
-        sub: `${day.errors} ${normalizeLowercaseStringOrEmpty(t("usage.overview.errors"))} · ${day.messages} ${t("usage.overview.messagesAbbrev")} · ${formatUsageTokens(day.tokens)}`,
-        rate,
-      };
-    })
-    .toSorted((a, b) => b.rate - a.rate)
+    .toSorted((a, b) => b.errors / b.messages - a.errors / a.messages)
     .slice(0, 5)
-    .map(({ rate: _rate, ...rest }) => rest);
+    .map((day) => ({
+      label: formatDayLabel(day.date),
+      value: `${((day.errors / day.messages) * 100).toFixed(2)}%`,
+      sub: `${day.errors} ${normalizeLowercaseStringOrEmpty(t("usage.overview.errors"))} · ${day.messages} ${t("usage.overview.messagesAbbrev")} · ${formatUsageTokens(day.tokens)}`,
+    }));
 
   const costAttribution = (
     label: string,
@@ -503,7 +492,7 @@ function renderSessionsCard(
   const { selectedSessions, selectedDays } = filters;
   const { sessionSort, sessionSortDir, recentSessions, sessionsTab } = display;
   const { onSelectSession } = callbacks.details;
-  const { onSessionSortChange, onSessionSortDirChange, onSessionsTabChange } = callbacks.display;
+  const onDisplayChange = callbacks.display.onChange;
   const { onClearSessions } = callbacks.filters;
   const isTokenMode = display.chartMode === "tokens";
   const sortDirectionLabel = t(
@@ -632,8 +621,8 @@ function renderSessionsCard(
             ariaPressed: false,
             className: "small",
             value: sessionsTab,
-            onChange: onSessionsTabChange,
-            onReselect: onSessionsTabChange,
+            onChange: (tab) => onDisplayChange({ sessionsTab: tab }),
+            onReselect: (tab) => onDisplayChange({ sessionsTab: tab }),
             options: [
               { value: "all", label: t("usage.sessions.all") },
               { value: "recent", label: t("usage.sessions.recent") },
@@ -644,7 +633,9 @@ function renderSessionsCard(
             <select
               class="settings-select"
               @change=${(e: Event) =>
-                onSessionSortChange((e.target as HTMLSelectElement).value as typeof sessionSort)}
+                onDisplayChange({
+                  sessionSort: (e.target as HTMLSelectElement).value as typeof sessionSort,
+                })}
             >
               ${Object.entries({
                 cost: "usage.metrics.cost",
@@ -664,7 +655,7 @@ function renderSessionsCard(
             <button
               class="btn btn--sm"
               aria-label=${sortDirectionLabel}
-              @click=${() => onSessionSortDirChange(sessionSortDir === "desc" ? "asc" : "desc")}
+              @click=${() => onDisplayChange({ sessionSortDir: sessionSortDir === "desc" ? "asc" : "desc" })}
             >
               ${sessionSortDir === "desc" ? "↓" : "↑"}
             </button>
@@ -729,4 +720,3 @@ export {
   renderSessionsCard,
   renderUsageInsights,
 };
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

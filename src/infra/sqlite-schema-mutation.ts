@@ -94,6 +94,29 @@ function changesData(sql: string): boolean {
   return /\b(?:INSERT|UPDATE|DELETE|REPLACE)\b/i.test(sql);
 }
 
+function temporaryWriteTables(sql: string): string[] | undefined {
+  const tables: string[] = [];
+  let remaining = normalizeSqlWhitespace(sql);
+  while (remaining) {
+    remaining = remaining.replace(/^[\s;]+/u, "");
+    const end = findSqlCharacter(remaining, ";");
+    const statement = end < 0 ? remaining : remaining.slice(0, end);
+    if (changesData(statement)) {
+      const target =
+        /^(?:INSERT(?: OR \w+)? INTO|REPLACE INTO|UPDATE(?: OR \w+)?|DELETE FROM)\s+(?:temp|"temp"|`temp`|\[temp\])\s*\.\s*("(?:[^"]|"")+"|`(?:[^`]|``)+`|\[[^\]]+\]|[a-z_]\w*)(?=\s|\(|$)/iu.exec(
+          statement,
+        );
+      const table = target?.[1];
+      if (table === undefined) {
+        return undefined;
+      }
+      tables.push(normalizeSqlIdentifier(table));
+    }
+    remaining = end < 0 ? "" : remaining.slice(end + 1);
+  }
+  return tables;
+}
+
 const sqlLeadingTrivia = /^(?:\s|;|--[^\n]*(?:\n|$)|\/\*(?:[^*]|\*(?!\/))*(?:\*\/|$))*/u;
 const transactionControlPrefix = /^(BEGIN|SAVEPOINT|COMMIT|END|RELEASE|ROLLBACK)\b/i;
 
@@ -157,11 +180,16 @@ export function canPreserveTransactionSnapshot(
 }
 
 export function classifySqliteMutation(sql: string, mode: "batch" | "statement") {
-  const schemaChange = changesSchema(sql) && (changesOnlyTemporaryTable(sql) ? "temp" : true);
+  const schemaChange = changesSchema(sql);
+  const dataChange = changesData(sql);
+  const temporaryTableSchemaChange = schemaChange && changesOnlyTemporaryTable(sql);
   return {
     schemaChange,
-    mainSchemaChange: schemaChange === true && !createsOnlyTemporaryObject(sql),
-    dataChange: changesData(sql),
+    mainSchemaChange:
+      schemaChange && !temporaryTableSchemaChange && !createsOnlyTemporaryObject(sql),
+    temporaryTableSchemaChange,
+    dataChange,
+    temporaryWriteTables: dataChange ? temporaryWriteTables(sql) : undefined,
     control: readTransactionControl(sql, mode),
   };
 }

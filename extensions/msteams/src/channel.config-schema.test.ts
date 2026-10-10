@@ -432,39 +432,25 @@ describe("msteams config schema", () => {
 
   it.each([
     { state: "enabled", enabled: undefined },
-    { state: "disabled with durable rows retained", enabled: false },
-  ])(
-    "rejects a $state named account id that collides with the default app-id inbox namespace",
-    ({ enabled }) => {
-      const res = MSTeamsConfigSchema.safeParse({
-        appId: "support",
-        appPassword: "primary-secret",
-        tenantId: "tenant-id",
-        accounts: {
-          support: {
-            ...(enabled === undefined ? {} : { enabled }),
-            appId: "support-app-id",
-            appPassword: "support-secret",
-            webhook: { path: "/hooks/3979" },
-          },
+    { state: "disabled", enabled: false },
+  ])("allows a $state logical account id matching another bot's appId", ({ enabled }) => {
+    const res = MSTeamsConfigSchema.safeParse({
+      appId: "support",
+      appPassword: "primary-secret",
+      tenantId: "tenant-id",
+      accounts: {
+        support: {
+          ...(enabled === undefined ? {} : { enabled }),
+          appId: "support-app-id",
+          appPassword: "support-secret",
+          webhook: { path: "/hooks/3979" },
         },
-      });
+      },
+    });
+    expect(res.success).toBe(true);
+  });
 
-      expect(res.success).toBe(false);
-      if (!res.success) {
-        expect(res.error.issues).toEqual(
-          expect.arrayContaining([
-            expect.objectContaining({
-              path: ["accounts", "support"],
-              message: expect.stringContaining("shipped durable inbox namespace"),
-            }),
-          ]),
-        );
-      }
-    },
-  );
-
-  it("reserves a disabled default account's retained app-id inbox namespace", () => {
+  it("keeps a disabled default bot's queue distinct from a matching logical label", () => {
     const res = MSTeamsConfigSchema.safeParse({
       tenantId: "tenant-id",
       accounts: {
@@ -481,18 +467,7 @@ describe("msteams config schema", () => {
         },
       },
     });
-
-    expect(res.success).toBe(false);
-    if (!res.success) {
-      expect(res.error.issues).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            path: ["accounts", "support"],
-            message: expect.stringContaining("shipped durable inbox namespace"),
-          }),
-        ]),
-      );
-    }
+    expect(res.success).toBe(true);
   });
 
   it("allows duplicate app IDs when one account is disabled", () => {
