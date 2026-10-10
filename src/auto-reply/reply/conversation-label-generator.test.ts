@@ -44,13 +44,14 @@ beforeEach(() => {
 });
 
 describe("generateConversationLabel", () => {
-  it.each([
+  it.each<{ primary: string; explicit: boolean; sessionRuntime?: string }>([
     { primary: "claude-opus", explicit: false },
     { primary: "claude-sonnet", explicit: false },
     { primary: "claude-opus", explicit: true },
+    { primary: "claude-opus", explicit: false, sessionRuntime: "openclaw" },
   ])(
-    "keeps the automatic utility label on the $primary runtime (explicit=$explicit)",
-    async ({ primary, explicit }) => {
+    "keeps the utility label on its selected runtime ($primary, explicit=$explicit, session=$sessionRuntime)",
+    async ({ primary, explicit, sessionRuntime }) => {
       const utilityModel = "anthropic/claude-haiku";
       const cfg = {
         agents: {
@@ -78,6 +79,7 @@ describe("generateConversationLabel", () => {
           agentId: "main",
           utilityModelRef: utilityModel,
           regularModelRef: `anthropic/${primary}`,
+          agentHarnessRuntimeOverride: sessionRuntime,
           prompt: "Return a session title.",
           userMessage: "Plan a garden.",
         }),
@@ -85,7 +87,7 @@ describe("generateConversationLabel", () => {
       expect(runIsolatedCompletion).toHaveBeenCalledOnce();
       expect(runIsolatedCompletion.mock.calls[0]?.[0]).toMatchObject({
         model: "claude-haiku",
-        ...(explicit ? {} : { agentHarnessRuntimeOverride: "claude-cli" }),
+        ...(explicit ? {} : { agentHarnessRuntimeOverride: sessionRuntime ?? "claude-cli" }),
       });
       if (explicit) {
         expect(runIsolatedCompletion.mock.calls[0]?.[0]).not.toHaveProperty(

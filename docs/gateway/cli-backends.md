@@ -47,7 +47,7 @@ Utility completions for Activity recaps, session titles, conversation labels, pr
 
 When `agents.defaults.utilityModel` is unset, OpenClaw uses the primary provider's declared small model. A Claude CLI primary uses the recommended Haiku model through Claude CLI, even if an Anthropic API credential is also available. It does not automatically switch utility work to the Anthropic API.
 
-An explicitly configured utility model keeps its own runtime. A runtime pinned on the derived model's own entry also wins over inherited routing. For other runtimes, automatic utility routing can prefer an available provider credential before borrowing the primary model's pinned runtime.
+An explicitly configured utility model keeps its own runtime. A compatible runtime explicitly selected for the session, or a runtime pinned on the derived model's own entry, also wins over inherited routing. For other runtimes, automatic utility routing can prefer an available provider credential before borrowing the primary model's pinned runtime.
 
 To explicitly use the Anthropic API for utility work, configure its runtime on the utility model:
 

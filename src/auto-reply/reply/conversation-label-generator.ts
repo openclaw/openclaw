@@ -129,20 +129,21 @@ async function runLabelAttempts(
       assertOperatorModelAllowed(params.operatorAuthority, model);
       // The session's runtime override was resolved for its primary provider; a
       // utility model on another provider cannot run through that harness.
-      const automaticRuntime = resolveAutomaticUtilityRuntimeOverride({
+      const selectedRuntime = resolveCompatibleAgentRuntimeForProvider({
+        provider: selection.provider,
+        runtime: params.agentHarnessRuntimeOverride,
         cfg: params.cfg,
-        agentId: params.agentId,
-        utilityProvider: selection.provider,
-        utilityModelId: selection.modelId,
       });
+      const automaticRuntime = selectedRuntime
+        ? undefined
+        : resolveAutomaticUtilityRuntimeOverride({
+            cfg: params.cfg,
+            agentId: params.agentId,
+            utilityProvider: selection.provider,
+            utilityModelId: selection.modelId,
+          });
       const agentHarnessRuntimeOverride =
-        automaticRuntime === "claude-cli"
-          ? automaticRuntime
-          : resolveCompatibleAgentRuntimeForProvider({
-              provider: selection.provider,
-              runtime: params.agentHarnessRuntimeOverride,
-              cfg: params.cfg,
-            });
+        selectedRuntime ?? (automaticRuntime === "claude-cli" ? automaticRuntime : undefined);
       const completion = await runIsolatedCompletion({
         purpose: "conversation-label",
         config: params.cfg,
