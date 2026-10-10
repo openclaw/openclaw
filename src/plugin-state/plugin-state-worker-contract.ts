@@ -8,7 +8,7 @@ import type {
 import type {
   PluginStateComparisonLimits,
   PluginStatePreparedComparison,
-} from "./plugin-state-store.comparison.js";
+} from "./plugin-state-store.comparison.worker.js";
 import type { PluginStateSequencedJournalParams } from "./plugin-state-store.journal.js";
 import type { PluginStateReadRow } from "./plugin-state-store.kernel.js";
 import type { PluginStateMoveEntriesParams } from "./plugin-state-store.mutations.js";

@@ -25,8 +25,6 @@ import type {
   PluginStateObservation,
 } from "./plugin-state-store.types.js";
 
-export { validatePluginStateComparison } from "./plugin-state-observation.js";
-
 type Key = { pluginId: string; namespace: string; key: string };
 export type PluginStatePreparedComparison = Key & {
   comparison: string;
