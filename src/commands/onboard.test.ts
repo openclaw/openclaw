@@ -118,7 +118,7 @@ vi.mock("../wizard/setup.migration-snapshot.js", () => ({
   withSetupMigrationTargetLock: mocks.withSetupMigrationTargetLock,
 }));
 
-// These tests cover option dispatch; the CLI process suite exercises real offline custody.
+// mock-isolation: Option-dispatch fixtures must not acquire state; CLI process tests cover custody.
 vi.mock("../cli/local-state-owner.js", () => ({
   runWithLocalStateOwner: async ({ runLocal }: { runLocal: () => Promise<unknown> }) =>
     await runLocal(),

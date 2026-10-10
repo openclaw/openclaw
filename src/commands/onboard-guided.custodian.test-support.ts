@@ -28,7 +28,7 @@ vi.mock("./auth-choice-prompt.js", () => ({
 }));
 
 vi.mock("../agents/auth-profiles.runtime.js", () => ({ ensureAuthProfileStore }));
-// Flow fixtures replace state writes; the CLI process suite owns physical custody coverage.
+// mock-isolation: Guided-flow fixtures use synthetic IO; CLI process tests cover real custody.
 vi.mock("../cli/local-state-owner.js", () => ({
   runWithLocalStateOwner: async ({ runLocal }: { runLocal: () => Promise<unknown> }) =>
     await runLocal(),
