@@ -36,6 +36,14 @@ are not part of the correctness contract. SQLite statements in autocommit see
 committed rows without a freshness query. Keep explicit read transactions only
 where multiple statements need one consistent snapshot.
 
+Idle outbound recovery and the Web Push subscription-presence check reuse
+physical-database facts on the Gateway host, avoiding worker requests as well as
+SQL. Queue insertions and replacements invalidate the empty recovery fact;
+subscription mutations publish or invalidate presence through the existing
+commit receipts. These facts do not authorize sends: delivery custody and current
+subscription policy remain with their existing owners. Mention Inbox head checks
+use the same physical-database admission lifecycle.
+
 Outside writers, including CLI commands, Doctor, cron processes, native companion
 processes, and plugin children, must route through the Gateway or acquire exclusive
 ownership while it is stopped. Existing direct writers that have not adopted that
