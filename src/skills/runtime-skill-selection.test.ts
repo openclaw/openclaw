@@ -20,7 +20,7 @@ describe("runtime skill selection marker", () => {
       sessionKey: "agent:main:discord:channel:1",
       sessionId: "session-1",
       runId: "run-1",
-      selectedSkill: "debug-toolkit",
+      selectedSkill: "debug--toolkit",
       selectionSource: "observed_runtime",
       selectionConfidence: "observed",
       selectionRule: "tool_invocation",
@@ -30,41 +30,23 @@ describe("runtime skill selection marker", () => {
     });
   });
 
-  it("sanitizes skill names with unsafe characters for audit storage", () => {
+  it.each([
+    // Distinct runtime names keep distinct audit identities.
+    ["Daily Brief", "Daily-20-Brief"],
+    ["Daily-Brief", "Daily--Brief"],
+    ["_helper", "_helper"],
+    ["helper", "helper"],
+    ["../secret", "..-2f-secret"],
+    ["___", "___"],
+    ["-", "x---"],
+    ["debug-toolkit", "debug--toolkit"],
+  ])("preserves a distinguishable identity for %s", (skillName, expected) => {
     const marker = buildRuntimeSkillSelectionMarker({
-      skillName: "Daily Brief",
+      skillName,
       skillSource: "workspace",
       activation: "read",
     });
-    expect(marker.selectedSkill).toBe("Daily-Brief");
-  });
-
-  it("sanitizes path-like skill names for audit storage", () => {
-    const marker = buildRuntimeSkillSelectionMarker({
-      skillName: "../secret",
-      skillSource: "workspace",
-      activation: "read",
-    });
-    // Path prefix gets sanitized to hyphens then leading non-alphanumerics stripped
-    expect(marker.selectedSkill).toBe("secret");
-  });
-
-  it("strips leading punctuation so projector accepts the value", () => {
-    const marker = buildRuntimeSkillSelectionMarker({
-      skillName: "_helper",
-      skillSource: "workspace",
-      activation: "read",
-    });
-    expect(marker.selectedSkill).toBe("helper");
-  });
-
-  it("handles names that are all punctuation", () => {
-    const marker = buildRuntimeSkillSelectionMarker({
-      skillName: "___",
-      skillSource: "workspace",
-      activation: "read",
-    });
-    expect(marker.selectedSkill).toBe("unknown");
+    expect(marker.selectedSkill).toBe(expected);
   });
 
   it("returns unknown for empty skill names", () => {

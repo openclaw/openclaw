@@ -238,7 +238,8 @@ describe("hidden-run skill-selection audit attribution", () => {
         kind: "skill_selection",
         sessionKey,
         sessionId: "session-hidden",
-        toolName: "debug-toolkit",
+        // Runtime encoder doubles `-` so `debug-toolkit` ≠ `debug toolkit`.
+        toolName: "debug--toolkit",
       }),
     ]);
     expect(
@@ -263,7 +264,7 @@ describe("hidden-run skill-selection audit attribution", () => {
         kind: "skill_selection",
         sessionKey,
         sessionId: "session-hidden",
-        toolName: "debug-toolkit",
+        toolName: "debug--toolkit",
       }),
     ]);
   });

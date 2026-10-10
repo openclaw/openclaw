@@ -21,18 +21,47 @@ function cleanOptionalString(value: string | undefined): string | null {
   return trimmed ? trimmed : null;
 }
 
+const SKILL_NAME_MAX_INPUT_CHARS = 64;
+const ENCODED_SKILL_NAME_MAX_CHARS = 128;
+const skillNameByteEncoder = new TextEncoder();
+
 /**
- * Sanitize a skill name into a safe form for audit storage.
- * Skill names like "Daily Brief" are valid at runtime but contain characters
- * (spaces) that are not safe for audit field values. We replace unsafe
- * characters with hyphens, ensure the result starts with [A-Za-z0-9] as
- * required by the audit projector, and truncate to 128 chars.
+ * Encode a skill name into a distinguishable identity for audit storage.
+ * Runtime names like "Daily Brief" stay distinct from "Daily-Brief": every
+ * `-` doubles to `--` and every byte outside `[A-Za-z0-9._-]` becomes
+ * `-hh-` (lowercase hex), so distinct inputs never share an identity.
+ * A leading `-` would read as a CLI flag, so it is prefixed to `x-…`.
+ * Output fits the audit projector (`^[A-Za-z0-9._][A-Za-z0-9._-]{0,127}$`)
+ * and is bounded to 128 chars without cutting a trailing partial escape.
  */
 function sanitizeSkillName(value: string): string {
-  const trimmed = value.trim();
-  const safe = trimmed.replace(/[^A-Za-z0-9._-]/gu, "-").replace(/^[^A-Za-z0-9]+/u, "");
-  const result = safe.slice(0, 128);
-  return result && /^[A-Za-z0-9]/u.test(result) ? result : "unknown";
+  const trimmed = value.trim().slice(0, SKILL_NAME_MAX_INPUT_CHARS);
+  if (!trimmed) {
+    return "unknown";
+  }
+  let encoded = "";
+  for (const ch of trimmed) {
+    if (ch === "-") {
+      encoded += "--";
+    } else if (/[A-Za-z0-9._]/u.test(ch)) {
+      encoded += ch;
+    } else {
+      for (const byte of skillNameByteEncoder.encode(ch)) {
+        encoded += `-${byte.toString(16).padStart(2, "0")}-`;
+      }
+    }
+  }
+  if (encoded.startsWith("-")) {
+    encoded = `x-${encoded}`;
+  }
+  // Truncation can only cut inside a `-hh-` escape; a trailing `-` plus 1-2
+  // hex chars is therefore always partial. Complete escapes (`-hh-`) and
+  // doubled hyphens (`--`) never match and are preserved.
+  encoded = encoded.slice(0, ENCODED_SKILL_NAME_MAX_CHARS).replace(/-[0-9a-f]{1,2}$/u, "");
+  if (!encoded || !/^[A-Za-z0-9._]/u.test(encoded)) {
+    return "unknown";
+  }
+  return encoded;
 }
 
 export function buildRuntimeSkillSelectionMarker(params: {

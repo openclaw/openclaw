@@ -64,9 +64,15 @@ function legacyAuditSourceId(params: {
   return `${params.runId}:${params.sourceSequence}:${params.occurredAt}:${params.action}`;
 }
 
+// Accepts the runtime encoder output (see sanitizeSkillName in
+// skills/runtime-skill-selection.ts): `-` doubles to `--`, bytes outside
+// `[A-Za-z0-9._-]` become `-hh-` hex escapes, and a leading `-` is prefixed
+// to `x-…`. Leading `_`/`.` stay literal so `_helper` and `helper` remain
+// distinct; only a leading `-` is rejected (CLI-flag injection). Bounded
+// to 128 chars; the encoder never emits a trailing partial escape.
 function auditSkillSelectionName(value: unknown): string | undefined {
   const name = nonEmptyString(value)?.trim();
-  return name && /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u.test(name) ? name : undefined;
+  return name && /^[A-Za-z0-9._][A-Za-z0-9._-]{0,127}$/u.test(name) ? name : undefined;
 }
 
 function auditSkillSelectionSource(value: unknown): "observed_runtime" | "none" {
