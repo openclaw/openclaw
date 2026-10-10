@@ -15,8 +15,13 @@ function createSealedRecoveryBuildConfig(entry: typeof managedHandoffRuntimeEntr
   const identityReader = fileURLToPath(
     new URL("../../src/shared/freebsd-process-identity.ts", import.meta.url),
   );
-  const privateNativeLoader = fileURLToPath(
-    new URL("../../src/infra/update-managed-service-handoff-native-loader.ts", import.meta.url),
+  const nativeLoader = fileURLToPath(
+    new URL(
+      entry === managedHandoffRuntimeEntrypoint
+        ? "../../src/infra/update-managed-service-handoff-native-loader.ts"
+        : "../../src/infra/package-update-activation-native-loader.ts",
+      import.meta.url,
+    ),
   );
   return {
     entry: {
@@ -35,13 +40,11 @@ function createSealedRecoveryBuildConfig(entry: typeof managedHandoffRuntimeEntr
       createStateSchemaInlinePlugin(),
       {
         name: "openclaw:managed-handoff-native-loader",
-        // All shared identity consumers in this bundle use the same private loader.
-        // Normal installations and sibling sealed builds keep their own loader policy.
+        // All shared identity consumers in this bundle use its recovery-owned loader.
+        // Normal installations and other sealed builds keep their own loader policy.
         resolveId(source, importer) {
-          return entry === managedHandoffRuntimeEntrypoint &&
-            source === "./freebsd-process-identity-native.ts" &&
-            importer === identityReader
-            ? privateNativeLoader
+          return source === "./freebsd-process-identity-native.ts" && importer === identityReader
+            ? nativeLoader
             : null;
         },
       },
