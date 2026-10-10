@@ -723,7 +723,7 @@ health failures even when its credential probe succeeds. A channel suppressed by
 the crash-loop breaker cannot count as recovered. Inspect `openclaw health --json`
 and address the recorded failure before retrying. Normal channel startup grace
 and scheduled automatic recovery remain pending within the restart deadline;
-verification waits for recovery and does not start
+failed credential probes remain terminal during those waits. Verification does not start
 channels that an operator stopped or disable the breaker.
 
 When no update is active, `openclaw update status` labels the saved outcome

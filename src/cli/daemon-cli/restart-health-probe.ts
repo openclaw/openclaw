@@ -233,6 +233,18 @@ function readChannelProbeFailures(health: unknown) {
       if (account?.enabled === false || account?.configured === false) {
         continue;
       }
+      const probe = asOptionalRecord(account?.probe);
+      const probeFailure =
+        probe && (probe.timedOut === true || probe.ok === false)
+          ? {
+              id,
+              error:
+                typeof probe.error === "string" && probe.error.trim()
+                  ? probe.error
+                  : "check failed",
+            }
+          : undefined;
+      const definitiveProbeFailure = probe?.timedOut === true ? undefined : probeFailure;
       const lastError = typeof account?.lastError === "string" ? account.lastError.trim() : "";
       const healthState = typeof account?.healthState === "string" ? account.healthState : "";
       // A successful credential probe does not prove that the channel process is running.
@@ -285,25 +297,26 @@ function readChannelProbeFailures(health: unknown) {
             },
             healthState,
           );
+        if (probeFailure && probe?.timedOut === true) {
+          timeouts.push(probeFailure);
+        }
         errors.push({
           id,
-          error: lastError || healthState,
-          ...(recoveryGrace || restartHandoff ? { retryable: true } : {}),
+          error: definitiveProbeFailure?.error ?? (lastError || healthState),
+          ...((recoveryGrace || restartHandoff) && !definitiveProbeFailure
+            ? { retryable: true }
+            : {}),
         });
         continue;
       }
       if (account?.linked === false) {
         continue;
       }
-      const probe = asOptionalRecord(account?.probe);
-      if (!probe || (probe.timedOut !== true && probe.ok !== false)) {
+      if (!probeFailure) {
         continue;
       }
       // Retain the explicit timeout marker from older Gateways that also sent ok:false.
-      (probe.timedOut === true ? timeouts : errors).push({
-        id,
-        error: typeof probe.error === "string" && probe.error.trim() ? probe.error : "check failed",
-      });
+      (probe?.timedOut === true ? timeouts : errors).push(probeFailure);
     }
   }
   return { errors, timeouts };

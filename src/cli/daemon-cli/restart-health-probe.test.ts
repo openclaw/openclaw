@@ -602,8 +602,13 @@ describe("restart health", () => {
         lifecycle: "stopped",
         lastError: "gateway restart-loop breaker tripped",
       },
+      "gateway restart-loop breaker tripped",
     ],
-    ["disconnected transport", { healthState: "disconnected", running: true, connected: false }],
+    [
+      "disconnected transport",
+      { healthState: "disconnected", running: true, connected: false },
+      "disconnected",
+    ],
     [
       "terminal unlink",
       {
@@ -613,6 +618,7 @@ describe("restart health", () => {
         linked: false,
         lastError: "session logged out",
       },
+      "session logged out",
     ],
     [
       "blocked unlinked account",
@@ -622,6 +628,7 @@ describe("restart health", () => {
         running: false,
         linked: false,
       },
+      "auth-rejected",
     ],
     [
       "unlinked ingress failure",
@@ -631,8 +638,43 @@ describe("restart health", () => {
         running: false,
         linked: false,
       },
+      "ingress-unavailable",
     ],
-  ])("rejects %s despite a successful account credential probe", async (_label, runtime) => {
+    [
+      "definitive probe failure during startup grace",
+      {
+        healthState: "starting",
+        lifecycle: "starting",
+        running: true,
+        lastStartAt: Date.now(),
+        probe: { ok: false, error: "invalid credentials" },
+      },
+      "invalid credentials",
+    ],
+    [
+      "definitive probe failure during reconnect grace",
+      {
+        healthState: "reconnecting",
+        lifecycle: "recovering",
+        running: true,
+        connected: false,
+        lastStartAt: Date.now() - 120_001,
+        lastDisconnect: { at: Date.now(), error: "socket closed" },
+        probe: { ok: false, error: "invalid credentials" },
+      },
+      "invalid credentials",
+    ],
+    [
+      "definitive probe failure during restart handoff",
+      {
+        healthState: "not-running",
+        running: false,
+        restartPending: true,
+        probe: { ok: false, error: "invalid credentials" },
+      },
+      "invalid credentials",
+    ],
+  ])("rejects %s instead of reporting recovery", async (_label, runtime, expectedError) => {
     callGateway.mockImplementation(
       gatewayHealthResponse({
         server: { version: "2026.4.24", connId: "new" },
@@ -663,8 +705,7 @@ describe("restart health", () => {
     expect(snapshot.channelProbeErrors).toEqual([
       {
         id: "telegram/affected",
-        error:
-          "lastError" in runtime && runtime.lastError ? runtime.lastError : runtime.healthState,
+        error: expectedError,
       },
     ]);
     expect(sleep).not.toHaveBeenCalled();
