@@ -611,22 +611,11 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
     }
   }
 
-  private async retainIndexedSessionChunks(
-    prepared: PreparedMemoryIndexEntry,
-    generation: MemorySyncProviderGeneration | null,
-  ): Promise<PreparedMemoryIndexEntry> {
-    const database = this.database;
-    return await retainIndexedSessionChunks(prepared, database, generation, () => {
-      if (this.closed || database.closed || this.database !== database) {
-        throw new Error("Memory source owner changed before session delta planning");
-      }
-    });
-  }
-
   private async prepareIndexEntry(
     entry: MemoryIndexEntry,
     source: MemorySource,
     generation: MemorySyncProviderGeneration | null,
+    retain = true,
   ): Promise<PreparedMemoryIndexEntry | null> {
     const kind = entry.kind;
     const suppliedContent = entry.content;
@@ -705,9 +694,19 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
         chunks: prepared.chunks,
       };
     };
-    return source === "sessions" && kind !== "multimodal" && typeof suppliedContent === "string"
-      ? withMemoryWorkspacePreparation(this.workspaceDir, prepare)
-      : withMemoryWorkspaceLock(this.workspaceDir, prepare);
+    const preparedEntry =
+      source === "sessions" && kind !== "multimodal" && typeof suppliedContent === "string"
+        ? await withMemoryWorkspacePreparation(this.workspaceDir, prepare)
+        : await withMemoryWorkspaceLock(this.workspaceDir, prepare);
+    if (!preparedEntry || !retain) {
+      return preparedEntry;
+    }
+    const database = this.database;
+    return await retainIndexedSessionChunks(preparedEntry, database, generation, () => {
+      if (this.closed || database.closed || this.database !== database) {
+        throw new Error("Memory source owner changed before session delta planning");
+      }
+    });
   }
 
   protected override async indexFiles(items: MemoryIndexWorkItem[]): Promise<void> {
@@ -823,11 +822,10 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
         await this.indexFileWithGeneration(item.entry, item.source, generation);
         continue;
       }
-      const unplanned = await this.prepareIndexEntry(item.entry, item.source, generation);
-      if (!unplanned) {
+      const preparedEntry = await this.prepareIndexEntry(item.entry, item.source, generation);
+      if (!preparedEntry) {
         continue;
       }
-      const preparedEntry = await this.retainIndexedSessionChunks(unplanned, generation);
       const nextWouldExceedRequests =
         preparedRequestCount + preparedEntry.chunks.length > SOURCE_WIDE_BATCH_MAX_REQUESTS;
       if (prepared.length > 0 && nextWouldExceedRequests) {
@@ -866,17 +864,13 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
     if (generation?.kind !== "semantic" && entry.kind === "multimodal") {
       return;
     }
-    const unplanned = await this.prepareIndexEntry(entry, source, generation);
-    if (!unplanned) {
+    const prepared = await this.prepareIndexEntry(entry, source, generation, retain);
+    if (!prepared) {
       return;
     }
-    const prepared = retain
-      ? await this.retainIndexedSessionChunks(unplanned, generation)
-      : unplanned;
     // An unchanged or truncated session has nothing to embed.
     if (generation?.kind !== "semantic" || prepared.chunks.length === 0) {
-      await this.writeChunks(prepared, generation, [], false);
-      return;
+      return await this.writeChunks(prepared, generation, [], false);
     }
 
     let embeddings: number[][];
@@ -904,8 +898,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
           model: generation.provider.model,
           error: message,
         });
-        await this.writeChunks({ ...prepared, chunks: [] }, generation, [], false);
-        return;
+        return await this.writeChunks({ ...prepared, chunks: [] }, generation, [], false);
       }
       throw err;
     }
