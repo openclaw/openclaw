@@ -8,6 +8,7 @@ vi.mock("../config/config.js", () => ({
   getRuntimeConfig: () => loadConfigMock(),
 }));
 
+// mock-isolation: Turn-source tests supply surface availability without consulting live channel approvals.
 vi.mock("./exec-approval-surface.js", () => ({
   resolveApprovalInitiatingSurfaceStateAsync: async (...args: unknown[]) =>
     resolveApprovalInitiatingSurfaceStateMock(...args),

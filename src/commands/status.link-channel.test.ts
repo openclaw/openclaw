@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 const pluginRegistry = vi.hoisted(() => ({ list: [] as unknown[] }));
 
+// mock-isolation: Link status uses the fixture registry without loading persisted channel accounts.
 vi.mock("../channels/plugins/read-only.js", () => ({
   listReadOnlyChannelPluginsForConfigAsync: async () => pluginRegistry.list,
 }));

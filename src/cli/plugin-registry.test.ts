@@ -100,6 +100,7 @@ vi.mock("../plugins/loader.js", () => ({
   ) => mocks.loadAndActivateRootPluginRegistry(...args),
 }));
 
+// mock-isolation: Registry selection uses fixture channel ids without persisted channel discovery.
 vi.mock("../plugins/channel-plugin-ids.js", () => ({
   resolveConfiguredChannelPluginIdsAsync: async (
     ...args: Parameters<typeof mocks.resolveConfiguredChannelPluginIds>
@@ -108,6 +109,7 @@ vi.mock("../plugins/channel-plugin-ids.js", () => ({
     mocks.resolveChannelPluginIds(...args),
 }));
 
+// mock-isolation: Registry selection uses fixture plugin ids without installed-plugin discovery.
 vi.mock("../plugins/effective-plugin-ids.js", () => ({
   resolveEffectivePluginIdsAsync: async (
     ...args: Parameters<typeof mocks.resolveEffectivePluginIds>

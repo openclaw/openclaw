@@ -50,6 +50,7 @@ vi.mock("../config/config.js", () => ({
 vi.mock("../runtime.js", () => ({
   defaultRuntime: { log: vi.fn(), error: vi.fn(), warn: vi.fn() },
 }));
+// mock-isolation: Streaming fixtures authorize their sender without command-owner database admission.
 vi.mock("./command-auth.js", () => ({
   resolveCommandAuthorizationAsync: vi.fn(() => ({ isAuthorizedSender: true })),
 }));

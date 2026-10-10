@@ -176,6 +176,7 @@ export const matrixMessageActions: ChannelMessageActionAdapter = {
     );
   },
   describeMessageToolAsync: async ({ cfg, accountId, senderIsOwner }) => {
+    // SAFETY: The host validates channels.matrix against this plugin's config schema.
     const resolvedCfg = cfg as CoreConfig;
     const account =
       !accountId && requiresExplicitMatrixDefaultAccount(resolvedCfg)

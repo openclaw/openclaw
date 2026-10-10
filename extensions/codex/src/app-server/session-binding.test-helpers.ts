@@ -1,5 +1,6 @@
 /** In-memory binding store helpers for Codex app-server tests. */
 export * from "./session-binding.js";
+import type { inspectConversationBinding } from "openclaw/plugin-sdk/conversation-binding-inspection-runtime";
 import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { legacyCodexConversationBindingId } from "../conversation-binding-data.js";
 import { resolveCodexSupervisionAppServerRuntimeOptions } from "./config.js";
@@ -210,4 +211,23 @@ export async function writeTestConversationBinding(
 
 export async function readTestConversationBinding(sessionFile: string) {
   return testCodexAppServerBindingStore.read(testConversationIdentity(sessionFile));
+}
+
+export function createConversationInspection(
+  conversation: Parameters<typeof inspectConversationBinding>[0],
+  bindingId: string | undefined,
+): ReturnType<typeof inspectConversationBinding> {
+  return {
+    status: "available",
+    binding: bindingId
+      ? {
+          bindingId,
+          targetSessionKey: "agent:main:codex-bound-test",
+          targetKind: "session",
+          conversation,
+          status: "active",
+          boundAt: 1,
+        }
+      : null,
+  };
 }
