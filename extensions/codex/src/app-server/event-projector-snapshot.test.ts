@@ -168,6 +168,44 @@ describe("buildCodexMessagesSnapshot", () => {
     );
   });
 
+  it("keeps a persisted earlier answer separate from a later tool-authored reply", async () => {
+    const projector = await createProjector();
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: {
+          type: "agentMessage",
+          id: "earlier-answer",
+          phase: "final_answer",
+          text: "Earlier answer.",
+        },
+      }),
+    );
+    const prefix = projector.buildSteeringTranscriptPrefix();
+    commitSteeringPrefix(projector, prefix);
+
+    const result = projector.buildResult({
+      ...buildEmptyToolTelemetry(),
+      messagingToolSourceReplyPayloads: [
+        {
+          text: "Later tool reply.",
+          sourceReplyFinal: true,
+          toolAuthored: true,
+          toolAuthoredForToolCallId: "later-call",
+          toolAuthoredForTurnId: "turn-1",
+        },
+      ],
+    });
+
+    expect(result.assistantTexts).toEqual([]);
+    expect(result.lastAssistant).toBeUndefined();
+    expect(result.currentAttemptAssistant).toMatchObject({ turnId: "turn-1" });
+    expect(prefix).toMatchObject([
+      { role: "assistant", content: [{ type: "text", text: "Earlier answer." }] },
+    ]);
+    expect(prefix[0]).not.toHaveProperty("turnId");
+    expect(prefix.map(readMirrorIdentity)).toEqual(["turn-1:assistant:earlier-answer"]);
+  });
+
   it("adopts the saved prefix for a raw completion with a replacement identity", async () => {
     const completionId = "raw-completed";
     const projector = await createProjector();

@@ -26,7 +26,7 @@ import { createPluginNativeImportPattern } from "./plugin-native-resolution.js";
 import {
   capturePluginPackageMetadata,
   capturePluginDependencies,
-  capturePluginModuleSource,
+  resolvePluginModulePackageRoot,
   createPluginDependencyLookup,
   createPluginDependencyResolver,
   createPluginNativeDependencyScopes,
@@ -67,6 +67,8 @@ function createPluginGenerationArtifact(
   const sourceCapture = retained?.source.sourceCapture ?? createPluginSourceCapture();
   const directory = sourceCapture.directory;
   const packages = new Map<string, PluginPackageCapture>();
+  const packageForFile = (filename: string) =>
+    findPluginCapturedPackage(packages, filename, directory)?.owner;
   const capturedPaths = new Map<string, string>();
   const originalSources = new Map<string, string>();
   const hardlinkedSources = new Set<string>();
@@ -79,7 +81,7 @@ function createPluginGenerationArtifact(
   );
   const metadataCapture = createPluginPackageMetadataCapture({
     sourceForCaptured: (filename) => originalSources.get(filename),
-    packageForFile: (filename) => packageForFile(filename),
+    packageForFile,
     isRetainedReference: nativeAdmission.isRetainedReference,
     resolveSource: nativeAdmission.resolvePreparedSource,
   });
@@ -123,7 +125,7 @@ function createPluginGenerationArtifact(
       if (!metadataOnly) {
         existing.materialize(executableEntry ? entry : undefined);
       }
-      return existing.destination;
+      return existing.capturedRoot;
     }
     const packageMap = createPluginPackageMapReferences();
     const packageId = `package-${packages.size}`;
@@ -140,7 +142,6 @@ function createPluginGenerationArtifact(
     sourceAliases[root] = destination;
     receipt.marker(`${packageId}\0`);
     const owner: PluginPackageCapture = {
-      destination,
       capturedRoot: destination,
       sourceRoot: boundary,
       links: new Set<string>(),
@@ -621,11 +622,14 @@ function createPluginGenerationArtifact(
     return destination;
   };
   const captureExecutableFile = (filename: string): string | undefined =>
-    execute?.(() =>
-      capturePluginModuleSource(filename, (root, source) => copyPackage(root, source, false, true)),
-    );
-  const packageForFile = (filename: string) =>
-    findPluginCapturedPackage(packages, filename, directory)?.owner;
+    execute?.(() => {
+      const real = fs.realpathSync(filename);
+      if (!fs.statSync(real).isFile()) {
+        return undefined;
+      }
+      copyPackage(resolvePluginModulePackageRoot(real), real, false, true);
+      return real;
+    });
 
   try {
     const sourceRoot = fs.realpathSync(rootDir);
