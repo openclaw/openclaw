@@ -24,7 +24,7 @@ cloud routing separate from the local `ollama` provider.
 Do not use the `/v1` OpenAI-compatible URL (`http://host:11434/v1`). It breaks tool calling and models can emit raw tool-call JSON as plain text. Use the native URL: `baseUrl: "http://host:11434"` (no `/v1`).
 </Warning>
 
-The canonical config key is `baseUrl`. `baseURL` is also accepted for
+The current config key is `baseUrl`. `baseURL` is also accepted for
 OpenAI-SDK-style examples, but new config should use `baseUrl`.
 
 This page is an index. Ollama is documented on nine pages, one per reader

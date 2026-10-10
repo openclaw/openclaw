@@ -283,7 +283,7 @@ An explicit tool model remains selected; the Grok 4.3 examples below are overrid
   tool calls, plus the model's input and output tokens. With each tool's
   `enabled` setting omitted, OpenClaw exposes it only for an active xAI model.
   A known non-xAI model provider requires an explicit per-tool `enabled: true`;
-  a missing or unresolved provider fails closed. xAI auth is always required,
+  a missing or unresolved provider blocks the request. xAI auth is always required,
   and `enabled: false` disables the tool for every provider.
 </Warning>
 
@@ -596,7 +596,7 @@ An explicit tool model remains selected; the Grok 4.3 examples below are overrid
     xAI to retain enough session state to resume the same conversation after a
     reconnect and then reconnects with the returned conversation id. Leave it
     disabled when provider-side replay/retention is not acceptable; interrupted
-    sockets then fail closed instead of silently starting a fresh conversation.
+    sockets then stop instead of silently starting a fresh conversation.
     </Note>
 
   </Accordion>

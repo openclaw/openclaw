@@ -97,7 +97,7 @@ must declare their own development dependencies rather than rely on hoisting.
   - `pnpm test:extension --list` to see valid extension ids
   - If you changed shared plugin or channel surfaces, run `pnpm test:contracts`
   - For targeted shared-surface work, use `pnpm test:contracts:channels` or `pnpm test:contracts:plugins`
-  - These commands also cover the shared seam/smoke files that the default unit lane skips
+  - These commands also cover the shared integration/smoke files that the default unit lane skips
   - If you changed broader runtime behavior, still run the relevant wider lanes (`pnpm test:extensions`, `pnpm test:channels`, or `pnpm test`) before asking for review
 - If you touched bundled-plugin boundaries in shared code, run the matching inventories:
   - `node --import tsx scripts/check-src-extension-import-boundary.mts --json` for `src/**`
@@ -108,7 +108,7 @@ must declare their own development dependencies rather than rely on hoisting.
 - Do not submit refactor-only PRs unless a maintainer explicitly requested that refactor for an active fix or deliverable.
 - Do not submit test or CI-config fixes for failures already red on `main` CI. If a failure is already visible in the [main branch CI runs](https://github.com/openclaw/openclaw/actions), it's a known issue the Maintainer team is tracking, and a PR that only addresses those failures will be closed automatically. If you spot a _new_ regression not yet shown in main CI, report it as an issue first.
 - Do not submit test-only PRs that just try to make known `main` CI failures pass. Test changes are acceptable when they are required to validate a new fix or cover new behavior in the same PR.
-- Ensure CI checks pass
+- Check that CI checks pass
 - Keep PRs focused (one thing per PR; do not mix unrelated concerns)
 - Describe what & why
 - **Include screenshots** — one showing the problem/before, one showing the fix/after (for UI or visual changes)
@@ -281,4 +281,4 @@ For issues that don't fit a specific repo, or if you're unsure, email **security
 7. **Environment**
 8. **Remediation Advice**
 
-Reports without reproduction steps, demonstrated impact, and remediation advice will be deprioritized. Given the volume of AI-generated scanner findings, we must ensure we're receiving vetted reports from researchers who understand the issues.
+Reports without reproduction steps, demonstrated impact, and remediation advice will be deprioritized. Given the volume of AI-generated scanner findings, we need reports that researchers have checked and understand.

@@ -72,7 +72,7 @@ you only need an issued ClawRouter key.
 ## Managed non-interactive deployment
 
 Keep the ClawRouter key in the workload's secret injection and store only a
-SecretRef in `openclaw.json`. The canonical managed fields are:
+SecretRef in `openclaw.json`. The managed fields are:
 
 | Purpose       | Config or environment field                                              |
 | ------------- | ------------------------------------------------------------------------ |
@@ -179,12 +179,12 @@ The plugin sends bounded `X-ClawRouter-Client`, `X-ClawRouter-Agent-Id`, and
 maps the model call's diagnostic `callId` (`<run-id>:model:<n>`) to
 `X-Request-ID`, so an OpenClaw model-call event can be joined to ClawRouter's
 metadata-only audit trail. Values within the 128-character request-id budget are
-identical. Longer values retain the `:model:<n>` suffix and a deterministic
+identical. Longer values retain the `:model:<n>` suffix and a stable
 hash so distinct calls remain bounded and joinable. Static deployment metadata
 such as `X-ClawRouter-Project-Id` can be set in the provider `headers` map.
 Agent and session attribution headers retain their separate 256-character
 limit. Automatic request ids containing characters outside ClawRouter's ASCII
-identifier set use the same deterministic bounded form.
+identifier set use the same size-limited hash format.
 Explicit configured headers, including any case variant of `X-Request-ID`, win
 over automatic values. The transport diagnostic records routing and response
 metadata; it does not log credentials, request ids, prompts, or completions.
@@ -283,7 +283,7 @@ the same ClawRouter policy can change the remaining percentage.
 - Automatic attribution and request-correlation values are trimmed and control-character rejected before dispatch. Attribution values are bounded to 256 characters; request ids are bounded to 128.
 - Model transport diagnostics contain metadata only and never include the ClawRouter key or model content.
 - Native Anthropic and Gemini model ids are rewritten to their upstream ids only at dispatch.
-- Unsupported or ungranted catalog rows fail closed and are not selectable.
+- Unsupported or ungranted catalog rows are not selectable.
 
 ## Related
 

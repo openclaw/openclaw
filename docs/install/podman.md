@@ -208,8 +208,8 @@ openclaw doctor --json
 
 - **Token generation fails:** Setup and launch stop before saving a generated token or starting the container when the selected random source (`openssl`, Python, or `od`) fails. Repair that command and retry.
 - **Init executable missing (`lookup init binary` / `container-init binary not found on the host`):** Install `catatonit` on the Podman engine host or repair its configured `init_path`/`helper_binaries_dir` in `containers.conf`, then retry. Installing the helper inside the Gateway or sandbox image does not repair the engine host. Keep `--init` enabled; see [Host init prerequisite](/gateway/sandboxing/podman-backend#host-init-prerequisite).
-- **Permission denied (EACCES) on config or workspace:** The container runs with `--userns=keep-id` and `--user <your uid>:<your gid>` by default. Ensure the host config/workspace paths are owned by your current user.
-- **Gateway start blocked (missing `gateway.mode=local`):** Ensure `~/.openclaw/openclaw.json` exists and sets `gateway.mode="local"`. `scripts/podman/setup.sh` creates this if missing.
+- **Permission denied (EACCES) on config or workspace:** The container runs with `--userns=keep-id` and `--user <your uid>:<your gid>` by default. Check that the host config/workspace paths are owned by your current user.
+- **Gateway start blocked (missing `gateway.mode=local`):** Check that `~/.openclaw/openclaw.json` exists and sets `gateway.mode="local"`. `scripts/podman/setup.sh` creates this if missing.
 - **Container restarts after an image update:** Run the one-off `openclaw doctor --fix` command in [Upgrading images](#upgrading-images), then start the gateway again.
 - **Container CLI commands hit the wrong target:** Use `openclaw --container <name> ...` explicitly, or export `OPENCLAW_CONTAINER=<name>` in your shell.
 - **`openclaw update` fails with `--container`:** Expected. Rebuild/pull the image, then restart the container or the Quadlet service.

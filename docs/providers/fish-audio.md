@@ -57,7 +57,7 @@ Then configure the provider:
 
 `speakerVoiceId` is optional. Without it, Fish Audio uses its default voice.
 `FISH_AUDIO_API_KEY` is also accepted for compatibility with existing community
-plugins, but `FISH_API_KEY` is the canonical Fish SDK environment variable.
+plugins, but `FISH_API_KEY` is the standard Fish SDK environment variable.
 
 ### Hosted models
 

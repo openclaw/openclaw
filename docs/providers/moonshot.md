@@ -422,7 +422,7 @@ at $0.30 per million tokens. See
   </Accordion>
 
   <Accordion title="Tool call id sanitization">
-    Moonshot Kimi serves native tool_call ids shaped like `functions.<name>:<index>`. OpenClaw preserves the first occurrence of each native Kimi id and rewrites later duplicates to deterministic OpenAI-style `call_*` ids. Matching tool results are remapped with the same id so replay remains unique without stripping Kimi's first native id. This behavior is wired into the bundled Moonshot provider and is not a user-configurable setting.
+    Moonshot Kimi serves native tool_call ids shaped like `functions.<name>:<index>`. OpenClaw preserves the first occurrence of each native Kimi id and rewrites later duplicates to stable OpenAI-style `call_*` ids. Matching tool results are remapped with the same id so replay remains unique without stripping Kimi's first native id. This behavior is wired into the bundled Moonshot provider and is not a user-configurable setting.
   </Accordion>
 
   <Accordion title="Streaming usage compatibility">
