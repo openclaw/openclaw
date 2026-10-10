@@ -205,7 +205,6 @@ function createStagingOwner(workerUrl: URL, nativeSource: RetainedNativeWorkerSo
         ? { ...command, preparationId, abortPort: cancellation.port2 }
         : { ...command, preparationId };
     requests++;
-    let request: RetainedOperation<SuccessfulReply>;
     let pendingClose: RetainedOperation<void> | undefined;
     const preparation = {
       directories: new Set<string>(),
@@ -245,7 +244,7 @@ function createStagingOwner(workerUrl: URL, nativeSource: RetainedNativeWorkerSo
       }
       return reply;
     });
-    request = finallyRetainedOperation(
+    const request: RetainedOperation<SuccessfulReply> = finallyRetainedOperation(
       result,
       () =>
         (release = finallyRetainedOperation(task.release(), () => {
@@ -283,7 +282,10 @@ function createStagingOwner(workerUrl: URL, nativeSource: RetainedNativeWorkerSo
           removals ??= [...preparation.directories].map(
             (directory): [string, RetainedOperation<boolean>] => {
               const removal = startRemoveTempDirectory(directory);
-              void removal.result.then(closing.operation.service, closing.operation.service);
+              void removal.result.then(
+                () => closing.operation.service(),
+                () => closing.operation.service(),
+              );
               return [directory, removal];
             },
           );
@@ -315,7 +317,10 @@ function createStagingOwner(workerUrl: URL, nativeSource: RetainedNativeWorkerSo
         }
       });
       pendingClose = closing.operation;
-      void request.result.then(closing.operation.service, closing.operation.service);
+      void request.result.then(
+        () => closing.operation.service(),
+        () => closing.operation.service(),
+      );
       closing.operation.service();
       return closing.operation;
     }

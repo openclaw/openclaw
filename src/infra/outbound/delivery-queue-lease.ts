@@ -51,7 +51,6 @@ export async function startDeliveryProducerLease(params: {
       }
       if (expiresAt === undefined) {
         abortLost();
-        return;
       }
     } catch (error) {
       abortLost(error);

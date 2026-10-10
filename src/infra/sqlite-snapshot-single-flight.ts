@@ -107,7 +107,7 @@ function createFlight(
     } else {
       if (!cleanup) {
         cleanup = releaseSnapshot(flight, outcome.value);
-        serviceWhenSettled(cleanup, settled.operation.service);
+        serviceWhenSettled(cleanup, () => settled.operation.service());
       }
       cleanup.service();
       const removed = cleanup.read();
@@ -120,7 +120,7 @@ function createFlight(
   });
   function serviceFlight() {
     production.operation.service();
-    for (const service of [...flight.listeners]) {
+    for (const service of flight.listeners) {
       service();
     }
     settled.operation.service();
@@ -245,13 +245,14 @@ function startSnapshotFlight(
         retained.reject(outcome.error);
       }
     }
-    signal?.removeEventListener("abort", retained.operation.service);
-    selected.listeners.delete(retained.operation.service);
+    signal?.removeEventListener("abort", service);
+    selected.listeners.delete(service);
     selected.settled.service();
   });
-  selected.listeners.add(retained.operation.service);
-  signal?.addEventListener("abort", retained.operation.service, { once: true });
-  queueMicrotask(retained.operation.service);
+  const service = () => retained.operation.service();
+  selected.listeners.add(service);
+  signal?.addEventListener("abort", service, { once: true });
+  queueMicrotask(service);
   return {
     ...retained.operation,
     startClose() {
