@@ -1,9 +1,14 @@
 /* @vitest-environment jsdom */
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { selectBackgroundSource } from "../../../packages/gateway-protocol/src/schema/background-preferences.ts";
+import { resolveThemeBranding } from "../../../packages/gateway-protocol/src/theme.ts";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
-import type { ApplicationContext, ApplicationGatewaySnapshot } from "../app/context.ts";
+import type {
+  ApplicationContext,
+  ApplicationGatewaySnapshot,
+  ApplicationTheme,
+} from "../app/context.ts";
 import { loadSettings } from "../app/settings.ts";
 import { createApplicationGateway } from "../test-helpers/application-context.ts";
 import { readBackgroundImage } from "./session-background-image.ts";
@@ -16,7 +21,7 @@ vi.mock("../app/server-prefs-profile.ts", () => ({
   resolveProfileAppearancePrefs: () => (profilePreferences.ready ? {} : null),
 }));
 
-function fixture() {
+function fixture(resourceBasePath = "/control") {
   const state: ApplicationGatewaySnapshot = {
     client: {} as GatewayBrowserClient,
     phase: "connected",
@@ -37,17 +42,21 @@ function fixture() {
     ...loadSettings(),
     background: selectBackgroundSource({ kind: "custom", assetId: "asset-a" }),
   };
-  const context = {
-    resourceBasePath: "/control",
-    gateway: gateway.gateway,
-    theme: {
-      settings,
-      subscribe: (notify: () => void) => {
-        listeners.add(notify);
-        return () => listeners.delete(notify);
-      },
+  const theme: ApplicationTheme = {
+    settings,
+    branding: resolveThemeBranding(undefined),
+    mode: "dark",
+    resolvedMode: "dark",
+    serverSelection: null,
+    recordServerSelection: () => undefined,
+    setMode: () => undefined,
+    refresh: () => listeners.forEach((notify) => notify()),
+    subscribe: (notify: () => void) => {
+      listeners.add(notify);
+      return () => listeners.delete(notify);
     },
-  } as ApplicationContext;
+  };
+  const context = { resourceBasePath, gateway: gateway.gateway, theme } as ApplicationContext;
   return {
     context,
     settings,
@@ -259,12 +268,12 @@ it.each([
 });
 
 it("preserves the explicit same-origin development proxy mount", async () => {
-  const { context } = fixture();
   const gatewayUrl = "wss://remote.example/control";
   const proxyPath = `/__openclaw_dev_gateway__/${encodeURIComponent(gatewayUrl)}`;
   vi.stubGlobal("OPENCLAW_UI_DEV_GATEWAY", { gatewayUrl, proxyPath });
+  const { context } = fixture(`${proxyPath}/control`);
   context.gateway.connection.gatewayUrl = gatewayUrl;
-  context.resourceBasePath = `${proxyPath}/control`;
+
   await readBackgroundImage(context, "asset-a", {
     signal: new AbortController().signal,
     isCurrent: () => true,
@@ -468,30 +477,37 @@ it("allows a temporary settings preview without changing disabled placements", a
   expect(revokeObjectUrl).toHaveBeenCalledWith("blob:background-a");
 });
 
+type RGB = readonly [number, number, number];
+type RGBA = readonly [number, number, number, number];
+
 it.each([
   { surface: [16, 20, 28], foreground: [240, 240, 248, 190] },
   { surface: [248, 244, 240], foreground: [12, 16, 24, 210] },
-])(
+] satisfies Array<{ surface: RGB; foreground: RGBA }>)(
   "protects translucent foregrounds against every extreme image color",
   ({ surface, foreground }) => {
     const opacity = backgroundImageOpacityLimit(surface, [foreground]);
-    const luma = (rgb: number[]) =>
-      rgb
-        .map((value) => {
-          const n = value / 255;
-          return n <= 0.04045 ? n / 12.92 : ((n + 0.055) / 1.055) ** 2.4;
-        })
-        .reduce((sum, value, index) => sum + value * [0.2126, 0.7152, 0.0722][index], 0);
+    const luma = (rgb: RGB) => {
+      const linear = (value: number) => {
+        const n = value / 255;
+        return n <= 0.04045 ? n / 12.92 : ((n + 0.055) / 1.055) ** 2.4;
+      };
+      return linear(rgb[0]) * 0.2126 + linear(rgb[1]) * 0.7152 + linear(rgb[2]) * 0.0722;
+    };
     for (const red of [0, 255]) {
       for (const green of [0, 255]) {
         for (const blue of [0, 255]) {
-          const background = [red, green, blue].map(
-            (value, index) => surface[index] * (1 - opacity) + value * opacity,
-          );
+          const blendSurface = (channel: 0 | 1 | 2, value: number) =>
+            surface[channel] * (1 - opacity) + value * opacity;
+          const background: RGB = [
+            blendSurface(0, red),
+            blendSurface(1, green),
+            blendSurface(2, blue),
+          ];
           const alpha = foreground[3] / 255;
-          const text = foreground
-            .slice(0, 3)
-            .map((value, index) => value * alpha + background[index] * (1 - alpha));
+          const blendText = (channel: 0 | 1 | 2) =>
+            foreground[channel] * alpha + background[channel] * (1 - alpha);
+          const text: RGB = [blendText(0), blendText(1), blendText(2)];
           expect(
             (Math.max(luma(text), luma(background)) + 0.05) /
               (Math.min(luma(text), luma(background)) + 0.05),

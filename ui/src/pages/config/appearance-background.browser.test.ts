@@ -3,6 +3,7 @@ import {
   DEFAULT_BACKGROUND_PREFERENCE,
   type BackgroundPreference,
 } from "../../../../packages/gateway-protocol/src/schema/background-preferences.ts";
+import { resolveThemeBranding } from "../../../../packages/gateway-protocol/src/theme.ts";
 import type { ApplicationContext, ApplicationTheme } from "../../app/context.ts";
 import { loadSettings } from "../../app/settings.ts";
 import type { SessionBackground } from "../../components/session-background.ts";
@@ -44,6 +45,7 @@ async function mount(preference: BackgroundPreference = DEFAULT_BACKGROUND_PREFE
   const themeListeners = new Set<() => void>();
   const settings = { ...loadSettings(), background: { ...preference } };
   const theme: ApplicationTheme = {
+    branding: resolveThemeBranding(undefined),
     settings,
     mode: "dark",
     resolvedMode: "dark",

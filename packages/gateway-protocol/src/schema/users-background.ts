@@ -6,7 +6,7 @@ import {
 } from "./background-preferences.js";
 import { closedObject } from "./closed-object.js";
 
-export const UserBackgroundAssetIdSchema = Type.String({ pattern: "^[A-Za-z0-9_-]{1,128}$" });
+const UserBackgroundAssetIdSchema = Type.String({ pattern: "^[A-Za-z0-9_-]{1,128}$" });
 export const BackgroundPreferenceSchema = closedObject({
   source: Type.Union([
     closedObject({ kind: Type.Literal("none") }),

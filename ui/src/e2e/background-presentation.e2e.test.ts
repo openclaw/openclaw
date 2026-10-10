@@ -257,31 +257,41 @@ suite.define(() => {
               const canvas = document.createElement("canvas");
               canvas.width = canvas.height = 1;
               const pixels = canvas.getContext("2d")!;
-              const color = (css: string) => {
+              type RGB = readonly [red: number, green: number, blue: number];
+              const color = (css: string): readonly [number, number, number, number] => {
                 pixels.clearRect(0, 0, 1, 1);
                 pixels.fillStyle = css;
                 pixels.fillRect(0, 0, 1, 1);
-                return [...pixels.getImageData(0, 0, 1, 1).data];
+                const [red, green, blue, alpha] = pixels.getImageData(0, 0, 1, 1).data;
+                if (
+                  red === undefined ||
+                  green === undefined ||
+                  blue === undefined ||
+                  alpha === undefined
+                ) {
+                  throw new Error("The contrast probe did not return a complete RGBA pixel");
+                }
+                return [red, green, blue, alpha];
               };
               const surface = color(getComputedStyle(probe).backgroundColor);
               const extreme = colorMode === "dark" ? 255 : 0;
-              const background = surface
-                .slice(0, 3)
-                .map((value) => value * (1 - opacity) + extreme * opacity);
-              const luma = (rgb: number[]) =>
-                rgb
-                  .map((value) => {
-                    const n = value / 255;
-                    return n <= 0.04045 ? n / 12.92 : ((n + 0.055) / 1.055) ** 2.4;
-                  })
-                  .reduce((sum, value, index) => sum + value * [0.2126, 0.7152, 0.0722][index], 0);
+              const blendSurface = (channel: 0 | 1 | 2) =>
+                surface[channel] * (1 - opacity) + extreme * opacity;
+              const background: RGB = [blendSurface(0), blendSurface(1), blendSurface(2)];
+              const luma = (rgb: RGB) => {
+                const linear = (value: number) => {
+                  const n = value / 255;
+                  return n <= 0.04045 ? n / 12.92 : ((n + 0.055) / 1.055) ** 2.4;
+                };
+                return linear(rgb[0]) * 0.2126 + linear(rgb[1]) * 0.7152 + linear(rgb[2]) * 0.0722;
+              };
               const ratios = ["--text", "--text-strong", "--muted", "--chat-text"].map((token) => {
                 probe.style.color = "var(" + token + ")";
                 const foreground = color(getComputedStyle(probe).color);
                 const alpha = foreground[3] / 255;
-                const text = foreground
-                  .slice(0, 3)
-                  .map((value, index) => value * alpha + background[index] * (1 - alpha));
+                const blendText = (channel: 0 | 1 | 2) =>
+                  foreground[channel] * alpha + background[channel] * (1 - alpha);
+                const text: RGB = [blendText(0), blendText(1), blendText(2)];
                 return (
                   (Math.max(luma(text), luma(background)) + 0.05) /
                   (Math.min(luma(text), luma(background)) + 0.05)
