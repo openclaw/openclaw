@@ -135,6 +135,8 @@ describe("memory_search index versions", () => {
 
   it("discloses a full retry handed to detached maintenance before embedding finishes", async () => {
     const cfg = uncachedConfig();
+    const now = Date.now();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(now);
     let failSync = false;
     let holdSync = false;
     const entered = createDeferred<void>();
@@ -162,6 +164,7 @@ describe("memory_search index versions", () => {
       failSync = true;
       await expect(manager.sync({ reason: "cli", force: true })).rejects.toThrow("HTTP 400");
       failSync = false;
+      clock.mockReturnValue(now + 30_000);
       holdSync = true;
       const embedded = fixture.provider.embedBatchCalls;
       const tool = createMemorySearchToolOrThrow({ config: cfg, agentId: "main" });
@@ -194,6 +197,7 @@ describe("memory_search index versions", () => {
       fixture.provider.beforeEmbedQuery = null;
       await closeAllMemorySearchManagers();
       get.mockRestore();
+      clock.mockRestore();
       fixture.provider.beforeEmbedBatch = null;
     }
   });

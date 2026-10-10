@@ -16,11 +16,7 @@ import {
   readMemoryCoreWorkspaceEntries,
   writeMemoryCoreWorkspaceEntries,
 } from "./dreaming-state.js";
-import {
-  listMemoryEntryOrigins,
-  listMemorySessionTombstones,
-  recordMemoryEntryOrigins,
-} from "./memory-entry-origins.js";
+import { listMemoryEntryOrigins, recordMemoryEntryOrigins } from "./memory-entry-origins.js";
 import { forgetMemoryEntries } from "./memory-forget.js";
 import {
   createMemoryForgetFixture,
@@ -28,6 +24,7 @@ import {
 } from "./memory-forget.test-helpers.js";
 import { runSessionBackfill } from "./session-backfill.js";
 import { readShortTermRecallEntries } from "./short-term-promotion.js";
+import { readMemoryForgetTombstonesForTest } from "./test-helpers.js";
 
 vi.mock("openclaw/plugin-sdk/process-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/process-runtime")>();
@@ -263,7 +260,7 @@ describe("memory forget", () => {
       curatedWrites: [{ relativePath: "USER.md", observedAt: expect.any(Number) }],
       artifacts: { memoryEntries: 1, sessionCorpusLines: 1, originRows: 1 },
     });
-    expect(await listMemorySessionTombstones({ agentId: "main" })).toEqual([]);
+    expect(readMemoryForgetTombstonesForTest({ agentId: "main" })).toEqual([]);
 
     const report = await forgetMemoryEntries({ cfg, agentId: "main", sessionIds: [selector] });
     expect(report).toEqual({ ...preview, dryRun: false });
@@ -274,7 +271,7 @@ describe("memory forget", () => {
       "Keep curated profile",
     );
     expect(await listMemoryEntryOrigins({ agentId: "main" })).toEqual([]);
-    expect(await listMemorySessionTombstones({ agentId: "main" })).toMatchObject([
+    expect(readMemoryForgetTombstonesForTest({ agentId: "main" })).toMatchObject([
       { sessionId: "archived", reason: "forgotten" },
     ]);
   });
@@ -392,7 +389,7 @@ describe("memory forget", () => {
         .filter(([name]) => name !== "embeddingCacheRows")
         .every(([, count]) => count === 0),
     ).toBe(true);
-    expect(await listMemorySessionTombstones({ agentId: "main" })).toEqual([]);
+    expect(readMemoryForgetTombstonesForTest({ agentId: "main" })).toEqual([]);
 
     const report = await forgetMemoryEntries({
       cfg,
@@ -400,7 +397,7 @@ describe("memory forget", () => {
       sessionIds: ["unknown-session"],
     });
     expect(report).toEqual({ ...preview, dryRun: false });
-    const tombstones = await listMemorySessionTombstones({ agentId: "main" });
+    const tombstones = readMemoryForgetTombstonesForTest({ agentId: "main" });
     expect(tombstones).toMatchObject([{ sessionId: "unknown-session", reason: "forgotten" }]);
     expect(
       await forgetMemoryEntries({ cfg, agentId: "main", sessionIds: ["unknown-session"] }),
@@ -408,7 +405,7 @@ describe("memory forget", () => {
       ...report,
       artifacts: { ...report.artifacts, embeddingCacheRows: 0 },
     });
-    expect(await listMemorySessionTombstones({ agentId: "main" })).toEqual(tombstones);
+    expect(readMemoryForgetTombstonesForTest({ agentId: "main" })).toEqual(tombstones);
     expect(await fs.readFile(memoryPath, "utf8")).toBe(content);
     expect(db.prepare("SELECT id FROM memory_index_chunks").all()).toEqual([{ id: "unrelated" }]);
     expect(db.prepare("SELECT hash FROM memory_embedding_cache").all()).toEqual([]);

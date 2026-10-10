@@ -28,6 +28,7 @@ type PersistedSessionCapabilityEntry = Pick<
   | "inheritedToolPolicySource"
   | "inheritedToolAllow"
   | "inheritedToolDeny"
+  | "delegatedToolPolicy"
 >;
 export type SessionCapabilityEntry = {
   [Key in keyof PersistedSessionCapabilityEntry]?: unknown;

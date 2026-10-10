@@ -1,6 +1,4 @@
-import path from "node:path";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
-import { isPathInside } from "../infra/path-guards.js";
 import { normalizePluginsConfigWithResolverCore } from "../plugins/config-normalization-shared.js";
 import {
   normalizePluginId,
@@ -10,7 +8,10 @@ import {
   resolveMemorySlotDecision,
 } from "../plugins/config-state.js";
 import { isPluginEnabledByDefaultForPlatform } from "../plugins/default-enablement.js";
-import { findUninspectedPluginDiagnostic } from "../plugins/discovery-availability.js";
+import {
+  createBlockedPluginDiagnosticLookup,
+  findUninspectedPluginDiagnostic,
+} from "../plugins/discovery-availability.js";
 import { resolveManifestCommandAliasOwnerInRegistry } from "../plugins/manifest-command-aliases.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import {
@@ -24,7 +25,7 @@ import {
 import { createPluginManifestIdNormalizer } from "../plugins/plugin-manifest-id-normalizer.js";
 import { normalizePluginPolicyId } from "../plugins/plugin-policy-id.js";
 import { hasKind } from "../plugins/slots.js";
-import { isRecord, resolveUserPath } from "../utils.js";
+import { isRecord } from "../utils.js";
 import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "./bundled-channel-config-metadata.generated.js";
 import { shouldSuppressMissingCodexPluginDiagnostics } from "./codex-plugin-diagnostics.js";
 import type { ConfigValidationIssue, OpenClawConfig } from "./types.js";
@@ -32,8 +33,6 @@ import {
   validatePreparedPluginSchemaValue,
   type PreparedPluginSchemaValidations,
 } from "./validation-prepared.js";
-
-const BLOCKED_PLUGIN_CANDIDATE_PREFIX = "blocked plugin candidate:";
 
 export function formatChannelConfigIssueMessage(message: string, pluginId?: string): string {
   const safePluginId = pluginId ? sanitizeForLog(pluginId).trim() : "";
@@ -125,74 +124,11 @@ export function validateExplicitPluginConfig(params: {
     resolveConfigPluginId,
   );
   const hasKnownPlugin = (id: string) => knownIds.has(resolveConfigPluginId(id));
-  const blockedPluginDiagnostics = new Map<string, { message: string; source?: string }>();
-  const blockedPluginDiagnosticsWithSource: Array<{ message: string; source: string }> = [];
-  const normalizeBlockedDiagnosticPath = (value: string | undefined): string => {
-    const trimmed = value?.trim();
-    if (!trimmed) {
-      return "";
-    }
-    try {
-      return path.resolve(resolveUserPath(trimmed, env ?? process.env));
-    } catch {
-      return path.resolve(trimmed);
-    }
-  };
-  for (const diag of registry.diagnostics) {
-    if (!diag.message.startsWith(BLOCKED_PLUGIN_CANDIDATE_PREFIX)) {
-      continue;
-    }
-    if (!diag.pluginId && diag.source) {
-      blockedPluginDiagnosticsWithSource.push({ message: diag.message, source: diag.source });
-    }
-    if (diag.pluginId) {
-      const normalizedPluginId = normalizePluginId(diag.pluginId);
-      for (const key of [diag.pluginId, normalizedPluginId]) {
-        if (key && !blockedPluginDiagnostics.has(key)) {
-          blockedPluginDiagnostics.set(key, {
-            message: diag.message,
-            ...(diag.source ? { source: diag.source } : {}),
-          });
-        }
-      }
-    }
-  }
-  const blockedDiagnosticSourceMatchesPluginId = (
-    diagnostic: { message: string; source: string },
-    pluginId: string,
-  ): boolean => {
-    const normalizedPluginId = normalizePluginId(pluginId);
-    if (!normalizedPluginId) {
-      return false;
-    }
-    const sourcePath = normalizeBlockedDiagnosticPath(diagnostic.source);
-    if (!sourcePath) {
-      return false;
-    }
-    if (
-      normalizePluginId(path.basename(sourcePath)) === normalizedPluginId ||
-      normalizePluginId(path.basename(path.dirname(sourcePath))) === normalizedPluginId
-    ) {
-      return true;
-    }
-    for (const loadPath of config.plugins?.load?.paths ?? []) {
-      const resolvedLoadPath = normalizeBlockedDiagnosticPath(loadPath);
-      if (
-        resolvedLoadPath &&
-        normalizePluginId(path.basename(resolvedLoadPath)) === normalizedPluginId &&
-        (isPathInside(resolvedLoadPath, sourcePath) || isPathInside(sourcePath, resolvedLoadPath))
-      ) {
-        return true;
-      }
-    }
-    return false;
-  };
-  const findBlockedPluginDiagnostic = (pluginId: string) =>
-    blockedPluginDiagnostics.get(pluginId) ??
-    blockedPluginDiagnostics.get(normalizePluginId(pluginId)) ??
-    blockedPluginDiagnosticsWithSource.find((diagnostic) =>
-      blockedDiagnosticSourceMatchesPluginId(diagnostic, pluginId),
-    );
+  const findBlockedPluginDiagnostic = createBlockedPluginDiagnosticLookup({
+    diagnostics: registry.diagnostics,
+    config,
+    env,
+  });
   const missingOfficialPluginWarningIds = new Set<string>();
   const deferredPluginWarningIds = new Set<string>();
   const noteDeferredPlugin = (pluginId: string, issuePath: string): boolean => {

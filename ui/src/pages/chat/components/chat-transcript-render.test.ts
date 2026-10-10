@@ -81,6 +81,9 @@ describe("chat transcript rendering", () => {
         transcript.hostConnected();
         transcript.hostUpdated();
         await flushDeferredRowPrune();
+        expect(
+          container.querySelector(".chat-thread")?.classList.contains("chat-thread--direct"),
+        ).toBe(avatarPlacement !== "gutter");
         const replies = container.querySelectorAll(".chat-group.assistant");
         expect(replies).toHaveLength(3);
         for (const reply of replies) {

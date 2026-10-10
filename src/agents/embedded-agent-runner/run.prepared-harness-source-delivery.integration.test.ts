@@ -211,8 +211,6 @@ describe("prepared harness source delivery", () => {
           chatType: "direct",
         },
         tools: attemptParams.forceMessageTool ? [{ name: "message" } as never] : [],
-        userTimezone: "UTC",
-        userDate: "2026-08-11",
       });
     };
     mockedBuildEmbeddedRunPayloads.mockReturnValue(

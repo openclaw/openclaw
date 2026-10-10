@@ -1,7 +1,7 @@
 import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { captureIncognitoSessionSource } from "../../config/sessions/session-incognito-binding.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { resolveGatewaySessionStoreTargetWithStore } from "../../gateway/session-utils-store-lookup.js";
+import { resolveGatewaySessionStoreTargetInWorker } from "../../gateway/session-utils-store-worker.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { withSubagentSessionSource } from "../subagents/spawn/subagent-session-source.js";
 import type { SessionsSendToolOptions } from "./sessions-send-tool.types.js";
@@ -24,13 +24,10 @@ export function withSessionsSendRequesterSource<T>(
 /** Target lookup stays native; an explicitly selected requester uses its retained actor. */
 export function createSessionsSendSessionReaders(cfg: OpenClawConfig) {
   const readTarget = (key: string, agentId: string) =>
-    resolveGatewaySessionStoreTargetWithStore({
+    resolveGatewaySessionStoreTargetInWorker({
       cfg,
       key,
       agentId,
-      readOnly: true,
-      exactRead: true,
-      clone: false,
       projection: "full",
     });
   return {

@@ -235,16 +235,16 @@ describe("mcp cli OAuth", () => {
       completeMcpOAuthAuthorization.mockClear();
       clearMcpOAuthCredentials.mockClear();
 
-      await expect(runMcpCommand(["mcp", "login", "calendar", "--code", "abc123"])).rejects.toThrow(
-        "__exit__:1",
-      );
+      await expect(
+        runMcpCommand(["mcp", "login", "calendar", "--code", "abc123"]),
+      ).rejects.toMatchObject({ code: 1 });
       expect(lastErrorLine()).toBe(
         'MCP server "calendar" uses per-requester OAuth. Senders connect from the channel via the MCP connect flow.',
       );
       expect(completeMcpOAuthAuthorization).not.toHaveBeenCalled();
 
       mockError.mockClear();
-      await expect(runMcpCommand(["mcp", "logout", "calendar"])).rejects.toThrow("__exit__:1");
+      await expect(runMcpCommand(["mcp", "logout", "calendar"])).rejects.toMatchObject({ code: 1 });
       expect(lastErrorLine()).toBe(
         'MCP server "calendar" uses per-requester OAuth. Remove or replace the server to clear requester credentials.',
       );

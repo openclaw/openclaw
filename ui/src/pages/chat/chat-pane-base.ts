@@ -75,7 +75,11 @@ import { ChatTranscriptController } from "./components/chat-transcript-controlle
 import type { SessionDiscussionPanelConfig } from "./components/session-discussion-panel.ts";
 import { hasDirectSessionRun } from "./run-lifecycle.ts";
 import { canAutoFollowChat, handleChatScrollTakeover } from "./scroll.ts";
-import type { ChatMessageCache } from "./session-message-cache.ts";
+import {
+  cacheChatSessionSnapshot,
+  readChatSessionSnapshot,
+  type ChatMessageCache,
+} from "./session-message-cache.ts";
 import { resolveChatSnapshotKey } from "./session-snapshot-key.ts";
 import type { SessionSnapshotStore } from "./session-snapshot-store.ts";
 import type { SidebarLayout } from "./sidebar-layout-types.ts";
@@ -377,7 +381,6 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
     this.requestUpdate(),
   );
   protected readonly transcript = new ChatTranscriptController(this, () => this.paneId, {
-    visuallyPresented: () => this.visuallyPresented,
     onViewportResize: () => this.chatState.handleTranscriptResize(),
     canFollowEnd: () => this.state !== undefined && canAutoFollowChat(this.state),
     onReaderScroll: (towardEnd) => this.state && handleChatScrollTakeover(this.state, towardEnd),
@@ -385,6 +388,19 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   protected readonly progressCard = new SessionProgressCardController(this, {
     gateway: () => this.context?.gateway,
     target: () => this.initialProgressCardTarget(),
+    onChange: (target, card) => {
+      const state = this.state;
+      if (!state || !this.ownsChatSnapshot(target)) {
+        return;
+      }
+      const snapshot = readChatSessionSnapshot(state.chatMessagesBySession, state, target);
+      if (snapshot) {
+        cacheChatSessionSnapshot(state.chatMessagesBySession, state, target, {
+          ...snapshot,
+          progressCard: card,
+        });
+      }
+    },
   });
   protected readonly questionPromptState = createQuestionPromptState(() => {
     this.questionPrompts = listQuestionPrompts(this.questionPromptState);
@@ -392,6 +408,25 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   });
   protected questionPrompts: QuestionPrompt[] = [];
   protected state: ChatPageHost | undefined;
+
+  protected ownsChatSnapshot(target: Parameters<typeof resolveChatSnapshotKey>[1]): boolean {
+    const state = this.state;
+    const gateway = this.context.gateway;
+    return Boolean(
+      state &&
+      resolveChatSnapshotKey(state, target) ===
+        resolveChatSnapshotKey(
+          {
+            settings: gateway.connection,
+            client: gateway.snapshot.client,
+            hello: state.hello,
+            assistantAgentId: state.assistantAgentId,
+            agentsList: state.agentsList,
+          },
+          target,
+        ),
+    );
+  }
 
   protected resolveChatReadTarget(): ReturnType<typeof resolveUiConversationIdentity> | undefined {
     const state = this.state;

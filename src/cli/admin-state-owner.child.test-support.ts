@@ -21,6 +21,16 @@ try {
           if (process.argv[2] === "pairing") {
             const { registerPairingCli } = await import("./pairing-cli.js");
             registerPairingCli(program);
+          } else if (process.argv[2] === "secrets") {
+            const { registerSecretStoreCli } = await import("./secrets-store-cli.js");
+            registerSecretStoreCli(program.command("secrets"));
+          } else if (process.argv[2] === "models") {
+            const { modelsRefreshCommand } = await import("../commands/models/refresh.js");
+            const { defaultRuntime } = await import("../runtime.js");
+            program
+              .command("models")
+              .command("refresh")
+              .action(() => modelsRefreshCommand({}, defaultRuntime));
           } else {
             const { registerExecApprovalsCli } = await import("./exec-approvals-cli.js");
             registerExecApprovalsCli(program);

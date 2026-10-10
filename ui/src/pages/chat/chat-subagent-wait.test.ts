@@ -343,9 +343,8 @@ describe("chat waiting on subagents", () => {
       ).listed;
     expect(listed([child])).toBe(true);
     expect(listed([child], false)).toBe(true);
-    // A swarm's workers and ACP children are counted, and that panel shows neither.
     const worker = { ...child, key: "agent:main:subagent:worker", swarmGroupId: "audit" };
-    expect(listed([child, worker])).toBe(false);
+    expect(listed([child, worker])).toBe(true);
     expect(listed([{ ...child, key: "agent:main:acp:coder" }], false)).toBe(false);
     // A child session is not one of the line's subagents.
     expect(listed([child, { ...child, key: "agent:main:dashboard:opened" }])).toBe(true);
