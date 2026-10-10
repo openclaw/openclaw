@@ -8,6 +8,7 @@ import { ABSOLUTE_DEADLINE_EXPIRED, awaitWithinDeadline } from "../utils/absolut
 import { resolveLaunchAgentLabel } from "./launchd-label.js";
 import { resolveLaunchAgentGuiDomain } from "./launchd-runtime.js";
 import { resolveTaskName } from "./schtasks-layout.js";
+import { getServiceInspectionClock } from "./service-inspection-budget.js";
 import type { GatewayServiceEnv, SystemdServiceReadBinding } from "./service-types.js";
 import { assertGatewayServiceUpdateCurrent } from "./service-update-authority.js";
 import { resolveSystemdServiceName } from "./systemd-service-files.js";
@@ -26,8 +27,9 @@ export async function withSystemdServiceReadBinding<T>(
   read: (binding: SystemdServiceReadBinding | undefined) => Promise<T>,
   deadline?: number,
 ): Promise<T> {
+  const now = getServiceInspectionClock();
   const expired = () => new Error("Original systemd read admission deadline expired.");
-  if (deadline !== undefined && performance.now() >= deadline) {
+  if (deadline !== undefined && now() >= deadline) {
     throw expired();
   }
   const scope = scopes.getStore()?.get(resolveGatewayServiceOperationLockPath(env));
@@ -50,7 +52,7 @@ export async function withSystemdServiceReadBinding<T>(
       const binding = await awaitWithinDeadline(
         () => retained,
         deadline,
-        () => performance.now(),
+        () => now(),
       );
       if (binding === ABSOLUTE_DEADLINE_EXPIRED) {
         throw expired();
@@ -70,7 +72,7 @@ export async function withSystemdServiceReadBinding<T>(
   }
   const binding = await create();
   try {
-    if (deadline !== undefined && performance.now() >= deadline) {
+    if (deadline !== undefined && now() >= deadline) {
       throw expired();
     }
     return await read(binding);
