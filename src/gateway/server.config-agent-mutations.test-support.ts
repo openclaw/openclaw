@@ -17,7 +17,7 @@ export function registerAgentConfigMutationTests({
   getConfigHash: () => Promise<string>;
   rpc: (method: string, params: unknown) => Promise<RpcResult>;
   workspacePath: (name: string) => string;
-  reloadBarrier: { entered: (() => void) | undefined; wait: Promise<void> | undefined };
+  reloadBarrier: { hold: (() => Promise<void>) | undefined };
 }) {
   it("uses fresh revisions after agent create, update, and delete before reload applies", async () => {
     const operations = [
@@ -32,8 +32,10 @@ export function registerAgentConfigMutationTests({
       const before = await getConfigHash();
       const entered = createDeferredCore();
       const gate = createDeferredCore();
-      reloadBarrier.entered = entered.resolve;
-      reloadBarrier.wait = gate.promise;
+      reloadBarrier.hold = () => {
+        entered.resolve();
+        return gate.promise;
+      };
       try {
         // Agent RPCs acknowledge only after runtime application, so a concurrent
         // reader observes the persisted revision while publication is held.
@@ -59,8 +61,7 @@ export function registerAgentConfigMutationTests({
         expect(current.hash).not.toBe(before);
       } finally {
         gate.resolve();
-        reloadBarrier.entered = undefined;
-        reloadBarrier.wait = undefined;
+        reloadBarrier.hold = undefined;
       }
     }
   });
