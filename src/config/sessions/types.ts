@@ -581,7 +581,12 @@ type SessionEntryCore = SessionRestartRecoveryState &
     fallbackNotice?: FallbackNoticeState;
     contextTokens?: number;
     /** Origin of the persisted context window; `resolved` is legacy/unverified. */
-    contextTokensSource?: "runtime" | "runtime-configured" | "resolved" | "resolved-v1";
+    contextTokensSource?:
+      | "runtime"
+      | "runtime-configured"
+      | "resolved"
+      | "resolved-v1"
+      | "synthetic";
     contextBudgetStatus?: SessionContextBudgetStatus;
     compactionCount?: number;
     memoryFlush?: MemoryFlushState;

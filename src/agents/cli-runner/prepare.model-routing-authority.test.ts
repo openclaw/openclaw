@@ -279,12 +279,13 @@ describe("CLI context-window ownership", () => {
     const resumed = await prepare();
     expect(resumed.contextWindowInfo?.tokens).toBe(200_000);
 
-    // A provider-owned large window remains usable even without a manifest row.
-    catalogModels.push({ provider, id: model, contextWindow: 1_000_000 });
-    replaceDiscoveredContextTokenCache(
-      await prepareDiscoveredContextTokenCache({ modelCatalog: { entries: catalogModels } }),
-    );
-    const owned = await prepare();
+    // The admitted native runtime supplies its capacity directly.
+    const owned = await fixture.prepare({
+      provider,
+      model,
+      nativeRuntime: provider,
+      modelContextWindow: 1_000_000,
+    });
     expect(owned.contextWindowInfo?.tokens).toBe(1_000_000);
     expect(prepareExecution.mock.calls.map(([context]) => context.contextTokenBudget)).toEqual([
       200_000, 200_000, 1_000_000,

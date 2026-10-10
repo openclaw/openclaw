@@ -171,6 +171,13 @@ describe("buildContextReply", () => {
     params.contextTokenProjection = {
       contextTokens: testCase.resolved,
       authoredContextTokens: testCase.authored,
+      configuredContextTokenLimits: undefined,
+      source:
+        testCase.authored !== undefined
+          ? "configured"
+          : testCase.resolved !== undefined
+            ? "model"
+            : "fallback",
     };
 
     const result = await buildContextReply(params);

@@ -34,7 +34,13 @@ export function resolveContextWindowInfo(params: {
   defaultTokens: number;
 }): ContextWindowInfo {
   const configured = resolveConfiguredContextTokenLimits(
-    { cfg: params.cfg, provider: params.provider, model: params.modelId },
+    {
+      cfg: params.cfg,
+      provider: params.provider,
+      model: params.modelId,
+      modelContextWindow: params.modelContextWindow,
+      modelContextWindowSource: params.modelContextWindowSource,
+    },
     normalizePositiveInt,
   );
   const fromModelsConfig =

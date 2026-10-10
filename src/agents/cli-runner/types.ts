@@ -120,6 +120,8 @@ export type RunCliAgentParams = {
   requesterModel?: ProviderModelRef;
   /** Native context window resolved by the run owner from its prepared model catalog. */
   modelContextWindow?: number;
+  modelContextWindowSource?: "synthetic";
+  nativeRuntime?: string;
   /** Effective context cap resolved by the run owner from its prepared model catalog. */
   modelContextTokens?: number;
   provider: string;
