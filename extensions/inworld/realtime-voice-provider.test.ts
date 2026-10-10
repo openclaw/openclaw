@@ -18,9 +18,7 @@ import {
   openRealtimeBridge,
   parseSent,
   requireSession,
-  requireSocket,
   startRealtimeBridge,
-  waitForRealtimeState,
 } from "./realtime-voice-provider.test-support.js";
 
 const bridges: ReturnType<typeof buildTestBridge>[] = [];
@@ -288,8 +286,7 @@ describe("buildInworldRealtimeVoiceProvider", () => {
   it("rejects startup on a server error before session.updated", async () => {
     const bridge = createTestBridge();
     const connecting = bridge.connect();
-    await waitForRealtimeState(() => expect(FakeWebSocket.instances).toHaveLength(1));
-    const socket = requireSocket(0);
+    const socket = await FakeWebSocket.waitForInstance(0);
     socket.open();
     socket.emitServer({ type: "error", error: { message: "Invalid authorization credentials" } });
     await expect(connecting).rejects.toThrow(/Invalid authorization credentials/);

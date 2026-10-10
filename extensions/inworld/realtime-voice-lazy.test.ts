@@ -9,11 +9,7 @@ vi.mock("./ws-runtime.js", () => ({
 }));
 
 import { createLazyInworldRealtimeVoiceProvider } from "./realtime-voice-lazy-provider.js";
-import {
-  parseSent,
-  requireSocket,
-  waitForRealtimeState,
-} from "./realtime-voice-provider.test-support.js";
+import { parseSent } from "./realtime-voice-provider.test-support.js";
 
 describe("createLazyInworldRealtimeVoiceProvider", () => {
   beforeEach(() => {
@@ -36,8 +32,7 @@ describe("createLazyInworldRealtimeVoiceProvider", () => {
     bridge.sendAudio(Buffer.from([7, 8, 9]));
     bridge.sendUserMessage?.("hello");
     const connecting = bridge.connect();
-    await waitForRealtimeState(() => expect(FakeWebSocket.instances).toHaveLength(1));
-    const socket = requireSocket(0);
+    const socket = await FakeWebSocket.waitForInstance(0);
     socket.open();
     socket.emitServer({ type: "session.created" });
     socket.emitServer({ type: "session.updated" });

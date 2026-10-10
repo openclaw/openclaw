@@ -1,6 +1,6 @@
 // Shared Inworld realtime provider test helpers. Test files must mock ./ws-runtime.js
 // with FakeWebSocket before importing this module.
-import { expect, vi } from "vitest";
+import { vi } from "vitest";
 import { buildInworldRealtimeVoiceProvider } from "./realtime-voice-provider.js";
 import { FakeWebSocket } from "./realtime-voice-socket.test-support.js";
 
@@ -20,20 +20,8 @@ export type SentRealtimeEvent = {
   session?: Record<string, unknown>;
 };
 
-export function waitForRealtimeState<T>(assertion: () => T | Promise<T>): Promise<T> {
-  return vi.waitFor(assertion, { interval: 1 });
-}
-
 export function parseSent(socket: FakeWebSocketInstance): SentRealtimeEvent[] {
   return socket.sent.map((payload: string) => JSON.parse(payload) as SentRealtimeEvent);
-}
-
-export function requireSocket(index = 0): FakeWebSocketInstance {
-  const socket = FakeWebSocket.instances[index];
-  if (!socket) {
-    throw new Error(`expected Inworld realtime socket at index ${index}`);
-  }
-  return socket;
 }
 
 export function requireSession(socket: FakeWebSocketInstance, index = 0): Record<string, unknown> {
@@ -55,8 +43,7 @@ export function createTestBridge(options: Partial<TestBridgeOptions> = {}): Test
 
 export async function startRealtimeBridge(bridge: TestBridge, index = 0) {
   const connecting = bridge.connect();
-  await waitForRealtimeState(() => expect(FakeWebSocket.instances.length).toBe(index + 1));
-  const socket = requireSocket(index);
+  const socket = await FakeWebSocket.waitForInstance(index);
   socket.open();
   socket.emitServer({ type: "session.created" });
   socket.emitServer({ type: "session.updated" });
