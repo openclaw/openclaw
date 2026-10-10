@@ -15,6 +15,7 @@ import * as sqliteRuntime from "openclaw/plugin-sdk/sqlite-runtime";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
+  observeHostDataSql,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -24,6 +25,7 @@ import {
   recordMemoryEntryOrigins,
 } from "./memory-entry-origins.js";
 import { observeMemoryForgetWorker } from "./memory-forget-fault.test-support.js";
+import { readMemoryForgetIndexInWorker } from "./memory-forget-index-read.js";
 import { planMemoryIndex } from "./memory-forget-index-sources.js";
 import { forgetMemoryEntries } from "./memory-forget.js";
 import {
@@ -54,6 +56,39 @@ describe("memory forget source removal", () => {
       corpusSnippets: new Set<string>(),
     };
   }
+
+  it("skips unselectable sources while preserving explicit file removals", async () => {
+    const { db, path: databasePath } = openOpenClawAgentDatabase({ agentId: "main" });
+    db.prepare(`INSERT INTO memory_index_sources (path, source, hash, mtime, size)
+      VALUES ('memory/retained.md', 'memory', 'retained', 1, 1)`).run();
+    const request = {
+      kind: "forget-index-plan" as const,
+      agentId: "main",
+      databasePath,
+      stateDir: fixture.stateDir,
+      changedPaths: ["MEMORY.md"],
+      removedPaths: [],
+      sessionIds: ["target"],
+      excludedSessionIds: [],
+      entryKeys: [],
+      corpusSnippets: [],
+    };
+    const observer = observeHostDataSql();
+    try {
+      expect(await readMemoryForgetIndexInWorker(request)).toMatchObject({
+        chunks: [],
+        sources: [],
+      });
+      expect(
+        observer.queries.filter((sql) => /\bfrom\s+"?memory_index_sources\b/iu.test(sql)),
+      ).toEqual([]);
+      expect(
+        await readMemoryForgetIndexInWorker({ ...request, removedPaths: ["memory/retained.md"] }),
+      ).toMatchObject({ sources: [{ path: "memory/retained.md", source: "memory" }] });
+    } finally {
+      observer.restore();
+    }
+  });
 
   it("retains planning input and placement across dispatch without creating missing stores", async () => {
     const options = { agentId: "main", env: { OPENCLAW_STATE_DIR: fixture.stateDir } };

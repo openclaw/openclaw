@@ -84,14 +84,17 @@ export async function readMemoryForgetIndexInWorker(
     const removedSessionPaths = new Set(
       chunks.filter((chunk) => chunk.source === "sessions").map((chunk) => chunk.path),
     );
-    const sources = executeSqliteQuerySync(
-      db,
-      kysely.selectFrom("memory_index_sources").select(["path", "source"]),
-    ).rows.filter(
-      (source) =>
-        params.removedPaths.has(source.path) ||
-        (source.source === "sessions" && removedSessionPaths.has(source.path)),
-    );
+    const sources =
+      params.removedPaths.size > 0 || removedSessionPaths.size > 0
+        ? executeSqliteQuerySync(
+            db,
+            kysely.selectFrom("memory_index_sources").select(["path", "source"]),
+          ).rows.filter(
+            (source) =>
+              params.removedPaths.has(source.path) ||
+              (source.source === "sessions" && removedSessionPaths.has(source.path)),
+          )
+        : [];
     const chunkIds = chunks.map((chunk) => chunk.id);
     const ftsRows =
       chunkIds.length > 0 && tableExists(db, "memory_index_chunks_fts")
