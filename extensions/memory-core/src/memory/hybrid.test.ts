@@ -128,13 +128,14 @@ describe("memory hybrid helpers", () => {
   it.each([false, true])(
     "keeps relevant old notes eligible with MMR enabled=%s",
     async (enabled) => {
+      const oldPath = "memory/records/2026-08-11-quartz.md";
       const vector = [
-        vectorHit("old", 0.9, { path: "memory/records/2026-08-11-quartz.md" }),
+        vectorHit("old", 0.9, { path: oldPath }),
         vectorHit("recent", 0.9, { path: "memory/records/2026-10-10-quartz.md" }),
         vectorHit("evergreen", 0.8),
         vectorHit("weak", 0.2),
       ];
-      const keyword = [keywordHit("old", 0.8, { path: vector[0].path })];
+      const keyword = [keywordHit("old", 0.8, { path: oldPath })];
       const merged = await mergeHybridResults({
         vector,
         keyword,
@@ -153,9 +154,9 @@ describe("memory hybrid helpers", () => {
       });
 
       expect(selected.map((entry) => entry.path)).toEqual([
-        vector[1].path,
-        vector[2].path,
-        vector[0].path,
+        "memory/records/2026-10-10-quartz.md",
+        "memory/evergreen.md",
+        oldPath,
       ]);
       expect(selected[2]?.score).toBeCloseTo(0.2175);
       expect(selected[2]?.vectorScore).toBe(0.9);
