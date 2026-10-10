@@ -66,6 +66,7 @@ afterEach(async () => {
 async function createFixture(
   config: OpenClawConfig = {},
   nativeOwner?: AgentHarness["resolveSessionRuntimeOwnership"],
+  asyncNativeOwner?: AgentHarness["resolveSessionRuntimeOwnershipAsync"],
 ) {
   const state = await createOpenClawTestState({ label: "model-ownership" });
   states.push(state);
@@ -92,6 +93,7 @@ async function createFixture(
           ? { supported: false, fallbackRuntime: "openclaw" }
           : { supported: true },
     ...(nativeOwner ? { resolveSessionRuntimeOwnership: nativeOwner } : {}),
+    ...(asyncNativeOwner ? { resolveSessionRuntimeOwnershipAsync: asyncNativeOwner } : {}),
     runAttempt: vi.fn<AgentHarness["runAttempt"]>(),
   };
   registerAgentHarness(harness);
@@ -117,7 +119,7 @@ async function createFixture(
     sessionId: runParams.sessionId,
     updatedAt: 1,
     modelSelectionLocked: true,
-    ...(nativeOwner
+    ...(nativeOwner || asyncNativeOwner
       ? { agentHarnessId: "codex" }
       : {
           pluginOwnerId: "catalog-owner",
@@ -799,21 +801,51 @@ describe("model chat and native model ownership", () => {
 
   it("closes host assertions and lineage reads after the ownership callback returns", async () => {
     let retained: (() => void) | undefined;
-    let retainedRead: (() => string | undefined) | undefined;
-    const fixture = await createFixture({}, ({ assertCurrent, readPreviousSessionId }) => {
-      retained = assertCurrent;
-      retainedRead = readPreviousSessionId;
-      return {
-        model: "native",
-        auth: "host",
-        modelRef: { provider: "openai", model: "fixture-model" },
-      };
-    });
+    let retainedRead: (() => Promise<string | undefined>) | undefined;
+    const fixture = await createFixture(
+      {},
+      undefined,
+      async ({ assertCurrent, readPreviousSessionId }) => {
+        await readPreviousSessionId();
+        retained = assertCurrent;
+        retainedRead = readPreviousSessionId;
+        return {
+          model: "native",
+          auth: "host",
+          modelRef: { provider: "openai", model: "fixture-model" },
+        };
+      },
+    );
     await fixture.resolve();
     expect(retained).toBeTypeOf("function");
     expect(() => retained?.()).toThrow("ownership changed");
     expect(retainedRead).toBeTypeOf("function");
-    expect(() => retainedRead?.()).toThrow("ownership changed");
+    await expect(retainedRead?.()).rejects.toThrow("ownership changed");
+  });
+
+  it("propagates async ownership failure without selecting the legacy hook", async () => {
+    const legacyOwner = vi.fn<NonNullable<AgentHarness["resolveSessionRuntimeOwnership"]>>(() => ({
+      model: "native",
+      auth: "native",
+    }));
+    const failure = new Error("ownership worker failed");
+    const fixture = await createFixture({}, legacyOwner, async () => {
+      throw failure;
+    });
+
+    await expect(fixture.resolve()).rejects.toBe(failure);
+    expect(legacyOwner).not.toHaveBeenCalled();
+    expect(fixture.generation.resolveDynamicModel).not.toHaveBeenCalled();
+  });
+
+  it("rejects a session replacement while async ownership is being read", async () => {
+    const fixture = await createFixture({}, undefined, async () => {
+      await patchSessionEntryCore(fixture.target, () => ({ lifecycleRevision: "replacement" }));
+      return { model: "native", auth: "native" };
+    });
+
+    await expect(fixture.resolve()).rejects.toThrow("ownership changed");
+    expect(fixture.generation.resolveDynamicModel).not.toHaveBeenCalled();
   });
 
   it("uses the native owner fact and rejects a lost binding before dispatch", async () => {

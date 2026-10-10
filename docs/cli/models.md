@@ -179,7 +179,9 @@ are reported directly; they do not switch the command to a different local list.
 Without a running local Gateway or an explicit Gateway target, the command
 identifies that it is showing the local cached catalog. This fallback can prepare
 configured and static facts and resolve its configured authentication, but starts
-model discovery only when `--refresh` is supplied.
+model discovery only when `--refresh` is supplied. Local refresh uses the configured
+managed proxy for provider discovery and releases it when discovery finishes.
+Cached lists and Gateway requests do not start the CLI's managed proxy.
 
 Use `--refresh` to acquire provider inventory before listing. A failed refresh
 warns while showing available published rows. Successful empty acquisition stays

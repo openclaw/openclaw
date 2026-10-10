@@ -11,5 +11,5 @@ expectTypeOf<typeof import("openclaw/plugin-sdk/agent-sessions")>().not.toHavePr
   "prepareSessionToolResult",
 );
 expectTypeOf<typeof import("openclaw/plugin-sdk/agent-sessions")>().not.toHaveProperty(
-  "setSessionToolTextPreparer",
+  "setSessionToolResultPreparer",
 );

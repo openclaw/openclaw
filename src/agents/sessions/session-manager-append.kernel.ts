@@ -2,7 +2,6 @@ import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { PreparedTranscriptMessageAppend } from "../../config/sessions/session-accessor.sqlite-transcript-message-append.js";
 import { canRebasePreparedAssistantInTransaction } from "../../config/sessions/session-accessor.sqlite-transcript-parent.js";
-import { readTranscriptMutationStateInTransaction } from "../../config/sessions/session-accessor.sqlite-transcript-state.js";
 import {
   appendTranscriptEventSnapshotSync,
   appendTranscriptMessageSnapshotSync,
@@ -27,7 +26,6 @@ import type {
 type PreparedSessionManagerAppend = {
   event: SessionHeader | SessionEntry | SessionLeafControl;
   message?: PreparedTranscriptMessageAppend<SessionMessageEntry["message"]>;
-  expectedMutationAt?: number | null;
 };
 
 export function decodeMetadataAppendEvent(
@@ -102,7 +100,6 @@ export function applySessionMetadataAppendInTransaction(
     const options = { ...input.options };
     if (message.validateTurn) {
       if (
-        preparation.expectedMutationAt === undefined &&
         !canRebasePreparedAssistantInTransaction(
           database,
           input.scope.sessionId,
@@ -112,10 +109,8 @@ export function applySessionMetadataAppendInTransaction(
       ) {
         throw new SqliteTranscriptMutationConflictError(input.scope.sessionId);
       }
-      options.expectedMutationAt =
-        preparation.expectedMutationAt !== undefined
-          ? preparation.expectedMutationAt
-          : readTranscriptMutationStateInTransaction(database, input.scope.sessionId).updatedAt;
+      // Rebase validation and append now share this write reservation.
+      options.expectedMutationAt = undefined;
     }
     const snapshot = appendTranscriptMessageSnapshotSync<
       SessionMessageEntry["message"] | undefined

@@ -33,6 +33,7 @@ import {
   readSessionEntryByIdInDatabase,
   readSessionEntryRow,
 } from "./session-accessor.sqlite-entry-read.js";
+import { loadSessionEntryReadOnlyResultInScope } from "./session-accessor.sqlite-exact-read.js";
 import { participantRecordsBySessionKey } from "./session-accessor.sqlite-participant-projection.js";
 import { readSessionEntryReplacementState } from "./session-accessor.sqlite-replacement-read.js";
 import { resolveSqliteSessionKey } from "./session-accessor.sqlite-scope-helpers.js";
@@ -65,6 +66,7 @@ import type {
   SessionRuntimeTargetWorkerInput,
   SessionRuntimeTargetWorkerResult,
 } from "./session-entry-read.types.js";
+import { encodeSessionTranscriptWorkerError } from "./session-history-worker-errors.js";
 import type { SessionRowDatabaseFacts } from "./session-row-facts.types.js";
 import { listSessionMembersInDatabase } from "./session-sharing-store.kernel.js";
 import type { SessionStoreProjectionWorkerInput } from "./session-store-projection.types.js";
@@ -128,8 +130,8 @@ export async function readSessionEntryWorkerRequest(
     const { readSessionTranscriptRuntimeTarget } =
       await import("./session-accessor.transcript-target.js");
     const read = withOpenClawAgentDatabaseReadOnly(
-      (database) => {
-        const target = readSessionTranscriptRuntimeTarget(
+      (database) => ({
+        target: readSessionTranscriptRuntimeTarget(
           request.scope,
           {
             keyFormat: request.keyFormat,
@@ -137,16 +139,13 @@ export async function readSessionEntryWorkerRequest(
             continuation: request.continuation,
           },
           database,
-        );
-        return {
-          target,
-          source: captureSessionEntryReadSource(
-            database,
-            undefined,
-            "Session runtime target requires its current durable owner",
-          ),
-        };
-      },
+        ),
+        source: captureSessionEntryReadSource(
+          database,
+          undefined,
+          "Session runtime target requires its current durable owner",
+        ),
+      }),
       { ...request.database, env: request.scope.env },
     );
     return {
@@ -166,11 +165,14 @@ export async function readSessionEntryWorkerRequest(
           }),
     };
   }
-  const [{ loadSessionEntryReadOnlyResultInScope }, { encodeSessionTranscriptWorkerError }] =
-    await Promise.all([
-      import("./session-accessor.sqlite-exact-read.js"),
-      import("./session-history-worker-errors.js"),
-    ]);
+  return readSessionEntryResult(request);
+}
+
+/** Native writer operations must finish their captured-database reads synchronously. */
+export function readSessionEntryResult(
+  request: SessionEntryReadWorkerInput,
+  capturedDatabase?: OpenClawAgentReadOnlyDatabase,
+): SessionEntryReadWorkerResult {
   let source: SessionEntryReadWorkerResult["source"];
   let facts: SessionEntryReadWorkerResult["facts"];
   const read = loadSessionEntryReadOnlyResultInScope(
@@ -204,6 +206,7 @@ export async function readSessionEntryWorkerRequest(
       };
       return selected.entries.find((row) => row.sessionKey === sessionKey.trim())?.entry;
     },
+    capturedDatabase,
   );
   if (!read.ok) {
     const readError = encodeSessionTranscriptWorkerError(read.error);

@@ -1,6 +1,6 @@
 import { getReplyOperationSessionReader } from "../../../auto-reply/reply/reply-run-registry.state.js";
 import {
-  withSessionEntriesFromStoresInWorker,
+  withSessionEntriesFromStoreInWorker,
   withSessionEntryReadOnlyInWorker,
 } from "../../../config/sessions/session-entry-read-runtime.js";
 import type { InternalSessionEntry as SessionEntry } from "../../../config/sessions/types.js";
@@ -31,7 +31,7 @@ import {
 import { getRegisteredAgentHarness } from "../../harness/registry.js";
 import { ensureSelectedAgentHarnessPlugin } from "../../harness/runtime-plugin.js";
 import { selectAgentHarness } from "../../harness/selection.js";
-import { readSessionRuntimeOwnership } from "../../harness/session-runtime-ownership.js";
+import { readSessionRuntimeOwnershipAsync } from "../../harness/session-runtime-ownership.js";
 import { assertPluginHarnessConversationToolPolicySupport } from "../../harness/support.js";
 import type { AgentHarness } from "../../harness/types.js";
 import {
@@ -71,7 +71,11 @@ async function prepareNativeSessionRuntime(
   assertCallerCurrent: () => void,
 ): Promise<PreparedNativeSessionRuntime | undefined> {
   const pinnedHarnessId = resolveSessionPinnedHarnessId(admission?.entry);
-  if (!admission || !pinnedHarnessId || !harness.resolveSessionRuntimeOwnership) {
+  if (
+    !admission ||
+    !pinnedHarnessId ||
+    (!harness.resolveSessionRuntimeOwnershipAsync && !harness.resolveSessionRuntimeOwnership)
+  ) {
     return undefined;
   }
   const { sessionId, lifecycleRevision } = admission.entry;
@@ -133,7 +137,7 @@ async function prepareNativeSessionRuntime(
           }
         };
         assertCurrent();
-        return readSessionRuntimeOwnership({
+        return readSessionRuntimeOwnershipAsync({
           config: runParams.config,
           agentId: admission.agentId,
           sessionKey: admission.sessionKey,
@@ -144,7 +148,7 @@ async function prepareNativeSessionRuntime(
         });
       };
       if (isIncognitoSessionKey(admission.sessionKey)) {
-        return withSessionEntryReadOnlyInWorker(
+        return await withSessionEntryReadOnlyInWorker(
           admission,
           assertCallerCurrent,
           async (read, owner) => {
@@ -161,37 +165,34 @@ async function prepareNativeSessionRuntime(
           reader.database,
           readDatabasePathIdentitySync(reader.database.path),
         );
-        return await reader.withRead(
+        const current = await reader.withRead(
           {
             sessionKeys: [admission.sessionKey],
             lifecycleSessionKey: admission.sessionKey,
             snapshotFields: [],
           },
           assertCallerCurrent,
-          (read, assertCurrent) =>
-            consume(
-              read.entries.find((row) => row.sessionKey === admission.sessionKey)?.entry,
-              assertCurrent,
-            ),
+          (read) => read.entries.find((row) => row.sessionKey === admission.sessionKey)?.entry,
         );
+        // The row publication subscription fences this snapshot while plugin ownership awaits.
+        return await consume(current, reader.assertCurrent.bind(reader));
       }
-      return await withSessionEntriesFromStoresInWorker(
-        [
-          {
-            agentId: sessionAgentId,
-            sessionKeys: [admission.sessionKey],
-            lifecycleSessionKey: admission.sessionKey,
-            storePath: admission.storePath,
-            includeAuthorization: true,
-            snapshotFields: [],
-          },
-        ],
-        ([read]) =>
+      return await withSessionEntriesFromStoreInWorker(
+        {
+          agentId: sessionAgentId,
+          sessionKeys: [admission.sessionKey],
+          lifecycleSessionKey: admission.sessionKey,
+          storePath: admission.storePath,
+          includeAuthorization: true,
+          snapshotFields: [],
+        },
+        (read) =>
           consume(
-            read!.result.entries.find((item) => item.sessionKey === admission.sessionKey)?.entry,
-            read!.assertCurrent,
+            read.result.entries.find((item) => item.sessionKey === admission.sessionKey)?.entry,
+            read.assertCurrent,
           ),
-        { prepareSource: (_input, ...source) => publication.prepareSource(...source) },
+        false,
+        (...source) => publication.prepareSource(...source),
       );
     } finally {
       stop();

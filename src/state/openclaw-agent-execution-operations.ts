@@ -2,7 +2,10 @@ import type { SessionTranscriptReadScope } from "../config/sessions/session-acce
 import type { SessionTranscriptInitializationPublication } from "../config/sessions/session-accessor.sqlite-entry-cache.types.js";
 import type { SessionEntryReplacementCommit } from "../config/sessions/session-accessor.sqlite-replacement-types.js";
 import type { ResolvedTranscriptReadScope } from "../config/sessions/session-accessor.sqlite-scope-helpers.js";
-import type { SessionEntryCohortRequest } from "../config/sessions/session-entry-read.types.js";
+import type {
+  SessionEntryCohortRequest,
+  SessionEntryReadWorkerInput,
+} from "../config/sessions/session-entry-read.types.js";
 import type {
   SessionTranscriptExecutionReadInputs,
   SessionTranscriptExecutionReadResult,
@@ -331,6 +334,8 @@ export async function loadAgentEntryReadOperations() {
   const { readSessionEntryCohort, readSessionEntryDataInDatabase } =
     await import("../config/sessions/session-entry-cohort.worker.js");
   return {
+    "session.entry.readResult": (input: SessionEntryReadWorkerInput, { open }) =>
+      kernel.readSessionEntryResult(input, open()),
     "session.entry.read": (input: { sessionKey: string } | SessionEntryCohortRequest, { open }) => {
       const database = open();
       return "sessionKeys" in input

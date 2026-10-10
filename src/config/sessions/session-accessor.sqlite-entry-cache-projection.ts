@@ -20,6 +20,7 @@ import {
 } from "./session-accessor.sqlite-participant-projection.js";
 import { parseSessionEntryJson, selectSessionEntryRows } from "./session-accessor.sqlite-status.js";
 import type { ValidatedSessionMetadata } from "./session-canonical-key.js";
+import type { SessionEntrySnapshot } from "./session-entry-snapshots.js";
 import type { SessionEntry } from "./types.js";
 
 type SessionEntryCacheTables = Pick<OpenClawAgentKyselyDatabase, "session_nodes">;
@@ -97,20 +98,29 @@ export function projectSessionEntryCacheUpdate(
   entryJson: string,
   sideMetadata: SessionEntrySideMetadata | undefined,
   snapshotEntry?: SessionEntry,
+  snapshots?: readonly SessionEntrySnapshot[],
 ): SessionEntry | undefined {
   // The writer supplies its persisted bytes; the cache owns the decoded metadata graph.
-  const parsedEntry = parseSessionEntryJson(
-    {
-      entry_json: entryJson,
-      ...(snapshotEntry
-        ? {
-            session_diff_baseline_json: JSON.stringify(snapshotEntry.sessionDiffBaseline),
-            skills_snapshot_json: JSON.stringify(snapshotEntry.skillsSnapshot),
-            system_prompt_report_json: JSON.stringify(snapshotEntry.systemPromptReport),
-          }
-        : {}),
-    },
-    snapshotEntry ? "full" : "list",
-  );
+  const parsedEntry = parseSessionEntryJson({ entry_json: entryJson }, "list");
+  if (parsedEntry && snapshotEntry) {
+    // Changed snapshots reuse persisted bytes; unchanged snapshots are already decoded.
+    const cold =
+      snapshots !== undefined
+        ? Object.fromEntries(
+            snapshots.map(({ field, valueJson }) => [field, JSON.parse(valueJson)]),
+          )
+        : structuredClone({
+            ...(snapshotEntry.sessionDiffBaseline !== undefined
+              ? { sessionDiffBaseline: snapshotEntry.sessionDiffBaseline }
+              : {}),
+            ...(snapshotEntry.skillsSnapshot !== undefined
+              ? { skillsSnapshot: snapshotEntry.skillsSnapshot }
+              : {}),
+            ...(snapshotEntry.systemPromptReport !== undefined
+              ? { systemPromptReport: snapshotEntry.systemPromptReport }
+              : {}),
+          });
+    Object.assign(parsedEntry, cold);
+  }
   return parsedEntry ? freezeJsonSnapshot({ ...parsedEntry, ...sideMetadata }) : undefined;
 }

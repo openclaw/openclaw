@@ -37,7 +37,7 @@ import {
 } from "./session-accessor.sqlite-replacement-projection.js";
 import { prepareSessionEntryReplacementPublication } from "./session-accessor.sqlite-replacement-state.js";
 import { readSessionTranscriptWatermarkInDatabase } from "./session-accessor.sqlite-transcript-watermark.js";
-import { appendTranscriptEventSync } from "./session-accessor.sqlite-transcript-write.js";
+import { appendTranscriptEventSync } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { captureSessionEntryMetadataReceipts } from "./session-entry-metadata-receipt.js";
 import { updateSessionGroupCategoriesInWorker } from "./session-group-categories.js";
 import { readPreparedSessionParticipants } from "./session-participant-prepared-read.js";
