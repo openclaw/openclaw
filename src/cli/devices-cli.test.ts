@@ -1,6 +1,7 @@
 import { Command } from "commander";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
+import "../test-utils/prepare-compiled-subprocesses.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { registerDevicesCli } from "./devices-cli.js";
 import { ExpectedCliError } from "./failure-output.js";

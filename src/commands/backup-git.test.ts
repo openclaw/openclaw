@@ -28,6 +28,7 @@ vi.mock("../snapshot/git-backup.js", () => ({
   verifyGitBackupRef: mocks.verifyGitBackupRef,
 }));
 
+// mock-isolation: Git backup settlement uses a controlled outcome; routing has real-ledger coverage.
 vi.mock("./backup-outcome.js", () => ({
   recordBackupRunOutcomeWithOwner: mocks.recordBackupRunOutcome,
 }));

@@ -694,7 +694,7 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["diagnostics.heapSnapshot", "diagnostics", "operator.admin", "2026.9"],
   ["sessions.catalog.import", "session-catalog", "operator.write", "2026.9"],
   ["backup.status", "backup", "operator.read", "2026.9"],
-  ["backup.recordOutcome", "backup", "operator.admin", "2026.10", CONTROL_PLANE_WRITE],
+  ["backup.recordOutcome", "backup", "operator.admin", "2026.9", CONTROL_PLANE_WRITE],
   ["storage.locations.list", "storage", "operator.read", "2026.9"],
   ["storage.locations.probe", "storage", "operator.read", "2026.9"],
   ["mcp.app.onboard", "mcp-app-onboarding", "operator.write", "2026.9", SESSION_WRITE],

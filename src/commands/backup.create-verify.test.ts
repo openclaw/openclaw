@@ -25,6 +25,7 @@ vi.mock("../runtime.js", async () => {
   };
 });
 
+// mock-isolation: Archive settlement uses a controlled outcome; routing has real-ledger coverage.
 vi.mock("./backup-outcome.js", () => ({
   recordBackupRunOutcomeWithOwner: recordBackupRunOutcomeMock,
 }));
