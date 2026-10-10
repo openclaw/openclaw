@@ -10,7 +10,6 @@ import {
   getProcessStartTime,
   isPidAlive,
   isPidDefinitelyDead,
-  readDarwinProcessIdentity,
 } from "./pid-alive.js";
 
 const nativeIdentity = vi.hoisted(() => vi.fn());
@@ -244,20 +243,6 @@ describe("process start times", () => {
   );
 });
 
-describe("Darwin combined process identity", () => {
-  it.each([
-    "43 1 Thu Sep 24 00:00:00 2026\n",
-    "42 1 Thu Sep 24 00:00:00 2026\n43 1 Thu Sep 24 00:00:00 2026\n",
-    "42 1 Thu Feb 31 00:00:00 2026\n",
-  ])("does not adopt incomplete or inconsistent metadata: %j", (stdout) => {
-    const shell = vi.spyOn(childProcess, "execFileSync").mockReturnValue(stdout);
-    withMockedPlatform("darwin", () => {
-      expect(readDarwinProcessIdentity(42)).toBeNull();
-    });
-    expect(shell).toHaveBeenCalledOnce();
-  });
-});
-
 describe("native process identity policy", () => {
   const seconds = 1_790_000_000;
   const identity = (startTimeMicros = seconds * 1_000_000 + 123_456) => ({
@@ -285,7 +270,6 @@ describe("native process identity policy", () => {
       nativeIdentity.mockReturnValue({ ...identity(seconds * 1_000_000 + 123_457), parentPid: 8 });
       expect(getFileLockProcessStartTime(42)).toBe(seconds);
       expect(getProcessInstanceStartTime(42)).toBe(seconds * 1_000_000 + 123_457);
-      expect(readDarwinProcessIdentity(42)).toEqual({ parentPid: 8, startedAt: seconds });
       expect(shell).not.toHaveBeenCalled();
     },
   );
@@ -314,7 +298,6 @@ describe("native process identity policy", () => {
       const shell = vi.spyOn(childProcess, "execFileSync");
       expect(getFileLockProcessStartTime(42)).toBeNull();
       expect(getProcessInstanceStartTime(42)).toBeNull();
-      expect(readDarwinProcessIdentity(42)).toBeNull();
       expect(isPidAlive(42)).toBe(false);
       expect(isPidDefinitelyDead(42)).toBe(true);
       expect(shell).not.toHaveBeenCalled();
@@ -362,7 +345,6 @@ describe("native process identity policy", () => {
     });
     const shell = vi.spyOn(childProcess, "execFileSync");
     expect(getFileLockProcessStartTime(42, process.env, 1000)).toBeNull();
-    expect(readDarwinProcessIdentity(42, process.env, 1000)).toBeNull();
     expect(shell).not.toHaveBeenCalled();
   });
 });

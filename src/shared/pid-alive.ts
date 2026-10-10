@@ -11,7 +11,7 @@ const PROCESS_START_TIMEOUT_MS = 1000;
 declare const SEALED_RUNTIME_BUILD: boolean;
 function readDarwinNativeIdentity(
   pid: number,
-): { parentPid: number; startedAt: number; startTimeMicros: number } | null | undefined {
+): { startedAt: number; startTimeMicros: number } | null | undefined {
   if (
     process.platform !== "darwin" ||
     (typeof SEALED_RUNTIME_BUILD === "boolean" && SEALED_RUNTIME_BUILD)
@@ -23,7 +23,6 @@ function readDarwinNativeIdentity(
     // A retained zombie is not a live owner. Do not recover it through ps.
     return identity && !identity.exited
       ? {
-          parentPid: identity.parentPid,
           // Published Darwin leases use epoch seconds, not microseconds.
           startedAt: Math.floor(identity.startTimeMicros / 1_000_000),
           startTimeMicros: identity.startTimeMicros,
@@ -167,68 +166,6 @@ function getDarwinProcessStartTime(
     // a system timezone change cannot make a live lock owner look like PID reuse.
     const startedAtMs = Date.parse(`${startedAt} UTC`);
     return Number.isFinite(startedAtMs) ? Math.floor(startedAtMs / 1000) : null;
-  } catch {
-    return null;
-  }
-}
-
-/** Read one Darwin PID's parent and birth together, without enumerating unrelated processes. */
-export function readDarwinProcessIdentity(
-  pid: number,
-  env: NodeJS.ProcessEnv = process.env,
-  timeoutMs?: number,
-): { parentPid: number; startedAt: number } | null {
-  if (process.platform !== "darwin" || !isValidPid(pid)) {
-    return null;
-  }
-  const started = performance.now();
-  const native = readDarwinNativeIdentity(pid);
-  if (native !== undefined) {
-    return native && { parentPid: native.parentPid, startedAt: native.startedAt };
-  }
-  const remainingMs =
-    timeoutMs === undefined
-      ? PROCESS_START_TIMEOUT_MS
-      : Math.ceil(timeoutMs - (performance.now() - started));
-  if (remainingMs <= 0) {
-    return null;
-  }
-  try {
-    const stdout = childProcess.execFileSync(
-      "/bin/ps",
-      ["-o", "pid=,ppid=,lstart=", "-p", String(pid)],
-      {
-        encoding: "utf8",
-        env: { ...resolveDiagnosticProcessEnv(env), LC_ALL: "C", TZ: "UTC" },
-        stdio: ["ignore", "pipe", "ignore"],
-        timeout: remainingMs,
-        killSignal: "SIGKILL",
-        maxBuffer: 4096,
-      },
-    );
-    // A complete single-PID record is required; truncated or extra rows are unknown.
-    if (!stdout.endsWith("\n") || /[\r\n]/.test(stdout.slice(0, -1))) {
-      return null;
-    }
-    const match =
-      /^[ \t]*(\d+)[ \t]+(\d+)[ \t]+(Sun|Mon|Tue|Wed|Thu|Fri|Sat) (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) +(\d{1,2}) (\d{2}:\d{2}:\d{2}) (\d{4})[ \t]*$/.exec(
-        stdout.slice(0, -1),
-      );
-    if (!match || Number(match[1]) !== pid || match[5] === undefined) {
-      return null;
-    }
-    const parentPid = Number(match[2]);
-    const date = `${match[3]}, ${match[5].padStart(2, "0")} ${match[4]} ${match[7]} ${match[6]} GMT`;
-    const startedAtMs = Date.parse(date);
-    if (
-      !Number.isSafeInteger(parentPid) ||
-      parentPid < 0 ||
-      !Number.isFinite(startedAtMs) ||
-      new Date(startedAtMs).toUTCString() !== date
-    ) {
-      return null;
-    }
-    return { parentPid, startedAt: Math.floor(startedAtMs / 1000) };
   } catch {
     return null;
   }

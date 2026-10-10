@@ -7,7 +7,6 @@ import {
   getProcessInstanceStartTime,
   isPidAlive,
   isPidDefinitelyDead,
-  readDarwinProcessIdentity,
 } from "./pid-alive.js";
 
 // The shell timestamp is independent of the native package and is the released lock format.
@@ -28,11 +27,10 @@ it.skipIf(process.platform !== "darwin")(
         `data:text/javascript,${encodeURIComponent(`
       import { parentPort } from 'node:worker_threads';
       import { getFileLockProcessStartTime, getProcessInstanceStartTime,
-        readDarwinProcessIdentity, isPidAlive, isPidDefinitelyDead } from ${JSON.stringify(source)};
+        isPidAlive, isPidDefinitelyDead } from ${JSON.stringify(source)};
       parentPort.postMessage({
         lock: getFileLockProcessStartTime(process.pid),
         custody: getProcessInstanceStartTime(process.pid),
-        identity: readDarwinProcessIdentity(process.pid),
         alive: isPidAlive(process.pid), dead: isPidDefinitelyDead(process.pid),
       });
     `)}`,
@@ -43,12 +41,10 @@ it.skipIf(process.platform !== "darwin")(
       expect(actual).toEqual({
         lock: expectedSeconds,
         custody: getProcessInstanceStartTime(process.pid),
-        identity: { parentPid: process.ppid, startedAt: expectedSeconds },
         alive: true,
         dead: false,
       });
       expect(getFileLockProcessStartTime(process.pid)).toBe(expectedSeconds);
-      expect(readDarwinProcessIdentity(process.pid)).toEqual(actual.identity);
       expect(Math.floor(actual.custody / 1_000_000)).toBe(expectedSeconds);
       expect(Number.isSafeInteger(actual.custody)).toBe(true);
       expect(isPidAlive(process.pid)).toBe(true);
