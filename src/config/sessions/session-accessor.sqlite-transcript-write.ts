@@ -337,6 +337,7 @@ export function appendTranscriptEventSnapshotSync(
     eventJson?: string;
   },
   view?: TranscriptWriteViewGuard,
+  transaction?: OpenClawAgentDatabase,
 ): Result<TranscriptWriteSnapshot<TranscriptEventAppendResult>, TranscriptAppendRefusal> {
   assertNonMessageTranscriptEvent(event);
   return runTranscriptWriteSnapshotSync<TranscriptEventAppendResult>(
@@ -369,6 +370,7 @@ export function appendTranscriptEventSnapshotSync(
     options.expectedMutationAt,
     view,
     { eventType: isRecord(event) && typeof event.type === "string" ? event.type : "unknown" },
+    transaction,
   );
 }
 
@@ -412,6 +414,7 @@ export function appendTranscriptMessageSnapshotSync<TMessage>(
     onProjectionReconcileNeeded?: () => void;
   },
   view?: TranscriptWriteViewGuard,
+  transaction?: OpenClawAgentDatabase,
 ): Result<TranscriptMessageWriteSnapshot<TMessage>, TranscriptAppendRefusal> {
   const snapshot = runTranscriptWriteSnapshotSync(
     scope,
@@ -452,6 +455,7 @@ export function appendTranscriptMessageSnapshotSync<TMessage>(
           ? options.message.role
           : "unknown",
     },
+    transaction,
   );
   if (!snapshot.ok) {
     return snapshot;

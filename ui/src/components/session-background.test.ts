@@ -48,6 +48,7 @@ function fixture(resourceBasePath = "/control") {
     mode: "dark",
     resolvedMode: "dark",
     serverSelection: null,
+    appliedPalette: null,
     recordServerSelection: () => undefined,
     setMode: () => undefined,
     refresh: () => listeners.forEach((notify) => notify()),

@@ -13,6 +13,7 @@ import {
   useAutoCleanupTempDirTracker,
 } from "../../../test/helpers/temp-dir.js";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../../infra/kysely-sync.js";
+import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
@@ -134,7 +135,7 @@ describe("session accessor readonly listing", () => {
     replaceSessionEntrySync({ ...scope, sessionKey }, entry);
     closeOpenClawAgentDatabasesForTest();
 
-    const peer = new DatabaseSync(storePath);
+    const peer = openNodeSqliteDatabase(storePath);
     try {
       withSessionEntryReadOnlyScope(scope, () => {
         expect(listSessionEntriesReadOnly(scope)[0]?.entry.visibility).toBe("shared");

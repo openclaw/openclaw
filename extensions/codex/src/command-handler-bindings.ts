@@ -5,7 +5,7 @@ import {
 } from "openclaw/plugin-sdk/model-session-runtime";
 import type { PluginCommandContext, PluginCommandResult } from "openclaw/plugin-sdk/plugin-entry";
 import { isIncognitoSessionKey } from "openclaw/plugin-sdk/session-key-runtime";
-import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
+import { getSessionEntryAsync, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { closeCodexStartupClientBestEffort } from "./app-server/attempt-client-cleanup.js";
 import { normalizeCodexAppServerBindingModelProvider } from "./app-server/auth-profile.js";
 import {
@@ -57,7 +57,9 @@ import {
 import { formatPermissionsMode } from "./conversation-control.js";
 import { formatCodexCliSessions } from "./node-cli-sessions.js";
 
-export function isCurrentSessionModelSelectionLocked(ctx: PluginCommandContext): boolean {
+export async function isCurrentSessionModelSelectionLocked(
+  ctx: PluginCommandContext,
+): Promise<boolean> {
   const sessionKey = ctx.sessionKey?.trim();
   if (!sessionKey) {
     return false;
@@ -68,7 +70,7 @@ export function isCurrentSessionModelSelectionLocked(ctx: PluginCommandContext):
   const storePath =
     ctx.sessionTarget?.storePath ?? resolveStorePath(ctx.config.session?.store, { agentId });
   return isModelSelectionLocked(
-    getSessionEntry({
+    await getSessionEntryAsync({
       storePath,
       sessionKey,
       hydrateSkillPromptRefs: false,
@@ -89,7 +91,7 @@ export async function bindConversation(
       text: "Usage: /codex bind [thread-id] [--cwd <path>] [--model <model>] [--provider <provider>]",
     };
   }
-  if (isCurrentSessionModelSelectionLocked(ctx)) {
+  if (await isCurrentSessionModelSelectionLocked(ctx)) {
     return { text: MODEL_SELECTION_LOCKED_MESSAGE };
   }
   const scope = resolveCodexConversationControlScope(ctx);
@@ -122,6 +124,9 @@ export async function bindConversation(
           agentId: sessionOwner.agentId,
           sessionId: sessionOwner.sessionId,
           threadId: existingBinding.threadId,
+          storePath:
+            ctx.sessionTarget?.storePath ??
+            resolveStorePath(ctx.config.session?.store, { agentId: sessionOwner.agentId }),
           ...(sessionOwner.sessionKey ? { sessionKey: sessionOwner.sessionKey } : {}),
         }
       : undefined;
@@ -169,7 +174,7 @@ export async function detachConversation(
   deps: CodexCommandDeps,
   ctx: PluginCommandContext,
 ): Promise<string> {
-  if (isCurrentSessionModelSelectionLocked(ctx)) {
+  if (await isCurrentSessionModelSelectionLocked(ctx)) {
     return MODEL_SELECTION_LOCKED_MESSAGE;
   }
   const current = await ctx.getCurrentConversationBinding();
@@ -250,7 +255,7 @@ export async function describeConversationBinding(
   const sessionKey = ctx.sessionKey?.trim();
   const { agentId } = resolveCodexConversationControlScope(ctx);
   const sessionEntry = sessionKey
-    ? getSessionEntry({
+    ? await getSessionEntryAsync({
         agentId,
         storePath:
           ctx.sessionTarget?.storePath ?? resolveStorePath(ctx.config.session?.store, { agentId }),
@@ -330,7 +335,7 @@ export async function resumeThread(
   if (!normalizedThreadId || args.length !== 1) {
     return "Usage: /codex resume <thread-id>";
   }
-  if (isCurrentSessionModelSelectionLocked(ctx)) {
+  if (await isCurrentSessionModelSelectionLocked(ctx)) {
     return MODEL_SELECTION_LOCKED_MESSAGE;
   }
   if (!ctx.sessionId) {
@@ -519,7 +524,7 @@ async function bindCodexCliNodeSession(
   if (!parsed.threadId || !parsed.host || parsed.bindHere !== true) {
     return "Usage: /codex resume <session-id> --host <node> --bind here";
   }
-  if (isCurrentSessionModelSelectionLocked(ctx)) {
+  if (await isCurrentSessionModelSelectionLocked(ctx)) {
     return MODEL_SELECTION_LOCKED_MESSAGE;
   }
   if (ctx.sessionId) {

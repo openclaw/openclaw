@@ -107,14 +107,19 @@ export function buildOllamaModelsConfig(
   modelNames: string[],
   discoveredModelsByName?: Map<string, OllamaModelWithContext>,
 ) {
-  return modelNames.map((name) => {
+  return modelNames.flatMap((name) => {
     const discovered = discoveredModelsByName?.get(name);
-    return buildOllamaModelDefinition(
-      name,
-      discovered?.contextWindow,
-      discovered?.capabilities,
-      discovered,
-    );
+    if (discovered && isOllamaEmbeddingOnlyModel(discovered)) {
+      return [];
+    }
+    return [
+      buildOllamaModelDefinition(
+        name,
+        discovered?.contextWindow,
+        discovered?.capabilities,
+        discovered,
+      ),
+    ];
   });
 }
 

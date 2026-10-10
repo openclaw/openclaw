@@ -11,10 +11,12 @@ import { buildAcpDatabaseSessionKey } from "../acp/runtime/session-meta-keys.js"
 import * as executionIdentityContext from "../audit/execution-identity-context.js";
 import * as sqlite from "../infra/node-sqlite.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
-import { runSqlitePinnedReadSnapshotSync } from "../infra/sqlite-pinned-read-snapshot.js";
 import { admitSqliteSchema, runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
 import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
-import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
+import {
+  runSqliteImmediateTransactionSync,
+  runSqliteReadSnapshotSync,
+} from "../infra/sqlite-transaction.js";
 import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { OpenClawQuarantineReadCleanupError } from "./openclaw-quarantine-error.js";
@@ -283,7 +285,7 @@ it("rejects pinned, transactional, asynchronous and retired direct-read results"
   } finally {
     db.exec("ROLLBACK");
   }
-  runSqlitePinnedReadSnapshotSync(db, () => {
+  runSqliteReadSnapshotSync(db, () => {
     expect(read).toThrow("transaction or snapshot");
   });
   expect(() => reader.read(() => Promise.resolve(1))).toThrow("must remain synchronous");
@@ -298,7 +300,7 @@ it("rejects pinned, transactional, asynchronous and retired direct-read results"
 
 function acpFixture() {
   const state = fixture();
-  const peer = new (sqlite.requireNodeSqlite().DatabaseSync)(state.pathname);
+  const peer = sqlite.openNodeSqliteDatabase(state.pathname);
   peer.exec(
     extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, "acp_sessions", {
       endMarker: "CREATE TABLE IF NOT EXISTS acp_replay_sessions",
@@ -332,7 +334,7 @@ it("batches ACP rows with revision admission and retains the following warm look
         });
         expect(observation.queries).toHaveLength(count);
       };
-      await check(null, 1);
+      await check(null, 0);
       observation.queries.length = 0;
       expect(
         await workerRead({ ...command, entries: [{ keys: [`${key}-missing`] }] }),
@@ -340,21 +342,21 @@ it("batches ACP rows with revision admission and retains the following warm look
         ok: true,
         rows: [null],
       });
-      expect(observation.queries).toHaveLength(2);
+      expect(observation.queries).toHaveLength(1);
       insert(key, "inserted");
-      await check("inserted", 2);
+      await check("inserted", 1);
       expect(
         observation.queries.filter((sql) =>
           /^PRAGMA data_version$|FROM main\.pragma_data_version\(\)\s*$/iu.test(sql),
         ),
-      ).toHaveLength(1);
-      await check("inserted", 1);
+      ).toHaveLength(0);
+      await check("inserted", 0);
       peer.prepare("UPDATE acp_sessions SET runtime_session_name='updated'").run();
-      await check("updated", 2);
       await check("updated", 1);
+      await check("updated", 0);
       peer.prepare("DELETE FROM acp_sessions").run();
-      await check(null, 2);
       await check(null, 1);
+      await check(null, 0);
     } finally {
       observation.restore();
     }
@@ -516,7 +518,7 @@ it("reuses one reader in registered worker commands, refreshes idle, and reopens
   expect.soft(observation.queries.filter((sql) => userVersion.test(sql))).toHaveLength(1);
   expect.soft(observation.queries.filter((sql) => catalogRead.test(sql))).toHaveLength(1);
   expect(await value()).toBe(1);
-  // First admission uses its native pragma; the retained observation caches on its second use.
+  // Warm reads retain native prepared statements without probing for external writers.
   expect(await value()).toBe(1);
   prepare.mockClear();
   observation.queries.length = 0;
@@ -526,7 +528,7 @@ it("reuses one reader in registered worker commands, refreshes idle, and reopens
   expect(prepare).not.toHaveBeenCalled();
   expect(observation.queries.filter((sql) => configSelect.test(sql))).toHaveLength(10);
   expect(observation.queries.filter((sql) => contentVersionSelect.test(sql))).toHaveLength(0);
-  expect(observation.queries.filter((sql) => dataVersion.test(sql))).toHaveLength(10);
+  expect(observation.queries.filter((sql) => dataVersion.test(sql))).toHaveLength(0);
   expect(countOpens()).toBe(1);
   const peer = new native.DatabaseSync(pathname);
   try {
@@ -558,8 +560,8 @@ it("reuses one reader in registered worker commands, refreshes idle, and reopens
         /^PRAGMA (?:schema_version|user_version)$/iu.test(sql),
     ),
   ).toEqual([]);
-  // Reopened handles borrow format facts and admit only row freshness.
-  expect(prepare.mock.calls.filter(([sql]) => dataVersion.test(sql))).toHaveLength(1);
+  // Reopened handles borrow admitted format facts without a freshness query.
+  expect(prepare.mock.calls.filter(([sql]) => dataVersion.test(sql))).toHaveLength(0);
   observation.restore();
 });
 
@@ -698,7 +700,7 @@ it("observes peer commits and closes only the invalidated physical identity", ()
       observation.queries.filter((sql) =>
         /^PRAGMA data_version$|FROM main\.pragma_data_version\(\)\s*$/iu.test(sql),
       ),
-    ).toHaveLength(1);
+    ).toHaveLength(0);
     expect(first.read(({ db }) => db)).toBe(reader);
     expect(peer.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get()?.busy).toBe(0);
   } finally {

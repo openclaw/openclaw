@@ -5,9 +5,9 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { JitiOptions } from "jiti";
 import { hasErrnoCode } from "../infra/errno.js";
-import { createJiti } from "./jiti-factory.js";
 import { isPathInside, relativePluginPathInsideRootSync } from "./path-safety.js";
 import { getPluginCache } from "./plugin-cache.js";
+import { createPluginCaptureResolver } from "./plugin-capture-resolution.js";
 import { PluginSourceRecoveryUnavailableError } from "./plugin-instance-error.js";
 import type { PluginNativeRecovery } from "./plugin-native-admission.js";
 import {
@@ -204,16 +204,15 @@ function createRetainedSourceVerification(
         throw new Error("Plugin dependency lookup changed after capture");
       }
     }
+    const resolvers = new Map<string, ReturnType<typeof createPluginCaptureResolver>>();
     for (const { source, reference, conditions, options, resolved } of moduleLookups) {
-      const resolver = createJiti(source, {
-        ...options,
-        fsCache: false,
-        moduleCache: false,
-        tryNative: false,
-      });
-      if (
-        resolveModuleTarget(resolver.esmResolve(reference, { try: true, conditions })) !== resolved
-      ) {
+      const key = JSON.stringify(options);
+      let resolver = resolvers.get(key);
+      if (!resolver) {
+        resolver = createPluginCaptureResolver(options);
+        resolvers.set(key, resolver);
+      }
+      if (resolveModuleTarget(resolver.resolve(source, reference, conditions)) !== resolved) {
         throw new Error("Plugin module lookup changed after capture");
       }
     }
@@ -286,17 +285,15 @@ export function createPluginSourceFacts(
     recordModuleLookup(
       source: string,
       reference: string,
-      resolver: ReturnType<typeof createJiti>,
+      resolver: ReturnType<typeof createPluginCaptureResolver>,
       conditions: readonly string[],
     ) {
       if (!captureForCustody || isBuiltin(reference)) {
         return;
       }
-      const resolved = resolveModuleTarget(
-        resolver.esmResolve(reference, { try: true, conditions: [...conditions] }),
-      );
+      const resolved = resolveModuleTarget(resolver.resolve(source, reference, conditions));
       // Keep resolution data, never Jiti's transformer or the instance's callbacks.
-      const { alias, extensions, nativeModules, tsconfigPaths } = resolver.options;
+      const { alias, extensions, nativeModules, tsconfigPaths } = resolver.get(source).options;
       moduleLookups.set(
         JSON.stringify([source, reference, conditions]),
         structuredClone({

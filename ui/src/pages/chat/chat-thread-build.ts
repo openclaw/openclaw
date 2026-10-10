@@ -76,7 +76,7 @@ import {
 } from "./chat-thread-run-identity.ts";
 import { coalesceToolActivityMessages } from "./chat-tool-activity-coalesce.ts";
 import { safeNormalizeMessage } from "./chat-turn-boundary.ts";
-import type { CompactionStatus } from "./tool-stream-contract.ts";
+import type { ChatReasoning, CompactionStatus } from "./tool-stream-contract.ts";
 
 export type BuildChatItemsProps = ChatInputPlacementProps & {
   paneId: string;
@@ -90,6 +90,7 @@ export type BuildChatItemsProps = ChatInputPlacementProps & {
   toolMessages: unknown[];
   guardianNotices?: ChatGuardianNotice[];
   streamSegments: ChatStreamSegment[];
+  reasoning?: ChatReasoning | null;
   stream: string | null;
   streamStartedAt: number | null;
   showToolCalls: boolean;
@@ -563,18 +564,25 @@ export function buildChatItems(
       items.push(item);
     }
   };
-  if (props.stream !== null) {
-    const text = sanitizeStreamText(props.stream);
+  if (props.stream !== null || props.reasoning) {
+    const text = sanitizeStreamText(props.stream ?? "");
     const prefix = accumulatedStreamText(segments, sanitizeStreamText);
     const visibleText = trimAccumulatedStreamPrefix(text, prefix);
-    if (visibleText.length > 0 && !stripHeartbeatTokenForDisplay(visibleText).shouldSkip) {
+    if (
+      props.reasoning ||
+      (visibleText.length > 0 && !stripHeartbeatTokenForDisplay(visibleText).shouldSkip)
+    ) {
       const liveProgress = resolveProgress();
-      const liveRunId = props.runId ?? liveProgress.runId;
+      const liveRunId = props.runId ?? props.reasoning?.runId ?? liveProgress.runId;
       const liveStreamItem: ChatItem = {
         kind: "stream",
         key: liveProgress.key,
         text: visibleText,
-        startedAt: timestampAfterVisibleItems(items, props.streamStartedAt ?? Date.now()),
+        thinking: props.reasoning?.text,
+        startedAt: timestampAfterVisibleItems(
+          items,
+          props.streamStartedAt ?? props.reasoning?.startedAt ?? Date.now(),
+        ),
         isStreaming: true,
         ...optionalRunIdentity(liveRunId),
         ...optionalBoundaryIdentity(liveRunId),
