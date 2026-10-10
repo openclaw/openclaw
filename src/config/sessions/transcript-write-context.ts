@@ -26,6 +26,10 @@ import {
   type SessionSourceAssertion,
 } from "./session-source-authority.js";
 import { SessionTranscriptWriterClaimReboundError } from "./session-transcript-writer-claim-error.js";
+import type {
+  InitialSessionTranscriptWriter,
+  SessionTranscriptWriterFence,
+} from "./session-transcript-writer.types.js";
 import {
   captureSessionTranscriptStorageEnvironment,
   captureSessionTranscriptTargetBinding,
@@ -36,6 +40,10 @@ import {
 import type { SessionEntry } from "./types.js";
 
 export { SessionTranscriptWriterClaimReboundError } from "./session-transcript-writer-claim-error.js";
+export type {
+  InitialSessionTranscriptWriter,
+  SessionTranscriptWriterFence,
+} from "./session-transcript-writer.types.js";
 
 export type SessionMetadataChange =
   | Pick<ModelChangeEntry, "type" | "provider" | "modelId">
@@ -58,20 +66,6 @@ type MetadataPublication = {
   change: SessionMetadataChange;
   publish: (commit: SessionMetadataCommit) => undefined;
 };
-
-export type SessionTranscriptWriterFence = Readonly<{
-  expectedLifecycleRevision: string | undefined;
-  expectedWriterRunId: string;
-}>;
-
-/** A first-insert lease, bound to the original admission rather than its run id. */
-export type InitialSessionTranscriptWriter = Readonly<{
-  writerRunId: string;
-  committedFence: SessionTranscriptWriterFence | undefined;
-  assertActive: SessionSourceAssertion;
-  recordCommitted: (fence: SessionTranscriptWriterFence) => void;
-  withTranscriptWrite: <T>(run: () => Promise<T> | T) => Promise<T>;
-}>;
 
 type SessionTranscriptWriteTarget = {
   agentId?: string;
