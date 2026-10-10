@@ -60,7 +60,6 @@ export type IncognitoSessionFacts = {
     | "execHost"
     | "execNode"
     | "execCwd"
-    | "skillLibrarySelections"
     | "pluginOwnerId"
     | "agentHarnessId"
   >;

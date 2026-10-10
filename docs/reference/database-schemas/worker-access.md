@@ -2060,6 +2060,12 @@ parent session, lifecycle, and skill-selection fields without waiting back on th
 parent actor. Terminal lazy policy reads and exec-approval follow-ups likewise
 retain the selected actor and refuse policy revocation or session rebound.
 
+The `sessions_send` communication-admission reread uses the same retained actor
+for an explicitly bound requester. It rereads the full entry for communication
+policy comparison and retains the exact session/lifecycle claim through final
+admission. Policy publications and current caller authority still fence delivery;
+unbound requesters keep the native reread.
+
 Production incognito acquisition remains host-owned until P12. Ordinary unbound
 calls retain their native selectors and allocate no actor. This inactive
 composition adds no freshness probes, worker service, schema, retention,

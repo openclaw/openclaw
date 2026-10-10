@@ -58,7 +58,6 @@ export function projectIncognitoSessionRuntimeFacts(
           execHost: entry.execHost,
           execNode: entry.execNode,
           execCwd: entry.execCwd,
-          skillLibrarySelections: entry.skillLibrarySelections,
           pluginOwnerId: entry.pluginOwnerId,
           agentHarnessId: entry.agentHarnessId,
         }

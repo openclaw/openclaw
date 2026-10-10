@@ -67,7 +67,7 @@ afterAll(async () => {
   await state.cleanup();
 });
 
-function gateway() {
+function gateway(beforeAdmission?: () => Promise<void>) {
   return vi
     .fn()
     .mockImplementation(async (request: Parameters<AgentToolGatewayRequestCaller>[0]) => {
@@ -90,6 +90,8 @@ function gateway() {
             },
           };
         case "agent":
+          await beforeAdmission?.();
+          request.assertDispatchCurrent?.();
           return { runId: "accepted-private-request", status: "accepted" };
         default:
           throw new Error(`Unexpected Gateway request: ${request.method}`);
@@ -97,9 +99,14 @@ function gateway() {
     });
 }
 
-it.each(["bound", "unbound"] as const)(
-  "sends from a %s private requester to a durable sibling",
-  async (owner) => {
+it.each([
+  { owner: "bound", change: "none" },
+  { owner: "unbound", change: "none" },
+  { owner: "bound", change: "policy" },
+  { owner: "bound", change: "incarnation" },
+] as const)(
+  "checks communication admission for a $owner private requester with $change changed",
+  async ({ owner, change }) => {
     const requesterKey = owner === "bound" ? actorKey : nativeKey;
     const requesterAgent = owner === "bound" ? "main" : "native";
     const beforeActors = captureOpenClawAgentDatabaseExecution
@@ -122,7 +129,23 @@ it.each(["bound", "unbound"] as const)(
         }),
       );
     });
-    const callGateway = gateway();
+    let reachedAdmission = false;
+    const callGateway = gateway(async () => {
+      reachedAdmission = true;
+      if (change !== "none") {
+        await replaceSessionEntry(
+          { agentId: "main", sessionKey: actorKey },
+          {
+            sessionId: change === "incarnation" ? "replacement-requester" : "actor-requester",
+            lifecycleRevision: "actor-generation",
+            updatedAt: 1,
+            spawnDepth: 1,
+            incognito: true,
+            ...(change === "policy" ? { communication: { send: "never" } } : {}),
+          },
+        );
+      }
+    });
     const work = new AsyncWorkScope();
     const send = () =>
       createSessionsSendTool({
@@ -142,11 +165,12 @@ it.each(["bound", "unbound"] as const)(
         owner === "bound" ? withIncognitoSessionActor(actor, send) : send(),
       );
       await work.drain();
-      expect(result.details).toMatchObject({
-        status: "accepted",
-        sessionKey: targetKey,
-        delivery: { status: "skipped" },
-      });
+      expect(reachedAdmission).toBe(true);
+      expect(result.details).toMatchObject(
+        change === "none"
+          ? { status: "accepted", sessionKey: targetKey, delivery: { status: "skipped" } }
+          : { status: "error", error: expect.stringMatching(/changed|no longer current/) },
+      );
       expect(callGateway.mock.calls.filter(([request]) => request.method === "agent")).toEqual([
         [
           expect.objectContaining({
@@ -180,6 +204,20 @@ it.each(["bound", "unbound"] as const)(
     } finally {
       await work.drain();
       observers.forEach((observer) => observer.mockRestore());
+      if (change !== "none") {
+        await withIncognitoSessionActor(actor, () =>
+          replaceSessionEntry(
+            { agentId: "main", sessionKey: actorKey },
+            {
+              sessionId: "actor-requester",
+              lifecycleRevision: "actor-generation",
+              updatedAt: 1,
+              spawnDepth: 1,
+              incognito: true,
+            },
+          ),
+        );
+      }
     }
   },
 );
