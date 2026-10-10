@@ -5,10 +5,9 @@ import { createStubChild } from "./supervisor/adapters/child.test-support.js";
 
 const native = vi.hoisted(() => ({
   spawn: vi.fn(),
-  koffiAvailable: true,
+  bindingAvailable: true,
   launcherAvailable: true,
   create: vi.fn(() => 1n),
-  configure: vi.fn(() => true),
   inspect: vi.fn<() => number[]>(),
   terminate: vi.fn(),
   close: vi.fn(() => true),
@@ -17,36 +16,18 @@ vi.mock("node:child_process", async (original) => ({
   ...(await original<typeof import("node:child_process")>()),
   spawn: native.spawn,
 }));
-vi.mock("node:module", async (original) => {
-  const actual = await original<typeof import("node:module")>();
-  const createRequire = (...args: Parameters<typeof actual.createRequire>) =>
-    new Proxy(actual.createRequire(...args), {
-      apply: (target, receiver, argumentsList) =>
-        argumentsList[0] === "koffi"
-          ? (() => {
-              if (!native.koffiAvailable) {
-                throw new Error("Cannot find module koffi");
-              }
-              return {};
-            })()
-          : Reflect.apply(target, receiver, argumentsList),
-    });
-  return new Proxy(actual, {
-    get: (target, property, receiver) =>
-      property === "createRequire" ? createRequire : Reflect.get(target, property, receiver),
-  });
-});
-vi.mock("./supervisor/service-child-windows-job-native.ts", () => ({
-  createWindowsJobBindings: () => ({
-    assertLayouts() {},
-    CreateJobObjectW: native.create,
-    requireHandle: (handle: bigint) => handle,
-    SetExtendedLimits: native.configure,
-    TerminateJobObject: native.terminate,
-    CloseHandle: native.close,
-    readJobProcessIds: native.inspect,
-    lastError: (operation: string) => new Error(operation),
-  }),
+vi.mock("@openclaw/proc-safe/windows-job", () => ({
+  isSupported: () => native.bindingAvailable,
+  WindowsJob: {
+    create: () => {
+      native.create();
+      return {
+        terminate: native.terminate,
+        close: native.close,
+        processIds: native.inspect,
+      };
+    },
+  },
 }));
 vi.mock("node:fs", async (original) => {
   const actual = await original<typeof import("node:fs")>();
@@ -84,12 +65,11 @@ beforeEach(async () => {
   vi.resetModules();
   ({ createOwnedStdioProcess, closeOwnedStdioProcess } = await import("./owned-stdio.js"));
   ({ createProcessSupervisor } = await import("./supervisor/supervisor.js"));
-  native.koffiAvailable = true;
+  native.bindingAvailable = true;
   native.launcherAvailable = true;
   Object.defineProperty(process, "platform", { value: "win32" });
   stub = createStubChild();
   native.create.mockReset().mockReturnValue(1n);
-  native.configure.mockReset().mockReturnValue(true);
   native.inspect.mockReset().mockReturnValue([1234]);
   native.close.mockReset().mockReturnValue(true);
   native.terminate.mockReset().mockImplementation(() => {
@@ -191,21 +171,17 @@ it.each([false, true])(
   },
 );
 
-it.each(["koffi", "launcher", "create", "configuration", "admission"] as const)(
+it.each(["binding", "launcher", "create", "admission"] as const)(
   "launches once without containment when Job %s is unavailable",
   async (phase) => {
-    const unavailable = phase === "koffi" || phase === "launcher";
+    const unavailable = phase === "binding" || phase === "launcher";
     const cause = new Error(`Job ${phase} failed`);
-    if (phase === "koffi") {
-      native.koffiAvailable = false;
+    if (phase === "binding") {
+      native.bindingAvailable = false;
     } else if (phase === "launcher") {
       native.launcherAvailable = false;
     } else if (phase === "create") {
       native.create.mockImplementationOnce(() => {
-        throw cause;
-      });
-    } else if (phase === "configuration") {
-      native.configure.mockImplementationOnce(() => {
         throw cause;
       });
     } else {
@@ -306,7 +282,7 @@ it.each([
   "%s cleanup (external=%s, requires tree=%s) interprets %s certification",
   async (processTree, external, requiresTree, certification) => {
     if (certification === "job-unavailable") {
-      native.koffiAvailable = false;
+      native.bindingAvailable = false;
     } else if (certification === "job-admission-failed") {
       rejectJobAdmission(new Error("Job admission failed"));
     }

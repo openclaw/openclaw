@@ -36,16 +36,26 @@ export function getCliPluginInvocationResources(): CliPluginInvocationResources 
   return current && current !== "process" ? current.pluginResources : undefined;
 }
 
+let retainedProcessJob = false;
+
 /** Finalizers own their Windows descendants until executable process exit. */
 export async function retainCliProcessJobUntilExit(): Promise<void> {
-  if (process.platform !== "win32" || !hasCliProcessScope()) {
+  if (process.platform !== "win32" || !hasCliProcessScope() || retainedProcessJob) {
     return;
   }
-  const [{ default: koffi }, { retainWindowsProcessJobUntilExit }] = await Promise.all([
-    import("koffi"),
-    import("../process/supervisor/service-child-windows-job-native.js"),
-  ]);
-  retainWindowsProcessJobUntilExit(koffi);
+  const { WindowsJob, retainCurrentProcessJobUntilExit } =
+    await import("@openclaw/proc-safe/windows-job");
+  // Concurrent callers can share the asynchronous module load.
+  if (retainedProcessJob) {
+    return;
+  }
+  const job = WindowsJob.create();
+  try {
+    retainCurrentProcessJobUntilExit(job);
+    retainedProcessJob = true;
+  } finally {
+    job.close();
+  }
 }
 
 export async function withCliCommandCleanup<T>(
