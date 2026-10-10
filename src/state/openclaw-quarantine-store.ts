@@ -380,7 +380,8 @@ function readOpenClawDatabaseQuarantine(
   if (!existsSync(storePath)) {
     return undefined;
   }
-  const database = openNodeSqliteDatabase(storePath);
+  // Read-only admission: a lookup must never create or recreate the store.
+  const database = openNodeSqliteDatabase(storePath, { readOnly: true });
   let outcome: { value: OpenClawDatabaseQuarantine | undefined } | { error: unknown };
   try {
     outcome = { value: readQuarantineDecision(database, pathname, storePath) };

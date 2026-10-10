@@ -1,8 +1,9 @@
 import fs from "node:fs";
 import { expect, it, vi } from "vitest";
+import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db-lifecycle.js";
-import * as readOnly from "../../state/openclaw-agent-db-readonly.js";
+import * as readOnlyScope from "../../state/openclaw-agent-db-readonly-scope.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
@@ -88,6 +89,46 @@ it.each([
   });
 });
 
+it("never issues page-read SQL through a host-held writable database handle", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+    const writer = openOpenClawAgentDatabase({ agentId: "main", env });
+    const scope = {
+      agentId: "main",
+      sessionKey: "agent:main:writable-hold",
+      sessionId: "writable-hold",
+      path: writer.path,
+      env,
+    };
+    writeSessionEntry(writer, scope.sessionKey, {
+      sessionId: scope.sessionId,
+      updatedAt: 1,
+      lifecycleRevision: "original",
+    });
+    await replaceTranscriptEvents({ ...scope, storePath: scope.path }, [
+      { type: "session", id: scope.sessionId, version: 3 },
+    ]);
+    const observed = trackSqliteStatementExecutions(writer.db, ["writer"], () => "writer");
+    try {
+      const execute = await prepareSessionHistoryReadOperation({
+        kind: "transcript-page-read",
+        database: { agentId: scope.agentId, path: scope.path },
+        request: {
+          scope,
+          expectedLifecycleRevision: "original",
+          limits: { limit: 2, maxScannedEntries: 1000, maxMaterializedBytes: 16 * 1024 * 1024 },
+        },
+        expectedIdentity: readDatabasePathIdentitySync(scope.path),
+      });
+      const { result } = execute();
+      expect(result.ok).toBe(true);
+    } finally {
+      observed.restore();
+    }
+    expect(observed.counts.writer).toBe(0);
+    await closeOpenClawAgentDatabaseByPathAsync(writer.path);
+  });
+});
+
 it.each([
   ["before read", "replacement", "stale_session"],
   ["after read", "replacement", "stale_session"],
@@ -95,16 +136,18 @@ it.each([
   ["after read", "deletion", "missing"],
 ] as const)("rejects %s %s at the worker dispatcher with %s", async (phase, mode, error) => {
   await withFixture(async (input) => {
-    const original = readOnly.withOpenClawAgentDatabaseReadOnly;
-    const spy = vi.spyOn(readOnly, "withOpenClawAgentDatabaseReadOnly").mockImplementation(
-      new Proxy(original, {
-        apply(target, receiver, args) {
-          const result = Reflect.apply(target, receiver, args);
-          replaceOrRemove(input.database.path, mode);
-          return result;
-        },
-      }),
-    );
+    const original = readOnlyScope.withScopedOpenClawAgentDatabaseReadOnly;
+    const spy = vi
+      .spyOn(readOnlyScope, "withScopedOpenClawAgentDatabaseReadOnly")
+      .mockImplementation(
+        new Proxy(original, {
+          apply(target, receiver, args) {
+            const result = Reflect.apply(target, receiver, args);
+            replaceOrRemove(input.database.path, mode);
+            return result;
+          },
+        }),
+      );
     try {
       const execute = await prepareSessionHistoryReadOperation(input);
       if (phase === "before read") {

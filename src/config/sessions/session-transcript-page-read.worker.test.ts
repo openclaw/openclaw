@@ -13,7 +13,27 @@ import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-ru
 
 const limits = { limit: 2, maxScannedEntries: 1000, maxMaterializedBytes: 16 * 1024 * 1024 };
 
-it("preserves absent coordination files through the actual read-only worker", async () => {
+function readLogicalState(pathname: string) {
+  const database = new (requireNodeSqlite().DatabaseSync)(pathname, { readOnly: true });
+  try {
+    return {
+      version: database.prepare("PRAGMA user_version").get(),
+      schema: database.prepare("SELECT type, name, sql FROM sqlite_schema ORDER BY name").all(),
+      transcriptEvents: database
+        .prepare(
+          "SELECT session_id, seq, event_json, created_at FROM transcript_events ORDER BY session_id, seq",
+        )
+        .all(),
+    };
+  } finally {
+    database.close();
+  }
+}
+
+it("preserves logical state through the actual read-only worker", async () => {
+  // Supersedes the strict absent-sidecar assertion: the logical read-only
+  // contract (PR #153) allows SQLite coordination files while the store's
+  // data, schema and idle-writer primary bytes must remain unchanged.
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
     const writer = openOpenClawAgentDatabase({ agentId: "main", env });
     const scope = {
@@ -36,6 +56,7 @@ it("preserves absent coordination files through the actual read-only worker", as
     expect(before).not.toContain(path.basename(scope.path) + "-wal");
     expect(before).not.toContain(path.basename(scope.path) + "-shm");
     const originalBytes = await fs.readFile(scope.path);
+    const logicalBefore = readLogicalState(scope.path);
     const result = await withSessionHistoryWorkerDatabase(
       { agentId: "main", path: scope.path, env },
       (owner) =>
@@ -46,7 +67,46 @@ it("preserves absent coordination files through the actual read-only worker", as
     );
     expect(result.ok).toBe(true);
     expect(await fs.readFile(scope.path)).toEqual(originalBytes);
-    expect(await fs.readdir(path.dirname(scope.path))).toEqual(before);
+    expect(readLogicalState(scope.path)).toEqual(logicalBefore);
+  });
+});
+
+it("releases the WAL read mark after each worker read", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+    const writer = openOpenClawAgentDatabase({ agentId: "main", env });
+    const scope = {
+      agentId: "main",
+      sessionKey: "agent:main:read-mark",
+      sessionId: "read-mark",
+      path: writer.path,
+      env,
+    };
+    writeSessionEntry(writer, scope.sessionKey, {
+      sessionId: scope.sessionId,
+      updatedAt: 1,
+      lifecycleRevision: "original",
+    });
+    await replaceTranscriptEvents({ ...scope, storePath: scope.path }, [
+      { type: "session", id: scope.sessionId, version: 3 },
+      { type: "message", id: "one", message: { role: "user", content: "one" } },
+    ]);
+    const input = {
+      request: { scope, expectedLifecycleRevision: "original", limits },
+      expectedIdentity: readDatabasePathIdentitySync(scope.path),
+    };
+    await withSessionHistoryWorkerDatabase(
+      { agentId: "main", path: scope.path, env },
+      async (owner) => {
+        const first = await owner.readTranscriptPage(input);
+        expect(first.ok).toBe(true);
+        // A held read snapshot would stall the owner's WAL reset (busy 1).
+        const checkpoint = writer.db.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get();
+        expect(checkpoint).toMatchObject({ busy: 0 });
+        const second = await owner.readTranscriptPage(input);
+        expect(second.ok).toBe(true);
+      },
+    );
+    await closeOpenClawAgentDatabaseByPathAsync(writer.path);
   });
 });
 

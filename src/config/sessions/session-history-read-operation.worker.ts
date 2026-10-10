@@ -103,10 +103,12 @@ async function prepareHistoryRead(
   switch (request.kind) {
     case "transcript-page-read": {
       const [
-        { withOpenClawAgentDatabaseReadOnly },
+        { withScopedOpenClawAgentDatabaseReadOnly },
         { createTranscriptReadMeter, readTranscriptPageInDatabase },
       ] = await Promise.all([
-        import("../../state/openclaw-agent-db-readonly.js"),
+        // The page read must never borrow the process-held writable handle:
+        // the scoped owner admits only native read-only connections.
+        import("../../state/openclaw-agent-db-readonly-scope.js"),
         import("./session-transcript-page-read.kernel.js"),
       ]);
       const meter = createTranscriptReadMeter(request.request.limits);
@@ -123,9 +125,13 @@ async function prepareHistoryRead(
         }
         try {
           assertTranscriptPageIdentity(request.database.path, request.expectedIdentity);
-          const read = withOpenClawAgentDatabaseReadOnly(
+          const read = withScopedOpenClawAgentDatabaseReadOnly(
             (database) => readTranscriptPageInDatabase(database, request.request, meter),
-            { ...request.database, env: request.request.scope.env },
+            {
+              agentId: request.database.agentId,
+              path: request.database.path,
+              env: request.request.scope.env,
+            },
           );
           assertTranscriptPageIdentity(request.database.path, request.expectedIdentity);
           return read.found
