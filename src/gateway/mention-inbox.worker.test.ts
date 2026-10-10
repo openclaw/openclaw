@@ -119,26 +119,29 @@ describe("Mention Inbox worker snapshots", () => {
       ),
     );
     let committed = false;
-    // oxlint-disable-next-line typescript/unbound-method -- The proxy preserves the native receiver.
-    const all = StatementSync.prototype.all;
-    vi.spyOn(StatementSync.prototype, "all").mockImplementation(
-      new Proxy(all, {
-        apply(target, receiver: StatementSync, args) {
-          const result = Reflect.apply(target, receiver, args);
-          if (!committed && receiver.sourceSQL.includes('from "config_machine_state"')) {
-            committed = true;
-            write(writer, () =>
-              writeMentionStoreChanges(
-                writer,
-                { revision: 1, nextSequence: 2 },
-                new Map([[second.key, second]]),
-              ),
-            );
-          }
-          return result;
-        },
-      }),
-    );
+    for (const method of ["all", "iterate"] as const) {
+      const original = StatementSync.prototype[method];
+      vi.spyOn(StatementSync.prototype, method).mockImplementation(
+        new Proxy(original, {
+          apply(target, receiver: StatementSync, args) {
+            const result = Reflect.apply(target, receiver, args);
+            // Finish the native read before committing during delivery on either query path.
+            const rows = method === "iterate" ? [...result] : result;
+            if (!committed && receiver.sourceSQL.includes('from "config_machine_state"')) {
+              committed = true;
+              write(writer, () =>
+                writeMentionStoreChanges(
+                  writer,
+                  { revision: 1, nextSequence: 2 },
+                  new Map([[second.key, second]]),
+                ),
+              );
+            }
+            return method === "iterate" ? rows.values() : rows;
+          },
+        }),
+      );
+    }
     expect(read(-1, reader).snapshot).toEqual({
       head: { revision: 1, nextSequence: 1 },
       sources: [first],

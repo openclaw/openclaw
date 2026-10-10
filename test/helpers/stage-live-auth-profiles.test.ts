@@ -80,7 +80,7 @@ describe("stage-live-auth-profiles", () => {
       database.close();
 
       await expect(stageLiveAuthProfiles(sourceStateDir, targetStateDir)).rejects.toThrow(
-        "canonical auth schema is incomplete",
+        `Session metadata unavailable (table-missing: ${missingTable})`,
       );
       expect(
         fs.existsSync(
@@ -99,7 +99,7 @@ describe("stage-live-auth-profiles", () => {
     database.close();
 
     await expect(stageLiveAuthProfiles(sourceStateDir, targetStateDir)).rejects.toThrow(
-      "canonical auth schema is incomplete",
+      "Session metadata unavailable (table-missing: auth_profile_state: auth_profile_store)",
     );
     expect(
       fs.existsSync(
