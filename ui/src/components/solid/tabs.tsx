@@ -93,7 +93,7 @@ export function Tabs(props: TabsProps) {
               item().value === (props.active === undefined ? props.defaultActive : props.active),
             )}
             disabled={item().disabled}
-            tabIndex={
+            tabindex={
               item().value === (props.active === undefined ? props.defaultActive : props.active)
                 ? 0
                 : -1
@@ -122,7 +122,7 @@ export function TabPanel(props: {
       role="tabpanel"
       aria-labelledby={props.tabId}
       hidden={!props.active}
-      tabIndex={props.tabIndex ?? 0}
+      tabindex={props.tabIndex ?? 0}
     >
       {props.children}
     </div>

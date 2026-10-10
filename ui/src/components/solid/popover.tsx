@@ -130,7 +130,7 @@ export function Popover(props: PopoverProps): JSX.Element {
         popover="manual"
         role="dialog"
         aria-label={props.label}
-        tabIndex={-1}
+        tabindex={-1}
       >
         {props.children}
       </div>

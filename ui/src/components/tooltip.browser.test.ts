@@ -1,5 +1,6 @@
 import { flush } from "solid-js";
 import { afterEach, describe, expect, it } from "vitest";
+import { expectSharedTooltipSkin } from "./tooltip.test-support.ts";
 import type { TooltipElement } from "./tooltip.ts";
 import "./tooltip.ts";
 import "../styles/base.css";
@@ -143,6 +144,13 @@ function withoutTooltipMotion(f: Fixture) {
 }
 
 describe.runIf("__vitest_browser__" in globalThis)("tooltip pointer ownership", () => {
+  it("skins the body and removes the arrow through shared overlay tokens", async () => {
+    const f = await fixture();
+    expect(getComputedStyle(f.tooltip).display).toBe("contents");
+    await openTooltip(f);
+    expectSharedTooltipSkin(f.tooltip);
+  });
+
   async function mountOpenTooltip(rich: boolean) {
     const f = await fixture();
     let link: HTMLAnchorElement | undefined;

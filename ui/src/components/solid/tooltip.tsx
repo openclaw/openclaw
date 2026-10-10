@@ -3,12 +3,10 @@ import { Show, createEffect, createSignal, onCleanup, onSettled, untrack } from 
 import { acquireNativeOverlaySurface } from "../../lib/native-overlay-occlusion.ts";
 import { bindOverlayAnchor } from "../overlay-anchor.ts";
 import { createOverlay, findOverlayParent } from "../overlay-lifecycle.ts";
-import "./overlay.css";
 import { isTooltipTriggerElement } from "../tooltip-content.ts";
 import { TooltipController, type TooltipPolicyProps } from "../tooltip-controller.ts";
 import { retainShadowStyles } from "./shadow-styles.ts";
 import overlayStyles from "./overlay.css?inline";
-import "./tooltip.css";
 import tooltipStyles from "./tooltip.css?inline";
 
 export interface TooltipContentsProps extends TooltipPolicyProps {

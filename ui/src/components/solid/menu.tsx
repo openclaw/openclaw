@@ -56,6 +56,10 @@ function ownItems(surface: HTMLElement) {
   );
 }
 
+function itemRole(type: MenuItem["type"]): "menuitem" | "menuitemcheckbox" | "menuitemradio" {
+  return type ? `menuitem${type}` : "menuitem";
+}
+
 /** Menus share native visibility authority; Zag owns navigation and pointer intent. */
 export function Menu(props: BranchProps): JSX.Element {
   let mounted = false;
@@ -268,7 +272,7 @@ export function Menu(props: BranchProps): JSX.Element {
                   class={["oc-menu-item", item().class]}
                   data-value={item().id}
                   data-variant={item().variant}
-                  role={item().type ? `menuitem${item().type}` : "menuitem"}
+                  role={itemRole(item().type)}
                   aria-label={item().label}
                   aria-checked={item().type ? (item().checked ? "true" : "false") : undefined}
                   aria-disabled={item().disabled ? "true" : undefined}

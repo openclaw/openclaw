@@ -171,7 +171,7 @@ describe("Solid menu navigation", () => {
             <input aria-label="Invisible" data-form-control="" />
           </span>
           <span data-form-control="">Not focusable</span>
-          <button data-form-control="" tabIndex={-1}>
+          <button data-form-control="" tabindex={-1}>
             Not sequential
           </button>
           <div inert>

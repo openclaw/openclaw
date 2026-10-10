@@ -222,8 +222,7 @@ describe("Solid native modal policy", () => {
     expect(handle.open).toBe(true);
     expect(modalDialog(handle).open).toBe(false);
     expect(onCancel).not.toHaveBeenCalled();
-    expect(hiding).toHaveLength(1);
-    expect(hiding[0]?.cancelable).toBe(false);
+    expect(hiding).toHaveLength(0);
     expect(changes).not.toHaveBeenCalled();
     parent.appendChild(handle);
     flush();

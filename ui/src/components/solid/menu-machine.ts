@@ -17,7 +17,7 @@ const normalize = (props: object) => {
   for (const [from, to] of [
     ["onFocus", "onFocusIn"],
     ["onBlur", "onFocusOut"],
-  ]) {
+  ] as const) {
     if (from in out) {
       out[to] = out[from];
       delete out[from];
@@ -115,7 +115,7 @@ export function useMenuMachine(
           const box = overlay.surface.getBoundingClientRect();
           const anchor = overlay.trigger.getBoundingClientRect();
           params.context.set("currentPlacement", box.x < anchor.x ? "left-start" : "right-start");
-          machine.implementations?.actions?.setIntentPolygon(params);
+          machine.implementations?.actions?.setIntentPolygon?.(params);
         },
       },
     },

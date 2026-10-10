@@ -15,7 +15,6 @@ import {
   hoverTrigger,
   tooltipSurface as currentTooltipSurface,
   expectOpenCount,
-  expectSharedTooltipSkin,
   settleTooltip,
   type TooltipElement,
 } from "./tooltip.test-support.ts";
@@ -157,14 +156,6 @@ describe("openclaw-tooltip", () => {
     expect(content?.querySelector("kbd")).toBeNull();
     expect(content?.textContent).toBe("Search unavailable");
     expect(document.getElementById(descriptionId)?.textContent).toBe("Search unavailable");
-  });
-
-  it("skins the body and removes the arrow through shared overlay tokens", async () => {
-    const { tooltip } = createTooltip("Styled tooltip");
-    document.body.append(tooltip);
-    await commitTooltip(tooltip);
-
-    expectSharedTooltipSkin(tooltip);
   });
 
   it("projects rich content into the tooltip", async () => {

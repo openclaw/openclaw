@@ -30,7 +30,9 @@ function TooltipTemplate(props: { template: TemplateResult | undefined }) {
   const leaf = document.createElement("span");
   createEffect(
     () => props.template,
-    (template) => renderLit(template ?? nothing, leaf),
+    (template) => {
+      renderLit(template ?? nothing, leaf);
+    },
   );
   onCleanup(() => renderLit(nothing, leaf));
   return leaf;
@@ -39,6 +41,7 @@ function TooltipTemplate(props: { template: TemplateResult | undefined }) {
 export const Tooltip = defineSolidBridge<TooltipProps, TooltipMethods>(
   "openclaw-tooltip",
   (props, host) => {
+    host.style.display = "contents";
     const root = host.shadowRoot ?? host.attachShadow({ mode: "open" });
     const template = createMemo(() =>
       props.contentTemplate === undefined
