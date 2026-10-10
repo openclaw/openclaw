@@ -579,7 +579,7 @@ describe("memory embedding policy", () => {
 
   it.each([
     { cap: 1, requests: [[0], [1], [2]] },
-    ...[undefined, 0, -1, 1.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1].map((cap) => ({
+    ...[undefined, 0, -1, 1.5, Number.NaN, Infinity, Number.MAX_SAFE_INTEGER + 1].map((cap) => ({
       cap,
       requests: [[0, 1, 2]],
     })),
