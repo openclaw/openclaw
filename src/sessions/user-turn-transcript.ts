@@ -12,6 +12,7 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { readWithdrawnSessionPendingInputId } from "../config/sessions/session-accessor.pending-inputs.js";
 import {
+  registerUserTurnInputActor,
   withSessionInputActor,
   type SessionInputActorBinding,
 } from "../config/sessions/session-input-actor.js";
@@ -804,10 +805,10 @@ export function createUserTurnTranscriptRecorder(
       notifyOriginalInputCommitted({ message: sourceMessage, anchor });
     }
   });
+  registerUserTurnInputActor(recorder, (binding) => {
+    inputActorBinding = binding;
+  });
   registerUserTurnTranscriptAdmissionOwner(recorder, {
-    bindInputActor: (binding) => {
-      inputActorBinding = binding;
-    },
     pendingInput: () => pendingInput,
     withdrawnInputId: () => readWithdrawnSessionPendingInputId(pendingInput),
     receipt: () => admissionReceipt,

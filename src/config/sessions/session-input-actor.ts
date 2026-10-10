@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
+import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
 import { isIncognitoSessionKey } from "../../shared/incognito-session-key.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { getOpenClawAgentDatabaseIfOpen } from "../../state/openclaw-agent-db.js";
@@ -13,6 +14,30 @@ export type SessionInputActorBinding = {
   phase: "acceptInput" | "adoptRun";
   acquire(): Promise<{ actor: SessionActor; target: SessionEntryTargetPatchScope }>;
 };
+
+const recorderBindings = new WeakMap<
+  UserTurnTranscriptRecorder,
+  (binding: SessionInputActorBinding) => void
+>();
+
+export function registerUserTurnInputActor(
+  recorder: UserTurnTranscriptRecorder,
+  bind: (binding: SessionInputActorBinding) => void,
+): void {
+  recorderBindings.set(recorder, bind);
+}
+
+/** Internal handoff only: the released recorder shape does not grant actor authority. */
+export function bindUserTurnInputActor(
+  recorder: UserTurnTranscriptRecorder,
+  binding: SessionInputActorBinding,
+): void {
+  const bind = recorderBindings.get(recorder);
+  if (!bind) {
+    throw new Error("Input actor requires a factory-owned transcript recorder");
+  }
+  bind(binding);
+}
 
 /** Acquire through the selected writer; never redirect an incognito target to a file. */
 export async function acquireSessionInputActor(

@@ -18,6 +18,7 @@ import type {
   SessionActorAuthority,
 } from "../../config/sessions/session-actor-contract.js";
 import { readSessionEntryInWorker } from "../../config/sessions/session-entry-read-runtime.js";
+import { bindUserTurnInputActor } from "../../config/sessions/session-input-actor.js";
 import type { SessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import type { SessionTranscriptTurnLifecyclePatch } from "../../config/sessions/session-transcript-turn-lifecycle.types.js";
 import {
@@ -41,7 +42,6 @@ import {
 } from "../../infra/agent-lifecycle-error.js";
 import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
-import { bindUserTurnInputActor } from "../../sessions/user-turn-transcript-admission.js";
 import type {
   UserTurnTranscriptRecorder,
   UserTurnTranscriptTarget,

@@ -1,4 +1,3 @@
-import type { SessionInputActorBinding } from "../config/sessions/session-input-actor.js";
 import type { SessionPendingInputReceipt } from "../config/sessions/session-pending-input-receipt.types.js";
 import type {
   PersistedUserTurnMessage,
@@ -7,7 +6,6 @@ import type {
 } from "./user-turn-transcript.types.js";
 
 type AdmissionOwner = {
-  bindInputActor: (binding: SessionInputActorBinding) => void;
   pendingInput: () => SessionPendingInputReceipt | undefined;
   withdrawnInputId: () => string | undefined;
   receipt: () => UserTurnTranscriptAdmissionReceipt | undefined;
@@ -22,18 +20,6 @@ type AdmissionOwner = {
 
 // Only the recorder factory registers an owner; copied SDK values cannot bind one.
 const admissionOwners = new WeakMap<UserTurnTranscriptRecorder, AdmissionOwner>();
-
-/** Internal handoff only: the released recorder shape does not grant actor authority. */
-export function bindUserTurnInputActor(
-  recorder: UserTurnTranscriptRecorder,
-  binding: SessionInputActorBinding,
-): void {
-  const owner = admissionOwners.get(recorder);
-  if (!owner) {
-    throw new Error("Input actor requires a factory-owned transcript recorder");
-  }
-  owner.bindInputActor(binding);
-}
 
 export function registerUserTurnTranscriptAdmissionOwner(
   recorder: UserTurnTranscriptRecorder,
