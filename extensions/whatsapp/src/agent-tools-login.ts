@@ -74,9 +74,9 @@ export function createWhatsAppLoginTool(
       const rawAction = (args as { action?: unknown })?.action;
       const action = rawAction === undefined ? "start" : rawAction;
       if (action !== "start" && action !== "wait") {
-        const printableAction =
-          typeof action === "string" ? action : (JSON.stringify(action) ?? "unknown");
-        throw new WhatsAppToolInputError(`Unknown WhatsApp login action: ${printableAction}`);
+        throw new WhatsAppToolInputError(
+          'Unknown WhatsApp login action. Expected "start" or "wait".',
+        );
       }
       const accountId = readNonBlankString((args as { accountId?: unknown }).accountId);
       const timeoutMs = readPositiveIntegerParam(args as Record<string, unknown>, "timeoutMs");

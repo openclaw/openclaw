@@ -16,6 +16,8 @@ vi.mock("../login-qr-api.js", () => ({
 
 const startWebLoginWithQrMock = vi.mocked(startWebLoginWithQr);
 const waitForWebLoginMock = vi.mocked(waitForWebLogin);
+const cyclicAction: Record<string, unknown> = {};
+cyclicAction.self = cyclicAction;
 
 function resolveRegisteredLoginTool(context: OpenClawPluginToolContext): AnyAgentTool | null {
   const registerTool = vi.fn<OpenClawPluginApi["registerTool"]>();
@@ -155,7 +157,10 @@ describe("createWhatsAppLoginTool", () => {
     });
   });
 
-  it("passes string timeoutMs through to start actions", async () => {
+  it.each([
+    { label: "explicit start", args: { action: "start" } },
+    { label: "omitted action", args: {} },
+  ])("passes string timeoutMs through to $label", async ({ args }) => {
     startWebLoginWithQrMock.mockResolvedValueOnce({
       connected: false,
       message: "Scan this QR in WhatsApp → Linked Devices.",
@@ -166,7 +171,7 @@ describe("createWhatsAppLoginTool", () => {
     await tool.execute(
       "tool-call-start",
       {
-        action: "start",
+        ...args,
         timeoutMs: "6000",
         accountId: "account-3",
       },
@@ -182,18 +187,19 @@ describe("createWhatsAppLoginTool", () => {
   });
 
   it.each([
-    { action: "bogus", rendered: "bogus" },
-    { action: null, rendered: "null" },
-    { action: 42, rendered: "42" },
-  ])("rejects malformed action $rendered before login", async ({ action, rendered }) => {
+    { action: "bogus", label: "unknown string" },
+    { action: null, label: "null" },
+    { action: 42, label: "number" },
+    { action: 1n, label: "bigint" },
+    { action: cyclicAction, label: "cyclic object" },
+  ])("rejects malformed action $label before login", async ({ action }) => {
     const tool = createOwnerLoginTool();
-    startWebLoginWithQrMock.mockResolvedValueOnce({ message: "login started" });
     const signal = new AbortController().signal;
 
     await expect(tool.execute("tool-call-unknown", { action }, signal)).rejects.toMatchObject({
       name: "ToolInputError",
       status: 400,
-      message: `Unknown WhatsApp login action: ${rendered}`,
+      message: 'Unknown WhatsApp login action. Expected "start" or "wait".',
     });
     expect(startWebLoginWithQrMock).not.toHaveBeenCalled();
     expect(waitForWebLoginMock).not.toHaveBeenCalled();
