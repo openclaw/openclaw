@@ -333,25 +333,39 @@ export function replacePreparedModelCatalogAuth(
     Pick<PreparedModelCatalogAuth, "authStore" | "authModes">,
   includesProvider: (provider: string) => boolean,
 ): PreparedModelCatalogAuth {
-  const keep = ([provider]: readonly [string, unknown]) => !includesProvider(provider);
   const take = ([provider]: readonly [string, unknown]) => includesProvider(provider);
+  const rediscoveredProviders = new Set(
+    Object.values(next.authStore.profiles).map((profile) => profile.provider),
+  );
+  // Every caller reads each scoped provider's credential source, so a scoped
+  // entry the refresh omits was observed removed, not passed over: prior
+  // entries must not survive it, or a logged-out provider stays published as
+  // available. Scoped facts are taken from the refresh alone; out-of-scope
+  // providers keep their prior entries.
+  const keepsPriorEntry = (provider: string) => !includesProvider(provider);
   const replace = <T>(
     before: Readonly<Record<string, T>> | undefined,
     after: Readonly<Record<string, T>> | undefined,
-  ) =>
-    Object.fromEntries([
-      ...Object.entries(before ?? {}).filter(keep),
-      ...Object.entries(after ?? {}).filter(take),
-    ]);
+  ) => {
+    const merged = new Map(
+      Object.entries(before ?? {}).filter(([provider]) => keepsPriorEntry(provider)),
+    );
+    for (const [provider, value] of Object.entries(after ?? {})) {
+      if (includesProvider(provider)) {
+        merged.set(provider, value);
+      }
+    }
+    return Object.fromEntries(merged);
+  };
   const selectStore = (
     store: RuntimeAuthProfileStore,
-    selected: boolean,
+    select: (provider: string) => boolean,
   ): RuntimeAuthProfileStore => {
     const scoped = removeRuntimeExternalProfileReferences({
       store,
       profileIds: new Set(
         Object.entries(store.profiles)
-          .filter(([, profile]) => includesProvider(profile.provider) !== selected)
+          .filter(([, profile]) => !select(profile.provider))
           .map(([id]) => id),
       ),
     });
@@ -359,17 +373,17 @@ export function replacePreparedModelCatalogAuth(
       ...scoped,
       order:
         scoped.order &&
-        Object.fromEntries(Object.entries(scoped.order).filter(selected ? take : keep)),
+        Object.fromEntries(Object.entries(scoped.order).filter(([provider]) => select(provider))),
       lastGood:
         scoped.lastGood &&
-        Object.fromEntries(Object.entries(scoped.lastGood).filter(selected ? take : keep)),
-      runtimeLocalOrderProviderIds: store.runtimeLocalOrderProviderIds?.filter(
-        (provider) => includesProvider(provider) === selected,
-      ),
+        Object.fromEntries(
+          Object.entries(scoped.lastGood).filter(([provider]) => select(provider)),
+        ),
+      runtimeLocalOrderProviderIds: store.runtimeLocalOrderProviderIds?.filter(select),
     };
   };
-  const retained = selectStore(previous.authStore, false);
-  const refreshed = selectStore(next.authStore, true);
+  const retained = selectStore(previous.authStore, keepsPriorEntry);
+  const refreshed = selectStore(next.authStore, includesProvider);
   // Both partitions belong to this agent; merging must retain each local-origin list.
   for (const key of ["runtimeLocalProfileIds", "runtimeLocalOrderProviderIds"] as const) {
     if (retained[key] || refreshed[key]) {
@@ -387,7 +401,16 @@ export function replacePreparedModelCatalogAuth(
     providerAuthLabels: next.providerAuthLabels
       ? new Map(
           [...previous.providerAuthLabels]
-            .filter(keep)
+            .filter(
+              ([provider]) =>
+                !includesProvider(provider) ||
+                // An observed next label replaces the prior one below. When the
+                // refresh omits a scoped label, only a provider whose auth was
+                // observed removed loses the prior label; a rediscovered
+                // provider keeps it so an unobserved label omission cannot
+                // churn the publication.
+                (!next.providerAuthLabels?.has(provider) && rediscoveredProviders.has(provider)),
+            )
             .concat([...next.providerAuthLabels].filter(take)),
         )
       : previous.providerAuthLabels,

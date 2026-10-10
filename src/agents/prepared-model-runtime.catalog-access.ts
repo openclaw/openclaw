@@ -295,6 +295,14 @@ export async function createFullModelCatalogAccess(
       const retained = published.inventory;
       const retainedAuth =
         getPreparedModelFullCatalogAuth(published.catalog ?? staticCatalog) ?? currentAuth;
+      // The worker re-reads the durable credential source for the whole requested
+      // scope before any discovery runs, so an auth omission in its returned store
+      // is a removal observed at that read — regardless of the per-provider
+      // discovery outcome. Discovery status speaks to model discovery, not to the
+      // credential observation, so an unavailable outcome must not resurrect a
+      // removed credential into the published catalog. Observation therefore
+      // tracks the credential-read scope itself, including providers whose
+      // discovery emitted no outcome at all.
       const auth = providerIds
         ? replacePreparedModelCatalogAuth(retainedAuth, discoveredAuth, (provider) =>
             scope.has(normalizeProvider(provider)),
@@ -474,6 +482,10 @@ export async function createFullModelCatalogAccess(
       const auth =
         getPreparedModelFullCatalogAuth(latest.inventory?.catalog ?? staticCatalog) ?? currentAuth;
       const nativeScope = preparedSyntheticAuthProviderScope(discoveredProviders);
+      // The worker re-read each discovered provider's credential source for this
+      // acquisition, so a discovered provider its result omits was observed removed,
+      // not passed over: prior auth must not survive the merge, or a logged-out
+      // provider stays published as available.
       const catalogAuth = nativeAuth
         ? replacePreparedModelCatalogAuth(auth, nativeAuth, (provider) =>
             nativeScope.has(normalizeProvider(provider)),
