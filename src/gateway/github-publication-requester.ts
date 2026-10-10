@@ -194,6 +194,8 @@ function prepareRequesterPolicy(
         authorizePreparedSessionMutation({ cfg: config, client, ...session }, facts, {
           policy: role,
           aliases: current.aliases,
+          // Publication mutates a session without starting an agent run.
+          authorizesAgentRun: false,
         })
       ) {
         throw new GitHubPublicationRequesterUnavailableError();
