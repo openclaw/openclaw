@@ -6,6 +6,7 @@ import {
   tryResolveCronJobEffectiveAgentId,
 } from "../agent-id.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
+import { resolvePreparedCronFailureAlert } from "../service/failure-alerts.js";
 import { hasActiveCronRun } from "../service/jobs-scheduling.js";
 import type { CronJobPolicyContext } from "../service/state.js";
 import { applyJobResult } from "../service/timer-outcomes.js";
@@ -13,7 +14,7 @@ import { findActiveCronRunReceiptInDatabase } from "./run-receipt-store.js";
 import type { CronRuntimeMutationContracts } from "./runtime-mutation.types.js";
 import {
   createCronMutationLogger,
-  prepareCronRuntimeMutation,
+  admitCronRuntimeMutation,
   retainCronRuntimeMutationOutcome,
 } from "./runtime-mutation.worker.js";
 import { mutateCronRuntimeRowsInDatabase } from "./runtime-rows.kernel.js";
@@ -37,13 +38,8 @@ export function recordSkippedCronRunsInWorker(
         storeKey: input.storeKey,
         jobIds,
         mutate({ jobs }) {
-          const preparation = prepareCronRuntimeMutation("cron.recordSkippedRuns", input.nonce, {
-            jobs: [...jobs.values()].map(({ id, delivery, failureAlert }) => ({
-              id,
-              delivery,
-              failureAlert,
-            })),
-          });
+          const preparation = input.prepared;
+          admitCronRuntimeMutation(input.nonce);
           const outcome: CronRuntimeMutationContracts["cron.recordSkippedRuns"]["outcome"] = {
             jobs: [],
             rejected: [],
@@ -52,16 +48,10 @@ export function recordSkippedCronRunsInWorker(
             logs: [],
           };
           const ownership = new Map(preparation.ownership.map((owner) => [owner.jobId, owner]));
-          const failureAlerts = new Map(
-            preparation.failureAlerts.map((alert) => [alert.jobId, alert]),
-          );
           for (const job of jobs.values()) {
             if (change.kind === "ownerless") {
               const planned = proposals.get(job.id);
               const owner = ownership.get(job.id);
-              if (!owner) {
-                throw new Error("Cron ownerless skip has no prepared process ownership");
-              }
               if (
                 !planned ||
                 job.enabled !== planned.enabled ||
@@ -69,7 +59,7 @@ export function recordSkippedCronRunsInWorker(
                 job.state.lastRunAtMs !== planned.lastRunAtMs ||
                 job.state.lastRunStatus !== planned.lastRunStatus ||
                 resolveCronJobConfigRevision(job) !== planned.configRevision ||
-                hasActiveCronRun(job, owner.active) ||
+                hasActiveCronRun(job, owner?.active ?? false) ||
                 findActiveCronRunReceiptInDatabase({
                   database: db,
                   storePath: input.storeKey,
@@ -85,17 +75,16 @@ export function recordSkippedCronRunsInWorker(
             } else if (resolveCronJobConfigRevision(job) !== change.configRevision) {
               continue;
             }
-            const failureAlert = failureAlerts.get(job.id);
-            if (!failureAlert) {
-              throw new Error("Cron skipped run has no prepared failure-alert policy");
-            }
             const state: CronJobPolicyContext = {
               deps: {
                 nowMs: () => preparation.nowMs,
                 cronConfig: preparation.cronConfig,
                 log: createCronMutationLogger(outcome.logs),
               },
-              preparedFailureAlert: { jobId: job.id, value: failureAlert.value },
+              preparedFailureAlert: {
+                jobId: job.id,
+                value: resolvePreparedCronFailureAlert(preparation.failureAlerts, job.id, job),
+              },
             };
             applyJobResult(
               state,

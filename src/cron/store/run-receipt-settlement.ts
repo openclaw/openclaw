@@ -171,7 +171,7 @@ export function createCronRunReceiptSettlementOwner(callbacks: {
             );
           }
         },
-        prepare: () => ({ value: {}, assertCurrent() {} }),
+        policy: { value: {}, assertCurrent() {} },
         onSettled(outcome) {
           retrySafe = outcome === "not-committed";
         },
@@ -217,6 +217,7 @@ export function createCronRunReceiptSettlementOwner(callbacks: {
       locallyOwnedReceipts.add(handle.receiptId);
     },
     owns: (receiptId: string) => locallyOwnedReceipts.has(receiptId),
+    ownedReceiptIds: () => [...locallyOwnedReceipts],
     trackCronRunReceiptSettlement,
     retainCronRunReceiptSettlement,
     finishCronRunReceiptAsync,

@@ -58,16 +58,13 @@ it.each(["commit", "retired", "reply-lost", "evidence-lost"] as const)(
         type: "cron.markDeliveryStarted",
         input: { storeKey: receipt.storeKey, handle: receipt },
         assertCurrent: () => undefined,
-        prepare: ({ deletionBlocked }) => {
-          expect(deletionBlocked).toBe(false);
-          return {
-            value: { allowMissingJob: false },
-            assertCurrent: () => {
-              if (outcome === "retired") {
-                throw new Error("delivery owner retired before commit");
-              }
-            },
-          };
+        policy: {
+          value: { allowMissingJob: false },
+          assertCurrent: () => {
+            if (outcome === "retired") {
+              throw new Error("delivery owner retired before commit");
+            }
+          },
         },
         publish: published,
         onSettled: settled,

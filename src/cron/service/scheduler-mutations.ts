@@ -3,7 +3,7 @@ import { noteCronJobsStoreCommit } from "../store.js";
 import type { CronRunHistorySource } from "../store/run-history.js";
 import type { CronRuntimeMutationContracts } from "../store/runtime-mutation.types.js";
 import type { CronRuntimeMutationInputs } from "../store/runtime-worker.types.js";
-import { resolveFailureAlert } from "./failure-alerts.js";
+import { prepareCronFailureAlertPolicies } from "./failure-alerts.js";
 import {
   captureCronNotificationRouting,
   prepareCronNotificationRouting,
@@ -41,11 +41,11 @@ export async function recordSkippedCronRuns(params: {
         source.assertCurrent();
         params.assertCurrent?.();
       },
-      prepare({ jobs }) {
-        const prepared = prepareCronScheduleOwnership(
-          state,
-          jobs.map(({ id }) => id),
-        );
+      policy: (() => {
+        const jobIds =
+          change.kind === "ownerless" ? change.proposals.map(({ jobId }) => jobId) : [change.jobId];
+        const alerts = prepareCronFailureAlertPolicies(state, jobIds);
+        const prepared = prepareCronScheduleOwnership(state, jobIds);
         const defaultAgentId = state.deps.resolveDefaultAgentId
           ? state.deps.resolveDefaultAgentId()
           : state.deps.defaultAgentId;
@@ -75,34 +75,25 @@ export async function recordSkippedCronRuns(params: {
           assertCurrent: () => source.assertStorageCurrent(),
         };
         const cronConfig = structuredClone(state.deps.cronConfig);
-        const failureAlerts = jobs.map((job) => ({
-          jobId: job.id,
-          value: resolveFailureAlert({ deps: { cronConfig } }, job),
-        }));
         return {
           value: {
             nowMs: params.nowMs,
             defaultAgentId,
             notificationRouting,
             cronConfig,
+            failureAlerts: alerts.policies,
             ownership: prepared.ownership,
-            failureAlerts,
           },
           assertCurrent() {
+            alerts.assertCurrent();
             assertRoutingCurrent();
             prepared.assertCurrent();
-            if (
-              !isDeepStrictEqual(cronConfig, state.deps.cronConfig) ||
-              jobs.some(
-                (job, index) =>
-                  !isDeepStrictEqual(failureAlerts[index]?.value, resolveFailureAlert(state, job)),
-              )
-            ) {
+            if (!isDeepStrictEqual(cronConfig, state.deps.cronConfig)) {
               throw new Error("Cron skipped-run policy changed before commit");
             }
           },
         };
-      },
+      })(),
       publish(outcome) {
         committed = outcome;
         if (outcome.jobs.length > 0) {
@@ -144,7 +135,7 @@ export async function planCronStartup(params: {
   let committed: StartupOutcome | undefined;
   let failure: { error: unknown } | undefined;
   try {
-    await runCronRuntimeMutation({
+    await runCronRuntimeMutation<"cron.planStartup">({
       context: source.context,
       type: "cron.planStartup",
       input: {
@@ -153,12 +144,13 @@ export async function planCronStartup(params: {
         skipJobIds: params.skipJobIds ? [...params.skipJobIds] : undefined,
       },
       assertCurrent: () => source.assertCurrent(),
-      prepare({ jobIds, notificationNeedsDefault }) {
-        const prepared = prepareCronScheduleOwnership(state, jobIds);
+      policy: (() => {
+        const prepared = prepareCronScheduleOwnership(state, params.jobIds);
         const skipMissedJobs = state.deps.cronConfig?.skipMissedJobs === true;
         const notifications = prepareCronNotificationRouting(
           state.deps,
-          skipMissedJobs && notificationNeedsDefault,
+          skipMissedJobs,
+          state.store?.jobs.filter((job) => params.jobIds.includes(job.id)),
         );
         return {
           value: {
@@ -167,16 +159,16 @@ export async function planCronStartup(params: {
             ownership: prepared.ownership,
             notificationRouting: notifications.routing,
           },
-          assertCurrent() {
+          assertCurrent(outcome) {
             source.assertCurrent();
             prepared.assertCurrent();
-            notifications.assertCurrent();
+            notifications.assertCurrent(outcome?.notifications);
             if ((state.deps.cronConfig?.skipMissedJobs === true) !== skipMissedJobs) {
               throw new Error("Cron missed-job policy changed before commit");
             }
           },
         };
-      },
+      })(),
       publish(outcome) {
         committed = outcome;
         if (outcome.jobs.length > 0) {

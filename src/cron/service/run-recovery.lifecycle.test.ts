@@ -1,9 +1,12 @@
 import { once } from "node:events";
 import { deserialize } from "node:v8";
-import { MessageChannel, MessagePort, Worker } from "node:worker_threads";
+import { MessageChannel, Worker } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
-import { loseFirstCronMutationReply } from "../../../test/helpers/cron/runtime-mutation.js";
+import {
+  duringCronMutationAdmission,
+  loseFirstCronMutationReply,
+} from "../../../test/helpers/cron/runtime-mutation.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { startSqliteConcurrentWriter } from "../../infra/sqlite-concurrent-writer.test-support.js";
 import type { SqliteWorkerRequest } from "../../infra/sqlite-worker-contract.js";
@@ -717,28 +720,22 @@ it("rolls schedule maintenance back when process ownership changes before commit
   const before = await loadCronStore(storePath);
   const state = makeCronRecoveryState(logger, storePath, nowMs);
   let activated = false;
-  // oxlint-disable-next-line typescript/unbound-method -- The private port remains the receiver.
-  const originalPost = MessagePort.prototype.postMessage;
-  const post = vi.spyOn(MessagePort.prototype, "postMessage").mockImplementation(function (
-    this: MessagePort,
-    value,
-    transferList,
-  ) {
-    if (isRecord(value) && Array.isArray(value.ownership)) {
+  const injection = duringCronMutationAdmission(
+    (value) => Array.isArray(value.ownership),
+    () => {
       markCronJobActive(job.id);
       activated = true;
-    }
-    return originalPost.call(this, value, transferList);
-  });
+    },
+  );
   try {
     await expect(recomputeUnownedCronSchedules(state)).rejects.toThrow(
-      "Cron schedule ownership changed before commit",
+      "Cron scheduling acquired new process ownership",
     );
     expect(activated).toBe(true);
     expect(await loadCronStore(storePath)).toEqual(before);
     expect(state.deps.enqueueSystemEvent).not.toHaveBeenCalled();
   } finally {
-    post.mockRestore();
+    injection.restore();
     clearCronJobActive(job.id);
     stop(state);
   }

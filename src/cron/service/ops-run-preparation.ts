@@ -13,7 +13,7 @@ import { findJobOrThrow, hasActiveCronRun, isJobEnabled } from "./jobs-schedulin
 import { assertSupportedJobSpec } from "./jobs-validation.js";
 import { locked } from "./locked.js";
 import { markManualCronJobActive } from "./ops-shared.js";
-import { releaseReservationOwnership, releaseReservedCronRuns } from "./run-admission-mutation.js";
+import { releaseReservedCronRuns, retryCronReservationRelease } from "./run-admission-mutation.js";
 import {
   activateQueuedCronRun,
   cleanupQueuedCronRunReservations,
@@ -415,17 +415,13 @@ export async function prepareManualRun(
       scheduleOwnershipAtMs: opts?.scheduleOwnershipAtMs ?? reservationAt,
       reservationIdentity,
       wasEnabled: opts?.onExit ? false : isJobEnabled(job),
-      ...(onExit ? { onExit } : {}),
-      ...(opts?.payload ? { payload: structuredClone(opts.payload) } : {}),
-      ...(opts?.evaluateTrigger ? { evaluateTrigger: true } : {}),
-      ...(opts?.streamBatch !== undefined ? { streamBatch: opts.streamBatch } : {}),
-      ...(opts?.streamScheduleKey !== undefined
-        ? { streamScheduleKey: opts.streamScheduleKey }
-        : {}),
-      ...(opts?.streamSourceIdentity !== undefined
-        ? { streamSourceIdentity: opts.streamSourceIdentity }
-        : {}),
-      ...(opts?.onTriggerDisposition ? { onTriggerDisposition: opts.onTriggerDisposition } : {}),
+      onExit,
+      payload: opts?.payload ? structuredClone(opts.payload) : undefined,
+      evaluateTrigger: opts?.evaluateTrigger,
+      streamBatch: opts?.streamBatch,
+      streamScheduleKey: opts?.streamScheduleKey,
+      streamSourceIdentity: opts?.streamSourceIdentity,
+      onTriggerDisposition: opts?.onTriggerDisposition,
     } as const;
   });
 }
@@ -445,37 +441,35 @@ export async function activatePreparedManualRun(
     await ensureLoaded(state, { forceReload: true });
     prepared.commitGuard?.();
     prepared.onExit?.commitGuard();
-    if (state.stopped) {
+    const reject = async (reason: Extract<PreparedManualRun, { ran: false }>["reason"]) => {
       await releasePreparedManualReservationWithRetry(state, prepared);
-      return { ok: true, ran: false, reason: "stopped" } as const;
+      return { ok: true, ran: false, reason } as const;
+    };
+    if (state.stopped) {
+      return reject("stopped");
     }
     const job = state.store?.jobs.find((entry) => entry.id === prepared.jobId);
     if (!job) {
-      await releasePreparedManualReservationWithRetry(state, prepared);
-      return { ok: true, ran: false, reason: "not-due" } as const;
+      return reject("not-due");
     }
     if (mode === "if-enabled" && (!isJobEnabled(job) || job.state.autoDisabled)) {
-      await releasePreparedManualReservationWithRetry(state, prepared);
-      return { ok: true, ran: false, reason: "disabled" } as const;
+      return reject("disabled");
     }
     if (
       !isQueuedCronRunReservationCurrent(state, prepared.jobId, prepared.reservationIdentity) ||
       job.state.queuedAtMs !== prepared.reservationAt
     ) {
-      await releasePreparedManualReservationWithRetry(state, prepared);
-      return { ok: true, ran: false, reason: "not-due" } as const;
+      return reject("not-due");
     }
     if (prepared.onExit && !matchesOnExitSchedule(job, prepared.onExit.schedule)) {
-      await releasePreparedManualReservationWithRetry(state, prepared);
-      return { ok: true, ran: false, reason: "not-due" };
+      return reject("not-due");
     }
     if (!admitsStreamSourceRun(job, prepared.streamScheduleKey, prepared.streamSourceIdentity)) {
       // This is reservation identity, not watcher ownership: a force run can
       // wait behind cron admission after its owner has stopped for replacement.
       // The logical source identity rejects retired batches even when the
       // schedule key is unchanged (disable→re-enable, A→B→A).
-      await releasePreparedManualReservationWithRetry(state, prepared);
-      return { ok: true, ran: false, reason: "not-due" } as const;
+      return reject("not-due");
     }
     const dueProbe = structuredClone(job);
     delete dueProbe.state.queuedAtMs;
@@ -487,8 +481,7 @@ export async function activatePreparedManualRun(
         forced: isImmediateCronRunMode(mode),
       })
     ) {
-      await releasePreparedManualReservationWithRetry(state, prepared);
-      return { ok: true, ran: false, reason: "not-due" } as const;
+      return reject("not-due");
     }
     try {
       assertSupportedJobSpec(job);
@@ -503,8 +496,7 @@ export async function activatePreparedManualRun(
         terminalTracker: prepared.terminalTracker,
         error,
       });
-      await releasePreparedManualReservationWithRetry(state, prepared);
-      return { ok: true, ran: false, reason: "invalid-spec" } as const;
+      return reject("invalid-spec");
     }
 
     const activation = await activateQueuedCronRun({
@@ -521,8 +513,7 @@ export async function activatePreparedManualRun(
       return { ok: true, ran: false, reason: activation.reason } as const;
     }
     if (activation.kind === "fenced") {
-      await releasePreparedManualReservationWithRetry(state, prepared);
-      return { ok: true, ran: false, reason: "already-running" } as const;
+      return reject("already-running");
     }
     prepared.onExit?.commitGuard();
     const { job: activatedJob, startedAt } = activation;
@@ -596,27 +587,9 @@ export async function releasePreparedManualReservationWithRetry(
   state: CronServiceState,
   prepared: Pick<Extract<PreparedManualRun, { ran: true }>, "jobId" | "reservationIdentity">,
 ): Promise<void> {
-  let retrySafe = false;
-  const attempt = async () => {
-    retrySafe = false;
-    await releasePreparedManualReservation(state, prepared, (outcome) => {
-      retrySafe = outcome === "not-committed";
-    });
-  };
-  try {
-    await attempt();
-  } catch (error) {
-    try {
-      if (!retrySafe) {
-        throw error;
-      }
-      await attempt();
-    } catch (failure) {
-      // Native work has settled. Leave uncertain durable markers for the existing recovery owner.
-      releaseReservationOwnership(state, [prepared]);
-      throw failure;
-    }
-  }
+  await retryCronReservationRelease(state, [prepared], (onSettled) =>
+    releasePreparedManualReservation(state, prepared, onSettled),
+  );
 }
 
 export async function releasePreparedManualReservationAfterReloadWithRetry(

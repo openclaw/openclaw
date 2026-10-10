@@ -25,7 +25,7 @@ import { retireCronRunTriggerStateInDatabase } from "./run-receipt-trigger-state
 import { prepareCronRunReceiptWriteSchema } from "./run-receipt-write-admission.js";
 import { loadCronRuntimeAuthorities } from "./runtime-authority-store.js";
 import {
-  prepareCronRuntimeMutation,
+  admitCronRuntimeMutation,
   retainCronRuntimeMutationOutcome,
 } from "./runtime-mutation.worker.js";
 import type { CronRuntimeWorkerOperations } from "./runtime-worker.types.js";
@@ -119,10 +119,11 @@ export function mutateCronJobsInWorker(
       ({ db }) => {
         try {
           const receiptSchema = prepareCronRunReceiptWriteSchema(db);
-          const preparation = prepareCronRuntimeMutation("cron.mutateJobs", input.nonce, {
-            deletionBlocked:
-              input.agentId !== undefined && isAgentDeletionBlocked(input.agentId, {}, db),
-          });
+          const preparation = input.prepared;
+          admitCronRuntimeMutation(input.nonce);
+          if (input.agentId !== undefined && isAgentDeletionBlocked(input.agentId, {}, db)) {
+            throw new Error("cron job agent is unavailable: " + input.agentId);
+          }
           if (input.preconditionJob || input.expectedJob || input.replacement) {
             const current = loadCronMutationStore(db, input.storeKey);
             if (

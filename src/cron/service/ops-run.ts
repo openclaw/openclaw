@@ -8,11 +8,7 @@ import { CommandLane } from "../../process/lanes.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { setSafeTimeout } from "../../utils/timer-delay.js";
 import { captureCronRunAdmissionTracker } from "../mutation-completion.js";
-import {
-  CronRunReceiptRevisionError,
-  releaseLocalCronRunReceiptOwnership,
-  type CronRunReceiptSettlementDisposition,
-} from "../store/run-receipt-store.js";
+import { releaseLocalCronRunReceiptOwnership } from "../store/run-receipt-store.js";
 import { normalizeCronRunErrorText } from "./execution-errors.js";
 import { locked } from "./locked.js";
 import { waitForRunSettlement } from "./ops-lifecycle.js";
@@ -28,13 +24,16 @@ import {
   type PreparedManualRun,
 } from "./ops-run-preparation.js";
 import { clearManualCronJobActive } from "./ops-shared.js";
-import { releaseQueuedCronRun, runWithCronAdmission } from "./run-admission.js";
-import { createCronOwnerExecutionIdentityAdmission } from "./run-history.js";
+import {
+  executeReservedCronRun,
+  releaseQueuedCronRun,
+  runWithCronAdmission,
+} from "./run-admission.js";
 import type { CronRunMode, CronServiceState, CronWakeMode } from "./state.js";
 import { isImmediateCronRunMode } from "./state.js";
 import { emitCronRunFinished, type ManualRunTerminalTracker } from "./timer-outcome-events.js";
 import { finalizeCompletedCronRunOutcomes } from "./timer-outcome-finalization.js";
-import { armTimer, authorCronRunCompletion, executeJobCoreWithTimeout } from "./timer.js";
+import { armTimer } from "./timer.js";
 import { wake } from "./wake.js";
 
 let nextManualRunId = 1;
@@ -49,35 +48,30 @@ async function finishPreparedManualRun(
   const jobId = prepared.jobId;
   const taskRunId = prepared.taskRunId;
   let finalizationStarted = false;
-  let receiptSettlementDisposition: CronRunReceiptSettlementDisposition | undefined;
 
   try {
-    let coreResult: Awaited<ReturnType<typeof executeJobCoreWithTimeout>>;
-    try {
-      coreResult = await executeJobCoreWithTimeout(state, executionJob, {
-        runId: taskRunId,
+    const coreResult = await executeReservedCronRun(
+      state,
+      {
+        jobId,
+        job: prepared.admittedJob,
+        taskRunId,
         activeJobMarker: prepared.activeJobMarker,
-        owningCronLaneTaskMarker: prepared.owningCronLaneTaskMarker,
-        streamBatch: prepared.streamBatch,
-        streamScheduleKey: prepared.streamScheduleKey,
-        streamSourceIdentity: prepared.streamSourceIdentity,
+        reservationIdentity: prepared.reservationIdentity,
         runReceipt: prepared.runReceipt,
         runReceiptContext: prepared.runReceiptContext,
-        executionIdentity: createCronOwnerExecutionIdentityAdmission({
-          state,
-          runReceipt: prepared.runReceipt,
-        }),
-      });
-    } catch (err) {
-      if (err instanceof CronRunReceiptRevisionError && err.reason === "owner-unavailable") {
-        receiptSettlementDisposition = "owner-unavailable";
-      }
-      coreResult = authorCronRunCompletion(executionJob, {
-        status: "error",
-        error:
-          err instanceof CronRunReceiptRevisionError ? err.message : normalizeCronRunErrorText(err),
-      });
-    }
+        startedAt,
+      },
+      {
+        executionJob,
+        payloadOptions: {
+          owningCronLaneTaskMarker: prepared.owningCronLaneTaskMarker,
+          streamBatch: prepared.streamBatch,
+          streamScheduleKey: prepared.streamScheduleKey,
+          streamSourceIdentity: prepared.streamSourceIdentity,
+        },
+      },
+    );
     if (prepared.onTriggerDisposition) {
       const disposition = coreResult.triggerEval?.busy
         ? "busy"
@@ -98,14 +92,6 @@ async function finishPreparedManualRun(
       [
         {
           ...coreResult,
-          jobId,
-          job: prepared.admittedJob,
-          taskRunId,
-          activeJobMarker: prepared.activeJobMarker,
-          reservationIdentity: prepared.reservationIdentity,
-          runReceipt: prepared.runReceipt,
-          runReceiptContext: prepared.runReceiptContext,
-          receiptSettlementDisposition,
           startedAt,
           endedAt: state.deps.nowMs(),
           request: {

@@ -50,6 +50,7 @@ import {
   registerCronCreatorSessionTests,
   type CronCreatorSessionLookup,
 } from "./cron-creator-session.test-support.js";
+import { cronRunWaitCases } from "./cron-run-wait.test-support.js";
 import {
   createCronTestContext,
   expectCronSuccess,
@@ -2279,36 +2280,7 @@ describe("cron method validation", () => {
     expect(requireRecord(respond.mock.calls[0]?.[2], "response error").details).toBeUndefined();
   });
 
-  it.each([
-    { name: "main", job: { sessionTarget: "main" }, waits: false },
-    {
-      name: "aliased own session",
-      job: { sessionTarget: "session:agent:ops:main" },
-      mainKey: "work",
-      waits: false,
-    },
-    {
-      name: "current-session announce into the caller",
-      job: {
-        sessionTarget: "current",
-        sessionKey: "agent:ops:main",
-        delivery: { mode: "announce" },
-      },
-      waits: false,
-    },
-    {
-      // Quiet current jobs run detached and never commit into the conversation.
-      name: "quiet current-session",
-      job: { sessionTarget: "current", sessionKey: "agent:ops:main", delivery: { mode: "none" } },
-      waits: true,
-    },
-    {
-      // The automations tool stamps the creator's session onto non-isolated jobs.
-      name: "other named session created from the caller",
-      job: { sessionTarget: "session:reports", sessionKey: "agent:ops:main" },
-      waits: true,
-    },
-  ] as const)(
+  it.each(cronRunWaitCases)(
     "waits for a $name run from an agent turn only when it can finish meanwhile",
     async ({ job, mainKey, waits }) => {
       setRuntimeConfig(mainKey ? { session: { mainKey } } : {});

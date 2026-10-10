@@ -15,7 +15,7 @@ Where a finished run sends its output, what happens when a run or a delivery fai
 
 | Mode       | What happens                                                        |
 | ---------- | ------------------------------------------------------------------- |
-| `announce` | Fallback-deliver final text to the target if the agent did not send |
+| `announce` | Commit the conversation result, then send any required notification |
 | `webhook`  | POST finished event payload to a URL                                |
 | `none`     | No runner fallback delivery                                         |
 
@@ -32,29 +32,19 @@ notifications include an `Inspect` link into the Control UI. Command and script
 completion announcements open the automation run; isolated agent announcements
 open the run's session.
 
-For a `current` job using `announce` (the default), the final assistant result is a first-class session completion, not a WebChat-specific outbound message. OpenClaw waits for active turns in the creation-bound conversation, verifies that the same session generation still owns the key, and commits the result through the canonical transcript writer with cron job/run provenance and a job/run idempotency key. A retry cannot append the same result twice.
+Agent, command, and script jobs created from a conversation capture its session key and generation unless they use the legacy `main` execution target. With `announce`, the final visible result is committed to that conversation before any external notification. It becomes part of the conversation's model context, with the job and run identified. OpenClaw waits for active turns and deduplicates the commit by job/run identity; it does not copy the run's internal tool history into the conversation.
 
-Isolated agent-turn jobs created from a conversation also capture that conversation's session key and generation at creation. When `announce` has no explicit channel, recipient, account, or thread and the creating conversation has no remembered external route, the final result uses the same conversation-completion path. `channel: "last"` also allows this behavior. The run keeps its own isolated session; delivering its result does not make it a `current` run or give it the creating conversation's history. This applies to the automations tool and `cron.add` requests that supply the creating session.
+Execution context is a separate choice. `isolated` runs without the creating conversation's history; `current` reads bounded conversation context in a detached run; `session:<key>` uses a persistent execution session. If execution already wrote the result into the chosen conversation, OpenClaw does not append it again.
 
-That creating-conversation binding is immutable. Editing the public `sessionKey` does not redirect implicit announce delivery; recreate the job from the intended conversation or set explicit delivery coordinates. Implicit channel delivery also checks the captured generation before using its route and before sending, including queued recovery.
+Explicit channel, recipient, account, and thread settings choose an **external notification**, not a different model transcript. A report posted to a Discord thread does not also become a new message in Home merely because that thread uses shared main-session routing. When the creating conversation itself has an external route, its ordinary channel notification still runs once. A verified matching `message` tool send suppresses automatic resend, not the conversation result.
 
-Conversation results use the same silent-reply handling as channel announcements. Internal control tokens stay out of conversation history, and suppressing a caption preserves its attached media.
+The creating-conversation binding is immutable. To make another conversation own future results, recreate the job there. Editing a notification destination does not move the result conversation. If the bound conversation was deleted or reset, completion fails visibly instead of selecting a replacement or falling back to Home. Cancellation while waiting does not interrupt the active conversation.
 
-If the run is canceled while waiting for the conversation, it stops waiting without interrupting the active turn or appending a result.
+WebChat receives the committed result immediately and returns the same message from `chat.history` after reconnect. If a required external notification fails, the result remains in the conversation and the run records a delivery failure separately from execution status. Partial or uncertain sends are not blindly replayed.
 
-WebChat receives the committed `session.message` event immediately. The same assistant result comes from `chat.history` after a refresh or reconnect; no follow-up user message is required. Delivery is successful only after that transcript/event commit succeeds.
+Conversation results and notifications share silent-reply handling. Suppressing a caption preserves attached media, and internal control tokens stay out of history. `none` disables automatic results and notifications; primary `webhook` delivery remains an external-only mode.
 
-For isolated jobs, if the creating conversation was deleted or reset, OpenClaw records a delivery failure instead of appending the result to a missing or replacement conversation. Inspect the run's delivery error and recreate the job from the intended conversation.
-
-For `current` jobs whose bound conversation is an external channel, OpenClaw also performs its normal durable channel send. That send still happens at most once, and the required session commit does not create a second external message. A verified `message` tool send suppresses the automatic channel resend but does not suppress the session commit. The run is reported delivered only after both the external recipient handoff (when required) and the canonical session commit succeed.
-
-When the bound conversation has no external channel route — WebChat/Control UI conversations, or a gateway with no channel plugins configured — the session commit alone completes delivery and the run succeeds without attempting an external send. For `current` jobs, if the conversation does name an external route that cannot be resolved at run time, the committed result stays in the conversation and the run records the resolution failure as its delivery error: a delivery failure, not a turn failure.
-
-For current agent-turn jobs, configuring unrelated external channels does not change this behavior. An explicit delivery channel, recipient, account, or thread still uses normal channel resolution. If that resolution fails, the report remains in the conversation and the run records the delivery error, even when no external channel could be selected.
-
-From WebChat, create a `current` or `isolated` agent-turn job with `delivery: { mode: "announce" }` (or omit `delivery`). The tool does not copy internal WebChat conversation coordinates into an external announce route. Do not set `delivery.channel: "webchat"`; explicit channels still must pass normal configured-channel validation. Condition triggers use the same delivery rules.
-
-Isolated jobs whose creating conversation has an external route retain normal channel delivery. Explicit channel, recipient, account, or thread settings also use normal channel resolution; `webhook` and `none` are unchanged. An isolated job without a captured creating conversation cannot commit into one. If its channel route is unresolved, or an explicit channel is unavailable, delivery still fails closed. Create and list results preview the conversation commit or unresolved route; update results include unresolved-route warnings. For an unresolved route, recreate the job from the intended conversation, configure a channel and target, or choose `delivery: { mode: "none" }` for silent runs. A warning does not reject the write or change delivery settings.
+CLI/API jobs without a captured conversation, including older stored jobs, can still use an explicit external destination. OpenClaw does not invent a result conversation for them. Recreate such a job from the intended conversation to enable conversation results. Do not set `delivery.channel: "webchat"`: internal conversation coordinates are not channel delivery targets.
 
 <Warning>
   Every outbound automation webhook uses the strict SSRF guard. Loopback,

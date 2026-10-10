@@ -48,6 +48,8 @@ it.each([
     const clock = createGatewaySchedulerClock(Date.now());
     const reachedInterruption = createDeferred();
     const acknowledgment = createDeferred();
+    const notificationText =
+      mode === "announce" ? "scheduled result\nnotification details" : "scheduled result";
     const received: string[] = [];
     const receive = async (text: string) => {
       received.push(text);
@@ -92,7 +94,7 @@ it.each([
           agentId: "main",
           jobId: job.id,
           target: { channel: "telegram", to: "123" },
-          payload: { text: "scheduled result" },
+          payload: [{ text: "scheduled result" }, { text: "notification details" }],
           abortSignal: abortSignal!,
           completion: {
             job,
@@ -150,7 +152,7 @@ it.each([
       });
       tick = clock.advanceTo(job.state.nextRunAtMs!);
       await reachedInterruption.promise;
-      expect(received).toEqual(interrupted === "after-acceptance" ? ["scheduled result"] : []);
+      expect(received).toEqual(interrupted === "after-acceptance" ? [notificationText] : []);
       const receipt = inspectActiveCronRunReceipt({ storePath, jobId: job.id });
       expect(receipt).toBeDefined();
       expect((await first.readJob(job.id))?.state.runningReceiptId).toBe(receipt?.receiptId);
@@ -170,7 +172,7 @@ it.each([
       await replacement.start();
       await replacementClock.advanceBy(120_000);
 
-      expect(received).toEqual(["scheduled result"]);
+      expect(received).toEqual([notificationText]);
       const recovered = await replacement.readJob(job.id);
       expect(recovered).toMatchObject({
         enabled: false,
@@ -190,7 +192,7 @@ it.each([
       advanceCronActiveJobGeneration();
       await secondReplacement.start();
       await secondReplacementClock.advanceBy(120_000);
-      expect(received).toEqual(["scheduled result"]);
+      expect(received).toEqual([notificationText]);
       expect(await secondReplacement.readJob(job.id)).toEqual(recovered);
     } finally {
       first.stop();

@@ -1,13 +1,14 @@
 import { getSqliteWorkerStateContext } from "../../infra/sqlite-worker-state-context.js";
 import type { OpenClawStateDatabase } from "../../state/openclaw-state-db-contract.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
+import { resolvePreparedCronFailureAlert } from "../service/failure-alerts.js";
 import type { CronJobPolicyContext } from "../service/state.js";
 import { applyJobResult } from "../service/timer-outcomes.js";
 import { ownsStreamSource } from "../stream-schedule.js";
 import type { CronRuntimeMutationContracts } from "./runtime-mutation.types.js";
 import {
   createCronMutationLogger,
-  prepareCronRuntimeMutation,
+  admitCronRuntimeMutation,
   retainCronRuntimeMutationOutcome,
 } from "./runtime-mutation.worker.js";
 import { mutateCronRuntimeRowsInDatabase } from "./runtime-rows.kernel.js";
@@ -25,11 +26,8 @@ export function mutateCronExternalStateInWorker(
         jobIds: new Set([input.jobId]),
         mutate({ jobs }) {
           const job = jobs.get(input.jobId);
-          const preparation = prepareCronRuntimeMutation("cron.mutateExternalState", input.nonce, {
-            id: input.jobId,
-            delivery: job?.delivery,
-            failureAlert: job?.failureAlert,
-          });
+          const preparation = input.prepared;
+          admitCronRuntimeMutation(input.nonce);
           const outcome: CronRuntimeMutationContracts["cron.mutateExternalState"]["outcome"] = {
             nowMs: preparation.nowMs,
             notifications: [],
@@ -53,7 +51,12 @@ export function mutateCronExternalStateInWorker(
               Object.assign(job.state, change.statePatch);
               job.state.streamSourceIdentity = sourceIdentity;
               if (change.kind === "failure") {
-                const { nowMs, cronConfig, failureAlert } = preparation;
+                const { nowMs, cronConfig } = preparation;
+                const failureAlert = resolvePreparedCronFailureAlert(
+                  preparation.failureAlerts,
+                  input.jobId,
+                  job,
+                );
                 const state: CronJobPolicyContext = {
                   deps: {
                     nowMs: () => nowMs,

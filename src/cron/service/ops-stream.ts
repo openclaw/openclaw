@@ -9,7 +9,10 @@ import {
   ownsStreamSource,
 } from "../stream-schedule.js";
 import type { CronJob } from "../types.js";
-import { failureNotificationDeliveryFromJobState, resolveFailureAlert } from "./failure-alerts.js";
+import {
+  prepareCronFailureAlertPolicies,
+  failureNotificationDeliveryFromJobState,
+} from "./failure-alerts.js";
 import { findJobOrThrow } from "./jobs-scheduling.js";
 import { locked } from "./locked.js";
 import { runCronRuntimeMutation } from "./runtime-mutation.js";
@@ -57,34 +60,32 @@ async function mutateExternalState(
         type: "cron.mutateExternalState",
         input: { storeKey: source.storeKey, jobId, change },
         assertCurrent: () => source.assertCurrent(),
-        prepare(routing) {
-          if (routing.id !== jobId) {
-            throw new Error("Cron external policy differs from its admitted job");
-          }
+        policy: (() => {
+          const alerts = prepareCronFailureAlertPolicies(
+            state,
+            change.kind === "failure" ? [jobId] : [],
+          );
           const cronConfig =
             change.kind === "failure" ? structuredClone(state.deps.cronConfig) : undefined;
           const value = {
             nowMs: state.deps.nowMs(),
+            failureAlerts: alerts.policies,
             cronConfig,
-            failureAlert:
-              change.kind === "failure"
-                ? resolveFailureAlert({ deps: { cronConfig } }, routing)
-                : null,
           };
           return {
             value,
             assertCurrent() {
+              alerts.assertCurrent();
               source.assertCurrent();
               if (
                 change.kind === "failure" &&
-                (!isDeepStrictEqual(cronConfig, state.deps.cronConfig) ||
-                  !isDeepStrictEqual(value.failureAlert, resolveFailureAlert(state, routing)))
+                !isDeepStrictEqual(cronConfig, state.deps.cronConfig)
               ) {
                 throw new Error("Cron external failure policy changed before commit");
               }
             },
           };
-        },
+        })(),
         publish(outcome) {
           committed = outcome;
           if (outcome.job) {

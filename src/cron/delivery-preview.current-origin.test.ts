@@ -140,8 +140,9 @@ describe("current cron delivery origin", () => {
                 );
           expect(previews).toEqual({
             healthy: {
-              label: "announce -> telegram:recipient",
-              detail: `resolved from last, session ${job.sessionKey}`,
+              label: "announce -> current session; notify telegram:recipient",
+              detail:
+                "commits the model-visible result to its bound conversation; sends one external notification",
             },
             "missing-current": {
               label: "announce -> current session",
@@ -154,8 +155,9 @@ describe("current cron delivery origin", () => {
               ),
             },
             "missing-explicit": {
-              label: "announce -> telegram:explicit-recipient",
-              detail: "explicit",
+              label: "announce -> current session; notify telegram:explicit-recipient",
+              detail:
+                "commits the model-visible result to its bound conversation; sends one external notification",
             },
           });
           expect(fs.existsSync(databasePath)).toBe(false);
@@ -196,16 +198,18 @@ describe("current cron delivery origin", () => {
         });
         expect(previews).toEqual({
           "healthy-current": {
-            label: "announce -> telegram:recipient",
-            detail: `resolved from last, session ${job.sessionKey}`,
+            label: "announce -> current session; notify telegram:recipient",
+            detail:
+              "commits the model-visible result to its bound conversation; sends one external notification",
           },
           interrupted: {
             label: "announce -> last",
             detail: expect.stringMatching(/^delivery preview unavailable: .*table-missing/u),
           },
           "healthy-explicit": {
-            label: "announce -> telegram:other-recipient",
-            detail: "explicit",
+            label: "announce -> current session; notify telegram:other-recipient",
+            detail:
+              "commits the model-visible result to its bound conversation; sends one external notification",
           },
         });
       },
@@ -235,8 +239,9 @@ describe("current cron delivery origin", () => {
           mode: "implicit",
         });
         const expected = {
-          label: "announce -> telegram:recipient",
-          detail: `resolved from last, session ${job.sessionKey}`,
+          label: "announce -> current session; notify telegram:recipient",
+          detail:
+            "commits the model-visible result to its bound conversation; sends one external notification",
         };
         expect(await resolveCronDeliveryPreview({ cfg, job })).toEqual(expected);
         expect(await resolveCronDeliveryPreviews({ cfg, jobs: [job] })).toEqual({
@@ -296,7 +301,7 @@ describe("current cron delivery origin", () => {
         const refreshed = await resolveCronDeliveryPreviews({ cfg, jobs });
         expect(
           Object.values(refreshed).every(
-            (preview) => preview.label === "announce -> telegram:recipient",
+            (preview) => preview.label === "announce -> current session; notify telegram:recipient",
           ),
         ).toBe(true);
         expect(
@@ -407,11 +412,11 @@ describe("current cron delivery origin", () => {
     await withCurrentOrigin(
       { sessionTarget: "isolated", source: { channel: "telegram", to: "recipient" } },
       async ({ cfg, job }) => {
-        const sessionKey = job.sessionKey;
         job.sessionKey = undefined;
         expect(await resolveCronDeliveryPreview({ cfg, job })).toEqual({
-          label: "announce -> telegram:recipient",
-          detail: `resolved from last, session ${sessionKey}`,
+          label: "announce -> creating conversation; notify telegram:recipient",
+          detail:
+            "commits the model-visible result to its bound conversation; sends one external notification",
         });
       },
     );
@@ -435,10 +440,11 @@ describe("current cron delivery origin", () => {
         label: "announce -> creating conversation",
         detail: "commits to this conversation (no external channel route)",
       });
-      job.delivery = { mode: "announce", channel: "telegram" };
+      job.delivery = { mode: "announce", channel: "telegram", to: "other-recipient" };
       expect(await resolveCronDeliveryPreview({ cfg, job })).toEqual({
-        label: "announce -> telegram:other-recipient",
-        detail: "explicit",
+        label: "announce -> creating conversation; notify telegram:other-recipient",
+        detail:
+          "commits the model-visible result to its bound conversation; sends one external notification",
       });
     });
   });

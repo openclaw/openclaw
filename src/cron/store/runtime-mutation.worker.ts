@@ -1,6 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
 import { serialize } from "node:v8";
-import { MessageChannel, receiveMessageOnPort } from "node:worker_threads";
 import {
   deferSqliteWorkerCommitReceipt,
   requestSqliteWorkerOperationAdmission,
@@ -27,34 +26,13 @@ export function createCronMutationLogger(logs: CronRunRecoveryOutcome["logs"]): 
   };
 }
 
-/** Host policy is prepared only after this worker has read authoritative transaction rows. */
-export function prepareCronRuntimeMutation<Type extends CronRuntimeMutationType>(
-  _type: Type,
-  nonce: string,
-  facts: CronRuntimeMutationContracts[Type]["facts"],
-): CronRuntimeMutationContracts[Type]["preparation"] {
-  const { port1, port2 } = new MessageChannel();
-  try {
-    requestSqliteWorkerOperationAdmission(
-      {
-        stage: "transaction",
-        facts: { nonce, preparation: facts, preparationPort: port2 },
-        deadlineMs: CRON_MUTATION_ADMISSION_DEADLINE_MS,
-      },
-      [port2],
-    );
-    // SAFETY: the private port receives only this command's host-owned policy preparation.
-    const preparation = receiveMessageOnPort(port1)?.message as
-      | CronRuntimeMutationContracts[Type]["preparation"]
-      | undefined;
-    if (!preparation) {
-      throw new Error("Cron mutation has no admitted policy preparation");
-    }
-    return preparation;
-  } finally {
-    port1.close();
-    port2.close();
-  }
+/** Policy is prepared before dispatch; the native owner requests live authority only. */
+export function admitCronRuntimeMutation(nonce: string): void {
+  requestSqliteWorkerOperationAdmission({
+    stage: "transaction",
+    facts: { nonce },
+    deadlineMs: CRON_MUTATION_ADMISSION_DEADLINE_MS,
+  });
 }
 
 /** Retain the outcome before commit; only the compact nonce enters the native receipt. */

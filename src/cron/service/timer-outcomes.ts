@@ -31,6 +31,7 @@ import {
   type CronTriggerEvalOutcome,
   MIN_REFIRE_GAP_MS,
   type TimedCronRunOutcome,
+  type CronFinalizationOutcome,
 } from "./timer-execution-timeout.js";
 import { emitCronOutcomeForJob } from "./timer-outcome-events.js";
 import {
@@ -51,7 +52,7 @@ type CronTriggerOwnership = "current" | "stale";
 function resolveCronRunScheduleOwnership(params: {
   admittedJob: CronJob;
   currentJob: CronJob;
-  activeJobMarker?: CronActiveJobMarker;
+  activeJobMarker?: Pick<CronActiveJobMarker, "scheduleMutated" | "triggerMutated">;
 }): CronScheduleOwnership {
   return typeof params.currentJob.state.runningScheduleChangeId === "string" ||
     params.activeJobMarker?.scheduleMutated === true ||
@@ -64,7 +65,7 @@ function resolveCronRunScheduleOwnership(params: {
 function resolveCronRunTriggerOwnership(params: {
   admittedJob: CronJob;
   currentJob: CronJob;
-  activeJobMarker?: CronActiveJobMarker;
+  activeJobMarker?: Pick<CronActiveJobMarker, "scheduleMutated" | "triggerMutated">;
 }): CronTriggerOwnership {
   return params.activeJobMarker?.triggerMutated === true ||
     params.admittedJob.trigger?.script !== params.currentJob.trigger?.script ||
@@ -668,9 +669,9 @@ export async function applyOutcomeToStoredJob(
 
 /** Applies one outcome to a row already re-read under the runtime write transaction. */
 export function applyOutcomeToAuthoritativeJob(
-  state: CronServiceState,
+  state: CronJobPolicyContext,
   job: CronJob,
-  result: TimedCronRunOutcome,
+  result: CronFinalizationOutcome,
   opts: {
     deferredNotifications: DeferredCronNotifications;
     triggerStateRetired?: boolean;

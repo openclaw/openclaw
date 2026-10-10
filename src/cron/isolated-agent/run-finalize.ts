@@ -317,22 +317,6 @@ export async function finalizeCronRun(params: {
     didSendViaMessageTool: finalRunResult.didSendViaMessagingTool,
     messageToolSentTargets: finalRunResult.messagingToolSentTargets,
   });
-  let queueSourceSessionMessageToolAwareness: (() => Promise<void>) | undefined;
-  if (sourceDeliveryOutcome.visibleDeliveries.length > 0) {
-    const { queueCronMessageToolDeliveryAwareness } = await loadCronDeliveryRuntime();
-    queueSourceSessionMessageToolAwareness = await queueCronMessageToolDeliveryAwareness({
-      cfg: prepared.cfgWithAgentDefaults,
-      runSessionKey: prepared.runSessionKey,
-      job: prepared.input.job,
-      agentId: prepared.agentId,
-      agentSessionKey: prepared.agentSessionKey,
-      deferredTargetSessionKey:
-        prepared.input.job.sessionTarget === "current" ? prepared.sourceSessionKey : undefined,
-      runStartedAt: execution.runStartedAt,
-      resolvedDelivery: prepared.resolvedDelivery,
-      sourceDeliveryOutcome,
-    });
-  }
   const hasIntentionalSilentReply =
     finalRunResult.meta?.terminalReplyKind === "silent-empty" ||
     isSilentReplyPayloadText(finalRunResult.meta?.finalAssistantRawText) ||
@@ -348,7 +332,6 @@ export async function finalizeCronRun(params: {
       fallbackUsed: false,
       delivered: sourceDeliveryOutcome.verifiedMessageToolDelivery,
     });
-    await queueSourceSessionMessageToolAwareness?.();
     return resolveRunOutcome({
       delivered: sourceDeliveryOutcome.verifiedMessageToolDelivery,
       deliveryAttempted: sourceDeliveryOutcome.verifiedMessageToolDelivery,
@@ -385,7 +368,6 @@ export async function finalizeCronRun(params: {
       : undefined,
     spawnOnlyHandoff,
     sourceDeliveryOutcome,
-    queueSourceSessionMessageToolAwareness,
     deliveryBestEffort: prepared.input.job.delivery?.bestEffort === true,
     deliveryPayloadHasStructuredContent,
     deliveryPayloads,

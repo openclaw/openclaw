@@ -2,10 +2,10 @@ import { createSqliteWorkerWriteAdmission } from "../../infra/sqlite-worker-stor
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-worker-store.js";
-import { isCronJobActive } from "../active-jobs.js";
+import { listActiveCronJobIds } from "../active-jobs.js";
 import { runCronRuntimeMutation } from "../service/runtime-mutation.js";
 import type { CronRunHistoryWrite } from "./run-history.types.js";
-import { isCronRunReceiptOwnerStale } from "./run-receipt-store.js";
+import { prepareCronReceiptLiveness } from "./run-receipt-store.js";
 
 /** Original host authority for history that follows an awaited committed mutation. */
 export type CronRunHistorySource = {
@@ -19,34 +19,29 @@ export async function maintainCronRunHistory(
   context: OpenClawStateWorkerContext,
   assertCurrent: () => void,
 ): Promise<void> {
-  await runCronRuntimeMutation({
+  await runCronRuntimeMutation<"cron.maintainHistory">({
     context,
     type: "cron.maintainHistory",
     input: {},
     assertCurrent,
-    prepare({ jobIds, receipts }) {
-      const protectedJobs = () =>
-        new Set([
-          ...jobIds.filter(isCronJobActive),
-          ...receipts
-            .filter((receipt) => !isCronRunReceiptOwnerStale(receipt, Date.now()))
-            .map((receipt) => receipt.jobId),
-        ]);
-      const protectedJobIds = protectedJobs();
+    policy: (() => {
+      const liveness = prepareCronReceiptLiveness();
+      const activeJobIds = listActiveCronJobIds();
       return {
-        value: { nowMs: Date.now(), protectedJobIds: [...protectedJobIds] },
-        assertCurrent() {
+        value: { nowMs: Date.now(), activeJobIds, localReceiptIds: liveness.receiptIds },
+        assertCurrent(outcome) {
           assertCurrent();
-          const current = protectedJobs();
+          liveness.assertCurrent(outcome?.liveness);
+          const current = listActiveCronJobIds();
           if (
-            current.size !== protectedJobIds.size ||
-            [...current].some((id) => !protectedJobIds.has(id))
+            current.length !== activeJobIds.length ||
+            current.some((id) => !activeJobIds.includes(id))
           ) {
             throw new Error("Cron history backing ownership changed before commit");
           }
         },
       };
-    },
+    })(),
     publish() {},
   });
 }

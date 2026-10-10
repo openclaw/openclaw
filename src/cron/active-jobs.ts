@@ -463,6 +463,11 @@ export function captureActiveCronJobAgentDeletion(
   };
 }
 
+/** Snapshot candidates for worker scheduling; callers retain the corresponding live checks. */
+export function listActiveCronJobIds(): string[] {
+  return [...getCronActiveJobState().activeJobs.keys()].filter(isCronJobActive);
+}
+
 /** Returns whether the given cron job id is currently executing in this process. */
 export function isCronJobActive(jobId: string) {
   return getCurrentCronActiveJobMarker(jobId) !== undefined;

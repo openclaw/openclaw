@@ -10,11 +10,9 @@ import {
   isCronRunReceiptOwnerStale,
 } from "../store/run-receipt-store.js";
 import type { CronRunRecoveryProposal } from "../store/run-recovery-read.types.js";
-import type {
-  CronRunRecoveryPreparation,
-  CronRunRecoveryResult,
-} from "../store/run-recovery.types.js";
-import { resolveFailureAlert } from "./failure-alerts.js";
+import type { CronRunRecoveryResult } from "../store/run-recovery.types.js";
+import type { CronJob } from "../types.js";
+import { prepareCronFailureAlertPolicies } from "./failure-alerts.js";
 import { runCronRuntimeMutation } from "./runtime-mutation.js";
 import type { CronServiceState } from "./state.js";
 
@@ -49,9 +47,12 @@ async function observeRecoveryProposals(
   context: OpenClawStateWorkerContext,
   proposals: readonly CronRunRecoveryProposal[],
   assertCurrent: () => void,
-): Promise<CronRunRecoveryProposal[]> {
+): Promise<{
+  proposals: CronRunRecoveryProposal[];
+  routing: Array<Pick<CronJob, "id" | "delivery" | "failureAlert">>;
+}> {
   if (proposals.length === 0) {
-    return [];
+    return { proposals: [], routing: [] };
   }
   const command = {
     type: "cron.observeRunRecovery" as const,
@@ -89,7 +90,10 @@ async function observeRecoveryProposals(
   if (!result?.ok || result.type !== command.type || result.observation.kind !== "observed") {
     throw new Error("Cron recovery observation did not return its admitted receipt snapshot");
   }
-  return result.observation.proposals;
+  return {
+    proposals: result.observation.proposals.map(({ routing: _routing, ...proposal }) => proposal),
+    routing: result.observation.proposals.flatMap(({ routing }) => (routing ? [routing] : [])),
+  };
 }
 
 function observedRecoveryResult(
@@ -116,6 +120,7 @@ async function repairRecoveryProposal(
   mode: "startup" | "reclaim",
   assertOwnerCurrent: () => void,
   publish: (result: CronRunRecoveryResult) => void,
+  routing: Pick<CronJob, "id" | "delivery" | "failureAlert"> | undefined,
 ): Promise<void> {
   const input = {
     storeKey: cronStoreKey(state.deps.storePath),
@@ -136,34 +141,36 @@ async function repairRecoveryProposal(
           throw error;
         }
       },
-      prepare(routing) {
-        if (routing.id !== proposal.jobId) {
-          throw new Error("Cron recovery policy differs from its admitted job");
-        }
+      policy: (() => {
+        const alerts = prepareCronFailureAlertPolicies(
+          state,
+          [proposal.jobId],
+          routing ? [routing] : [],
+        );
         const receiptIsStale = () =>
           proposal.receipt
             ? isCronRunReceiptOwnerStale(proposal.receipt, state.deps.nowMs())
             : true;
         const cronConfig = structuredClone(state.deps.cronConfig);
-        const value: CronRunRecoveryPreparation = {
+        const value = {
           proposedReceiptIsStale: receiptIsStale(),
+          failureAlerts: alerts.policies,
           nowMs: state.deps.nowMs(),
           cronConfig,
-          failureAlert: resolveFailureAlert({ deps: { cronConfig } }, routing),
         };
         return {
           value,
           assertCurrent() {
+            alerts.assertCurrent();
             if (
               value.proposedReceiptIsStale !== receiptIsStale() ||
-              !isDeepStrictEqual(value.cronConfig, state.deps.cronConfig) ||
-              !isDeepStrictEqual(value.failureAlert, resolveFailureAlert(state, routing))
+              !isDeepStrictEqual(value.cronConfig, state.deps.cronConfig)
             ) {
               throw new Error("Cron recovery policy or receipt ownership changed before commit");
             }
           },
         };
-      },
+      })(),
       publish(outcome) {
         if (outcome.result.kind === "repaired") {
           noteCronJobsStoreCommit(input.storeKey);
@@ -196,7 +203,9 @@ export async function recoverCronRunProposals(
   const context = captureOpenClawStateWorkerContext();
   const assertCurrent = recoveryAuthority(state, context, options.signal, options.isCurrent);
   try {
-    const observed = await observeRecoveryProposals(state, context, targets, assertCurrent);
+    const observation = await observeRecoveryProposals(state, context, targets, assertCurrent);
+    const observed = observation.proposals;
+    const routing = new Map(observation.routing.map((job) => [job.id, job]));
     const repairs: CronRunRecoveryProposal[] = [];
     for (let index = 0; index < observed.length; index += 1) {
       const current = observed[index]!;
@@ -218,6 +227,7 @@ export async function recoverCronRunProposals(
         options.mode ?? "reclaim",
         assertCurrent,
         (result) => options.onRecovery(proposal, result),
+        routing.get(proposal.jobId),
       );
     }
   } catch (error) {

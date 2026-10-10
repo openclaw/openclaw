@@ -1,3 +1,4 @@
+import type { CronJob } from "../types.js";
 import type { CronRunReceiptRecoveryCandidate } from "./run-receipt.types.js";
 
 export type CronRunRecoveryProposal = {
@@ -9,7 +10,12 @@ export type CronRunRecoveryProposal = {
 };
 
 export type CronRunRecoveryObservation =
-  | { kind: "observed"; proposals: CronRunRecoveryProposal[] }
+  | {
+      kind: "observed";
+      proposals: Array<
+        CronRunRecoveryProposal & { routing?: Pick<CronJob, "id" | "delivery" | "failureAlert"> }
+      >;
+    }
   | { kind: "schema-uninitialized" };
 
 export type CronRunRecoveryReadCommand = {

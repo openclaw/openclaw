@@ -9,14 +9,20 @@ import {
   assertValidCronAnnounceDelivery,
   assertValidCronFailureAlert,
 } from "../../cron/delivery-channel-validation.js";
+import { resolveCronDeliveryPlan } from "../../cron/delivery-plan.js";
 import { assertCronDeliveryInputNonBlankFields } from "../../cron/delivery-target-validation.js";
+import { resolveCronAgentSessionKey } from "../../cron/isolated-agent/session-key.js";
 import { normalizeCronJobCreate, normalizeCronJobPatch } from "../../cron/normalize.js";
 import { resolveFailureAlert } from "../../cron/service/failure-alerts.js";
 import { applyJobPatch } from "../../cron/service/jobs.js";
-import { resolveCronSessionTargetSessionKey } from "../../cron/session-target.js";
+import {
+  resolveCronDeliverySessionKey,
+  resolveCronSessionTargetSessionKey,
+} from "../../cron/session-target.js";
 import { cronJobUsesToolRuntime } from "../../cron/tools-allow.js";
-import type { CronJob, CronJobCreate, CronJobPatch } from "../../cron/types.js";
+import type { CronJob, CronJobCreate, CronJobPatch, CronStoredJob } from "../../cron/types.js";
 import { resolveTargetPrefixedChannel } from "../../infra/outbound/channel-target-prefix.js";
+import { normalizeAgentId } from "../../routing/session-key.js";
 import {
   AGENT_HARNESS_SESSION_ID_LOCKED_MESSAGE,
   AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE,
@@ -212,13 +218,18 @@ export function captureCronCreatorSession(
   callerScope: CronCallerScope | undefined,
   client: GatewayClient | null,
 ) {
-  const isolatedAgentTurn = job.sessionTarget === "isolated" && job.payload.kind === "agentTurn";
-  const sessionKey = callerScope?.sessionKey ?? (isolatedAgentTurn ? job.sessionKey : undefined);
+  const hasConversationResult =
+    job.sessionTarget !== "main" &&
+    (job.payload.kind === "agentTurn" ||
+      job.payload.kind === "script" ||
+      job.payload.kind === "command");
+  const sessionKey =
+    callerScope?.sessionKey ?? (hasConversationResult ? job.sessionKey : undefined);
   const agentId = callerScope?.agentId ?? job.agentId;
   const loaded = sessionKey ? loadGatewaySessionEntryReadOnly(sessionKey, { agentId }) : undefined;
   const creatorSession = loaded?.entry;
   const sourceConversation =
-    isolatedAgentTurn && loaded && creatorSession?.sessionId
+    hasConversationResult && loaded && creatorSession?.sessionId
       ? {
           sessionKey: loaded.canonicalKey,
           sessionId: creatorSession.sessionId,
@@ -253,4 +264,36 @@ export function captureCronCreatorSession(
       }
     },
   };
+}
+
+/** Waiting cannot finish while the caller owns the execution or result conversation lane. */
+export function cronRunQueuesBehindCaller(params: {
+  job: CronStoredJob;
+  cfg: OpenClawConfig;
+  callerSessionKey?: string;
+  resolveDefaultAgentId: () => string | undefined;
+}): boolean {
+  const { job, cfg, callerSessionKey } = params;
+  if (!callerSessionKey) {
+    return false;
+  }
+  if (job.sessionTarget === "main") {
+    return true;
+  }
+  const dependencies = [
+    job.payload.kind === "agentTurn"
+      ? resolveCronSessionTargetSessionKey(job.sessionTarget)
+      : undefined,
+    resolveCronDeliveryPlan(job).requested ? resolveCronDeliverySessionKey(job) : undefined,
+  ];
+  return dependencies.some(
+    (sessionKey) =>
+      sessionKey !== undefined &&
+      resolveCronAgentSessionKey({
+        sessionKey,
+        agentId: normalizeAgentId(job.agentId ?? params.resolveDefaultAgentId()),
+        mainKey: cfg.session?.mainKey,
+        cfg,
+      }) === callerSessionKey,
+  );
 }

@@ -44,6 +44,7 @@ export function loseFirstCronMutationReply(type: CronRuntimeMutationType = "cron
         isRecord(command) &&
         command.type === type &&
         isRecord(command.input) &&
+        isRecord(command.input.prepared) &&
         typeof command.input.nonce === "string"
       ) {
         attempts.push(
@@ -99,7 +100,8 @@ export function loseFirstCronMutationReply(type: CronRuntimeMutationType = "cron
   };
 }
 
-/** Install before opening a fresh actor; terminate its real transaction before the commit grant. */
+/** Prepared policy travels in the command; retain the real native commit and settlement fault.
+ * Install before opening a fresh actor and terminate its transaction before the commit grant. */
 export function terminateFirstCronMutationBeforeCommit(type: CronRuntimeMutationType) {
   const attempts: string[] = [];
   const restorePosts: Array<() => void> = [];
@@ -118,6 +120,7 @@ export function terminateFirstCronMutationBeforeCommit(type: CronRuntimeMutation
           isRecord(command) &&
           command.type === type &&
           isRecord(command.input) &&
+          isRecord(command.input.prepared) &&
           typeof command.input.nonce === "string"
         ) {
           attempts.push(type);
@@ -227,6 +230,7 @@ export function observeCronJobWrites(
         isRecord(command) &&
         command.type === "cron.mutateJobs" &&
         isRecord(command.input) &&
+        isRecord(command.input.prepared) &&
         typeof command.input.nonce === "string" &&
         !command.input.replacement &&
         isRecord(command.input.changes) &&
@@ -291,5 +295,57 @@ export function observeCronJobWrites(
     post.mockRestore();
     admission.mockRestore();
     database.exec(`DROP TRIGGER IF EXISTS ${triggerName}`);
+  };
+}
+
+/** Mutate live host custody after a prepared command enters its native transaction. */
+export function duringCronMutationAdmission(
+  matches: (prepared: Record<string, unknown>) => boolean,
+  mutate: () => void,
+) {
+  const preparedByNonce = new Map<string, Record<string, unknown>>();
+  let observed = false;
+  // oxlint-disable-next-line typescript/unbound-method -- Preserve the intercepted worker receiver.
+  const originalPost = Worker.prototype.postMessage;
+  const posted = vi.spyOn(Worker.prototype, "postMessage").mockImplementation(function (
+    this: Worker,
+    request: SqliteWorkerRequest,
+    transferList,
+  ) {
+    if (request.type === "execute") {
+      const command: unknown = deserialize(request.input);
+      if (
+        isRecord(command) &&
+        isRecord(command.input) &&
+        typeof command.input.nonce === "string" &&
+        isRecord(command.input.prepared)
+      ) {
+        preparedByNonce.set(command.input.nonce, command.input.prepared);
+      }
+    }
+    return originalPost.call(this, request, transferList);
+  });
+  const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
+  const admission = vi
+    .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
+    .mockImplementation((admit, attachment) =>
+      createAdmission((request, grant) => {
+        const prepared =
+          isRecord(request.facts) && typeof request.facts.nonce === "string"
+            ? preparedByNonce.get(request.facts.nonce)
+            : undefined;
+        if (!observed && request.stage === "transaction" && prepared && matches(prepared)) {
+          observed = true;
+          mutate();
+        }
+        admit(request, grant);
+      }, attachment),
+    );
+  return {
+    observed: () => observed,
+    restore() {
+      admission.mockRestore();
+      posted.mockRestore();
+    },
   };
 }

@@ -1,55 +1,78 @@
+import { isAudioFileName } from "@openclaw/media-core/mime";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { copyReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
+import { copyReplyPayloadMetadata, type ReplyPayload } from "../auto-reply/reply-payload.js";
+import { resolveMirroredTranscriptText } from "../config/sessions/transcript-mirror.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   attachManagedOutgoingMediaToMessage,
   removeManagedOutgoingMediaBlocks,
-} from "../../gateway/managed-image-attachments.js";
+} from "../gateway/managed-image-attachments.js";
 import {
   buildAssistantReplyContent,
   hasAssistantDisplayMediaContent,
   hasManagedOutgoingAssistantContent,
-} from "../../gateway/server-methods/chat-assistant-content.js";
+} from "../gateway/server-methods/chat-assistant-content.js";
 import {
   createOutboundPayloadPlan,
   projectOutboundPayloadPlanForMirror,
   resolveOutboundPayloadMirrorText,
-} from "../../infra/outbound/payloads.js";
-import { getAgentScopedMediaLocalRootsForSources } from "../../media/local-roots.js";
-import { commitBackgroundResultToSession } from "../../sessions/background-session-result.js";
-import { readAssistantDisplayContent } from "../../shared/assistant-display-content.js";
-import { createCronExecutionId } from "../run-id.js";
-import {
-  buildDirectCronTranscriptMirrorPayloads,
-  resolveDirectCronTranscriptMirrorText,
-} from "./delivery-dispatch-awareness.js";
-import { logCronDeliveryWarn } from "./delivery-dispatch-policy.js";
-import type { DispatchCronDeliveryParams } from "./delivery-dispatch-types.js";
-import { requiresExternalCronDelivery } from "./delivery-target.js";
+} from "../infra/outbound/payloads.js";
+import { logWarn } from "../logger.js";
+import { getAgentScopedMediaLocalRootsForSources } from "../media/local-roots.js";
+import { commitBackgroundResultToSession } from "../sessions/background-session-result.js";
+import { readAssistantDisplayContent } from "../shared/assistant-display-content.js";
+import type { CronCompletionDeliveryFence } from "./delivery-attempt-fence.js";
+import { createCronExecutionId } from "./run-id.js";
 
-type CurrentSessionCompletionResult =
-  | { ok: false; reason: string }
-  | { ok: true; requiresExternalDelivery: boolean; deliveryError?: string };
+export type CronConversationResultParams = {
+  config: OpenClawConfig;
+  agentId: string;
+  jobId: string;
+  runStartedAt: number;
+  conversation: { sessionKey: string; sessionId: string; lifecycleRevision?: string };
+  payloads: ReplyPayload[];
+  text?: string;
+  signal?: AbortSignal;
+  deliveryAttemptFence: CronCompletionDeliveryFence | null;
+};
 
-export async function commitCurrentSessionCronCompletion(
-  params: DispatchCronDeliveryParams,
-  text?: string,
-): Promise<CurrentSessionCompletionResult> {
-  const sourceSessionKey = params.sourceSessionKey?.trim();
+/** Commit final output, not the private run transcript or an external notification mirror. */
+export async function commitCronConversationResult(params: CronConversationResultParams) {
+  const sourceSessionKey = params.conversation.sessionKey.trim();
   if (!sourceSessionKey) {
-    return { ok: false, reason: "current cron delivery is missing its source session binding" };
+    return {
+      ok: false as const,
+      reason: "current cron delivery is missing its source session binding",
+    };
   }
-  const sourceSessionGeneration = params.sourceSessionGeneration;
-  if (!sourceSessionGeneration) {
-    return { ok: false, reason: "current cron delivery is missing its source session generation" };
-  }
-  const transcriptPayloads = buildDirectCronTranscriptMirrorPayloads(params.deliveryPayloads);
+  const sourceSessionGeneration = {
+    sessionId: params.conversation.sessionId,
+    lifecycleRevision: params.conversation.lifecycleRevision,
+  };
+  const transcriptPayloads = params.payloads.map((payload) => {
+    const spokenText = normalizeOptionalString(payload.spokenText);
+    if (!spokenText) {
+      return payload;
+    }
+    const mediaUrls = [payload.mediaUrl, ...(payload.mediaUrls ?? [])].filter(
+      (url): url is string => Boolean(url) && !isAudioFileName(url),
+    );
+    return copyReplyPayloadMetadata(payload, {
+      ...payload,
+      text: spokenText,
+      spokenText: undefined,
+      audioAsVoice: undefined,
+      mediaUrl: undefined,
+      mediaUrls,
+    });
+  });
   const mirror = projectOutboundPayloadPlanForMirror(createOutboundPayloadPlan(transcriptPayloads));
   const completionText =
-    resolveDirectCronTranscriptMirrorText(mirror) ?? normalizeOptionalString(text);
+    resolveMirroredTranscriptText(mirror) ?? normalizeOptionalString(params.text);
   if (!completionText) {
-    return { ok: false, reason: "current cron completion has no durable transcript projection" };
+    return { ok: false as const, reason: "cron result has no visible payload" };
   }
-  const runId = createCronExecutionId(params.job.id, params.runStartedAt);
+  const runId = createCronExecutionId(params.jobId, params.runStartedAt);
   let preparedContent: Record<string, unknown>[] | undefined;
   let appended = false;
   try {
@@ -72,14 +95,14 @@ export async function commitCurrentSessionCronCompletion(
             }),
           ),
           managedMediaLocalRoots: getAgentScopedMediaLocalRootsForSources({
-            cfg: params.cfgWithAgentDefaults,
+            cfg: params.config,
             agentId: params.agentId,
             mediaSources: mirror.mediaUrls,
           }),
           includeSensitiveMedia: false,
           onManagedMediaPrepareError: (message) => {
-            void logCronDeliveryWarn(
-              `[cron:${params.job.id}] current-session completion media embedding skipped: ${message}`,
+            logWarn(
+              `[cron:${params.jobId}] current-session completion media embedding skipped: ${message}`,
             );
           },
         });
@@ -87,11 +110,11 @@ export async function commitCurrentSessionCronCompletion(
         return hasAssistantDisplayMediaContent(preparedContent) ? preparedContent : undefined;
       },
       idempotencyKey: `cron-current-completion:${runId}`,
-      provenance: { kind: "cron", jobId: params.job.id, runId },
-      config: params.cfgWithAgentDefaults,
-      signal: params.abortSignal,
+      provenance: { kind: "cron", jobId: params.jobId, runId },
+      config: params.config,
+      signal: params.signal,
       assertCurrent: () => {
-        params.abortSignal?.throwIfAborted();
+        params.signal?.throwIfAborted();
         params.deliveryAttemptFence?.assertCurrent();
       },
       onMessageCommitted: (result, acceptCompletion) => {
@@ -121,20 +144,5 @@ export async function commitCurrentSessionCronCompletion(
       await removeManagedOutgoingMediaBlocks({ blocks: preparedContent, messageId: null });
     }
   }
-  if (params.sourceDeliveryOutcome.satisfiesSourceDelivery) {
-    return { ok: true, requiresExternalDelivery: false };
-  }
-  if (params.resolvedDelivery.ok) {
-    return { ok: true, requiresExternalDelivery: true };
-  }
-  // Committing the report cannot satisfy an explicit or remembered external
-  // destination; retain its error even when selection produced no channel.
-  if (requiresExternalCronDelivery(params.deliveryPlan, params.resolvedDelivery)) {
-    return {
-      ok: true,
-      requiresExternalDelivery: false,
-      deliveryError: params.resolvedDelivery.error.message,
-    };
-  }
-  return { ok: true, requiresExternalDelivery: false };
+  return { ok: true as const };
 }

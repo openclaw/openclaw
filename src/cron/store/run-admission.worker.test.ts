@@ -1,5 +1,3 @@
-import { MessagePort } from "node:worker_threads";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import { createDueIsolatedJob } from "../../../test/helpers/cron/service-regression-fixtures.js";
 import { assertTransactionUsable } from "../../infra/sqlite-transaction.js";
@@ -13,7 +11,8 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
 import { saveCronStore } from "../store.js";
 import { cronStoreKey } from "./key.js";
-import { finalizeCronRunsInWorker, reserveCronRunsInWorker } from "./run-admission.worker.js";
+import { reserveCronRunsInWorker } from "./run-admission.worker.js";
+import { finalizeCronRunsInWorker } from "./run-finalization.worker.js";
 import {
   CronRunReceiptConflictError,
   CronRunReceiptRevisionError,
@@ -57,13 +56,6 @@ it.each(["confirmed", "aborted-open"] as const)(
         .spyOn(workerAdmission, "requestSqliteWorkerOperationAdmission")
         .mockImplementation((request) => {
           expect(request.stage).toBe("transaction");
-          if (!isRecord(request.facts) || !(request.facts.preparationPort instanceof MessagePort)) {
-            throw new Error("Reservation did not request host preparation");
-          }
-          request.facts.preparationPort.postMessage(
-            { defaultAgentId: "main", claims: [candidate], replacements: [] },
-            [],
-          );
         });
       const exec = database.db.exec.bind(database.db);
       let rollbackFailed = false;
@@ -87,6 +79,12 @@ it.each(["confirmed", "aborted-open"] as const)(
           () =>
             reserveCronRunsInWorker(database, {
               nonce: "conflict-rollback",
+              prepared: {
+                defaultAgentId: "main",
+                claims: [candidate],
+                replacements: [],
+                localReceiptIds: [receipt.receiptId],
+              },
               storeKey: cronStoreKey(storePath),
               proposals: [
                 {
@@ -170,18 +168,6 @@ it.each(["confirmed", "aborted-open"] as const)(
         .spyOn(workerAdmission, "requestSqliteWorkerOperationAdmission")
         .mockImplementation((request) => {
           expect(request.stage).toBe("transaction");
-          if (!isRecord(request.facts) || !(request.facts.preparationPort instanceof MessagePort)) {
-            throw new Error("Finalization did not request host preparation");
-          }
-          request.facts.preparationPort.postMessage(
-            {
-              defaultAgentId: "main",
-              jobs: [{ ...job, state: { lastRunStatus: "ok" } }],
-              deletedJobIds: [],
-              deferredReceiptIds: [],
-            },
-            [],
-          );
         });
       const exec = database.db.exec.bind(database.db);
       let rollbackFailed = false;
@@ -205,6 +191,13 @@ it.each(["confirmed", "aborted-open"] as const)(
           () =>
             finalizeCronRunsInWorker(database, {
               nonce: "finalization-rollback",
+              prepared: {
+                defaultAgentId: "main",
+                nowMs: now + 1,
+                outcomes: [],
+                failureAlerts: [],
+                deferredReceiptIds: [],
+              },
               storeKey: cronStoreKey(storePath),
               jobIds: [job.id],
               receipts: [

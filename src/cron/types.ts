@@ -376,7 +376,7 @@ export type CronToolsAllowProvenance =
 
 /** Persisted row shape; public Gateway and wire contracts use CronJob. */
 export type CronStoredJob = CronJob & {
-  /** Creation-bound destination for isolated results when no external route exists. */
+  /** Creation-bound result conversation, independent of run context and external notifications. */
   sourceConversation?: {
     sessionKey: string;
     sessionId: string;

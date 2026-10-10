@@ -1,5 +1,5 @@
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
-import { isCronJobActive } from "../active-jobs.js";
+import { isCronJobActive, listActiveCronJobIds } from "../active-jobs.js";
 import { noteCronJobsStoreCommit } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
 import type { CronRuntimeMutationContracts } from "../store/runtime-mutation.types.js";
@@ -12,8 +12,12 @@ import { runPostPersistCronNotifications } from "./store.js";
 type MaintenanceOutcome = CronRuntimeMutationContracts["cron.scheduleUnowned"]["outcome"];
 
 /** Keep host activity and exact local reservations current while a worker owns its rows. */
-export function prepareCronScheduleOwnership(state: CronServiceState, jobIds: readonly string[]) {
-  const owners = jobIds.map((jobId) => ({
+export function prepareCronScheduleOwnership(state: CronServiceState, jobIds?: readonly string[]) {
+  const activeIds = listActiveCronJobIds();
+  const selected = jobIds ?? [
+    ...new Set([...activeIds, ...state.queuedRunReservationsByJobId.keys()]),
+  ];
+  const owners = selected.map((jobId) => ({
     jobId,
     active: isCronJobActive(jobId),
     reservation: state.queuedRunReservationsByJobId.get(jobId),
@@ -31,6 +35,15 @@ export function prepareCronScheduleOwnership(state: CronServiceState, jobIds: re
   return {
     ownership,
     assertCurrent() {
+      if (!jobIds && listActiveCronJobIds().some((id) => !activeIds.includes(id))) {
+        throw new Error("Cron scheduling acquired new process ownership");
+      }
+      if (
+        !jobIds &&
+        [...state.queuedRunReservationsByJobId.keys()].some((id) => !selected.includes(id))
+      ) {
+        throw new Error("Cron scheduling acquired new reservations");
+      }
       for (let index = 0; index < owners.length; index += 1) {
         const owner = owners[index]!;
         const prepared = ownership[index]!;
@@ -66,13 +79,13 @@ export async function recomputeUnownedCronSchedules(
         throw new Error("Cron schedule maintenance owner retired");
       }
     },
-    prepare({ jobIds }) {
-      const prepared = prepareCronScheduleOwnership(state, jobIds);
+    policy: (() => {
+      const prepared = prepareCronScheduleOwnership(state);
       return {
         value: { nowMs: opts?.nowMs ?? state.deps.nowMs(), ownership: prepared.ownership },
         assertCurrent: () => prepared.assertCurrent(),
       };
-    },
+    })(),
     publish(committed) {
       outcome = committed;
       if (committed.changed) {

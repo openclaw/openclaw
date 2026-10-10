@@ -157,9 +157,8 @@ export async function resolveDeliveryTarget(
   const explicitTo = typeof jobPayload.to === "string" ? jobPayload.to : undefined;
   const allowMismatchedLastTo = requestedChannel === "last";
   const deliveryTargetRuntime = await deliveryTargetRuntimeLoader.load();
-  const source =
-    jobPayload.sessionTarget === "isolated" ? jobPayload.sourceConversation : undefined;
-  if (source && !hasExplicitCronDeliveryTarget(jobPayload)) {
+  const source = jobPayload.sourceConversation;
+  if (source) {
     try {
       const { prepareSessionGenerationFacts } = await sessionGenerationRuntimeLoader.load();
       const generation = await prepareSessionGenerationFacts({
@@ -176,7 +175,7 @@ export async function resolveDeliveryTarget(
     } catch (error) {
       return {
         ok: false,
-        mode: "implicit",
+        mode: hasExplicitCronDeliveryTarget(jobPayload) ? "explicit" : "implicit",
         sourceConversationUnavailable: true,
         error: new Error(`Creating conversation unavailable: ${formatErrorMessage(error)}`),
       };
@@ -197,8 +196,7 @@ export async function resolveDeliveryTarget(
   const { mainSessionKey, rawSessionKey, threadSessionKey, usedSharedMainFallback } =
     sessionContext;
   const hasConversationCompletion =
-    jobPayload.sessionTarget === "current" ||
-    (jobPayload.sessionTarget === "isolated" && jobPayload.sourceConversation !== undefined);
+    jobPayload.sessionTarget === "current" || jobPayload.sourceConversation !== undefined;
   // A missing creating conversation cannot inherit another conversation's shared route.
   const main =
     hasConversationCompletion && usedSharedMainFallback ? undefined : sessionContext.main;

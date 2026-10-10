@@ -99,6 +99,7 @@ async function recordFailureAlertOutcome(
       const context = captureOpenClawStateWorkerContext();
       const storeKey = cronStoreKey(state.deps.storePath);
       let result: FailureAlertRecordResult = "stale";
+      ownsCycle = true;
       await runCronRuntimeMutation({
         context,
         type: "cron.recordFailureAlertOutcome",
@@ -121,11 +122,9 @@ async function recordFailureAlertOutcome(
             throw new Error("Cron failure-alert owner retired");
           }
         },
-        prepare(facts) {
-          ownsCycle = facts.ownsCycle;
-          return { value: {}, assertCurrent() {} };
-        },
+        policy: { value: {}, assertCurrent() {} },
         publish(committed) {
+          ownsCycle = committed.job !== undefined;
           if (committed.job) {
             noteCronJobsStoreCommit(storeKey);
             applyCronRuntimeRowsToState(state, [committed.job], [], { publish: false });

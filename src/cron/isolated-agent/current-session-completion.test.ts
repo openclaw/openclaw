@@ -42,11 +42,12 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
+import { commitCronConversationResult } from "../conversation-result.js";
 import { resolveCronDeliveryPlan } from "../delivery-plan.js";
 import { makeCronJob } from "../delivery.test-helpers.js";
 import { createCliDeps } from "../isolated-agent.delivery.test-helpers.js";
 import type { CronStoredJob } from "../types.js";
-import { commitCurrentSessionCronCompletion } from "./current-session-completion.js";
+import * as deliveryPolicy from "./delivery-dispatch-policy.js";
 import type { DispatchCronDeliveryParams } from "./delivery-dispatch-types.js";
 import { dispatchCronDelivery } from "./delivery-dispatch.js";
 import { resolveDeliveryTarget } from "./delivery-target.js";
@@ -163,7 +164,18 @@ async function createCompletionFixture(
       unsubscribe();
       await readDownloads();
     },
-    commit: () => commitCurrentSessionCronCompletion(params),
+    commit: () =>
+      commitCronConversationResult({
+        config: params.cfgWithAgentDefaults,
+        agentId: params.agentId,
+        jobId: params.job.id,
+        runStartedAt: params.runStartedAt,
+        conversation: { sessionKey, ...generation },
+        payloads: params.deliveryPayloads,
+        text: params.synthesizedText,
+        signal: params.abortSignal,
+        deliveryAttemptFence: params.deliveryAttemptFence,
+      }),
     messages: async () =>
       (await loadTranscriptEvents(scope)).filter(
         (event) => readTranscriptEventMessage(event)?.role === "assistant",
@@ -218,16 +230,16 @@ describe("current-session completion delivery", () => {
           fixture.params.job.delivery = { mode: "announce", ...coordinates };
           fixture.params.deliveryPlan = resolveCronDeliveryPlan(fixture.params.job);
           fixture.params.deliveryPayloads = [{ text: "Final report" }];
-          const completion = await fixture.commit();
+          const completion = await dispatchCronDelivery(fixture.params);
           const messages = await fixture.messages();
           expect(messages).toHaveLength(1);
           expect(readTranscriptEventMessage(messages[0])?.content).toEqual([
             { type: "text", text: "Final report" },
           ]);
-          expect(completion).toEqual({
-            ok: true,
-            requiresExternalDelivery: false,
+          expect(completion).toMatchObject({
+            delivered: false,
             deliveryError: "No external channel",
+            disposition: { kind: "error", errorKind: "delivery-target" },
           });
         } finally {
           await fixture.dispose();
@@ -238,6 +250,80 @@ describe("current-session completion delivery", () => {
 });
 
 describe("isolated completion in the creating conversation", () => {
+  it.each([
+    { sessionTarget: "current", notificationFails: false },
+    { sessionTarget: "isolated", notificationFails: false },
+    { sessionTarget: "isolated", notificationFails: true },
+  ] as const)(
+    "commits $sessionTarget output only to its source before notifying (failure=$notificationFails)",
+    async ({ sessionTarget, notificationFails }) => {
+      await withOpenClawTestState({ layout: "state-only" }, async (state) => {
+        const fixture = await createCompletionFixture(state, sessionTarget);
+        const registry = captureActivePluginRegistrySnapshot();
+        const destination = {
+          ...fixture.scope,
+          sessionKey: "agent:main:telegram:direct:123",
+          sessionId: "recipient-session",
+        };
+        const main = { ...fixture.scope, sessionKey: "agent:main:main", sessionId: "main-session" };
+        await replaceSessionEntry(destination, { sessionId: destination.sessionId, updatedAt: 1 });
+        await replaceSessionEntry(main, { sessionId: main.sessionId, updatedAt: 1 });
+        const sendText = vi.fn(async () => {
+          const messages = await fixture.messages();
+          expect(messages).toHaveLength(1);
+          expect(readTranscriptEventMessage(messages[0])?.content).toEqual([
+            { type: "text", text: "Final source report" },
+          ]);
+          if (notificationFails) {
+            throw new Error("notification rejected");
+          }
+          return { channel: "telegram", messageId: "notification-message" };
+        });
+        setActivePluginRegistry(
+          createTestRegistry([
+            {
+              pluginId: "telegram",
+              source: "test",
+              plugin: {
+                ...createChannelTestPluginBase({ id: "telegram" }),
+                outbound: { deliveryMode: "direct", sendText },
+              },
+            },
+          ]),
+        );
+        try {
+          fixture.params.job.delivery = { mode: "announce", channel: "telegram", to: "123" };
+          fixture.params.deliveryPlan = resolveCronDeliveryPlan(fixture.params.job);
+          fixture.params.resolvedDelivery = {
+            ok: true,
+            mode: "explicit",
+            channel: "telegram",
+            to: "123",
+          };
+          fixture.params.deliveryPayloads = [{ text: "Final source report" }];
+          fixture.params.synthesizedText = "Final source report";
+          const result = await dispatchCronDelivery(fixture.params);
+          expect(result.delivered).toBe(!notificationFails);
+          if (notificationFails) {
+            expect(result.deliveryError).toContain("notification rejected");
+          }
+          expect(sendText).toHaveBeenCalledOnce();
+          expect(await fixture.messages()).toHaveLength(1);
+          for (const scope of [destination, main]) {
+            expect(
+              (await loadTranscriptEvents(scope)).filter(
+                (event) => readTranscriptEventMessage(event)?.role === "assistant",
+              ),
+            ).toEqual([]);
+          }
+        } finally {
+          restoreActivePluginRegistrySnapshot(registry);
+          await fixture.dispose();
+        }
+      });
+    },
+  );
+
   it.each(["unchanged", "reset"] as const)(
     "fences implicit external delivery against the %s source generation after resolution",
     async (sourceState) => {
@@ -299,7 +385,7 @@ describe("isolated completion in the creating conversation", () => {
             expect(delivery).toMatchObject({
               delivered: false,
               deliveryState: { status: "not-delivered" },
-              deliveryError: expect.stringContaining("original session generation"),
+              deliveryError: expect.stringContaining("session rebound"),
             });
             expect(sendText).not.toHaveBeenCalled();
           } else {
@@ -310,6 +396,68 @@ describe("isolated completion in the creating conversation", () => {
             expect(sendText).toHaveBeenCalledOnce();
           }
         } finally {
+          restoreActivePluginRegistrySnapshot(registry);
+          await fixture.dispose();
+        }
+      });
+    },
+  );
+
+  it.each(["current", "isolated"] as const)(
+    "revokes a %s notification when the source resets after result persistence",
+    async (target) => {
+      await withOpenClawTestState({ layout: "state-only" }, async (state) => {
+        const fixture = await createCompletionFixture(state, target);
+        const registry = captureActivePluginRegistrySnapshot();
+        const sendText = vi.fn(async () => ({ channel: "telegram", messageId: "stale-message" }));
+        setActivePluginRegistry(
+          createTestRegistry([
+            {
+              pluginId: "telegram",
+              source: "test",
+              plugin: {
+                ...createChannelTestPluginBase({ id: "telegram" }),
+                outbound: { deliveryMode: "direct", sendText },
+              },
+            },
+          ]),
+        );
+        const tts = vi
+          .spyOn(deliveryPolicy, "maybeApplyTtsToCronPayloads")
+          .mockImplementationOnce(async ({ payloads }) => {
+            expect(await fixture.messages()).toHaveLength(1);
+            await resetSessionEntryLifecycle({
+              storePath: fixture.scope.storePath,
+              target: {
+                canonicalKey: fixture.scope.sessionKey,
+                storeKeys: [fixture.scope.sessionKey],
+              },
+              buildNextEntry: () => ({
+                sessionId: "replacement-session",
+                lifecycleRevision: "replacement-generation",
+                updatedAt: 3000,
+              }),
+            });
+            return payloads;
+          });
+        try {
+          fixture.params.job.delivery = { mode: "announce", channel: "telegram", to: "123" };
+          fixture.params.deliveryPlan = resolveCronDeliveryPlan(fixture.params.job);
+          fixture.params.resolvedDelivery = {
+            ok: true,
+            mode: "explicit",
+            channel: "telegram",
+            to: "123",
+          };
+          const result = await dispatchCronDelivery(fixture.params);
+          expect(tts).toHaveBeenCalledOnce();
+          expect(sendText).not.toHaveBeenCalled();
+          expect(result).toMatchObject({
+            delivered: false,
+            deliveryError: expect.stringContaining("generation"),
+          });
+        } finally {
+          tts.mockRestore();
           restoreActivePluginRegistrySnapshot(registry);
           await fixture.dispose();
         }
@@ -386,7 +534,7 @@ describe("isolated completion in the creating conversation", () => {
   });
 
   it.each(["explicit", "remembered"] as const)(
-    "does not replace an unavailable %s external route with a conversation commit",
+    "commits the result but still reports an unavailable %s external route",
     async (route) => {
       await withOpenClawTestState({ layout: "state-only" }, async (state) => {
         const fixture = await createCompletionFixture(state, "isolated");
@@ -410,8 +558,12 @@ describe("isolated completion in the creating conversation", () => {
               route === "explicit" ? "No external channel" : "Remembered channel unavailable",
             disposition: { kind: "error", errorKind: "delivery-target" },
           });
-          expect(await fixture.messages()).toEqual([]);
-          expect(fixture.updates()).toBe(0);
+          const messages = await fixture.messages();
+          expect(messages).toHaveLength(1);
+          expect(readTranscriptEventMessage(messages[0])?.content).toEqual([
+            { type: "text", text: "tick" },
+          ]);
+          expect(fixture.updates()).toBe(1);
         } finally {
           await fixture.dispose();
         }

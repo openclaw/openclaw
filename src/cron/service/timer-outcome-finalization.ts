@@ -6,7 +6,6 @@ import {
   finishCronRunReceiptAsync,
   releaseLocalCronRunReceiptOwnership,
 } from "../store/run-receipt-store.js";
-import type { CronJob } from "../types.js";
 import { locked } from "./locked.js";
 import { clearManualCronJobActive, maybeNotifyManualIsolatedSetupTimeout } from "./ops-shared.js";
 import { releaseQueuedCronRun, supersedeActivatedCronRun } from "./run-admission.js";
@@ -185,37 +184,16 @@ export async function finalizeCompletedCronRunOutcomes(
         jobIds: finalizedOutcomes.map((outcome) => outcome.jobId),
         receipts,
         markers: finalizedOutcomes.map((outcome) => outcome.activeJobMarker),
-        mutate: ({ jobs, retiredTriggerReceiptIds }) => {
-          const upsertedJobs: CronJob[] = [];
-          const removedJobs: CronJob[] = [];
-          const eventPlans: Array<{ outcome: TimedCronRunOutcome; job?: CronJob }> = [];
-          for (const outcome of finalizedOutcomes) {
-            const job = jobs.get(outcome.jobId);
-            if (!job || outcome.activeJobMarker?.jobRemoved === true) {
-              eventPlans.push({ outcome });
-              continue;
-            }
-            if (
-              applyOutcomeToAuthoritativeJob(state, job, outcome, {
-                request: outcome.request,
-                deferredNotifications: postPersistNotifications,
-                triggerStateRetired:
-                  outcome.runReceipt && retiredTriggerReceiptIds.has(outcome.runReceipt.receiptId),
-              })
-            ) {
-              removedJobs.push(job);
-            } else {
-              upsertedJobs.push(job);
-            }
-            eventPlans.push({ outcome, job: structuredClone(job) });
-          }
-          return {
-            deletedJobIds: removedJobs.map((job) => job.id),
-            jobs: upsertedJobs,
-            value: { eventPlans, removedJobs, upsertedJobs },
-          };
-        },
+        outcomes: finalizedOutcomes,
       });
+      postPersistNotifications.push(...committed.notifications);
+      for (const entry of committed.logs) {
+        state.deps.log[entry.level](entry.fields, entry.message);
+      }
+      const eventPlans = finalizedOutcomes.map((outcome, index) => ({
+        outcome,
+        job: committed.eventJobs[index],
+      }));
       applyCronRuntimeRowsToState(
         state,
         committed.upsertedJobs,
@@ -245,7 +223,7 @@ export async function finalizeCompletedCronRunOutcomes(
         return;
       }
       const publishedJobIds = new Set(finalizedOutcomes.map((outcome) => outcome.jobId));
-      for (const plan of committed.eventPlans) {
+      for (const plan of eventPlans) {
         if (!publishedJobIds.has(plan.outcome.jobId)) {
           continue;
         }

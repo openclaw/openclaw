@@ -20,7 +20,9 @@ import {
   readScratchStateFromDatabase,
 } from "./scratch-read.kernel.js";
 import { runCronRuntimeMutation } from "./service/runtime-mutation.js";
+import { noteCronJobsStoreCommit } from "./store.js";
 import { cronStoreKey } from "./store/key.js";
+import { CronJobsStoreChangedError } from "./store/save-error.js";
 import { getCronStoreKysely } from "./store/schema.js";
 
 /** Doctor's synchronous transaction reads stay with the maintenance owner. */
@@ -68,7 +70,7 @@ export async function writeCronJobScratch(
   admission?: {
     context?: OpenClawStateWorkerContext;
     assertCurrent?: () => void;
-    assertJobCurrent?: (configRevision: string | undefined) => void;
+    expectedConfigRevision?: string;
     createdAtMsFallback?: number;
   },
 ): Promise<CronJobScratchWriteResult> {
@@ -78,6 +80,7 @@ export async function writeCronJobScratch(
   const context = admission?.context ?? captureOpenClawStateWorkerContext(params.options);
   const markCommitted = captureCronMutationCommit("cron.scratch.set");
   let result: CronJobScratchWriteResult | undefined;
+  let jobChanged = false;
   await runCronRuntimeMutation({
     context,
     type: "cron.writeScratch",
@@ -91,21 +94,25 @@ export async function writeCronJobScratch(
       createdAtMsFallback: admission?.createdAtMsFallback,
     },
     assertCurrent: () => admission?.assertCurrent?.(),
-    prepare({ configRevision }) {
-      const assertCurrent = () => {
-        admission?.assertCurrent?.();
-        admission?.assertJobCurrent?.(configRevision);
-      };
-      assertCurrent();
-      return { value: {}, assertCurrent };
+    policy: {
+      value: { expectedConfigRevision: admission?.expectedConfigRevision },
+      assertCurrent() {},
     },
     publish(outcome) {
+      if ("jobChanged" in outcome) {
+        jobChanged = true;
+        return;
+      }
       result = outcome.result;
       if (outcome.written) {
         markCommitted?.();
       }
     },
   });
+  if (jobChanged) {
+    noteCronJobsStoreCommit(cronStoreKey(params.storePath));
+    throw new CronJobsStoreChangedError(cronStoreKey(params.storePath));
+  }
   if (!result) {
     throw new Error("Cron scratch write has no committed result");
   }

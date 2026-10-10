@@ -1,5 +1,6 @@
 /** Resolves and emits cron failure-alert notifications. */
 import { randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -29,8 +30,57 @@ import {
   cronNotificationJob,
   type CronNotificationJob,
   type ResolvedFailureAlert,
+  type PreparedCronFailureAlertPolicy,
 } from "./notification-intents.js";
-import type { CronJobPolicyContext, DeferredCronNotifications } from "./state.js";
+import type { CronJobPolicyContext, CronServiceState, DeferredCronNotifications } from "./state.js";
+
+/** Plugin normalization belongs to the host; workers compare the exact routing inputs. */
+export function prepareCronFailureAlertPolicies(
+  state: CronServiceState,
+  jobIds: readonly string[],
+  routingJobs?: readonly Pick<CronJob, "id" | "delivery" | "failureAlert">[],
+) {
+  const jobs = new Map((routingJobs ?? state.store?.jobs ?? []).map((job) => [job.id, job]));
+  const policies: PreparedCronFailureAlertPolicy[] = jobIds.map((id) => {
+    const job = jobs.get(id);
+    const projection = structuredClone({
+      id,
+      delivery: job?.delivery,
+      failureAlert: job?.failureAlert,
+    });
+    return { job: projection, value: resolveFailureAlert(state, projection) };
+  });
+  return {
+    policies,
+    assertCurrent() {
+      if (
+        policies.some(
+          (policy) => !isDeepStrictEqual(policy.value, resolveFailureAlert(state, policy.job)),
+        )
+      ) {
+        throw new Error("Cron failure-alert routing changed before commit");
+      }
+    },
+  };
+}
+
+export function resolvePreparedCronFailureAlert(
+  policies: readonly PreparedCronFailureAlertPolicy[],
+  id: string,
+  job?: Pick<CronJob, "delivery" | "failureAlert">,
+): ResolvedFailureAlert | null {
+  const policy = policies.find((candidate) => candidate.job.id === id);
+  if (
+    !policy ||
+    !isDeepStrictEqual(
+      policy.job,
+      structuredClone({ id, delivery: job?.delivery, failureAlert: job?.failureAlert }),
+    )
+  ) {
+    throw new Error("Cron failure-alert job changed after policy preparation");
+  }
+  return policy.value;
+}
 
 const DEFAULT_FAILURE_ALERT_AFTER = 2;
 const DEFAULT_FAILURE_ALERT_COOLDOWN_MS = 60 * 60_000; // 1 hour

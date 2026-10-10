@@ -462,20 +462,20 @@ export async function persistCronJobMutation(params: {
           : undefined,
     }),
     assertCurrent,
-    prepare(facts) {
+    policy: (() => {
       const assertAvailable = () => {
         assertCurrent();
         if (
           params.agentId !== undefined &&
-          (facts.deletionBlocked ||
-            state.deps.isAgentAvailable?.(params.agentId, undefined, facts) === false)
+          state.deps.isAgentAvailable?.(params.agentId, undefined, { deletionBlocked: false }) ===
+            false
         ) {
           throw new Error(describeUnavailableCronAgent(params.agentId));
         }
       };
       assertAvailable();
       return { value: { nowMs: state.deps.nowMs() }, assertCurrent: assertAvailable };
-    },
+    })(),
     publish({
       store,
       names,

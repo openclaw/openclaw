@@ -71,6 +71,18 @@ export type TimedCronRunOutcome = CronJobExecutionResult & {
   endedAt: number;
 };
 
+/** Cloneable execution result; live markers and settlement stay with the host. */
+export type CronFinalizationOutcome = Omit<
+  TimedCronRunOutcome,
+  "activeJobMarker" | "runReceiptContext" | "reservationIdentity" | "request"
+> & {
+  activeJobMarker?: Pick<CronActiveJobMarker, "jobRemoved" | "scheduleMutated" | "triggerMutated">;
+  request?: Pick<
+    NonNullable<TimedCronRunOutcome["request"]>,
+    "preserveCadence" | "scheduleOwnershipAtMs"
+  >;
+};
+
 export type CronJobRunResult = CronRunOutcome &
   Pick<CronRunTelemetry, "provider"> &
   CronRunDeliveryResult & {
