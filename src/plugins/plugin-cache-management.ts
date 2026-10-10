@@ -16,7 +16,6 @@ export type PluginCacheFact<T> = { value: T } | { pending: Promise<{ value: T }>
 
 type BundledDiscoveryModeFact = {
   value: "compat" | "allowlist" | undefined;
-  generation: object;
 };
 
 export type PluginCacheManagement<TCache> = {

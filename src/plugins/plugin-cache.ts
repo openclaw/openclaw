@@ -2,7 +2,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import { materializeErrorStack } from "../infra/error-graph-internal.js";
-import { AsyncWorkScope, trackAsyncWork } from "../shared/async-work-scope.js";
+import { AsyncWorkScope, runOutsideAsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
@@ -59,7 +59,6 @@ const cacheRetainers = resolveGlobalSingleton(
         controller: AbortController;
         settled: ReturnType<typeof createDeferredCore<void>>;
         retirement?: Promise<PluginHostCleanupResult>;
-        beginRetirement?: (track?: typeof trackAsyncWork) => void;
       }
     >(),
 );
@@ -134,7 +133,6 @@ export function retainPluginCache(cache: PluginCache): () => void {
   return () => {
     if (retained.references.delete(reference) && retained.references.size === 0) {
       retained.settled.resolve();
-      retained.beginRetirement?.();
     }
   };
 }
@@ -155,7 +153,6 @@ function createPluginMetadataCache(): PluginCache["metadata"] {
       defaultDiscoveryCompatible: false,
       compatiblePolicyHashes: undefined,
       compatibleConfigFingerprints: undefined,
-      revision: Symbol("plugin-metadata-snapshot"),
       configIdentities: new WeakSet(),
     },
     snapshots: new Map(),
@@ -235,15 +232,6 @@ export function getScopedPluginCache(): PluginCache | undefined {
   return getPluginExecutionFrame()?.cacheScope?.cache;
 }
 
-/** Installation refreshes every enclosing operation, including callers outside metadata phases. */
-export function getScopedPluginCaches(): PluginCache[] {
-  const caches: PluginCache[] = [];
-  for (let scope = getPluginExecutionFrame()?.cacheScope; scope; scope = scope.parent) {
-    caches.push(scope.cache);
-  }
-  return caches;
-}
-
 export function getPluginCache(): PluginCache {
   return getScopedPluginCache() ?? getProcessPluginCache();
 }
@@ -251,10 +239,7 @@ export function getPluginCache(): PluginCache {
 export function withPluginCache<T>(cache: PluginCache, run: () => T): T {
   const current = getPluginExecutionFrame();
   return runWithPluginExecutionFrame(
-    createPluginExecutionFrame(
-      { ...current, cacheScope: { cache, parent: current?.cacheScope } },
-      current,
-    ),
+    createPluginExecutionFrame({ ...current, cacheScope: { cache } }, current),
     run,
   );
 }
@@ -377,40 +362,21 @@ export function retirePluginCache(
   }
   const completion = createDeferredCore<PluginHostCleanupResult>();
   retained.retirement = completion.promise;
-  const trackRetirement: typeof trackAsyncWork = async (run) => {
+  const retire = async () => {
+    // Cleanup owns its work after the requesting command has closed.
+    if (retained.references.size) {
+      await retained.settled.promise;
+    }
     const work = new AsyncWorkScope();
     try {
-      return await work.track(run);
+      return await work.track(() => beginPluginCacheRetirement(cache, beforeRetire));
     } finally {
-      await work.run(() => work.drain());
+      await work.drain();
     }
   };
-  retained.beginRetirement = (track = trackAsyncWork) => {
-    let admitted = false;
-    void track(() => {
-      admitted = true;
-      retained.beginRetirement = undefined;
-      return beginPluginCacheRetirement(cache, beforeRetire);
-    }).then(completion.resolve, (error: unknown) => {
-      if (admitted) {
-        completion.reject(error);
-      } else {
-        // A retained release may outlive its request; only admission consumes the handoff.
-        retained.beginRetirement?.(trackRetirement);
-      }
-    });
-  };
-  // Abort listeners may reenter retirement or release the final generation immediately.
   retained.controller.abort();
   materializeErrorStack(retained.controller.signal.reason);
-  if (retained.references.size === 0) {
-    retained.beginRetirement?.();
-  } else {
-    // Released borrowers only resolve this promise; their requesting scope may have closed.
-    void retained.settled.promise.then(() => {
-      retained.beginRetirement?.(trackRetirement);
-    });
-  }
+  void runOutsideAsyncWorkScope(retire).then(completion.resolve, completion.reject);
   return completion.promise;
 }
 

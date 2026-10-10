@@ -15,7 +15,6 @@ import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-
 import { resolveInstalledManifestRegistryIndexFingerprint } from "./manifest-registry-installed.js";
 import {
   getPluginMetadataSnapshotCache,
-  getScopedPluginCaches,
   invalidatePluginCacheMetadata,
   getProcessPluginCache,
   getScopedPluginCache,
@@ -193,28 +192,19 @@ export function adoptCurrentPluginMetadataSnapshotIfAbsent(
   prepareCurrentPluginMetadataSnapshotPublication(snapshot, options)();
 }
 
-/** Installation revokes operation facts even when it runs between metadata scopes. */
-function revokeCurrentPluginMetadataSnapshotScopes(): void {
-  const caches = new Set(getScopedPluginCaches());
-  const runtimeCaches = new Set();
-  for (let scoped = getPluginExecutionFrame()?.metadataScope; scoped; scoped = scoped.parent) {
-    if (scoped.immutableRuntimeGeneration) {
-      runtimeCaches.add(scoped.cache);
-    } else {
-      caches.add(scoped.cache);
-    }
-  }
-  for (const cache of caches) {
-    if (cache.kind === "operation" && !runtimeCaches.has(cache)) {
-      invalidatePluginCacheMetadata(cache);
-    }
+/** Explicit installation refreshes the operation's cached discovery facts. */
+function clearCurrentPluginMetadataOperation(): void {
+  const cache = getScopedPluginCache();
+  if (
+    cache?.kind === "operation" &&
+    !getPluginExecutionFrame()?.metadataScope?.immutableRuntimeGeneration
+  ) {
+    invalidatePluginCacheMetadata(cache);
   }
 }
 
 function isScopedSnapshotInCurrentCache(scoped: ScopedPluginMetadataSnapshot): boolean {
-  if (!scoped.immutableRuntimeGeneration && scoped.metadata !== scoped.cache.metadata) {
-    return false;
-  }
+  // A running scope keeps its captured metadata across an explicit cache refresh.
   const cache = getScopedPluginCache();
   return cache?.kind !== "operation" || scoped.cache === cache;
 }
@@ -266,7 +256,6 @@ export function createPluginMetadataSnapshotFrame(
       metadataScope: {
         snapshot,
         cache,
-        metadata: cache.metadata,
         configFingerprint,
         envFingerprint: resolvePluginMetadataEnvFingerprint(options.env),
         compatiblePolicyHashes,
@@ -472,6 +461,6 @@ registerPluginMetadataSnapshotReaders({
   getCurrentPluginMetadataSnapshot,
 });
 
-registerPluginMetadataProcessMemoLifecycleClear(revokeCurrentPluginMetadataSnapshotScopes, {
+registerPluginMetadataProcessMemoLifecycleClear(clearCurrentPluginMetadataOperation, {
   owner: "operation",
 });

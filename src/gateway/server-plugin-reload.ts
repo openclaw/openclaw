@@ -134,7 +134,6 @@ export async function reloadGatewayPlugins(
     NonNullable<GatewayPostReadySidecarHandle["preparePluginReload"]>
   >[] = [];
   let rollbackConfigEffects: (() => Promise<void>) | undefined;
-  let releaseResourceHandoff: (() => void) | undefined;
   const channels = createPluginReloadChannels({
     channelManager,
     previousRegistry,
@@ -150,7 +149,7 @@ export async function reloadGatewayPlugins(
     isBlockingStopError,
     rethrowServiceStopTimeout,
     includeServiceStopFailure,
-    reserveResourceHandoff,
+    assertResourceHandoff,
     selectResourceHandoff,
     drainInstances,
     drainMemory,
@@ -250,8 +249,8 @@ export async function reloadGatewayPlugins(
       recordWarning(warning);
     }
     await checkpoint();
-    // Reserve and gate new model runs atomically; admitted runs keep their callbacks until settled.
-    releaseResourceHandoff = reserveResourceHandoff(resourceHandoffIds);
+    // Refuse self-reload before stopping the plugin whose callback must finish this request.
+    assertResourceHandoff(resourceHandoffIds);
     const configEffects = params.prepareConfigEffects({
       pluginIds: changedPluginIds,
       channels: channelTargets,
@@ -592,7 +591,6 @@ export async function reloadGatewayPlugins(
             );
           } else {
             // Restored preparation must be able to retain the still-callable instances.
-            releaseResourceHandoff?.();
             resumeInstances();
             await attempt(recoveryErrors, () =>
               services.resumeMemory(memoryReplacement, previousConfig, true),
@@ -691,7 +689,6 @@ export async function reloadGatewayPlugins(
       { cause: failure },
     );
   } finally {
-    releaseResourceHandoff?.();
     // A completed operation never retains an in-progress channel pause. Failed
     // instances keep their own resource/admission fence until a later safe reload.
     channels.release("failed");

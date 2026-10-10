@@ -73,11 +73,9 @@ export function readBundledDiscoveryMode(
 // interleaved isolated scopes (agent execution, doctor lint) from inheriting
 // another root's cached mode; the reads honor the active install-root context.
 const discoveryState = resolveGlobalSingleton<{
-  generation: object;
   memoized?: { key: string; value: BundledDiscoveryMode };
   snapshotModes: WeakMap<object, { value: BundledDiscoveryMode }>;
 }>(Symbol.for("openclaw.bundledDiscoveryMode"), () => ({
-  generation: {},
   snapshotModes: new WeakMap(),
 }));
 
@@ -125,11 +123,7 @@ export function readBundledDiscoveryModeMemoized(
   if (discoveryState.memoized?.key !== key) {
     const owner = getPluginCache();
     const prepared = owner.preparedBundledDiscoveryModes.get(key);
-    if (
-      prepared &&
-      "value" in prepared &&
-      prepared.value.generation === discoveryState.generation
-    ) {
+    if (prepared && "value" in prepared) {
       getPluginCacheRetirementSignal(owner).throwIfAborted();
       discoveryState.memoized = { key, value: prepared.value.value };
     } else {
@@ -173,11 +167,6 @@ export async function prepareBundledDiscoveryMode(
   }
   const cache = owner.preparedBundledDiscoveryModes;
   const key = resolveBundledDiscoveryMemoKey(env);
-  const generation = discoveryState.generation;
-  const current = cache.get(key);
-  if (current && "value" in current && current.value.generation !== generation) {
-    cache.delete(key);
-  }
   const prepared = await preparePluginCacheFact(owner, cache, key, async () => {
     let value: BundledDiscoveryMode;
     if (discoveryState.memoized?.key === key) {
@@ -191,7 +180,7 @@ export async function prepareBundledDiscoveryMode(
           );
       value = parseBundledDiscoveryMode(row ? JSON.parse(row.value_json) : undefined);
     }
-    return { value, generation };
+    return { value };
   });
   const activate = () => {
     prepared.assertCurrent();
@@ -211,8 +200,6 @@ export async function prepareBundledDiscoveryMode(
 export function clearBundledDiscoveryModeMemo(): void {
   discoveryState.memoized = undefined;
   discoveryState.snapshotModes = new WeakMap();
-  // Inactive operation caches must also discard facts completed before this clear.
-  discoveryState.generation = {};
   for (const cache of new Set([getPluginCache(), getProcessPluginCache()])) {
     cache.preparedBundledDiscoveryModes.clear();
   }

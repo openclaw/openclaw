@@ -665,7 +665,7 @@ describe("gateway plugin instance bindings", () => {
       const channelInstance = channelOwner && getPluginInstance(channelOwner);
       expect(channelInstance?.hasRetainedConsumers).toBe(true);
       // Live monitors retain custody, so they cannot refuse replacement admission.
-      expect(() => channelInstance!.reserveReplacement()()).not.toThrow();
+      expect(() => channelInstance!.assertCanReplace()).not.toThrow();
       const channelReload = await rpcReq(socket, "plugins.reload", {
         plugins: [{ pluginId: "instance-binding-channels" }],
       });

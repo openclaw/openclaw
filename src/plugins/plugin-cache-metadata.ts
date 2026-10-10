@@ -32,7 +32,6 @@ type CurrentPluginMetadataCacheState = {
   defaultDiscoveryCompatible: boolean;
   compatiblePolicyHashes: readonly string[] | undefined;
   compatibleConfigFingerprints: readonly string[] | undefined;
-  revision: symbol;
   configIdentities: WeakSet<OpenClawConfig>;
 };
 

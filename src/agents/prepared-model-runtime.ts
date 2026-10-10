@@ -4,7 +4,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { registerRuntimeAuthProfileStoreMutationListener } from "./auth-profiles/runtime-snapshots.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
-import { assertPreparedModelRuntimeAdmissionCanWait } from "./prepared-model-runtime-admission.js";
 import {
   PreparedModelRuntimeAuthPublicationOwner,
   invalidatePreparedModelRuntimeOwnersForAuthMutation,
@@ -249,7 +248,6 @@ export async function publishPreparedModelRuntimeSnapshot(
   const existing = owners.get(ownerKey(input));
   if (existing?.pending) {
     if (!options.force && hasSameLifecycleInput(existing.input, input)) {
-      assertPreparedModelRuntimeAdmissionCanWait(existing);
       return await existing.pending;
     }
   } else {
@@ -352,7 +350,6 @@ async function activateStandalonePreparedModelRuntimeNow(
       }
       const replacement = pendingModelRuntimeReplacement;
       if (replacement) {
-        assertPreparedModelRuntimeAdmissionCanWait();
         await replacement.promise;
       }
     }

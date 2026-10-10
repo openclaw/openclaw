@@ -690,47 +690,6 @@ describe("plugin package facts", () => {
   );
 });
 
-it("lets the last cache borrower own retirement after the requesting scope closes", async () => {
-  const requester = new AsyncWorkScope();
-  const borrower = new AsyncWorkScope();
-  const cache = createPluginCache();
-  const instance = new PluginInstance("cache-borrower");
-  cache.instances.add(instance);
-  const release = retainPluginCache(cache);
-  const entered = createDeferredCore();
-  const finish = createDeferredCore();
-  const cleaned = vi.fn();
-  instance.lifecycle.onDispose(async () => {
-    entered.resolve();
-    await finish.promise;
-    cleaned();
-  });
-  let retirement: ReturnType<typeof retirePluginCache> | undefined;
-  await requester.track(() => {
-    retirement = retirePluginCache(cache);
-    void retirement.catch(() => {});
-  });
-  await requester.drain();
-  let closed = false;
-  const released = borrower.track(release);
-  const drain = borrower.drain().then(() => {
-    closed = true;
-  });
-  try {
-    await Promise.race([entered.promise, retirement]);
-    expect(closed).toBe(false);
-    finish.resolve();
-    await expect(retirement).resolves.toMatchObject({ failures: [] });
-    await drain;
-    expect(cleaned).toHaveBeenCalledOnce();
-    expect(closed).toBe(true);
-  } finally {
-    release();
-    finish.resolve();
-    await Promise.allSettled([retirement, released, drain]);
-  }
-});
-
 it.each([false, true])(
   "owns cache cleanup when retirement runs in a closed request scope (borrowed: %s)",
   async (borrowed) => {
@@ -771,7 +730,6 @@ it("retires a cache released by a borrower captured before package replacement",
         {
           references: Set<object>;
           settled: { resolve: () => void };
-          beginRetirement?: () => void;
         }
       >(),
   );
@@ -806,8 +764,6 @@ it("retires a cache released by a borrower captured before package replacement",
     expect(cleaned).toHaveBeenCalledOnce();
   } finally {
     release();
-    // Unstick the broken implementation's unpublished cleanup after the regression fails.
-    retained.beginRetirement?.();
     finish.resolve();
     await retirement.catch(() => {});
   }

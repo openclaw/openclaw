@@ -146,6 +146,12 @@ hashing. Plugin lifecycle operations prepare fresh metadata in their own cache
 generation. Account health and authentication state are not part of the
 immutable package inventory.
 
+An explicit refresh clears the current operation's discovery cache. Already
+running scopes keep their captured metadata, including enclosing scopes; a new
+operation observes the refreshed inventory. Each process normally owns one
+Gateway. Overlapping independent Gateways in one process are best effort rather
+than coordinated owners of the same inventory.
+
 Native SDK alias resolution retains each importing file's canonical path, root
 membership, and alias targets in that same generation. Alias registration or
 replacement clears those results, as does metadata invalidation; repeated
@@ -264,8 +270,8 @@ The CLI invocation owns one operation cache across config reads, output metadata
 command ownership, nested registration, and actions. Standalone registration uses
 its caller's active generation. Config validation covers every
 workspace; execution uses the original selected workspace snapshot, or shared
-roots when no workspace owner is proven. Exact config/source identities and
-revision checks fence retained registrars. Preparation closes before Commander
+roots when no workspace owner is proven. Prepared registrars keep their captured
+metadata if configuration changes during the operation. Preparation closes before Commander
 actions, while its cache scope lasts through action completion for late imports.
 Changed package files require a new operation; changing activation inputs does
 not retire compatible package facts. SDK alias maps are prepared on first alias

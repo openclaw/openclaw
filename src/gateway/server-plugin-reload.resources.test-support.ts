@@ -216,7 +216,7 @@ async function verifySelfConsumerReload(
     await closing;
     assert(consumer);
     consumer.release();
-    // A refusal on a later instance must unwind reservations already acquired for earlier ones.
+    // A refusal leaves each previous instance available for ordinary work.
     for (const previous of fixture.previousRegistry.plugins) {
       getPluginInstance(previous)?.retainWork()();
     }
@@ -277,7 +277,6 @@ async function verifyOverlappingRetainedWork(createRecoveryFixture: RecoveryFixt
     await Promise.race([reserved.promise, reloading]);
     expect(fixture.firstStop).not.toHaveBeenCalled();
     expect(disposed).toEqual([]);
-    expect(() => retainRuntimePluginWork([old])).toThrow("replacement is in progress");
     first();
     expect(instance.run(() => "old run finishes")).toBe("old run finishes");
     expect(fixture.candidates).toHaveLength(0);
@@ -351,7 +350,6 @@ async function verifyExplicitDrainWait(
     expect(fixture.candidates).toHaveLength(0);
     expect(fixture.firstStop).not.toHaveBeenCalled();
     expect(instance.disposing).toBe(false);
-    expect(() => instance.retainWork()).toThrow("replacement is in progress");
     if (outcome === "cancel") {
       controller.abort(new Error("operator cancelled reload"));
       await vi.advanceTimersByTimeAsync(0);

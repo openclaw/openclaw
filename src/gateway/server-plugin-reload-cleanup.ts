@@ -404,21 +404,12 @@ export function createPluginReloadCleanup({
       pendingServiceCleanup && pendingServiceCleanup.error !== error
         ? new AggregateError([pendingServiceCleanup.error, error], "Previous plugin cleanup failed")
         : error,
-    reserveResourceHandoff: (pluginIds: ReadonlySet<string>) => {
-      const releases: Array<() => void> = [];
-      const release = () => releases.splice(0).forEach((close) => close());
-      try {
-        for (const record of previousRegistry.plugins) {
-          const instance = pluginIds.has(record.id) && getPluginInstance(record);
-          if (instance) {
-            releases.push(instance.reserveReplacement());
-          }
+    assertResourceHandoff: (pluginIds: ReadonlySet<string>) => {
+      for (const record of previousRegistry.plugins) {
+        if (pluginIds.has(record.id)) {
+          getPluginInstance(record)?.assertCanReplace();
         }
-      } catch (error) {
-        release();
-        throw error;
       }
-      return release;
     },
     drainInstances,
     drainMemory: async (drain: () => Promise<{ errors: readonly unknown[] }>) => {

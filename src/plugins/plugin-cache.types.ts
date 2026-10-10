@@ -33,4 +33,4 @@ export interface PluginCache
   [Symbol.asyncDispose](): Promise<void>;
 }
 
-export type PluginCacheScope = { cache: PluginCache; parent?: PluginCacheScope };
+export type PluginCacheScope = { cache: PluginCache };
