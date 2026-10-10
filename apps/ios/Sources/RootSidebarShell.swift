@@ -175,8 +175,9 @@ struct RootSidebarShell<Sidebar: View, Detail: View>: View {
             .overlay {
                 OpenClawSidebarPalette.background
                     .opacity(self.isDrawerLayout ? RootSidebarShellMetric.maximumDimmingOpacity * Double(progress) : 0)
+                    // Color is decorative. Explicitly hiding this overlay from
+                    // accessibility can obscure native destination hit targets.
                     .allowsHitTesting(false)
-                    .accessibilityHidden(true)
             }
             .clipShape(shape)
             .overlay {
