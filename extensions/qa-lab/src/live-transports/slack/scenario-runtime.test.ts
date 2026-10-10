@@ -69,7 +69,6 @@ function createMpimRuntime(
   };
   return {
     env: environment as never,
-    rawEnvironment: environment,
     marker: markerText,
     postMessage,
     writes: environment.readMessageWrites,
@@ -127,48 +126,6 @@ describe("Slack scenario runtime capture merge", () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.clearAllMocks();
-  });
-
-  it("sends through the native receipt owner even when the scenario assertion fails", async () => {
-    const runtime = createMpimRuntime([]);
-    const send = vi.fn().mockResolvedValue({
-      id: "1.000000",
-      channelId: "C_MPIM",
-      actor: "driver",
-    });
-    const waitForReply = vi.fn().mockResolvedValue({});
-    const environment = {
-      ...runtime.rawEnvironment,
-      channelE2e: { send, waitForReply },
-      configureScenario: async () => ({
-        cfg: {},
-        primaryModel: "mock-openai/gpt-5.6-luna",
-        run: {
-          kind: "message",
-          input: "owned fixture",
-          matchText: runtime.marker,
-          expectReply: true,
-          verify: () => {
-            throw new Error("intentional assertion failure");
-          },
-        },
-      }),
-    };
-    await expect(
-      runSlackScenario(environment as never, slackQaMpimAppMentionDedupeScenario),
-    ).rejects.toThrow("intentional assertion failure");
-    expect(send).toHaveBeenCalledWith({
-      text: "owned fixture",
-      mention: false,
-      threadId: undefined,
-    });
-    expect(waitForReply).toHaveBeenCalledWith({
-      afterMessageId: "1.000000",
-      threadId: undefined,
-      textIncludes: runtime.marker,
-      timeoutMs: 1_000,
-    });
-    expect(runtime.postMessage).not.toHaveBeenCalled();
   });
 
   it.each([

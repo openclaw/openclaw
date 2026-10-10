@@ -68,6 +68,7 @@ async function runSlackMessageScenario(
 ) {
   const { scenario } = environment;
   let scenarioContext = environment.context;
+  let ownedRequest: { cursor: number; messageId: string } | undefined;
   try {
     const beforeRunResult = await run.beforeRun?.(environment.context);
     const beforeRunDetails =
@@ -98,6 +99,9 @@ async function runSlackMessageScenario(
           text: run.input,
           threadTs,
         });
+    if (owned) {
+      ownedRequest = { cursor: messageWriteCursor, messageId: owned.id };
+    }
     const requestThreadTs =
       (typeof beforeRunResult === "object" ? beforeRunResult?.inputThreadTs : undefined) ?? sent.ts;
     const observation = {
@@ -139,14 +143,6 @@ async function runSlackMessageScenario(
       threadTs: requestThreadTs,
       timeoutMs: scenario.timeoutMs,
     });
-    if (owned) {
-      await environment.channelE2e!.waitForReply({
-        afterMessageId: sent.ts,
-        threadId: threadTs,
-        textIncludes: run.matchText,
-        timeoutMs: scenario.timeoutMs,
-      });
-    }
     run.verify?.(reply.message, { requestThreadTs, sentTs: sent.ts });
     if (run.settleObservedMs) {
       await observeSlackScenarioMessages({
@@ -179,7 +175,17 @@ async function runSlackMessageScenario(
       ),
     };
   } finally {
-    await run.cleanup?.(scenarioContext);
+    try {
+      if (ownedRequest && environment.recordScenarioMessages) {
+        const messages = await environment.readMessageWrites(ownedRequest.cursor);
+        await environment.recordScenarioMessages(
+          ownedRequest.messageId,
+          messages.map((message) => message.ts).filter((ts): ts is string => Boolean(ts)),
+        );
+      }
+    } finally {
+      await run.cleanup?.(scenarioContext);
+    }
   }
 }
 

@@ -412,7 +412,7 @@ export async function createSlackQaTransportAdapter(
         e2eSessions.push(e2e);
         await e2e.driver.doctor();
         return {
-          ...(await scenarioEnvironment.prepareFlow(input, e2e.driver)),
+          ...(await scenarioEnvironment.prepareFlow(input, e2e.driver, e2e.recordScenarioMessages)),
           channelE2e: e2e.driver,
         };
       }

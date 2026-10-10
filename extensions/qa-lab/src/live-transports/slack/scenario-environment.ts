@@ -6,6 +6,7 @@ import {
   patchLiveQaGatewayConfig,
   readLiveQaGatewayConfig,
 } from "../shared/live-gateway-config.runtime.js";
+import type { SlackChannelE2eSession } from "./channel-e2e.js";
 import { buildSlackQaConfig } from "./slack-live.config.js";
 import type {
   SlackAuthIdentity,
@@ -35,6 +36,7 @@ export type SlackQaScenarioEnvironment = {
   getMessageWriteCursor: () => Promise<number>;
   observedMessages: SlackObservedMessage[];
   readMessageWrites: (afterRequestEventId: number) => Promise<SlackObservedMessage[]>;
+  recordScenarioMessages?: SlackChannelE2eSession["recordScenarioMessages"];
   scenario: SlackQaScenarioMetadata;
   stopGateway: (preserveDebugArtifacts: boolean) => Promise<void>;
   sutAccountId: string;
@@ -60,6 +62,7 @@ export function createSlackQaScenarioEnvironment(params: {
   const prepareFlow = async (
     input: FlowPreparationInput,
     channelE2e?: QaChannelE2eDriver,
+    recordScenarioMessages?: SlackChannelE2eSession["recordScenarioMessages"],
   ): Promise<{ slackScenarioContext: SlackQaScenarioEnvironment }> => {
     const context = {
       channelId: params.channelId,
@@ -72,6 +75,7 @@ export function createSlackQaScenarioEnvironment(params: {
       slackScenarioContext: {
         channelId: params.channelId,
         channelE2e,
+        recordScenarioMessages,
         configureScenario: async (implementation: SlackQaScenarioImplementation) => {
           if (!input.primaryModel) {
             throw new Error("Slack QA module flow requires a primary model");
