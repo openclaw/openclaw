@@ -183,10 +183,11 @@ export async function retireSessionSqliteRecovery(params: {
     env: params.env,
     operation: "update recovery cleanup",
     run: async (authority) => {
-      const { report, references, manifestPaths } = collectUpdateCleanupInventory({
-        cfg: await params.readConfig(),
-        env: params.env,
-      });
+      const { report, references, manifestPaths, captureIdentities } =
+        collectUpdateCleanupInventory({
+          cfg: await params.readConfig(),
+          env: params.env,
+        });
       authority.assertCurrent();
       if (
         report.stateDir !== params.preview.stateDir ||
@@ -321,7 +322,7 @@ export async function retireSessionSqliteRecovery(params: {
       });
       await retireUpdateCaptures({
         selected: captures,
-        identities: rechecked.captureIdentities,
+        identities: captureIdentities,
         assertCurrent: () => authority.assertCurrent(),
       });
       return summarizeRecoveryCleanup(

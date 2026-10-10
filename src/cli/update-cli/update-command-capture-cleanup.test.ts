@@ -38,11 +38,13 @@ function writeCapture(root: string, name: string, sealed: boolean, marked = true
   return directory;
 }
 
-/** Peanutto-shaped history: finished updates, one failed baseline, the latest, and a live run. */
+/** Finished updates, one failed baseline, the latest update, a live run, and unattributed entries. */
 async function withCaptureHistory(
   run: (captures: Record<string, string>, root: string) => Promise<void>,
 ) {
-  const stateDir = fs.realpathSync(dirs.make("update-capture-cleanup-"));
+  // The capture root is a sibling of the state directory; keep both under one tracked parent.
+  const stateDir = path.join(fs.realpathSync(dirs.make("update-capture-cleanup-")), "state");
+  fs.mkdirSync(stateDir);
   const env = { OPENCLAW_STATE_DIR: stateDir };
   await withEnvAsync(
     { ...env, OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json") },

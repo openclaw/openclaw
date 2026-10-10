@@ -163,7 +163,7 @@ export function collectUpdateCaptureInventory(params: {
   return { artifacts, identities };
 }
 
-/** Caller holds the cleanup maintenance lock and has revalidated the selection after consent. */
+/** Caller holds the cleanup maintenance lock and passes identities from the confirmed selection. */
 export async function retireUpdateCaptures(params: {
   selected: RecoveryCleanupArtifact[];
   identities: ReadonlyMap<string, CaptureIdentity>;
@@ -183,6 +183,13 @@ export async function retireUpdateCaptures(params: {
       ) {
         throw new Error("update capture changed after selection");
       }
+      // The marker goes last: an interrupted removal stays attributed, so a rerun finishes it.
+      for (const name of fs.readdirSync(item.path)) {
+        if (name !== UPDATE_CAPTURE_PRIVACY_MARKER) {
+          await fs.promises.rm(path.join(item.path, name), { recursive: true });
+        }
+      }
+      params.assertCurrent();
       await fs.promises.rm(item.path, { recursive: true });
       item.outcome = "removed";
       item.removedBytes = item.bytes;
