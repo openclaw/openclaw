@@ -46,8 +46,7 @@ it("binds iterators immediately and holds custody until exhaustion or explicit r
   const db = open();
   const statement = db.prepare("SELECT ? AS value UNION ALL SELECT 2");
   expect(() => {
-    // @ts-expect-error -- Exercise native validation of an unsupported binding value.
-    statement.iterate(Symbol("invalid"));
+    Reflect.apply(statement.iterate.bind(statement), undefined, [Symbol("invalid")]);
   }).toThrow();
   expect(hasPendingSqliteNativeExecution(db)).toBe(false);
   const rows = statement.iterate(1);
@@ -89,8 +88,7 @@ it.each(["run", "get", "all", "bind-error", "close"] as const)(
       }
     } else if (method === "bind-error") {
       expect(() => {
-        // @ts-expect-error -- Exercise native validation of an unsupported binding value.
-        statement.get(Symbol("invalid"));
+        Reflect.apply(statement.get.bind(statement), undefined, [Symbol("invalid")]);
       }).toThrow();
     } else {
       statement[method](0);
@@ -200,13 +198,15 @@ it.each(["run", "get", "all", "iterate"] as const)(
       let outcome: unknown;
       try {
         if (method === "iterate") {
-          // @ts-expect-error -- Forward explicit undefined for this backend's own validation.
-          const rows = statement.iterate(undefined, 42);
+          const rows: ReturnType<typeof statement.iterate> = Reflect.apply(
+            statement.iterate.bind(statement),
+            undefined,
+            [undefined, 42],
+          );
           outcome = rows.next();
           rows.return?.();
         } else {
-          // @ts-expect-error -- Forward explicit undefined for this backend's own validation.
-          outcome = statement[method](undefined, 42);
+          outcome = Reflect.apply(statement[method].bind(statement), undefined, [undefined, 42]);
         }
       } catch (error) {
         outcome = error instanceof Error ? error.message : error;
