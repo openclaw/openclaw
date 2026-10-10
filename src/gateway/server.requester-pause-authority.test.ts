@@ -22,7 +22,10 @@ import { listSessionPendingInputs } from "../config/sessions/session-accessor.pe
 import { registerAgentRunContext } from "../infra/agent-run-registry.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { dispatchGatewayRequestInProcessRaw } from "./server-in-process-dispatch.js";
-import { dispatchGatewayMethodInProcess } from "./server-plugin-in-process-dispatch.js";
+import {
+  captureOperatorToolGatewayContinuationContext,
+  dispatchGatewayMethodInProcess,
+} from "./server-plugin-in-process-dispatch.js";
 import { createOperatorClient } from "./server-plugin-in-process-dispatch.test-support.js";
 import { startGatewayServerHarness, type GatewayServerHarness } from "./server.e2e-ws-harness.js";
 import {
@@ -199,6 +202,11 @@ describe("requester pause authority at the Gateway effect", () => {
             );
             expect(await recorder.persistApproved()).toMatchObject({ appended: true });
             if (runId === originalRunId) {
+              const completion = expectDefined(
+                await captureOperatorToolGatewayContinuationContext(),
+                "registered completion source",
+              );
+              runs.bindCompletionAuthority(currentChild(), completion);
               expect(
                 await markRequesterTurnYielded({
                   requesterSessionKey: parent,
@@ -247,32 +255,34 @@ describe("requester pause authority at the Gateway effect", () => {
         };
       });
       const dispatch = (runId: string, target: string, message: string) =>
-        withRequesterCronAuthority(
-          {
-            requesterSessionKey: parent,
-            requesterSessionId: parentId,
-            requesterAgentId: "main",
-            batch: [currentChild()],
-            rearmGeneration: currentChild().requesterSettleWake?.rearmGeneration,
-            runId,
-            isCurrent: () => true,
-          },
-          () =>
-            dispatchGatewayMethodInProcess(
-              "agent",
-              {
-                sessionKey: target,
-                message,
-                idempotencyKey: runId,
-                deliver: false,
-                inputProvenance: {
-                  kind: "inter_session",
-                  sourceTool: "subagent_settle",
-                  sourceSessionKey: child.childSessionKey,
+        runs.runWithCompletionBatchAuthority([currentChild()], () =>
+          withRequesterCronAuthority(
+            {
+              requesterSessionKey: parent,
+              requesterSessionId: parentId,
+              requesterAgentId: "main",
+              batch: [currentChild()],
+              rearmGeneration: currentChild().requesterSettleWake?.rearmGeneration,
+              runId,
+              isCurrent: () => true,
+            },
+            () =>
+              dispatchGatewayMethodInProcess(
+                "agent",
+                {
+                  sessionKey: target,
+                  message,
+                  idempotencyKey: runId,
+                  deliver: false,
+                  inputProvenance: {
+                    kind: "inter_session",
+                    sourceTool: "subagent_settle",
+                    sourceSessionKey: child.childSessionKey,
+                  },
                 },
-              },
-              { expectFinal: true, resolveGatewayContext: () => context },
-            ),
+                { expectFinal: true, resolveGatewayContext: () => context },
+              ),
+          ),
         );
       try {
         expect(
@@ -398,6 +408,7 @@ describe("requester pause authority at the Gateway effect", () => {
         }
       } finally {
         revokeRequesterCronAuthority(parent);
+        runs.releaseCompletionAuthority(currentChild());
         await mutateSubagentRuns(
           [child.runId],
           () => ({
