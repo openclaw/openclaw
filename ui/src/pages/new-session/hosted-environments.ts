@@ -4,7 +4,7 @@ import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-sessio
 import { buildQualifiedChatModelValue } from "../../lib/chat/model-ref.ts";
 import { resolveModelRuntimeEntry } from "../../lib/model-runtime-choice.ts";
 import type { DraftCloudProfile } from "./discovery.ts";
-import type { NewSessionModelControl } from "./model-control.ts";
+import type { NewSessionModelSelection } from "./model-selection.ts";
 import {
   resolveDraftModelTarget,
   resolveDraftDevicePlacementUnsupportedReason,
@@ -75,17 +75,17 @@ export function resolveHostEnvironmentChoice(
     : undefined;
 }
 
-export function environmentPlacementRuntime(control: NewSessionModelControl) {
+export function environmentPlacementRuntime(control: NewSessionModelSelection) {
   return control.hostEnvironmentRuntime()?.runtime ?? control.resolveAgentRuntime();
 }
-export function environmentDeviceDisabledReason(control: NewSessionModelControl) {
+export function environmentDeviceDisabledReason(control: NewSessionModelSelection) {
   return (
     control.hostEnvironmentDisabledReason() ??
     resolveDraftDevicePlacementUnsupportedReason(environmentPlacementRuntime(control))
   );
 }
 export function environmentCloudDisabledReason(
-  control: NewSessionModelControl,
+  control: NewSessionModelSelection,
   profile?: DraftCloudProfile,
 ) {
   return (

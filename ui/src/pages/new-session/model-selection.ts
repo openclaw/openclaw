@@ -31,6 +31,7 @@ export abstract class NewSessionModelSelection {
     | { model: string; runtime: NonNullable<ModelRuntimeEntry["agentRuntime"]> }
     | undefined;
   abstract selectModel(model: string, agentRuntime?: string): void;
+  abstract hostEnvironmentDisabledReason(): string | undefined;
 
   selectHostedEnvironment(id: string): boolean {
     const choice = this.hostedEnvironments().find((entry) => entry.id === id);
