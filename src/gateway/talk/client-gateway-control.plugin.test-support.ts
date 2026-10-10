@@ -14,13 +14,13 @@ export type TalkGatewayControlOwnerTestFixture = {
   readLogicalSessionStatus: () => "open" | "closed" | undefined;
 };
 
-export function createTalkGatewayControlOwnerTestFixture(
+export async function createTalkGatewayControlOwnerTestFixture(
   voiceSessionId: string,
-): TalkGatewayControlOwnerTestFixture {
+): Promise<TalkGatewayControlOwnerTestFixture> {
   const agentId = "main";
   const sessionKey = "agent:main:main";
   const events: Array<{ type: string; payload: unknown }> = [];
-  createOrResumeClientVoiceSession({
+  await createOrResumeClientVoiceSession({
     agentId,
     sessionKey,
     voiceSessionId,

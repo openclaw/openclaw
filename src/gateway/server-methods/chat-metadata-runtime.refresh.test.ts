@@ -4,7 +4,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from "vite
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles.js";
 import { setPreparedModelRuntimeStartupStatus } from "../../agents/prepared-model-runtime.startup-status.js";
-import { handleGatewayProbeRequest } from "../server-http-probes.js";
+import { createGatewayProbeHandler } from "../server-http-probes.js";
 import {
   createChatMetadataHarness,
   createChatMetadataOwner,
@@ -15,8 +15,9 @@ describe("gateway chat metadata refresh", () => {
     setPreparedModelRuntimeStartupStatus(undefined);
   });
 
+  const handleProbeRequest = createGatewayProbeHandler({});
   const server = createServer((req, res) => {
-    void handleGatewayProbeRequest(
+    void handleProbeRequest(
       req,
       res,
       "/health",

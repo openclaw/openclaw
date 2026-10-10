@@ -59,7 +59,7 @@ function startupProbeBody(result: StartupResult, includeDetails: boolean): strin
 }
 
 /** Handles live/ready/startup probe endpoints before normal gateway routing. */
-export async function handleGatewayProbeRequest(
+async function handleGatewayProbeRequest(
   req: IncomingMessage,
   res: ServerResponse,
   requestPath: string,
@@ -134,4 +134,33 @@ export async function handleGatewayProbeRequest(
   res.setHeader("Content-Length", String(Buffer.byteLength(body)));
   res.end(method === "HEAD" ? undefined : body);
   return true;
+}
+
+/** Binds listener-lifetime probe dependencies so request routing passes only per-request inputs. */
+export function createGatewayProbeHandler(deps: {
+  rateLimiter?: AuthRateLimiter;
+  getReadiness?: ReadinessChecker;
+  getStartup?: StartupChecker;
+  publishedPort?: number;
+}) {
+  return (
+    req: IncomingMessage,
+    res: ServerResponse,
+    requestPath: string,
+    resolvedAuth: ResolvedGatewayAuth,
+    trustedProxies: string[],
+    allowRealIpFallback: boolean,
+  ): Promise<boolean> =>
+    handleGatewayProbeRequest(
+      req,
+      res,
+      requestPath,
+      resolvedAuth,
+      trustedProxies,
+      allowRealIpFallback,
+      deps.rateLimiter,
+      deps.getReadiness,
+      deps.getStartup,
+      deps.publishedPort,
+    );
 }

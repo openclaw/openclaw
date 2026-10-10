@@ -137,7 +137,7 @@ describe("GPT-Live offer origin policy", () => {
     const gatewayPort = await listen(gatewayServer, "0.0.0.0");
     const endpoint = `http://${gatewayHost}:${gatewayPort}/plugins/openai/realtime/calls`;
     const createReservation = async (
-      gateway?: ReturnType<typeof createTalkGatewayControlOwnerTestFixture>,
+      gateway?: Awaited<ReturnType<typeof createTalkGatewayControlOwnerTestFixture>>,
     ) => {
       const session = await realtime.broker.createBrowserSession(
         {
@@ -169,10 +169,10 @@ describe("GPT-Live offer origin policy", () => {
         body,
         ...(body instanceof ReadableStream ? { duplex: "half" as const } : {}),
       } as RequestInit & { duplex?: "half" });
-    const acceptedGateway = createTalkGatewayControlOwnerTestFixture(
+    const acceptedGateway = await createTalkGatewayControlOwnerTestFixture(
       `voice-accepted-${randomUUID()}`,
     );
-    const revokedGateway = createTalkGatewayControlOwnerTestFixture(
+    const revokedGateway = await createTalkGatewayControlOwnerTestFixture(
       `voice-revoked-${randomUUID()}`,
     );
     let heldBody: ReadableStreamDefaultController<Uint8Array> | undefined;
@@ -311,7 +311,7 @@ describe("GPT-Live offer origin policy", () => {
         }),
     ) as unknown as typeof fetch;
     const { realtime } = createBroker({ fetchImpl, getConfig: () => cfg });
-    const gateway = createTalkGatewayControlOwnerTestFixture("voice-revoked-origin");
+    const gateway = await createTalkGatewayControlOwnerTestFixture("voice-revoked-origin");
     const reservation = await realtime.broker.createBrowserSession(
       {
         providerConfig: {},

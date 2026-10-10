@@ -130,6 +130,23 @@ export function assertGatewayRuntimeSecurityConfig(
   }
 }
 
+/** Reload candidates resolve auth from their own config and env before the shared policy runs. */
+export function assertGatewayCandidateSecurityConfig(
+  params: Omit<Parameters<typeof assertGatewayRuntimeSecurityConfig>[0], "resolvedAuth"> & {
+    env?: NodeJS.ProcessEnv;
+  },
+): void {
+  const { env, ...policy } = params;
+  assertGatewayRuntimeSecurityConfig({
+    ...policy,
+    resolvedAuth: resolveGatewayAuth({
+      authConfig: policy.cfg.gateway?.auth,
+      tailscaleMode: policy.tailscaleMode,
+      env,
+    }),
+  });
+}
+
 export async function resolveGatewayRuntimeConfig(params: {
   cfg: OpenClawConfig;
   port: number;

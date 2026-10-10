@@ -167,7 +167,7 @@ describe("scripts/docker/setup.sh", () => {
   });
 
   it("rejects an older image before config writes or Gateway replacement", async () => {
-        await resetDockerLog(sandbox);
+    await resetDockerLog(sandbox);
     const envPath = join(sandbox.rootDir, ".env");
     const savedEnv = "OPENCLAW_IMAGE=old:selected\n";
     await writeFile(envPath, savedEnv);
@@ -183,7 +183,7 @@ describe("scripts/docker/setup.sh", () => {
   });
 
   it("launches the verified image identity while preserving the saved image selection", async () => {
-        await resetDockerLog(sandbox);
+    await resetDockerLog(sandbox);
     const result = runDockerSetup(sandbox, { OPENCLAW_IMAGE: "fixture:selected" });
     expect(result.status, result.stderr).toBe(0);
     await expect(stat(`${sandbox.logPath}-volume`)).rejects.toMatchObject({ code: "ENOENT" });
@@ -200,7 +200,7 @@ describe("scripts/docker/setup.sh", () => {
     { allowedOrigins: [] },
     { allowedOrigins: ["https://admin.example.com", "http://localhost:18888"] },
   ])("leaves omitted or explicit browser origins unchanged (%j)", async ({ allowedOrigins }) => {
-        await resetDockerLog(sandbox);
+    await resetDockerLog(sandbox);
     const configDir = join(
       sandbox.rootDir,
       `config-origins-${allowedOrigins?.length ?? "omitted"}`,
@@ -835,7 +835,7 @@ describe("scripts/docker/setup.sh", () => {
     ])(
       "preserves selected image startup ($name)",
       async ({ name, help, helpStatus, expectedStatus, mapped }) => {
-                const parsed = parse(await readFile(join(repoRoot, "docker-compose.yml"), "utf8")) as {
+        const parsed = parse(await readFile(join(repoRoot, "docker-compose.yml"), "utf8")) as {
           services: { "openclaw-gateway": { command: string[] } };
         };
         const commandRoot = join(sandbox.rootDir, `compose-command-${name}`);
