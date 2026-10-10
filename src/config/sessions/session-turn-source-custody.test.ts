@@ -12,8 +12,7 @@ import { readSessionPendingInputByKey } from "./session-accessor.sqlite-pending-
 import { readTranscriptEventRows } from "./session-accessor.sqlite-read.js";
 import { persistSessionTranscriptTurn } from "./session-accessor.transcript-turn.js";
 import { createSessionCompoundWorkerFixture as fixture } from "./session-compound-worker.test-support.js";
-import { bindUserTurnInputActor } from "./session-input-actor.js";
-import { acquireSessionInputActor } from "./session-input-actor.js";
+import { acquireSessionInputActor, bindUserTurnInputActor } from "./session-input-actor.js";
 import { withSessionTranscriptSourcePublication } from "./transcript-write-context.js";
 
 afterEach(() => {

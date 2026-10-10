@@ -35,8 +35,7 @@ import {
   captureNativeIncognitoSessionActorSources,
   captureNativeIncognitoSessionActorTarget,
 } from "./session-actor-native-incognito.js";
-import { bindUserTurnInputActor } from "./session-input-actor.js";
-import { acquireSessionInputActor } from "./session-input-actor.js";
+import { acquireSessionInputActor, bindUserTurnInputActor } from "./session-input-actor.js";
 import { addSessionMember, removeSessionMember } from "./session-sharing-store.native.js";
 import { deleteSessionTranscriptIndexInTransaction } from "./session-transcript-index.js";
 import { buildRestartRecoveryExpectedState } from "./session-transcript-turn-state.js";
