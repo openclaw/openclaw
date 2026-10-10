@@ -420,8 +420,13 @@ function budgetCompactionSummary(
       bodyBudget: maxChars,
       bodyTrimmed: false,
       suffixTrimmed: false,
-      qualityRetentionInfeasible: false,
     };
+  }
+
+  // The fitter must search above the retention minimum, not price an unrelated
+  // head cut whose CJK density can exceed a larger candidate that keeps the facts.
+  if (retentionPlan && retentionPlan.minimumChars > maxChars) {
+    return undefined;
   }
 
   const bodyCapacity = retentionPlan ? maxChars : summaryBody.length;
@@ -442,7 +447,6 @@ function budgetCompactionSummary(
     bodyBudget: bodySlot,
     bodyTrimmed: rendered ? rendered.trimmed : cappedBody.length < summaryBody.length,
     suffixTrimmed: cappedSuffix.length < suffix.text.length,
-    qualityRetentionInfeasible: retentionPlan !== null && retentionPlan.minimumChars > maxChars,
   };
 }
 
@@ -1068,15 +1072,6 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
 
         if (!qualityGuardEnabled) {
           return compactionResult(finalized.summary);
-        }
-        if (finalized.qualityRetentionInfeasible) {
-          log.warn(
-            "Compaction safeguard: required quality facts exceed finalized artifact budget; " +
-              `requiredChars>${MAX_COMPACTION_SUMMARY_CHARS} identifierCount=${identifiers.length}`,
-          );
-          return cancelCompaction(
-            "Compaction safeguard required facts exceed the finalized summary budget.",
-          );
         }
         const quality = auditSummaryQuality({
           summary: finalized.summary,

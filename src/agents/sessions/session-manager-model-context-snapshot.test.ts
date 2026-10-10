@@ -22,7 +22,7 @@ import {
   onInternalDiagnosticEvent,
   waitForDiagnosticEventsDrained,
 } from "../../infra/diagnostic-events.js";
-import { readGlobalSingleton } from "../../shared/global-singleton.js";
+import { withPluginRuntimePluginScope } from "../../plugins/runtime/gateway-request-scope.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
   getOpenClawAgentDatabaseIfOpen,
@@ -197,28 +197,19 @@ it("reads full durable context through workers and preserves the deprecated sync
     if (!seeded.anchor) {
       throw new Error("Missing initial transcript anchor");
     }
-    const warned = readGlobalSingleton(Symbol.for("openclaw.sessionPersistenceDeprecations"));
-    if (!(warned instanceof Set)) {
-      throw new Error("Missing session persistence warning budget");
-    }
-    const warningKey = "SessionManager.readSessionContext";
-    const previouslyWarned = warned.delete(warningKey);
     const warn = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
     let expected: unknown;
     try {
-      expected = SessionManager.readSessionContext(target, (messages) => [...messages]);
-      expect(SessionManager.readSessionContext(target, () => 7)).toBe(7);
+      withPluginRuntimePluginScope({ pluginId: "session-context-compat" }, () => {
+        expected = SessionManager.readSessionContext(target, (messages) => [...messages]);
+        expect(SessionManager.readSessionContext(target, () => 7)).toBe(7);
+      });
       expect(warn).toHaveBeenCalledExactlyOnceWith(
         expect.stringContaining("readSessionContextAsync"),
         { code: "DEP_SESSION_PERSISTENCE", type: "DeprecationWarning" },
       );
     } finally {
       warn.mockRestore();
-      if (previouslyWarned) {
-        warned.add(warningKey);
-      } else {
-        warned.delete(warningKey);
-      }
     }
     const prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
     const exec = vi.spyOn(DatabaseSync.prototype, "exec");

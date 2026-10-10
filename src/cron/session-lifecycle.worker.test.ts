@@ -18,7 +18,7 @@ import {
   loadTranscriptEvents,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
-import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.js";
+import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import * as maintenanceReads from "../config/sessions/session-entry-read-maintenance.js";
 import * as sessionReads from "../config/sessions/session-entry-read-runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";

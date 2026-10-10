@@ -38,6 +38,37 @@ function claudeTextDelta(text: string, index?: number | string) {
 }
 
 describe("createCliJsonlStreamingParser events", () => {
+  it("does not start interrupted tool input when a later message reuses its index for text", () => {
+    const starts: CliToolUseStartDelta[] = [];
+    const parser = createCliJsonlStreamingParser({
+      backend: { command: "fixture", output: "jsonl", jsonlDialect: "claude-stream-json" },
+      providerId: "fixture-cli",
+      onAssistantDelta: () => {},
+      onToolUseStart: (delta) => starts.push(delta),
+    });
+    parser.push(
+      joinJsonlFrames(
+        claudeStreamEvent({ type: "message_start", message: { id: "interrupted" } }),
+        claudeBlockStart({ type: "tool_use", id: "abandoned", name: "Write", input: {} }, 0),
+        claudeStreamEvent({
+          type: "content_block_delta",
+          index: 0,
+          delta: { type: "input_json_delta", partial_json: '{"content":"unfinished\\n' },
+        }),
+        claudeStreamEvent({ type: "message_start", message: { id: "recovered" } }),
+        claudeBlockStart({ type: "text", text: "" }, 0),
+        claudeTextDelta("Recovered.", 0),
+        claudeStreamEvent({ type: "content_block_stop", index: 0 }),
+        claudeMessageStop(),
+        { type: "result", subtype: "success", result: "Recovered." },
+        "",
+      ),
+    );
+    parser.finish();
+    expect(starts).toEqual([]);
+    expect(parser.getOutput()?.text).toBe("Recovered.");
+  });
+
   it.each([
     {
       name: "Write",

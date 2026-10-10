@@ -30,6 +30,7 @@ import {
 } from "../../test-helpers/chat-model.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
+import { makeUiSettings } from "../../test-helpers/settings-node.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import {
   getChatAttachmentDataUrl,
@@ -454,20 +455,12 @@ function createChatHeaderState(
     sessionsResult: initialSessionsResult,
     chatModelCatalog: catalog,
     client,
-    settings: {
-      gatewayUrl: "",
-      token: "",
+    settings: makeUiSettings("", {
       locale: "en",
-      sessionKey: "main",
-      lastActiveSessionKey: "main",
-      theme: "claw",
       themeMode: "dark",
-      navCollapsed: false,
       navWidth: 280,
-      sidebarEntries: [],
       chatShowThinking: false,
-      chatShowToolCalls: true,
-    },
+    }),
     chatMessage: "",
     chatStream: null,
     chatStreamStartedAt: null,

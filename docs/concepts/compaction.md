@@ -27,7 +27,9 @@ New configs default `agents.defaults.compaction.mode` to `"safeguard"` (stricter
 </Note>
 
 With the built-in safeguard quality guard enabled, OpenClaw applies the final
-summary budget before validation. Required headings must remain in the retained
+summary budget before validation. It trims optional prose while preserving required
+facts, using the shared CJK-aware token estimate to fit the receiving request.
+Required headings must remain in the retained
 generated body, while pending asks and exact identifiers must remain in the
 exact text that would be stored. Invalid output gets only the configured number
 of corrective attempts. If no finalized summary passes, compaction stops before
