@@ -753,7 +753,6 @@ describe("managed service update handoff", () => {
           string[],
           { env: NodeJS.ProcessEnv; detached?: boolean; cwd?: string },
         ];
-        const scriptIndex = systemd ? 5 : 0;
         expect(path.isAbsolute(result.logPath)).toBe(true);
         tempDirs.add(path.dirname(result.logPath));
         const helperParams = JSON.parse(
