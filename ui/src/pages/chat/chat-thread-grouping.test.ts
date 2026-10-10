@@ -59,6 +59,25 @@ function signed(text: string, phase: string) {
 }
 beforeEach(() => resetChatThreadState());
 
+describe("duplicate display counts", () => {
+  it.each([2, 3])(
+    "counts %s copies without annotating input wrappers or inflating a replay",
+    (copies) => {
+      const items = Array.from({ length: copies }, (_, index) => ({
+        kind: "message" as const,
+        key: `copy:${index}`,
+        message: message("assistant", "Same progress", index + 1),
+      }));
+      const before = structuredClone(items);
+      const first = groupMessages(items);
+      const replay = groupMessages(items);
+      expect(first).toMatchObject([{ kind: "group", messages: [{ duplicateCount: copies }] }]);
+      expect(replay).toEqual(first);
+      expect(items).toEqual(before);
+    },
+  );
+});
+
 describe("queued input group continuity", () => {
   it("keeps each queued message in the same row through acceptance and persistence", () => {
     const queue: ChatQueueItem[] = ["First queued input", "Second queued input"].map(

@@ -4,6 +4,7 @@ import { asNullableRecord as asRecord } from "@openclaw/normalization-core/recor
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { CHAT_PENDING_INPUT_MESSAGE_PREFIX } from "../../../../packages/gateway-protocol/src/schema/chat-history-constants.js";
 import { stripInboundMetadata } from "../../../../src/auto-reply/reply/strip-inbound-meta.js";
+import { extractCanvasShortcodes } from "../../../../src/chat/canvas-render.js";
 import { resolveToolUseId } from "../../../../src/chat/tool-content.js";
 import type { ChatItem, ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { extractTextCached, readTranscriptMediaEntries } from "../../lib/chat/message-extract.ts";
@@ -26,7 +27,11 @@ import {
   resolveSourceMessageId,
   type ChatMessageRecovery,
 } from "./chat-message-recovery.ts";
-import { chatItemStartsUserTurn, safeNormalizeMessage } from "./chat-turn-boundary.ts";
+import {
+  chatItemStartsDisplayTurn,
+  chatItemStartsUserTurn,
+  safeNormalizeMessage,
+} from "./chat-turn-boundary.ts";
 import { buildLocalUserMessage } from "./user-message-content.ts";
 
 export function appendCanvasBlockToAssistantMessage(
@@ -65,6 +70,162 @@ export function appendCanvasBlockToAssistantMessage(
   };
 }
 
+function removeCanvasPreviewFromAssistantMessage(
+  message: unknown,
+  preview: CanvasToolPreview,
+): unknown {
+  const raw = asRecord(message);
+  if (!raw) {
+    return message;
+  }
+  const content = Array.isArray(raw.content)
+    ? raw.content
+    : typeof raw.content === "string"
+      ? [{ type: "text", text: raw.content }]
+      : typeof raw.text === "string"
+        ? [{ type: "text", text: raw.text }]
+        : [];
+  const structured = content.flatMap((block) => readCanvasContentPreview(block) ?? []);
+  const nextContent: unknown[] = [];
+  let changed = false;
+  for (const value of content) {
+    const existing = readCanvasContentPreview(value);
+    if (existing && canvasPreviewsMatch(existing, preview)) {
+      changed = true;
+      continue;
+    }
+    const block = asRecord(value);
+    if (
+      !block ||
+      !["text", "input_text", "output_text"].includes(String(block.type)) ||
+      typeof block.text !== "string"
+    ) {
+      nextContent.push(value);
+      continue;
+    }
+    const extracted = extractCanvasShortcodes(block.text);
+    if (!extracted.previews.some((candidate) => canvasPreviewsMatch(candidate, preview))) {
+      nextContent.push(value);
+      continue;
+    }
+    changed = true;
+    nextContent.push({ ...block, text: extracted.text });
+    for (const candidate of extracted.previews) {
+      if (
+        !canvasPreviewsMatch(candidate, preview) &&
+        !structured.some((existing) => canvasPreviewsMatch(existing, candidate))
+      ) {
+        nextContent.push({ type: "canvas", preview: candidate });
+      }
+    }
+  }
+  return changed ? { ...raw, content: nextContent } : message;
+}
+
+export function reconcileCanvasDisplayCopies(
+  items: ChatItem[],
+  toolOwnedCanvasSources: ReadonlyMap<unknown, ChatMessagePreview>,
+): ChatItem[] {
+  type MessageItem = Extract<ChatItem, { kind: "message" }>;
+  let turn: MessageItem[] = [];
+  const replacements = new Map<MessageItem, unknown>();
+  const duplicates = new Set<MessageItem>();
+  const finishTurn = () => {
+    const owners: { item: MessageItem; source: ChatMessagePreview }[] = [];
+    for (const item of turn) {
+      const source = toolOwnedCanvasSources.get(item.message);
+      if (!source) {
+        continue;
+      }
+      if (owners.some((owner) => canvasPreviewsMatch(owner.source.preview, source.preview))) {
+        duplicates.add(item);
+      } else {
+        owners.push({ item, source });
+      }
+    }
+    for (const item of turn) {
+      if (toolOwnedCanvasSources.has(item.message)) {
+        continue;
+      }
+      const content = asRecord(item.message)?.content;
+      const structured = Array.isArray(content)
+        ? content.flatMap((block) => readCanvasContentPreview(block) ?? [])
+        : [];
+      for (const block of safeNormalizeMessage(item.message)?.content ?? []) {
+        if (block.type !== "canvas") {
+          continue;
+        }
+        const owner = owners.find(({ source }) =>
+          canvasPreviewsMatch(source.preview, block.preview),
+        );
+        if (!owner) {
+          continue;
+        }
+        // Shortcodes carry identity only. Enrich from structured display copies
+        // without replacing the tool's sandbox or complete App descriptor with defaults.
+        const displayPreview = structured.find((preview) =>
+          canvasPreviewsMatch(preview, owner.source.preview),
+        );
+        if (displayPreview) {
+          owner.source = {
+            ...owner.source,
+            preview: {
+              ...owner.source.preview,
+              ...displayPreview,
+              ...(displayPreview.mcpApp
+                ? { mcpApp: { ...owner.source.preview.mcpApp, ...displayPreview.mcpApp } }
+                : {}),
+            },
+          };
+          replacements.set(
+            owner.item,
+            createCanvasAssistantMessage(owner.source, rawMessageTimestamp(owner.item.message)),
+          );
+        }
+        replacements.set(
+          item,
+          removeCanvasPreviewFromAssistantMessage(
+            replacements.get(item) ?? item.message,
+            block.preview,
+          ),
+        );
+      }
+    }
+    turn = [];
+  };
+  // Coalescing has finished choosing tool rows, but grouping has not annotated
+  // them. Reconcile at their actual positions using its canonical display boundaries.
+  for (const item of items) {
+    if (chatItemStartsDisplayTurn(item) || item.kind === "divider") {
+      finishTurn();
+    }
+    if (
+      item.kind === "message" &&
+      normalizeRoleForGrouping(safeNormalizeMessage(item.message)?.role ?? "") === "assistant"
+    ) {
+      turn.push(item);
+    }
+  }
+  finishTurn();
+  if (replacements.size === 0 && duplicates.size === 0) {
+    return items;
+  }
+  return items.flatMap<ChatItem>((item) => {
+    if (item.kind !== "message") {
+      return [item];
+    }
+    if (duplicates.has(item)) {
+      return [];
+    }
+    const message = replacements.get(item);
+    return message === undefined
+      ? [item]
+      : hasRenderableNormalizedMessage(message)
+        ? [{ ...item, message }]
+        : [];
+  });
+}
+
 export function messageMatchesSearchQuery(
   message: unknown,
   query: string,
@@ -90,7 +251,7 @@ export function messageMatchesSearchQuery(
   return normalizeLowercaseStringOrEmpty(extractTextCached(message)).includes(normalizedQuery);
 }
 
-type ChatMessagePreview = {
+export type ChatMessagePreview = {
   preview: CanvasToolPreview;
   text: string | null;
   timestamp: number | null;
@@ -244,33 +405,6 @@ export function findNearestAssistantMessage(
       : last;
   }
   return previous?.anchor ?? last;
-}
-
-export function findCanvasInsertionIndex(
-  items: ChatItem[],
-  toolTimestamp: number | null,
-  minimumIndex: number,
-  maximumIndex: number,
-): number {
-  if (toolTimestamp == null) {
-    return maximumIndex;
-  }
-  for (let index = minimumIndex; index < maximumIndex; index += 1) {
-    const item = items[index];
-    if (item?.kind !== "message") {
-      continue;
-    }
-    const normalized = safeNormalizeMessage(item.message);
-    if (
-      normalized &&
-      normalizeRoleForGrouping(normalized.role).toLowerCase() === "user" &&
-      normalized.timestamp != null &&
-      normalized.timestamp > toolTimestamp
-    ) {
-      return index;
-    }
-  }
-  return maximumIndex;
 }
 
 function resolveMessageToolUseId(message: Record<string, unknown>): string | undefined {

@@ -1677,7 +1677,7 @@ describe("buildCachedChatItems", () => {
     }
     const groups = items.filter((item) => item.kind === "group");
     for (const [index, count] of canvases) {
-      const blocks = canvasBlocksIn(groupAt(groups, index));
+      const blocks = canvasBlocksAcross(groupAt(groups, index));
       if (count === 0) {
         expect(blocks).toStrictEqual([]);
       } else {

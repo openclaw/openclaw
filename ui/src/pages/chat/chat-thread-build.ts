@@ -49,14 +49,15 @@ import {
   buildMessageItems,
   canvasPreviewBaseIdentity,
   createCanvasAssistantMessage,
+  type ChatMessagePreview,
   extractChatMessagePreview,
-  findCanvasInsertionIndex,
   findNearestAssistantMessage,
   hasRenderableNormalizedMessage,
   insertionIndexesForBounds,
   type ChatProjection,
   messageMatchesSearchQuery,
   rawMessageTimestamp,
+  reconcileCanvasDisplayCopies,
   insertChatItemsByTimestamp,
   sanitizeStreamText,
   timestampAfterVisibleItems,
@@ -75,7 +76,7 @@ import {
   transcriptRunId,
 } from "./chat-thread-run-identity.ts";
 import { coalesceToolActivityMessages } from "./chat-tool-activity-coalesce.ts";
-import { safeNormalizeMessage } from "./chat-turn-boundary.ts";
+import { chatItemStartsDisplayTurn, safeNormalizeMessage } from "./chat-turn-boundary.ts";
 import type { CompactionStatus } from "./tool-stream-contract.ts";
 
 export type BuildChatItemsProps = ChatInputPlacementProps & {
@@ -115,7 +116,8 @@ function canvasAssistantItemKey(
   fallback: string,
 ): string {
   const identity = canvasPreviewBaseIdentity(message, source);
-  return identity ? `canvas:${identity}` : `${fallback}:canvas`;
+  const runId = transcriptRunId(message);
+  return identity ? `canvas:${identity}${runId ? `:run:${runId}` : ""}` : `${fallback}:canvas`;
 }
 
 export function buildChatItems(
@@ -175,7 +177,7 @@ export function buildChatItems(
   );
   const searchFiltering = props.searchOpen === true && Boolean(props.searchQuery?.trim());
   const hiddenHistoryKeys = new Set<string>();
-  const persistedCanvasIdentities = new Set<string>();
+  const toolOwnedCanvasSources = new Map<unknown, ChatMessagePreview>();
   const normalizedHistory = history.map(safeNormalizeMessage);
   const historyItems = buildMessageItems(history);
   let canvasTurn: {
@@ -190,7 +192,7 @@ export function buildChatItems(
   const canvasTurns = historyItems.map((item, index) => {
     const message = normalizedHistory[index];
     const role = message && normalizeRoleForGrouping(message.role);
-    if (role === "user" || role === "system") {
+    if (chatItemStartsDisplayTurn(item) || role === "system") {
       canvasTurn = { previews: [], lastMatchingAssistantIndex: -1 };
     }
     if (
@@ -253,13 +255,8 @@ export function buildChatItems(
 
     const isToolResult = normalized.role.toLowerCase() === "toolresult";
     const persistedCanvasSource = isToolResult ? extractChatMessagePreview(msg) : null;
-    if (persistedCanvasSource) {
-      const identity = canvasPreviewBaseIdentity(msg, persistedCanvasSource);
-      if (identity) {
-        persistedCanvasIdentities.add(identity);
-      }
-    }
     const matchingCanvas =
+      searchFiltering &&
       persistedCanvasSource &&
       canvasTurns[i]!.previews.find(({ preview }) =>
         canvasPreviewsMatch(preview, persistedCanvasSource.preview),
@@ -278,13 +275,15 @@ export function buildChatItems(
       !matchingCanvas &&
       (!searchFiltering || canvasTurns[i]!.lastMatchingAssistantIndex > i);
     if (persistedCanvasSource && renderPersistedPreview) {
+      const message = createCanvasAssistantMessage(
+        persistedCanvasSource,
+        persistedCanvasSource.timestamp ?? transcriptPositionTimestamp(history, i),
+      );
+      toolOwnedCanvasSources.set(message, persistedCanvasSource);
       items.push({
         kind: "message",
         key: canvasAssistantItemKey(msg, persistedCanvasSource, itemKey),
-        message: createCanvasAssistantMessage(
-          persistedCanvasSource,
-          persistedCanvasSource.timestamp ?? transcriptPositionTimestamp(history, i),
-        ),
+        message,
       });
     }
 
@@ -344,68 +343,49 @@ export function buildChatItems(
     );
     return pending ? { ...bounds, beforeKey: pending.key } : (bounds ?? undefined);
   };
+  const projections: ChatProjection[] = [];
+  const canvasProjections: { canvas: ChatProjection; tool: ChatProjection }[] = [];
   for (const { projection, preview } of toolItems) {
     if (!preview) {
       continue;
     }
-    const baseIdentity = canvasPreviewBaseIdentity(projection.item.message, preview);
-    if (baseIdentity && persistedCanvasIdentities.has(baseIdentity)) {
-      continue;
-    }
-    const canvasBounds = boundToPendingInputs(
-      resolveRunBounds(
-        canvasRunBounds,
-        projection.item.message.runId,
-        normalizeOptionalString(projection.item.message.openclawToolStreamAfterSendId),
-      ),
-    );
-    const { minimum: canvasMinimumIndex, maximum: canvasMaximumIndex } = insertionIndexesForBounds(
-      items,
-      canvasBounds ?? undefined,
-    );
-    const assistant = findNearestAssistantMessage(
-      items,
-      preview.timestamp,
-      canvasMinimumIndex,
-      canvasMaximumIndex,
-    );
-    if (assistant) {
-      items[assistant.index] = {
-        ...assistant.item,
-        message: appendCanvasBlockToAssistantMessage(
-          assistant.item.message,
-          preview.preview,
-          preview.text,
-        ),
-      };
-      continue;
-    }
     if (searchFiltering) {
+      const bounds = boundToPendingInputs(
+        resolveRunBounds(
+          canvasRunBounds,
+          projection.item.message.runId,
+          normalizeOptionalString(projection.item.message.openclawToolStreamAfterSendId),
+        ),
+      );
+      const { minimum, maximum } = insertionIndexesForBounds(items, bounds);
+      const assistant = findNearestAssistantMessage(items, preview.timestamp, minimum, maximum);
+      if (assistant) {
+        items[assistant.index] = {
+          ...assistant.item,
+          message: appendCanvasBlockToAssistantMessage(
+            assistant.item.message,
+            preview.preview,
+            preview.text,
+          ),
+        };
+      }
       continue;
     }
-    const insertionIndex = findCanvasInsertionIndex(
-      items,
-      preview.timestamp,
-      canvasMinimumIndex,
-      canvasMaximumIndex,
-    );
-    const nextItem = items[insertionIndex];
-    const nextTimestamp =
-      nextItem?.kind === "message" ? rawMessageTimestamp(nextItem.message) : null;
-    const timestamp =
-      preview.timestamp != null && nextTimestamp != null
-        ? Math.min(preview.timestamp, nextTimestamp)
-        : preview.timestamp;
-    items.splice(insertionIndex, 0, {
-      kind: "message",
-      key: canvasAssistantItemKey(projection.item.message, preview, projection.item.key),
-      message: createCanvasAssistantMessage(preview, timestamp),
-    });
+    const message = createCanvasAssistantMessage(preview, preview.timestamp);
+    toolOwnedCanvasSources.set(message, preview);
+    const canvas: ChatProjection = {
+      item: {
+        kind: "message",
+        key: canvasAssistantItemKey(projection.item.message, preview, projection.item.key),
+        message,
+      },
+    };
+    projections.push(canvas);
+    canvasProjections.push({ canvas, tool: projection });
   }
   items = items.filter(
     (item) => item.kind !== "message" || hasRenderableNormalizedMessage(item.message),
   );
-  const projections: ChatProjection[] = [];
   if (compaction && compactionKey && !hasPersistedCompaction) {
     const timestamp = compaction.startedAt ?? compaction.completedAt ?? Date.now();
     projections.push({
@@ -485,12 +465,14 @@ export function buildChatItems(
       }
     }
     const tool = toolItems[i];
-    if (tool && (props.showToolCalls || hasSessionsYieldCall(tool.projection.item.message))) {
+    if (tool) {
       tool.projection.bounds = resolveProjectionBounds(
         tool.runId,
         normalizeOptionalString(tool.projection.item.message.openclawToolStreamAfterSendId),
       );
-      projections.push(tool.projection);
+      if (props.showToolCalls || hasSessionsYieldCall(tool.projection.item.message)) {
+        projections.push(tool.projection);
+      }
     }
   }
   // Keyed commentary does not advance cumulative text and follows the indexed
@@ -526,6 +508,13 @@ export function buildChatItems(
     items,
     toolItems.map((tool) => tool.projection),
   );
+  // Widgets share the tool owner's final execution interval and introducing
+  // stream, including hidden calls and persisted echoes. Pending input ceilings
+  // still constrain the entire live response.
+  for (const { canvas, tool } of canvasProjections) {
+    canvas.bounds = boundToPendingInputs(tool.bounds);
+    canvas.predecessorKey = tool.predecessorKey;
+  }
   insertChatItemsByTimestamp(items, projections);
 
   // The active claw is telemetry, not a placeholder: it stays through visible
@@ -613,7 +602,11 @@ export function buildChatItems(
   const projectYields = (source: ChatItem[], complete?: ChatItem[]) =>
     projectSessionsYieldItems(source, props.showToolCalls, complete);
   const complete = hidden ? projectYields(coalesceToolActivityMessages(items)) : undefined;
-  return groupMessages(projectYields(coalesceToolActivityMessages(items, hidden), complete), {
+  const coalesced = coalesceToolActivityMessages(items, hidden);
+  const visible = searchFiltering
+    ? coalesced
+    : reconcileCanvasDisplayCopies(coalesced, toolOwnedCanvasSources);
+  return groupMessages(projectYields(visible, complete), {
     items: complete,
     people: props.replyPeople,
     localPerson: props.replyLocalPerson,

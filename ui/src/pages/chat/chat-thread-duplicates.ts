@@ -148,7 +148,10 @@ export function prepareMessagesForGrouping(items: ChatItem[]): PreparedChatItem[
     ) {
       const signature = collapseDuplicateDisplaySignature(parts);
       if (signature && signature === collapseDuplicateDisplaySignature(previousParts)) {
-        previous.item.duplicateCount = (previous.item.duplicateCount ?? 1) + 1;
+        previous.item = {
+          ...previous.item,
+          duplicateCount: (previous.item.duplicateCount ?? 1) + 1,
+        };
         continue;
       }
     }
