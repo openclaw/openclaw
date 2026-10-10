@@ -156,6 +156,15 @@ describe("root memory repair", () => {
       ),
       "Doctor changes",
     );
+    // The note names the affected file and states the recovery action.
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining(`- not valid UTF-8: ${canonicalPath}`),
+      "Doctor changes",
+    );
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining("Keep a byte-for-byte copy of that file"),
+      "Doctor changes",
+    );
     // The merge rewrites the canonical file in place and keeps no backup of it,
     // so an undecodable byte must leave both files and the archive untouched.
     await expect(fs.readFile(canonicalPath)).resolves.toEqual(canonicalBytes);
@@ -178,6 +187,72 @@ describe("root memory repair", () => {
     await expect(fs.readFile(canonicalPath, "utf8")).resolves.toBe("# Canonical\n");
     await expect(fs.readFile(legacyPath)).resolves.toEqual(legacyBytes);
     await expectPathMissing(path.join(tmpDir, ".openclaw-repair"));
+  });
+
+  it("refuses a legacy file that turns malformed while it is archived and preserves the archive", async () => {
+    const canonicalPath = path.join(tmpDir, "MEMORY.md");
+    const legacyPath = path.join(tmpDir, "memory.md");
+    await fs.writeFile(canonicalPath, "# Canonical\n", "utf8");
+    await fs.writeFile(legacyPath, "# Legacy\n", "utf8");
+    if (!(await hasDistinctRootMemoryFiles(tmpDir))) {
+      return;
+    }
+
+    const rename = vi.spyOn(fs, "rename");
+    rename.mockImplementationOnce(async (sourcePath, targetPath) => {
+      await fs.appendFile(sourcePath, Buffer.from([0xff, 0x0a]));
+      rename.mockRestore();
+      await fs.rename(sourcePath, targetPath);
+    });
+
+    await maybeRepairWorkspaceMemoryHealth({ scope, prompter });
+
+    // The read after the archive move is the buffer the merged text is built from,
+    // so it must be admitted too; the archive keeps the original legacy bytes.
+    await expect(fs.readFile(canonicalPath, "utf8")).resolves.toBe("# Canonical\n");
+    await expectPathMissing(legacyPath);
+    const archivedLegacyPath = await expectArchivedLegacyMemory();
+    await expect(fs.readFile(archivedLegacyPath)).resolves.toEqual(
+      Buffer.concat([Buffer.from("# Legacy\n"), Buffer.from([0xff, 0x0a])]),
+    );
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining(`- not valid UTF-8: ${archivedLegacyPath}`),
+      "Doctor changes",
+    );
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining(`- preserved archive: ${archivedLegacyPath}`),
+      "Doctor changes",
+    );
+  });
+
+  it("refuses a canonical file that turns malformed while the legacy file is archived", async () => {
+    const canonicalPath = path.join(tmpDir, "MEMORY.md");
+    const legacyPath = path.join(tmpDir, "memory.md");
+    const mutatedBytes = Buffer.concat([Buffer.from("# Canonical\n"), Buffer.from([0xff, 0x0a])]);
+    await fs.writeFile(canonicalPath, "# Canonical\n", "utf8");
+    await fs.writeFile(legacyPath, "# Legacy\n", "utf8");
+    if (!(await hasDistinctRootMemoryFiles(tmpDir))) {
+      return;
+    }
+
+    const rename = vi.spyOn(fs, "rename");
+    rename.mockImplementationOnce(async (sourcePath, targetPath) => {
+      await fs.writeFile(canonicalPath, mutatedBytes);
+      rename.mockRestore();
+      await fs.rename(sourcePath, targetPath);
+    });
+
+    await maybeRepairWorkspaceMemoryHealth({ scope, prompter });
+
+    // There is no backup of the canonical file, so the refusal must leave the
+    // bytes that were on disk at decode time exactly as they are.
+    await expect(fs.readFile(canonicalPath)).resolves.toEqual(mutatedBytes);
+    await expectPathMissing(legacyPath);
+    await expectArchivedLegacyMemory();
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining(`- not valid UTF-8: ${canonicalPath}`),
+      "Doctor changes",
+    );
   });
 
   it("merges valid non-ASCII root memory including a literal replacement character", async () => {

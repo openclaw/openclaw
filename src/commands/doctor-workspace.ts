@@ -143,6 +143,8 @@ type RootMemoryMigrationResult = {
   readError?: boolean;
   /** True when the repair was skipped because a file is not valid UTF-8. */
   invalidUtf8?: boolean;
+  /** The first file that failed UTF-8 admission, so the recovery note names it. */
+  invalidUtf8Path?: string;
   /** True when the legacy file could not be archived atomically. */
   archiveError?: boolean;
 };
@@ -210,6 +212,9 @@ async function migrateLegacyRootMemoryFile(
   };
   const readMemoryFile = (filePath: string) =>
     readRegularFile({ filePath, maxBytes: ROOT_MEMORY_FILE_MAX_BYTES });
+  const firstNonUtf8File = (
+    candidates: ReadonlyArray<{ path: string; buffer: Buffer }>,
+  ): string | undefined => candidates.find((candidate) => !isUtf8(candidate.buffer))?.path;
   try {
     // Reject oversized, unreadable, symlinked, non-regular, or non-UTF-8 inputs
     // before the archive rename. The merge rewrites the canonical file from
@@ -219,8 +224,12 @@ async function migrateLegacyRootMemoryFile(
       readMemoryFile(detection.canonicalPath),
       readMemoryFile(detection.legacyPath),
     ]);
-    if (!isUtf8(canonical.buffer) || !isUtf8(legacy.buffer)) {
-      return { ...unchanged, invalidUtf8: true };
+    const invalidUtf8Path = firstNonUtf8File([
+      { path: detection.canonicalPath, buffer: canonical.buffer },
+      { path: detection.legacyPath, buffer: legacy.buffer },
+    ]);
+    if (invalidUtf8Path) {
+      return { ...unchanged, invalidUtf8: true, invalidUtf8Path };
     }
   } catch (err) {
     return skippedForReadFailure(err);
@@ -237,10 +246,30 @@ async function migrateLegacyRootMemoryFile(
   let canonicalText: string;
   let legacyText: string;
   try {
-    [canonicalText, legacyText] = await Promise.all([
-      readMemoryFile(detection.canonicalPath).then(({ buffer }) => buffer.toString("utf-8")),
-      readMemoryFile(archivedLegacyPath).then(({ buffer }) => buffer.toString("utf-8")),
+    // These fresh buffers are what the merged text is actually built from, so the
+    // admission repeats here: a file that changed while the archive rename was in
+    // flight would otherwise still be decoded with replacement.
+    const [canonicalRead, legacyRead] = await Promise.all([
+      readMemoryFile(detection.canonicalPath),
+      readMemoryFile(archivedLegacyPath),
     ]);
+    const invalidUtf8Path = firstNonUtf8File([
+      { path: detection.canonicalPath, buffer: canonicalRead.buffer },
+      { path: archivedLegacyPath, buffer: legacyRead.buffer },
+    ]);
+    if (invalidUtf8Path) {
+      // The canonical file was never rewritten, and the archived legacy copy keeps
+      // the original bytes; report the refusal with the archive as recovery copy.
+      return {
+        ...unchanged,
+        changed: true,
+        archivedLegacyPath,
+        invalidUtf8: true,
+        invalidUtf8Path,
+      };
+    }
+    canonicalText = canonicalRead.buffer.toString("utf-8");
+    legacyText = legacyRead.buffer.toString("utf-8");
   } catch (err) {
     const skipped = skippedForReadFailure(err);
     // The archive is the independent recovery copy. Do not link or copy it
@@ -332,10 +361,14 @@ export async function maybeRepairWorkspaceMemoryHealth(params: {
       note(
         [
           `${prefix}Workspace memory root repair skipped (${reason}):`,
+          migration.invalidUtf8Path ? `- not valid UTF-8: ${migration.invalidUtf8Path}` : null,
           `- canonical: ${migration.canonicalPath}`,
           `- legacy: ${migration.legacyPath}`,
           migration.archivedLegacyPath
             ? `- preserved archive: ${migration.archivedLegacyPath}`
+            : null,
+          migration.invalidUtf8
+            ? "Nothing was modified. Keep a byte-for-byte copy of that file, re-encode it as UTF-8 (or edit a copy converted with its original encoding), then run doctor --fix again."
             : null,
         ]
           .filter((line): line is string => Boolean(line))
