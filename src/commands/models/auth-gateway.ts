@@ -33,8 +33,12 @@ export async function readGatewayApiKeyParams(
   }
   signal.throwIfAborted();
   const apiKey = normalizeSecretInput(input);
-  if (!apiKey) throw new Error("Required");
+  if (!apiKey) {
+    throw new Error("Required");
+  }
   registerSecretValueForRedaction(apiKey);
-  if (!opts.provider) throw new Error("Missing --provider.");
+  if (!opts.provider) {
+    throw new Error("Missing --provider.");
+  }
   return { provider: opts.provider, apiKey, agentId: opts.agent };
 }

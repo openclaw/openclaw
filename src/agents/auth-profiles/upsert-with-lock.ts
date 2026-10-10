@@ -317,6 +317,7 @@ export async function persistAuthProfileBatch(
 type AuthProfileUpsertParams = {
   profileId: string;
   validateCurrentCredential?: (credential: AuthProfileCredential | undefined) => void;
+  assertCurrent?: () => void;
   preserveApiKeyMetadata?: boolean;
   credential: AuthProfileCredential;
   agentDir?: string;
@@ -335,6 +336,7 @@ export async function upsertAuthProfileWithLock(
       agentDir: params.agentDir,
       sharedStoreWrite: true,
       stateDir: params.stateDir,
+      assertCurrent: params.assertCurrent,
       saveOptions: {
         filterExternalAuthProfiles: false,
         syncExternalCli: false,

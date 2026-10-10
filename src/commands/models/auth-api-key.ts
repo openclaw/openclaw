@@ -149,6 +149,7 @@ export async function saveModelProviderApiKey(params: {
     agentDir,
     preserveApiKeyMetadata: true,
     validateCurrentCredential: validateReplacement,
+    assertCurrent: params.assertCurrent,
   });
   const application = createRuntimeConfigWriteApplication(
     captureGatewayRootWorkAdmissionContinuationScope()?.run,
@@ -191,8 +192,8 @@ export async function saveModelProviderApiKey(params: {
       return next;
     },
     undefined,
-    undefined,
-    attachRuntimeConfigWriteApplication({}, application),
+    params.assertCurrent,
+    attachRuntimeConfigWriteApplication({ assertCurrent: params.assertCurrent }, application),
   ).catch((error: unknown) => {
     throw new Error(
       "API key saved, but provider settings could not be applied: " +
