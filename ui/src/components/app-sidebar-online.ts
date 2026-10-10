@@ -2,6 +2,7 @@ import { html, nothing } from "lit";
 import { repeat } from "lit/directives/repeat.js";
 import { html as staticHtml, literal } from "lit/static-html.js";
 import { presenceUserKey } from "../../../src/shared/presence-user.ts";
+import type { ApplicationGateway } from "../app/gateway.ts";
 import { t } from "../i18n/index.ts";
 import { renderHoverMarquee } from "../lib/hover-marquee.ts";
 import {
@@ -16,15 +17,31 @@ import { icons } from "./icons.ts";
 import { personActivityLink, personActivityRouting } from "./person-activity-link.ts";
 import { sidebarOnlineCountFor, SidebarOnlineOrder } from "./sidebar-online-order.ts";
 
-const onlineOrders = new WeakMap<AppSidebarRenderHost, SidebarOnlineOrder>();
+const onlineOrders = new WeakMap<
+  AppSidebarRenderHost,
+  {
+    gateway: ApplicationGateway | undefined;
+    revision: number | undefined;
+    viewerId: string | undefined;
+    order: SidebarOnlineOrder;
+  }
+>();
 
 export function sidebarOnlineOrder(host: AppSidebarRenderHost): SidebarOnlineOrder {
-  let order = onlineOrders.get(host);
-  if (!order) {
-    order = new SidebarOnlineOrder();
-    onlineOrders.set(host, order);
+  const gateway = host.sessionDataContext?.gateway;
+  const revision = gateway?.connectionRevision;
+  const viewerId = host.sidebarSnapshot?.footer?.id ?? gateway?.snapshot.selfUser?.id;
+  let cached = onlineOrders.get(host);
+  if (
+    !cached ||
+    cached.gateway !== gateway ||
+    cached.revision !== revision ||
+    cached.viewerId !== viewerId
+  ) {
+    cached = { gateway, revision, viewerId, order: new SidebarOnlineOrder() };
+    onlineOrders.set(host, cached);
   }
-  return order;
+  return cached.order;
 }
 
 export function renderAppSidebarOnline(host: AppSidebarRenderHost) {
