@@ -681,7 +681,7 @@ async function prepareControlUiBootstrapConfig(
     return { config: undefined, requestAuth };
   }
   const config = opts?.config;
-  const [assistant, pluginCatalog, devGitBranch] = await Promise.all([
+  const [assistant, pluginControlUiModules, devGitBranch] = await Promise.all([
     (async () => {
       const resolvedIdentity = config
         ? await resolveAssistantIdentity({ cfg: config, agentId: opts?.agentId })
@@ -698,7 +698,11 @@ async function prepareControlUiBootstrapConfig(
       return { identity, agentId: resolvedIdentity?.agentId, avatarProjection };
     })(),
     import("./control-ui-plugin-assets.js").then(({ listControlUiPluginCatalog }) =>
-      listControlUiPluginCatalog(),
+      listControlUiPluginCatalog().then(
+        ({ plugins }) => plugins,
+        // The post-connect plugins.controlUi.list RPC owns user-visible catalog errors.
+        () => [],
+      ),
     ),
     resolveDevInstallGitBranch(),
   ]);
@@ -723,7 +727,7 @@ async function prepareControlUiBootstrapConfig(
     terminalEnabled,
     cliAgentsEnabled: config?.gateway?.cliAgents?.enabled !== false,
     pluginAssetsRequireAuth: opts?.auth !== undefined && opts.auth.mode !== "none",
-    pluginControlUiModules: pluginCatalog.plugins,
+    pluginControlUiModules,
     pluginFrameGrants: pluginFrameGrants.map(({ pluginId, path: grantPath, match }) => ({
       pluginId,
       path: grantPath,

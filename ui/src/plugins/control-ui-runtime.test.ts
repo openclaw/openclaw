@@ -116,6 +116,13 @@ it.each(["document", "published", "listener"] as const)(
 describe("native plugin asset admission", () => {
   it.each([
     {
+      scenario: "catalog RPC failure",
+      native: false,
+      remote: false,
+      catalogError: true,
+      error: "plugin registry is no longer active",
+    },
+    {
       scenario: "cross-origin native plugin",
       native: true,
       remote: true,
@@ -167,11 +174,15 @@ describe("native plugin asset admission", () => {
       requiresAuth = true,
       loads = false,
       resourceBasePath = "",
+      catalogError = false,
     }) => {
       vi.stubGlobal("isSecureContext", secure);
       vi.mocked(initializeControlUiPlugin).mockClear();
-      const request = vi.fn(async (method: string) =>
-        method === "plugins.controlUi.list"
+      const request = vi.fn(async (method: string) => {
+        if (method === "plugins.controlUi.list" && catalogError) {
+          throw new Error(error ?? undefined);
+        }
+        return method === "plugins.controlUi.list"
           ? {
               revision: "catalog-one",
               diagnostics: [],
@@ -187,8 +198,8 @@ describe("native plugin asset admission", () => {
                   ]
                 : [],
             }
-          : { ok: true },
-      );
+          : { ok: true };
+      });
       const refresh = vi.fn(async () => ({
         pluginAssetsRequireAuth: requiresAuth,
         pluginFrameGrants: granted
@@ -227,11 +238,13 @@ describe("native plugin asset admission", () => {
         runtime.start();
         expect(refresh).toHaveBeenCalledTimes(remote ? 0 : 1);
         await runtime.refresh();
-        expect(runtime.errors).toEqual(error ? [{ pluginId: "review", message: error }] : []);
+        expect(runtime.errors).toEqual(
+          error ? [{ pluginId: catalogError ? "host" : "review", message: error }] : [],
+        );
         expect(
           request.mock.calls.filter(([method]) => method === "plugins.controlUi.report"),
         ).toEqual(
-          error
+          error && !catalogError
             ? [
                 [
                   "plugins.controlUi.report",
