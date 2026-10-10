@@ -2267,6 +2267,18 @@ describe("slack implicit mention policy", () => {
 
     expect(await prepareThreadMessage(eventScope)).toBeNull();
   });
+
+  it("accepts workspace-scoped send participation when inbound has no event scope", async () => {
+    const threadTs = "1700000000.000000";
+    // send.ts records delivery.teamId even when the inbound event later has no
+    // enterprise eventScope (relay / non-enterprise monitor).
+    recordSlackThreadParticipation("default", "C123", threadTs, { teamId: "T1" });
+
+    const result = await prepareThreadMessage();
+
+    expect(result?.ctxPayload.MentionSource).toBe("implicit_thread");
+    expect(result?.ctxPayload.ImplicitMentionKinds).toEqual(["bot_thread_participant"]);
+  });
 });
 type RouteOptions = Parameters<typeof resolveSlackRoutingContext>[0];
 function routingFixture(dmScope: "main" | "per-channel-peer" = "main") {

@@ -779,6 +779,9 @@ const config = {
     "extensions/signal/src/setup-core.ts": ["exports"],
     // Focused CLI tests exercise plan construction through this explicit test seam.
     "extensions/onepassword/src/secret-ref-cli.ts": ["exports"],
+    // Focused Slack thread-participation tests exercise persisted lookup and
+    // legacy-key upgrade directly; production reaches it through the inbound resolver.
+    "extensions/slack/src/sent-thread-cache.ts": ["exports"],
     // Mirror config parsing, redaction mapping, cap fitting, and the runner are
     // asserted by the focused Beam mirror tests; production wires only the service.
     "extensions/beam/src/mirror.ts": ["exports", "types"],
