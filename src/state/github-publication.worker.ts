@@ -47,15 +47,18 @@ function requiresSource(
   kind: PublicationMutationReceipt["kind"],
   input: PersonalPublicationMutation | RepositoryPublicationMutation | SharedPublicationMutation,
 ): boolean {
-  if (input.operation === "claim") return kind === "personal";
+  if (input.operation === "claim") {
+    return kind === "personal";
+  }
   if (
     input.operation === "bindWorkspaceSnapshot" ||
     input.operation === "updatePublishingFacts" ||
     input.operation === "checkpoint" ||
     input.operation === "failPreparation" ||
     input.operation === "retire"
-  )
+  ) {
     return true;
+  }
   if (
     input.operation === "updateHead" ||
     input.operation === "recordEffect" ||
@@ -135,7 +138,9 @@ function assertMutationSource(
       ) {
         throw new Error("GitHub publication transition source repository changed.");
       }
-      if (retiring) continue;
+      if (retiring) {
+        continue;
+      }
       const workspace = source.expected.repositoryWorkspace;
       if (
         workspace?.workspaceId !== row.workspace_id ||
@@ -174,7 +179,9 @@ function assertMutationSource(
     });
   }
   if (result.kind === "personal") {
-    for (const row of result.rows) assertGitHubPublicationConnectionSource(source, row);
+    for (const row of result.rows) {
+      assertGitHubPublicationConnectionSource(source, row);
+    }
   }
 }
 
@@ -341,6 +348,7 @@ function sharedMutation(database: OpenClawStateDatabase, input: SharedPublicatio
         ),
       ];
   }
+  throw new Error("Unknown shared GitHub publication mutation.");
 }
 
 export const publicationOperations = {
@@ -350,8 +358,9 @@ export const publicationOperations = {
     { open },
   ) => {
     const database = open();
-    if (requiresSource("shared", input) && !input.source)
+    if (requiresSource("shared", input) && !input.source) {
       throw new Error("GitHub publication action requires a typed source.");
+    }
     return mutate(
       database,
       input.operation,
@@ -369,8 +378,9 @@ export const publicationOperations = {
     { open },
   ) => {
     const database = open();
-    if (requiresSource("personal", input) && !input.source)
+    if (requiresSource("personal", input) && !input.source) {
       throw new Error("GitHub publication action requires a typed source.");
+    }
     return mutate(
       database,
       input.operation,
@@ -388,8 +398,9 @@ export const publicationOperations = {
     { open },
   ) => {
     const database = open();
-    if (requiresSource("repository", input) && !input.source)
+    if (requiresSource("repository", input) && !input.source) {
       throw new Error("GitHub publication action requires a typed source.");
+    }
     return mutate(
       database,
       input.operation,

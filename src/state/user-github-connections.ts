@@ -19,7 +19,7 @@ import {
   disconnectUserGitHubConnectionInDatabase,
   parseUserGitHubConnection,
   readUserGitHubConnectionInDatabase,
-  resolvePersonalGitHubOwner as resolveOwner,
+  resolvePersonalGitHubOwnerInDatabase,
 } from "./user-github-connections.kernel.js";
 import {
   isUserGitHubConnectionCommit,
@@ -42,7 +42,7 @@ export function resolvePersonalGitHubOwner(
   profile: string,
   db = openOpenClawStateDatabase().db,
 ): string | undefined {
-  return resolveOwner(profile, db);
+  return resolvePersonalGitHubOwnerInDatabase(profile, db);
 }
 
 /** Native final-effect guard; never substitute a pre-await connection snapshot. */

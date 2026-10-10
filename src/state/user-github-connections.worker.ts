@@ -118,6 +118,7 @@ function applyMutation(
         selection: { ...current.selection, refresh: { operationId: mutation.operationId } },
       };
   }
+  throw new Error("Unknown personal GitHub connection mutation.");
 }
 
 function mutate<T>(
