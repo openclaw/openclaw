@@ -57,6 +57,11 @@ import { QuestionAnswerUnconfirmedError } from "../harness/gateway-question-disp
 import { resolveSessionPlacementForcedTerminalSettlement } from "../session-placement-forced-terminal-settlement.js";
 import { getGatewayToolCallerIdentity } from "../tools/gateway-caller-context.js";
 import {
+  notifyEmbeddedRunEnded,
+  waitForCurrentEmbeddedAgentRunEnd,
+  waitForEmbeddedAgentRunEnd,
+} from "./active-run-projections.js";
+import {
   persistForceClearedEmbeddedRunTerminalState,
   tryLoadForceClearSessionSnapshot,
 } from "./force-clear-session-state.js";
@@ -103,14 +108,7 @@ import {
   clearActiveRunSessionIndex,
   normalizeSessionFileRegistryKey,
 } from "./runs.session-index.js";
-import {
-  notifyEmbeddedRunEnded,
-  waitForCurrentEmbeddedAgentRunEnd,
-  waitForEmbeddedAgentRunEnd,
-} from "./runs.wait.js";
-
-export { isEmbeddedAgentRunActive } from "./active-run-projections.js";
-export { waitForEmbeddedAgentRunEnd } from "./runs.wait.js";
+export { isEmbeddedAgentRunActive, waitForEmbeddedAgentRunEnd } from "./active-run-projections.js";
 
 export type {
   EmbeddedAgentQueueHandle,
