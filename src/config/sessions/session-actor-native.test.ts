@@ -258,11 +258,11 @@ it("retains unrelated session replicas through native entry, sharing, participan
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
     const { actor, database, factory, owner, scope } = await nativeSession(env);
     const siblingScope = { ...scope, sessionKey: "agent:main:dashboard:incognito-sibling" };
-    const siblingEntry: InternalSessionEntry = {
+    const siblingEntry = {
       sessionId: "sibling-session",
       updatedAt: 1,
       incognito: true,
-    };
+    } satisfies InternalSessionEntry;
     replaceSessionEntrySync(siblingScope, siblingEntry);
     const siblingTarget = expectDefined(
       captureNativeIncognitoSessionActorTarget({ database, sessionKey: siblingScope.sessionKey }),

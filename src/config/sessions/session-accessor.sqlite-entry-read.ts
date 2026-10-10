@@ -249,17 +249,13 @@ function scanSessionEntryRows(
   const actor = readSessionActorTransactionState(database, { sessionKey });
   if (actor) {
     const lookupKeys = collectSessionEntryLookupKeys(sessionKey);
-    const selected = actor.entryRows.get(sessionKey);
     return {
       lookupKeys,
       rows: lookupKeys.flatMap((key) => {
         const row = actor.entryRows.get(key)?.row;
         return row ? [structuredClone(row)] : [];
       }),
-      selected: selected && {
-        row: structuredClone(selected.row),
-        entry: attachSessionEntrySnapshots(structuredClone(selected.entry), {}, projection),
-      },
+      selected: readExactSessionEntryRow(database, sessionKey, projection),
     };
   }
   return runSqliteReadOperationSync(database.db, () => {

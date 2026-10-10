@@ -83,6 +83,7 @@ export function readTranscriptMessageByIdentity(
   if (!eventRow) {
     return undefined;
   }
+  // SAFETY: Identity rows are created only for canonical object events; message stays unknown.
   const event = JSON.parse(eventRow.event_json) as { message?: unknown };
   return { messageId: identity.eventId, message: event.message };
 }

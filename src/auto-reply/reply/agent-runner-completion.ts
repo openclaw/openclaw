@@ -178,7 +178,7 @@ export async function withAgentTurnCompletion<T>(
           throw new AggregateError(
             [error, settlementError],
             "Terminal accounting failed to settle",
-            { cause: error },
+            { cause: settlementError },
           );
         }
         throw error;
