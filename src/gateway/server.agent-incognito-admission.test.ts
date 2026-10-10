@@ -1,6 +1,7 @@
+import "./test-helpers.mocks.js";
 import "../test-utils/prepare-compiled-subprocesses.js";
 import { randomUUID } from "node:crypto";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import {
   isSessionEntryDataSql,
@@ -10,6 +11,7 @@ import * as acpMetadata from "../acp/runtime/session-meta.js";
 import * as preparedRuntime from "../agents/prepared-model-runtime.js";
 import { withIncognitoSessionActor } from "../config/sessions/session-incognito-binding.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { closeSkillsWatchers } from "../skills/runtime/refresh.js";
 import { openIncognitoTestActor } from "../state/openclaw-agent-execution-incognito.test-support.js";
 import * as preflight from "./agent-turn/agent-request-preflight.js";
 import * as operatorRun from "./operator-run-cancellation.js";
@@ -27,10 +29,14 @@ const authority = { assertCurrent() {} };
 describe("bound incognito agent admission", () => {
   const fixture = installAgentAuthorityProofFixture();
 
+  afterEach(async () => {
+    await closeSkillsWatchers(true);
+  });
+
   it.each(["public", "internal", "create", "id", "retry"] as const)(
     "admits %s through the recorder with configured roles",
     async (route) => {
-      const f = await fixture();
+      const f = await fixture({ imageCapable: true });
       const actor = await openIncognitoTestActor(process.env, authority);
       const runId = randomUUID();
       const sessionKey = `agent:main:dashboard:incognito-${runId}`;
