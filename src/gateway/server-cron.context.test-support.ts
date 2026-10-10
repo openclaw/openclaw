@@ -283,7 +283,7 @@ export function registerGatewayCronContextTests({
     }
   });
 
-  it("keeps an RPC-inherited gateway context instead of the scheduler resolver", async () => {
+  it("replaces an RPC-inherited gateway context with the scheduler owner after activation", async () => {
     const cfg = createCronConfig("server-cron-rpc-gateway-context");
     loadConfigMock.mockReturnValue(cfg);
     const rpcContext = { terminalSessions: { rpc: true } } as never;
@@ -295,6 +295,7 @@ export function registerGatewayCronContextTests({
     let observed: unknown = "never-ran";
     let callerActive = true;
     let assertCaller: ReturnType<typeof captureGatewayToolCallerAssertion>;
+    let assertInitiatingCaller: ((method?: string) => void) | undefined;
     runCronIsolatedAgentTurnMock.mockImplementationOnce(async () => {
       observed = getInProcessGatewayToolContext();
       assertCaller = captureGatewayToolCallerAssertion();
@@ -314,18 +315,21 @@ export function registerGatewayCronContextTests({
           operationalRunInstance: { runId: "manual-run", instanceId: "manual-instance" },
           receiptAuthority: () => callerActive,
         },
-        () =>
-          withPluginRuntimeGatewayRequestScope(
+        () => {
+          assertInitiatingCaller = captureGatewayToolCallerAssertion();
+          return withPluginRuntimeGatewayRequestScope(
             { context: rpcContext, isWebchatConnect: () => false } as never,
             () => state.cron.run(job.id, "force"),
-          ),
+          );
+        },
       );
 
-      expect(observed).toBe(rpcContext);
-      expect(assertCaller).toBeTypeOf("function");
-      expect(() => assertCaller?.("chat.history")).not.toThrow();
+      expect(observed).toBe(schedulerContext);
+      expect(assertCaller).toBeUndefined();
+      expect(assertInitiatingCaller).toBeTypeOf("function");
+      expect(() => assertInitiatingCaller?.("chat.history")).not.toThrow();
       callerActive = false;
-      expect(() => assertCaller?.("chat.history")).toThrow(
+      expect(() => assertInitiatingCaller?.("chat.history")).toThrow(
         "agent tool caller authority is no longer active",
       );
     } finally {

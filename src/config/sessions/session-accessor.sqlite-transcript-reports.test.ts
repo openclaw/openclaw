@@ -20,10 +20,10 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
   appendSessionTranscriptReport,
   loadTranscriptEvents,
-  replaceTranscriptEvents,
   upsertSessionEntryCore,
 } from "./session-accessor.js";
 import { appendAbortedSessionTranscriptPartial } from "./session-accessor.sqlite-transcript-reports.js";
+import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { prepareTranscriptPayload } from "./transcript-payload.js";
 import { CURRENT_SESSION_VERSION } from "./version.js";
 

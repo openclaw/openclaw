@@ -4,6 +4,17 @@ import { en } from "./en.ts";
 // Recovery copy follows the lazy login and plugin views; the loader label stays eager.
 const enLogin = {
   login: {
+    unsupportedBrowser: {
+      title: "Update your browser to use OpenClaw",
+      description:
+        "This browser is missing features the Control UI needs to display menus and dialogs.",
+      apple: "Use macOS 26.2 or iOS 26.2 or later, with Safari 26.2 or later.",
+      browsers: "You can also use Chrome or Firefox released within the last six months.",
+      native: "On an older Mac, open this dashboard in an up-to-date browser instead.",
+      open: "Open in browser",
+      opened: "Opened in your default browser.",
+      failed: "Could not open your browser. Copy this page’s address into an up-to-date browser.",
+    },
     heading: "Connect to OpenClaw",
     lede: "Enter the Gateway URL and secret, or open the one-time link that openclaw dashboard prints on the Gateway host.",
     gatewayUrl: "Gateway URL",

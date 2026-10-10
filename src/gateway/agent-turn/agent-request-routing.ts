@@ -72,10 +72,12 @@ export async function prepareAgentRequestRouting(params: {
       ? requestedToRaw
       : undefined;
   const requestedSessionKeyRaw = requestedSessionKeyParam ?? sessionKeyFromTo;
-  if (requestedSessionKeyRaw) {
+  const agentSelectionKey =
+    requestedSessionKeyRaw ?? (!requestedSessionId && !agentId ? "main" : undefined);
+  if (agentSelectionKey) {
     const requestedSessionAgent = resolveRequestedSessionAgentId(
       params.cfg,
-      requestedSessionKeyRaw,
+      agentSelectionKey,
       agentId,
     );
     if (!requestedSessionAgent.ok) {
@@ -96,14 +98,6 @@ export async function prepareAgentRequestRouting(params: {
     } catch (error) {
       return rejectInvalidRequest(formatForLog(error));
     }
-  }
-  if (!requestedSessionKeyRaw && !requestedSessionId && !agentId) {
-    const implicitMainOwner = resolveRequestedSessionAgentId(params.cfg, "main");
-    if (!implicitMainOwner.ok) {
-      params.respond(false, undefined, implicitMainOwner.error);
-      return undefined;
-    }
-    agentId = implicitMainOwner.agentId;
   }
   const explicitRecipientChannel = normalizeMessageChannel(params.request.channel);
   const explicitRecipient =

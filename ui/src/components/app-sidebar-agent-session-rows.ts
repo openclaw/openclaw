@@ -355,9 +355,12 @@ export function projectSidebarHomeSession({
     ...home,
     ...home.subagentSummary,
     metadataVisible,
-    // The agent avatar owns decorative identity; metadata keeps attribution, not a second icon.
+    // The agent avatar is the header identity: no session icon, channel avatar,
+    // or creator/archiver chip beside it. Ownership still drives the owner filter above.
     icon: undefined,
     channelAvatarUrl: undefined,
+    owner: undefined,
+    archivedBy: undefined,
     attention: summarizeSidebarSessionAttention([
       own.attention,
       home.subagentSummary?.attention ?? SIDEBAR_SESSION_NO_ATTENTION,

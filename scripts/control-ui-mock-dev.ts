@@ -12,6 +12,7 @@ import type {
   UserProfile,
 } from "../packages/gateway-protocol/src/index.js";
 import { expectDefined } from "../packages/normalization-core/src/expect.js";
+import { createSolidControlUiBuildPlugin } from "../src/cli/plugins-build-solid.js";
 import { applySharedChannelFieldHelp } from "../src/config/schema.channel-field-help.js";
 import { buildBaseHints } from "../src/config/schema.hints.js";
 import { applyConfigTierHints, applyResolvedConfigTierHints } from "../src/config/schema.tiers.js";
@@ -58,6 +59,7 @@ import {
   buildChatAttachmentHistory,
   createChatAttachmentFixturePlugin,
 } from "./control-ui-mock-attachments.ts";
+import { backgroundMockInitScript } from "./control-ui-mock-background.ts";
 import {
   buildChannelsPairingMock,
   buildChannelsStatusMock,
@@ -81,6 +83,7 @@ const FIXTURES = [
   "approval",
   "attachments",
   "avatars",
+  "backgrounds",
   "board",
   "code-fences",
   "dashboards",
@@ -3308,6 +3311,16 @@ async function createChatPickerScenario(
     scenario.repeatingSessionEvents = { events: [] };
     scenario.sessionGroups = [];
   }
+  if (fixture === "backgrounds") {
+    scenario.featureMethods = [
+      ...(scenario.featureMethods ?? []),
+      "users.prefs.get",
+      "users.prefs.set",
+      "users.background.get",
+      "users.background.upload",
+      "users.background.remove",
+    ];
+  }
   return scenario;
 }
 
@@ -3354,6 +3367,7 @@ async function createMockGatewayPlugin(
       pluginLifecycleMockInitScript() +
       skillWorkshopMockInitScript(Date.now()) +
       approvalMockInitScript(fixture === "approval") +
+      (fixture === "backgrounds" ? backgroundMockInitScript() : "") +
       (fixture === "workboard" || fixture === "workboard-states"
         ? `(() => { const __name = (target) => target; (${installWorkboardBoardMock.toString()})(${JSON.stringify(buildWorkboardMocks(Date.now(), MOCK_ACTOR_PETER, fixture === "workboard-states"))}); })();`
         : ""),
@@ -3510,6 +3524,7 @@ async function buildWorkboardStatesAssets() {
     },
     alias: buildPluginLoaderAliasMap(entry, process.argv[1], import.meta.url, "src"),
     plugins: [
+      createSolidControlUiBuildPlugin(uiRoot),
       {
         name: "workboard-state-projections",
         setup(builder) {

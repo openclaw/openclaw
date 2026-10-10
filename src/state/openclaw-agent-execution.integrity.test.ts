@@ -414,6 +414,12 @@ it.each([
   "closed-host-blocked-last",
   "closed-host-revoked",
   "closed-host-replaced",
+  "closed-host-no-receipt",
+  "closed-host-no-receipt-verifier",
+  "closed-host-no-receipt-rollback-verifier",
+  "closed-host-no-receipt-stopped-verifier",
+  "closed-host-no-receipt-retired-verifier",
+  "closed-host-no-receipt-revoked-verifier",
 ] as const)("native execution borrows only current host integrity proof (%s)", async (proof) => {
   const env = { OPENCLAW_STATE_DIR: fs.realpathSync(tempDirs.make("agent-native-integrity-")) };
   const database = openOpenClawAgentDatabase({ agentId: "main", env });
@@ -422,8 +428,10 @@ it.each([
   counter.checks = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT * 2);
   const context = captureOpenClawStateWorkerContext({ env });
   const closedHost = proof.startsWith("closed-host");
+  const missingReceipt = proof.startsWith("closed-host-no-receipt");
   const siblingLease =
-    (closedHost && proof !== "closed-host-blocked-last") || proof.startsWith("two-leases")
+    (closedHost && !missingReceipt && proof !== "closed-host-blocked-last") ||
+    proof.startsWith("two-leases")
       ? claimOpenClawAgentDatabaseLease({ agentId: database.agentId, path: database.path, env })
       : undefined;
   if (proof === "two-leases") {
@@ -461,6 +469,23 @@ it.each([
   } else if (closedHost) {
     closeOpenClawAgentDatabaseByPath(database.path);
   }
+  if (proof === "closed-host-no-receipt-revoked-verifier") {
+    clearOpenClawAgentIntegrityVerification(database.path, env);
+  } else if (missingReceipt) {
+    clearOpenClawAgentDatabaseValidationCache(database.path);
+    using store = openNodeSqliteDatabase(resolveQuarantineStorePath(env));
+    store.prepare("DELETE FROM agent_integrity_verifications WHERE path=?").run(database.path);
+    if (proof === "closed-host-no-receipt-rollback-verifier") {
+      using writer = openNodeSqliteDatabase(database.path);
+      writer.exec("PRAGMA journal_mode=DELETE");
+    }
+  }
+  const verifier = proof.endsWith("verifier")
+    ? verification.startOpenClawDatabaseIntegrityVerifier({ env })
+    : undefined;
+  if (proof === "closed-host-no-receipt-stopped-verifier") {
+    await verifier!.stop();
+  }
   const assertCurrent = () => {
     claim?.assertCurrent();
     context.admission.assertCurrent();
@@ -475,6 +500,16 @@ it.each([
         admission: createSqliteWorkerOperationAdmission((request, grant) => {
           binding.authorize(request);
           assertCurrent();
+          if (
+            proof === "closed-host-no-receipt-retired-verifier" &&
+            request.stage === "prepare" &&
+            typeof request.facts === "object" &&
+            request.facts !== null &&
+            "kind" in request.facts &&
+            request.facts.kind === "agent-integrity-check"
+          ) {
+            void verifier!.stop();
+          }
           if (
             proof === "revoked-before-grant" &&
             request.stage === "prepare" &&
@@ -538,6 +573,13 @@ it.each([
   }
   const integrityCheck = vi.spyOn(verification, "requestOpenClawAgentDatabaseIntegrityCheck");
   try {
+    if (proof === "closed-host-no-receipt-retired-verifier") {
+      const operation = vi.fn(async () => "not admitted");
+      await expect(generation.run(source, operation)).rejects.toThrow();
+      expect(operation).not.toHaveBeenCalled();
+      expect(Array.from(new Int32Array(counter.checks))).toEqual([0, 0]);
+      return;
+    }
     if (proof === "revoked-after-verification-admission") {
       const operation = vi.fn(async () => "not admitted");
       await expect(generation.run(source, operation)).rejects.toThrow(
@@ -559,14 +601,25 @@ it.each([
     await expect(
       generation.run(source, async () => "opened", undefined, proof === "prepared-existing"),
     ).resolves.toBe("opened");
-    expect(integrityCheck).not.toHaveBeenCalled();
+    if (proof === "closed-host-no-receipt-verifier") {
+      expect(integrityCheck).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          path: database.path,
+          check: "full",
+        }),
+      );
+    } else {
+      expect(integrityCheck).not.toHaveBeenCalled();
+    }
     expect(Array.from(new Int32Array(counter.checks))).toEqual(
       proof === "verified" ||
         proof === "prepared-existing" ||
         proof === "closed-host" ||
         proof === "closed-host-blocked" ||
         proof === "closed-host-blocked-last" ||
+        proof === "closed-host-no-receipt-verifier" ||
         proof === "two-leases" ||
+        proof === "two-leases-unknown-owner" ||
         proof === "two-leases-missing-metadata" ||
         proof === "version-mismatch"
         ? [0, 0]
@@ -575,6 +628,7 @@ it.each([
     expect(revokedBeforeGrant).toBe(proof === "revoked-before-grant");
   } finally {
     integrityCheck.mockRestore();
+    await verifier?.stop();
     try {
       await generation.close();
     } finally {

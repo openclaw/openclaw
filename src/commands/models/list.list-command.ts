@@ -13,6 +13,7 @@ import { requestExitAfterOneShotOutput } from "../../cli/one-shot-exit.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { callGateway, isImplicitLocalGatewayTarget } from "../../gateway/call.js";
 import { readActiveGatewayLockIdentity } from "../../infra/gateway-lock.js";
+import { startProxy, stopProxy } from "../../infra/net/proxy/proxy-lifecycle.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { printModelTable } from "./list.table.js";
 import type { ModelRow } from "./list.types.js";
@@ -105,30 +106,35 @@ export async function modelsListCommand(
     const { agentId, agentDir } = resolveModelsTargetAgent(localConfig, opts.agent, {
       kind: "read",
     });
-    result = await withPreparedModelCatalogOwner(
-      {
-        agentId,
-        agentDir,
-        config: localConfig,
-        readOnly: opts.refresh !== true,
-        ...(opts.refresh ? { refreshFullCatalog: true } : {}),
-      },
-      async (snapshot) => {
-        const owner = resolvePublishedModelCatalogOwner(snapshot);
-        // Complete row projection and its final readiness reads before releasing a temporary owner.
-        return await buildModelsListResult({
-          source: {
-            kind: "published",
-            owner: {
-              ...owner,
-              authMaterializations: getPreparedModelRuntimeAuthMaterializations(snapshot),
-            },
-          },
+    const proxy = opts.refresh ? await startProxy(localConfig.proxy) : null;
+    try {
+      result = await withPreparedModelCatalogOwner(
+        {
           agentId,
-          params,
-        });
-      },
-    );
+          agentDir,
+          config: localConfig,
+          readOnly: opts.refresh !== true,
+          ...(opts.refresh ? { refreshFullCatalog: true } : {}),
+        },
+        async (snapshot) => {
+          const owner = resolvePublishedModelCatalogOwner(snapshot);
+          // Complete row projection and its final readiness reads before releasing a temporary owner.
+          return await buildModelsListResult({
+            source: {
+              kind: "published",
+              owner: {
+                ...owner,
+                authMaterializations: getPreparedModelRuntimeAuthMaterializations(snapshot),
+              },
+            },
+            agentId,
+            params,
+          });
+        },
+      );
+    } finally {
+      await stopProxy(proxy);
+    }
   }
   if (result.refreshFailed) {
     runtime.error(

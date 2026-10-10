@@ -349,8 +349,11 @@ export function prepareTalkVoiceReplacement(params: {
   assertChangeCurrent(change);
   change.claimed = true;
   return {
-    ...change.original.launch,
-    voice: change.voice,
+    launch: {
+      provider: change.original.launch.provider,
+      model: change.original.launch.model,
+      voice: change.voice,
+    },
     assertCurrent: (target?: PreparedTalkSessionTarget) => {
       assertChangeCurrent(change);
       if (target) {

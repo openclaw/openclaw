@@ -46,7 +46,7 @@ import { notifyLlmRequestActivity } from "../utils/llm-request-activity.js";
 import { sortPromptCacheToolsByName } from "../utils/prompt-cache-stability.js";
 import { requireApiKey } from "../utils/required-api-key.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
-import { createSseByteGuard } from "../utils/streaming-byte-guard.js";
+import { boundResponseBody } from "../utils/streaming-byte-guard.js";
 import { stripSystemPromptCacheBoundary } from "../utils/system-prompt-cache-boundary.js";
 import { mapOpenAIStopReason } from "./openai-stop-reason.js";
 import { buildBaseOptions, clampMaxTokensToModel } from "./simple-options.js";
@@ -68,32 +68,10 @@ export function createBoundedMistralFetcher(
 ): Fetcher {
   return async (input, init) => {
     const response = init == null ? await upstreamFetch(input) : await upstreamFetch(input, init);
-    if (!response.body || typeof response.body.getReader !== "function") {
-      return response;
-    }
-    const reader = response.body.getReader();
-    const guard = createSseByteGuard(reader, {
+    return boundResponseBody(response, {
       maxBytes,
       onOverflow: ({ size, maxBytes: cap }) =>
         new Error(`mistral: stream body exceeds ${cap} bytes (got ${size})`),
-    });
-    const guardedStream = new ReadableStream<Uint8Array>({
-      async pull(controller) {
-        const { done, value } = await guard.read();
-        if (done) {
-          controller.close();
-          return;
-        }
-        controller.enqueue(value);
-      },
-      async cancel(reason) {
-        await guard.cancel(reason);
-      },
-    });
-    return new Response(guardedStream, {
-      status: response.status,
-      statusText: response.statusText,
-      headers: response.headers,
     });
   };
 }

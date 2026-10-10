@@ -16,6 +16,7 @@ import {
   type TranscriptMessageAppendOptions,
   type TranscriptMessageAppendResult,
   type TranscriptUpdatePayload,
+  type SessionTranscriptWriteLockAccessorContext,
   type SessionTranscriptRawDeltaLimits,
   type SessionTranscriptRawDeltaResult,
   type SessionTranscriptVisibleMessageDeltaLimits,
@@ -241,6 +242,8 @@ export type SessionTranscriptWriteLockContext = {
   ) => Promise<TranscriptMessageAppendResult<TMessage> | undefined>;
   publishUpdate: (update?: TranscriptUpdatePayload) => Promise<void>;
   readEvents: () => Promise<SessionTranscriptEvent[]>;
+  /** Exact-key facts from this captured transcript; never another session or store. */
+  readMessageFacts: SessionTranscriptWriteLockAccessorContext["readMessageFacts"];
   target: SessionTranscriptTarget;
 };
 
@@ -522,7 +525,7 @@ export async function appendSessionTranscriptMessageByIdentityStrict<TMessage>(
   params: SessionTranscriptAppendMessageParams<TMessage> & {
     runId?: string;
     updateMode?: SessionTranscriptUpdateMode;
-    /** @deprecated Use preparation.prepareMessage outside the transaction. Removed at the next Plugin SDK major. */
+    /** @deprecated Use preparation.prepareMessage outside the transaction; removed in the next Plugin SDK major. */
     prepareMessageAfterIdempotencyCheck?: (message: TMessage) => TMessage | undefined;
     /** Awaited after duplicate detection; undefined suppresses a fresh append. */
     prepareMessageAfterIdempotencyCheckAsync?: (message: TMessage) => Promise<TMessage | undefined>;
@@ -629,7 +632,7 @@ export async function publishSessionTranscriptUpdateByIdentity(
 
 /**
  * Runs transcript work under the write lock for the resolved scoped target.
- * @deprecated Use withSessionTranscriptWrite and preparation options. Removed at the next Plugin SDK major.
+ * @deprecated Use withSessionTranscriptWrite and preparation options; removed in the next Plugin SDK major.
  */
 export async function withSessionTranscriptWriteLock<T>(
   params: SessionTranscriptWriteLockParams,

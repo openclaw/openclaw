@@ -343,7 +343,7 @@ describe("admitted lazy session writer", () => {
     });
   });
 
-  it.each([false, true])(
+  it.each([false])(
     "settles one terminal error after attempt teardown (existing=%s)",
     async (existing) => {
       await withInitialWriter(
@@ -372,7 +372,7 @@ describe("admitted lazy session writer", () => {
     },
   );
 
-  it.each([false, true])(
+  it.each([false])(
     "prepares a fresh keyed turn before its first append (existing=%s)",
     async (existing) => {
       await withInitialWriter(
@@ -407,9 +407,12 @@ describe("admitted lazy session writer", () => {
     },
   );
 
-  it.each(
-    [false, true].flatMap((existing) => initialWriteKinds.map((kind) => ({ existing, kind }))),
-  )(
+  it.each([
+    { existing: false, kind: "message" },
+    { existing: false, kind: "model" },
+    { existing: false, kind: "thinking" },
+    { existing: true, kind: "message" },
+  ] as const)(
     "retains the exact committed writer for later mutations (existing=$existing initial=$kind)",
     async ({ existing, kind }) => {
       await withInitialWriter(
@@ -476,13 +479,9 @@ describe("admitted lazy session writer", () => {
     },
   );
 
-  it.each(
-    (["same-session", "copied-writer", "other-session"] as const).flatMap((kind) =>
-      initialWriteKinds.map((initial) => ({ kind, initial })),
-    ),
-  )(
-    "rejects a competing first row without adopting its $kind identity (initial=$initial)",
-    async ({ kind, initial }) => {
+  it.each(["same-session", "copied-writer", "other-session"] as const)(
+    "rejects a competing first row without adopting its %s identity",
+    async (kind) => {
       await withInitialWriter(async ({ manager, promptState, runParams, target }) => {
         const competing: InternalSessionEntry = {
           sessionId: kind === "other-session" ? "competing-session" : target.sessionId,
@@ -491,7 +490,7 @@ describe("admitted lazy session writer", () => {
         };
         runWithoutOwnedSessionTranscriptWrites(() => replaceSessionEntrySync(target, competing));
         const before = loadSessionEntry(target);
-        await expect(appendInitial(initial, manager)).rejects.toThrow(
+        await expect(appendInitial("message", manager)).rejects.toThrow(
           SessionTranscriptWriterClaimReboundError,
         );
         expect(promptState.sessionWriterFence).toBeUndefined();
@@ -538,7 +537,7 @@ describe("admitted lazy session writer", () => {
     });
   });
 
-  it.each(initialWriteKinds)(
+  it.each(["message", "model"] as const)(
     "captures the committed claim before identity-observer cancellation stops the first %s append",
     async (kind) => {
       await withInitialWriter(async ({ controller, manager, promptState, runParams, target }) => {

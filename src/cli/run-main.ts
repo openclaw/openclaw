@@ -781,7 +781,7 @@ export async function runCli(
     );
   const invocation = resolveCliArgvInvocation(rewriteUpdateFlagArgv(originalArgv));
   return !invocation.hasHelpOrVersion &&
-    (invocation.primary === "update" || invocation.primary === "doctor")
+    ["update", "doctor", "proxy"].includes(invocation.primary ?? "")
     ? await withDeferredDebugProxyCapture(invoke)
     : await invoke();
 }
