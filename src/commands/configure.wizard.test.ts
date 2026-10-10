@@ -13,6 +13,11 @@ import {
   wizardTestMocks as mocks,
 } from "./configure.wizard.test-support.js";
 
+vi.mock("../cli/local-state-owner.js", () => ({
+  runWithLocalStateOwner: async ({ runLocal }: { runLocal: () => Promise<unknown> }) =>
+    await runLocal(),
+}));
+
 const { configureCommandFromSectionsArg } = await import("./configure.commands.js");
 
 const written = () => mocks.writeConfigFile.mock.calls.at(-1)![0];
