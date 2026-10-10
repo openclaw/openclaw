@@ -8,7 +8,7 @@ import {
 } from "openclaw/plugin-sdk/channel-inbound";
 import { createReplyDispatcher } from "openclaw/plugin-sdk/reply-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { afterAll, beforeEach, describe, expect, it, type Mock, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const resolveFeishuAccountMock = vi.hoisted(() => vi.fn());
 const getFeishuRuntimeMock = vi.hoisted(() => vi.fn());
@@ -1668,7 +1668,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       const { result, options } = createDispatcherHarness({ allowReasoningPreview: true });
       await options.onReplyStart?.();
       for (const text of reasoning) {
-        result.replyOptions.onReasoningStream?.({ text });
+        await result.replyOptions.onReasoningStream?.({ text });
       }
       if (partial) {
         result.replyOptions.onPartialReply?.({ text: partial });
