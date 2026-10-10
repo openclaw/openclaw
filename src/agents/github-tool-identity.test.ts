@@ -181,7 +181,9 @@ describe("GitHub tool identity", () => {
         : {}),
       PREVIEW_SERVICE_TOKEN: "",
     });
-    expect(Object.keys(envScrub.localIdentityEnv).length).toBe(managed ? 1 : 0);
+    expect(envScrub.localIdentityEnv).toEqual(
+      managed ? { GH_CONFIG_DIR: expect.any(String), GH_HOST: "github.com" } : {},
+    );
     expect(envScrub.excludedStoreNames).toEqual([]);
 
     const storeScrub = prepareGitHubToolEnvironment({

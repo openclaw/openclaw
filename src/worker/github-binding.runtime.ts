@@ -146,6 +146,7 @@ export async function prepareWorkerGitHubEnvironment(params: {
   }
   const localIdentityEnv = managedGitHubIdentityEnvironment({
     profileDir,
+    host: githubHost,
     gitAuthor: binding.gitAuthor,
     // Reset inherited helpers so paired-device credentials cannot override the turn identity.
     gitConfig: [
@@ -153,7 +154,6 @@ export async function prepareWorkerGitHubEnvironment(params: {
       ["credential.helper", "!gh auth git-credential"],
     ],
   });
-  const hostIdentityEnv = { ...localIdentityEnv, GH_HOST: githubHost };
   if (os.platform() === "win32") {
     const permissions = await inspectPathPermissions(profileDir);
     if (
@@ -174,7 +174,7 @@ export async function prepareWorkerGitHubEnvironment(params: {
     binding,
     {
       ...process.env,
-      ...hostIdentityEnv,
+      ...localIdentityEnv,
       // Git may rewrite the remote URL; only the host-keyed profile can supply credentials.
       ...CLEARED_GITHUB_CREDENTIALS,
     },
@@ -208,7 +208,7 @@ export async function prepareWorkerGitHubEnvironment(params: {
     managedLocalIdentity: true,
     excludedStoreNames: [],
     credentialScrubEnv: { ...CLEARED_GITHUB_CREDENTIALS },
-    localIdentityEnv: hostIdentityEnv,
+    localIdentityEnv,
     localGitConfigParameters: AGENT_GIT_CONFIG_PARAMETERS,
   };
 }
