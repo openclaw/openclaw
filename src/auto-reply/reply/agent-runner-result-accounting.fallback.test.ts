@@ -25,7 +25,9 @@ let storePath: string;
 let sequence = 0;
 const operations: ReplyOperation[] = [];
 afterEach(() => {
-  for (const operation of operations.splice(0)) operation.complete();
+  for (const operation of operations.splice(0)) {
+    operation.complete();
+  }
 });
 beforeAll(() => {
   // openclaw-temp-dir: allow suite database root drains before removal

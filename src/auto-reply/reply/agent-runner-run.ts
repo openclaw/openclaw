@@ -315,7 +315,9 @@ export async function runReplyAgent(
         },
         onCommittedEntry: (entry) => {
           activeSessionEntry = entry;
-          if (activeSessionEntry) activeSessionStore[sessionKey] = activeSessionEntry;
+          if (activeSessionEntry) {
+            activeSessionStore[sessionKey] = activeSessionEntry;
+          }
         },
       });
     } else {

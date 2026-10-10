@@ -113,7 +113,9 @@ async function withActor(
     let epoch = 0;
     const lifetime = {
       assertAdmission() {
-        if (fault.admissionCancelled) throw new Error("Admission cancelled");
+        if (fault.admissionCancelled) {
+          throw new Error("Admission cancelled");
+        }
       },
       assertCurrent() {},
       assertReadable() {},
@@ -543,23 +545,19 @@ it("refuses cancelled admission while an accepted phase settles its committed re
   await withActor(async ({ actor, fault, commands }) => {
     const initial = await actor.read(authority);
     const continuePhase = Promise.withResolvers<void>();
-    const operation = actor.withPhase(
-      "accepted-turn",
-      authority,
-      async ({ actor: held, patch }) => {
-        patch([{ kind: "activity", updatedAt: 790 }]);
-        await continuePhase.promise;
-        return held.patch(
-          {
-            commandId: "accepted",
-            phaseId: "accepted-turn",
-            expected: initial.version,
-            reducers: [],
-          },
-          authority,
-        );
-      },
-    );
+    const operation = actor.withPhase("accepted-turn", authority, async (phase) => {
+      phase.patch([{ kind: "activity", updatedAt: 790 }]);
+      await continuePhase.promise;
+      return phase.actor.patch(
+        {
+          commandId: "accepted",
+          phaseId: "accepted-turn",
+          expected: initial.version,
+          reducers: [],
+        },
+        authority,
+      );
+    });
     fault.admissionCancelled = true;
     expect(() => actor.snapshot(authority)).toThrow("Admission cancelled");
     expect(() => actor.read(authority)).toThrow("Admission cancelled");
@@ -575,7 +573,9 @@ it("refuses cancelled admission while an accepted phase settles its committed re
     continuePhase.resolve();
     const result = await operation;
     expect(result.kind).toBe("committed");
-    if (result.kind !== "committed") throw new Error("Expected accepted commit");
+    if (result.kind !== "committed") {
+      throw new Error("Expected accepted commit");
+    }
     expect(result.receipt.postimage.entry?.updatedAt).toBe(790);
     expect(commands).toEqual(["session.actor.read", "session.actor.patch"]);
   });

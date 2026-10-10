@@ -35,7 +35,9 @@ export async function withSessionActor<T>(
   lifetime.assertAdmission?.();
   lifetime.assertCurrent();
   const source = captureIncognitoSessionSource(input);
-  if (source && "kind" in source) return undefined;
+  if (source && "kind" in source) {
+    return undefined;
+  }
   if (source) {
     const execution = await captureOpenClawAgentDatabaseExecution({
       kind: "ephemeral",
@@ -50,7 +52,9 @@ export async function withSessionActor<T>(
       existingOnly: true,
       signal: source.admissionSignal,
     });
-    if (!execution) return undefined;
+    if (!execution) {
+      return undefined;
+    }
     try {
       if (!isDeepStrictEqual(execution.identity, source.actor.identity)) {
         throw new Error("Session actor acquisition changed its incognito owner");
@@ -96,7 +100,9 @@ export async function withSessionActor<T>(
     lifetime.assertCurrent();
     target = captureNativeIncognitoSessionActorTarget({ database, sessionKey: scope.sessionKey });
   }
-  if (!target) return undefined;
+  if (!target) {
+    return undefined;
+  }
   const actor = await createSessionActorFactory({
     ...database,
     path: target.database.kind === "file" ? identity.canonicalPath : database.path,

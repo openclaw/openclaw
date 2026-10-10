@@ -61,14 +61,17 @@ describe("session actor usage accounting", () => {
               publish() {},
             },
             async (completion) => {
-              if (!completion) throw new Error("Missing usage completion owner");
+              if (!completion) {
+                throw new Error("Missing usage completion owner");
+              }
               const prepared = prepareSessionUsageUpdate({ cfg: {}, ...update });
-              if (prepared)
+              if (prepared) {
                 completion.patch((current) => ({
                   kind: "usage",
                   update: { ...prepared.update, estimatedCostUsd: prepared.estimateCost(current) },
                   updatedAt: Date.now(),
                 }));
+              }
             },
           );
         } finally {

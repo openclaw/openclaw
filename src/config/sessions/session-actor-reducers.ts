@@ -7,10 +7,12 @@ export function reduceSessionActorEntry(
   entry: SessionEntry,
   reducers: readonly SessionActorReducer[],
 ): SessionEntry {
-  let next = structuredClone(entry);
+  const next = structuredClone(entry);
   for (const reducer of reducers) {
     const patch = reduceSessionBookkeeping(next, reducer);
-    if (patch) next = { ...next, ...patch };
+    if (patch) {
+      Object.assign(next, patch);
+    }
   }
   return next;
 }

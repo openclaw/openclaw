@@ -177,7 +177,7 @@ function observeCompletionCommands(
         get fileIdentity() {
           return owner.fileIdentity;
         },
-        runExisting: (source, run, options) =>
+        runExisting: (source, run, runOptions) =>
           owner.runExisting(
             source,
             (worker) =>
@@ -187,7 +187,7 @@ function observeCompletionCommands(
                   return worker.execute(command, commandOptions);
                 },
               }),
-            options,
+            runOptions,
           ),
       };
     });
@@ -210,10 +210,10 @@ function observeCompletionCommands(
         return authorize(request, grant);
       }, attachment);
       if (options.hideCommittedReceipt) {
-        const committed = Object.getOwnPropertyDescriptor(owner, "committed")!.get!;
+        const committed = Object.getOwnPropertyDescriptor(owner, "committed")!;
         Object.defineProperty(owner, "committed", {
           get() {
-            const receipt = committed.call(owner);
+            const receipt = committed.get!.call(owner);
             return terminalCommit ? undefined : receipt;
           },
         });

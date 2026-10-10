@@ -38,7 +38,9 @@ export async function withAgentTurnCompletion<T>(
   consume: (completion: AgentTurnCompletion | undefined) => Promise<T>,
 ): Promise<T> {
   const { storePath, sessionKey, entry, operation } = params;
-  if (!storePath || !sessionKey || !entry) return consume(undefined);
+  if (!storePath || !sessionKey || !entry) {
+    return consume(undefined);
+  }
   const expected = {
     sessionId: entry.sessionId,
     lifecycleRevision: entry.lifecycleRevision,
@@ -93,19 +95,25 @@ export async function withAgentTurnCompletion<T>(
         current: () => project().entry,
         refresh,
         patch(reducer) {
-          if (finished) throw new Error("Terminal accounting is already settled");
+          if (finished) {
+            throw new Error("Terminal accounting is already settled");
+          }
           prepared.push(reducer);
         },
         async complete(pendingFinalDelivery) {
           if (finished) {
-            if (pendingFinalDelivery) throw new Error("Final delivery custody is already settled");
+            if (pendingFinalDelivery) {
+              throw new Error("Final delivery custody is already settled");
+            }
             return snapshot.entry!;
           }
           finished = true;
           await refresh();
           for (let attempt = 0; ; attempt++) {
             const { reducers } = project();
-            if (reducers.length === 0 && !pendingFinalDelivery) return snapshot.entry!;
+            if (reducers.length === 0 && !pendingFinalDelivery) {
+              return snapshot.entry!;
+            }
             const committed: { receipt?: SessionActorReceipt } = {};
             const outcome = await actor.completeTurn(
               {
@@ -153,7 +161,9 @@ export async function withAgentTurnCompletion<T>(
                 outcome.kind === "unknown" ? "outcome-unknown" : "unavailable",
               );
             }
-            if (outcome.failure) throw new Error(outcome.failure.message);
+            if (outcome.failure) {
+              throw new Error(outcome.failure.message);
+            }
             return snapshot.entry!;
           }
         },
@@ -168,6 +178,7 @@ export async function withAgentTurnCompletion<T>(
           throw new AggregateError(
             [error, settlementError],
             "Terminal accounting failed to settle",
+            { cause: error },
           );
         }
         throw error;
@@ -176,6 +187,8 @@ export async function withAgentTurnCompletion<T>(
       return { value };
     },
   );
-  if (!result) throw new Error("Terminal accounting session is unavailable");
+  if (!result) {
+    throw new Error("Terminal accounting session is unavailable");
+  }
   return result.value;
 }

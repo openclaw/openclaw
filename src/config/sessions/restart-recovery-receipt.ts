@@ -103,7 +103,9 @@ export async function beginRestartRecoveryTerminalDelivery(
         ),
       );
       const value = terminalValue(outcome);
-      if (!value) return "stale";
+      if (!value) {
+        return "stale";
+      }
       return value.disposition;
     })) ?? "stale"
   );
@@ -114,10 +116,14 @@ const receiptAuthority: SessionActorAuthority = { assertCurrent() {}, authorize(
 
 function terminalValue<Value>(outcome: SessionActorOutcome<Value>): Value | undefined {
   if (outcome.kind === "committed") {
-    if (outcome.failure) throw new Error(outcome.failure.message);
+    if (outcome.failure) {
+      throw new Error(outcome.failure.message);
+    }
     return outcome.value;
   }
-  if (outcome.kind === "rolled-back" && outcome.reason === "stale-state") return undefined;
+  if (outcome.kind === "rolled-back" && outcome.reason === "stale-state") {
+    return undefined;
+  }
   throw new SqliteWorkerError(
     outcome.error.message,
     outcome.kind === "unknown" ? "outcome-unknown" : "unavailable",
@@ -142,9 +148,12 @@ async function updatePendingTerminalDelivery(
         ),
       );
       const value = terminalValue(settled);
-      if (!value) return "stale";
-      if (!("disposition" in value))
+      if (!value) {
+        return "stale";
+      }
+      if (!("disposition" in value)) {
         throw new Error("Restart delivery returned another settlement");
+      }
       return value.disposition;
     })) ?? "stale"
   );

@@ -104,9 +104,13 @@ export function projectSessionEntryPatch(
   let next: SessionEntry | undefined;
   for (const operation of operations) {
     const patch = reduceSessionEntryPatch(operation, writeBase, existing);
-    if (patch === null) continue;
+    if (patch === null) {
+      continue;
+    }
     next = mergeSessionEntryPatch({ ...params, existing, writeBase, patch });
-    if (next) existing = writeBase = next;
+    if (next) {
+      existing = writeBase = next;
+    }
   }
   return next;
 }
@@ -130,13 +134,16 @@ export function reduceSessionBookkeeping(
     case "live-model":
       // SAFETY: This internal reducer's closed expected record contains only SessionEntry keys.
       for (const key of Object.keys(reducer.expected) as Array<keyof typeof reducer.expected>) {
-        if (entry[key] !== reducer.expected[key]) return null;
+        if (entry[key] !== reducer.expected[key]) {
+          return null;
+        }
       }
       return {
         ...reducer.next,
         ...(reducer.clearPending ? { liveModelSwitchPending: undefined } : {}),
       };
   }
+  return reducer satisfies never;
 }
 
 function reduceSessionEntryPatch(

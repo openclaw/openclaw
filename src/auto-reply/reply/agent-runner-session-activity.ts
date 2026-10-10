@@ -14,8 +14,9 @@ export async function commitQueuedReplySessionActivity(params: {
   assertCurrent: () => void;
   onCommittedEntry: (entry: SessionEntry | undefined) => void;
 }): Promise<void> {
+  const assertCurrent = () => params.assertCurrent();
   const authority: SessionActorAuthority = {
-    assertCurrent: params.assertCurrent,
+    assertCurrent,
     authorize(_stage, facts) {
       const current = facts.entry;
       if (
@@ -30,7 +31,7 @@ export async function commitQueuedReplySessionActivity(params: {
   // This queue/steering branch has no later durable command before returning.
   await withSessionActor(
     params.target,
-    { assertCurrent: authority.assertCurrent, assertReadable: authority.assertCurrent },
+    { assertCurrent, assertReadable: assertCurrent },
     async (actor) => {
       const outcome = await runSessionActorCommand(actor, authority, (snapshot) =>
         actor.patch(
@@ -43,13 +44,16 @@ export async function commitQueuedReplySessionActivity(params: {
           authority,
         ),
       );
-      if (outcome.kind !== "committed")
+      if (outcome.kind !== "committed") {
         throw new SqliteWorkerError(
           outcome.error.message,
           outcome.kind === "unknown" ? "outcome-unknown" : "unavailable",
         );
+      }
       params.onCommittedEntry(outcome.receipt.postimage.entry);
-      if (outcome.failure) throw new Error(outcome.failure.message);
+      if (outcome.failure) {
+        throw new Error(outcome.failure.message);
+      }
     },
   );
 }

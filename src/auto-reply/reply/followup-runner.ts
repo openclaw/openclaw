@@ -220,16 +220,21 @@ export function createFollowupRunner(
           operation: turn.operation,
           publish: (entry) => turn.session.publish(entry),
         },
-        async (completion) => {
-          const accounting = await accountFollowupTurn({ turn, defaults, execution, completion });
-          const decision = await resolveFollowupDeliveryDecision({
+        async (turnCompletion) => {
+          const accounting = await accountFollowupTurn({
+            turn,
+            defaults,
+            execution,
+            completion: turnCompletion,
+          });
+          const resolved = await resolveFollowupDeliveryDecision({
             turn,
             execution: execution.execution,
             accounting,
             opts: deliveryOpts,
           });
-          await completion?.complete();
-          return decision;
+          await turnCompletion?.complete();
+          return resolved;
         },
       );
       if (decision.kind === "deliver") {

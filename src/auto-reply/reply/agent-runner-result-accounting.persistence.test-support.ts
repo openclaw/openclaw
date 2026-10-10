@@ -269,14 +269,14 @@ export async function createAgentAccountingPersistenceFixture({
         const delivered: ReplyPayload[] = [];
         const decision = await withCompletion(async (completion) => {
           const accounting = await accountQueued(context.execution, completion);
-          const decision = await resolveFollowupDeliveryDecision({
+          const resolved = await resolveFollowupDeliveryDecision({
             turn,
             execution: { runId: context.runId, outcome: context.execution },
             accounting,
             opts: { onBlockReply: async () => {} },
           });
           await completion?.complete();
-          return decision;
+          return resolved;
         });
         await deliverFollowupDecision({
           decision,

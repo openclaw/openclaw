@@ -169,8 +169,12 @@ export async function settlePendingFinalDelivery(
   const live: SessionActorAuthority = {
     assertCurrent() {},
     authorize(stage, facts) {
-      if (!claim) return;
-      if (stage === "transaction" || !preimage) preimage = facts.entry;
+      if (!claim) {
+        return;
+      }
+      if (stage === "transaction" || !preimage) {
+        preimage = facts.entry;
+      }
       const entry = facts.entry;
       if (
         !entry ||
@@ -229,21 +233,28 @@ export async function settlePendingFinalDelivery(
       );
     } catch (error) {
       // No command was accepted if its read's live authorization refused.
-      if (refused) return;
+      if (refused) {
+        return;
+      }
       throw error;
     }
     if (outcome.kind !== "committed") {
-      if (outcome.kind === "rolled-back" && (refused || outcome.reason === "stale-state")) return;
+      if (outcome.kind === "rolled-back" && (refused || outcome.reason === "stale-state")) {
+        return;
+      }
       throw new SqliteWorkerError(
         outcome.error.message,
         outcome.kind === "unknown" ? "outcome-unknown" : "unavailable",
       );
     }
-    if (!("state" in outcome.value))
+    if (!("state" in outcome.value)) {
       throw new Error("Pending final delivery returned another settlement");
+    }
     settled = outcome.value.state;
     wakeRecovery = outcome.value.wakeRecovery;
-    if (outcome.failure) throw new Error(outcome.failure.message);
+    if (outcome.failure) {
+      throw new Error(outcome.failure.message);
+    }
   });
   if (wakeRecovery) {
     const { scheduleMainSessionRecoveryPendingTarget } =

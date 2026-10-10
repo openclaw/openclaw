@@ -63,7 +63,9 @@ describe("live model switch worker persistence", () => {
               modelUsed: "gpt-5.4",
               entry: snapshot.entry!,
             });
-            if (!reducer) return;
+            if (!reducer) {
+              return;
+            }
             const outcome = await actor.completeTurn(
               {
                 commandId: "complete-selection",
@@ -175,7 +177,9 @@ describe("live model switch worker persistence", () => {
       providerUsed: "openai",
       modelUsed: "gpt-5.4",
     });
-    if (!reducer) throw new Error("Expected applied model selection");
+    if (!reducer) {
+      throw new Error("Expected applied model selection");
+    }
     const authority = { assertCurrent() {}, authorize() {} };
     for (const newer of [
       { providerOverride: "other-provider" },

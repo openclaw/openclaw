@@ -655,14 +655,14 @@ it.each(["assistant append", "empty append", "bookkeeping"] as const)(
           },
         },
       });
-      expect(committed.value).toMatchObject({
-        ...(mode === "bookkeeping"
+      expect(committed.value).toMatchObject(
+        mode === "bookkeeping"
           ? { kind: "bookkeeping" }
           : {
               kind: "session-turn",
               result: { sessionEntry: committed.receipt.postimage.entry },
-            }),
-      });
+            },
+      );
       const appended = committed.receipt.transcript.appendedMessages;
       if (mode === "assistant append") {
         expect(appended).toMatchObject([
@@ -840,7 +840,9 @@ it("publishes actual pending-final state and evidence only after live commit aut
       },
     } satisfies Mutation;
     f.hooks.admit = (stage) => {
-      if (stage === "commit") throw new Error("harness claim revoked");
+      if (stage === "commit") {
+        throw new Error("harness claim revoked");
+      }
     };
     expect(f.mutate(command)).toMatchObject({ kind: "rolled-back" });
     expect(f.nativeEntry()).toEqual(initial.entry);

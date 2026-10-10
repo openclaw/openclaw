@@ -454,7 +454,9 @@ describe("model chat and native model ownership", () => {
               publish() {},
             },
             async (completion) => {
-              if (!completion || !prepared) throw new Error("Missing usage completion owner");
+              if (!completion || !prepared) {
+                throw new Error("Missing usage completion owner");
+              }
               completion.patch((entry) => ({
                 kind: "usage",
                 update: { ...prepared.update, estimatedCostUsd: prepared.estimateCost(entry) },

@@ -103,13 +103,17 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
   activeSessionEntry = completion?.current() ?? activeSessionEntry;
   const patchBookkeeping = (entry: SessionEntry | undefined, reducers: SessionActorReducer[]) => {
     if (completion) {
-      for (const reducer of reducers) completion.patch(reducer);
+      for (const reducer of reducers) {
+        completion.patch(reducer);
+      }
       return completion.current();
     }
     // Entry-only callers keep their transient projection, without a second durable writer.
     if (entry && !context.storePath) {
       Object.assign(entry, reduceSessionActorEntry(entry, reducers));
-      if (activeSessionStore && sessionKey) activeSessionStore[sessionKey] = entry;
+      if (activeSessionStore && sessionKey) {
+        activeSessionStore[sessionKey] = entry;
+      }
     }
     return entry;
   };
@@ -336,7 +340,9 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
         modelUsed: sessionModel.model,
         entry: completion.current(),
       });
-      if (reducer) completion.patch(reducer);
+      if (reducer) {
+        completion.patch(reducer);
+      }
     }
   }
 

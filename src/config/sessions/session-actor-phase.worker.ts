@@ -101,8 +101,11 @@ export function applySessionActorPhase(
         : {}),
     };
     if (!isDeepStrictEqual(entry, next)) {
-      if (defer) entryUpdate = next;
-      else writeEntry(next);
+      if (defer) {
+        entryUpdate = next;
+      } else {
+        writeEntry(next);
+      }
     }
   };
   const turn = (input: SessionTurnPlan) => {
@@ -295,7 +298,9 @@ export function applySessionActorPhase(
               : {}),
             ...(pendingFinalDelivery ? { pendingFinalDelivery } : {}),
           };
-          if (!isDeepStrictEqual(entry, next)) entryUpdate = next;
+          if (!isDeepStrictEqual(entry, next)) {
+            entryUpdate = next;
+          }
         }
       }
       const completion = command.input.completion;
@@ -367,7 +372,9 @@ export function applySessionActorPhase(
       try {
         next = reduceSessionActorEntry(entry, [reducer]);
       } catch (error) {
-        if (reducer.kind !== "usage") throw error;
+        if (reducer.kind !== "usage") {
+          throw error;
+        }
         reducers.push({
           index,
           kind: reducer.kind,
@@ -382,9 +389,13 @@ export function applySessionActorPhase(
       reducers.push({ index, kind: reducer.kind, changed: !isDeepStrictEqual(entry, next) });
       entry = next;
     }
-    if (reducers.some(({ changed }) => changed)) entryUpdate = entry;
+    if (reducers.some(({ changed }) => changed)) {
+      entryUpdate = entry;
+    }
   }
-  if (entryUpdate) writeEntry(entryUpdate);
+  if (entryUpdate) {
+    writeEntry(entryUpdate);
+  }
   const committedTurn =
     result && "kind" in result && result.kind === "session-turn"
       ? result

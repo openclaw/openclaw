@@ -100,7 +100,9 @@ export function prepareLiveModelSwitchAfterRun(params: {
   const provider = normalizeOptionalString(params.providerUsed);
   const model = normalizeOptionalString(params.modelUsed);
   const entry = params.entry;
-  if (!entry.liveModelSwitchPending || !provider || !model) return undefined;
+  if (!entry.liveModelSwitchPending || !provider || !model) {
+    return undefined;
+  }
   const persisted = resolveSelectionFromSessionEntry({
     cfg: params.cfg,
     entry,
@@ -115,8 +117,9 @@ export function prepareLiveModelSwitchAfterRun(params: {
   if (
     !(provider === persisted.provider && model === persisted.model) &&
     !isAlreadyAppliedOpenAICodexRuntimePromotion({ provider, model }, persisted)
-  )
+  ) {
     return undefined;
+  }
   return {
     kind: "live-model",
     expected: {
