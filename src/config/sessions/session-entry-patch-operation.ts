@@ -139,7 +139,7 @@ export function reduceSessionBookkeeping(
   }
 }
 
-export function reduceSessionEntryPatch(
+function reduceSessionEntryPatch(
   operation: SessionEntryPatchStep,
   entry: SessionEntry,
   existingEntry: SessionEntry | undefined,
