@@ -10,6 +10,7 @@ import {
   pruneExpiredAuditEventsInDatabase,
   recordAuditEventInDatabase,
 } from "./audit-event-store.js";
+import { pruneExpiredSkillSelectionAuditEvents } from "./audit-event-store.skill-selection-storage.js";
 import type { AuditEventInput, SkillSelectionAuditEventInput } from "./audit-event-types.js";
 
 const tempDirs: string[] = [];
@@ -214,11 +215,10 @@ describe("audit event skill-selection persistence", () => {
     const database = createDatabaseOptions();
     const occurredAt = Date.now();
     const { db } = openOpenClawStateDatabase(database);
-    recordAuditEventInDatabase(skillSelectionInput({ occurredAt }), {
-      ...database,
-      database: openOpenClawStateDatabase(database),
-    });
-    db.prepare("DELETE FROM audit_skill_selection_events").run();
+    // Establish the companion schema without warming the per-connection
+    // row-count cache, mirroring how the canonical ledger cap test seeds
+    // rows before the first counted insert.
+    pruneExpiredSkillSelectionAuditEvents({ db, retainedAfter: occurredAt });
     db.prepare(
       `WITH digits(d) AS (VALUES (0),(1),(2),(3),(4),(5),(6),(7),(8),(9)),
             numbers(n) AS (

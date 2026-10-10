@@ -509,14 +509,11 @@ export type AuditActivityToolActionV1 = AuditActivityRecordBaseV1 &
   SchemaContract<Static<TObject<typeof toolActionProperties>>> &
   AuditActivityToolActionV1Terminal;
 
-export type AuditActivitySkillSelectionV1 = AuditActivityRecordBaseV1 & {
-  eventType: "skill_selection";
-  kind: "skill_selection";
-  action: "skill.selection.observed";
-  status: "observed";
-  actor: { type: "agent" | "system"; id: string };
-  selectedSkill: string;
-};
+// Derived from the canonical schema properties (same SchemaContract pattern
+// as the adjacent variants), so attribution fields required by wire
+// validation (agentId, runId) stay visible to typed consumers.
+export type AuditActivitySkillSelectionV1 = AuditActivityRecordBaseV1 &
+  SchemaContract<Static<TObject<typeof skillSelectionProperties>>>;
 
 type AuditActivityMessageRecordBaseV1 = AuditActivityRecordBaseV1 & {
   sessionKey?: never;

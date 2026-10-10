@@ -31,6 +31,7 @@ import {
   requireNullColumns,
 } from "./audit-event-store.row-helpers.js";
 import {
+  invalidateSkillSelectionAuditCachesForDatabase,
   pruneExpiredSkillSelectionAuditEvents,
   recordSkillSelectionAuditEvent,
 } from "./audit-event-store.skill-selection-storage.js";
@@ -547,6 +548,7 @@ export function recordAuditEventInDatabase(
   } catch (error) {
     if (countCacheDatabase) {
       auditEventRowCounts.delete(countCacheDatabase);
+      invalidateSkillSelectionAuditCachesForDatabase(countCacheDatabase);
       clearAuditIdentityKeyCacheForDatabase(countCacheDatabase);
     }
     throw error;

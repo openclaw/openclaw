@@ -36,6 +36,27 @@ function getSkillSelectionAuditKysely(db: DatabaseSync) {
   return getNodeSqliteKysely<AuditSkillSelectionDatabase>(db);
 }
 
+/**
+ * Per-connection skill-selection row-count cache, mirroring the
+ * `auditEventRowCounts` pattern of the canonical ledger: ordinary writes
+ * do bounded work and only fall back to COUNT(*) on a cold cache.
+ */
+const skillSelectionAuditRowCounts = new Map<DatabaseSync, number>();
+
+/**
+ * Connections whose companion schema is established. The canonical schema
+ * admission owns this table (see openclaw-state-schema.sql); additive DDL
+ * below only runs for databases created before admission, at most once
+ * per connection.
+ */
+const skillSelectionSchemaEstablished = new WeakSet<DatabaseSync>();
+
+/** Drops cached skill-selection facts for a connection (rollback path). */
+export function invalidateSkillSelectionAuditCachesForDatabase(db: DatabaseSync): void {
+  skillSelectionAuditRowCounts.delete(db);
+  skillSelectionSchemaEstablished.delete(db);
+}
+
 function ensureSkillSelectionAuditSchema(db: DatabaseSync): void {
   // sqlite-allow-raw -- Canonical additive DDL only; skill-selection rows use Kysely.
   db.exec(`
@@ -79,8 +100,18 @@ function countSkillSelectionAuditEvents(db: DatabaseSync): number {
   return normalizeSqliteNumber(row?.count ?? null) ?? 0;
 }
 
+function ensureSkillSelectionAuditSchemaOnce(db: DatabaseSync): void {
+  if (skillSelectionSchemaEstablished.has(db)) {
+    return;
+  }
+  if (!tableExists(db, "audit_skill_selection_events")) {
+    ensureSkillSelectionAuditSchema(db);
+  }
+  skillSelectionSchemaEstablished.add(db);
+}
+
 function deleteExpiredSkillSelectionAuditEvents(db: DatabaseSync, retainedAfter: number): number {
-  ensureSkillSelectionAuditSchema(db);
+  ensureSkillSelectionAuditSchemaOnce(db);
   const kysely = getSkillSelectionAuditKysely(db);
   const expiredSequences = kysely
     .selectFrom("audit_skill_selection_events")
@@ -93,13 +124,27 @@ function deleteExpiredSkillSelectionAuditEvents(db: DatabaseSync, retainedAfter:
     db,
     kysely.deleteFrom("audit_skill_selection_events").where("sequence", "in", expiredSequences),
   );
-  return Number(result.numAffectedRows ?? 0n);
+  const deleted = Number(result.numAffectedRows ?? 0n);
+  // Maintenance ticks share this path, so keep a warm count honest here
+  // instead of letting it drift until the next insert.
+  const cachedCount = skillSelectionAuditRowCounts.get(db);
+  if (cachedCount !== undefined) {
+    skillSelectionAuditRowCounts.set(db, Math.max(0, cachedCount - deleted));
+  }
+  return deleted;
 }
 
 function pruneSkillSelectionAuditEventsAfterInsert(db: DatabaseSync, retainedAfter: number): void {
-  deleteExpiredSkillSelectionAuditEvents(db, retainedAfter);
-  const rowCount = countSkillSelectionAuditEvents(db);
+  const expiredCount = deleteExpiredSkillSelectionAuditEvents(db, retainedAfter);
+  // One COUNT(*) per connection lifetime: a warm cache advances by
+  // (+1 insert, −expired) exactly like the canonical ledger pattern.
+  const cachedCount = skillSelectionAuditRowCounts.get(db);
+  let rowCount =
+    cachedCount === undefined
+      ? countSkillSelectionAuditEvents(db)
+      : Math.max(0, cachedCount + 1 - expiredCount);
   if (rowCount <= SKILL_SELECTION_AUDIT_MAX_ROWS) {
+    skillSelectionAuditRowCounts.set(db, rowCount);
     return;
   }
   const retainedRows = Math.max(
@@ -120,9 +165,13 @@ function pruneSkillSelectionAuditEventsAfterInsert(db: DatabaseSync, retainedAft
   if (sequenceCutoff === undefined) {
     return;
   }
-  executeSqliteQuerySync(
+  const pruned = executeSqliteQuerySync(
     db,
     kysely.deleteFrom("audit_skill_selection_events").where("sequence", "<=", sequenceCutoff),
+  );
+  skillSelectionAuditRowCounts.set(
+    db,
+    Math.max(0, rowCount - Number(pruned.numAffectedRows ?? 0n)),
   );
 }
 
@@ -221,7 +270,7 @@ export function recordSkillSelectionAuditEvent(
   db: DatabaseSync,
   retainedAfter: number,
 ): AuditEventRecord | undefined {
-  ensureSkillSelectionAuditSchema(db);
+  ensureSkillSelectionAuditSchemaOnce(db);
   const sequence = allocateAuditSequence(db);
   const row = bindSkillSelectionAuditEvent(sequence, input);
   const inserted = executeSqliteQueryTakeFirstSync(

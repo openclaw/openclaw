@@ -489,8 +489,9 @@ ignore this additive table as well.
 
 Observed runtime skill selections live in the additive
 `audit_skill_selection_events` companion table. Collection follows the master
-`logging.audit.enabled` switch: disabling the ledger stops new rows after a
-Gateway restart, while retained rows remain queryable until expiry. Each row
+`logging.audit.enabled` switch: the recorder re-reads the switch on every
+event, so disabling the ledger stops new rows immediately (already accepted
+writes still drain), while retained rows remain queryable until expiry. Each row
 contains only the skill name, observed status, timestamp, and run attribution
 (agent, optional session, and run ids); it does not retain skill contents,
 paths, prompts, arguments, results, or raw errors. The table uses the same
