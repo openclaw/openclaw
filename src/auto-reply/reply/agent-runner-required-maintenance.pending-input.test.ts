@@ -202,8 +202,8 @@ describe("required maintenance with restart-safe admitted input", () => {
                     name: "Synthetic model",
                     reasoning: false,
                     input: ["text"],
-                    contextWindow: 32_768,
-                    contextTokens: 32_768,
+                    contextWindow: 49_152,
+                    contextTokens: 49_152,
                     maxTokens: 8_192,
                     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
                   },
@@ -339,7 +339,8 @@ describe("required maintenance with restart-safe admitted input", () => {
           const sessionStore = { [sessionKey]: entry };
           installAgentRunnerMemoryFixture(() => ({
             softThresholdTokens: 4_000,
-            reserveTokensFloor: 8_192,
+            // Keep the 24,576-token maintenance threshold with transport-estimation headroom.
+            reserveTokensFloor: 24_576,
             forceFlushTranscriptBytes: 2 * 1024 * 1024,
             prompt: "Checkpoint durable notes. Reply NO_REPLY.",
             systemPrompt: "Write durable notes only.",
