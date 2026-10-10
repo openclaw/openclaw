@@ -3,6 +3,7 @@ import { formatCliCommand } from "../../cli/command-format.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveChannelAccountKey } from "../../routing/account-lookup.js";
 import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
+import type { ChannelMessageActionName } from "./message-action-names.js";
 import type { ChannelSecurityDmPolicy } from "./types.core.js";
 import type { ChannelPlugin } from "./types.plugin.js";
 
@@ -15,6 +16,18 @@ export function resolveChannelDefaultAccountId<ResolvedAccount>(params: {
     params.plugin.config.defaultAccountId?.(params.cfg) ??
     (params.accountIds ?? params.plugin.config.listAccountIds(params.cfg))[0] ??
     DEFAULT_ACCOUNT_ID
+  );
+}
+
+/** Returns whether a plugin owns and accepts a shared message action. */
+export function supportsChannelMessageAction(
+  actions: ChannelPlugin["actions"] | undefined,
+  action: ChannelMessageActionName | undefined,
+): boolean {
+  return Boolean(
+    action &&
+    typeof actions?.handleAction === "function" &&
+    (!actions.supportsAction || actions.supportsAction({ action })),
   );
 }
 

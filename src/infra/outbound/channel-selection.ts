@@ -1,6 +1,7 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveChannelAccount } from "../../channels/account-resolution.js";
 import type { AnyChannelPlugin as ChannelPlugin } from "../../channels/plugins/types.plugin.js";
+import type { ChannelMessageActionName } from "../../channels/plugins/types.public.js";
 import { formatUnknownChannelMessage } from "../../cli/error-format.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -145,6 +146,8 @@ export async function resolveMessageChannelSelection(params: {
   channel?: string | null;
   fallbackChannel?: string | null;
   agentId?: string;
+  /** Explicit and current-channel lookup only. Configured-channel fallback is unchanged. */
+  action?: ChannelMessageActionName;
   // Strict callers select usable runtime accounts. Directory inspection opts in before it knows
   // which account-scoped SecretRefs to redeem.
   accountResolution?: AccountResolutionMode;
@@ -166,6 +169,7 @@ export async function resolveMessageChannelSelection(params: {
       cfg,
       agentId,
       allowBootstrap: true,
+      ...(params.action ? { requiredAction: params.action } : {}),
     });
     if (selectedPlugin) {
       return { channel: selectedPlugin.id, plugin: selectedPlugin };

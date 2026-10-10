@@ -242,6 +242,8 @@ export async function prepareMessageRoute(params: {
     fallbackChannel:
       action === "read" && requestedChannel ? undefined : input.toolContext?.currentChannelProvider,
     agentId,
+    // Send selection must see action-only plugins. Other actions keep outbound selection.
+    ...(action === "send" ? { action } : {}),
   });
   actionParams.channel = channel;
   const explicitAccountId = await validateExplicitMessageAccountSelection({

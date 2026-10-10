@@ -426,6 +426,87 @@ describe("outbound channel resolution", () => {
     expect(resolveRuntimePluginRegistryMock).toHaveBeenCalledTimes(1);
   });
 
+  it("resolves an active actions-only plugin when the send action is requested", async () => {
+    const actionsOnlyPlugin = { id: "alpha", actions: { handleAction: vi.fn() } };
+    getLoadedChannelPluginMock.mockReturnValue(actionsOnlyPlugin);
+    getChannelPluginMock.mockReturnValue(actionsOnlyPlugin);
+    getActivePluginRegistryMock.mockReturnValue({
+      channels: [{ plugin: actionsOnlyPlugin }],
+    });
+
+    expect(
+      channelResolution.resolveOutboundChannelPlugin({
+        channel: "alpha",
+        cfg: { channels: {} } as never,
+        allowBootstrap: true,
+        requiredAction: "send",
+      }),
+    ).toBe(actionsOnlyPlugin);
+    expect(resolveRuntimePluginRegistryMock).not.toHaveBeenCalled();
+  });
+
+  it("does not resolve an actions-only plugin for an action it declines", async () => {
+    const actionsOnlyPlugin = {
+      id: "alpha",
+      actions: {
+        handleAction: vi.fn(),
+        supportsAction: () => false,
+      },
+    };
+    getLoadedChannelPluginMock.mockReturnValue(actionsOnlyPlugin);
+    getChannelPluginMock.mockReturnValue(actionsOnlyPlugin);
+    getActivePluginRegistryMock.mockReturnValue({
+      channels: [{ plugin: actionsOnlyPlugin }],
+    });
+
+    expect(
+      channelResolution.resolveOutboundChannelPlugin({
+        channel: "alpha",
+        cfg: { channels: {} } as never,
+        allowBootstrap: true,
+        requiredAction: "send",
+      }),
+    ).toBeUndefined();
+  });
+
+  it("activates an actions-only runtime from a setup shell for an explicit send", async () => {
+    const setupPlugin = { id: "alpha" };
+    const actionsOnlyPlugin = {
+      id: "alpha",
+      actions: {
+        handleAction: vi.fn(),
+        supportsAction: ({ action }: { action: string }) => action === "send",
+      },
+    };
+    getLoadedChannelPluginMock.mockReturnValue(setupPlugin);
+    getChannelPluginMock.mockReturnValue(undefined);
+    getActivePluginRegistryMock.mockReturnValue({
+      channels: [{ plugin: setupPlugin }],
+    });
+    resolveRuntimePluginRegistryMock.mockReturnValue({
+      channels: [{ plugin: actionsOnlyPlugin }],
+    });
+
+    expect(
+      channelResolution.resolveOutboundChannelPlugin({
+        channel: "alpha",
+        cfg: { channels: {} } as never,
+        allowBootstrap: true,
+      }),
+    ).toBeUndefined();
+    expect(resolveRuntimePluginRegistryMock).toHaveBeenCalledTimes(1);
+
+    expect(
+      channelResolution.resolveOutboundChannelPlugin({
+        channel: "alpha",
+        cfg: { channels: {} } as never,
+        allowBootstrap: true,
+        requiredAction: "send",
+      }),
+    ).toBe(actionsOnlyPlugin);
+    expect(resolveRuntimePluginRegistryMock).toHaveBeenCalledTimes(2);
+  });
+
   it("prefers an active runtime plugin over a loaded setup shell", async () => {
     const setupPlugin = { id: "alpha" };
     const runtimePlugin = { id: "alpha", outbound: { sendText: vi.fn() } };

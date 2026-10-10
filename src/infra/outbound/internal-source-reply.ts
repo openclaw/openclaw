@@ -79,7 +79,12 @@ export async function shouldUseInternalSourceReplySink(
     !provider ||
     provider === INTERNAL_MESSAGE_CHANNEL ||
     !isConfiguredChannel(input.cfg, provider) ||
-    !resolveOutboundChannelPlugin({ channel: provider, cfg: input.cfg, allowBootstrap: true })
+    !resolveOutboundChannelPlugin({
+      channel: provider,
+      cfg: input.cfg,
+      allowBootstrap: true,
+      requiredAction: "send",
+    })
   ) {
     return true;
   }
