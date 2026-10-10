@@ -1565,6 +1565,7 @@ const RELEASE_ONLY_TOOLING_SHARDS = new Set(["core-tooling"]);
 const RELEASE_ONLY_UI_TEST_FILES = new Set([
   "ui/src/e2e/activity-run-inspector.real-gateway.e2e.test.ts",
   "ui/src/components/app-sidebar.stress.browser.test.ts",
+  "ui/src/e2e/control-ui-stale-build-reload.e2e.test.ts",
   "ui/src/e2e/cron-duration-save.real-gateway.e2e.test.ts",
   "ui/src/e2e/desktop-resize.real-gateway.e2e.test.ts",
   "extensions/qa-lab/src/control-ui-automation-management.real-gateway.e2e.test.ts",
@@ -1681,15 +1682,13 @@ export function createUiTestShardGroups(
 ) {
   const includeReleaseOnlyTests = options.includeReleaseOnlyTests ?? true;
   const changedPaths = new Set(options.changedPaths ?? []);
+  const includeUiTest = (file: string) =>
+    includeReleaseOnlyTests || !RELEASE_ONLY_UI_TEST_FILES.has(file) || changedPaths.has(file);
   const files =
     includeReleaseOnlyTests && options.includePrExemptRuntimeTests !== false
       ? undefined
       : listTrackedTestFiles(".").filter(
-          (file) =>
-            (includeReleaseOnlyTests ||
-              !RELEASE_ONLY_UI_TEST_FILES.has(file) ||
-              changedPaths.has(file)) &&
-            isRuntimeTestFileIncluded(file, options),
+          (file) => includeUiTest(file) && isRuntimeTestFileIncluded(file, options),
         );
   const group = (config: string, ownsFile: (file: string) => boolean) => [
     {
@@ -1710,7 +1709,7 @@ export function createUiTestShardGroups(
     );
     e2eGroups[0]!.includePatterns = [
       ...new Set([
-        ...options.uiE2eFiles,
+        ...options.uiE2eFiles.filter(includeUiTest),
         ...(options.includeReleaseOnlyE2eTests ? uiE2eRealGatewayTestFiles : retained),
       ]),
     ].toSorted();

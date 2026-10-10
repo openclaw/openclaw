@@ -590,14 +590,13 @@ let uiTestGroups =
   (!frozenTarget || releaseGate) &&
   typeof nodeTestPlan.createUiTestShardGroups === "function"
     ? nodeTestPlan.createUiTestShardGroups({
-        // Preserve the ordinary owner-family inventory. Protected or directly
-        // selected files opt into the existing release-only UI tier below.
+        // Only edited test files opt into the release-only UI tier on automatic CI.
         includeReleaseOnlyTests: includeReleaseOnlyUiTests,
         ...(typeof nodeTestPlan.resolveUiE2ePrTestSelection === "function"
           ? { includeReleaseOnlyE2eTests: forceFullUiE2e }
           : {}),
         includePrExemptRuntimeTests: selectedTestTargets ? true : includePrExemptRuntimeTests,
-        changedPaths: selectedTestTargets ?? changedPaths ?? [],
+        changedPaths: changedPaths ?? [],
         ...(uiE2eSelection ? { uiE2eFiles: uiE2eSelection.files } : {}),
       })
     : null;
@@ -658,6 +657,10 @@ if (selectedTestTargets) {
   uiE2eJobCount = Math.min(uiE2eJobCount - 1, controlTargets.length) + 1;
 }
 if (uiE2eSelection) {
+  const includedFiles = new Set(
+    uiTestGroups?.e2e.flatMap((group) => group.includePatterns ?? []) ?? uiE2eSelection.files,
+  );
+  uiE2eSelection.files = uiE2eSelection.files.filter((file) => includedFiles.has(file));
   // Selection also applies to UI-only plans without a Node target inventory.
   runControlUiE2e = uiE2eSelection.files.length > 0;
   runUiE2e = runControlUiE2e || runBrowserExtensionE2e;
