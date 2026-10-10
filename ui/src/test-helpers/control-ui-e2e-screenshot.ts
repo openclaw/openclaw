@@ -86,6 +86,7 @@ type ScreenshotFrameOptions = {
   viewport?: { width: number; height: number };
   scrollTo?: Locator;
   animations?: "disabled";
+  animationFrameBeforeCapture?: boolean;
   fullPage?: boolean;
 };
 
@@ -162,6 +163,11 @@ export async function takeControlUiScreenshotFrame(
     ).toBe(true);
     if (options.scrollTo) {
       expect(await inspectControlUiProofScroll(options.scrollTo, false)).toBe(requestedScroll);
+    }
+    if (options.animationFrameBeforeCapture) {
+      await page.evaluate(
+        () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())),
+      );
     }
     const frame = await captureControlUiFrame(page, options.elements ?? [], options);
     expect(

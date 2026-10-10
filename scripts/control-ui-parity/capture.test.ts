@@ -32,6 +32,8 @@ const suite = createControlUiE2eSuite({
     // Apply static animation changes before the compositor samples the frame.
     args: [
       "--enable-features=CDPScreenshotNewSurface",
+      "--force-color-profile=srgb",
+      "--font-render-hinting=none",
       "--disable-threaded-animation",
       "--run-all-compositor-stages-before-draw",
     ],
@@ -218,6 +220,7 @@ suite.define(() => {
                   [content],
                   {
                     animations: "disabled",
+                    animationFrameBeforeCapture: true,
                     ...(scene.scrollTo ? { scrollTo: page.locator(scene.scrollTo) } : {}),
                   },
                 );
