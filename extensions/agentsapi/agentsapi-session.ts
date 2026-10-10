@@ -14,7 +14,10 @@ import {
   isAgentsApiOptionalHistoryReadFailure,
   isAgentsApiTransportDisconnect,
 } from "./agentsapi-errors.js";
-import { createAgentsApiSessionHistory } from "./agentsapi-session-history.js";
+import {
+  createAgentsApiSessionHistory,
+  waitForAgentsApiEventOrRecovery,
+} from "./agentsapi-session-history.js";
 import type { AgentsApiToolExecutionResult } from "./agentsapi-tools.js";
 
 /** Native input receipts and session idle, together, establish Agents API completion. */
@@ -26,6 +29,7 @@ export function createAgentsApiSession(options: {
   assertCurrent: () => void;
   /** A fresh session whose creation request already admitted the sole input. */
   initialInputSubmitted?: true;
+  waitForRecovery?: (ms: number, signal: AbortSignal) => Promise<void>;
   onEvent: (event: AgentsApiEvent) => void | Promise<void>;
   onReconcile?: (turn: Turn, items: AgentsApiItem[]) => Promise<void | boolean>;
   onReconcileHistory?: (entries: Array<{ turn: Turn; items: AgentsApiItem[] }>) => Promise<void>;
@@ -41,6 +45,9 @@ export function createAgentsApiSession(options: {
   ) => void | Promise<void>;
 }) {
   const { client, cleanupClient, sessionId, signal, assertCurrent } = options;
+  const waitForRecovery =
+    options.waitForRecovery ??
+    ((ms: number, recoverySignal: AbortSignal) => delay(ms, undefined, { signal: recoverySignal }));
   let streamController = new AbortController();
   let submitted = options.initialInputSubmitted ?? false;
   let inputAdmissionClosed = false;
@@ -65,6 +72,9 @@ export function createAgentsApiSession(options: {
   let latestInputTurnId: string | undefined;
   let usageTurns: Promise<Turn[]> | undefined;
   let terminatedByTool = false;
+  // Healthy streams remain event-driven. A terminal notification or transport gap
+  // needs saved-state recovery because the live stream cannot replay late records.
+  let reconciliationPending = options.initialInputSubmitted ?? false;
 
   const isAvailable = () =>
     submitted && !inputAdmissionClosed && !stopped && !settled && !rootTurn && !signal.aborted;
@@ -366,6 +376,7 @@ export function createAgentsApiSession(options: {
       void nextEvent.catch(() => {});
       const bufferedEvents: AgentsApiEvent[] = [];
       const reconnectEvents = async () => {
+        reconciliationPending = true;
         streamController.abort();
         // A broken reader can reject return() as well as next(). Retire only
         // this transport; the admitted native work remains in the session.
@@ -375,7 +386,7 @@ export function createAgentsApiSession(options: {
           }
         });
         while (true) {
-          await delay(500, undefined, { signal });
+          await waitForRecovery(500, signal);
           assertCurrent();
           streamController = new AbortController();
           try {
@@ -573,19 +584,10 @@ export function createAgentsApiSession(options: {
             if (buffered) {
               consumedBufferedEvent = true;
               chunk = { done: false, value: buffered };
-            } else if (options.initialInputSubmitted) {
-              // Creation events are not replayed, and saved records can lag them.
-              const refresh = new AbortController();
-              try {
-                chunk = await Promise.race([
-                  nextEvent,
-                  delay(1_000, undefined, {
-                    signal: AbortSignal.any([signal, refresh.signal]),
-                  }),
-                ]);
-              } finally {
-                refresh.abort();
-              }
+            } else if (reconciliationPending) {
+              // Terminal and disconnected-stream records may lag their last live event.
+              // Keep the next event in flight while reconciling within the attempt deadline.
+              chunk = await waitForAgentsApiEventOrRecovery(nextEvent, signal, waitForRecovery);
             } else {
               chunk = await nextEvent;
             }
@@ -619,6 +621,7 @@ export function createAgentsApiSession(options: {
           await options.onEvent(event);
           assertCurrent();
           if (event.type === "agent.session.idle") {
+            reconciliationPending = true;
             await settleFromSavedState();
             continue;
           }
@@ -675,6 +678,7 @@ export function createAgentsApiSession(options: {
             event.turn?.subagent_id === null &&
             event.turn.id === latestInputTurnId
           ) {
+            reconciliationPending = true;
             rootTurn = event.turn;
             turnFailure = event.type.endsWith(".failed")
               ? new AgentsApiError(

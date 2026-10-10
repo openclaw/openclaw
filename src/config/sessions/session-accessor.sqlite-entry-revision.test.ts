@@ -45,7 +45,7 @@ function fixture(filename = ":memory:") {
 
 describe("session entry revision facts", () => {
   it("reuses unchanged generation reads across admitted operations", () => {
-    const { db, read } = fixture();
+    const { read } = fixture();
     // The first read installs TEMP triggers; admit that schema before observing warm reads.
     expect(read()).toBe(0);
     const observation = observeSqliteReadSql(StatementSync.prototype);

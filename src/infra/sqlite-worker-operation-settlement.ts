@@ -6,35 +6,20 @@ import type { MessagePort } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { stageSqliteTransactionState } from "./sqlite-post-commit.js";
-import { SQLITE_WORKER_MAX_MESSAGE_BYTES, SqliteWorkerError } from "./sqlite-worker-contract.js";
-
-export const sqliteDatabaseAdmissionUpstream = resolveGlobalSingleton<{
-  connection?: { port: MessagePort; closed: boolean };
-}>(Symbol.for("openclaw.sqliteDatabaseAdmissionUpstream"), () => ({}));
-
-/** A served worker relays descendant facts through its existing lifetime channel. */
-export function bindSqliteDatabaseAdmissionUpstream(port: MessagePort): void {
-  const current = sqliteDatabaseAdmissionUpstream.connection;
-  if (current) {
-    if (current.port !== port) {
-      throw new SqliteWorkerError("SQLite admission upstream changed owner", "closed");
-    }
-    return;
-  }
-  const connection = { port, closed: false };
-  sqliteDatabaseAdmissionUpstream.connection = connection;
-  port.once("close", () => {
-    connection.closed = true;
-  });
-  port.unref();
-}
+import {
+  SQLITE_WORKER_MAX_MESSAGE_BYTES,
+  SqliteWorkerError,
+  type SqliteWorkerAdmissionTimeoutError,
+} from "./sqlite-worker-contract.js";
 
 export type SqliteWorkerOperationContext = {
   port: MessagePort;
   attachment?: { value: unknown };
-  refusal?: SqliteWorkerError;
+  refusal?: SqliteWorkerError | InstanceType<typeof SqliteWorkerAdmissionTimeoutError>;
   committed?: { facts: unknown };
   settled?: true;
+  sourceReservations?: true;
+  pendingReceipts?: Map<DatabaseSync, number>;
 };
 
 export type NativeCommitReceipt = {
@@ -109,11 +94,24 @@ export function deferSqliteWorkerNativeCommitReceipt(
   }
   const captured = structuredClone(facts);
   const operationId = nativeCommitReceipts.get(owner)?.operationId ?? randomUUID();
+  const counts = owner.sourceReservations ? (owner.pendingReceipts ??= new Map()) : undefined;
+  const pending = (delta: number) => {
+    if (!counts) {
+      return;
+    }
+    const count = (counts.get(database) ?? 0) + delta;
+    if (count === 0) {
+      counts.delete(database);
+    } else {
+      counts.set(database, count);
+    }
+  };
   if (
     !stageSqliteTransactionState(database, {
-      stage() {},
-      rollback() {},
+      stage: () => pending(1),
+      rollback: () => pending(-1),
       commit() {
+        pending(-1);
         const previous = nativeCommitReceipts.get(owner);
         const receipt: NativeCommitReceipt = {
           version: 1,

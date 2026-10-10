@@ -230,29 +230,64 @@ describe("memory manager FTS-only reindex", () => {
     expect(createEmbeddingProviderMock).not.toHaveBeenCalled();
   });
 
-  it("returns keyword matches when the first bootstrap embedding request fails", async () => {
-    providerAvailable = true;
-    providerEmbeddingError = new Error("embedding request failed during bootstrap");
-    const memoryManager = await createManager();
-    const debug: unknown[] = [];
+  it.each(["first search", "failed background sync"])(
+    "returns keyword matches after an embedding failure during %s",
+    async (phase) => {
+      providerAvailable = true;
+      providerEmbeddingError = new Error("embedding request failed during bootstrap");
+      const memoryManager = await createManager();
+      const debug: unknown[] = [];
+      if (phase === "failed background sync") {
+        await expect(memoryManager.sync({ reason: "watch" })).rejects.toThrow(
+          "embedding request failed during bootstrap",
+        );
+      }
 
-    const results = await memoryManager.search("Alpha topic", {
-      onDebug: (entry) => debug.push(entry),
-    });
+      const results = await memoryManager.search("Alpha topic", {
+        onDebug: (entry) => debug.push(entry),
+      });
 
-    expect(results).toEqual([expect.objectContaining({ path: "MEMORY.md", source: "memory" })]);
-    expect(providerQueryCalls).toBe(0);
-    expect(debug).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          embeddingBootstrap: expect.objectContaining({
-            degradedTo: "keyword-only",
-            provider: "openai",
-            reason: expect.stringContaining("embedding request failed during bootstrap"),
+      expect(results).toEqual([expect.objectContaining({ path: "MEMORY.md", source: "memory" })]);
+      expect(providerQueryCalls).toBe(0);
+      expect(debug).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            embeddingBootstrap: expect.objectContaining({
+              degradedTo: "keyword-only",
+              provider: "openai",
+              reason: expect.stringContaining("embedding request failed during bootstrap"),
+            }),
           }),
-        }),
-      ]),
-    );
+        ]),
+      );
+    },
+  );
+
+  it("backs off when the first keyword-only publication also fails", async () => {
+    const now = Date.now();
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(now);
+    try {
+      providerAvailable = true;
+      providerEmbeddingError = new Error("embedding request failed during bootstrap");
+      const memoryManager = await createManager();
+      const metadata = vi
+        .spyOn(memoryManager as unknown as { writeMeta(meta: MemoryIndexMeta): void }, "writeMeta")
+        .mockImplementationOnce(() => {
+          throw new Error("keyword publication failed");
+        });
+
+      await expect(memoryManager.search("Alpha topic")).resolves.toEqual([]);
+      await expect(memoryManager.search("Alpha topic")).resolves.toEqual([]);
+      expect(metadata).toHaveBeenCalledOnce();
+
+      providerAvailable = false;
+      nowSpy.mockReturnValue(now + 60_000);
+      await expect(memoryManager.search("Alpha topic")).resolves.toEqual([
+        expect.objectContaining({ path: "MEMORY.md", source: "memory" }),
+      ]);
+    } finally {
+      nowSpy.mockRestore();
+    }
   });
 
   it("falls back to keyword results when the default query embedding fails", async () => {
@@ -457,12 +492,13 @@ describe("memory manager FTS-only reindex", () => {
       nowSpy.mockReturnValue(now + 31_000);
       await expect(memoryManager.probeEmbeddingAvailability()).resolves.toEqual({ ok: true });
       providerEmbeddingError = new Error("embedding request failed during rebuild");
+      const queryCallsAfterProbe = providerQueryCalls;
       const debug: unknown[] = [];
 
       await expect(
         memoryManager.search("Alpha topic", { onDebug: (entry) => debug.push(entry) }),
       ).resolves.toHaveLength(1);
-      expect(providerQueryCalls).toBe(0);
+      expect(providerQueryCalls).toBe(queryCallsAfterProbe);
       expect(debug).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
@@ -482,7 +518,7 @@ describe("memory manager FTS-only reindex", () => {
       );
       await expect(memoryManager.sync({ reason: "watch", force: true })).resolves.toBeUndefined();
       await expect(memoryManager.search("Gamma fallback refresh")).resolves.toHaveLength(1);
-      expect(providerQueryCalls).toBe(0);
+      expect(providerQueryCalls).toBe(queryCallsAfterProbe);
 
       nowSpy.mockReturnValue(now + 62_000);
       await fs.writeFile(
@@ -491,13 +527,13 @@ describe("memory manager FTS-only reindex", () => {
       );
       await expect(memoryManager.sync({ reason: "watch", force: true })).resolves.toBeUndefined();
       await expect(memoryManager.search("Delta fallback refresh")).resolves.toHaveLength(1);
-      expect(providerQueryCalls).toBe(0);
+      expect(providerQueryCalls).toBe(queryCallsAfterProbe);
 
       providerEmbeddingError = null;
       nowSpy.mockReturnValue(now + 93_000);
       await expect(memoryManager.sync({ reason: "watch", force: true })).resolves.toBeUndefined();
       await expect(memoryManager.search("Delta fallback refresh")).resolves.toHaveLength(1);
-      expect(providerQueryCalls).toBeGreaterThan(0);
+      expect(providerQueryCalls).toBeGreaterThan(queryCallsAfterProbe);
       const recoveredStatus = memoryManager.status();
       expect(recoveredStatus.custom?.providerState).toEqual({
         mode: "active",

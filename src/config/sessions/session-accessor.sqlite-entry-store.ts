@@ -10,6 +10,7 @@ import {
   type SqliteReadScopeRevision,
 } from "../../infra/sqlite-schema-facts.js";
 import { getChildLogger } from "../../logging/logger.js";
+import { communicationEntryBinding } from "../../sessions/communication-admission.js";
 import { isIncognitoSessionKey } from "../../shared/incognito-session-key.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type { ConversationRouteContext } from "./conversation-route-context.js";
@@ -691,6 +692,7 @@ export function writeSessionEntry(
               previousSessionId: canonicalPreviousEntry?.sessionId,
               sessionId: normalizedEntry.sessionId,
               category: normalizedEntry.category?.trim() || null,
+              communicationBinding: communicationEntryBinding(normalizedEntry),
               clearMembers:
                 canonicalPreviousEntry !== undefined &&
                 canonicalPreviousEntry.sessionId !== normalizedEntry.sessionId,

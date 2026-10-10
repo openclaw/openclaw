@@ -5,6 +5,8 @@ import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { getOpenClawAgentDatabaseIfOpen } from "../../state/openclaw-agent-db.js";
 import { prepareSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 import type { CapturedSessionEntryReadSource } from "./session-entry-read-source.types.js";
+import { captureIncognitoSessionSource } from "./session-incognito-binding.js";
+import type { IncognitoSessionFacts } from "./session-incognito-facts.types.js";
 import {
   releaseSessionSourceAuthorities,
   type PreparedSessionSourceAuthority,
@@ -23,6 +25,117 @@ import { retainSessionHistoryWorkerDatabase } from "./session-transcript-worker-
 import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
+type SessionEntrySourceMetadata = NonNullable<
+  NonNullable<IncognitoSessionFacts["sharing"]>["entry"]
+> &
+  NonNullable<IncognitoSessionFacts["media"]> &
+  NonNullable<IncognitoSessionFacts["modelSelection"]>;
+
+const metadataFields: ReadonlySet<string> = new Set([
+  "sessionId",
+  "previousSessionId",
+  "updatedAt",
+  "createdAt",
+  "initializationPending",
+  "providerReview",
+  "mainRestartRecovery",
+  "modelSelectionLocked",
+  "pendingProjectGitUrl",
+  "pendingWorktree",
+  "lifecycleRevision",
+  "lifecycleRunId",
+  "activeWriterRunId",
+  "subagentRecovery",
+  "archivedAt",
+  "category",
+  "repositoryWorkspaceId",
+  "visibility",
+  "incognito",
+  "createdActor",
+  "owner",
+  "sandbox",
+  "spawnedBy",
+  "spawnDepth",
+  "parentSessionKey",
+  "sessionStartedAt",
+  "permissionMode",
+  "toolOverrides",
+  "execNode",
+  "sessionRoot",
+  "spawnedCwd",
+  "spawnedWorkspaceDir",
+  "worktree",
+  "worktreeId",
+  "projectId",
+  "pluginOwnerId",
+  "modelOverride",
+  "modelOverrideSource",
+  "providerOverride",
+  "modelOverrideRouteResolution",
+  "modelOverrideFallbackOriginProvider",
+  "modelOverrideFallbackOriginModel",
+  "agentRuntimeOverride",
+  "agentHarnessId",
+  "authProfileOverride",
+  "sandboxMode",
+  "nativeRuntimeConsent",
+] satisfies (keyof SessionEntrySourceMetadata)[]);
+
+function isMetadataField(
+  field: keyof SessionEntry,
+): field is keyof SessionEntrySourceMetadata & keyof SessionEntry {
+  return metadataFields.has(field);
+}
+
+/** Capture the selected actor once; current effect predicates read only its acknowledged metadata. */
+export function captureSessionEntryMetadataRead(scope: {
+  agentId?: string;
+  sessionKey: string;
+  storePath?: string;
+  env?: NodeJS.ProcessEnv;
+}) {
+  const binding = captureIncognitoSessionSource(scope);
+  if (!binding) {
+    return undefined;
+  }
+  const assertCurrent = () => {
+    binding.admissionSignal?.throwIfAborted();
+    if ("kind" in binding) {
+      binding.assertCurrent();
+    } else {
+      binding.actor.assertReadable();
+    }
+  };
+  return {
+    assertCurrent,
+    source:
+      "kind" in binding
+        ? undefined
+        : {
+            agentId: binding.actor.agentId,
+            path: binding.actor.path,
+            databaseIdentity: binding.actor.identity.incarnation,
+          },
+    readCurrent(): SessionEntrySourceMetadata | undefined {
+      assertCurrent();
+      if ("kind" in binding) {
+        return undefined;
+      }
+      const { sessions } = binding.actor;
+      const sharing = sessions.readSharing(scope.sessionKey)?.entry;
+      if (!sharing) {
+        return undefined;
+      }
+      return {
+        ...sharing,
+        subagentRecovery: sharing.subagentRecovery,
+        ...sessions.readMedia(scope.sessionKey),
+        ...sessions.readModelSelection(scope.sessionKey),
+      };
+    },
+  };
+}
+
 /** Retain a selected entry's authority while its predicates move into the destination writer. */
 export function captureSessionEntrySourceAssertion(params: {
   scope: { agentId: string; sessionKey: string; storePath: string; env?: NodeJS.ProcessEnv };
@@ -40,6 +153,58 @@ export function captureSessionEntrySourceAssertion(params: {
   }>;
   refuse: () => never;
 }): SessionSourceAssertion {
+  const incognito = captureSessionEntryMetadataRead(params.scope);
+  if (incognito) {
+    if (params.prepareConversations) {
+      throw new Error("Incognito conversation predicates require their actor preparation owner");
+    }
+    const fields = params.fields.filter(isMetadataField);
+    if (fields.length !== params.fields.length) {
+      throw new Error("Incognito source predicates require published session metadata");
+    }
+    const expected: Partial<SessionEntry> | undefined = params.expected
+      ? structuredClone(
+          Object.fromEntries(fields.map((field) => [field, params.expected?.[field]])),
+        )
+      : undefined;
+    const assertScopeCurrent = () => {
+      incognito.assertCurrent();
+      params.assertHostCurrent?.();
+    };
+    const assertCurrent = () => {
+      assertScopeCurrent();
+      const current = incognito.readCurrent();
+      if (
+        (current === undefined) !== (expected === undefined) ||
+        fields.some((field) => !isDeepStrictEqual(current?.[field], expected?.[field]))
+      ) {
+        params.refuse();
+      }
+      params.assertCurrent();
+    };
+    return Object.assign(assertCurrent, {
+      assertScopeCurrent,
+      async prepareSessionSource(): Promise<PreparedSessionSourceAuthority> {
+        assertCurrent();
+        return {
+          assertCurrent,
+          checks: incognito.source
+            ? [
+                {
+                  predicate: {
+                    source: incognito.source,
+                    sessionKey: params.scope.sessionKey,
+                    fields,
+                    expected,
+                  },
+                  refuse: params.refuse,
+                },
+              ]
+            : [],
+        };
+      },
+    });
+  }
   if (isIncognitoSessionKey(params.scope.sessionKey)) {
     return Object.assign(() => params.assertCurrent(), { nativeSource: true });
   }

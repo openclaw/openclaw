@@ -292,6 +292,13 @@ function* openOpenClawAgentDatabaseSteps(
   // Latched paths are quarantined; every fresh open fails fast here until
   // doctor repairs the file and clears the latch plus the persisted row.
   revalidateAgentDatabaseTerminalOpen(pathname);
+  const persistedFailure = readOpenClawDatabaseQuarantineFailure("agent", pathname, {
+    env: databaseOptions.env,
+  });
+  if (persistedFailure) {
+    recordOpenClawAgentDatabaseOpenFailure(pathname, persistedFailure);
+    throw persistedFailure;
+  }
   if (cached) {
     // A closed handle can leave Kysely and WAL helpers cached; clear both before reopening.
     closeCachedOpenClawAgentDatabase(cached);
@@ -374,13 +381,6 @@ function* openOpenClawAgentDatabaseSteps(
     );
     openedDb = db;
     registerOpenClawAgentDatabaseIdentity(db);
-    const persistedFailure = readOpenClawDatabaseQuarantineFailure("agent", pathname, {
-      env: databaseOptions.env,
-    });
-    if (persistedFailure) {
-      recordOpenClawAgentDatabaseOpenFailure(pathname, persistedFailure);
-      throw persistedFailure;
-    }
     assertCurrent({ db, path: pathname });
     if (repairAdmission?.expectedIdentity) {
       ensureOpenClawAgentDatabasePermissions(pathname, databaseOptions);
@@ -450,6 +450,7 @@ function* openOpenClawAgentDatabaseSteps(
         isValidatedReopen && reuseAdmittedIntegrity,
         integrityRevoked && !diagnostics.because,
         reusedSchema,
+        preparedLease?.deferUnverifiedIntegrity,
       );
       assertCurrent(validationDatabase);
       if (!diagnostics.integrityGateOutcome || diagnostics.integrityGateOutcome === "cached") {

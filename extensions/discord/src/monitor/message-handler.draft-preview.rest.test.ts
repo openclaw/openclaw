@@ -213,6 +213,41 @@ describe("Discord draft preview REST lifecycle", () => {
     }
   });
 
+  it("prefixes tool rows with tool glyphs and keeps the reasoning and commentary lanes", async () => {
+    vi.useFakeTimers();
+    const { controller, visible } = createContinuationHarness({
+      discordConfig: {
+        streaming: {
+          mode: "progress",
+          progress: { label: false, toolProgress: true, commentary: true },
+        },
+      },
+    });
+    try {
+      await controller.pushReasoningProgress("Planning the check");
+      await controller.pushItemEvent({
+        itemId: "preamble-1",
+        kind: "preamble",
+        phase: "end",
+        progressText: "Looking at the workspace",
+      });
+      await controller.pushItemEvent(
+        projectAgentToolActivity({ toolCallId: "exec-1", name: "exec", phase: "start" }),
+      );
+      await controller.pushItemEvent(
+        projectAgentToolActivity({ toolCallId: "read-1", name: "read", phase: "start" }),
+      );
+      await vi.advanceTimersByTimeAsync(1_500);
+      await controller.flush();
+      expect([...visible.values()]).toEqual([
+        "🧠 _Planning the check_\n💬 Looking at the workspace\n🛠️ Exec: running\n📖 Read: running",
+      ]);
+    } finally {
+      await controller.cleanup();
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps one confirmed card after yield and isolates a queued turn's cleanup", async () => {
     vi.useFakeTimers();
     const harness = createContinuationHarness({ discordConfig: {} });

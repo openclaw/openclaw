@@ -13,7 +13,10 @@ import {
   listSqliteSessionEntriesFromDatabase,
   readSelectedSessionEntriesInDatabase,
 } from "./session-accessor.sqlite-entry-list.read.js";
-import { readSessionEntryCacheValidityToken } from "./session-accessor.sqlite-entry-revision.js";
+import {
+  cacheValidityTokensEqual,
+  readSessionEntryCacheValidityToken,
+} from "./session-accessor.sqlite-entry-revision.js";
 import { resolveSqliteScope } from "./session-accessor.sqlite-scope.js";
 import { readWithCanonicalSessionReaderContinuation } from "./session-canonical-key.js";
 import { captureSessionEntryReadSource } from "./session-entry-read-source.js";
@@ -51,24 +54,31 @@ export function readSessionEntryList(
             scope.sessionKeys !== undefined ||
             scope.cronRetention ||
             scope.expiredCronRuns ||
-            scope.readConsistency === "latest"
+            scope.readConsistency === "latest" ||
+            database.db.isTransaction
           ) {
             return read();
           }
-          // Owner receipts cover sibling writes; the incarnation fences reopened readers.
-          return runSqliteReadSnapshotSync(database.db, () => {
-            const current = readSessionEntryCacheValidityToken(database.db);
-            revision = JSON.stringify([
-              readOpenClawAgentDatabaseIdentity(database).incarnation,
-              current.siblingWriteRevision,
-              current.sessionNodesGeneration,
-            ]);
-            if (current.siblingWriteRevision !== undefined && request.ifRevision === revision) {
-              unchanged = true;
-              return [];
-            }
-            return read();
-          });
+          const current = readSessionEntryCacheValidityToken(database.db);
+          const token =
+            current.siblingWriteRevision === undefined
+              ? undefined
+              : JSON.stringify([
+                  readOpenClawAgentDatabaseIdentity(database).incarnation,
+                  current.siblingWriteRevision,
+                  current.sessionNodesGeneration,
+                ]);
+          if (token !== undefined && request.ifRevision === token) {
+            revision = token;
+            unchanged = true;
+            return [];
+          }
+          const entries = runSqliteReadSnapshotSync(database.db, read);
+          // Publish a committed revision only when the read crossed no writer receipt.
+          if (cacheValidityTokensEqual(current, readSessionEntryCacheValidityToken(database.db))) {
+            revision = token;
+          }
+          return entries;
         }
         return withSqlitePostCommitPublications(database.db, () =>
           runSqliteDeferredTransactionSync(database.db, () => {

@@ -9,7 +9,7 @@ import type {
 import { appendAssistantThinking } from "@openclaw/llm-core/event-stream";
 import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { readNonEmptyStringPreservingWhitespace } from "@openclaw/normalization-core/string-coerce";
-import type { ChatCompletionChunk } from "openai/resources/chat/completions.js";
+import type { ChatCompletion, ChatCompletionChunk } from "openai/resources/chat/completions.js";
 import type { OpenAICompletionsOptions } from "../provider-options.js";
 import {
   createOpenAICompletionsToolCallDeltaNormalizer,
@@ -99,7 +99,7 @@ function extractToolCallThoughtSignature(toolCall: unknown): string | undefined 
 }
 
 export async function processCompletionsStream(
-  responseStream: AsyncIterable<ChatCompletionChunk>,
+  responseStream: AsyncIterable<ChatCompletionChunk | ChatCompletion>,
   output: MutableAssistantOutput,
   model: Model,
   stream: { push(event: AssistantMessageEvent): void },
@@ -329,8 +329,13 @@ export async function processCompletionsStream(
     }
     appendContentDelta({ kind: "thinking", text: "" });
   };
-  const flushReasoningTagTextPartitioner = () => {
-    for (const delta of reasoningTagTextPartitioner.flush()) {
+  const flushReasoningTagTextPartitioner = (allowRecovery = true) => {
+    const recoverUnclosed =
+      allowRecovery &&
+      output.stopReason !== "length" &&
+      output.stopReason !== "error" &&
+      output.stopReason !== "aborted";
+    for (const delta of reasoningTagTextPartitioner.flush({ recoverUnclosed })) {
       appendPartitionedVisibleDelta(delta);
     }
   };
@@ -497,7 +502,7 @@ export async function processCompletionsStream(
         // Native calls own mixed streams; emit pending raw text in its original position.
         flushGemmaToolCallRecoverer(false);
         sawNativeToolCallDelta = true;
-        flushReasoningTagTextPartitioner();
+        flushReasoningTagTextPartitioner(false);
         rememberPendingCommentaryTags(
           provisionalCommentaryTags,
           tagPendingCommentaryText(output.content),

@@ -1,20 +1,22 @@
-import type { PropertyValues } from "lit";
+import type { LitElement, PropertyValues } from "lit";
 import { property, query, state } from "lit/decorators.js";
 import {
   formatDocumentTitle,
   isSettingsNavigationRoute,
   titleForRoute,
 } from "../app-navigation.ts";
+import { isSessionRouteId } from "../app-route-paths.ts";
 import "../components/app-topbar.ts";
 import "../components/assistant-panel.ts";
 import "../components/modal-dialog.ts";
-import { isSessionRouteId } from "../app-route-paths.ts";
-import "../components/resizable-divider.ts";
 import type { RouteId } from "../app-routes.ts";
+import "../components/resizable-divider.ts";
+import type { AppSidebarBase } from "../components/app-sidebar-base.ts";
 import type {
   CommandPaletteElement,
   CommandPaletteTargetDetail,
 } from "../components/command-palette-contract.ts";
+import { askBrandLabel } from "../components/theme-brand-label.ts";
 import type { ThemeModeChangeDetail } from "../components/theme-mode-toggle.ts";
 import { i18n, t } from "../i18n/index.ts";
 import { normalizeAgentLabel } from "../lib/agents/display.ts";
@@ -52,6 +54,11 @@ import { renderApplicationShell, type ShellViewHost } from "./app-shell-view.ts"
 import type { ApplicationRuntime } from "./bootstrap.ts";
 import type { ApplicationContext } from "./context.ts";
 import { syncControlUiSystemChrome } from "./control-ui-presentation.ts";
+import type {
+  ControlUiReadiness,
+  ControlUiCommittedPresentation,
+  ControlUiReadinessOutlet,
+} from "./control-ui-readiness.ts";
 import { createGatewayControlUiReloadOptions } from "./gateway-control-ui-reload.ts";
 import {
   APP_SIDEBAR_ELEMENT,
@@ -95,6 +102,7 @@ class OpenClawShell
   implements ShellChromeHost, ShellGatewayHost, ShellNavigationHost, ShellViewHost
 {
   @property({ attribute: false }) runtime: ApplicationRuntime | undefined;
+  @property({ attribute: false }) readiness: ControlUiReadiness | undefined;
   @property({ attribute: false }) onboarding = false;
 
   @state() navDrawerOpen = false;
@@ -133,7 +141,10 @@ class OpenClawShell
   // Desktop and modal navigation are two slots for the same live sidebar.
   // Moving its element preserves session controllers and the resident pet
   // instead of resetting their lifecycle at every responsive breakpoint.
-  readonly navigationSidebar: HTMLElement = document.createElement(APP_SIDEBAR_ELEMENT.tagName);
+  readonly navigationSidebar: HTMLElement &
+    Partial<Pick<AppSidebarBase, "navigationVisible" | "updateComplete">> = document.createElement(
+    APP_SIDEBAR_ELEMENT.tagName,
+  );
   // Where "Back to app" / Escape leaves the settings takeover; falls back to
   // chat (the app default route) when settings was the entry point.
   lastWorkspaceLocation: ShellNavigationHost["lastWorkspaceLocation"] = null;
@@ -570,7 +581,7 @@ class OpenClawShell
       return;
     }
     const outboxScopeHost = this.storedOutboxScopeHost(context);
-    let primaryContext = routeId === "custodian" ? t("nav.askOpenClaw") : titleForRoute(routeId);
+    let primaryContext = routeId === "custodian" ? askBrandLabel() : titleForRoute(routeId);
     if (isSessionRouteId(routeId) && this.activeSessionKey) {
       primaryContext = this.chatTitleContext(context, outboxScopeHost) || primaryContext;
     }
@@ -584,6 +595,7 @@ class OpenClawShell
         phase === "reload-required");
     let title = formatDocumentTitle({
       context: primaryContext,
+      brandName: context.theme.branding.brandName,
       attentionCount: phase === "connected" ? context.overlays.snapshot.approvalQueue.length : 0,
       gatewayDisconnected,
     });
@@ -594,6 +606,33 @@ class OpenClawShell
     if (document.title !== title) {
       document.title = title;
     }
+  }
+
+  protected override willUpdate(): void {
+    this.readiness?.invalidate();
+  }
+
+  async settleReadiness(): Promise<ControlUiCommittedPresentation> {
+    await this.updateComplete;
+    if (!this.querySelector(".shell")) {
+      return { kind: "loading", navigationVisible: false };
+    }
+    // The optional sidebar is not a Lit element until its registration has loaded.
+    const sidebar = this.navigationSidebar;
+    const navigationVisible = sidebar.isConnected && sidebar.navigationVisible !== false;
+    if (navigationVisible) {
+      if (!customElements.get(APP_SIDEBAR_ELEMENT.tagName)) {
+        return { kind: "loading", navigationVisible: true };
+      }
+      await sidebar.updateComplete;
+    }
+    const outlet = this.querySelector<ControlUiReadinessOutlet>("openclaw-router-outlet");
+    if (!outlet || !(await outlet.settlePresentation())) {
+      return { kind: "loading", navigationVisible };
+    }
+    await this.querySelector<LitElement>("openclaw-route-presentation")?.updateComplete;
+    await this.querySelector<LitElement>("openclaw-chat-page")?.updateComplete;
+    return { kind: "shell", navigationVisible, sessionKey: this.activeSessionKey };
   }
 
   override updated(changed: PropertyValues<this>) {

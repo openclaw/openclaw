@@ -1,15 +1,16 @@
 import "./subagent-announce.requester-settle-dispatch-mocks.test-support.js";
-import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   loadSessionEntry,
   replaceSessionEntry,
 } from "../../../config/sessions/session-accessor.js";
+import { writeSessionEntry } from "../../../config/sessions/session-accessor.sqlite-entry-store.js";
 import { resolvePhysicalSessionStorePath } from "../../../config/sessions/session-store-path.js";
 import * as workerAdmission from "../../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../../infra/sqlite-worker-owner-probe.test-support.js";
 import { publishSystemEventStoreResolver } from "../../../infra/system-event-ownership.js";
 import { registerSessionStateWatch } from "../../../sessions/session-state-events.js";
+import { openOpenClawAgentDatabase } from "../../../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../../../state/openclaw-state-db.js";
 import { observeMainThreadSql } from "../../../test-utils/main-thread-sql-spies.test-support.js";
 import { createOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
@@ -39,10 +40,10 @@ import { maybeWakeRequesterAfterAllChildrenSettled } from "./subagent-announce.r
 describe("requester settle watch admission", () => {
   useRequesterSettleDispatchFixture();
 
-  it.each(["current", "foreign reset", "same-store handoff"] as const)(
+  it.each(["current", "owner reset", "same-store handoff"] as const)(
     "fences a settled requester's worker watch without retiring its wake (%s)",
     async (change) => {
-      const resetRequester = change === "foreign reset";
+      const resetRequester = change === "owner reset";
       const sameStoreHandoff = change === "same-store handoff";
       const state = await createOpenClawTestState({
         prefix: "settle-watch-",
@@ -80,10 +81,12 @@ describe("requester settle watch admission", () => {
         });
       }
       registryRead.listSubagentRunsForRequester.mockReturnValue([child]);
-      const peer = resetRequester
-        ? new DatabaseSync(resolvePhysicalSessionStorePath(target))
+      const writer = resetRequester
+        ? openOpenClawAgentDatabase({
+            agentId: target.agentId,
+            path: resolvePhysicalSessionStorePath(target),
+          })
         : undefined;
-      onTestFinished(() => peer?.close());
       const admission = prepareAgentRunAdmission({
         cfg,
         operationalRunInstance: createOperationalRunInstanceRef("settle-watch"),
@@ -102,7 +105,7 @@ describe("requester settle watch admission", () => {
       deliver.mockImplementation(
         async (params: Parameters<typeof sendSubagentAnnounceDirectly>[0]) => {
           const interception =
-            peer || sameStoreHandoff
+            writer || sameStoreHandoff
               ? probe.admission(workerAdmission, (request, grant, admit) => {
                   if (
                     request.stage === "commit" &&
@@ -113,13 +116,13 @@ describe("requester settle watch admission", () => {
                     request.facts.kind === "session-entry-current"
                   ) {
                     witnessed = true;
-                    if (peer) {
-                      // Independent native writer changes the requester after the worker's read.
-                      peer
-                        .prepare(
-                          "UPDATE session_nodes SET entry_json = json_set(entry_json, '$.lifecycleRevision', ?) WHERE session_key = ?",
-                        )
-                        .run("replaced-requester-revision", REQUESTER_KEY);
+                    if (writer) {
+                      // The owning writer's receipt revokes the worker's earlier read.
+                      writeSessionEntry(writer, REQUESTER_KEY, {
+                        sessionId: "requester-session",
+                        lifecycleRevision: "replaced-requester-revision",
+                        updatedAt: 100,
+                      });
                     } else {
                       publishSystemEventStoreResolver(() => storePath);
                     }
@@ -134,7 +137,7 @@ describe("requester settle watch admission", () => {
             receiptAuthority: params.isSourceSessionEffectsAllowed,
             receiptAdmission: params.sourceReceiptAdmission,
           });
-          const sql = peer ? undefined : observeMainThreadSql();
+          const sql = writer ? undefined : observeMainThreadSql();
           try {
             sql?.calibrate();
             watched = await withGatewayToolCallerIdentity(caller, () =>

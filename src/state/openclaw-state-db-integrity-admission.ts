@@ -26,12 +26,15 @@ const integrityKey: SqliteDatabaseAdmissionKey<true> = {
   read: (value) => (value === true ? true : undefined),
 };
 
+function hasStateDatabaseIntegrityAdmission(database: DatabaseSync): boolean {
+  return Boolean(
+    getStateRuntimeSchemaAdmission(database) || getSqliteDatabaseAdmission(database, integrityKey),
+  );
+}
+
 /** Ordinary opens share physical-file proof; Doctor calls the uncached integrity owner. */
 export function assertStateDatabaseIntegrityOnce(database: DatabaseSync, pathname: string): void {
-  if (
-    !getStateRuntimeSchemaAdmission(database) &&
-    !getSqliteDatabaseAdmission(database, integrityKey)
-  ) {
+  if (!hasStateDatabaseIntegrityAdmission(database)) {
     assertSqliteIntegrity(database, pathname);
     publishSqliteDatabaseAdmission(database, integrityKey, true);
   }
@@ -110,7 +113,11 @@ export function assertOpenClawStateRuntimeIntegrity(
   );
   const observed = Atomics.load(proof, 0);
   if (Atomics.load(revision, 0) === admission.epoch && observed !== -1n) {
-    if (observed === metadata && Atomics.load(revision, 0) === admission.epoch) {
+    if (
+      observed === metadata &&
+      Atomics.load(revision, 0) === admission.epoch &&
+      hasStateDatabaseIntegrityAdmission(database)
+    ) {
       return undefined;
     }
     invalidate(revision);

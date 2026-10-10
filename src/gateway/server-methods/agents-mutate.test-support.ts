@@ -22,7 +22,7 @@ export type MockAgentEntry = {
   identity?: MockIdentity;
 };
 
-type MockConfig = {
+export type MockConfig = {
   agents?: {
     entries?: Record<string, Omit<MockAgentEntry, "id">>;
   };

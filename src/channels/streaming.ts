@@ -34,6 +34,7 @@ import {
   isChannelProgressPriorityLine,
   type ChannelProgressDraftLine,
 } from "./progress-draft-lines.js";
+import { PROGRESS_TOOL_GLYPHS } from "./progress-tool-glyphs.js";
 import {
   getChannelStreamingConfigObject,
   type StreamingCompatEntry,
@@ -120,6 +121,8 @@ export type ChannelProgressLineOptions = {
   detailMode?: "explain" | "raw";
   /** Whether command progress should show raw command text or status-only copy. */
   commandText?: ChannelStreamingCommandTextMode;
+  /** Prefix tool rows with their text glyph; channels opt in, default plain. */
+  toolIcons?: boolean;
 };
 
 export type AgentPlanStepStatus = "pending" | "in_progress" | "completed";
@@ -281,6 +284,10 @@ function buildNamedProgressLine(
     kind,
     text,
     label: display.label,
+    // Plan and approval rows keep their plain status shape.
+    ...(options?.toolIcons && kind !== "plan" && kind !== "approval"
+      ? { icon: PROGRESS_TOOL_GLYPHS[display.icon] }
+      : {}),
     ...(detail ? { detail } : {}),
     ...(fields?.status ? { status: fields.status } : {}),
     toolName: display.name,
@@ -416,10 +423,22 @@ export function buildChannelProgressDraftLineForEntry(
   input: ChannelProgressDraftLineInput,
   options?: ChannelProgressLineOptions,
 ): ChannelProgressDraftLine | undefined {
-  return buildChannelProgressDraftLine(input, {
+  const line = buildChannelProgressDraftLine(input, {
     ...options,
     commandText: options?.commandText ?? resolveChannelStreamingPreviewCommandText(entry),
   });
+  if (line?.toolName && input.event === "item" && line.label === input.title?.trim()) {
+    const labelChars = Array.from(line.label).length;
+    const surroundingChars = Array.from(line.text).length - labelChars;
+    const labelLimit = Math.max(
+      1,
+      resolveChannelProgressDraftMaxLineChars(entry) - surroundingChars,
+    );
+    line.label = compactProgressLineDetail(line.label, labelLimit);
+    line.text = line.label;
+    line.text = getProgressDraftLineText(line);
+  }
+  return line;
 }
 
 export function formatChannelProgressDraftLineForEntry(
