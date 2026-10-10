@@ -78,10 +78,7 @@ export function CardMoveControl(input: {
     <>
       {!isActiveWorkboardCard(input.card) || statuses().length < 2 ? null : (
         <label
-          class={[
-            "workboard-card__move",
-            `${input.options?.wide ? "workboard-card__move--wide" : ""}`,
-          ]}
+          class={["workboard-card__move", input.options?.wide ? "workboard-card__move--wide" : ""]}
           title={t("workboard.fieldStatus")}
         >
           <select
@@ -100,26 +97,28 @@ export function CardMoveControl(input: {
                 void moveCardToStatus(input.workboard, input.card, status);
               }
             }}
-            prop:onkeydown={(event: KeyboardEvent) => {
-              if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") {
-                return;
-              }
-              if (
-                state().busyCardIds.has(input.card.id) ||
-                state().dispatching ||
-                !input.workboard.connected ||
-                !input.workboard.client
-              ) {
+            ref={(element: HTMLSelectElement) => {
+              element.onkeydown = (event: KeyboardEvent) => {
+                if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") {
+                  return;
+                }
+                if (
+                  state().busyCardIds.has(input.card.id) ||
+                  state().dispatching ||
+                  !input.workboard.connected ||
+                  !input.workboard.client
+                ) {
+                  event.preventDefault();
+                  return;
+                }
+                const offset = event.key === "ArrowRight" ? 1 : -1;
+                const status = statuses()[statuses().indexOf(input.card.status) + offset];
+                if (!status) {
+                  return;
+                }
                 event.preventDefault();
-                return;
-              }
-              const offset = event.key === "ArrowRight" ? 1 : -1;
-              const status = statuses()[statuses().indexOf(input.card.status) + offset];
-              if (!status) {
-                return;
-              }
-              event.preventDefault();
-              void moveCardToStatus(input.workboard, input.card, status);
+                void moveCardToStatus(input.workboard, input.card, status);
+              };
             }}
           >
             <For each={statuses()} keyed={(status) => status}>
@@ -185,7 +184,7 @@ function CardActionButton(input: {
 }) {
   return (
     <button
-      class={["btn", `${input.params.className ?? ""}`]}
+      class={["btn", input.params.className ?? ""]}
       type="button"
       aria-label={input.params.label}
       aria-haspopup={input.params.ariaHaspopup}
@@ -401,7 +400,7 @@ export function StartExecutionButton(input: {
         "btn--xs",
         "workboard-card__start",
         `workboard-card__start--${input.mode}`,
-        `${input.engine ? "" : "workboard-card__start--default"}`,
+        input.engine ? "" : "workboard-card__start--default",
       ]}
       type="button"
       aria-label={title()}

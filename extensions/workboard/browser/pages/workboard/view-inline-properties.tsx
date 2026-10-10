@@ -63,7 +63,9 @@ function PropertyPicker<T extends string>(params: {
         trigger.isConnected &&
         document.activeElement === document.body
       ) {
-        trigger.focus({ preventScroll: true });
+        trigger.focus({
+          preventScroll: true,
+        });
       }
     });
   };
@@ -71,7 +73,7 @@ function PropertyPicker<T extends string>(params: {
     <div class="workboard-detail__property-control">
       <button
         type="button"
-        class={["workboard-detail__property-trigger", `${params.className ?? ""}`]}
+        class={["workboard-detail__property-trigger", params.className ?? ""]}
         aria-label={`${params.label}: ${selected()?.label ?? params.value}`}
         aria-haspopup="dialog"
         aria-expanded="false"
@@ -113,7 +115,7 @@ function PropertyPicker<T extends string>(params: {
                 },
               );
               return (
-                <label class={["workboard-detail__property-option", `${option().className ?? ""}`]}>
+                <label class={["workboard-detail__property-option", option().className ?? ""]}>
                   <input
                     ref={(element: HTMLInputElement) => {
                       radio = element;

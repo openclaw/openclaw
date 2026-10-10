@@ -19,7 +19,6 @@ import {
   requireButton,
   textButton,
   sessionPicker,
-  toast,
 } from "./view.test-support.ts";
 
 describe("WorkboardView", () => {

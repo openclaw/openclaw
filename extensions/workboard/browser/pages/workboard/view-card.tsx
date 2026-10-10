@@ -294,13 +294,13 @@ export function WorkboardCardView(input: {
     <article
       class={[
         "workboard-card",
-        `${input.surface === "list" ? "workboard-card--list" : ""}`,
+        input.surface === "list" ? "workboard-card--list" : "",
         `priority-${input.card.priority}`,
-        `${action().busy ? "workboard-card--busy" : ""}`,
-        `${action().archived ? "workboard-card--archived" : ""}`,
-        `${action().state.draggedCardId === input.card.id ? "workboard-card--dragging" : ""}`,
-        `${selected() ? "workboard-card--selected" : ""}`,
-        `${widget() ? "workboard-card--widget" : "workboard-card--openable"}`,
+        action().busy ? "workboard-card--busy" : "",
+        action().archived ? "workboard-card--archived" : "",
+        action().state.draggedCardId === input.card.id ? "workboard-card--dragging" : "",
+        selected() ? "workboard-card--selected" : "",
+        widget() ? "workboard-card--widget" : "workboard-card--openable",
       ]}
       role={widget() ? undefined : "button"}
       tabindex={widget() ? undefined : "0"}

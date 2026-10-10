@@ -14,7 +14,6 @@ import {
   buttonByLabel,
   buttonByText,
   requireButton,
-  toast,
 } from "./view.test-support.ts";
 
 describe("WorkboardView", () => {

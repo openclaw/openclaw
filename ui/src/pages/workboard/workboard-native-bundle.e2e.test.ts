@@ -170,16 +170,20 @@ suite.define(() => {
 
               await page.keyboard.press("Enter");
               const details = page.getByRole("dialog", { name: card.title, exact: true });
+              const detailContent = page.locator(".workboard-detail");
               await details.waitFor();
               await expect
                 .poll(() => details.evaluate((element) => element.matches(":focus-within")))
                 .toBe(true);
               await capture(page, engine, `${prefix}-details`, details, [
-                details.getByRole("tab", { name: "Overview", exact: true }),
+                detailContent.getByRole("tab", { name: "Overview", exact: true }),
               ]);
-              const actions = details.getByRole("button", { name: "Card actions", exact: true });
+              const actions = detailContent.getByRole("button", {
+                name: "Card actions",
+                exact: true,
+              });
               await actions.click();
-              await details.getByRole("button", { name: "Edit card", exact: true }).waitFor();
+              await detailContent.getByRole("button", { name: "Edit card", exact: true }).waitFor();
               await page.keyboard.press("Escape");
               expect(await details.isVisible()).toBe(true);
               await expect.poll(() => actions.getAttribute("aria-expanded")).toBe("false");
@@ -201,7 +205,9 @@ suite.define(() => {
             await create.focus();
             await page.keyboard.press("Enter");
             const modal = page.getByRole("dialog", { name: "New card", exact: true });
-            const title = modal.getByLabel("Title", { exact: true });
+            const title = page
+              .locator(".workboard-card-draft")
+              .getByLabel("Title", { exact: true });
             await title.waitFor();
             await expect
               .poll(() => title.evaluate((element) => element === document.activeElement))

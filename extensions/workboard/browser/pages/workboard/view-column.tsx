@@ -176,8 +176,10 @@ export function WorkboardColumn(input: {
       class={[
         "workboard-column",
         `workboard-column--${input.status}`,
-        `${state().draggedCardId && state().dragOverStatus === input.status ? "workboard-column--drop-target" : ""}`,
-        `${collapsed() ? "workboard-column--collapsed" : ""}`,
+        state().draggedCardId && state().dragOverStatus === input.status
+          ? "workboard-column--drop-target"
+          : "",
+        collapsed() ? "workboard-column--collapsed" : "",
       ]}
       aria-label={`${label()}, ${input.cards.length}`}
       onDragOver={(event: DragEvent) => {
@@ -362,8 +364,14 @@ export function WorkboardColumn(input: {
                     <div
                       class={[
                         "workboard-column__item",
-                        `${dropTarget() && state().dragBeforeCardId === card().id ? "workboard-column__item--drop-before" : ""}`,
-                        `${dropTarget() && state().dragBeforeCardId === null && card().id === lastDropCardId() ? "workboard-column__item--drop-after" : ""}`,
+                        dropTarget() && state().dragBeforeCardId === card().id
+                          ? "workboard-column__item--drop-before"
+                          : "",
+                        dropTarget() &&
+                        state().dragBeforeCardId === null &&
+                        card().id === lastDropCardId()
+                          ? "workboard-column__item--drop-after"
+                          : "",
                       ]}
                       role={surface() === "list" ? "listitem" : undefined}
                       data-card-id={card().id}
