@@ -32,6 +32,7 @@ export async function withAgentTurnCompletion<T>(
     storePath?: string;
     sessionKey?: string;
     entry?: SessionEntry;
+    writer?: Pick<SessionEntry, "sessionId" | "lifecycleRevision" | "activeWriterRunId">;
     operation: ReplyOperation;
     publish(entry: SessionEntry): void;
   },
@@ -41,10 +42,11 @@ export async function withAgentTurnCompletion<T>(
   if (!storePath || !sessionKey || !entry) {
     return consume(undefined);
   }
+  const writer = params.writer ?? entry;
   const expected = {
-    sessionId: entry.sessionId,
-    lifecycleRevision: entry.lifecycleRevision,
-    writerRunId: entry.activeWriterRunId,
+    sessionId: writer.sessionId,
+    lifecycleRevision: writer.lifecycleRevision,
+    writerRunId: writer.activeWriterRunId,
   };
   const operationKey = operation.key;
   const assertCurrent = () => {

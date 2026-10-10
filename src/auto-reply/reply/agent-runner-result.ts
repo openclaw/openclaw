@@ -14,6 +14,7 @@ export async function finalizeReplyAgentRun(
       storePath: context.storePath,
       sessionKey: context.sessionKey,
       entry: context.activeSessionEntry,
+      writer: context.execution.sessionWriter,
       operation: context.replyOperation,
       publish(entry) {
         context.activeSessionEntry = entry;

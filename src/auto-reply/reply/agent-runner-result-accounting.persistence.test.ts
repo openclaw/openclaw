@@ -163,6 +163,28 @@ it("publishes a prepared final only after its worker completion commits without 
   }
 });
 
+it("completes against the settled writer when the caller still has its pre-run entry", async () => {
+  const fixture = await createFixture();
+  fixture.context.execution.sessionWriter = {
+    agentId: "main",
+    storePath,
+    sessionKey: fixture.context.sessionKey!,
+    sessionId: fixture.sessionId,
+    lifecycleRevision: fixture.context.activeSessionEntry!.lifecycleRevision,
+    activeWriterRunId: fixture.context.runId,
+  };
+  Object.assign(fixture.context.activeSessionEntry!, { activeWriterRunId: undefined });
+
+  const result = await finalizeReplyAgentRun(fixture.context);
+
+  expect(result).toMatchObject({ text: "done" });
+  expect(fixture.read()).toMatchObject({
+    activeWriterRunId: fixture.context.runId,
+    pendingFinalDelivery: { text: "done" },
+  });
+  expect(fixture.read()?.compactionCount).toBeUndefined();
+});
+
 function observeCompletionCommands(
   options: { hideCommittedReceipt?: boolean; beforeCommit?: () => void } = {},
 ) {
