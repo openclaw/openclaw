@@ -50,7 +50,9 @@ vi.mock("../../src/agents/openclaw-tools.js", async () => {
       const entry = builder.registry.tools.find((candidate) =>
         candidate.names.includes("whatsapp_login"),
       );
-      if (!entry) throw new Error("WhatsApp login factory was not registered");
+      if (!entry) {
+        throw new Error("WhatsApp login factory was not registered");
+      }
       const context = createPluginToolFactoryContext({
         entry,
         registry: builder.registry,
@@ -58,8 +60,12 @@ vi.mock("../../src/agents/openclaw-tools.js", async () => {
         assertInvocationCurrent: options.assertInvocationCurrent,
       });
       const raw = entry.factory(context);
-      if (!raw) return [];
-      if (Array.isArray(raw)) throw new Error("Expected one WhatsApp login tool");
+      if (!raw) {
+        return [];
+      }
+      if (Array.isArray(raw)) {
+        throw new Error("Expected one WhatsApp login tool");
+      }
       setPluginToolMeta(raw, { pluginId: "whatsapp", optional: false });
       return [
         bindPluginToolCallbacks(entry, builder.registry, raw, context.assertInvocationCurrent),
@@ -94,7 +100,9 @@ async function invokeHttp(args: Record<string, unknown>, action?: string) {
 async function invokeRpc(args: Record<string, unknown>, owner = true) {
   const respond = vi.fn();
   const handler = toolsInvokeHandlers["tools.invoke"];
-  if (!handler) throw new Error("tools.invoke handler is unavailable");
+  if (!handler) {
+    throw new Error("tools.invoke handler is unavailable");
+  }
   const context = createGatewayRequestContext(makeContextParams());
   context.getRuntimeConfig = () => cfg;
   const options: GatewayRequestHandlerOptions = {
