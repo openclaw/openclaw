@@ -47,4 +47,37 @@ describe("elevenLabsMediaUnderstandingProvider", () => {
       }),
     ).rejects.toThrow("ElevenLabs audio transcription failed: malformed JSON response");
   });
+
+  it("forwards allowlisted providerOptions into the multipart form", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(Response.json({ text: "hello" }));
+
+    await elevenLabsMediaUnderstandingProvider.transcribeAudio!({
+      ...request,
+      model: "scribe_v2",
+      query: { no_verbatim: true, tag_audio_events: false },
+      fetchFn: fetchMock,
+    });
+
+    const [, requestInit] = expectDefined(fetchMock.mock.calls[0], "ElevenLabs fetch call");
+    const form = expectDefined(requestInit?.body, "ElevenLabs request body") as FormData;
+    expect(form.get("no_verbatim")).toBe("true");
+    expect(form.get("tag_audio_events")).toBe("false");
+    expect(form.get("model_id")).toBe("scribe_v2");
+  });
+
+  it("does not forward non-allowlisted query options", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(Response.json({ text: "hello" }));
+
+    await elevenLabsMediaUnderstandingProvider.transcribeAudio!({
+      ...request,
+      model: "scribe_v2",
+      query: { no_verbatim: true, webhook: "https://example.com/hook" },
+      fetchFn: fetchMock,
+    });
+
+    const [, requestInit] = expectDefined(fetchMock.mock.calls[0], "ElevenLabs fetch call");
+    const form = expectDefined(requestInit?.body, "ElevenLabs request body") as FormData;
+    expect(form.get("no_verbatim")).toBe("true");
+    expect(form.get("webhook")).toBeNull();
+  });
 });
