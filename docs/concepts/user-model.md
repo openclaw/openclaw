@@ -79,7 +79,7 @@ context on the next new turn, not the running turn. Another participant can stee
 under the normal permission and queue rules without switching personal context.
 Queued and collected messages from multiple people keep the session's selection;
 the current sender does not select a different file. Profile merges select the
-surviving canonical ID; move the preferences to that directory yourself. OpenClaw
+surviving primary ID; move the preferences to that directory yourself. OpenClaw
 does not merge files or create a dossier.
 
 Missing files or missing qualifying human identity use shared defaults only. A
@@ -123,11 +123,11 @@ The Control UI labels this presence **Shared owner** in the People sidebar, acti
 
 On macOS, an owner without a saved avatar uses the Gateway host account's user picture. Uploading an avatar in **Settings → Profile → Identity** overrides that default. The picture stays a local, process-cached default rather than a saved profile upload. Restart the Gateway after changing it in macOS. This applies only to the shared owner profile, not to people signed in with their own identities. Unavailable pictures fall back to initials.
 
-GitHub-backed sign-in is supported through Cloudflare Access and Tailscale Serve. For Cloudflare Access, the Gateway accepts identity enrichment only after successful `trusted-proxy` authentication with the standard Access email header and a required Access assertion header. It calls the Access identity endpoint and requires the returned email to match the authenticated proxy principal. The account ID comes from the GitHub identity provider, or from an explicitly configured [trusted OIDC claim](/gateway/cloudflare-access#verified-github-credit-through-oidc). It then resolves the canonical GitHub login from that numeric account ID. For Tailscale Serve, the Gateway resolves the verified GitHub-backed Tailscale login through GitHub. Both paths record the immutable numeric account ID plus the current canonical login.
+GitHub-backed sign-in is supported through Cloudflare Access and Tailscale Serve. For Cloudflare Access, the Gateway accepts identity enrichment only after successful `trusted-proxy` authentication with the standard Access email header and a required Access assertion header. It calls the Access identity endpoint and requires the returned email to match the authenticated proxy principal. The account ID comes from the GitHub identity provider, or from an explicitly configured [trusted OIDC claim](/gateway/cloudflare-access#verified-github-credit-through-oidc). It then resolves the current verified GitHub login from that numeric account ID. For Tailscale Serve, the Gateway resolves the verified GitHub-backed Tailscale login through GitHub. Both paths record the immutable numeric account ID plus the current verified login.
 
 OIDC without a trusted GitHub claim keeps email-only sign-in and any existing linked identity. Trusted OIDC enrichment preserves an existing email profile's role and saved co-author preference; conflicting identities require explicit administrator linking rather than an automatic merge or email reassignment.
 
-For new profiles or an unset display name, OpenClaw prefers the public name from the verified GitHub account. When GitHub has none, it uses the sign-in provider's name. A saved name is upgraded only when it exactly matches the current canonical GitHub login, including case. All other saved names remain unchanged, including custom names and previously adopted full names. This takes effect on the next successful identity sync through sign-in, reconnect, or a Profile refresh that retries the lookup. Existing profiles are not renamed in a background migration.
+For new profiles or an unset display name, OpenClaw prefers the public name from the verified GitHub account. When GitHub has none, it uses the sign-in provider's name. A saved name is upgraded only when it exactly matches the current verified GitHub login, including case. All other saved names remain unchanged, including custom names and previously adopted full names. This takes effect on the next successful identity sync through sign-in, reconnect, or a Profile refresh that retries the lookup. Existing profiles are not renamed in a background migration.
 
 The **GitHub account** row is read-only. Generic trusted proxies, token, password, and unauthenticated connections cannot claim a GitHub account, and agent or tool GitHub credentials are never used for this identity. Public GitHub account lookups use the Gateway's configured `gateway.controlUi.github.token`, or its process `GH_TOKEN` / `GITHUB_TOKEN` when no credential is configured, to avoid the smaller anonymous API quota. That credential authenticates the API request only. The sign-in provider still determines the person's identity. The forwarded Cloudflare Access assertion is connection-scoped: OpenClaw does not persist, export, log, or expose it to the UI or model.
 
@@ -143,7 +143,7 @@ An administrator can explicitly link profiles belonging to the same person throu
 
 The primary account uses a nullable field in the existing profile table without advancing the database schema version. **Downgrade risk:** no schema-version bump blocks older builds from using this state. Their single-account writers can discard secondary account links or split the person again. Re-upgrading does not reconstruct discarded links; an administrator must explicitly relink the profiles. Keep a backup before downgrading.
 
-Public commit metadata is a separate choice. **Git co-author credit** defaults on for verified accounts. It adds the verified account's public GitHub noreply address to commits created from shared sessions. OpenClaw never requests or stores a private GitHub email for this feature. An unrelated, unlinked GitHub account uses its own profile and credit preference, so reusing a sign-in email or username does not inherit another person's choice. Signing in through a linked secondary account preserves the canonical profile's primary and credit preference.
+Public commit metadata is a separate choice. **Git co-author credit** defaults on for verified accounts. It adds the verified account's public GitHub noreply address to commits created from shared sessions. OpenClaw never requests or stores a private GitHub email for this feature. An unrelated, unlinked GitHub account uses its own profile and credit preference, so reusing a sign-in email or username does not inherit another person's choice. Signing in through a linked secondary account preserves the primary profile's primary account and credit preference.
 
 When your authenticated profile has prompted a session before an agent run, commits created from that run receive your exact `Co-authored-by` trailer. Commits and pull requests then visibly credit who worked on the session. Profile participants with verified GitHub identity and Git co-author credit enabled are eligible. Remote identities, agents, bots, and the configured primary Git author are excluded. Contributors appear by recorded contribution aggregate, highest first. Ties use the earliest known profile input, with unknown historical times after known times, then immutable GitHub account id. These best-effort aggregates are not exact lifetime prompt counts. Contributions from merged profiles remain attached to their surviving verified account. New participant admission and model-facing credit output are each capped at 32. Repair can retain larger histories.
 
@@ -162,7 +162,7 @@ Turning **Git co-author credit** off stops attribution for future runs. Gateway-
 The Gateway directory method `users.list` requires `operator.read`. Its optional
 `githubAccountIds` filter accepts up to 500 unique positive safe integers. The
 response retains `profiles` and adds `githubProfiles` containing only requested
-verified account IDs and their canonical, non-merged `profileId` matches. Missing
+verified account IDs and their primary, non-merged `profileId` matches. Missing
 IDs have no match; other linked accounts are not returned. Omitting the filter
 preserves the ordinary directory response. This lookup reads existing identity
 bindings; it does not link accounts or grant access.
@@ -203,7 +203,7 @@ assigners, contributors, audit contexts, approval provenance, publication
 receipts, and session participants are not rewritten. Readers that resolve
 profile aliases can still show the surviving person. This does not transfer
 previously captured authority: privileged work bound to the retired profile
-fails closed and requires a fresh authorized request. Connected identity,
+is rejected and requires a fresh authorized request. Connected identity,
 presence, and permissions refresh after the merge; affected connections may
 need to reconnect.
 
@@ -213,11 +213,11 @@ An administrator can attest that a stable channel sender belongs to an existing 
 
 All three Gateway methods require `operator.admin`:
 
-| Method                        | Parameters              | Result                                      |
-| ----------------------------- | ----------------------- | ------------------------------------------- |
-| `users.linkChannelIdentity`   | `profileId`, `identity` | The canonical profile ID and saved identity |
-| `users.listChannelIdentities` | `profileId`             | `links` for that profile                    |
-| `users.unlinkChannelIdentity` | `profileId`, `identity` | `removed`                                   |
+| Method                        | Parameters              | Result                                    |
+| ----------------------------- | ----------------------- | ----------------------------------------- |
+| `users.linkChannelIdentity`   | `profileId`, `identity` | The primary profile ID and saved identity |
+| `users.listChannelIdentities` | `profileId`             | `links` for that profile                  |
+| `users.unlinkChannelIdentity` | `profileId`, `identity` | `removed`                                 |
 
 For example, the `identity` object for a Discord user is:
 
@@ -254,7 +254,7 @@ native user ID (for example, `senderId: "U0123456789"`). Direct Socket Mode and
 signature-verified HTTP delivery authenticate that sender; relay delivery does
 not. Discord's verified native senders use the same profile resolution.
 
-The next verified message turn includes the canonical profile ID and current display
+The next verified message turn includes the primary profile ID and current display
 label as host-generated fields in the per-turn conversation info. The system
 prompt stays stable across requesters. For example, a linked person
 whose effective role includes `operator.admin` can ask, "Assign this session to
@@ -292,7 +292,7 @@ An existing `gh` login in the Gateway's runtime environment is supported; connec
 
 The composer shows either unpublished branch changes or PR rows. New changes replace earlier PR history, including changes made after merging on the same branch. The account arrow appears only while publication is idle and the account selection is unlocked. Publication recovery stays inside an unpublished branch row. When PR rows are visible, recovery appears separately because a session publication attempt does not necessarily belong to any listed PR. Failed attempts use a collapsed **Publication attempt failed** disclosure; expand it to inspect the original account, error, and recovery actions. When OpenClaw verifies that a failed shared attempt’s accepted changes are already published in the matching PR, it stops offering that obsolete failure as recovery—even after reloading or starting later work. The historical receipt remains unchanged and can still be read explicitly. Unpublished or unverified changes retain their failure; refreshing a receipt never retries publication. Pending status and confirmation details remain expanded. Successful publication shows a compact PR link until GitHub metadata supplies the normal PR row; it does not add a separate publication card.
 
-If the Gateway rejects the selected account before accepting the first publication request, choose **Refresh publication**, review the current account, then explicitly publish again. An unknown outcome keeps the original account and request locked. For shared publication, **Refresh publication** looks up the receipt using the original invocation key; finding no receipt does not prove that the request never ran. **Retry publication** is an explicit replay of that same idempotent request, not a switch of account or a new publication.
+If the Gateway rejects the selected account before accepting the first publication request, choose **Refresh publication**, review the current account, then explicitly publish again. An unknown outcome keeps the original account and request locked. For shared publication, **Refresh publication** looks up the receipt using the original invocation key; finding no receipt does not prove that the request never ran. **Retry publication** replays that same request without duplicating its effects. It does not switch accounts or start a new publication.
 
 Publication state survives navigation between chats, including when an inactive chat pane is unloaded. Split panes showing the same chat share its publication progress and retry. The page retains up to 32 publication attempts within the current authenticated Gateway connection. At capacity, existing retries remain available. Dismiss a completed PR row, or select **Choose a new publication** after a failed attempt, before starting another. Read-only operators can dismiss an observed completed result without publishing or confirming anything.
 

@@ -208,7 +208,7 @@ auto-capture, and local Ollama embedding support. Plugin install.
 
 If you want durable memory to behave more like a maintained knowledge base
 than raw notes, use the bundled `memory-wiki` plugin. It compiles durable
-knowledge into a wiki vault with deterministic page structure, structured
+knowledge into a wiki vault with fixed page structure, structured
 claims and evidence, contradiction and freshness tracking, generated
 dashboards, compiled digests, and wiki-native tools (`wiki_status`,
 `wiki_search`, `wiki_get`, `wiki_apply`, `wiki_lint`).
@@ -306,7 +306,7 @@ owner or agent-derived items into long-term memory (`MEMORY.md`):
 - **Thresholded**: promotions must pass score, recall-frequency, and
   query-diversity gates.
 - **Consolidated**: a tool-free completion selects merges and supersessions
-  after the deterministic gate. The memory writer composes the result from
+  after the rule-based check. The memory writer composes the result from
   validated source evidence; invalid or unavailable decisions use append-only fallback.
 - **Taint gated**: untrusted and system-derived candidates never enter the
   consolidation prompt or durable promotion path.
@@ -333,7 +333,7 @@ The dreaming system has two related review lanes:
 Dreaming JSON journals from before July 2026 are no longer imported. The
 migration check leaves `memory/.dreams/daily-ingestion.json`, `session-ingestion.json`,
 `short-term-recall.json`, and `phase-signals.json` untouched. Existing SQLite
-state remains authoritative. If Doctor cannot establish canonical state,
+state remains authoritative. If Doctor cannot establish valid stored state,
 restore a backup from a July 2026 or newer release. An empty ingestion store
 without a previous migration acknowledgement is indistinguishable from
 unmigrated state; after verifying its SQLite state, back up and move the retired

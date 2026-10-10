@@ -102,7 +102,7 @@ delivery failures are terminal data in `completion`, not retryable HTTP
 failures. `deliveryError`, when present, is the fixed categorical value
 `"delivery-failed"`; provider, runtime, model, target, session, and diagnostic
 details remain private. The response never includes model output or summaries.
-Use an idempotency key so a lost response can replay the same admitted run and
+Use an `Idempotency-Key` header so a lost response can replay the same admitted run and
 completion result without dispatching again.
 
 In `openclaw logs --follow`, search for `hook agent run completed` and the exact HTTP
@@ -162,7 +162,7 @@ limits, routing policy, and error responses.
 
   </Accordion>
   <Accordion title="POST /hooks/agent">
-    Submit an agent turn with a required `message`. Optional routing, model, thinking, timeout, and idempotency fields are documented in the [payload reference](/gateway/config-hooks#hook-agent-payload).
+    Submit an agent turn with a required `message`. Optional routing, model, thinking, timeout, and duplicate-request protection fields are documented in the [payload reference](/gateway/config-hooks#hook-agent-payload).
 
     Keep `sessionMode: "isolated"` for fresh context. Set `"persistent"` only when repeated events should reuse prior context: direct requests then require an explicit `sessionKey`, `hooks.allowRequestSessionKey: true`, and nonempty `hooks.allowedSessionKeyPrefixes`.
 
@@ -189,7 +189,7 @@ limits, routing policy, and error responses.
 
 | Observation                | Check or next action                                                                                                                                                                    |
 | -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `401`                      | Check the hook token, not Gateway auth; ensure the proxy forwards the auth header.                                                                                                      |
+| `401`                      | Check the hook token, not Gateway auth; check that the proxy forwards the auth header.                                                                                                  |
 | `404`                      | Check `hooks.enabled`, `hooks.path`, and whether the custom path matches a mapping.                                                                                                     |
 | `400`                      | Read the response error: JSON, agent selection, session policy, or delivery coordinates may be invalid. Correct the request before retrying.                                            |
 | `405`, `408`, or `413`     | Use `POST`; send the body promptly; stay within the documented body limit.                                                                                                              |

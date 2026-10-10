@@ -296,7 +296,7 @@ A complete delegate configuration handling email, calendar, and social media:
 
 The delegate's `AGENTS.md` defines its autonomous authority - what it may do without asking, what needs approval, and what is forbidden. [Cron Jobs](/automation/cron-jobs) drive its daily schedule.
 
-If you grant `sessions_history`, it is a bounded, safety-filtered recall view, not a raw transcript dump. OpenClaw redacts credential/token-like text, truncates long content, and strips internal scaffolding (thinking-block signatures, `<relevant-memories>` scaffolding tags, tool-call XML tags such as `<tool_call>`/`<function_calls>`, and similar leaked provider control tokens) from assistant recall. Oversized rows can be replaced with `[sessions_history omitted: message too large]` instead of returning the raw content. Use `nextOffset` when present to page backward through older transcript windows.
+If you grant `sessions_history`, it is a bounded, safety-filtered recall view, not a raw transcript dump. OpenClaw redacts credential/token-like text, truncates long content, and strips internal markup (thinking-block signatures, `<relevant-memories>` markup tags, tool-call XML tags such as `<tool_call>`/`<function_calls>`, and similar leaked provider control tokens) from assistant recall. Oversized rows can be replaced with `[sessions_history omitted: message too large]` instead of returning the raw content. Use `nextOffset` when present to page backward through older transcript windows.
 
 ## Scaling pattern
 

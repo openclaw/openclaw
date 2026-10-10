@@ -17,7 +17,7 @@ started.
 - **Keyword search** via FTS5 full-text indexing (BM25 scoring).
 - **Vector search** via embeddings from any supported provider.
 - **Hybrid search** that combines both for best results.
-- **Deterministic ranking** by relevance, recency, and write-time importance.
+- **Ranking** by relevance, recency, and write-time importance, using fixed rules.
 - **Diversity-aware ordering** with MMR enabled on hybrid results by default.
 - **Trusted trigger recall** for bounded pre-reply context without a recall model.
 - **CJK support** via trigram tokenization for Chinese, Japanese, and Korean.
@@ -63,7 +63,7 @@ The builtin engine is the right choice for most users:
 The builtin engine can index directories outside the workspace with
 `memory.search.extraPaths`. It uses bounded lexical query expansion to improve
 conversational recall, but it does not provide a learned or model-based relevance
-reranking stage. Its MMR pass is deterministic and local.
+reranking stage. Its MMR pass uses fixed rules and runs locally.
 
 Consider [Honcho](/concepts/memory-honcho) if you want cross-session memory
 with automatic user modeling.
@@ -282,9 +282,9 @@ startup. After backing them up, you can remove old indexes, model downloads,
 collection metadata, and session exports manually if you have confirmed that
 no standalone QMD installation uses them.
 
-Canonical memory remains in `MEMORY.md`, `USER.md`, `memory/*.md`, and the
+The original memory remains in `MEMORY.md`, `USER.md`, `memory/*.md`, and the
 migrated extra paths. Builtin indexes those same Markdown sources on its next
-sync. The cutover is lossless by construction: no canonical memory content is
+sync. The cutover is lossless by construction: no original memory content is
 copied or deleted; only derived state is rebuilt.
 
 Builtin now covers most QMD use cases with:
@@ -341,7 +341,7 @@ openclaw memory status --agent <agent-id> --deep
 ```
 
 <Warning>
-The index shares `openclaw-agent.sqlite` with canonical sessions, transcripts,
+The index shares `openclaw-agent.sqlite` with stored sessions, transcripts,
 and other durable agent state. Never delete that database or its `-wal`, `-shm`,
 or `-journal` sidecars to reset memory. Memory indexing cannot reconstruct
 conversation history lost this way.
@@ -395,7 +395,7 @@ before/after database and WAL sizes. Compaction needs temporary disk space; on a
 full volume, free space or move a verified backup to a volume with sufficient
 capacity before attempting it. Rebuilding can call the embedding provider and
 incur cost. Restart the Gateway through its deployment owner after verification.
-Neither reset nor compaction removes canonical sessions or changes retention.
+Neither reset nor compaction removes stored sessions or changes retention.
 
 ## Configuration
 
