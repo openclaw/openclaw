@@ -334,8 +334,7 @@ export class ChatPane extends ChatPaneLayoutRender {
       (catalogKey
         ? this.catalogSession?.canContinue === true
         : !disabledReason &&
-          !(selectedSessionArchived || restartRecoveryTombstoned || placementComposer.blocksSend) &&
-          (!pendingReason || initialHistoryUnavailable));
+          !(selectedSessionArchived || restartRecoveryTombstoned || placementComposer.blocksSend));
     const composerAvailability = {
       canCompose: composerAccess && composerAvailable,
       canSend: composerAccess && composerAvailable,
@@ -394,7 +393,6 @@ export class ChatPane extends ChatPaneLayoutRender {
         : state.chatLoading || (!runActive && pendingReason !== null && placementStartup === null),
       routeLoadingSkeleton: this.routeLoadingSkeleton && initialHistoryUnavailable,
       sending:
-        (placementStartup !== null && placementStartup.phase !== "failed") ||
         state.chatSending ||
         this.recoveringSession ||
         this.sessionSuggestionAddOperation !== undefined,
@@ -418,6 +416,7 @@ export class ChatPane extends ChatPaneLayoutRender {
       progressCardInitialLoading: this.progressCardInitialLoading,
       progressCardRefresh,
       collapseTaskProgress: state.settings.chatCollapseTaskProgress === true,
+      ...this.captureProgressCardActions(canWriteProgressCard),
       readingHistory: state.chatReadingHistory,
       onProgressManipulate: () => {
         lockChatScroll(state);
@@ -426,7 +425,6 @@ export class ChatPane extends ChatPaneLayoutRender {
       onDismissProgressCard: progressPresentation
         ? (card) => this.hideProgressCard(card)
         : undefined,
-      onClearSavedProgressCard: canWriteProgressCard ? this.clearSavedProgressCard : undefined,
       gatewayQuestionPrompts,
       asyncQuestionStorage:
         !catalogKey && !suggestionViewer ? this.chatState.composerPersistence.durableScope : null,
@@ -530,7 +528,7 @@ export class ChatPane extends ChatPaneLayoutRender {
             }
           : undefined,
       sessions: state.sessionsResult,
-      selectedSession: catalogKey ? undefined : selectedSession,
+      ...this.transcriptSessionProps(selectedSession),
       toolOverrides: selectedSession?.toolOverrides,
       capabilityMenu: catalogKey
         ? undefined

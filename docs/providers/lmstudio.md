@@ -187,6 +187,12 @@ enough context for the selected model budget. A newly loaded instance is address
 identifier returned by LM Studio. Your configured model reference and conversation model identity
 keep the canonical model key.
 
+Model loads use the configured provider `timeoutSeconds` (or the request timeout override),
+with a two-minute default matching embedding loads. Increase `models.providers.lmstudio.timeoutSeconds`
+for slow cold loads. If a load fails while every known loaded instance is too small, OpenClaw
+reports the model and requested context instead of sending the prompt to a smaller instance.
+Wait for loading to finish in LM Studio and retry, or lower the model's `contextTokens`.
+
 With preload enabled, embedding requests also check that their model is loaded and route to the
 instance prepared for the configured context length. This avoids truncating input through a smaller
 loaded instance and lets memory embeddings recover after model eviction even when LM Studio JIT

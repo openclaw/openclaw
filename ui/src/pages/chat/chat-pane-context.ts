@@ -30,6 +30,7 @@ import {
 } from "../../lib/sessions/session-key.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { invalidateChatAvatarCache } from "./chat-avatar.ts";
+import { commitCurrentChatHistorySnapshot } from "./chat-history-snapshot.ts";
 import {
   getChatHistoryLoadState,
   synchronizeInitialChatSnapshotConnection,
@@ -61,13 +62,35 @@ import {
   replayPendingChatAbort,
 } from "./run-lifecycle.ts";
 import { cancelChatScroll } from "./scroll.ts";
-import { clearChatMessagesFromCache } from "./session-message-cache.ts";
+import { clearChatMessagesFromCache, readChatSessionSnapshot } from "./session-message-cache.ts";
 import { migrateLegacyDockVisibility } from "./sidebar-layout-legacy-migration.ts";
 import { normalizeSidebarLayout } from "./sidebar-layout.ts";
 import { maybeResetToolStream } from "./stream-reconciliation.ts";
 import { reconcileWaitingApprovalsFromSnapshot } from "./tool-stream-status.ts";
 
 export abstract class ChatPaneContext extends ChatPaneLifecycle {
+  protected transcriptSessionProps(selectedSession: GatewaySessionRow | undefined) {
+    const state = this.state;
+    if (!state || parseCatalogSessionKey(state.sessionKey)) {
+      return { selectedSession: undefined };
+    }
+    if (
+      !this.ownsChatSnapshot({ sessionKey: state.sessionKey }) ||
+      this.resourceSessionObservation()?.hasObserved ||
+      (selectedSession && !state.sessions.state.resultCached)
+    ) {
+      return { selectedSession };
+    }
+    const snapshot = readChatSessionSnapshot(state.chatMessagesBySession, state, {
+      sessionKey: state.sessionKey,
+    });
+    return {
+      selectedSession,
+      transcriptMetadata:
+        snapshot?.sessionId === state.currentSessionId ? snapshot?.transcriptMetadata : undefined,
+    };
+  }
+
   private sessionPresentationKey: string | undefined;
   private gatewayConnectionLifecycle?: ReturnType<typeof createGatewayConnectionLifecycle>;
   private outboxRecoveryReady = false;
@@ -220,6 +243,14 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     }
     this.refreshSwarmRoster();
     const selectedSession = selectedChatSessionRow(state);
+    if (
+      (!stateValue.resultCached || this.resourceSessionObservation()?.hasObserved) &&
+      selectedSession?.sessionId &&
+      selectedSession.sessionId === state.currentSessionId &&
+      this.ownsChatSnapshot({ sessionKey: state.sessionKey })
+    ) {
+      commitCurrentChatHistorySnapshot(state, undefined, selectedSession);
+    }
     const outboxState = selectedSession
       ? JSON.stringify([
           state.sessionKey,

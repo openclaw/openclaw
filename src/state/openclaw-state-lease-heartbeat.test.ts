@@ -365,6 +365,7 @@ it("keeps deferred activation pending until renewal commits after contention", a
         deferActivation: true,
         shared: shared.buffer,
         renewalProgress: new SharedArrayBuffer(BigInt64Array.BYTES_PER_ELEMENT),
+        completedRequest: new SharedArrayBuffer(BigInt64Array.BYTES_PER_ELEMENT),
       } satisfies LeaseHeartbeatWorkerData,
       execArgv: resolveRuntimeWorkerThreadExecArgv(driverUrl),
       env: {},

@@ -619,6 +619,7 @@ it.each([
         proof === "closed-host-blocked-last" ||
         proof === "closed-host-no-receipt-verifier" ||
         proof === "two-leases" ||
+        proof === "two-leases-unknown-owner" ||
         proof === "two-leases-missing-metadata" ||
         proof === "version-mismatch"
         ? [0, 0]

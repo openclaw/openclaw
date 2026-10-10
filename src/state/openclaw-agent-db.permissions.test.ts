@@ -4,6 +4,10 @@ import { MessagePort } from "node:worker_threads";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
+  captureSqliteDatabaseAdmissions,
+  withSqliteDatabaseAdmissionExchange,
+} from "../infra/sqlite-database-admission.js";
+import {
   createSqliteWorkerOperationAdmission,
   withSqliteWorkerOperationAdmission,
 } from "../infra/sqlite-worker-operation-admission.js";
@@ -105,7 +109,11 @@ describe("agent database permission repair", () => {
         });
         try {
           return withSqliteWorkerOperationAdmission({ port: admission.port }, () =>
-            backend.execute(command),
+            // This fixture runs both owners in one isolate; a port round trip would deadlock.
+            withSqliteDatabaseAdmissionExchange(
+              () => captureSqliteDatabaseAdmissions(),
+              () => backend.execute(command),
+            ),
           );
         } finally {
           admission.finish();

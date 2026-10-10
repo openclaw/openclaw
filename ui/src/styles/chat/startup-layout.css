@@ -163,6 +163,19 @@
   max-height: var(--chat-footer-max-height);
 }
 
+.creation-composer {
+  display: flex;
+  flex: 0 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  max-height: var(--chat-footer-max-height, 60%);
+}
+
+.creation-composer > .callout {
+  margin-inline: var(--chat-composer-side-inset, 16px);
+}
+
 /* The fade stays inside the transcript viewport; footer controls never cover it. */
 .chat-footer::before {
   position: absolute;

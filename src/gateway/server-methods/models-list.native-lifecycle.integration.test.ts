@@ -587,7 +587,8 @@ it("models.list full refresh discovers an enabled provider without configured cr
     response.end(
       JSON.stringify([
         {
-          id: "public-model",
+          // Each response names its request so a publication proves which discovery produced it.
+          id: `public-model-${requests}`,
           name: "Public model",
           reasoning: false,
           input: ["text"],
@@ -653,18 +654,23 @@ it("models.list full refresh discovers an enabled provider without configured cr
       await server.startupSettled;
       const list = (refresh = false) =>
         client.request<ModelsListResult>("models.list", { agentId: "main", view: "all", refresh });
-      expect((await list()).models.some((row) => row.id === "public-model")).toBe(false);
-      expect(requests).toBe(0);
+      const published = (modelId: string) => (result: ModelsListResult) =>
+        !result.pendingProviders?.includes(provider) &&
+        result.models.some((row) => row.provider === provider && row.id === modelId);
+      // Cold startup runs the full discovery a refresh would, without an operator request.
+      await waitForCatalogPublication({ signal, read: list, ready: published("public-model-1") });
+      expect(requests).toBe(1);
+      // An explicit refresh acquires fresh responses instead of reusing startup discovery.
       const refreshed = await waitForCatalogPublication({
         signal,
         start: () => list(true),
         read: list,
-        ready: (result) => !result.pendingProviders?.includes(provider),
+        ready: published("public-model-2"),
       });
-      expect(refreshed.models).toContainEqual(modelRow(provider, "public-model"));
-      expect(requests).toBe(1);
-      expect((await list()).models).toContainEqual(modelRow(provider, "public-model"));
-      expect(requests).toBe(1);
+      expect(refreshed.models).not.toContainEqual(modelRow(provider, "public-model-1"));
+      expect(requests).toBe(2);
+      expect((await list()).models).toContainEqual(modelRow(provider, "public-model-2"));
+      expect(requests).toBe(2);
     } finally {
       await disconnectGatewayClient(client);
       await server.close();
