@@ -51,7 +51,7 @@ describe("config boundary guard", () => {
       },
     ].flatMap((testCase) =>
       ["ts", "tsx"].map((extension) => ({
-        ...testCase,
+        collect: testCase.collect,
         name: `${testCase.name} (${extension})`,
         file: testCase.file.replace(/\.ts$/u, `.${extension}`),
         expected: testCase.expected.replace(/\.ts:/u, `.${extension}:`),
