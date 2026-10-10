@@ -657,6 +657,180 @@ describe("buildGuardedModelFetch", () => {
       vi.useRealTimers();
     }
   });
+
+  it("releases the queue slot when a queued waiter aborts before its turn", async () => {
+    vi.useFakeTimers();
+    try {
+      const pacedModel = {
+        id: "gpt-5.4",
+        provider: "openai",
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+      } as unknown as Model<"openai-responses">;
+      getModelProviderRequestTransportMock.mockReturnValue({
+        rateLimit: { minIntervalMs: 50, maxQueueSize: 1 },
+      });
+      fetchWithSsrFGuardMock.mockImplementation(async () => ({
+        response: new Response("ok", { status: 200 }),
+        finalUrl: "https://api.openai.com/v1/responses",
+        release: vi.fn(async () => undefined),
+      }));
+      const fetcher = buildGuardedModelFetch(pacedModel);
+
+      const first = await fetcher("https://api.openai.com/v1/responses", { method: "POST" });
+      await first.text();
+      const controller = new AbortController();
+      const queued = fetcher("https://api.openai.com/v1/responses", {
+        method: "POST",
+        signal: controller.signal,
+      });
+      const queueFull = await fetcher("https://api.openai.com/v1/responses", { method: "POST" });
+      expect(queueFull.status).toBe(429);
+
+      controller.abort("canceled-before-turn");
+      await expect(queued).rejects.toMatchObject({ name: "AbortError" });
+
+      // The freed slot must be reusable immediately, before any pacing window elapses.
+      const retry = fetcher("https://api.openai.com/v1/responses", { method: "POST" });
+      await vi.advanceTimersByTimeAsync(50);
+      await vi.waitFor(() => expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(2));
+      const retryResponse = await retry;
+      expect(retryResponse.status).toBe(200);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not consume provider quota for an already-aborted request", async () => {
+    vi.useFakeTimers();
+    try {
+      const pacedModel = {
+        id: "gpt-5.4",
+        provider: "openai",
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+      } as unknown as Model<"openai-responses">;
+      getModelProviderRequestTransportMock.mockReturnValue({ rateLimit: { minIntervalMs: 50 } });
+      fetchWithSsrFGuardMock.mockImplementation(async () => ({
+        response: new Response("ok", { status: 200 }),
+        finalUrl: "https://api.openai.com/v1/responses",
+        release: vi.fn(async () => undefined),
+      }));
+      const fetcher = buildGuardedModelFetch(pacedModel);
+      const controller = new AbortController();
+      controller.abort("already-canceled");
+
+      await expect(
+        fetcher("https://api.openai.com/v1/responses", {
+          method: "POST",
+          signal: controller.signal,
+        }),
+      ).rejects.toMatchObject({ name: "AbortError" });
+      expect(testing.getProviderRequestRateLimitBucketCountForTests()).toBe(0);
+
+      // A live request directly after must dispatch immediately, not wait out a
+      // window consumed by the aborted caller.
+      const live = await fetcher("https://api.openai.com/v1/responses", { method: "POST" });
+      expect(live.status).toBe(200);
+      expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("shares one rate-limit bucket across simple-completion api aliases", async () => {
+    vi.useFakeTimers();
+    try {
+      getModelProviderRequestTransportMock.mockReturnValue({ rateLimit: { minIntervalMs: 50 } });
+      fetchWithSsrFGuardMock.mockImplementation(async () => ({
+        response: new Response("ok", { status: 200 }),
+        finalUrl: "https://api.openai.com/v1/responses",
+        release: vi.fn(async () => undefined),
+      }));
+      const agentModel = {
+        id: "gpt-5.4",
+        provider: "openai",
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+      } as unknown as Model<"openai-responses">;
+      const aliasModel = {
+        ...agentModel,
+        api: "openclaw-openai-responses-transport",
+      } as unknown as Model<"openai-responses">;
+
+      const first = await buildGuardedModelFetch(agentModel)(
+        "https://api.openai.com/v1/responses",
+        {
+          method: "POST",
+        },
+      );
+      await first.text();
+      const second = buildGuardedModelFetch(aliasModel)("https://api.openai.com/v1/responses", {
+        method: "POST",
+      });
+
+      // The alias must join the same bucket and wait for pacing instead of
+      // dispatching through an independent quota.
+      expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
+      expect(testing.getProviderRequestRateLimitBucketCountForTests()).toBe(1);
+      await vi.advanceTimersByTimeAsync(50);
+      await vi.waitFor(() => expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(2));
+      await second;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("paces requests after local-service readiness completes", async () => {
+    vi.useFakeTimers();
+    try {
+      const pacedModel = {
+        id: "gpt-5.4",
+        provider: "openai",
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+      } as unknown as Model<"openai-responses">;
+      getModelProviderRequestTransportMock.mockReturnValue({ rateLimit: { minIntervalMs: 50 } });
+      let releaseReadiness: (() => void) | undefined;
+      const readiness = new Promise<void>((resolve) => {
+        releaseReadiness = resolve;
+      });
+      ensureModelProviderLocalServiceMock.mockImplementation(async () => {
+        await readiness;
+        return undefined;
+      });
+      fetchWithSsrFGuardMock.mockImplementation(async () => ({
+        response: new Response("ok", { status: 200 }),
+        finalUrl: "https://api.openai.com/v1/responses",
+        release: vi.fn(async () => undefined),
+      }));
+      const fetcher = buildGuardedModelFetch(pacedModel);
+
+      const first = fetcher("https://api.openai.com/v1/responses", { method: "POST" });
+      const second = fetcher("https://api.openai.com/v1/responses", { method: "POST" });
+
+      // Startup longer than minIntervalMs must not collapse pacing measured
+      // before readiness; nothing dispatches while startup is pending.
+      await vi.advanceTimersByTimeAsync(120);
+      expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+
+      releaseReadiness?.();
+      const firstResponse = await first;
+      await firstResponse.text();
+      expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
+
+      // The second request still paces a full minimum interval after readiness,
+      // instead of dispatching simultaneously with the first.
+      await vi.advanceTimersByTimeAsync(49);
+      expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
+      await vi.waitFor(() => expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(2));
+      const secondResponse = await second;
+      expect(secondResponse.status).toBe(200);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe("buildGuardedModelFetch headers", () => {

@@ -300,7 +300,10 @@ function sleepForRateLimit(delayMs: number, signal?: AbortSignal): Promise<void>
 }
 
 function resolveProviderRateLimitKey(model: Model): string {
-  return [model.provider, model.id, model.api, model.baseUrl].join("\0");
+  // Quota identity is provider/model/baseUrl. Simple-completion preparation rewrites
+  // model.api to an internal transport alias, so including it would give agent and
+  // utility callers for the same upstream separate buckets.
+  return [model.provider, model.id, model.baseUrl].join("\0");
 }
 
 function resolveProviderRateLimitDelayMs(
@@ -350,6 +353,10 @@ async function waitForProviderRequestRateLimit(
   if (!config || (!config.requestsPerMinute && !config.minIntervalMs)) {
     return undefined;
   }
+  // Aborted callers must never consume quota or queue capacity.
+  if (signal?.aborted) {
+    throw createProviderRequestRateLimitAbortError(signal);
+  }
   pruneProviderRequestRateLimitBuckets(Date.now());
   const key = resolveProviderRateLimitKey(model);
   const bucket = providerRequestRateLimitBuckets.get(key) ?? {
@@ -362,6 +369,9 @@ async function waitForProviderRequestRateLimit(
   providerRequestRateLimitBuckets.set(key, bucket);
   const maxQueueSize = config.maxQueueSize ?? DEFAULT_PROVIDER_RATE_LIMIT_MAX_QUEUE_SIZE;
   if (bucket.queued === 0 && resolveProviderRateLimitDelayMs(bucket, config) <= 0) {
+    if (signal?.aborted) {
+      throw createProviderRequestRateLimitAbortError(signal);
+    }
     recordProviderRequestRateLimitDispatch(bucket, config);
     return undefined;
   }
@@ -369,22 +379,51 @@ async function waitForProviderRequestRateLimit(
     return buildProviderRateLimitQueueFullResponse(model);
   }
   bucket.queued += 1;
+  // A waiter canceled before its turn rejects immediately and releases its queue
+  // slot; its turn becomes a no-op so it never sleeps, dispatches, or records quota.
+  let canceled = false;
+  let waitAborted: Promise<never> | undefined;
+  if (signal) {
+    waitAborted = new Promise<never>((_, reject) => {
+      const onAbort = () => {
+        canceled = true;
+        reject(createProviderRequestRateLimitAbortError(signal));
+      };
+      if (signal.aborted) {
+        onAbort();
+        return;
+      }
+      signal.addEventListener("abort", onAbort, { once: true });
+    });
+    waitAborted.catch(() => undefined);
+  }
   const turn = bucket.queue.then(async () => {
+    if (canceled || signal?.aborted) {
+      return;
+    }
     const delayMs = resolveProviderRateLimitDelayMs(bucket, config);
     if (delayMs > 0) {
       await sleepForRateLimit(delayMs, signal);
+    }
+    if (canceled || signal?.aborted) {
+      return;
     }
     recordProviderRequestRateLimitDispatch(bucket, config);
   });
   bucket.queue = turn.catch(() => undefined);
   try {
-    await turn;
+    if (waitAborted) {
+      await Promise.race([turn, waitAborted]);
+    } else {
+      await turn;
+    }
   } finally {
     bucket.queued = Math.max(0, bucket.queued - 1);
     pruneProviderRequestRateLimitBuckets(Date.now());
   }
   return undefined;
 }
+
 function buildManagedResponse(
   response: Response,
   release: () => Promise<void>,
