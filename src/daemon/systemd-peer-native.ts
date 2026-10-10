@@ -96,6 +96,13 @@ function matchesReply(value: unknown, expected: string): boolean {
 }
 
 function translateFailure(error: unknown): never {
+  if (
+    error instanceof ProcSafeError &&
+    error.code === "access-denied" &&
+    error.details?.reason === "peer-uid-mismatch"
+  ) {
+    throw new ServiceOwnershipRefusalError("systemd-manager-changed");
+  }
   if (error instanceof ProcSafeError && error.code === "timeout") {
     throw new ServiceInspectionError("systemd-inspection-deadline-exceeded");
   }
@@ -133,16 +140,9 @@ export async function openSystemdMachineBroker(machine: string, deadline: number
 
 /** Ordinary local reads authenticate the connected manager without a session broker. */
 export async function openSystemdUserManager(address: string, deadline: number) {
-  const uid = process.geteuid?.();
-  if (process.platform !== "linux" || uid === undefined) {
-    throw unavailable();
-  }
-  // Keep the account refusal in OpenClaw; the package's user factory also enforces it.
   return openSystemdConnection(
-    (timeoutMs) => SystemdBus.connectPrivatePeer(address, { timeoutMs }),
+    (timeoutMs) => SystemdBus.connectUserManager(address, { timeoutMs }),
     deadline,
-    undefined,
-    uid,
   );
 }
 
@@ -150,12 +150,11 @@ async function openSystemdConnection(
   connect: (timeoutMs: number) => Promise<SystemdBus | AuthenticatedSystemdBus>,
   deadline: number,
   expected?: SystemdPeerIdentity,
-  managerUid?: number,
 ) {
   const admissionNow = getServiceInspectionClock();
-  const privatePeer = expected !== undefined || managerUid !== undefined;
   let identity = expected;
   const bus = await connect(remaining(deadline, admissionNow)).catch(translateFailure);
+  const peer = "peer" in bus ? bus.peer : undefined;
   let closed = false;
   const queue = createSystemdPeerQueue();
   let closing: Promise<void> | undefined;
@@ -180,17 +179,11 @@ async function openSystemdConnection(
   };
   const verifyConnection = () => {
     verify();
-    if (!privatePeer) {
+    if (!peer) {
       return;
     }
-    if (!("peer" in bus)) {
-      throw unavailable();
-    }
-    const { pid, uid } = bus.peer;
+    const { pid, uid } = peer;
     if (!identity) {
-      if (uid !== managerUid) {
-        throw new ServiceOwnershipRefusalError("systemd-manager-changed");
-      }
       const startTime = getProcessStartTime(pid);
       if (!isPidAlive(pid) || startTime === null) {
         throw unavailable();
@@ -232,7 +225,7 @@ async function openSystemdConnection(
     if (!destination || !path || !iface || !member) {
       throw unavailable();
     }
-    const target = { ...(privatePeer ? {} : { destination }), path, interface: iface, member };
+    const target = { ...(peer ? {} : { destination }), path, interface: iface, member };
     let values = MAX_VALUES;
     let bytes = MAX_STRING_BYTES;
     const account = (value: SystemdValue): void => {

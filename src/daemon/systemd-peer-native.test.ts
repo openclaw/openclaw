@@ -1,3 +1,5 @@
+import { ProcSafeError } from "@openclaw/proc-safe/errors";
+import { SystemdBus } from "@openclaw/proc-safe/systemd";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   withServiceInspectionBudget,
@@ -37,9 +39,9 @@ vi.mock("../shared/pid-alive.js", () => ({
   getProcessStartTime: () => kernel.startTime,
   isPidAlive: () => kernel.alive,
 }));
-vi.mock("@openclaw/proc-safe/systemd", () => {
-  const connect = async () => ({
-    peer: Object.freeze({ pid: kernel.pid, uid: kernel.uid }),
+vi.mock("@openclaw/proc-safe/systemd", async () => {
+  const { ProcSafeError: PackageError } = await import("@openclaw/proc-safe/errors");
+  const connect = () => ({
     close: async () => {
       kernel.closes++;
     },
@@ -49,7 +51,26 @@ vi.mock("@openclaw/proc-safe/systemd", () => {
       return [];
     },
   });
-  return { SystemdBus: { connectPrivatePeer: connect, connectBroker: connect } };
+  const connectPrivatePeer = async () => ({
+    ...connect(),
+    peer: Object.freeze({ pid: kernel.pid, uid: kernel.uid }),
+  });
+  return {
+    SystemdBus: {
+      connectPrivatePeer,
+      connectBroker: async () => connect(),
+      connectUserManager: async () => {
+        const expectedUid = process.geteuid?.();
+        if (kernel.uid !== expectedUid) {
+          kernel.closes++;
+          throw new PackageError("access-denied", "user manager peer has a different UID", {
+            details: { reason: "peer-uid-mismatch", expectedUid, actualUid: kernel.uid },
+          });
+        }
+        return connectPrivatePeer();
+      },
+    },
+  };
 });
 
 beforeEach(() => {
@@ -96,6 +117,12 @@ it.each([
     expect(kernel.closes).toBe(1);
   },
 );
+
+it("preserves transport access refusal without claiming a different manager owner", async () => {
+  const failure = new ProcSafeError("access-denied", "socket access denied");
+  vi.spyOn(SystemdBus, "connectUserManager").mockRejectedValueOnce(failure);
+  await expect(openSystemdUserManager(address, performance.now() + 1000)).rejects.toBe(failure);
+});
 
 it("revalidates a retained peer without misclassifying a closed connection", async () => {
   const peer = await openSystemdPrivatePeer(address, expected, performance.now() + 1000);
