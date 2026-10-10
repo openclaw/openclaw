@@ -147,14 +147,15 @@ describe("Talk voice RPC ownership", () => {
   }
 
   async function replace(changeId: string, retireOriginal = true) {
-    const launch = prepareTalkVoiceReplacement({
+    const replacement = prepareTalkVoiceReplacement({
       voiceChangeId: changeId,
       connId: browser.connId,
       sessionKey: sessionTarget.sessionKey,
     });
-    if (!launch || !browser.connId) {
+    if (!replacement || !browser.connId) {
       throw new Error("Expected an admitted voice replacement");
     }
+    const launch = replacement.launch;
     if (retireOriginal) {
       unregisterTalkVoiceSession(originalId, browser.connId, sessionTarget.agentId);
     }
