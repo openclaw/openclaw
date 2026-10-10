@@ -5,6 +5,43 @@ import { en } from "../../../i18n/locales/en.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { renderDreaming } from "./view.tsx";
 
+type DreamingProps = Parameters<typeof renderDreaming>[0];
+export type DreamingViewFixture = Omit<DreamingProps, "resources"> & {
+  dreamDiaryLoading: boolean;
+  dreamDiaryError: string | null;
+  dreamDiaryContent: string | null;
+  wikiImportInsightsLoading: boolean;
+  wikiImportInsightsError: string | null;
+  wikiImportInsights: DreamingProps["resources"]["wikiImportInsights"]["value"];
+  wikiOverviewLoading: boolean;
+  wikiOverviewError: string | null;
+  wikiOverview: DreamingProps["resources"]["wikiOverview"]["value"];
+};
+
+export function dreamingViewProps(fixture: DreamingViewFixture): DreamingProps {
+  return {
+    ...fixture,
+    resources: {
+      dreamingStatus: { value: null, loading: false, error: null },
+      dreamDiary: {
+        value: { path: "DREAMS.md", content: fixture.dreamDiaryContent },
+        loading: fixture.dreamDiaryLoading,
+        error: fixture.dreamDiaryError,
+      },
+      wikiImportInsights: {
+        value: fixture.wikiImportInsights,
+        loading: fixture.wikiImportInsightsLoading,
+        error: fixture.wikiImportInsightsError,
+      },
+      wikiOverview: {
+        value: fixture.wikiOverview,
+        loading: fixture.wikiOverviewLoading,
+        error: fixture.wikiOverviewError,
+      },
+    },
+  };
+}
+
 export const fullDreamingViewAccess: Parameters<typeof renderDreaming>[0]["access"] = {
   canOpenConfig: true,
   canBackfillDiary: true,

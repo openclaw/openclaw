@@ -1,4 +1,5 @@
 import { html, nothing } from "lit";
+import { keyed } from "lit/directives/keyed.js";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
 import type { MessageContentItem } from "../../../lib/chat/chat-types.ts";
@@ -98,34 +99,29 @@ export function renderAssistantAttachmentStatusCard(params: {
           </span>
         </div>
         ${
-          params.onAllow
-            ? html`<button
-                class="chat-assistant-attachment-card__action chat-assistant-attachment-card__action--labeled"
-                type="button"
-                @click=${params.onAllow}
-              >
-                ${t("chat.attachments.allowImage")}
-              </button>`
-            : params.onRetry
-              ? html`<button
-                  class="chat-assistant-attachment-card__action chat-assistant-attachment-card__action--labeled chat-assistant-attachment-card__retry"
+          params.onAllow || params.onRetry
+            ? keyed(
+                Boolean(params.onAllow),
+                html`<button
+                  class="chat-assistant-attachment-card__action chat-assistant-attachment-card__action--labeled${params.onAllow ? "" : " chat-assistant-attachment-card__retry"}"
                   type="button"
-                  @click=${params.onRetry}
+                  @click=${params.onAllow ?? params.onRetry}
                 >
-                  ${icons.refresh} ${t("common.retry")}
-                </button>`
-              : unavailable
-                ? nothing
-                : html`<span
-                    class="chat-assistant-attachment-card__actions chat-assistant-attachment-card__actions--loading"
+                  ${params.onAllow ? t("chat.attachments.allowImage") : html`${icons.refresh} ${t("common.retry")}`}
+                </button>`,
+              )
+            : unavailable
+              ? nothing
+              : html`<span
+                  class="chat-assistant-attachment-card__actions chat-assistant-attachment-card__actions--loading"
+                  aria-hidden="true"
+                  data-label=${t("chat.attachments.open")}
+                >
+                  <span
+                    class="chat-assistant-attachment-card__action-skeleton skeleton"
                     aria-hidden="true"
-                    data-label=${t("chat.attachments.open")}
-                  >
-                    <span
-                      class="chat-assistant-attachment-card__action-skeleton skeleton"
-                      aria-hidden="true"
-                    ></span>
-                  </span>`
+                  ></span>
+                </span>`
         }
       </div>
     </div>

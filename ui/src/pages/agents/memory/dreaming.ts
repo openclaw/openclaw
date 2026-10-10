@@ -118,12 +118,23 @@ export type WikiPagePreview = {
   updatedAt?: string;
 };
 
-export type DreamingResourceKey =
-  | "dreamingStatus"
-  | "dreamDiary"
-  | "wikiImportInsights"
-  | "wikiOverview";
+type DreamingResourceValues = {
+  dreamingStatus: DreamingStatus;
+  dreamDiary: { path: string; content: string | null };
+  wikiImportInsights: WikiImportInsights;
+  wikiOverview: WikiOverview;
+};
+export type DreamingResourceKey = keyof DreamingResourceValues;
 type DreamingResourceRequest = { agentId: string };
+export type DreamingResources = {
+  [Key in DreamingResourceKey]: {
+    value: DreamingResourceValues[Key] | null;
+    loading: boolean;
+    error: string | null;
+    agentId?: string | null;
+    request?: DreamingResourceRequest;
+  };
+};
 
 export type DreamingState = {
   client: GatewayBrowserClient | null;
@@ -131,28 +142,11 @@ export type DreamingState = {
   hello: GatewayHelloOk | null;
   configSnapshot: ConfigSnapshot | null;
   selectedAgentId: string | null;
-  resourceRequests: Partial<Record<DreamingResourceKey, DreamingResourceRequest>>;
-  dreamingStatusAgentId?: string | null;
-  dreamingStatusLoading: boolean;
-  dreamingStatusError: string | null;
-  dreamingStatus: DreamingStatus | null;
+  resources: DreamingResources;
   dreamingModeSaving: boolean;
-  dreamDiaryAgentId?: string | null;
-  dreamDiaryLoading: boolean;
   dreamDiaryActionLoading: boolean;
   dreamDiaryActionMessage: { kind: "success" | "error"; text: string } | null;
   dreamDiaryActionArchivePath: string | null;
-  dreamDiaryError: string | null;
-  dreamDiaryPath: string | null;
-  dreamDiaryContent: string | null;
-  wikiImportInsightsAgentId?: string | null;
-  wikiImportInsightsLoading: boolean;
-  wikiImportInsightsError: string | null;
-  wikiImportInsights: WikiImportInsights | null;
-  wikiOverviewAgentId?: string | null;
-  wikiOverviewLoading: boolean;
-  wikiOverviewError: string | null;
-  wikiOverview: WikiOverview | null;
   lastError: string | null;
 };
 
@@ -167,24 +161,16 @@ export function createDreamingState(
     hello: initial.hello ?? null,
     configSnapshot: initial.configSnapshot ?? null,
     selectedAgentId: initial.selectedAgentId ?? null,
-    resourceRequests: {},
-    dreamingStatusLoading: false,
-    dreamingStatusError: null,
-    dreamingStatus: null,
+    resources: {
+      dreamingStatus: { value: null, loading: false, error: null },
+      dreamDiary: { value: null, loading: false, error: null },
+      wikiImportInsights: { value: null, loading: false, error: null },
+      wikiOverview: { value: null, loading: false, error: null },
+    },
     dreamingModeSaving: false,
-    dreamDiaryLoading: false,
     dreamDiaryActionLoading: false,
     dreamDiaryActionMessage: null,
     dreamDiaryActionArchivePath: null,
-    dreamDiaryError: null,
-    dreamDiaryPath: null,
-    dreamDiaryContent: null,
-    wikiImportInsightsLoading: false,
-    wikiImportInsightsError: null,
-    wikiImportInsights: null,
-    wikiOverviewLoading: false,
-    wikiOverviewError: null,
-    wikiOverview: null,
     lastError: null,
   };
 }
@@ -314,8 +300,7 @@ type DreamingResourcePayloads = {
 
 type DreamingResourceSpec<Key extends DreamingResourceKey> = {
   method: string;
-  clear: (state: DreamingState) => void;
-  apply: (state: DreamingState, payload: DreamingResourcePayloads[Key]) => void;
+  value: (payload: DreamingResourcePayloads[Key]) => DreamingResourceValues[Key] | null;
 };
 
 const DREAMING_RESOURCES: {
@@ -323,42 +308,17 @@ const DREAMING_RESOURCES: {
 } = {
   dreamingStatus: {
     method: "doctor.memory.status",
-    clear: (state) => {
-      state.dreamingStatus = null;
-    },
-    apply: (state, payload) => {
-      state.dreamingStatus = payload.dreaming ?? null;
-    },
+    value: (payload) => payload.dreaming ?? null,
   },
   dreamDiary: {
     method: "doctor.memory.dreamDiary",
-    clear: (state) => {
-      state.dreamDiaryPath = null;
-      state.dreamDiaryContent = null;
-    },
-    apply: (state, payload) => {
-      state.dreamDiaryPath = payload.path;
-      state.dreamDiaryContent = payload.found ? (payload.content ?? "") : null;
-    },
+    value: (payload) => ({
+      path: payload.path,
+      content: payload.found ? (payload.content ?? "") : null,
+    }),
   },
-  wikiImportInsights: {
-    method: "wiki.importInsights",
-    clear: (state) => {
-      state.wikiImportInsights = null;
-    },
-    apply: (state, payload) => {
-      state.wikiImportInsights = payload;
-    },
-  },
-  wikiOverview: {
-    method: "wiki.overview",
-    clear: (state) => {
-      state.wikiOverview = null;
-    },
-    apply: (state, payload) => {
-      state.wikiOverview = payload;
-    },
-  },
+  wikiImportInsights: { method: "wiki.importInsights", value: (payload) => payload },
+  wikiOverview: { method: "wiki.overview", value: (payload) => payload },
 };
 
 export function loadDreamingResource(
@@ -374,9 +334,7 @@ async function loadDreamingResourceSpec<Key extends DreamingResourceKey>(
   spec: (typeof DREAMING_RESOURCES)[Key],
 ): Promise<void> {
   const agentId = resolveSelectedAgentId(state);
-  const loadingKey: `${Key}Loading` = `${key}Loading`;
-  const errorKey: `${Key}Error` = `${key}Error`;
-  const agentKey: `${Key}AgentId` = `${key}AgentId`;
+  const resource = state.resources[key];
   if (!agentId) {
     return;
   }
@@ -384,45 +342,45 @@ async function loadDreamingResourceSpec<Key extends DreamingResourceKey>(
   if (!client || !state.connected) {
     return;
   }
-  if (state[agentKey] !== agentId) {
-    spec.clear(state);
+  if (resource.agentId !== agentId) {
+    resource.value = null;
   }
   if (
     (key === "wikiImportInsights" || key === "wikiOverview") &&
     !canCallMemoryWikiMethod(state, spec.method)
   ) {
-    delete state.resourceRequests[key];
-    state[loadingKey] = false;
-    state[errorKey] = null;
-    spec.clear(state);
+    delete resource.request;
+    resource.loading = false;
+    resource.error = null;
+    resource.value = null;
     return;
   }
 
-  const active = state.resourceRequests[key];
-  if (active?.agentId === agentId && state[loadingKey]) {
+  const active = resource.request;
+  if (active?.agentId === agentId && resource.loading) {
     return;
   }
 
   // Request identity, not agent identity, rejects stale A -> B -> A completions.
   const request: DreamingResourceRequest = { agentId };
-  state.resourceRequests[key] = request;
-  state[loadingKey] = true;
-  state[errorKey] = null;
+  resource.request = request;
+  resource.loading = true;
+  resource.error = null;
   try {
     const payload = await client.request<DreamingResourcePayloads[Key]>(spec.method, { agentId });
-    if (state.resourceRequests[key] !== request || resolveSelectedAgentId(state) !== agentId) {
+    if (resource.request !== request || resolveSelectedAgentId(state) !== agentId) {
       return;
     }
-    spec.apply(state, payload);
-    state[agentKey] = agentId;
+    resource.value = spec.value(payload);
+    resource.agentId = agentId;
   } catch (error) {
-    if (state.resourceRequests[key] === request && resolveSelectedAgentId(state) === agentId) {
-      state[errorKey] = formatUiError(error);
+    if (resource.request === request && resolveSelectedAgentId(state) === agentId) {
+      resource.error = formatUiError(error);
     }
   } finally {
-    if (state.resourceRequests[key] === request) {
-      delete state.resourceRequests[key];
-      state[loadingKey] = false;
+    if (resource.request === request) {
+      delete resource.request;
+      resource.loading = false;
     }
   }
 }
@@ -442,8 +400,8 @@ export async function runDreamDiaryAction(
     return false;
   }
   state.dreamDiaryActionLoading = true;
-  state.dreamingStatusError = null;
-  state.dreamDiaryError = null;
+  state.resources.dreamingStatus.error = null;
+  state.resources.dreamDiary.error = null;
   state.dreamDiaryActionMessage = null;
   state.dreamDiaryActionArchivePath = null;
   try {
@@ -466,7 +424,7 @@ export async function runDreamDiaryAction(
     return true;
   } catch (err) {
     const message = formatUiError(err);
-    state.dreamingStatusError = message;
+    state.resources.dreamingStatus.error = message;
     state.lastError = message;
     state.dreamDiaryActionArchivePath = null;
     state.dreamDiaryActionMessage = { kind: "error", text: message };
@@ -530,7 +488,7 @@ export async function updateDreamingEnabled(
     return false;
   }
   if (!config.state.configSnapshot?.hash) {
-    state.dreamingStatusError = t("dreaming.actions.configHashMissing");
+    state.resources.dreamingStatus.error = t("dreaming.actions.configHashMissing");
     return false;
   }
   const { pluginId } = resolveConfiguredDreaming(
@@ -539,7 +497,7 @@ export async function updateDreamingEnabled(
   // "unknown" stays optimistic: the gateway rejects the write if it is wrong.
   if ((await resolveDreamingConfigPathSupport(config, pluginId)) === "unsupported") {
     const message = t("dreaming.actions.unsupportedPlugin", { pluginId });
-    state.dreamingStatusError = message;
+    state.resources.dreamingStatus.error = message;
     state.lastError = message;
     return false;
   }
@@ -551,7 +509,7 @@ export async function updateDreamingEnabled(
     return false;
   }
   state.dreamingModeSaving = true;
-  state.dreamingStatusError = null;
+  state.resources.dreamingStatus.error = null;
   let updated: boolean;
   try {
     updated = await config.patch({
@@ -572,15 +530,15 @@ export async function updateDreamingEnabled(
       canDispatch,
     });
     if (!updated) {
-      state.dreamingStatusError =
+      state.resources.dreamingStatus.error =
         config.state.lastError ?? state.lastError ?? t("dreaming.actions.updateFailed");
     }
   } finally {
     state.dreamingModeSaving = false;
   }
-  if (updated && state.dreamingStatus) {
-    state.dreamingStatus = {
-      ...state.dreamingStatus,
+  if (updated && state.resources.dreamingStatus.value) {
+    state.resources.dreamingStatus.value = {
+      ...state.resources.dreamingStatus.value,
       enabled,
     };
   }

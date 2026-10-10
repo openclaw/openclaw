@@ -28,6 +28,7 @@ import {
 import { renderCustodianAlertCard } from "./custodian-alert-card.ts";
 import { custodianAlertStore } from "./custodian-alert-store.ts";
 import { custodianSessionStore, type CustodianSessionStore } from "./custodian-session-store.ts";
+import { renderCustodianTranscriptEntry } from "./custodian-transcript-view.ts";
 import * as eventNudgeState from "./event-nudge.ts";
 import {
   createPluginHelpRequest,
@@ -35,7 +36,6 @@ import {
   pluginHelpFocusRequest,
 } from "./plugin-help.ts";
 import { sessionVariant } from "./session-lifecycle.ts";
-import { renderCustodianTranscriptEntry } from "./transcript.ts";
 
 registerPluginManagementEnglish();
 
@@ -251,28 +251,7 @@ class CustodianSurface extends OpenClawLightDomElement {
           }
           ${store.messages
             .filter((message) => !pluginWelcome || !message.optionalWelcome)
-            .map((message) => {
-              const questionKey = message.question ? `${message.id}:${message.question.id}` : "";
-              const showQuestion =
-                message.question !== null && !store.dismissedQuestions.has(questionKey);
-              return renderCustodianTranscriptEntry({
-                message,
-                boundaryAfterId: store.earlierBoundaryAfterId,
-                showQuestion,
-                questionDisabled: !store.canSend || store.answeredQuestions.has(questionKey),
-                onSelect: (label) => store.answerQuestion(message, label),
-                onSkip: () => void store.dismissQuestion(message),
-                showWizardStep: message === activeWizardMessage,
-                wizardValue: store.wizardValue,
-                wizardDisabled: !store.canSend,
-                wizardSecretVisible: store.wizardSecretVisible,
-                onWizardValueChange: (value) => store.setWizardValue(value),
-                onWizardAnswer: (value) => store.answerWizardStep(message, value),
-                showWizardCancel: store.wizardCancelAvailable,
-                onWizardCancel: () => store.cancelWizardStep(message),
-                onToggleWizardSecretVisibility: () => store.toggleWizardSecretVisibility(),
-              });
-            })}
+            .map((message) => renderCustodianTranscriptEntry(store, message, activeWizardMessage))}
           ${
             store.sending
               ? html`<div class="chat-group assistant custodian__thinking-row" role="status">
