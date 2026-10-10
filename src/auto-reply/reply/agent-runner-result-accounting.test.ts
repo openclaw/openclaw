@@ -16,10 +16,6 @@ vi.mock("../../agents/fast-mode.js", () => ({
   resolveFastModeState: () => ({ enabled: false }),
 }));
 
-vi.mock("../../agents/live-model-switch.js", () => ({
-  prepareLiveModelSwitchAfterRun: vi.fn(() => undefined),
-}));
-
 vi.mock("../../agents/model-selection.js", () => ({
   isCliProvider: () => false,
 }));
