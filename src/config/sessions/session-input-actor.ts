@@ -126,7 +126,7 @@ export async function getSessionInputActor(scope: { agentId: string; sessionKey:
 
 export function throwSessionInputActorFailure(
   outcome: {
-    kind: "rolled-back" | "unknown";
+    kind: "rolled-back" | "stale-version" | "unknown";
     error: { name: string; message: string };
   },
   authorityFailure?: unknown,

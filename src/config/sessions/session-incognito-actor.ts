@@ -85,6 +85,9 @@ export function createIncognitoSessionFacts(
   assertActorCurrent: () => void,
   withGrant: <T>(operation: () => T) => T,
   assertOutsideGrant: () => void,
+  invalidateActorSnapshots: (
+    targets: readonly Pick<IncognitoSessionFacts, "sessionKey" | "sharing">[] | undefined,
+  ) => void,
   assertAdmittedCurrent: () => void = assertActorCurrent,
 ) {
   const entries = new Map<string, IncognitoSessionFacts>();
@@ -146,12 +149,14 @@ export function createIncognitoSessionFacts(
   return {
     captureRead,
     invalidate(sessionKey: string) {
+      invalidateActorSnapshots([{ sessionKey, sharing: entries.get(sessionKey)?.sharing }]);
       if (!unavailable.has(sessionKey)) {
         unavailable.add(sessionKey);
         snapshotRevision += 1;
       }
     },
     clear() {
+      invalidateActorSnapshots(undefined);
       entries.clear();
       pending.clear();
       unavailable.clear();
@@ -194,6 +199,14 @@ export function createIncognitoSessionFacts(
         const commandGrant = grants.command(captured.type, authority.entryCreation);
         let commitGranted = false;
         function unknownOutcome(message: string): never {
+          invalidateActorSnapshots(
+            targets.size
+              ? [...targets].map((sessionKey) => ({
+                  sessionKey,
+                  sharing: entries.get(sessionKey)?.sharing,
+                }))
+              : undefined,
+          );
           for (const key of targets) {
             unavailable.add(key);
           }
@@ -354,6 +367,9 @@ export function createIncognitoSessionFacts(
                     captured,
                     request.stage === "commit" ? targets : undefined,
                   );
+                  if (changing) {
+                    invalidateActorSnapshots(facts);
+                  }
                   commandGrant.capture(request.stage, facts);
                   for (const entry of facts) {
                     targets.add(entry.sessionKey);

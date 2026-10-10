@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { isDeepStrictEqual } from "node:util";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import { createRestartRecoveryOperatorSource } from "../../agents/operator-run-recovery-source.js";
@@ -256,76 +255,62 @@ export function createReplyRestartRecoveryClaimController(params: {
       assertClaimCurrent(sessionId);
       params.operatorAuthority?.assertCurrent();
     };
-    // Preparation can publish unrelated metadata. Retry only a proven non-commit
-    // with a changed replica version; the original lifecycle predicates stay fixed.
-    for (let attempt = 0; ; attempt++) {
-      const before = await readActor();
-      validate(before.entry);
-      let admitted = false;
-      let authorityFailure: unknown;
-      const authorize = (stage?: "transaction" | "commit", entry?: SessionEntry) => {
-        try {
-          assertCurrent();
-          if (stage === "transaction" && !admitted) {
-            validate(entry);
-            admitted = true;
+    let admitted = false;
+    let authorityFailure: unknown;
+    const authorize = (stage?: "transaction" | "commit", entry?: SessionEntry) => {
+      try {
+        assertCurrent();
+        if (stage === "transaction" && !admitted) {
+          validate(entry);
+          admitted = true;
+        }
+      } catch (error) {
+        authorityFailure = error;
+        throw error;
+      }
+    };
+    const authority: SessionActorAuthority = {
+      assertCurrent: authorize,
+      authorize(stage, facts) {
+        authorize(stage, facts.entry);
+      },
+    };
+    let committed: SessionEntry | undefined;
+    const outcome = await actor.adoptRun(
+      {
+        commandId: randomUUID(),
+        phaseId: "reply.restart-recovery",
+        sessionId,
+        expectedState,
+        lifecycle: options.patch,
+      },
+      authority,
+      {
+        committed(receipt) {
+          committed = receipt.receipt.postimage.entry;
+          if (!committed) {
+            throw new Error("Committed restart recovery adoption omitted its session");
           }
-        } catch (error) {
-          authorityFailure = error;
-          throw error;
-        }
-      };
-      const authority: SessionActorAuthority = {
-        assertCurrent: authorize,
-        authorize(stage, facts) {
-          authorize(stage, facts.entry);
+          options.committed(committed);
         },
-      };
-      let committed: SessionEntry | undefined;
-      const outcome = await actor.adoptRun(
-        {
-          commandId: randomUUID(),
-          phaseId: "reply.restart-recovery",
-          expected: before.version,
-          sessionId,
-          expectedState,
-          lifecycle: options.patch,
-        },
-        authority,
-        {
-          committed(receipt) {
-            committed = receipt.receipt.postimage.entry;
-            if (!committed) {
-              throw new Error("Committed restart recovery adoption omitted its session");
-            }
-            options.committed(committed);
-          },
-        },
-      );
-      if (outcome.kind === "committed") {
-        if (outcome.failure && outcome.failure.origin !== "response") {
-          throw Object.assign(new Error(outcome.failure.message), { name: outcome.failure.name });
-        }
-        if (!committed) {
-          throw new Error("Restart recovery adoption omitted its committed receipt");
-        }
-        return committed;
+      },
+    );
+    if (outcome.kind === "committed") {
+      if (outcome.failure && outcome.failure.origin !== "response") {
+        throw Object.assign(new Error(outcome.failure.message), { name: outcome.failure.name });
       }
-      if (outcome.kind === "unknown") {
-        throw new SqliteWorkerError(outcome.error.message, "outcome-unknown");
+      if (!committed) {
+        throw new Error("Restart recovery adoption omitted its committed receipt");
       }
-      if (authorityFailure) {
-        throw authorityFailure;
-      }
-      if (!admitted && attempt === 0) {
-        const refreshed = await readActor();
-        validate(refreshed.entry);
-        if (!isDeepStrictEqual(before.version, refreshed.version)) {
-          continue;
-        }
-      }
-      throw Object.assign(new Error(outcome.error.message), { name: outcome.error.name });
+      return committed;
     }
+    if (outcome.kind === "unknown") {
+      throw new SqliteWorkerError(outcome.error.message, "outcome-unknown");
+    }
+    if (authorityFailure) {
+      throw authorityFailure;
+    }
+    throw Object.assign(new Error(outcome.error.message), { name: outcome.error.name });
   };
 
   const persistAdmissionPatch = async (options: {

@@ -1,4 +1,7 @@
-import { readSqliteDatabaseWriteTokenForPath } from "../../infra/sqlite-database-admission.js";
+import {
+  readSqliteDatabaseScopedWriteTokenForPath,
+  sqliteSessionIdWriteScope,
+} from "../../infra/sqlite-database-admission.js";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { sessionChangeAffectsStoredRow } from "../../sessions/session-row-facts.js";
@@ -18,6 +21,7 @@ import type {
   SessionActorTarget,
   SessionActorVersion,
 } from "./session-actor-contract.js";
+import { collectSessionEntryLookupKeys } from "./store-entry.js";
 
 type FileTarget = SessionActorTarget & { database: AgentDatabaseExecutionFileIdentity };
 type EphemeralTarget = SessionActorTarget & {
@@ -43,7 +47,7 @@ const pool = resolveGlobalSingleton(Symbol.for("openclaw.sessionActorReplicas"),
       if (
         database.kind !== "file" ||
         !sessionChangeAffectsStoredRow(change, {
-          sessionKeys: [sessionKey],
+          sessionKeys: collectSessionEntryLookupKeys(sessionKey),
           storePaths: new Set([database.nativeLocation]),
           databaseIdentities: new Set([database.physicalIdentity]),
         })
@@ -122,7 +126,7 @@ export function createSessionActorReplica(
     | { target: FileTarget; currentWriteToken?: never; currentGeneration: () => string | undefined }
     | {
         target: EphemeralTarget;
-        currentWriteToken: () => string | undefined;
+        currentWriteToken: (state: SessionActorHotState) => string | undefined;
         currentGeneration?: never;
       }
   ),
@@ -152,10 +156,10 @@ export function createSessionActorReplica(
       return undefined;
     }
   };
-  const currentToken = (): string | undefined => {
+  const currentToken = (state: SessionActorHotState): string | undefined => {
     const database = target.database;
     if (database.kind !== "file") {
-      return params.currentWriteToken?.();
+      return params.currentWriteToken?.(state);
     }
     try {
       const identity = readDatabasePathIdentitySync(database.nativeLocation);
@@ -165,12 +169,19 @@ export function createSessionActorReplica(
       ) {
         return undefined;
       }
-      return readSqliteDatabaseWriteTokenForPath(database.nativeLocation);
+      return readSqliteDatabaseScopedWriteTokenForPath(database.nativeLocation, [
+        ...collectSessionEntryLookupKeys(target.sessionKey),
+        ...state.dependencySessionIds.map(sqliteSessionIdWriteScope),
+      ]);
     } catch {
       return undefined;
     }
   };
-  const accepts = (state: SessionActorHotState, expectedGeneration: string | undefined): boolean =>
+  const accepts = (
+    state: SessionActorHotState,
+    expectedGeneration: string | undefined,
+    writeToken = currentToken(state),
+  ): boolean =>
     expectedGeneration !== undefined &&
     expectedGeneration === generation() &&
     targetKey(state.target) === key &&
@@ -178,7 +189,7 @@ export function createSessionActorReplica(
     Number.isSafeInteger(state.version.sequence) &&
     state.version.sequence >= 0 &&
     state.writeToken.length > 0 &&
-    state.writeToken === currentToken();
+    state.writeToken === writeToken;
   const install = (
     state: SessionActorHotState,
     expectedGeneration: string | undefined,
@@ -225,25 +236,25 @@ export function createSessionActorReplica(
     };
   };
 
-  const read = (): SessionActorHotState | undefined => {
-    if (closed || !owned.snapshot) return undefined;
-    if (!accepts(owned.snapshot, owned.generation)) {
-      invalidate();
-      return undefined;
-    }
-    touch(owned);
-    return structuredClone(owned.snapshot);
-  };
   return {
     /** Each borrower validates its current physical generation before disclosure. */
     read(): SessionActorHotState | undefined {
       params.lifetime.assertReadable();
-      return read();
-    },
-    /** Already-accepted phase work retains settlement authority after disclosure closes. */
-    readAccepted(): SessionActorHotState | undefined {
-      params.lifetime.assertCurrent();
-      return read();
+      if (closed || !owned.snapshot) {
+        return undefined;
+      }
+      const token = currentToken(owned.snapshot);
+      if (token === undefined) {
+        // An unrelated unsettled writer can temporarily fence disclosure without
+        // discarding this session's still-valid postimage.
+        return undefined;
+      }
+      if (!accepts(owned.snapshot, owned.generation, token)) {
+        invalidate();
+        return undefined;
+      }
+      touch(owned);
+      return structuredClone(owned.snapshot);
     },
     beginRead() {
       const settle = begin();
@@ -274,16 +285,20 @@ export function createSessionActorReplica(
               discard(owned);
               return false;
             }
+            if (outcome.kind === "stale-version") {
+              return install(outcome.postimage, expectedGeneration);
+            }
             const { receipt } = outcome;
             const version = receipt.postimage.version;
             if (
               receipt.commandId !== captured.commandId ||
               receipt.phaseId !== captured.phaseId ||
               receipt.phase !== captured.phase ||
-              !sameVersion(receipt.beforeVersion, captured.expected) ||
+              (captured.expected !== undefined &&
+                !sameVersion(receipt.beforeVersion, captured.expected)) ||
               !sameVersion(receipt.afterVersion, version) ||
-              version.epoch !== captured.expected.epoch ||
-              version.sequence !== captured.expected.sequence + 1
+              version.epoch !== receipt.beforeVersion.epoch ||
+              version.sequence !== receipt.beforeVersion.sequence + 1
             ) {
               discard(owned);
               return false;

@@ -8,7 +8,11 @@ import {
   getNodeSqliteKysely,
   prepareSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
-import { readSqliteDatabaseSiblingWriteRevision } from "../../infra/sqlite-database-admission.js";
+import {
+  readSqliteDatabaseSiblingWriteRevision,
+  sqliteSessionIdWriteScope,
+  withSqliteDatabaseWriteScope,
+} from "../../infra/sqlite-database-admission.js";
 import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
 import {
   getAdmittedSqliteSchemaFacts,
@@ -214,19 +218,21 @@ export function maintainSessionTranscriptIndexStatus(db: DatabaseSync): {
     } else {
       for (const [index, table] of projectionTables.entries()) {
         const removed =
-          executeSqliteQuerySync(
-            db,
-            kysely
-              .deleteFrom(table)
-              .where(
-                "rowid",
-                "in",
-                kysely
-                  .selectFrom(table)
-                  .select("rowid")
-                  .where("session_id", "=", sessionId)
-                  .limit(remainingRows[index]!),
-              ),
+          withSqliteDatabaseWriteScope(db, [sqliteSessionIdWriteScope(sessionId)], () =>
+            executeSqliteQuerySync(
+              db,
+              kysely
+                .deleteFrom(table)
+                .where(
+                  "rowid",
+                  "in",
+                  kysely
+                    .selectFrom(table)
+                    .select("rowid")
+                    .where("session_id", "=", sessionId)
+                    .limit(remainingRows[index]!),
+                ),
+            ),
           ).numAffectedRows ?? 0n;
         remainingRows[index]! -= Number(removed);
         unfinished ||=

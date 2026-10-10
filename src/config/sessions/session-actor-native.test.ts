@@ -8,6 +8,7 @@ import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db
 import {
   closeOpenClawAgentDatabaseByPathAsync,
   getOpenClawAgentDatabaseIfOpen,
+  runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import {
   resolveIncognitoOpenClawAgentSqlitePath,
@@ -15,10 +16,20 @@ import {
 } from "../../state/openclaw-agent-db.paths.js";
 import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { readExactSessionEntryRow } from "./session-accessor.sqlite-entry-store.js";
+import {
+  deleteSessionEntryRows,
+  readExactSessionEntryRow,
+} from "./session-accessor.sqlite-entry-store.js";
 import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
+import { assignSessionOwner } from "./session-accessor.sqlite-owner.js";
+import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
 import { readSessionPendingInputByKey } from "./session-accessor.sqlite-pending-inputs.js";
 import { readTranscriptEventRows } from "./session-accessor.sqlite-read.js";
+import { replaceTranscriptSuffixEventsSync } from "./session-accessor.sqlite-transcript-suffix-write.js";
+import {
+  appendTranscriptEventSync,
+  replaceTranscriptEventsSync,
+} from "./session-accessor.sqlite-transcript-write.js";
 import type { SessionActorAuthority, SessionActorReducer } from "./session-actor-contract.js";
 import { createSessionActorFactory } from "./session-actor-durable.js";
 import {
@@ -26,6 +37,8 @@ import {
   captureNativeIncognitoSessionActorTarget,
 } from "./session-actor-native-incognito.js";
 import { acquireSessionInputActor } from "./session-input-actor.js";
+import { addSessionMember, removeSessionMember } from "./session-sharing-store.native.js";
+import { deleteSessionTranscriptIndexInTransaction } from "./session-transcript-index.js";
 import { buildRestartRecoveryExpectedState } from "./session-transcript-turn-state.js";
 import { withSessionTranscriptSourcePublication } from "./transcript-write-context.js";
 
@@ -588,6 +601,110 @@ it("refuses a captured native owner after closure instead of adopting its replac
       });
       expect(captureOpenClawAgentDatabaseExecution.listIncognito(env)).toEqual([]);
       expect(existsSync(database.path)).toBe(false);
+    } finally {
+      await actor.release();
+    }
+  });
+});
+
+it("retains unrelated session replicas through native entry, sharing, participant, transcript, and deletion writes", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+    const { actor, database, factory, owner, scope } = await nativeSession(env);
+    const siblingScope = { ...scope, sessionKey: "agent:main:dashboard:incognito-sibling" };
+    const siblingEntry = { sessionId: "sibling-session", updatedAt: 1, incognito: true };
+    replaceSessionEntrySync(siblingScope, siblingEntry);
+    const siblingTarget = expectDefined(
+      captureNativeIncognitoSessionActorTarget({ database, sessionKey: siblingScope.sessionKey }),
+      "sibling actor target",
+    );
+    const sibling = await factory.acquire(siblingTarget, lifetime);
+    try {
+      const retained = await actor.read(authority);
+      const siblingEvent = {
+        type: "custom",
+        id: "native-sibling-event",
+        parentId: null,
+        customType: "fixture",
+        data: { value: 1 },
+        timestamp: "2026-10-10T00:00:00.000Z",
+      };
+      const mutations = [
+        () =>
+          replaceSessionEntrySync(siblingScope, {
+            ...siblingEntry,
+            updatedAt: 2,
+            label: "changed",
+          }),
+        () =>
+          assignSessionOwner(siblingScope, {
+            owner: { type: "profile", id: "owner-profile" },
+            assignedBy: { type: "profile", id: "admin-profile" },
+            assignedAt: 3,
+          }),
+        () =>
+          addSessionMember(siblingScope, {
+            identityId: "member-profile",
+            addedBy: "admin-profile",
+            addedAt: 4,
+          }),
+        () => removeSessionMember(siblingScope, "member-profile"),
+        () =>
+          recordSessionParticipant(siblingScope, {
+            identity: { type: "agent", id: "helper-agent" },
+            promptedAt: 5,
+          }),
+        () =>
+          expect(
+            appendTranscriptEventSync(
+              { ...siblingScope, sessionId: siblingEntry.sessionId },
+              siblingEvent,
+            ),
+          ).toMatchObject({ ok: true, value: true }),
+        () =>
+          expect(
+            replaceTranscriptSuffixEventsSync(
+              { ...siblingScope, sessionId: siblingEntry.sessionId },
+              [siblingEvent],
+              [{ ...siblingEvent, data: { value: 2 } }],
+            ),
+          ).toBe(true),
+        () =>
+          runOpenClawAgentWriteTransaction((selected) => {
+            deleteSessionTranscriptIndexInTransaction(selected.db, siblingEntry.sessionId);
+          }, database),
+        () =>
+          replaceTranscriptEventsSync({ ...siblingScope, sessionId: siblingEntry.sessionId }, []),
+        () =>
+          runOpenClawAgentWriteTransaction((selected) => {
+            expect(selected).toBe(owner);
+            deleteSessionEntryRows(selected, siblingScope.sessionKey, { deleteOwnedWindows: true });
+          }, database),
+      ];
+      for (const mutate of mutations) {
+        await sibling.read(authority);
+        mutate();
+        expect(actor.snapshot(authority)).toEqual(retained);
+        expect(sibling.snapshot(authority)).toBeUndefined();
+      }
+      expect(readExactSessionEntryRow(owner, siblingScope.sessionKey)).toBeUndefined();
+      expect(actor.snapshot(authority)?.entry?.sessionId).toBe("native-session");
+    } finally {
+      await sibling.release();
+      await actor.release();
+    }
+  });
+});
+
+it("invalidates another logical session when both hold the same physical transcript window", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+    const { actor, scope } = await nativeSession(env);
+    try {
+      await actor.read(authority);
+      replaceSessionEntrySync(
+        { ...scope, sessionKey: "agent:main:dashboard:incognito-shared-window" },
+        { sessionId: "native-session", updatedAt: 2, incognito: true },
+      );
+      expect(actor.snapshot(authority)).toBeUndefined();
     } finally {
       await actor.release();
     }

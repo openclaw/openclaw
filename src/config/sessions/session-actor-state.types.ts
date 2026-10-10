@@ -43,6 +43,8 @@ export type SessionActorHotState = {
   version: SessionActorVersion;
   /** In-process writer receipt revision, not a SQLite foreign-commit observation. */
   writeToken: string;
+  /** Shared windows retained by the selected row and its lookup aliases. */
+  dependencySessionIds: string[];
   /** Includes the canonical turn, lifecycle, recovery, and pendingFinalDelivery fields. */
   entry: SessionEntry | undefined;
   participants: SessionParticipantRecord[];
@@ -64,4 +66,4 @@ export type SessionActorHotState = {
   };
 };
 
-export type SessionActorSettlement = "committed" | "rolled-back" | "unknown";
+export type SessionActorSettlement = "committed" | "rolled-back" | "stale-version" | "unknown";

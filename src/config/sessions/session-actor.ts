@@ -155,14 +155,14 @@ export function createSessionActor(params: {
     generation = scope.captureGeneration();
     generation.assertCurrent();
   };
-  const isInstalled = (snapshot: SessionActorHotState, disclose = true): boolean => {
+  const isInstalled = (snapshot: SessionActorHotState): boolean => {
     try {
       generation?.assertCurrent();
     } catch {
       params.replica.invalidate();
       return false;
     }
-    const current = disclose ? params.replica.read() : params.replica.readAccepted();
+    const current = params.replica.read();
     return (
       current !== undefined &&
       current.writeToken === snapshot.writeToken &&
@@ -218,15 +218,14 @@ export function createSessionActor(params: {
       }
     };
   };
-  const read = (authority: SessionActorAuthority, phase?: PhaseState, disclose = true) =>
+  const read = (authority: SessionActorAuthority, phase?: PhaseState) =>
     retain(
       () =>
         params.transport.run(async (scope) => {
           checkGeneration(scope);
-          const assertView = disclose ? assertReadable : assertAccepted;
-          assertView();
+          assertReadable();
           authority.assertCurrent();
-          let snapshot = disclose ? params.replica.read() : params.replica.readAccepted();
+          let snapshot = params.replica.read();
           if (!snapshot) {
             const pending = params.replica.beginRead();
             try {
@@ -240,12 +239,12 @@ export function createSessionActor(params: {
               pending.cancel();
             }
           }
-          assertView();
+          assertReadable();
           authority.assertCurrent();
           authority.authorize("commit", snapshot);
           authority.assertCurrent();
-          assertView();
-          if (!isInstalled(snapshot, disclose)) {
+          assertReadable();
+          if (!isInstalled(snapshot)) {
             throw new Error("Session actor changed before read disclosure");
           }
           return snapshot;
@@ -267,7 +266,11 @@ export function createSessionActor(params: {
       type Outcome = SessionActorOutcome<SessionActorPhaseResults[Phase]>;
       const reducers = phase?.reducers.splice(0) ?? [];
       captured.reducers = [...reducers, ...(captured.reducers ?? [])];
-      const selected: { native?: NativeAdmission; commitSnapshot?: SessionActorHotState } = {};
+      const selected: {
+        native?: NativeAdmission;
+        transactionSnapshot?: SessionActorHotState;
+        commitSnapshot?: SessionActorHotState;
+      } = {};
       let running: Promise<Outcome> | undefined;
       let committed: Extract<Outcome, { kind: "committed" }> | undefined;
       const unknown = (error: unknown): Outcome => ({
@@ -318,15 +321,20 @@ export function createSessionActor(params: {
                   isRecord(evidence) &&
                   evidence.kind === "committed" &&
                   isRecord(receipt) &&
+                  selected.transactionSnapshot !== undefined &&
                   selected.commitSnapshot !== undefined &&
                   receipt.kind === "session-actor-committed" &&
                   receipt.commandId === captured.commandId &&
                   receipt.phaseId === captured.phaseId &&
                   receipt.phase === name &&
-                  isDeepStrictEqual(receipt.beforeVersion, captured.expected) &&
+                  isDeepStrictEqual(receipt.beforeVersion, selected.transactionSnapshot.version) &&
+                  (captured.expected === undefined ||
+                    isDeepStrictEqual(receipt.beforeVersion, captured.expected)) &&
                   isDeepStrictEqual(receipt.afterVersion, selected.commitSnapshot.version) &&
-                  selected.commitSnapshot.version.epoch === captured.expected.epoch &&
-                  selected.commitSnapshot.version.sequence === captured.expected.sequence + 1 &&
+                  selected.commitSnapshot.version.epoch ===
+                    selected.transactionSnapshot.version.epoch &&
+                  selected.commitSnapshot.version.sequence ===
+                    selected.transactionSnapshot.version.sequence + 1 &&
                   isDeepStrictEqual(receipt.postimage, selected.commitSnapshot)
                 ) {
                   // SAFETY: The paired native receipt owns the result type; the checks above match its command and postimage.
@@ -345,7 +353,12 @@ export function createSessionActor(params: {
                 } else if (
                   evidence === undefined &&
                   reply.ok &&
-                  reply.value.kind === "rolled-back" &&
+                  (reply.value.kind === "rolled-back" ||
+                    (reply.value.kind === "stale-version" &&
+                      captured.expected !== undefined &&
+                      isDeepStrictEqual(reply.value.expected, captured.expected) &&
+                      isDeepStrictEqual(reply.value.postimage, selected.transactionSnapshot) &&
+                      !isDeepStrictEqual(reply.value.postimage.version, captured.expected))) &&
                   (settled.kind === "not-entered" ||
                     native.admission.settlement?.kind === "completed")
                 ) {
@@ -373,6 +386,16 @@ export function createSessionActor(params: {
                 // Fence before returning the physical FIFO permit to a queued command.
                 fenced = true;
               }
+              if (result.kind === "stale-version") {
+                try {
+                  authority.assertCurrent();
+                  authority.authorize("commit", structuredClone(result.postimage));
+                  authority.assertCurrent();
+                  assertAccepted();
+                } catch (error) {
+                  result = { kind: "rolled-back", error: errorFacts(error) };
+                }
+              }
               try {
                 if (!pending.settle(result)) {
                   params.replica.invalidate();
@@ -392,6 +415,9 @@ export function createSessionActor(params: {
           },
           authorize(authority, (native, stage, snapshot, final) => {
             selected.native = native;
+            if (stage === "transaction") {
+              selected.transactionSnapshot ??= snapshot;
+            }
             if (stage === "commit" && final) {
               selected.commitSnapshot = snapshot;
             }
@@ -439,7 +465,7 @@ export function createSessionActor(params: {
         if (phase) {
           phase.uncertain = true;
         }
-      } else if (phase && outcome.kind === "rolled-back") {
+      } else if (phase && (outcome.kind === "rolled-back" || outcome.kind === "stale-version")) {
         phase.reducers.unshift(...reducers);
       }
       return outcome;
@@ -540,13 +566,11 @@ export function createSessionActor(params: {
             );
           }
           while (held.reducers.length) {
-            const phaseSnapshot = await read(authority, held, false);
             const settled = await command(
               "patch",
               {
                 commandId: randomUUID(),
                 phaseId,
-                expected: phaseSnapshot.version,
                 reducers: [],
               },
               authority,

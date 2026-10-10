@@ -56,18 +56,16 @@ it("acquires the exact cold durable execution owner and installs a real worker c
       { assertCurrent() {}, assertReadable() {} },
     );
     try {
-      const before = await actor.read(authority);
-      expect(before.entry?.sessionId).toBe(fixture.scope.sessionId);
       const result = await actor.patch(
         {
           commandId: "durable",
           phaseId: "turn",
-          expected: before.version,
           reducers: [{ kind: "activity", updatedAt: 543 }],
         },
         authority,
       );
       expect(result.kind).toBe("committed");
+      expect(actor.snapshot(authority)?.entry?.sessionId).toBe(fixture.scope.sessionId);
       expect(actor.snapshot(authority)?.entry?.updatedAt).toBe(543);
       expect(fixture.read()?.updatedAt).toBe(543);
     } finally {
@@ -277,6 +275,65 @@ it("serves installed state without a request and reconciles a retired worker gen
   });
 });
 
+it("installs a cold command and stale preimage without a separate read request", async () => {
+  await withActor(async ({ actor, commands, fault, retireGeneration }) => {
+    const input = {
+      commandId: "same-command",
+      phaseId: "turn",
+      reducers: [{ kind: "activity" as const, updatedAt: 601 }],
+    };
+    const first = await actor.patch(input, authority);
+    if (first.kind !== "committed") {
+      throw new Error("Expected first command to adopt its current preimage");
+    }
+    expect(actor.snapshot(authority)).toEqual(first.receipt.postimage);
+    retireGeneration();
+    let revoked = false;
+    fault.onExecuted = () => {
+      revoked = true;
+    };
+    const refused = await actor.patch(
+      { ...input, expected: first.receipt.afterVersion },
+      {
+        assertCurrent() {
+          if (revoked) {
+            throw new Error("Disclosure authority revoked after rollback");
+          }
+        },
+        authorize() {},
+      },
+    );
+    expect(refused).toMatchObject({
+      kind: "rolled-back",
+      error: { message: "Disclosure authority revoked after rollback" },
+    });
+    expect(actor.snapshot(authority)).toBeUndefined();
+    delete fault.onExecuted;
+    const stale = await actor.patch({ ...input, expected: first.receipt.afterVersion }, authority);
+    if (stale.kind !== "stale-version") {
+      throw new Error("Expected the retired worker version to be stale");
+    }
+    expect(stale.postimage.entry?.updatedAt).toBe(601);
+    expect(actor.snapshot(authority)).toEqual(stale.postimage);
+    const next = await actor.patch(
+      {
+        ...input,
+        expected: stale.postimage.version,
+        reducers: [{ kind: "activity", updatedAt: 602 }],
+      },
+      authority,
+    );
+    expect(next.kind).toBe("committed");
+    expect(actor.snapshot(authority)?.entry?.updatedAt).toBe(602);
+    expect(commands).toEqual([
+      "session.actor.patch",
+      "session.actor.patch",
+      "session.actor.patch",
+      "session.actor.patch",
+    ]);
+  });
+});
+
 it("installs the full append receipt and releases FIFO before retained follow-up work", async () => {
   await withActor(async ({ actor, fault }) => {
     const before = await actor.read(authority);
@@ -435,12 +492,7 @@ it("retains rollback state and fences unknown commits until an explicit read", a
     expect(actor.snapshot(authority)).toBeUndefined();
     const before = commands.length;
     expect(
-      (
-        await actor.patch(
-          { commandId: "unknown", phaseId: "turn", expected: initial.version, reducers: [] },
-          authority,
-        )
-      ).kind,
+      (await actor.patch({ commandId: "unknown", phaseId: "turn", reducers: [] }, authority)).kind,
     ).toBe("unknown");
     expect(commands).toHaveLength(before);
     fault.reply = "normal";

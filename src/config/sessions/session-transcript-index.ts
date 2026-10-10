@@ -13,6 +13,11 @@ import {
   getNodeSqliteKysely,
   prepareSqliteQuerySync,
 } from "../../infra/kysely-sync.js";
+import {
+  sqliteSessionIdWriteScope,
+  withSqliteDatabaseWriteScope,
+  withoutSqliteDatabaseWriteScope,
+} from "../../infra/sqlite-database-admission.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import { readSessionActorTransactionState } from "./session-actor-transaction.js";
 import {
@@ -202,7 +207,7 @@ export function sessionTranscriptIndexNeedsReconcile(db: DatabaseSync, sessionId
 }
 
 function createWatermarkWriter(db: DatabaseSync, sessionId: string, updateExisting = false) {
-  return prepareSqliteQuerySync<SessionTranscriptProjectionState & { updatedAt: number }>(
+  const write = prepareSqliteQuerySync<SessionTranscriptProjectionState & { updatedAt: number }>(
     db,
     (parameter) => {
       const kysely = getIndexKysely(db);
@@ -225,10 +230,12 @@ function createWatermarkWriter(db: DatabaseSync, sessionId: string, updateExisti
             .onConflict((conflict) => conflict.column("session_id").doUpdateSet(values));
     },
   );
+  return (row: SessionTranscriptProjectionState & { updatedAt: number }) =>
+    withSqliteDatabaseWriteScope(db, [sqliteSessionIdWriteScope(sessionId)], () => write(row));
 }
 
 function createActiveEventInserter(db: DatabaseSync, sessionId: string) {
-  return prepareSqliteQuerySync<PreparedSessionTranscriptProjection["activeRows"][number]>(
+  const write = prepareSqliteQuerySync<PreparedSessionTranscriptProjection["activeRows"][number]>(
     db,
     (parameter) =>
       getIndexKysely(db)
@@ -241,14 +248,18 @@ function createActiveEventInserter(db: DatabaseSync, sessionId: string) {
           message_position: parameter((row) => row.messagePosition),
         }),
   );
+  return (row: PreparedSessionTranscriptProjection["activeRows"][number]) =>
+    withSqliteDatabaseWriteScope(db, [sqliteSessionIdWriteScope(sessionId)], () => write(row));
 }
 
 function deleteActiveEventRows(db: DatabaseSync, sessionId: string): void {
-  executeSqliteQuerySync(
-    db,
-    getIndexKysely(db)
-      .deleteFrom("session_transcript_active_events")
-      .where("session_id", "=", sessionId),
+  withSqliteDatabaseWriteScope(db, [sqliteSessionIdWriteScope(sessionId)], () =>
+    executeSqliteQuerySync(
+      db,
+      getIndexKysely(db)
+        .deleteFrom("session_transcript_active_events")
+        .where("session_id", "=", sessionId),
+    ),
   );
 }
 
@@ -366,11 +377,13 @@ export function deleteSessionTranscriptIndexInTransaction(
 ): void {
   deleteSessionTranscriptFtsRowsInTransaction(db, sessionId);
   deleteActiveEventRows(db, sessionId);
-  executeSqliteQuerySync(
-    db,
-    getIndexKysely(db)
-      .deleteFrom("session_transcript_index_state")
-      .where("session_id", "=", sessionId),
+  withSqliteDatabaseWriteScope(db, [sqliteSessionIdWriteScope(sessionId)], () =>
+    executeSqliteQuerySync(
+      db,
+      getIndexKysely(db)
+        .deleteFrom("session_transcript_index_state")
+        .where("session_id", "=", sessionId),
+    ),
   );
 }
 
@@ -450,12 +463,14 @@ export function replaceSessionTranscriptIndexSuffixInTransaction(
   if (removedMessageIds.length > 0) {
     deleteSessionTranscriptFtsRowsInTransaction(db, sessionId, { messageIds: removedMessageIds });
   }
-  executeSqliteQuerySync(
-    db,
-    kysely
-      .deleteFrom("session_transcript_active_events")
-      .where("session_id", "=", sessionId)
-      .where("active_position", ">=", retainedCount),
+  withSqliteDatabaseWriteScope(db, [sqliteSessionIdWriteScope(sessionId)], () =>
+    executeSqliteQuerySync(
+      db,
+      kysely
+        .deleteFrom("session_transcript_active_events")
+        .where("session_id", "=", sessionId)
+        .where("active_position", ">=", retainedCount),
+    ),
   );
 
   const insertActive = createActiveEventInserter(db, sessionId);
@@ -617,10 +632,15 @@ function selectOrphanedTranscriptOwners(
 
 export function deleteOrphanedTranscriptIndexRowsInTransaction(db: DatabaseSync): void {
   const kysely = getIndexKysely(db);
+  // The subquery discovers owners in SQLite; this maintenance write is database-wide.
   for (const table of transcriptIndexTables) {
-    executeSqliteQuerySync(
-      db,
-      kysely.deleteFrom(table).where("session_id", "in", selectOrphanedTranscriptOwners(db, table)),
+    withoutSqliteDatabaseWriteScope(db, () =>
+      executeSqliteQuerySync(
+        db,
+        kysely
+          .deleteFrom(table)
+          .where("session_id", "in", selectOrphanedTranscriptOwners(db, table)),
+      ),
     );
   }
 }
