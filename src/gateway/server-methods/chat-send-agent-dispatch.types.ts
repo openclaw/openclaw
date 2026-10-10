@@ -12,6 +12,7 @@ import type { NormalizedChatSendRequest } from "./chat-send-request.js";
 import type { PreparedChatSendSession } from "./chat-send-session.js";
 import type { prepareChatSendUserTurn } from "./chat-send-user-turn.js";
 import type { createGatewayChatUserTurnController } from "./chat-user-turn-recorder.js";
+import type { SkillLibraryRequestOwner } from "./skills-library.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 export type StartChatDispatchParams = {
@@ -24,9 +25,7 @@ export type StartChatDispatchParams = {
   context: GatewayRequestHandlerOptions["context"];
   toolsAllow?: string[];
   prepareAssistantTranscriptMessage?: PrepareAssistantTranscriptMessage;
-  prepareSkillLibraryAuthoring: () => Promise<
-    import("../../skills/library/authoring.js").SkillLibraryAuthoringCapability | undefined
-  >;
+  skillLibrary: { owner: SkillLibraryRequestOwner; isHumanTurn: boolean; sessionKey: string };
   cronCreatorAuthority: ReturnType<ChatSendExternalAuthorityAdmission["resolve"]>;
   assertDashboardReadCurrent?: () => void;
   externalAuthorityAdmission: ChatSendExternalAuthorityAdmission | undefined;

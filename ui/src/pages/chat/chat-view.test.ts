@@ -4899,15 +4899,27 @@ describe("right-click Reply", () => {
   });
 
   it("keeps Reply and composer focus available when the pane rerenders with its menu open", () => {
+    vi.mocked(chatThread.buildCachedChatItems).mockRestore();
+    vi.mocked(chatMessage.renderMessageGroup).mockRestore();
     const onSetReply = vi.fn();
     const transcript = createTestTranscript();
-    const { container, bubble } = renderChatBubble(
-      { onSetReply, transcript },
+    const messages = [
       {
-        messageId: "msg-stable-1",
-        senderLabel: "User",
-        text: "hello world",
+        role: "user",
+        content: "hello world",
+        timestamp: 1,
+        __openclaw: {
+          id: "msg-stable-1",
+          senderId: "profile-user",
+          senderName: "User",
+          senderIdentity: { type: "profile", id: "profile-user" },
+        },
       },
+    ];
+    const container = renderChatView({ onSetReply, transcript, messages });
+    const bubble = expectDefined(
+      container.querySelector<HTMLElement>(".chat-bubble"),
+      "rendered message bubble",
     );
     document.body.appendChild(container);
     transcript.hostConnected();
@@ -4917,7 +4929,7 @@ describe("right-click Reply", () => {
 
       const menu = document.querySelector(".chat-reply-context-menu");
       expect(menu).not.toBeNull();
-      renderChatInto(container, { onSetReply, transcript, draft: "A draft update" });
+      renderChatInto(container, { onSetReply, transcript, messages, draft: "A draft update" });
       menu!.querySelector("button")!.click();
 
       expect(onSetReply).toHaveBeenCalledTimes(1);
@@ -4926,7 +4938,7 @@ describe("right-click Reply", () => {
         0,
         "reply target",
       );
-      expect(target.messageId).toBe("msg-stable-1");
+      expect(target.sourceMessageId).toBe("msg-stable-1");
       expect(target.text).toBe("hello world");
       expect(target.senderLabel).toBe("User");
       expect(document.activeElement).toBe(

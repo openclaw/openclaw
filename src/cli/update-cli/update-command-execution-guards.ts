@@ -96,6 +96,8 @@ export function createUpdateCommandExecutionGuards(
     return {
       env: capturedEnv,
       context,
+      // Driver-only wait; these writes run in the worker, never on the Gateway event loop.
+      busyTimeoutMs: 120_000,
       assertCurrent,
       assertAccepting,
       retainSettlement: (completion: Promise<void>) =>

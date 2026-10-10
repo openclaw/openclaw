@@ -23,7 +23,7 @@ const nativeSchtasksAuditEntries = createRuntimeProcessBuildEntries(
   Object.values(schtasksNativeEntrypoints),
 );
 
-const TEST_ENTRY_GLOB = "**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!";
+const TEST_ENTRY_GLOB = "**/*.{test,spec}.{js,mjs,cjs,ts,tsx,mts,cts}!";
 
 function listQaScenarioExecutionEntries(dir = "qa/scenarios"): string[] {
   const entries = fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
@@ -47,10 +47,10 @@ function listQaScenarioExecutionEntries(dir = "qa/scenarios"): string[] {
 
 const QA_SCENARIO_EXECUTION_ENTRIES = listQaScenarioExecutionEntries();
 const ROOT_TEST_ENTRY_GLOBS = [
-  "*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!",
-  "src/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!",
-  "scripts/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!",
-  "test/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!",
+  "*.{test,spec}.{js,mjs,cjs,ts,tsx,mts,cts}!",
+  "src/**/*.{test,spec}.{js,mjs,cjs,ts,tsx,mts,cts}!",
+  "scripts/**/*.{test,spec}.{js,mjs,cjs,ts,tsx,mts,cts}!",
+  "test/**/*.{test,spec}.{js,mjs,cjs,ts,tsx,mts,cts}!",
   // The PR artifact Vitest suite launches this standalone Node regression by path.
   "test/scripts/pr-review-artifacts.node.mjs!",
   // SHA-pinned dispatch tests load this admission transport by a generated file URL.
@@ -107,7 +107,7 @@ const ROOT_TEST_ENTRY_GLOBS = [
   // The Voice Call QA scenario loads this fixture through a generated plugin directory.
   "test/e2e/qa-lab/runtime/fixtures/voice-call-runtime-plugin/index.js!",
   // The topology analyzer owns these as an intentionally self-contained graph.
-  "test/fixtures/ts-topology/basic/**/*.{js,mjs,cjs,ts,mts,cts}!",
+  "test/fixtures/ts-topology/basic/**/*.{js,mjs,cjs,ts,tsx,mts,cts}!",
   // The focused Oxlint test invokes these deliberate violations by path.
   "test/fixtures/oxlint-boundary-guards/*.ts!",
   // The ACP reset proof spawns this adapter by path from the proof driver.
@@ -148,7 +148,10 @@ const workspaces = Object.fromEntries(
           return relative.startsWith("../") ? [] : [`${relative}!`];
         }),
         ...(workspace === "."
-          ? [".agents/skills/**/scripts/**/*.{js,mjs,cjs,ts,mts,cts}!", ...ROOT_TEST_ENTRY_GLOBS]
+          ? [
+              ".agents/skills/**/scripts/**/*.{js,mjs,cjs,ts,tsx,mts,cts}!",
+              ...ROOT_TEST_ENTRY_GLOBS,
+            ]
           : [
               TEST_ENTRY_GLOB,
               // The plugin README documents this standalone fixture benchmark command.
@@ -168,7 +171,7 @@ const workspaces = Object.fromEntries(
       ],
       project:
         workspace === "."
-          ? [...settings.project, ".agents/skills/**/scripts/**/*.{js,mjs,cjs,ts,mts,cts}!"]
+          ? [...settings.project, ".agents/skills/**/scripts/**/*.{js,mjs,cjs,ts,tsx,mts,cts}!"]
           : settings.project,
     },
   ]),

@@ -9,6 +9,26 @@ title: "Integrity, troubleshooting, and recovery"
 
 ## Integrity checks
 
+Admission validates SQLite format, schema, canonical indexes, and required
+integrity once per physical database per process load. The quarantine store's
+format follows the same rule. Existing guards retain the indexed durable
+quarantine-row lookup so another process's recorded corruption is observed.
+The process shares admitted format and integrity facts with all handles and
+worker isolates. Later opens, read scopes, and writer reopens after idle close
+do not repeat format or integrity validation SQL. File identity
+uses volume, inode, and stable birthtime checked with `fstat`; a replaced or
+restored file requires its own first admission. Migration and repair owners keep
+their checks and publish new facts after successful DDL settlement. Doctor and
+explicit verification keep their independent checks. Proven corruption still
+revokes admission; current ownership and cached-row freshness are separate from
+format validation.
+
+Shared-state admission checks schema eligibility before scanning database contents.
+Stores that need canonical index repair receive their full integrity check from
+the repair owner before mutation, followed by verification of the rebuilt indexes.
+Repair publishes the passing integrity fact with its committed schema so later
+schema additions and worker opens do not repeat the full check.
+
 Gateway agent inspections share a five-second foreground wait. Unfinished stores
 remain unavailable while the startup admission owner completes their inspection
 and session/model preparation after the listener is ready. Other agents and the
@@ -147,6 +167,10 @@ or lock failures remain inconclusive and are logged, not relabeled as corruption
 Confirmation treats an empty WAL and an absent WAL as equivalent: SQLite readers
 can create or remove those empty sidecars without changing committed contents.
 Nonempty WALs, rollback journals, and the main file retain full generation checks.
+Terminal-failure and quarantine generation checks hash those files in an isolated
+child process. Closing a raw file descriptor in any Gateway thread would release
+that process's SQLite locks on the same inode. The child preserves the complete
+fingerprint without changing schemas, quarantine policy, or update behavior.
 
 The Gateway does not repeat full scans on a daily timer. For operator-requested or scheduled full verification,
 use `openclaw doctor --fix --non-interactive` during a planned maintenance window.
@@ -187,14 +211,15 @@ unconfirmed close, read-only release, missing lease, changed file, mismatched
 path, or missing matching verification. An interrupted release leaves its lease
 for the next admission to diagnose.
 
-| When                                        | Check                                                                                                                                           |
-| ------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| Every open                                  | Validate the `schema_meta` table and primary metadata row                                                                                       |
-| Writable agent open and Gateway readiness   | Run full integrity and foreign-key checks without reusable proof, except native WAL admission with no receipt or proven same-boot process death |
-| Same-process agent reopen                   | Reuse current file-bound runtime proof without another integrity or quick check; recheck owner, version, schema, and canonical indexes          |
-| Clean same-version agent restart            | Recheck owner, version, schema, and canonical indexes; queue a child-process `quick_check` and foreign-key check after the Gateway is listening |
-| Before a pending migration                  | Run a full integrity, foreign-key, role, schema, and index scan                                                                                 |
-| Doctor, backup verification, and compaction | Run the full scan before accepting or rewriting the database                                                                                    |
+| When                                                 | Check                                                                                                                                                         |
+| ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| First physical-database admission in a process       | Validate format, schema metadata, and canonical indexes; share the admitted facts with all handles and workers                                                |
+| First writable agent admission and Gateway readiness | Run required integrity and foreign-key checks without reusable proof; native WAL admission with no receipt or proven same-boot process death defers that scan |
+| Same-process reopen or new worker                    | Reuse file-bound admitted facts without schema, version, catalog, or integrity SQL; retain current ownership and durable quarantine-row checks                |
+| Clean same-version agent restart                     | Recheck owner, version, schema, and canonical indexes; queue a child-process `quick_check` and foreign-key check after the Gateway is listening               |
+| Before a pending migration                           | Run a full integrity, foreign-key, role, schema, and index scan                                                                                               |
+| After a migration or repair                          | The migration or repair owner validates its changes and publishes committed facts; later consumers do not repeat the checks                                   |
+| Doctor, backup verification, and compaction          | Run the full scan before accepting or rewriting the database                                                                                                  |
 
 The existing quarantine store keeps a reconstructible `agent_integrity_verifications`
 record: canonical database path, device, inode, OpenClaw version, verification time, and
@@ -216,8 +241,8 @@ including stale admission and unsettled Worker cleanup. A successful native clos
 with a reader-blocked checkpoint keeps verification dirty and preserves live
 runtime proof. A later last writer can certify that verification after a completed
 checkpoint and native close; failed close or uncertain storage errors revoke both.
-Cold opens and restarts
-still require matching clean-close metadata or the admission gate.
+The first open in a new process still requires matching clean-close metadata or
+the admission gate. Idle close within the same process preserves admitted facts.
 Cleanup workers and native agent execution workers borrow that proof under their
 existing writer admission. Cleanup workers return new verification to the Gateway
 after they finish.
@@ -225,7 +250,7 @@ Reclamation retains one Worker connection per database, so alternating agents
 reuse their admitted handles. Requests still share the archive FIFO. Each Worker
 retires after 30 idle minutes, on database close, or when idle under critical
 memory pressure; failed cleanup retains its original lease until settlement.
-Integrity revocation, schema checks, and update behavior are unchanged.
+Integrity revocation and update behavior are unchanged.
 During a one-way Gateway shutdown drain, idle native execution and retained
 reclamation connections close immediately. Active executions close when their
 final borrower releases them; active reclamation requests settle before closing.
@@ -307,11 +332,12 @@ above, or override explicit process-local revocation. Older readers can
 ignore the nullable column; backup and rollback retain its existing row lifetime.
 
 Database replacement, quarantine, and failed admission discard applicable
-verification. Doctor maintenance discards remembered runtime verification after
+verification. Ordinary native close does not. Doctor maintenance discards remembered runtime verification after
 draining agent connections and before raw maintenance can run. Pending migrations
 still run full checks, and canonical index
-repairs verify their result before committing. Schema, ownership, and current
-write authority are never borrowed from the integrity result.
+repairs verify their result before committing, then publish the new admitted
+facts. Ownership and current write authority are never borrowed from the
+integrity result.
 
 Shared-state runtime opens and automatic startup preparation converge supported
 schema additions and preserve atomic upgrades from older schema versions. A

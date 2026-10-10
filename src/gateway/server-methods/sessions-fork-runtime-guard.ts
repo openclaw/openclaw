@@ -1,6 +1,7 @@
 import { listRegisteredAgentHarnesses } from "../../agents/harness/registry.js";
 import type { AgentHarness } from "../../agents/harness/types.js";
 import { resolveSessionModelRef } from "../../agents/session-model-ref.js";
+import { captureSessionEntryMetadataRead } from "../../config/sessions/session-entry-source-authority.js";
 import {
   readCurrentSessionUpstreamLink,
   type SessionUpstreamLinkReadSource,
@@ -10,8 +11,9 @@ import { sessionUpstreamLinkSourceMatches } from "../../sessions/session-upstrea
 import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "../operator-role-policy.js";
 import { resolveOperatorSessionCreation } from "../session-creation-provenance.js";
 import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
+import { resolveSessionStoreIdentity } from "../session-store-key.js";
+import { loadGatewaySessionEntry } from "../session-utils-store.js";
 import { resolveSessionNativeRuntimeRestriction } from "./sessions-patch-model-selection.js";
-import { loadAccessorSessionEntryForGatewayTarget } from "./sessions-shared.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
 type UpstreamForkHarness = {
@@ -51,7 +53,7 @@ export function createUpstreamForkCurrentGuard(params: {
   link: SessionUpstreamLink;
   requestedAgentId: string;
   sessionKey: string;
-  source: ReturnType<typeof loadAccessorSessionEntryForGatewayTarget>;
+  source: ReturnType<typeof loadGatewaySessionEntry>;
   targetKey: string;
   upstreamContext: SessionUpstreamLinkReadSource;
 }) {
@@ -62,21 +64,38 @@ export function createUpstreamForkCurrentGuard(params: {
   const upstreamSource = params.upstreamContext;
   const { context } = upstreamSource;
   const expectedLink = structuredClone(params.link);
+  const sourceMetadata = captureSessionEntryMetadataRead({
+    agentId: params.source.agentId,
+    sessionKey: params.source.canonicalKey,
+    storePath: params.source.storePath,
+  });
   let inSourceTransaction = false;
   const readCurrent = () => {
     upstreamSource.assertCurrent();
     params.commitGuard();
     const currentConfig = params.context.getRuntimeConfig();
-    const source = loadAccessorSessionEntryForGatewayTarget({
-      key: params.sessionKey,
-      cfg: currentConfig,
-      agentId: params.requestedAgentId,
-    });
-    const sourceEntry = source.entry;
+    const source = sourceMetadata
+      ? params.source
+      : loadGatewaySessionEntry(
+          params.sessionKey,
+          { agentId: params.requestedAgentId },
+          currentConfig,
+        );
+    const sourceEntry = sourceMetadata ? sourceMetadata.readCurrent() : source.entry;
+    if (sourceMetadata) {
+      const selected = resolveSessionStoreIdentity({
+        cfg: currentConfig,
+        sessionKey: params.sessionKey,
+        agentId: params.requestedAgentId,
+      });
+      if (selected.agentId !== source.agentId || selected.canonicalKey !== source.canonicalKey) {
+        throw new Error(`Session ${params.sessionKey} changed during fork initialization`);
+      }
+    }
     const currentLink = sourceEntry
       ? inSourceTransaction
         ? expectedLink
-        : readCurrentSessionUpstreamLink(upstreamSource, source.canonicalKey, source.target.agentId)
+        : readCurrentSessionUpstreamLink(upstreamSource, source.canonicalKey, source.agentId)
       : undefined;
     const currentForkHarness = currentLink ? resolveUpstreamForkHarness(currentLink) : undefined;
     if (
@@ -84,7 +103,7 @@ export function createUpstreamForkCurrentGuard(params: {
       sourceEntry.sessionId !== expectedEntry.sessionId ||
       sourceEntry.lifecycleRevision !== expectedEntry.lifecycleRevision ||
       sourceEntry.initializationPending === true ||
-      source.target.agentId !== params.source.target.agentId ||
+      source.agentId !== params.source.agentId ||
       source.canonicalKey !== params.source.canonicalKey ||
       source.storePath !== params.source.storePath ||
       !sessionUpstreamLinkSourceMatches(currentLink, expectedLink) ||
@@ -98,7 +117,7 @@ export function createUpstreamForkCurrentGuard(params: {
     const creationError = authorizeGatewaySessionCreation({
       cfg: currentConfig,
       client: params.client,
-      agentId: source.target.agentId,
+      agentId: source.agentId,
     });
     if (creationError) {
       throw new SessionMutationAuthorizationChangedError(creationError);
@@ -121,7 +140,7 @@ export function createUpstreamForkCurrentGuard(params: {
         "required"
         ? "required"
         : undefined;
-    const sourceModel = resolveSessionModelRef(currentConfig, sourceEntry, source.target.agentId);
+    const sourceModel = resolveSessionModelRef(currentConfig, sourceEntry, source.agentId);
     const policyHarness =
       currentForkHarness.harness.executionEnvironment === "host-only"
         ? currentForkHarness.harness
@@ -129,7 +148,7 @@ export function createUpstreamForkCurrentGuard(params: {
     const restriction = resolveSessionNativeRuntimeRestriction({
       operation: "fork",
       cfg: currentConfig,
-      agentId: source.target.agentId,
+      agentId: source.agentId,
       sessionKey: params.targetKey,
       entry: currentSandbox === "required" ? { sandbox: "required" } : {},
       persistedEntry: undefined,

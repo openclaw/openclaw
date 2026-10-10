@@ -96,6 +96,9 @@ const QUERY_INSTRUCTION_TEMPLATES = [
 function normalizeOllamaEmbedding(vec: unknown[], outputDimensionality?: number): number[] {
   const selected =
     typeof outputDimensionality === "number" ? vec.slice(0, outputDimensionality) : vec;
+  if (selected.length === 0) {
+    throw new Error("Ollama embed response contains an empty embedding");
+  }
   if (!selected.every((value): value is number => typeof value === "number")) {
     throw new Error("Ollama embed response contains a non-number embedding value");
   }
@@ -389,7 +392,11 @@ export async function createOllamaEmbeddingProvider(
             OLLAMA_EMBED_ERROR_BODY_LIMIT_BYTES,
             client.headers,
           ).catch(() => "unknown error");
-          throw new Error(`Ollama embed HTTP ${response.status}: ${detail}`);
+          const recovery =
+            response.status === 404 && /model.*not found/i.test(detail)
+              ? ` Run \`ollama pull ${client.model}\` on the configured Ollama host.`
+              : "";
+          throw new Error(`Ollama embed HTTP ${response.status}: ${detail}${recovery}`);
         }
         json = await readProviderJsonObjectResponse(response, "Ollama embed response");
       } finally {

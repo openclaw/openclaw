@@ -1,5 +1,5 @@
 import { createRouter } from "@openclaw/uirouter";
-import { vi } from "vitest";
+import { onTestFinished, vi } from "vitest";
 import type { RouteId } from "../../app-routes.ts";
 import { createChatSubmissions } from "../../app/chat-submissions.ts";
 import type { ApplicationContext } from "../../app/context.ts";
@@ -7,6 +7,7 @@ import { registerChatAttachmentPayload } from "../chat/attachment-payload-store.
 import { DraftGatewayState } from "./draft-gateway-state.ts";
 import { DraftPlaceBrowser } from "./draft-place-browser.ts";
 import { DraftPlaceState } from "./draft-place-state.ts";
+import type { DraftSubmissionCallbacks } from "./draft-submission-contract.ts";
 import { DraftSubmissionFlow } from "./draft-submission-flow.ts";
 import type { NewSessionRouteData } from "./location.ts";
 import { TestReactiveControllerHost } from "./reactive-controller-host.test-support.ts";
@@ -14,6 +15,7 @@ import { TestReactiveControllerHost } from "./reactive-controller-host.test-supp
 type FixtureOptions = {
   gateway?: ApplicationContext["gateway"];
   takePreparedTitle?: () => string | undefined;
+  retainForHandoff?: DraftSubmissionCallbacks["retainForHandoff"];
   phase?: "connected" | "connecting";
   agents?: unknown[];
   methods?: string[];
@@ -51,7 +53,10 @@ export function createDraftFixture(options: FixtureOptions = {}) {
   const router = createRouter<RouteId, ApplicationContext>({
     routes: [{ id: "chat", path: "/chat", component: () => ({}) }],
   });
+  const lifetime = new AbortController();
+  onTestFinished(() => lifetime.abort());
   const context = {
+    lifecycleAbortSignal: lifetime.signal,
     router,
     gateway: options.gateway ?? {
       subscribe: () => () => undefined,
@@ -195,7 +200,12 @@ export function createDraftFixture(options: FixtureOptions = {}) {
     gateway,
     place,
     () => ({ context, data: options.data, isConnected: phase === "connected" }),
-    { requestUpdate, closeTransientUi: vi.fn(), takePreparedTitle: options.takePreparedTitle },
+    {
+      requestUpdate,
+      closeTransientUi: vi.fn(),
+      takePreparedTitle: options.takePreparedTitle,
+      retainForHandoff: options.retainForHandoff,
+    },
   );
   gateway.synchronize(context.gateway);
   place.setAgentsHydrated(true);

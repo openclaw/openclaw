@@ -245,14 +245,6 @@ describe("memory-core generic embedding provider contract", () => {
   });
 });
 
-// Zhipu BigModel embedding-3 caps `input` at 64 items and rejects a larger array
-// with HTTP 400 code 1214. Memory batches are byte-budgeted, not item-counted, so
-// short chunks pack far more than 64 items into one request (issue #139040).
-const ZHIPU_INPUT_ARRAY_LIMIT = 64;
-const ZHIPU_REJECTION_BODY = JSON.stringify({
-  error: { code: "1214", message: "input array max 64" },
-});
-
 // Keep batching, splitting, retry classification, and timeout ownership real.
 function createMemoryEmbeddingOwner(generation: MemorySemanticProviderGeneration) {
   return Object.assign(Object.create(MemoryManagerEmbeddingOps.prototype), {
@@ -323,11 +315,37 @@ function distinctCandidates(
 }
 
 describe("memory-core embedding batch recovery over real transport", () => {
-  it("halves an oversized batch until the provider input array limit is met", async () => {
+  it.each([
+    {
+      message: "batch size is invalid, it should not be larger than 10",
+      count: 33,
+      limit: 10,
+      requests: [33, 10, 10, 10, 3],
+    },
+    { message: "input array max 64", count: 100, limit: 64, requests: [100, 64, 36] },
+    {
+      message: "input数组最大不得超过10条",
+      count: 33,
+      limit: 10,
+      requests: [33, 10, 10, 10, 3],
+    },
+    {
+      message: "Embeddings API input limit exceeded: max 10, got 33",
+      count: 33,
+      limit: 10,
+      requests: [33, 10, 10, 10, 3],
+    },
+    {
+      message: "request header fields too large",
+      count: 100,
+      limit: 50,
+      requests: [100, 50, 50],
+    },
+  ])("recovers in order from $message", async ({ message, count, limit, requests }) => {
     const server = await startEmbeddingServer({
       reject: (inputCount) =>
-        inputCount > ZHIPU_INPUT_ARRAY_LIMIT
-          ? { status: 400, body: ZHIPU_REJECTION_BODY }
+        inputCount > limit
+          ? { status: 400, body: JSON.stringify({ error: { message } }) }
           : undefined,
     });
     const database = new DatabaseSync(":memory:");
@@ -337,16 +355,16 @@ describe("memory-core embedding batch recovery over real transport", () => {
         database,
       );
       const embeddings = await owner.embedChunksInBatches(
-        distinctCandidates(100),
+        distinctCandidates(count),
         generation,
         8000,
       );
 
-      expect(server.requests.map((request) => (request.body.input as unknown[]).length)).toEqual([
-        100, 50, 50,
-      ]);
+      expect(server.requests.map((request) => (request.body.input as unknown[]).length)).toEqual(
+        requests,
+      );
       expect(embeddings).toEqual(
-        Array.from({ length: 100 }, (_, index) => [index + 1, (index % 50) + 0.5, 3]),
+        Array.from({ length: count }, (_, index) => [index + 1, (index % limit) + 0.5, 3]),
       );
     } finally {
       database.close();
