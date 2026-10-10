@@ -377,18 +377,22 @@ describe("CronPage lifecycle", () => {
       return fallbackRequest(method);
     });
     vi.mocked(showConfirmDialog).mockResolvedValue(true);
-    const { page } = await mountPage(request);
+    const { page } = await mountPage(request, { render: true });
     const job = digestJob();
     page.selectJob(job);
     page.patchForm({ deliveryMode: "announce", deliveryChannel: "telegram" });
     await waitForCronPage(() =>
       expect(request).toHaveBeenCalledWith("conversations.list", expect.anything()),
     );
+    await page.updateComplete;
+    const trigger = page.querySelector<HTMLButtonElement>(".cron-job-menu__trigger")!;
+    trigger.focus();
 
     await page.removeJob(job);
     await waitForCronPage(() => expect(page.cron.cronError).toContain("cron.remove rejected"));
 
     expect(page.cron.cronEditingJob?.id).toBe("daily-digest");
+    expect(document.activeElement).toBe(trigger);
 
     // A directory response that lands after the failed delete still publishes
     // into the editor that asked for it.
@@ -399,6 +403,34 @@ describe("CronPage lifecycle", () => {
       ]),
     );
     expect(page.deliveryDirectory.error).toBeNull();
+  });
+
+  it("does not reclaim focus moved outside the editor during a deletion", async () => {
+    const removal = createDeferred<Record<string, never>>();
+    const fallbackRequest = createRequest();
+    const request = vi.fn(async (method: string) =>
+      method === "cron.remove" ? removal.promise : fallbackRequest(method),
+    );
+    vi.mocked(showConfirmDialog).mockResolvedValue(true);
+    const { page } = await mountPage(request, { render: true });
+    const job = digestJob();
+    page.selectJob(job);
+    await page.updateComplete;
+    page.querySelector<HTMLButtonElement>(".cron-job-menu__trigger")!.focus();
+
+    const removed = page.removeJob(job);
+    await waitForCronPage(() =>
+      expect(request).toHaveBeenCalledWith("cron.remove", { id: job.id }),
+    );
+    const otherControl = document.createElement("button");
+    document.body.append(otherControl);
+    otherControl.focus();
+    removal.resolve({});
+    await removed;
+    await page.updateComplete;
+
+    expect(page.cron.cronEditingJob).toBeNull();
+    expect(document.activeElement).toBe(otherControl);
   });
 
   it.each([
@@ -498,7 +530,7 @@ describe("CronPage lifecycle", () => {
       return fallbackRequest(method);
     });
     vi.mocked(showConfirmDialog).mockResolvedValue(true);
-    const { page } = await mountPage(request);
+    const { page } = await mountPage(request, { render: true });
     const doomed = digestJob();
     const replacement = digestJob("weekly-digest", {
       configRevision: "rev-2",
@@ -519,6 +551,9 @@ describe("CronPage lifecycle", () => {
     page.selectJob(replacement);
     page.patchForm({ deliveryMode: "announce", deliveryChannel: "telegram" });
     await waitForCronPage(() => expect(directoryCalls).toBe(2));
+    await page.updateComplete;
+    const trigger = page.querySelector<HTMLButtonElement>(".cron-job-menu__trigger")!;
+    trigger.focus();
 
     removal.resolve({});
     await removed;
@@ -526,6 +561,7 @@ describe("CronPage lifecycle", () => {
     // The deletion's continuation now sees a different editing job, which it
     // would otherwise read as its own confirmed exit.
     expect(page.cron.cronEditingJob?.id).toBe("weekly-digest");
+    expect(document.activeElement).toBe(trigger);
     directories[1]?.resolve({ conversations: [conversationTarget("-100replacement")] });
     await waitForCronPage(() =>
       expect(page.deliveryDirectory.conversations.map((entry) => entry.target)).toEqual([

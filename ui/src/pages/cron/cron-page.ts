@@ -57,6 +57,7 @@ import {
   resolveConversationTargetSuggestions,
   THINKING_SUGGESTIONS,
 } from "./form-suggestions.ts";
+import { CronPanelController } from "./panel-controller.ts";
 import { resolveCronRouteData } from "./route-model.ts";
 import { CronRunTranscript } from "./run-transcript.ts";
 import type { CronDetailTab, CronListTab } from "./view-types.ts";
@@ -68,6 +69,15 @@ class CronPage extends OpenClawLightDomElement {
   constructor() {
     super();
     void new CronEditorClearance(this);
+    // Focus handoff runs after the outgoing editor retires its scroll clearance.
+    this.panel = new CronPanelController(
+      this,
+      () => this.cron,
+      () => {
+        this.runTranscript.close();
+        this.detailTab = this.cron.cronEditingJob && this.highlightedRunId ? "history" : "settings";
+      },
+    );
   }
 
   @consume({ context: applicationContext, subscribe: true })
@@ -95,7 +105,7 @@ class CronPage extends OpenClawLightDomElement {
   private pendingRouteData: ReturnType<typeof resolveCronRouteData> | null = null;
   private routeJobRequested = false;
   private highlightedRunId: string | null = null;
-  private pendingRunScroll = false;
+  private readonly panel: CronPanelController;
   private modelSuggestionsRequest: { state: CronState; agentId: string } | null = null;
   private readonly deliveryDirectory = new DeliveryConversationsController({
     currentCronState: () => this.cron,
@@ -255,10 +265,9 @@ class CronPage extends OpenClawLightDomElement {
     }
   }
 
-  private lastPanelKey: string | null = null;
-
   override willUpdate(changed: PropertyValues) {
     if (changed.has("routeSearch")) {
+      this.panel.reset();
       this.runTranscript.close();
       this.cron.cronError = null;
       const routeData = resolveCronRouteData(this.routeSearch);
@@ -272,21 +281,6 @@ class CronPage extends OpenClawLightDomElement {
       this.pendingRouteData = routeData.jobId || routeData.session ? routeData : null;
       this.routeJobRequested = false;
       this.highlightedRunId = null;
-      this.pendingRunScroll = false;
-    }
-    // The panel owns its transcript and detail tab. Retire the previous run
-    // before rendering another target; close also invalidates pending history.
-    const editingJobId = this.cron.cronEditingJob?.id ?? null;
-    const mode = editingJobId ? "job" : this.cron.cronCreateOpen ? "create" : "overview";
-    const panelKey = `${mode}:${editingJobId ?? ""}`;
-    if (panelKey !== this.lastPanelKey) {
-      this.lastPanelKey = panelKey;
-      this.runTranscript.close();
-      this.detailTab = editingJobId && this.highlightedRunId ? "history" : "settings";
-      const scroller = this.closest(".content");
-      if (scroller instanceof HTMLElement && typeof scroller.scrollTo === "function") {
-        scroller.scrollTo({ top: 0 });
-      }
     }
   }
 
@@ -318,13 +312,6 @@ class CronPage extends OpenClawLightDomElement {
           }
         }
       });
-    }
-    if (this.pendingRunScroll) {
-      const run = this.querySelector<HTMLElement>(".cron-run-entry--highlighted");
-      if (run) {
-        run.scrollIntoView?.({ block: "nearest" });
-        this.pendingRunScroll = false;
-      }
     }
   }
 
@@ -426,12 +413,12 @@ class CronPage extends OpenClawLightDomElement {
     this.clearHeartbeatScratch();
     this.pendingRouteData = null;
     this.highlightedRunId = runId;
-    this.pendingRunScroll = Boolean(runId);
     if (runId) {
       this.detailTab = "history";
     }
     this.cron.cronCreateOpen = false;
     startCronEdit(this.cron, job);
+    this.panel.openJob(job.id, Boolean(runId));
     this.deliveryDirectory.openEditor();
     this.requestCronUpdate();
     if (job.payload?.kind === "heartbeat") {
@@ -502,6 +489,7 @@ class CronPage extends OpenClawLightDomElement {
       return;
     }
     this.resetEditor(true);
+    this.panel.openCreate();
     if (patch) {
       this.patchForm(patch);
       return;
@@ -518,6 +506,7 @@ class CronPage extends OpenClawLightDomElement {
     // A clone is a prefilled create: the editor submits cron.add, not update.
     startCronClone(this.cron, job);
     this.cron.cronCreateOpen = true;
+    this.panel.openCreate(job.id);
     this.deliveryDirectory.openEditor();
     this.requestCronUpdate();
   }
@@ -563,6 +552,7 @@ class CronPage extends OpenClawLightDomElement {
       return;
     }
     const editorGeneration = this.deliveryDirectory.generation;
+    const focusSource = this.ownerDocument.activeElement;
     await this.runCronTask(async (current) => {
       const editorOwnedDiscovery = current.cronEditingJob?.id === selectedJobId;
       await removeCronJob(current, currentJob);
@@ -575,6 +565,9 @@ class CronPage extends OpenClawLightDomElement {
       // check and publishes onto the overview, where the page error suppresses
       // the starter automations, and an already-published error survives too.
       if (editorOwnedDiscovery && current.cronEditingJob?.id !== selectedJobId) {
+        if (this.deliveryDirectory.ownedBy(current, connectionScope, editorGeneration)) {
+          this.panel.close(focusSource);
+        }
         this.deliveryDirectory.retireExitedEditor(current, connectionScope, editorGeneration);
       }
       // Removing the selected task drops the panel back to overview;
@@ -587,6 +580,7 @@ class CronPage extends OpenClawLightDomElement {
 
   private closePanel() {
     this.resetEditor(false);
+    this.panel.close();
     this.requestCronUpdate();
     void this.runCronTask(async (cronState) => {
       await this.refreshRunsScope(cronState, null);
