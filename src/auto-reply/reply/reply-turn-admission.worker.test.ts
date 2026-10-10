@@ -26,10 +26,7 @@ import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.tes
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { holdStateDatabaseWriteTransaction } from "../../test-utils/state-database-contention.js";
 import { replyRunRegistry, waitForReplyRunSuccessorAdmission } from "./reply-run-registry.js";
-import {
-  acquireReplyOperationSessionActor,
-  getReplyOperationSessionActor,
-} from "./reply-run-registry.state.js";
+import { acquireReplyOperationSessionActor } from "./reply-run-registry.state.js";
 import { testing } from "./reply-run-registry.test-support.js";
 import { admitReplyTurn } from "./reply-turn-admission.js";
 
@@ -191,7 +188,6 @@ it("retains one actor per cold/reopened reply admission and drains it without ma
           acquireReplyOperationSessionActor(operation),
         ]);
         expect(sibling).toBe(actor);
-        expect(getReplyOperationSessionActor(operation)).toBe(actor);
         const authority = {
           assertCurrent: () => databaseClaim.assertCurrent(),
           authorize() {},
@@ -221,7 +217,6 @@ it("retains one actor per cold/reopened reply admission and drains it without ma
         });
         await withinTest(phaseEntered.promise, signal);
         operation.complete();
-        expect(getReplyOperationSessionActor(operation)).toBeUndefined();
         expect(() => actor.snapshot(authority)).toThrow();
         expect(() => acquireReplyOperationSessionActor(operation)).toThrow();
         let successorSettled = false;

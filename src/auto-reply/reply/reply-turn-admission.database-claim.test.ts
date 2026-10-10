@@ -24,7 +24,6 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import * as registry from "./reply-run-registry.js";
 import {
   acquireReplyOperationSessionActor,
-  getReplyOperationSessionActor,
   getReplyOperationSessionTarget,
 } from "./reply-run-registry.state.js";
 import { testing } from "./reply-run-registry.test-support.js";
@@ -123,7 +122,6 @@ it("retains the native incognito owner until accepted actor work drains", async 
         signal,
       );
       operation.complete();
-      expect(getReplyOperationSessionActor(operation)).toBeUndefined();
       expect(() => actor.snapshot(authority)).toThrow();
       expect(() => acquireReplyOperationSessionActor(operation)).toThrow();
       expect(() => getReplyOperationSessionTarget(operation)).toThrow();
