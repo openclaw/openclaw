@@ -187,11 +187,11 @@ export async function withSessionEntryWorker<T>(
     },
   };
   const withWriterReads = <Value>(
-    worker: AgentDatabaseExecutionScope | undefined,
-    run: () => Promise<Value>,
+    nativeWorker: AgentDatabaseExecutionScope | undefined,
+    consume: () => Promise<Value>,
   ): Promise<Value> => {
     const read = <Read>(operation: (scope: AgentDatabaseExecutionScope) => Promise<Read>) =>
-      worker ? operation(worker) : execution.runExisting(source, operation);
+      nativeWorker ? operation(nativeWorker) : execution.runExisting(source, operation);
     return withSessionEntryWriterReads(
       options,
       {
@@ -229,7 +229,7 @@ export async function withSessionEntryWorker<T>(
           return result;
         },
       },
-      run,
+      consume,
     );
   };
   let preparation: ReturnType<SessionEntryWorkerPreparation> | undefined;

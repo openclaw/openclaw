@@ -130,8 +130,8 @@ export async function readSessionEntryWorkerRequest(
     const { readSessionTranscriptRuntimeTarget } =
       await import("./session-accessor.transcript-target.js");
     const read = withOpenClawAgentDatabaseReadOnly(
-      (database) => {
-        const target = readSessionTranscriptRuntimeTarget(
+      (database) => ({
+        target: readSessionTranscriptRuntimeTarget(
           request.scope,
           {
             keyFormat: request.keyFormat,
@@ -139,16 +139,13 @@ export async function readSessionEntryWorkerRequest(
             continuation: request.continuation,
           },
           database,
-        );
-        return {
-          target,
-          source: captureSessionEntryReadSource(
-            database,
-            undefined,
-            "Session runtime target requires its current durable owner",
-          ),
-        };
-      },
+        ),
+        source: captureSessionEntryReadSource(
+          database,
+          undefined,
+          "Session runtime target requires its current durable owner",
+        ),
+      }),
       { ...request.database, env: request.scope.env },
     );
     return {
