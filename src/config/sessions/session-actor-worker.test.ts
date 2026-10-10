@@ -175,6 +175,57 @@ function patch(snapshot: SessionActorHotState, updatedAt: number): Mutation {
   };
 }
 
+it("hydrates a cold command inside its transaction and returns a retryable preimage without rereading", async () => {
+  await withActor(async (f) => {
+    const command: Mutation = {
+      type: "session.actor.patch",
+      input: {
+        target: f.target,
+        commandId: "cold-patch",
+        phaseId: "turn",
+        reducers: [{ kind: "activity", updatedAt: 25 }],
+      },
+    };
+    await f.prepare(command);
+    const reads = trackSqliteStatementExecutions(f.database.db, ["select"], (sql) => {
+      if (!/^select\b/iu.test(sql)) {
+        return null;
+      }
+      expect(f.database.db.isTransaction).toBe(true);
+      return "select";
+    });
+    try {
+      const first = f.mutate(command);
+      if (first.kind !== "committed") {
+        throw new Error("Expected cold command to commit");
+      }
+      expect(first.receipt.postimage.entry?.updatedAt).toBe(25);
+      expect(reads.counts.select).toBe(1);
+      f.restartActor();
+      const stale = f.mutate(patch(first.receipt.postimage, 26));
+      if (stale.kind !== "stale-version") {
+        throw new Error("Expected replacement worker to return its current preimage");
+      }
+      expect(stale.expected).toEqual(first.receipt.afterVersion);
+      expect(stale.postimage.entry?.updatedAt).toBe(25);
+      expect(stale.postimage.version.epoch).not.toBe(first.receipt.afterVersion.epoch);
+      expect(reads.counts.select).toBe(2);
+      const retried = f.mutate(patch(stale.postimage, 26));
+      expect(retried).toMatchObject({
+        kind: "committed",
+        receipt: {
+          beforeVersion: stale.postimage.version,
+          postimage: { entry: { updatedAt: 26 } },
+        },
+      });
+      expect(reads.counts.select).toBe(2);
+      expect(f.hooks.transactions).toBe(3);
+    } finally {
+      reads.restore();
+    }
+  });
+});
+
 it("installs native commits before reply, retains known commits after reply failure, and rolls back revoked authority", async () => {
   await withActor(async (f) => {
     const initial = f.read();
@@ -247,10 +298,11 @@ it("fences a commit whose settlement is lost and rehydrates its durable state wi
     expect(recovered.version.epoch).not.toBe(initial.version.epoch);
     expect(f.hooks.transactions).toBe(writesBeforeRead);
     expect(f.mutate(command)).toMatchObject({
-      kind: "rolled-back",
+      kind: "stale-version",
+      postimage: recovered,
       error: { message: "Session actor version changed before command admission" },
     });
-    expect(f.hooks.transactions).toBe(writesBeforeRead);
+    expect(f.hooks.transactions).toBe(writesBeforeRead + 1);
     expect(f.nativeEntry()?.updatedAt).toBe(30);
   });
 });
@@ -274,8 +326,8 @@ it("invalidates resident facts on native writes and keeps missing, replaced, and
       expect(replaced.entry?.label).toBe("native writer");
       expect(replaced.version.epoch).not.toBe(initial.version.epoch);
       expect(reads.counts.select).toBe(2);
-      expect(f.mutate(patch(initial, 40)).kind).toBe("rolled-back");
-      expect(f.hooks.transactions).toBe(0);
+      expect(f.mutate(patch(initial, 40)).kind).toBe("stale-version");
+      expect(f.hooks.transactions).toBe(1);
 
       const missing = f.read({ ...f.target, sessionKey: "agent:main:absent" });
       expect(missing.entry).toBeUndefined();

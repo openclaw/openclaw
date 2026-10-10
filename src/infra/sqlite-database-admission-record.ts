@@ -27,6 +27,7 @@ export type Admission = {
   generationId: string;
   generation: SharedArrayBuffer;
   writers: Map<number, Writer>;
+  writeScopes: Map<string, SharedArrayBuffer>;
   facts: Map<string, AdmissionFact>;
 };
 export type SqliteDatabaseAdmissions = Admission[];
@@ -71,12 +72,12 @@ function readInheritedAdmission(value: unknown): Admission | undefined {
     typeof value.descriptorOwner !== "number" ||
     typeof value.generationId !== "string" ||
     !(value.generation instanceof SharedArrayBuffer) ||
-    value.generation.byteLength !== 6 * Int32Array.BYTES_PER_ELEMENT ||
+    value.generation.byteLength !== 8 * Int32Array.BYTES_PER_ELEMENT ||
     !(value.facts instanceof Map)
   ) {
     return undefined;
   }
-  if (!(value.writers instanceof Map)) {
+  if (!(value.writers instanceof Map) || !(value.writeScopes instanceof Map)) {
     return undefined;
   }
   const writers = new Map<number, Writer>();
@@ -97,6 +98,17 @@ function readInheritedAdmission(value: unknown): Admission | undefined {
     }
     writers.set(writer, { cell: custody.cell, ancestors });
   }
+  const writeScopes = new Map<string, SharedArrayBuffer>();
+  for (const [key, revision] of value.writeScopes) {
+    if (
+      typeof key !== "string" ||
+      !(revision instanceof SharedArrayBuffer) ||
+      revision.byteLength !== Int32Array.BYTES_PER_ELEMENT
+    ) {
+      return undefined;
+    }
+    writeScopes.set(key, revision);
+  }
   const facts = new Map<string, AdmissionFact>();
   for (const [key, entry] of value.facts) {
     const fact = readAdmissionFact(entry);
@@ -113,6 +125,7 @@ function readInheritedAdmission(value: unknown): Admission | undefined {
     generationId: value.generationId,
     generation: value.generation,
     writers,
+    writeScopes,
     facts,
   };
 }
@@ -163,6 +176,15 @@ export function mergeSqliteDatabaseAdmissionRecord(record: Admission, incoming: 
   for (const [writer, cell] of incoming.writers) {
     if (!record.writers.has(writer)) {
       record.writers.set(writer, cell);
+    }
+  }
+  for (const [key, revision] of incoming.writeScopes) {
+    // The host selects one shared cell when concurrent isolates discover a key.
+    if (threadId !== 0 || !record.writeScopes.has(key)) {
+      if (threadId === 0) {
+        Atomics.add(new Int32Array(record.generation), 7, 1);
+      }
+      record.writeScopes.set(key, revision);
     }
   }
   registerWriterCustody(record);
@@ -236,6 +258,8 @@ export function retireSqliteDatabaseWriter(record: Admission, id: number): void 
   if (joined.some((cell) => Atomics.load(cell, 2) > 0)) {
     // The joined native connection may have committed before its JS receipt ran.
     Atomics.add(new Int32Array(record.generation), 5, 1);
+    // A lost writer cannot attest which of its accepted keys reached COMMIT.
+    Atomics.add(new Int32Array(record.generation), 6, 1);
     for (const cell of joined) {
       Atomics.store(cell, 2, 0);
     }

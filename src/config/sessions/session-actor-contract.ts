@@ -62,7 +62,8 @@ export type SessionActorReducer =
 export type SessionActorCommandContext = {
   commandId: string;
   phaseId: string;
-  expected: SessionActorVersion;
+  /** Omit to adopt the current preimage inside this command, without a preceding read. */
+  expected?: SessionActorVersion;
   reducers?: readonly SessionActorReducer[];
 };
 
@@ -217,6 +218,13 @@ export type SessionActorOutcome<Value> =
       failure?: { name: string; message: string };
     }
   | { kind: "rolled-back"; error: { name: string; message: string } }
+  | {
+      /** No mutation ran. A caller may retry once using this authorized postimage. */
+      kind: "stale-version";
+      expected: SessionActorVersion;
+      postimage: SessionActorHotState;
+      error: { name: string; message: string };
+    }
   | {
       kind: "unknown";
       target: SessionActorTarget;

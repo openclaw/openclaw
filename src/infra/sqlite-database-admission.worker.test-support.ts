@@ -1,6 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { threadId } from "node:worker_threads";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
+import { withSqliteDatabaseWriteScope } from "./sqlite-database-admission.js";
 import { admitSqliteSchema, getAdmittedSqliteSchemaFacts } from "./sqlite-schema-facts.js";
 import type { SqliteWorkerBackend, SqliteWorkerCommand } from "./sqlite-worker-contract.js";
 import {
@@ -11,7 +12,7 @@ import {
 export type AdmissionOperations = {
   admitted: { input: undefined; output: { sql: string[]; threadId: number } };
   mutate: { input: undefined; output: undefined };
-  writeRows: { input: { sql: string }; output: undefined };
+  writeRows: { input: { sql: string; sessionKeys?: string[] }; output: undefined };
   mutateAfterHostAdmission: {
     input: { path: string };
     output: { native: boolean; admitted: boolean };
@@ -71,7 +72,12 @@ export function createSqliteWorkerBackend(
       return undefined;
     }
     if (command.type === "writeRows") {
-      database.exec(command.input.sql);
+      const run = () => database.exec(command.input.sql);
+      if (command.input.sessionKeys) {
+        withSqliteDatabaseWriteScope(database, command.input.sessionKeys, run);
+      } else {
+        run();
+      }
       return undefined;
     }
     if (command.type === "mutateAfterHostAdmission") {
