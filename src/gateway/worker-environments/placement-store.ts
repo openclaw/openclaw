@@ -202,7 +202,7 @@ export function createWorkerSessionPlacementStore(
           return conflict ? [[id, conflict] as const] : [];
         }),
       );
-      const read = async () => {
+      const loadProjection = async () => {
         const result = await executeExistingOpenClawStateRead(
           { path },
           {
@@ -228,8 +228,8 @@ export function createWorkerSessionPlacementStore(
       const singleSessionId = ids.length === 1 ? ids[0] : undefined;
       const { projection, conflictSessionIds } =
         singleSessionId !== undefined && conflicts.size === 0
-          ? await readPlacementProjection(path, singleSessionId, read)
-          : await read();
+          ? await readPlacementProjection(path, singleSessionId, loadProjection)
+          : await loadProjection();
       const placements = new Map(projection.placements);
       for (const [id, captured] of conflicts) {
         const record = placements.get(id);

@@ -107,7 +107,7 @@ describe("worker placement read cache", () => {
     changed.assertCurrent();
     changed.release();
     expect(
-      reads.mock.calls.filter(([_, command]) => command.type === "workers.placementPreservation"),
+      reads.mock.calls.filter(([, command]) => command.type === "workers.placementPreservation"),
     ).toHaveLength(1);
   });
 });
