@@ -1,17 +1,10 @@
 import type { SidebarSnapshotModel } from "../components/sidebar-snapshot-model.ts";
-import type { BootRoster } from "../lib/sessions/session-boot-roster.ts";
+import { bootRosterSchema, type BootRoster } from "../lib/sessions/session-boot-roster.ts";
 
 export function sidebarBootSnapshot(roster: BootRoster | null): SidebarSnapshotModel {
   return {
     routingDefaults: { mainKey: "main", scope: "per-sender" },
-    roster: roster
-      ? {
-          ...roster,
-          groups: [...roster.groups],
-          groupSettings: [...roster.groupSettings],
-          sectionOrder: [...roster.sectionOrder],
-        }
-      : null,
+    roster: roster ? bootRosterSchema.parse(roster) : null,
     mode: "roster",
     entries: ["sessions"],
     sessions: [],
