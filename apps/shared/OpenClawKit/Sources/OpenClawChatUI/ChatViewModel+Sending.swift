@@ -33,6 +33,16 @@ extension OpenClawChatViewModel {
             !Self.isSlashCommandDraft(self.input.trimmingCharacters(in: .whitespacesAndNewlines))
     }
 
+    var sendModeChoices: [OpenClawChatQueueMode] {
+        guard self.canChooseSendMode else { return [] }
+        switch self.currentSessionEntry()?.effectiveQueueMode {
+        case "steer": return [.followup]
+        case "followup": return [.steer]
+        // Other Gateway modes and older Gateways do not have a single opposite.
+        default: return [.steer, .followup]
+        }
+    }
+
     public var hasDraftToSend: Bool {
         let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
         return !trimmed.isEmpty || !attachments.isEmpty

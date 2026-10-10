@@ -920,6 +920,43 @@ actor ScriptedOutbox: OpenClawChatCommandOutbox {
 }
 
 struct ChatViewModelBusySendTests {
+    @Test @MainActor
+    func `hold choices follow the current session effective default`() async throws {
+        let (store, _, databaseDirectory) = try makeOutboxStore()
+        defer { try? FileManager.default.removeItem(at: databaseDirectory) }
+        // The saved override differs from the effective value: only the Gateway
+        // projection knows which action a normal tap will actually use.
+        let queueSession = try JSONDecoder().decode(OpenClawChatSessionEntry.self, from: Data(
+            #"{"key":"agent:main:main","queueMode":"steer","effectiveQueueMode":"followup"}"#.utf8))
+        let steerSession = try JSONDecoder().decode(OpenClawChatSessionEntry.self, from: Data(
+            #"{"key":"other","effectiveQueueMode":"steer"}"#.utf8))
+        let transport = OutboxTestTransport(healthy: true, sessions: [queueSession, steerSession])
+        let vm = await makeOutboxViewModel(transport: transport, outbox: store)
+        vm.load()
+        await vm.bootstrapTask?.value
+        vm.hasActiveSessionRunWithoutChatSnapshot = true
+        vm.input = "use the shorter approach"
+        #expect(vm.sendModeChoices == [.steer])
+
+        vm.switchSession(to: "other")
+        await vm.bootstrapTask?.value
+        vm.hasActiveSessionRunWithoutChatSnapshot = true
+        vm.input = "use the shorter approach"
+        #expect(vm.sendModeChoices == [.followup])
+        // A refreshed projection changes the menu without creating a local default.
+        vm.sessions[1].effectiveQueueMode = "followup"
+        #expect(vm.sendModeChoices == [.steer])
+        for mode in [nil, "collect", "steer-backlog", "future-mode"] as [String?] {
+            vm.sessions[1].effectiveQueueMode = mode
+            #expect(vm.sendModeChoices == [.steer, .followup])
+        }
+        vm.input = "/steer use the shorter approach"
+        #expect(vm.sendModeChoices.isEmpty)
+        vm.input = "use the shorter approach"
+        vm.hasActiveSessionRunWithoutChatSnapshot = false
+        #expect(vm.sendModeChoices.isEmpty)
+    }
+
     @Test(arguments: ["next task", "/steer use the shorter approach"])
     @MainActor
     func `busy send accepts a visible followup without retiring the active reply`(text: String) async throws {

@@ -1274,18 +1274,20 @@ extension OpenClawChatComposer {
             .accessibilityIdentifier("chat-send-message")
             .disabled(!self.canSendMessage)
             .contextMenu {
-                if self.inputModel?.canChooseSendMode == true, self.canSendMessage {
-                    Button {
-                        self.sendDraftIfEnabled(queueMode: .steer)
-                    } label: {
-                        Label("Steer now", systemImage: "arrow.turn.up.right")
-                            .font(OpenClawChatTypography.body)
-                    }
-                    Button {
-                        self.sendDraftIfEnabled(queueMode: .followup)
-                    } label: {
-                        Label("Queue next", systemImage: "clock")
-                            .font(OpenClawChatTypography.body)
+                if self.canSendMessage {
+                    ForEach(self.inputModel?.sendModeChoices ?? [], id: \.self) { mode in
+                        Button {
+                            self.sendDraftIfEnabled(queueMode: mode)
+                        } label: {
+                            switch mode {
+                            case .steer:
+                                Label("Steer now", systemImage: "arrow.turn.up.right")
+                                    .font(OpenClawChatTypography.body)
+                            case .followup:
+                                Label("Queue next", systemImage: "clock")
+                                    .font(OpenClawChatTypography.body)
+                            }
+                        }
                     }
                 }
             }

@@ -670,6 +670,7 @@ public struct OpenClawChatSessionEntry: Codable, Identifiable, Sendable, Hashabl
     public var verboseLevel: String?
     public var fastMode: OpenClawChatFastMode?
     public var effectiveFastMode: OpenClawChatFastMode?
+    public var effectiveQueueMode: String?
     public var permissionMode: OpenClawChatPermissionMode?
     public var toolOverrides: OpenClawChatSessionToolOverrides?
 
@@ -755,7 +756,8 @@ public struct OpenClawChatSessionEntry: Codable, Identifiable, Sendable, Hashabl
         endedAt: Double? = nil,
         runtimeMs: Double? = nil,
         agentRuntime: OpenClawChatAgentRuntime? = nil,
-        derivedTitle: String? = nil)
+        derivedTitle: String? = nil,
+        effectiveQueueMode: String? = nil)
     {
         self.key = key
         self.kind = kind
@@ -815,6 +817,7 @@ public struct OpenClawChatSessionEntry: Codable, Identifiable, Sendable, Hashabl
         self.verboseLevel = verboseLevel
         self.fastMode = fastMode
         self.effectiveFastMode = effectiveFastMode
+        self.effectiveQueueMode = effectiveQueueMode
         self.permissionMode = permissionMode
         self.toolOverrides = toolOverrides
         self.inputTokens = inputTokens
