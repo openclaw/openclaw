@@ -14,6 +14,7 @@ import {
 } from "../gateway/worker-environments/store-row-codec.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
 import { readAgentDeletionJournalStatusInDatabase } from "./agent-deletion-journal.read.js";
+import { readProcessAgentDatabaseLeasesInDatabase } from "./openclaw-agent-db-lease-process.read.js";
 import type {
   OpenClawStateReadCommand,
   OpenClawStateReadResult,
@@ -29,6 +30,7 @@ export function readStateRegistryCommand(
         | "workerEnvironments.snapshot"
         | "workerEnvironments.pruneCandidates"
         | "agentDeletionJournal.status"
+        | "agentDatabaseLeases.process"
         | "worktrees.cleanupState"
         | "worktrees.list"
         | "sandboxRegistry.list"
@@ -59,6 +61,16 @@ export function readStateRegistryCommand(
     return {
       type: command.type,
       status: readAgentDeletionJournalStatusInDatabase(db, command.agentId),
+    };
+  }
+  if (command.type === "agentDatabaseLeases.process") {
+    return {
+      type: command.type,
+      leases: readProcessAgentDatabaseLeasesInDatabase(
+        db,
+        command.ownerPid,
+        command.ownerStartTime,
+      ),
     };
   }
   if (command.type === "sandboxRegistry.list") {

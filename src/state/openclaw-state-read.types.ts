@@ -134,6 +134,7 @@ import type {
 } from "./github-publication-read.types.js";
 import type { OnboardingRecommendationsRecord } from "./onboarding-recommendations.contract.js";
 import type { OpenClawAgentDatabaseRegistryReadResult } from "./openclaw-agent-db-contract.js";
+import type { ProcessAgentDatabaseLease } from "./openclaw-agent-db-lease-process.read.js";
 import type { ConfigMachineState } from "./openclaw-state-db.generated.js";
 import type {
   RegisteredStateReadCommand,
@@ -232,6 +233,7 @@ export type OpenClawStateReadCommand =
   | { type: "agentDatabaseRegistry.read" }
   | { type: "agentDatabaseDeletion.snapshot"; purpose: AgentDeletionJournalPurpose }
   | { type: "agentDeletionJournal.status"; agentId: string }
+  | { type: "agentDatabaseLeases.process"; ownerPid: number; ownerStartTime: number | null }
   | { type: "workerEnvironments.snapshot"; ids?: readonly string[] }
   | { type: "workerEnvironments.pruneCandidates"; input: WorkerEnvironmentPruneReadInput }
   | { type: "sessionGroups.snapshot" }
@@ -346,6 +348,10 @@ export type OpenClawStateReadResult =
   | {
       type: "agentDeletionJournal.status";
       status: AgentDeletionJournalStatus;
+    }
+  | {
+      type: "agentDatabaseLeases.process";
+      leases: ProcessAgentDatabaseLease[];
     }
   | {
       type: "deliveryQueue.outbound";

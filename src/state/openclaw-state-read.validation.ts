@@ -318,6 +318,10 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
         (input.command.purpose === "runtime" || input.command.purpose === "maintenance")) ||
       (input.command.type === "agentDeletionJournal.status" &&
         typeof input.command.agentId === "string") ||
+      (input.command.type === "agentDatabaseLeases.process" &&
+        Number.isSafeInteger(input.command.ownerPid) &&
+        (input.command.ownerStartTime === null ||
+          Number.isSafeInteger(input.command.ownerStartTime))) ||
       input.command.type === "sessionGroups.snapshot" ||
       (input.command.type === "sessionGroups.members" && isRecord(input.command.cfg)) ||
       (input.command.type === "workerEnvironments.snapshot" &&
