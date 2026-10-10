@@ -793,7 +793,7 @@ function renderDetailHeader(props: CronProps, mode: CronPanelMode, selectedJob?:
   return html`
     <div class="cron-detail-header">
       <div class="cron-detail-header__copy">
-        <div class="cron-detail-title">${title}</div>
+        <div class="cron-detail-title" role="heading" aria-level="2" tabindex="-1">${title}</div>
         ${
           description
             ? html`<div class="cron-detail-description" data-test-id="cron-detail-description">
