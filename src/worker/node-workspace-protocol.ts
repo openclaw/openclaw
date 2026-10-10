@@ -55,7 +55,6 @@ const WorkspaceProcess = workerProtocolObject({
   action: z.enum(["start", "status", "stop"]),
   processId: WorkspaceProcessId,
 });
-export type NodeWorkerWorkspaceProcessInput = z.infer<typeof WorkspaceProcess>;
 type NodeWorkerWorkspaceProcessResult = {
   processId: string;
   state: "running" | "exited";
