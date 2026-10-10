@@ -165,7 +165,7 @@ function assertExplicitSelection(
     const explicitRevision = normalizeIosAppStoreRevision(input.explicitRevision);
     if (explicitRevision !== plan.appStoreRevision) {
       throw new Error(
-        `Explicit App Store revision ${explicitRevision} does not match the deterministic revision ${plan.appStoreRevision}.`,
+        `Explicit App Store revision ${explicitRevision} does not match the planned revision ${plan.appStoreRevision}.`,
       );
     }
   }
@@ -174,7 +174,7 @@ function assertExplicitSelection(
     const buildNumber = normalizeBuildNumber(explicitBuild);
     if (buildNumber !== plan.buildNumber) {
       throw new Error(
-        `Explicit App Store build ${buildNumber} does not match the deterministic next build ${plan.buildNumber}.`,
+        `Explicit App Store build ${buildNumber} does not match the planned next build ${plan.buildNumber}.`,
       );
     }
   }

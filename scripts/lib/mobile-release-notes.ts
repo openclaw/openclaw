@@ -160,7 +160,7 @@ export function renderMobileReleaseNotes(options: {
   const artifactPath = options.artifactPath ?? process.env.OPENCLAW_MOBILE_RELEASE_NOTES;
   if (!artifactPath) {
     throw new Error(
-      "Missing OPENCLAW_MOBILE_RELEASE_NOTES. Use the canonical store release command or the saved release artifact.",
+      "Missing OPENCLAW_MOBILE_RELEASE_NOTES. Use the store release command or the saved release artifact.",
     );
   }
   const sourceSha = git(options.rootDir, "rev-parse", "HEAD").trim();

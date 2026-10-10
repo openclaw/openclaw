@@ -89,12 +89,12 @@ if [[ -z "${TEAM_ID}" ]]; then
 fi
 
 if [[ "${TEAM_ID}" != "${CANONICAL_TEAM_ID}" ]]; then
-  echo "iOS App Store release must use canonical OpenClaw Team ID ${CANONICAL_TEAM_ID}; got ${TEAM_ID}." >&2
+  echo "iOS App Store release must use official OpenClaw Team ID ${CANONICAL_TEAM_ID}; got ${TEAM_ID}." >&2
   exit 1
 fi
 
 if [[ -n "${OPENCLAW_PUSH_RELAY_BASE_URL:-}" || -n "${IOS_PUSH_RELAY_BASE_URL:-}" ]]; then
-  echo "iOS App Store release uses the canonical hosted push relay; custom relay URL overrides are not allowed." >&2
+  echo "iOS App Store release uses the official hosted push relay; custom relay URL overrides are not allowed." >&2
   exit 1
 fi
 
