@@ -37,7 +37,7 @@ import { assertSessionEntryCohortScope } from "./session-entry-cohort-scope.js";
 import type { SessionEntryCohortReader } from "./session-entry-read-runtime.types.js";
 import {
   SessionEntryLifecycleUpsertConflictError,
-  SessionMaintenancePreservationConflictError,
+  SqliteSessionMutationConflictError,
 } from "./session-mutation-conflict-error.js";
 import { resolveReplySessionInitializationUpserts } from "./session-reset-entry.js";
 import type { ReplySessionInitializationUpsertDescriptor } from "./session-reset.types.js";
@@ -407,7 +407,10 @@ export async function commitReplySessionInitialization(params: {
     }
   } catch (error) {
     if (
-      !(error instanceof SessionMaintenancePreservationConflictError) &&
+      !(
+        error instanceof SqliteSessionMutationConflictError &&
+        error.operationLabel === "session maintenance"
+      ) &&
       (!(error instanceof SessionEntryLifecycleUpsertConflictError) ||
         error.sessionKey !== resolved.normalizedKey)
     ) {

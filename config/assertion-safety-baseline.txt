@@ -424,7 +424,6 @@ extensions/line/src/webhook-spool.ts	2
 extensions/llm-task/doctor-contract-api.ts	1
 extensions/llm-task/src/llm-task-tool.ts	2
 extensions/lmstudio/src/models.ts	2
-extensions/lmstudio/src/stream.ts	2
 extensions/lobster/src/lobster-runner.ts	2
 extensions/logbook/index.ts	5
 extensions/logbook/src/analyze.ts	5
@@ -626,7 +625,6 @@ extensions/ollama/index.ts	6
 extensions/ollama/provider-discovery.ts	1
 extensions/ollama/src/config-compat.ts	1
 extensions/ollama/src/discovery-shared.ts	1
-extensions/ollama/src/embedding-provider.runtime.ts	1
 extensions/ollama/src/provider-base-url.ts	1
 extensions/ollama/src/provider-models.ts	1
 extensions/ollama/src/setup-pull.ts	1
@@ -2353,7 +2351,7 @@ src/plugin-sdk/provider-auth-runtime.ts	1
 src/plugin-sdk/provider-catalog-shared.ts	1
 src/plugin-sdk/provider-entry.ts	3
 src/plugin-sdk/provider-onboard.ts	3
-src/plugin-sdk/provider-stream-shared.ts	9
+src/plugin-sdk/provider-stream-shared.ts	7
 src/plugin-sdk/provider-stream.ts	1
 src/plugin-sdk/provider-tools.ts	4
 src/plugin-sdk/qa-runtime.ts	5
@@ -2457,7 +2455,7 @@ src/plugins/registry-registrars-host.ts	1
 src/plugins/registry-registrars-operations.ts	2
 src/plugins/registry-registrars-tools-hooks.ts	1
 src/plugins/registry-runtime-binding.ts	1
-src/plugins/registry-runtime.ts	5
+src/plugins/registry-runtime.ts	1
 src/plugins/registry.ts	1
 src/plugins/runtime-channel-state.ts	1
 src/plugins/runtime-state.ts	1
@@ -2570,7 +2568,6 @@ src/state/local-onboarding-state.ts	1
 src/state/openclaw-agent-db-permissions.ts	1
 src/state/openclaw-agent-db-registry-listing.ts	2
 src/state/openclaw-agent-db-session-migrations.ts	1
-src/state/openclaw-quarantine-store.ts	1
 src/state/openclaw-state-db-delivery-queue-backfill.ts	1
 src/state/openclaw-state-db-legacy-backfills.ts	4
 src/state/openclaw-state-db-schema-helpers.ts	1

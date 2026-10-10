@@ -117,6 +117,15 @@ Follow-up messages use the same Agents API session. Ask the agent to revise its
 answer, work with another attachment, or take the next step. A message sent while
 the agent is working can redirect it; stopping the task cancels its remote turn.
 
+Saved sessions from `v2026.9.9` are upgraded on their first continuation without
+changing the remote session ID. Keep the original API key and configuration
+until that continuation succeeds. If they no longer match, the plugin retains
+the binding and explains how to restore them or explicitly reset with a key
+that can settle the original native session. A failed upgrade never silently
+creates a replacement conversation. See the [saved-session upgrade
+notes](https://github.com/openclaw/openclaw/blob/main/extensions/agentsapi/README.md#upgrading-saved-sessions)
+for key rotation and rollback.
+
 New sessions receive your OpenClaw instructions and persona, including
 `AGENTS.md`, `SOUL.md`, and your user context. After editing those instructions,
 send `/new` or `/reset` to start a conversation with the updated context. Your

@@ -9,9 +9,9 @@ import {
   deferSqliteWorkerCommitReceipt,
   observeSqliteWorkerCommittedFacts,
   requestSqliteWorkerOperationAdmission,
-  settleSqliteWorkerOperationContext,
   withSqliteWorkerOperationAdmission,
 } from "./sqlite-worker-operation-admission.js";
+import { settleSqliteWorkerOperationContext } from "./sqlite-worker-operation-settlement.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());

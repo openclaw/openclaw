@@ -541,12 +541,14 @@ test("preserves complete base rows across time and caller presentation fixtures"
         expect(row.createdSurface).toBe(fixture.entry?.createdSurface);
         expect(row.isDock).toBe(fixture.expectedIsDock ?? false);
         expect(row.sessionModelRevision).toEqual(expect.any(String));
+        expect(row.sidebarRoot).toBe(fixture.entry?.sidebarRoot === true);
         // Assert additive fields separately while preserving the frozen wire-byte coverage.
         const {
           snapshotAt: _snapshotAt,
           createdSurface: _createdSurface,
           isDock: _isDock,
           sessionModelRevision: _sessionModelRevision,
+          sidebarRoot: _sidebarRoot,
           ...previousWireFields
         } = row;
         const json = JSON.stringify(previousWireFields);
