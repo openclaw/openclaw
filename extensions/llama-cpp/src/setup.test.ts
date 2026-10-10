@@ -546,7 +546,6 @@ describe("llama.cpp managed setup", () => {
       expect.objectContaining({
         chatModel: { mode: "remove" },
         configuredChatModelIds: [],
-        embeddingModelIsDefault: true,
         embeddingModelPath: path.join(tempRoot, "embedding.gguf"),
         isolated: true,
       }),
@@ -588,7 +587,6 @@ describe("llama.cpp managed setup", () => {
     );
     expect(mocks.prepareServer).toHaveBeenCalledWith(
       expect.objectContaining({
-        embeddingModelIsDefault: false,
         embeddingModelPath: path.join(tempRoot, "embedding.gguf"),
       }),
     );
@@ -689,9 +687,6 @@ describe("llama.cpp managed setup", () => {
     );
     expect(mocks.ensureModel).not.toHaveBeenCalledWith(
       expect.objectContaining({ source: NON_LOCAL_EMBEDDING_MODEL }),
-    );
-    expect(mocks.prepareServer).toHaveBeenCalledWith(
-      expect.objectContaining({ embeddingModelIsDefault: false }),
     );
   });
 
