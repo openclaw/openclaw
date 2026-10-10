@@ -15,15 +15,10 @@ type CaptureIdentity = { dev: bigint; ino: bigint };
 /** A rollback original is superseded only after a later update succeeded. */
 export function readCompletedUpdateHistory(env: NodeJS.ProcessEnv) {
   try {
-    const runs = listUpdateRuns({ limit: 100 }, { env });
+    const [latest] = listUpdateRuns({ limit: 1, succeeded: true }, { env });
     return {
-      runs,
-      latestCompletedStartedAt: Math.max(
-        0,
-        ...runs
-          .filter((run) => run.status === "succeeded" && run.finishedAtMs !== null)
-          .map((run) => run.createdAtMs),
-      ),
+      runs: listUpdateRuns({ limit: 100 }, { env }),
+      latestCompletedStartedAt: latest && latest.finishedAtMs !== null ? latest.createdAtMs : 0,
     };
   } catch {
     // Missing/unreadable update history cannot release rollback originals.
@@ -186,6 +181,7 @@ export async function retireUpdateCaptures(params: {
       // The marker goes last: an interrupted removal stays attributed, so a rerun finishes it.
       for (const name of fs.readdirSync(item.path)) {
         if (name !== UPDATE_CAPTURE_PRIVACY_MARKER) {
+          params.assertCurrent();
           await fs.promises.rm(path.join(item.path, name), { recursive: true });
         }
       }
