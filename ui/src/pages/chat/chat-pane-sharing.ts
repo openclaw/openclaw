@@ -23,6 +23,7 @@ import { CHAT_COMPOSER_TEXTAREA_SELECTOR } from "./chat-pane-shared.ts";
 import { selectedChatSessionRow } from "./chat-state-route.ts";
 import {
   typingActorIdForSessionMessage,
+  typingDraftPreview,
   type ChatTypingActorState,
   type ChatTypingActorView,
   type ChatTypingOverflow,
@@ -453,7 +454,7 @@ export abstract class ChatPaneSharing extends ChatPaneReactions {
     const actor: ChatTypingActorState = {
       label: event.actor.label ?? event.actor.id,
       retireAt: event.preview ? idleDeadline : now + activeMs,
-      ...(event.preview ? { preview: event.preview } : {}),
+      ...(event.preview ? { preview: event.preview, cursor: event.cursor } : {}),
     };
     this.typingActiveIds.add(event.actor.id);
     // Updating a Map entry preserves its arrival order and the two preview slots.
@@ -543,6 +544,7 @@ export abstract class ChatPaneSharing extends ChatPaneReactions {
         id,
         label: actor.label,
         ...(actor.preview ? { preview: actor.preview } : {}),
+        ...(actor.cursor !== undefined ? { cursor: actor.cursor } : {}),
         ...(actor.paused ? { paused: true } : {}),
         ...(actor.exitDurationMs !== undefined ? { exitDurationMs: actor.exitDurationMs } : {}),
       });
@@ -576,6 +578,7 @@ export abstract class ChatPaneSharing extends ChatPaneReactions {
           previous?.id === view.id &&
           previous.label === view.label &&
           previous.preview === view.preview &&
+          previous.cursor === view.cursor &&
           previous.paused === view.paused &&
           previous.exitDurationMs === view.exitDurationMs
         );
@@ -593,7 +596,7 @@ export abstract class ChatPaneSharing extends ChatPaneReactions {
     return this.typingViews;
   }
 
-  protected sendTypingState(typing: boolean, preview?: string): void {
+  protected sendTypingState(typing: boolean, preview?: string, cursor?: number): void {
     const scope = this.captureConnectionScope();
     const row = scope ? selectedChatSessionRow(scope.state) : undefined;
     if (!scope || !row?.sessionId || !this.hasMultipleIdentities()) {
@@ -614,15 +617,14 @@ export abstract class ChatPaneSharing extends ChatPaneReactions {
       ) {
         return;
       }
-      const draft = typing ? preview?.trim() : undefined;
-      const draftPreview = draft ? Array.from(draft).slice(-300).join("") : undefined;
+      const draftPreview = typing && preview ? typingDraftPreview(preview, cursor) : undefined;
       this.typingRequestSentAt = typing ? Date.now() : undefined;
       void scope.client
         .request("session.typing", {
           sessionKey,
           sessionId,
           typing,
-          ...(draftPreview ? { preview: draftPreview } : {}),
+          ...draftPreview,
           ...scopedAgentParamsForSession(scope.state, sessionKey),
         })
         .catch(() => undefined);

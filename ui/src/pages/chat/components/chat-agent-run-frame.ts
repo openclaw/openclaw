@@ -1,5 +1,4 @@
 import { html, nothing } from "lit";
-import { repeat } from "lit/directives/repeat.js";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { extractChatSourcePreviews } from "../../../lib/chat/source-previews.ts";
 import {
@@ -9,6 +8,7 @@ import {
 } from "../chat-agent-run-grouping.ts";
 import type { TurnRecap } from "../chat-progress.ts";
 import { rawMessageTimestamp } from "../chat-thread-items.ts";
+import { atomicKeyedRepeat } from "./atomic-keyed-repeat.ts";
 import {
   renderActivityGroup,
   renderMessageGroup,
@@ -91,7 +91,7 @@ export function renderAgentRunFrame(frame: AgentRunFrameRenderItem, opts: AgentR
     opts.renderGroupOptions(shell),
   );
   const frameContent = [
-    repeat(
+    atomicKeyedRepeat(
       bodyParts,
       (part) => part.kind + ":" + part.key,
       (part) => {

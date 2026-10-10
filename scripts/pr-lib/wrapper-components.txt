@@ -332,6 +332,7 @@ src/agents/worktrees/preparation-timing.ts
 src/agents/worktrees/provisioned-file-inspection.ts
 src/agents/worktrees/provisioned-snapshot-store.ts
 src/agents/worktrees/provisioned-snapshot.ts
+src/agents/worktrees/registry-publication.ts
 src/agents/worktrees/registry-read.kernel.ts
 src/agents/worktrees/registry-read.ts
 src/agents/worktrees/registry-run-end.ts
@@ -340,6 +341,7 @@ src/agents/worktrees/registry.ts
 src/agents/worktrees/repository-paths.ts
 src/agents/worktrees/run-end-lifecycle.ts
 src/agents/sandbox/registry-lifecycle.ts
+src/agents/sandbox/registry-publication.ts
 src/talk/client-voice-session-lifecycle.ts
 src/talk/client-voice-session-source.ts
 src/agents/worktrees/run-lease-owner.ts
@@ -744,6 +746,7 @@ src/gateway/worker-environments/placement-read-authority.ts
 src/gateway/worker-environments/placement-record.ts
 src/gateway/worker-environments/placement-row-codec.ts
 src/gateway/worker-environments/placement-state.ts
+src/gateway/worker-environments/placement-turn-authority.receipt.ts
 src/gateway/worker-environments/placement-turn-authority.ts
 src/gateway/worker-environments/placement-workspace-journal.ts
 src/gateway/worker-environments/placement-workspace-journal.types.ts
@@ -1018,6 +1021,7 @@ src/infra/sqlite-jsonl-budget.ts
 src/infra/sqlite-live-snapshot.ts
 src/infra/sqlite-lifecycle-errors.ts
 src/infra/sqlite-maintenance-cache.ts
+src/infra/sqlite-native-observer.ts
 src/infra/sqlite-number.ts
 src/infra/sqlite-page-cache-residency.ts
 src/infra/sqlite-page-cache.worker.ts
@@ -1048,6 +1052,7 @@ src/infra/sqlite-schema-ensure.ts
 src/infra/sqlite-schema-facts.ts
 src/infra/sqlite-schema-header.ts
 src/infra/sqlite-schema-issues.ts
+src/infra/sqlite-schema-mutation.ts
 src/infra/sqlite-schema-sql.ts
 src/infra/sqlite-snapshot-file.ts
 src/infra/sqlite-snapshot-policy.ts
@@ -1061,6 +1066,8 @@ src/infra/sqlite-snapshot-staging-owner.ts
 src/infra/sqlite-snapshot-staging.ts
 src/infra/sqlite-snapshot-wal-prefix.ts
 src/infra/sqlite-snapshot.ts
+src/infra/sqlite-source-fence-contract.ts
+src/infra/sqlite-source-fence.ts
 src/infra/sqlite-source-handle.ts
 src/infra/sqlite-source-revision.ts
 src/infra/sqlite-source-revision.worker.ts
@@ -1613,6 +1620,7 @@ src/skills/runtime/refresh-watch-targets.types.ts
 src/state/agent-creation-claim.ts
 src/state/agent-database-admission-error.ts
 src/state/agent-database-admission.ts
+src/state/agent-database-preparation-context.ts
 src/state/agent-database-startup.ts
 src/state/agent-deletion-cleanup-admission.ts
 src/state/agent-deletion-cleanup.ts

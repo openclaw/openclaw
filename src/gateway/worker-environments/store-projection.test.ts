@@ -18,6 +18,7 @@ import type { WorkerEnvironmentRecord } from "./environment-record.js";
 import { createWorkerEnvironmentCommitAdmission } from "./store-commit-authority.js";
 import { publishWorkerEnvironmentNativeMutation } from "./store-native-publication.js";
 import { workerEnvironmentProjections } from "./store-projection.js";
+import { createWorkerEnvironmentReceipt, readWorkerEnvironmentReceipt } from "./store-receipt.js";
 import type { WorkerEnvironmentFacts } from "./store.types.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -86,6 +87,42 @@ function acquireProjection() {
   });
   return owner;
 }
+
+it("requires complete exact-key receipts before replacing environment authority", () => {
+  const owner = acquireProjection();
+  const source = { identity: "environment-store", incarnation: owner.incarnation };
+  owner.install(facts(environment, true), owner.nextSequence(), false);
+  const deletion = createWorkerEnvironmentReceipt(source, facts(undefined));
+  for (const invalid of [
+    { ...deletion, facts: new Map() },
+    { ...deletion, source: { ...source, identity: "another-store" } },
+    { ...deletion, source: { ...source, incarnation: "retired-owner" } },
+    { ...deletion, facts: new Map([[environment.environmentId, { kind: "unknown" }]]) },
+    {
+      ...deletion,
+      facts: new Map([
+        [environment.environmentId, { kind: "postimage", value: { environment: null } }],
+      ]),
+    },
+  ]) {
+    expect(() =>
+      owner.install(
+        readWorkerEnvironmentReceipt(invalid, source, [environment.environmentId]),
+        owner.nextSequence(),
+        false,
+      ),
+    ).toThrow(/receipt/);
+    expect(owner.get(environment.environmentId)).toEqual(environment);
+    expect(owner.credential(environment.environmentId)).toEqual(credential);
+  }
+  owner.install(
+    readWorkerEnvironmentReceipt(deletion, source, [environment.environmentId]),
+    owner.nextSequence(),
+    false,
+  );
+  expect(owner.get(environment.environmentId)).toBeUndefined();
+  expect(owner.credential(environment.environmentId)).toBeUndefined();
+});
 
 it("keeps exact node admission predicates after bootstrap setup binding", () => {
   const owner = acquireProjection();

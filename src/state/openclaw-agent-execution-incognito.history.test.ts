@@ -23,6 +23,7 @@ import {
   readSessionTranscriptBoundedMessageTailPageAsync,
 } from "../gateway/session-transcript-readers.js";
 import {
+  readLatestAssistantTextByIdentity,
   readSessionTranscriptRawDelta,
   readSessionTranscriptVisibleMessageDelta,
 } from "../plugin-sdk/session-transcript-runtime.js";
@@ -965,6 +966,7 @@ it("ends queued history reads with the typed error when their actor is lost", as
       reader.memoryEntry("actor-memory"),
       reader.memoryResetRecall(),
       reader.nativeContext(scope, () => "private result"),
+      withIncognitoSessionActor(lossActor, () => readLatestAssistantTextByIdentity(scope)),
     ].map((result) => expect(result).rejects.toMatchObject({ code: "INCOGNITO_SESSION_ENDED" })),
   );
   let replacing: Promise<IncognitoAgentDatabaseExecution | undefined> | undefined;

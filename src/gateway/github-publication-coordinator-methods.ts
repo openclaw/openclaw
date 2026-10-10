@@ -8,6 +8,7 @@ import type {
 import { formatErrorMessage } from "../infra/errors.js";
 import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
 import type { GitHubPublicationRow as PublicationRow } from "../state/github-publication-read.types.js";
+import { githubPublicationReceipts } from "../state/github-publication-receipts.js";
 import { readGitHubPublicationSessionLifecycleInWorker } from "../state/github-publication-session-lifecycles.js";
 import {
   openOpenClawStateDatabase,
@@ -530,14 +531,18 @@ export function createGitHubPublicationCoordinatorMethods(params: {
       ensureSchema();
       runOpenClawStateWriteTransaction(
         ({ db }) => {
-          executeSqliteQuerySync(
+          const changed = executeSqliteQuerySync(
             db,
             publicationDb(db)
               .updateTable("github_publication_requests")
               .set({ reported_at_ms: Date.now(), updated_at_ms: Date.now() })
               .where("request_id", "=", requestId)
-              .where("reported_at_ms", "is", null),
-          );
+              .where("reported_at_ms", "is", null)
+              .returningAll(),
+          ).rows;
+          for (const row of changed) {
+            githubPublicationReceipts.stageRow(db, "shared", row);
+          }
         },
         undefined,
         { operationLabel: "github-publication.report" },
