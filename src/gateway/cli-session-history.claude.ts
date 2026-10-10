@@ -26,7 +26,6 @@ import {
 } from "../config/sessions/cli-session-binding.js";
 import {
   type InputProvenance,
-  buildInterSessionPromptContext,
   readInterSessionPromptEnvelope,
 } from "../sessions/input-provenance.js";
 import { formatSystemTurnPrompt } from "../sessions/system-turn-prompt.js";
@@ -371,23 +370,6 @@ function resolveClaudeCliInternalSourceTool(text: string): string | undefined {
   // A wake drains queued system events (for example Control UI reactions) and
   // the interrupted-run hint ahead of its prompt; neither makes it a user turn.
   const body = stripCliSessionDriftNote(text).replace(INTERNAL_PROMPT_PREFIX, "");
-  const header =
-    /^\[Inter-session message\] (?:sourceSession=(\S+) )?(?:sourceChannel=(\S+) )?sourceTool=(\S+) isUser=false\n/u.exec(
-      body,
-    );
-  if (
-    header &&
-    body.startsWith(
-      buildInterSessionPromptContext({
-        kind: "inter_session",
-        sourceSessionKey: header[1],
-        sourceChannel: header[2],
-        sourceTool: header[3],
-      }).text,
-    )
-  ) {
-    return header[3];
-  }
   if (
     body.startsWith(
       "An async command you ran earlier has completed. The command completion details are:\n\n",

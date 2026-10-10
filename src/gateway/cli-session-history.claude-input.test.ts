@@ -43,17 +43,6 @@ const boundary = (content = "Conversation compacted") => ({
 const internalInputs = [
   ["resume", buildCliSessionDriftNote(["system-prompt"])],
   [
-    "subagent",
-    `${
-      buildInterSessionPromptContext({
-        kind: "inter_session",
-        sourceSessionKey: "agent:main:subagent:worker",
-        sourceChannel: "internal",
-        sourceTool: "subagent_settle",
-      }).text
-    }\nReview completed.`,
-  ],
-  [
     "compact-command",
     "<command-name>/compact</command-name>\n            <command-message>compact</command-message>\n            <command-args></command-args>",
   ],
@@ -69,16 +58,6 @@ const internalInputs = [
       baseBody: buildExecEventPrompt(["Exec completed (example, code 0) :: done"]),
       abortedLastRun: true,
     }),
-  ],
-  [
-    "sessions-send",
-    `${
-      buildInterSessionPromptContext({
-        kind: "inter_session",
-        sourceSessionKey: "agent:main:cron:job:run:1",
-        sourceTool: "sessions_send",
-      }).text
-    }\n[build-events] done`,
   ],
 ] as const;
 // The display projection already rewrites or hides these even on canonical rows,
@@ -137,6 +116,25 @@ describe("Claude imported internal inputs", () => {
       expect(projectChatDisplayMessages(merged)).toMatchObject([{ role: "user", content }]);
     }
   });
+
+  it.each(["sessions_send", "subagent_settle"])(
+    "preserves routed %s input for the shared provenance projection",
+    (sourceTool) => {
+      const text = `${
+        buildInterSessionPromptContext({
+          kind: "inter_session",
+          sourceSessionKey: "agent:peer:main",
+          sourceTool,
+        }).text
+      }\nRouted result.`;
+      for (const content of [text, [{ type: "text", text }]]) {
+        const imported = parseImportedUser(content);
+        expect(imported).toMatchObject({ role: "user", content });
+        expect(imported?.display).not.toBe(false);
+        expect(imported?.provenance).not.toMatchObject({ kind: "internal_system" });
+      }
+    },
+  );
 
   it.each(["string", "text-block"])(
     "removes the resume decorator, not its real %s user turn",
