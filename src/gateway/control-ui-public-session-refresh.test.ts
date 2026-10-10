@@ -1,7 +1,8 @@
 import { runInNewContext } from "node:vm";
+import { JSDOM } from "jsdom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { PUBLIC_SESSION_ENTRY_SCRIPT } from "./control-ui-public-session-render.js";
+import { renderPublicSessionDocument } from "./control-ui-public-session-render.js";
 
 afterEach(() => vi.useRealTimers());
 function fixture() {
@@ -34,7 +35,22 @@ function fixture() {
   const response = (status: number, body = "updated", etag = '"revision-1"') =>
     new Response(status === 304 ? null : body, { status, headers: { ETag: etag } });
   fetch.mockResolvedValue(response(200));
-  runInNewContext(PUBLIC_SESSION_ENTRY_SCRIPT, {
+  const page = new JSDOM(
+    renderPublicSessionDocument({
+      messages: [],
+      title: "Before",
+      truncated: false,
+      latestUrl: "/chat/main/topic",
+      cardUrl: "https://example.test/card",
+      assetBasePath: "/control",
+    }),
+  );
+  const source = page.window.document.querySelector("script")?.textContent;
+  page.window.close();
+  if (!source) {
+    throw new Error("Public reader document has no lifecycle script");
+  }
+  runInNewContext(source, {
     document,
     fetch,
     location: { href: "https://example.test/chat/main/topic" },
