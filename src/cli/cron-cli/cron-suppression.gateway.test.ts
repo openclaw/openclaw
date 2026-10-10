@@ -265,7 +265,10 @@ describe("cron CLI delivery suppression readback", () => {
             expect(run.exitCode).toBe(failed ? 1 : 0);
             // CLI completion can observe history before the queued run releases its root.
             expect(
-              await withinTest(expectDefined(runReleased, "cron run did not start"), signal),
+              await withinTest(
+                expectDefined<Promise<"settled" | "reset">>(runReleased, "cron run did not start"),
+                signal,
+              ),
             ).toBe("settled");
             expect(
               getActiveGatewayRootWorkCount(),
