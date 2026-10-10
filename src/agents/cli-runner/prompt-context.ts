@@ -58,10 +58,10 @@ async function buildCliTurnAppendContext(
       enabled: params.thinkLevel === "ultra",
       hasSessionsSpawn: params.capabilityToolNames.has("sessions_spawn"),
     }).join("\n"),
-    mediaTaskMessage ? labelRuntimeContextText(mediaTaskMessage.content) : undefined,
     interruptedInputContext
       ? labelRuntimeContextText(projectRuntimeContextFragments([interruptedInputContext]))
       : undefined,
+    mediaTaskMessage ? labelRuntimeContextText(mediaTaskMessage.content) : undefined,
     // Native-prompt owners and first-only resumes do not receive the current runtime line.
     resolveSystemPromptUsage(params)
       ? undefined
