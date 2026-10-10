@@ -12,6 +12,52 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 const suite = createControlUiE2eSuite({ name: "Settings message width" });
 
 suite.define(() => {
+  it("keeps existing widths through the new default and restores that default when cleared", async () => {
+    await suite.withPage({ viewport: { width: 1600, height: 900 } }, async ({ page }) => {
+      await installMockGateway(page, {
+        historyMessages: [{ role: "assistant", content: "Existing browser preference fixture." }],
+      });
+      const settingsUrl = `${suite.server.baseUrl}settings/appearance#settings-appearance-chat`;
+      const settingsKey = controlUiBundledSettingsStorageKey(suite.server.baseUrl);
+      const widthInput = page.getByRole("textbox", { name: "Message width", exact: true });
+      const transcript = page.locator(".chat-thread-inner");
+      const renderedWidth = () =>
+        transcript.evaluate((element) => Math.round(element.getBoundingClientRect().width));
+
+      for (const [storedWidth, expectedWidth] of [
+        ["48rem", 768],
+        ["960px", 960],
+      ] as const) {
+        await page.goto(suite.server.baseUrl);
+        await page.evaluate(
+          ({ key, width }) =>
+            localStorage.setItem(key, JSON.stringify({ chatMessageMaxWidth: width })),
+          { key: settingsKey, width: storedWidth },
+        );
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
+        await transcript.getByText("Existing browser preference fixture.").waitFor();
+        expect(await renderedWidth()).toBe(expectedWidth);
+        await page.goto(settingsUrl);
+        await browserExpect(widthInput).toHaveValue(storedWidth);
+      }
+
+      await widthInput.fill("");
+      await widthInput.press("Tab");
+      await browserExpect
+        .poll(() =>
+          page.evaluate(
+            (key) => JSON.parse(localStorage.getItem(key) ?? "{}").chatMessageMaxWidth,
+            settingsKey,
+          ),
+        )
+        .toBeUndefined();
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
+      await transcript.getByText("Existing browser preference fixture.").waitFor();
+      expect(await renderedWidth()).toBeGreaterThan(960);
+      expect(await renderedWidth()).toBeLessThanOrEqual(1280);
+    });
+  });
+
   it("retains the last valid reading width when CSS math is mistyped", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
       await installMockGateway(page, {
@@ -84,9 +130,11 @@ suite.define(() => {
       await browserExpect(widthInput).toHaveValue("");
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       await transcript.getByText("A comfortable reading column.").waitFor();
-      expect(await transcript.evaluate((element) => getComputedStyle(element).maxWidth)).toBe(
-        "768px",
+      const restoredFrameWidth = await transcript.evaluate(
+        (element) => element.getBoundingClientRect().width,
       );
+      expect(restoredFrameWidth).toBeGreaterThan(768);
+      expect(restoredFrameWidth).toBeLessThanOrEqual(1280);
     });
   });
 });

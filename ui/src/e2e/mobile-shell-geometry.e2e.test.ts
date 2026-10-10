@@ -583,8 +583,8 @@ suite.define(() => {
         if (mobile) {
           expect(fresh.composer.left).toBeCloseTo(generating.composer.left, 0);
           expect(fresh.composer.right).toBeCloseTo(generating.composer.right, 0);
-          expect(chat.composer.left).toBeGreaterThanOrEqual(left + 20);
-          expect(chat.composer.right).toBeLessThanOrEqual(width - right - 20);
+          expect(chat.composer.left).toBeCloseTo(left + 20, 0);
+          expect(chat.composer.right).toBeCloseTo(width - right - 20, 0);
           expect(chat.thread!.left).toBeCloseTo(chat.composer.left, 0);
           expect(chat.thread!.right).toBeCloseTo(chat.composer.right, 0);
           if (withProgress.progress) {

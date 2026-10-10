@@ -218,7 +218,7 @@ export async function expectPendingNewSessionPresentation(page: Page) {
     };
   });
   expect(presentation.direction).toBe("row-reverse");
-  expect(presentation.width).toBeLessThanOrEqual(768);
+  expect(presentation.width).toBeLessThanOrEqual(1280);
   expect(presentation.rightGap).toBeLessThanOrEqual(1);
   expect(presentation.padding).toEqual(presentation.images ? ["10px", "14px"] : ["16px", "16px"]);
   expect(presentation.background).not.toBe("rgba(0, 0, 0, 0)");

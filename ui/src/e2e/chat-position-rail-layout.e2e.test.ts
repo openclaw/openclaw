@@ -96,7 +96,15 @@ suite.define(() => {
           });
           await page.addInitScript(createControlUiMockSameOriginGatewayScript());
           await page.goto(`${suite.server.baseUrl}chat`);
-          await page.locator(".chat-position-rail__track").waitFor();
+          const railTrack = page.locator(".chat-position-rail__track");
+          await railTrack.waitFor();
+          expect(await railTrack.isVisible()).toBe(true);
+          const reservedGutter = await page.locator(".chat-thread").evaluate((thread) => {
+            const inner = thread.querySelector<HTMLElement>(".chat-thread-inner");
+            if (!inner) throw new Error("expected a rendered transcript column");
+            return inner.getBoundingClientRect().left - thread.getBoundingClientRect().left;
+          });
+          expect(reservedGutter).toBeGreaterThanOrEqual(68);
           await waitForChatScrollIdle(page);
           await expectPositionRailAtEnd(page);
           const transcript = page.locator(".chat-thread");

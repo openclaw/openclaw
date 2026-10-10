@@ -110,7 +110,7 @@ export function expectResponsiveTableGeometry(
     expect(geometry.visibleExpandLabel).toBe(false);
     expect(geometry.controlsGap).toBe(0);
     expect(geometry.bottomGap).toBeGreaterThanOrEqual(20);
-    expect(geometry.prose).toBeLessThanOrEqual(768);
+    expect(geometry.prose).toBeLessThanOrEqual(1280);
   } else {
     expect(geometry.controlHeight).toBe(40);
     expect(geometry.visibleExpandLabel).toBe(true);
