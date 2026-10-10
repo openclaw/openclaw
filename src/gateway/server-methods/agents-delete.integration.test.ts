@@ -379,9 +379,15 @@ it.for(["active", "restart-draining", "legacy-retiring"] as const)(
               registry.plugins.push(plugin);
               registry.agentHarnesses.push(registration);
               try {
+                const readSummaries = sessionInventory.readSessionEntrySummariesInWorker;
                 const inventory = vi
                   .spyOn(sessionInventory, "readSessionEntrySummariesInWorker")
-                  .mockRejectedValueOnce(new Error("synthetic inventory failure"));
+                  .mockImplementation(async (scope) => {
+                    if (scope.agentId === agentId) {
+                      throw new Error("synthetic inventory failure");
+                    }
+                    return readSummaries(scope);
+                  });
                 await expect(
                   client.request("agents.delete", { agentId, deleteFiles: true }),
                 ).rejects.toThrow("synthetic inventory failure");

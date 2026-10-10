@@ -17,7 +17,7 @@ import {
   beginSessionWorkAdmission,
   type SessionWorkAdmissionLease,
 } from "../../sessions/session-lifecycle-admission.js";
-import { readAgentDeletionJournalAsync } from "../../state/agent-deletion-journal.js";
+import * as deletionJournals from "../../state/agent-deletion-journal.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
@@ -25,6 +25,7 @@ import {
   runWithChatAbortExecution,
 } from "../chat-abort-lifecycle-internal.js";
 import type { ChatAbortControllerEntry } from "../chat-abort.types.js";
+import { resumeAgentDeletions } from "../server-agent-deletion-recovery.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { TerminalSessionManager } from "../terminal/session-manager.js";
 import {
@@ -45,53 +46,70 @@ import { prepareSessionLifecycleDrain } from "./sessions-lifecycle-drain.js";
 
 afterEach(() => vi.restoreAllMocks());
 
-it("keeps session writes fenced after a draining deletion fails", async () => {
-  await withOpenClawTestState({ label: "deletion-pending-write" }, async (state) => {
-    await state.writeConfig({
-      agents: {
-        ownership: "explicit",
-        entries: {
-          keeper: { workspace: state.workspaceDir },
-          doomed: { workspace: state.path("doomed") },
+it.each(["rollback", "rollback during recovery"] as const)(
+  "keeps session writes fenced after a draining deletion fails until %s",
+  async (rollbackPath) => {
+    await withOpenClawTestState({ label: "deletion-pending-write" }, async (state) => {
+      await state.writeConfig({
+        agents: {
+          ownership: "explicit",
+          entries: {
+            keeper: { workspace: state.workspaceDir },
+            doomed: { workspace: state.path("doomed") },
+          },
         },
-      },
-    });
-    const scope = { agentId: "doomed", env: state.env, sessionKey: "agent:doomed:pending" };
-    await expect(
-      replaceSessionEntry(scope, { sessionId: "pending", updatedAt: 1 }),
-    ).resolves.toMatchObject({ sessionId: "pending" });
-    const inventory = vi
-      .spyOn(sessionInventory, "readSessionEntrySummariesInWorker")
-      .mockRejectedValueOnce(new Error("inventory failed"));
-    await expect(
-      deleteGatewayAgent("doomed", false, createDirectChatContext({ getRuntimeConfig })),
-    ).rejects.toThrow("inventory failed");
-    inventory.mockRestore();
-    expect(await readAgentDeletionJournalAsync("doomed")).toMatchObject({
-      phase: "draining",
-      cleanupCompleted: false,
-    });
-    const update = vi.fn(() => ({ label: "must not be written" }));
-    await expect(patchSessionEntryCore(scope, update, { skipMaintenance: true })).rejects.toThrow(
-      "deletion cleanup is still pending",
-    );
-    expect(update).not.toHaveBeenCalled();
-    await withAgentDeletion("doomed", async (begin) => {
-      const deletion = await begin({
-        agentId: "doomed",
-        agentDir: state.agentDir("doomed"),
-        workspaceDir: state.path("doomed"),
-        sessionsDir: state.sessionsDir("doomed"),
-        phase: "draining",
       });
-      await deletion.rollback();
+      const scope = { agentId: "doomed", env: state.env, sessionKey: "agent:doomed:pending" };
+      await expect(
+        replaceSessionEntry(scope, { sessionId: "pending", updatedAt: 1 }),
+      ).resolves.toMatchObject({ sessionId: "pending" });
+      const inventory = vi
+        .spyOn(sessionInventory, "readSessionEntrySummariesInWorker")
+        .mockRejectedValueOnce(new Error("inventory failed"));
+      await expect(
+        deleteGatewayAgent("doomed", false, createDirectChatContext({ getRuntimeConfig })),
+      ).rejects.toThrow("inventory failed");
+      inventory.mockRestore();
+      expect(await deletionJournals.readAgentDeletionJournalAsync("doomed")).toMatchObject({
+        phase: "draining",
+        cleanupCompleted: false,
+      });
+      const update = vi.fn(() => ({ label: "must not be written" }));
+      await expect(patchSessionEntryCore(scope, update, { skipMaintenance: true })).rejects.toThrow(
+        "deletion cleanup is still pending",
+      );
+      expect(update).not.toHaveBeenCalled();
+      const rollback = () =>
+        withAgentDeletion("doomed", async (begin) => {
+          const deletion = await begin({
+            agentId: "doomed",
+            agentDir: state.agentDir("doomed"),
+            workspaceDir: state.path("doomed"),
+            sessionsDir: state.sessionsDir("doomed"),
+            phase: "draining",
+          });
+          await deletion.rollback();
+        });
+      if (rollbackPath === "rollback during recovery") {
+        const listPending = deletionJournals.listPendingAgentDeletionJournalsAsync;
+        vi.spyOn(deletionJournals, "listPendingAgentDeletionJournalsAsync").mockImplementationOnce(
+          async () => {
+            const pending = await listPending();
+            await rollback();
+            return pending;
+          },
+        );
+        await resumeAgentDeletions(createDirectChatContext({ getRuntimeConfig }));
+      } else {
+        await rollback();
+      }
+      expect(await deletionJournals.readAgentDeletionJournalAsync("doomed")).toBeUndefined();
+      await expect(
+        patchSessionEntryCore(scope, () => ({ label: "resumed" }), { skipMaintenance: true }),
+      ).resolves.toMatchObject({ label: "resumed" });
     });
-    expect(await readAgentDeletionJournalAsync("doomed")).toBeUndefined();
-    await expect(
-      patchSessionEntryCore(scope, () => ({ label: "resumed" }), { skipMaintenance: true }),
-    ).resolves.toMatchObject({ label: "resumed" });
-  });
-});
+  },
+);
 
 it("preserves another agent's replacement run and admissions in a shared store during inventory", async () => {
   await withOpenClawTestState({ label: "deletion-run-identity" }, async (state) => {
