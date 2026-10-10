@@ -139,7 +139,7 @@ function pruneSkillSelectionAuditEventsAfterInsert(db: DatabaseSync, retainedAft
   // One COUNT(*) per connection lifetime: a warm cache advances by
   // (+1 insert, −expired) exactly like the canonical ledger pattern.
   const cachedCount = skillSelectionAuditRowCounts.get(db);
-  let rowCount =
+  const rowCount =
     cachedCount === undefined
       ? countSkillSelectionAuditEvents(db)
       : Math.max(0, cachedCount + 1 - expiredCount);
