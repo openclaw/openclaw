@@ -407,6 +407,9 @@ export async function handleAcpCloseAction(
           agentId,
           reason: "manual-close",
           allowBackendUnavailable: true,
+          // Release keeps the acpx record reusable. Discard writes the
+          // durable reset marker so the next turn is session/new.
+          discardPersistentState: true,
           clearMeta: true,
         });
         runtimeNotice = closed.runtimeNotice ? ` (${closed.runtimeNotice})` : "";
