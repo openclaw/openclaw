@@ -12,6 +12,7 @@ const { resolveChannelMessageToolMediaSourceParamKeysMock } = vi.hoisted(() => (
   resolveChannelMessageToolMediaSourceParamKeysMock: vi.fn(() => ["avatarPath", "avatarUrl"]),
 }));
 
+// mock-isolation: Media fixtures supply custom parameter keys without loading channel action adapters.
 vi.mock("../../channels/plugins/message-action-discovery.js", () => ({
   resolveChannelMessageToolMediaSourceParamKeysAsync:
     resolveChannelMessageToolMediaSourceParamKeysMock,
