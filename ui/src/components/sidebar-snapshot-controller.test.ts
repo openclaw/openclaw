@@ -50,7 +50,8 @@ const model: SidebarSnapshotModel = {
   brand: { name: "Synthetic workspace", avatar: null, icon: "mark", environment: null },
 };
 
-function fixture(selectedAgentId = "main") {
+function fixture(initialAgentId = "main") {
+  let selectedAgentId = initialAgentId;
   let snapshot: ApplicationGatewaySnapshot = {
     client: null,
     phase: "connecting",
