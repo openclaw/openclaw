@@ -17,7 +17,10 @@ import {
   claimRepositoryGitHubPublicationInDatabase,
   insertRepositoryGitHubPublicationInDatabase,
 } from "../gateway/github-repository-publication-store.js";
-import { repositoryGitHubPublicationDigest } from "../gateway/github-repository-publication.kernel.js";
+import {
+  listRepositoryGitHubPublicationsInDatabase,
+  repositoryGitHubPublicationDigest,
+} from "../gateway/github-repository-publication.kernel.js";
 import type { SqliteWorkerReply, SqliteWorkerRequest } from "../infra/sqlite-worker-contract.js";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -32,7 +35,7 @@ import type {
 import { closeOpenClawAgentDatabasesAsync } from "./openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "./openclaw-state-db-cache.js";
-import { executeExistingOpenClawStateRead } from "./openclaw-state-db-readonly.js";
+import { withExistingOpenClawStateDatabaseCurrentReadOnly } from "./openclaw-state-db-readonly.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
@@ -100,10 +103,13 @@ function seed(id: string) {
   return row;
 }
 function read(row: RepositoryPublicationRow) {
-  return executeExistingOpenClawStateRead(
-    { path: context.admission.databasePath },
-    { type: "githubPublications.repositoryList", input: { idempotencyKey: row.idempotency_key } },
-    { context, current: true },
+  // Observe the durable commit independently while the ordinary worker reply is withheld.
+  return withExistingOpenClawStateDatabaseCurrentReadOnly(
+    ({ db }) => ({
+      ok: true,
+      rows: listRepositoryGitHubPublicationsInDatabase(db, { idempotencyKey: row.idempotency_key }),
+    }),
+    { path: context.admission.databasePath, allowNativeRead: true },
   );
 }
 function holdNextReply(commandType = "githubPublications.repository") {
