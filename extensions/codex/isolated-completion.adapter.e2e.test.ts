@@ -1,88 +1,27 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { Model } from "openclaw/plugin-sdk/llm";
+import { createIsolatedCompletionBoundaryFixture } from "openclaw/plugin-sdk/plugin-test-runtime";
+import type { AuthProfileStore } from "openclaw/plugin-sdk/provider-auth";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
+import { awaitGateBeforeSettlement } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import type * as CodexHarness from "../../extensions/codex/harness.js";
-import type * as CodexTestApi from "../../extensions/codex/test-api.js";
-import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import type { OpenClawConfig } from "../config/config.js";
-import { createEmptyPluginMetadataSnapshot } from "../plugins/plugin-metadata-empty.test-support.js";
-import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
-import { loadBundledPluginFacade } from "../test-utils/bundled-plugin-public-surface.js";
-import type { AuthProfileStore } from "./auth-profiles/types.js";
-import type * as RuntimeModel from "./embedded-agent-runner/model.js";
-import type * as HarnessPlugin from "./harness/runtime-plugin.js";
-import type * as HarnessSelection from "./harness/selection-decision.js";
-import type { AgentHarness } from "./harness/types.js";
-import { runIsolatedCompletion } from "./isolated-completion.js";
-import type * as ModelAuth from "./model-auth.js";
-import type * as PreparedRuntime from "./prepared-model-runtime.js";
-
-const mocks = vi.hoisted(() => ({
-  acquire: vi.fn(),
-  resolveModelAsync: vi.fn(),
-  ensureAuthProfileStore: vi.fn(),
-  selection: vi.fn(),
-}));
-vi.mock("./prepared-model-runtime.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof PreparedRuntime>()),
-  acquireAgentRunPreparedModelRuntime: mocks.acquire,
-}));
-vi.mock("./embedded-agent-runner/model.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof RuntimeModel>()),
-  resolveModelAsync: mocks.resolveModelAsync,
-}));
-vi.mock("./model-auth.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof ModelAuth>()),
-  ensureAuthProfileStore: mocks.ensureAuthProfileStore,
-}));
-vi.mock("./harness/selection-decision.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof HarnessSelection>()),
-  resolveAgentHarnessSelectionDecision: mocks.selection,
-}));
-vi.mock("./harness/runtime-plugin.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof HarnessPlugin>()),
-  ensureSelectedAgentHarnessPlugin: async () => {},
-}));
+import { createCodexAppServerAgentHarness } from "./harness.js";
+import { CODEX_APP_SERVER_VERSION } from "./src/app-server/version.js";
 
 const repo = fileURLToPath(new URL("../../", import.meta.url));
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 let root: string;
-let preparedModelRuntime: object;
 
 beforeEach(() => {
-  vi.clearAllMocks();
   root = dirs.make("isolated-adapter-proof-");
   for (const key of ["HOME", "CODEX_HOME", "OPENCLAW_STATE_DIR"]) {
     vi.stubEnv(key, root);
   }
-  preparedModelRuntime = {
-    config: {},
-    agentDir: root,
-    workspaceDir: root,
-    metadataSnapshot: createEmptyPluginMetadataSnapshot(root),
-    pluginRegistry: createEmptyPluginRegistry(),
-    createStores: () => ({ modelRegistry: {} }),
-  };
-  mocks.acquire.mockResolvedValue({
-    snapshot: preparedModelRuntime,
-    [Symbol.asyncDispose]: async () => {},
-  });
 });
 afterEach(() => vi.unstubAllEnvs());
-
-function registerHarness(harness: AgentHarness) {
-  mocks.selection.mockReturnValue({
-    policy: { runtime: "codex" },
-    selectedHarnessId: "codex",
-    selectedReason: "forced_plugin",
-    candidates: [],
-    builtIn: false,
-    harness,
-    ownerPluginId: "codex",
-  });
-}
 
 function unexpectedSessionBinding(): never {
   throw new Error("Isolated completion must not access session bindings");
@@ -91,28 +30,22 @@ function unexpectedSessionBinding(): never {
 it.each(["allowed", "forbidden", "revoked"] as const)(
   "preserves account authority through the real Codex adapter: %s",
   async (scenario) => {
-    const { createCodexAppServerAgentHarness } = await loadBundledPluginFacade<typeof CodexHarness>(
-      {
-        pluginId: "codex",
-        artifactBasename: "harness.js",
-      },
-    );
-    const { CODEX_APP_SERVER_VERSION } = await loadBundledPluginFacade<typeof CodexTestApi>({
-      pluginId: "codex",
-      artifactBasename: "test-api.js",
-    });
     vi.stubEnv("OPENCLAW_QA_CODEX_APP_SERVER_VERSION", CODEX_APP_SERVER_VERSION);
     const log = path.join(root, "messages.jsonl");
     fs.writeFileSync(log, "");
     vi.stubEnv("OPENCLAW_QA_CODEX_AUTH_APP_SERVER_LOG", log);
-    const platform = {
+    const platform: Model<"openai-responses"> = {
       provider: "openai",
       id: "gpt-test",
       name: "Test",
       api: "openai-responses",
       baseUrl: "https://api.openai.com/v1",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      maxTokens: 4096,
     };
-    const subscription = {
+    const subscription: Model<"openai-chatgpt-responses"> = {
       ...platform,
       api: "openai-chatgpt-responses",
       baseUrl: "https://chatgpt.com/backend-api/codex",
@@ -141,11 +74,6 @@ it.each(["allowed", "forbidden", "revoked"] as const)(
         "openai:forbidden": credential("forbidden"),
       },
     };
-    Object.assign(preparedModelRuntime, {
-      config,
-      modelCatalog: { entries: [platform], routeVariants: [platform, subscription] },
-    });
-    mocks.ensureAuthProfileStore.mockReturnValue(store);
     let enter!: () => void;
     let release!: () => void;
     const entered = new Promise<void>((resolve) => {
@@ -154,17 +82,7 @@ it.each(["allowed", "forbidden", "revoked"] as const)(
     const gate = new Promise<void>((resolve) => {
       release = resolve;
     });
-    let resolutions = 0;
     let current = true;
-    mocks.resolveModelAsync.mockImplementation(async () => {
-      resolutions++;
-      // Hold the real materializePreparedRuntimeModel await after route/auth planning.
-      if (scenario === "revoked" && resolutions === 2) {
-        enter();
-        await gate;
-      }
-      return { model: resolutions === 1 ? platform : subscription };
-    });
     const harness = createCodexAppServerAgentHarness({
       bindingStore: {
         read: unexpectedSessionBinding,
@@ -192,8 +110,22 @@ it.each(["allowed", "forbidden", "revoked"] as const)(
         },
       },
     });
-    registerHarness(harness);
-    const pending = runIsolatedCompletion({
+    const fixture = await createIsolatedCompletionBoundaryFixture({
+      config,
+      root,
+      catalog: { entries: [platform], routeVariants: [platform, subscription] },
+      authStore: store,
+      harness,
+      async resolveModel(call) {
+        // Hold the real materializePreparedRuntimeModel await after route/auth planning.
+        if (scenario === "revoked" && call === 2) {
+          enter();
+          await gate;
+        }
+        return call === 1 ? platform : subscription;
+      },
+    });
+    const pending = fixture.run({
       config,
       provider: "openai",
       model: "gpt-test",
