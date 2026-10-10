@@ -680,7 +680,6 @@ export async function acquireGatewayLock(
   let ownerLease: GatewayOwnerLease | undefined;
   try {
     assertStateOwnerCurrent(opts.assertCurrent);
-    assertStateOwnerCurrent();
     if (role === "gateway" && opts.listenerMode && opts.port) {
       ownerLease = acquireGatewayOwnerLease({
         env,
