@@ -213,7 +213,9 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +2: approved async upstream-link writes with released sync compatibility.
       // -8: retired Skill Workshop proposal hook types.
       // +3: approved async session entry reads and typed incognito refusal on the existing subpath.
-      3644,
+      // +1: async channel approval adapter for worker-backed account state.
+      // +12: awaited command authorization and native approval contracts.
+      3657,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -227,7 +229,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: resolve the controller from the current invocation registry.
       // +2: approved async upstream-link writes with released sync compatibility.
       // +3: approved async session entry reads and typed incognito refusal on the existing subpath.
-      2114,
+      // +8: awaited command authorization and native approval operations.
+      2122,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
