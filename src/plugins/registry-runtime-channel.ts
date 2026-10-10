@@ -10,6 +10,9 @@ import {
 } from "./runtime/gateway-request-scope.js";
 import type { PluginRuntime } from "./runtime/types.js";
 
+type BuildContextParams = Parameters<PluginRuntime["channel"]["inbound"]["buildContext"]>[0];
+type BuiltContext = ReturnType<PluginRuntime["channel"]["inbound"]["buildContext"]>;
+
 /** Channel admission belongs to the exact registered record and closes on replacement. */
 export function createRegisteredChannelRuntimeResolver(
   state: PluginRegistryState,
@@ -78,13 +81,15 @@ export function createRegisteredChannelRuntimeResolver(
       channel.inbound.buildContext,
       owner,
     );
-    const buildContext = ((
-      params: Parameters<PluginRuntime["channel"]["inbound"]["buildContext"]>[0],
-    ) => {
+    function buildContext(
+      params: BuildContextParams & { resolveSupplementalMedia: true },
+    ): Promise<BuiltContext>;
+    function buildContext(params: BuildContextParams): BuiltContext;
+    function buildContext(params: BuildContextParams): BuiltContext | Promise<BuiltContext> {
       // Audit provenance is passive: stale closures still build the message context,
       // but only the exact live trusted owner may attach participant evidence.
-      return buildHostContext(params as never);
-    }) as unknown as PluginRuntime["channel"]["inbound"]["buildContext"];
+      return buildHostContext(params);
+    }
     const inbound = {
       ...channel.inbound,
       ingress: createHostChannelIngressRuntime(owner),

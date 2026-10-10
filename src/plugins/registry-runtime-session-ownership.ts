@@ -28,6 +28,10 @@ import type { PluginRegistry } from "./registry-types.js";
 import type { PluginRuntime } from "./runtime/types.js";
 
 type PluginSessionRuntime = PluginRuntime["agent"]["session"];
+type SessionOwnershipFields = Pick<
+  SessionEntry,
+  "modelSelectionLocked" | "pluginOwnerId" | "agentHarnessId"
+>;
 
 const PLUGIN_GATEWAY_SESSION_MUTATION_METHODS = new Set([
   "agent",
@@ -124,7 +128,7 @@ export function createPluginSessionOwnership(
   };
   const resolveLockedSessionHarnessRegistration = (
     sessionKey: string,
-    entry: SessionEntry,
+    entry: SessionOwnershipFields,
     action: string,
   ) => {
     if (entry.modelSelectionLocked !== true) {
@@ -155,7 +159,7 @@ export function createPluginSessionOwnership(
   };
   const assertLockedSessionEntryOwned = (
     sessionKey: string,
-    entry: SessionEntry,
+    entry: SessionOwnershipFields,
     action: string,
   ): void => {
     const resolved = resolveLockedSessionHarnessRegistration(sessionKey, entry, action);
@@ -512,7 +516,7 @@ export function createPluginSessionOwnership(
   const assertStoreEntryOwned = (params: {
     action: string;
     before?: SessionEntry;
-    entry: SessionEntry;
+    entry: SessionOwnershipFields;
     sessionKey: string;
   }): void => {
     if (params.entry.modelSelectionLocked === true) {
@@ -589,9 +593,7 @@ export function createPluginSessionOwnership(
           if (!patch) {
             return patch;
           }
-          const next = params.replaceEntry
-            ? (patch as SessionEntry)
-            : ({ ...entry, ...patch } satisfies SessionEntry);
+          const next = params.replaceEntry ? patch : { ...entry, ...patch };
           assertStoreEntryOwned({
             action: "patch",
             before: context.existingEntry ?? entry,
