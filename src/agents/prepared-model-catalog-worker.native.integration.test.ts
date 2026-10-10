@@ -184,6 +184,9 @@ module.exports = { id: ${JSON.stringify(PROVIDER_ID)}, register(api) {
   let unsubscribe = () => {};
   const retirement = new AbortController();
   let current = true;
+  // Cleanup is registered before the awaited build; moving this binding below it
+  // would make failed-build cleanup read an uninitialized const.
+  // eslint-disable-next-line prefer-const
   let releaseGeneration: (() => Promise<void>) | undefined;
   let closing: Promise<void> | undefined;
   const close = () =>

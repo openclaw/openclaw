@@ -9,7 +9,6 @@ import { retireAgentDeleteRuntime } from "./agent-delete-databases.js";
 import { withAgentDeletion } from "./agent-lifecycle-registry.js";
 import {
   getPreparedModelRuntimeSnapshot,
-  loadPublishedGatewayReplyDispatchRuntime,
   markPreparedModelRuntimeSnapshotsStale,
   loadPreparedModelRuntimeSnapshot,
   refreshPreparedModelRuntimeSnapshots,

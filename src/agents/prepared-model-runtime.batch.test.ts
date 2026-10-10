@@ -17,7 +17,6 @@ import {
   advancePreparedModelRuntimeConfig,
   getPreparedModelRuntimeSnapshot,
   loadPublishedGatewayReplyDispatchRuntime,
-  markPreparedModelRuntimeSnapshotsStale,
   cancelPreparedModelRuntimeRefresh,
   refreshPreparedModelRuntimeSnapshots,
   registerPreparedModelRuntimePublicationListener,
