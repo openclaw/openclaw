@@ -319,6 +319,13 @@ describe("searchSessionTranscripts", () => {
     expect(search("- &").hits).toEqual([]);
   });
 
+  it("keeps symbol words that SQLite indexes as tokens", async () => {
+    await appendUserMessage("lobster", "agent:main:lobster", "deploy \u{1F99E}");
+    await appendUserMessage("plain", "agent:main:plain", "deploy plain");
+
+    expect(search("deploy \u{1F99E}").hits.map((hit) => hit.sessionId)).toEqual(["lobster"]);
+  });
+
   it("filters hits across 33,000 requested session keys", async () => {
     await appendUserMessage("session-1", "agent:main:main", "shared keyword payload");
     await appendUserMessage("session-2", "agent:main:other", "shared keyword payload");

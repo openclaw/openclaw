@@ -3,7 +3,7 @@
 // this module owns the query path and schedules the shared reconcile owner
 // when doctor imports or out-of-band writes leave derived rows behind.
 import { randomUUID } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseSync, StatementSync } from "node:sqlite";
 import { sql } from "kysely";
 import { registerNodeSqliteDisposeCallback } from "../../infra/kysely-sync-cache-state.js";
 import {
@@ -12,6 +12,7 @@ import {
   getNodeSqliteKysely,
   sqliteStringSet,
 } from "../../infra/kysely-sync.js";
+import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import {
   getSqliteReadOperationRevision,
   runSqliteReadOperationSync,
@@ -91,9 +92,31 @@ export function isSessionTranscriptSearchCurrentSync(
   return result.found && result.value;
 }
 
+let tokenProbe: { clear: StatementSync; insert: StatementSync; count: StatementSync } | undefined;
+
+// unicode61 classifies with fixed Unicode 6.1 tables, so ask SQLite instead of a JS regex.
+function isIndexedTerm(term: string): boolean {
+  if (/[\p{L}\p{N}\p{Co}]/u.test(term)) {
+    return true;
+  }
+  if (!tokenProbe) {
+    const db = openNodeSqliteDatabase(":memory:");
+    db.exec(`CREATE VIRTUAL TABLE probe USING fts5(t, tokenize = 'unicode61 remove_diacritics 2');
+      CREATE VIRTUAL TABLE probe_vocab USING fts5vocab(probe, 'row');`);
+    tokenProbe = {
+      clear: db.prepare("DELETE FROM probe"),
+      insert: db.prepare("INSERT INTO probe(t) VALUES (?)"),
+      count: db.prepare("SELECT count(*) AS n FROM probe_vocab"),
+    };
+  }
+  tokenProbe.clear.run();
+  tokenProbe.insert.run(term);
+  return Number((tokenProbe.count.get() as { n: number }).n) > 0;
+}
+
 function toFtsQuery(query: string, match: SessionTranscriptSearchParams["match"]): string {
   const terms = query.split(/\s+/u);
-  const indexed = terms.filter((term) => /[\p{L}\p{N}\p{Co}]/u.test(term));
+  const indexed = terms.filter(isIndexedTerm);
   return (indexed.length > 0 ? indexed : terms)
     .map(
       (token, index, tokens) =>
