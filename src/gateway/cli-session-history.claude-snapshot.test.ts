@@ -165,3 +165,19 @@ it("projects oversized Claude messages off-thread using one worker per snapshot"
     parseSpy.mockRestore();
   }
 });
+
+it("imports a complete Claude history record containing literal Unicode separators", async () => {
+  await withClaudeProjectsDir(async ({ homeDir, sessionId, filePath }) => {
+    const content = "雪🦀\u0085NEL\u2028LS\u2029PS";
+    await fs.writeFile(
+      filePath,
+      createClaudeTextHistoryLines([{ role: "assistant", uuid: "unicode-assistant", content }]),
+    );
+    const messages = await readClaudeCliSessionMessagesAsync({ cliSessionId: sessionId, homeDir });
+    expect(messages).toHaveLength(1);
+    expect(messages[0]?.content).toBe(content);
+    expectRecordFields(readRecord(messages[0])["__openclaw"], "fields", {
+      externalId: "unicode-assistant",
+    });
+  });
+});

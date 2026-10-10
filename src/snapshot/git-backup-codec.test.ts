@@ -2,12 +2,16 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { expect, it } from "vitest";
+import { afterEach, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { dumpGitBackupDatabase, restoreGitBackupDirectory } from "./git-backup-codec.js";
+import { createGitBackup, restoreGitBackupRef } from "./git-backup.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 it("preserves TEXT, storage classes, key order, quoted DDL, and CASE triggers", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "git-backup-text-"));
@@ -102,5 +106,88 @@ it("preserves TEXT, storage classes, key order, quoted DDL, and CASE triggers", 
   } finally {
     closeOpenClawStateDatabaseForTest();
     await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+it("restores literal JSON Unicode separators across UTF-8 chunks from an actual Git backup", async () => {
+  const root = tempDirs.make("git-backup-unicode-");
+  const stateDir = path.join(root, "state");
+  const sourcePath = path.join(stateDir, "source.sqlite");
+  const repositoryPath = path.join(root, "repository");
+  const targetPath = path.join(root, "restored.sqlite");
+  const prefixBytes = Buffer.byteLength('{"id":1,"body":"');
+  const values = [
+    "x".repeat(64 * 1024 - prefixBytes - 1) + "雪🦀\u0085NEL\u2028LS\u2029PS\0tail",
+    "🦀".repeat(280_000) + '\u2028\u2029\n\r"\\last',
+  ];
+  try {
+    await fs.mkdir(stateDir);
+    const source = openOpenClawStateDatabase({ path: sourcePath });
+    source.db.exec("CREATE TABLE unicode_values (id INTEGER PRIMARY KEY, body TEXT NOT NULL)");
+    const insert = source.db.prepare("INSERT INTO unicode_values VALUES (?, ?)");
+    values.forEach((body, index) => insert.run(index + 1, body));
+    closeOpenClawStateDatabaseForTest();
+    const created = await createGitBackup({
+      repositoryPath,
+      stateDir,
+      databases: [{ path: sourcePath, identity: { role: "global" } }],
+    });
+    expect(created.commit).toBeTruthy();
+    const restored = await restoreGitBackupRef({
+      repositoryPath,
+      identity: { role: "global" },
+      ref: created.commit,
+      targetPath,
+    });
+    expect(restored.tables.every((table) => table.ok)).toBe(true);
+    expect(restored.manifest.tables.unicode_values?.rows).toBe(values.length);
+    const database = new DatabaseSync(targetPath, { readOnly: true });
+    try {
+      expect(database.prepare("SELECT body FROM unicode_values ORDER BY id").all()).toEqual(
+        values.map((body) => ({ body })),
+      );
+    } finally {
+      database.close();
+    }
+  } finally {
+    closeOpenClawStateDatabaseForTest();
+  }
+});
+
+it("refuses malformed JSON, changed bytes and incomplete EOF without publishing a restore", async () => {
+  const root = tempDirs.make("git-backup-invalid-jsonl-");
+  const sourcePath = path.join(root, "source.sqlite");
+  const outputPath = path.join(root, "dump");
+  try {
+    const source = openOpenClawStateDatabase({ path: sourcePath });
+    source.db.exec("CREATE TABLE unicode_values (id INTEGER PRIMARY KEY, body TEXT NOT NULL)");
+    source.db
+      .prepare("INSERT INTO unicode_values VALUES (?, ?)")
+      .run(1, "legal\u0085\u2028\u2029雪");
+    closeOpenClawStateDatabaseForTest();
+    await dumpGitBackupDatabase({
+      snapshotPath: sourcePath,
+      outputPath,
+      identity: { role: "global" },
+    });
+    const tablePath = path.join(outputPath, "tables", "unicode_values.jsonl");
+    const original = await fs.readFile(tablePath, "utf8");
+    for (const [label, bytes, error] of [
+      ["malformed", '{"id":1,"body":"unfinished', /JSON/],
+      ["changed", original.replace("legal", "other"), /hash mismatch/],
+      ["unterminated", original.slice(0, -1), /hash mismatch/],
+    ] as const) {
+      await fs.writeFile(tablePath, bytes);
+      const targetPath = path.join(root, `${label}.sqlite`);
+      await expect(
+        restoreGitBackupDirectory({ sourcePath: outputPath, targetPath }),
+      ).rejects.toThrow(error);
+      await expect(fs.stat(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+      expect((await fs.readdir(root)).some((name) => name.startsWith(".git-backup-restore-"))).toBe(
+        false,
+      );
+    }
+  } finally {
+    closeOpenClawStateDatabaseForTest();
   }
 });

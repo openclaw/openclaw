@@ -1,6 +1,6 @@
 import fs from "node:fs";
-import readline from "node:readline";
 import { hasErrnoCode } from "../../infra/errors.js";
+import { createJsonlLineReader } from "../../infra/jsonl-lines.js";
 import { readFileRangeAsync } from "./file-range.js";
 
 const DEFAULT_REVERSE_CHUNK_BYTES = 64 * 1024;
@@ -40,8 +40,8 @@ export async function* streamSessionTranscriptLines(
   if (options.signal?.aborted) {
     return;
   }
-  const stream = fs.createReadStream(filePath, { encoding: "utf-8" });
-  const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
+  const stream = fs.createReadStream(filePath);
+  const rl = createJsonlLineReader(stream);
   try {
     for await (const line of rl) {
       if (options.signal?.aborted) {

@@ -1,9 +1,9 @@
 import fs from "node:fs";
-import readline from "node:readline";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import type { Worker } from "node:worker_threads";
 import type { CliSessionReseedReceipt } from "../config/sessions.js";
 import { normalizeCliSessionReseedReceipt } from "../config/sessions/cli-session-binding.js";
+import { createJsonlLineReader } from "../infra/jsonl-lines.js";
 import { createCpuTrackedWorker } from "../infra/worker-cpu.js";
 import {
   appendCoalescedClaudeCliToolMessage,
@@ -132,13 +132,11 @@ export async function visitClaudeCliSessionMessages(
   }
   const messages: Message[] = [];
   const toolNames = new Map<string, string>();
-  const lines = readline.createInterface({
-    input: fs.createReadStream(filePath, {
-      encoding: "utf8",
-      ...(byteLength === undefined ? {} : { end: byteLength - 1 }),
-    }),
-    crlfDelay: Number.POSITIVE_INFINITY,
-  });
+  const input = fs.createReadStream(
+    filePath,
+    byteLength === undefined ? undefined : { end: byteLength - 1 },
+  );
+  const lines = createJsonlLineReader(input);
   const reseedState = createClaudeReseedImportState(params);
   let bytesSinceYield = 0;
   let lineNumber = 0;
@@ -195,6 +193,8 @@ export async function visitClaudeCliSessionMessages(
       }
     }
   } finally {
+    lines.close();
+    input.destroy();
     await worker?.terminate();
   }
   for (const message of messages) {

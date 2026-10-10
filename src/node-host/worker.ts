@@ -1,6 +1,6 @@
 /** Private JSONL worker exposing the CLI node-host runtime to the macOS app. */
-import { createInterface } from "node:readline";
 import { requestExitAfterOneShotOutput } from "../cli/one-shot-exit.js";
+import { createJsonlLineReader } from "../infra/jsonl-lines.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { VERSION } from "../version.js";
 import type { NodeHostClient } from "./client.js";
@@ -87,8 +87,8 @@ export async function runNodeHostWorker(
 
   readySent = true;
 
-  const input = createInterface({ input: process.stdin, crlfDelay: Infinity });
-  input.on("line", (line) => {
+  const input = createJsonlLineReader(process.stdin);
+  input.on("data", (line) => {
     const message = parseNodeHostWorkerInput(line);
     if (!message) {
       writeMessage({ type: "protocol-error", error: "invalid worker request" });

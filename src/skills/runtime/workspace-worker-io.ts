@@ -1,6 +1,6 @@
-import { createInterface } from "node:readline";
 import type { Readable, Writable } from "node:stream";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { createJsonlLineReader } from "../../infra/jsonl-lines.js";
 
 const MAX_REQUEST_BYTES = 12 * 1024 * 1024;
 
@@ -28,11 +28,16 @@ export function skillWorkerLines(input: Readable) {
     }
   };
   input.on("data", count);
-  const lines = createInterface({ input, crlfDelay: Infinity });
+  const lines = createJsonlLineReader(input);
   const iterator = lines[Symbol.asyncIterator]();
   return {
     async read(): Promise<Record<string, unknown>> {
-      const line = await iterator.next();
+      let line: IteratorResult<string>;
+      try {
+        line = await iterator.next();
+      } catch (error) {
+        throw overflow ?? error;
+      }
       if (overflow) {
         throw overflow;
       }

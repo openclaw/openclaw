@@ -120,7 +120,7 @@ module.exports = {
         child.invoke({
           command: "screen.snapshot",
           params: { executionId },
-          sessionKey: "fixture-session",
+          sessionKey: "fixture-session\u0085NEL\u2028LS\u2029PS雪",
           assertCurrent: () => {},
         }),
       ).resolves.toEqual({ format: "png", base64: "c3ludGhldGljLXBpeGVscw==" });
@@ -128,13 +128,13 @@ module.exports = {
         child.invoke({
           command: "computer.act",
           params: { executionId, action: "left_click", x: 1, y: 2 },
-          sessionKey: "fixture-session",
+          sessionKey: "fixture-session\u0085NEL\u2028LS\u2029PS雪",
           assertCurrent: () => {},
         }),
       ).resolves.toEqual({
         ok: true,
         action: "left_click",
-        details: { executionId, sessionKey: "fixture-session" },
+        details: { executionId, sessionKey: "fixture-session\u0085NEL\u2028LS\u2029PS雪" },
       });
     } finally {
       const closing = child.close({ executionId, reason: "completion" });

@@ -2,10 +2,10 @@ import { createHash } from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { createInterface } from "node:readline";
 import type { DatabaseSync } from "node:sqlite";
 import { finished } from "node:stream/promises";
 import { stripPluginModelCatalogCredentials } from "../agents/plugin-model-catalog-repair.js";
+import { createJsonlLineReader } from "../infra/jsonl-lines.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { applyPrivateModeSync } from "../infra/private-mode.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
@@ -483,7 +483,7 @@ async function loadGitBackupTable(
      VALUES (${columns.map(() => "?").join(", ")})`,
   );
   const input = fsSync.createReadStream(inputPath);
-  const lines = createInterface({ input, crlfDelay: Infinity });
+  const lines = createJsonlLineReader(input);
   const hash = createHash("sha256");
   input.on("data", (chunk: Buffer) => hash.update(chunk));
   const pending: Array<ReturnType<typeof decodeSqliteValue>[]> = [];

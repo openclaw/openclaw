@@ -38,7 +38,8 @@ const fixture = vi.hoisted(() => ({
     close: vi.fn(),
   },
 }));
-vi.mock("node:readline", () => ({ createInterface: () => fixture.input }));
+// mock-isolation: Drive private worker input through the fixture emitter instead of process.stdin.
+vi.mock("../infra/jsonl-lines.js", () => ({ createJsonlLineReader: () => fixture.input }));
 vi.mock("./startup-state-readiness.js", () => ({ ensureNodeHostStateReady: () => {} }));
 vi.mock("./config.js", () => ({ loadNodeHostConfig: fixture.loadConfig }));
 vi.mock("./runtime.js", () => ({ prepareNodeHostRuntime: fixture.prepare }));
@@ -104,7 +105,7 @@ function startWorkerFixture(
     if (message.type === "gateway-request") {
       queueMicrotask(() =>
         input.emit(
-          "line",
+          "data",
           JSON.stringify({
             type: "gateway-response",
             generation: message.generation,
@@ -164,7 +165,7 @@ it("refreshes runner facts only for the current private bridge generation", asyn
   try {
     await vi.waitFor(() => expect(messages.some((message) => message.type === "ready")).toBe(true));
     input.emit(
-      "line",
+      "data",
       JSON.stringify({
         type: "gateway-connection",
         generation: 2,
@@ -176,10 +177,10 @@ it("refreshes runner facts only for the current private bridge generation", asyn
       messages.filter((message) => message.method === "node.runnerInventory.update");
     expect(publications()).toHaveLength(1);
     const cancelsBefore = fixture.runtime.cancelAll.mock.calls.length;
-    input.emit("line", JSON.stringify({ type: "runner-inventory-refresh", generation: 1 }));
+    input.emit("data", JSON.stringify({ type: "runner-inventory-refresh", generation: 1 }));
     await setImmediate();
     expect(publications()).toHaveLength(1);
-    input.emit("line", JSON.stringify({ type: "runner-inventory-refresh", generation: 2 }));
+    input.emit("data", JSON.stringify({ type: "runner-inventory-refresh", generation: 2 }));
     await setImmediate();
     expect(publications()).toHaveLength(2);
     expect(publications().at(-1)).toMatchObject({
@@ -188,10 +189,10 @@ it("refreshes runner facts only for the current private bridge generation", asyn
     });
     expect(fixture.runtime.cancelAll).toHaveBeenCalledTimes(cancelsBefore);
     input.emit(
-      "line",
+      "data",
       JSON.stringify({ type: "gateway-connection", generation: 3, connection: null }),
     );
-    input.emit("line", JSON.stringify({ type: "runner-inventory-refresh", generation: 3 }));
+    input.emit("data", JSON.stringify({ type: "runner-inventory-refresh", generation: 3 }));
     await setImmediate();
     expect(publications()).toHaveLength(2);
   } finally {
@@ -289,7 +290,7 @@ it("publishes hosting through the app route and retires it on disconnect", async
       protocol: 4,
       capabilities: ["node.worker.bundleRetention.v1"],
     };
-    input.emit("line", JSON.stringify({ type: "gateway-connection", generation: 1, connection }));
+    input.emit("data", JSON.stringify({ type: "gateway-connection", generation: 1, connection }));
     await vi.waitFor(() =>
       expect(messages).toContainEqual(
         expect.objectContaining({
@@ -305,12 +306,12 @@ it("publishes hosting through the app route and retires it on disconnect", async
       expect.objectContaining({ url: connection.url }),
     );
     input.emit(
-      "line",
+      "data",
       JSON.stringify({ type: "gateway-connection", generation: 2, connection: null }),
     );
     expect(fixture.runtime.cancelAll).toHaveBeenCalled();
     expect(fixture.runtime.updateGatewayConnection).toHaveBeenLastCalledWith();
-    input.emit("line", JSON.stringify({ type: "gateway-connection", generation: 3, connection }));
+    input.emit("data", JSON.stringify({ type: "gateway-connection", generation: 3, connection }));
     await setImmediate();
     const callbacks = fixture.start.mock.calls[0]?.[0];
     if (!callbacks) {
@@ -340,7 +341,7 @@ it("publishes hosting through the app route and retires it on disconnect", async
     expect(messages.filter((message) => message.type === "worker-hosting")).toEqual([]);
     callbacks.onManifestChanged({ commands: ["system.run"], caps: ["system"], pathEnv: "/bin" });
     input.emit(
-      "line",
+      "data",
       JSON.stringify({
         type: "invoke",
         generation: 3,
@@ -449,7 +450,7 @@ it.runIf(process.platform !== "win32").each([
           const { input, messages } = worker;
           const connect = (generation: number, target: string) => {
             input.emit(
-              "line",
+              "data",
               JSON.stringify({
                 type: "gateway-connection",
                 generation,
@@ -463,7 +464,7 @@ it.runIf(process.platform !== "win32").each([
           };
           const invoke = async (generation: number, id: string) => {
             input.emit(
-              "line",
+              "data",
               JSON.stringify({
                 type: "invoke",
                 generation,
@@ -555,7 +556,7 @@ it.runIf(process.platform !== "win32").each([
           }
           expect(skillRequests()).toHaveLength(1);
           input.emit(
-            "line",
+            "data",
             JSON.stringify({ type: "gateway-connection", generation: 2, connection: null }),
           );
           // Advance expiry only after both real processes have completed.
@@ -615,7 +616,7 @@ it("publishes host stats through the native bridge only while connected", async 
     expect(publications()).toEqual([]);
     vi.useFakeTimers();
     input.emit(
-      "line",
+      "data",
       JSON.stringify({
         type: "gateway-connection",
         generation: 1,
@@ -634,7 +635,7 @@ it("publishes host stats through the native bridge only while connected", async 
     await vi.advanceTimersByTimeAsync(NODE_HOST_STATS_INTERVAL_MS);
     expect(publications()).toHaveLength(2);
     input.emit(
-      "line",
+      "data",
       JSON.stringify({ type: "gateway-connection", generation: 2, connection: null }),
     );
     await vi.advanceTimersByTimeAsync(NODE_HOST_STATS_INTERVAL_MS);
@@ -687,7 +688,7 @@ it.each(["prepared failure", "later failure", "configured opt-out"] as const)(
       };
       const inventories = () =>
         messages.filter((message) => message.method === "node.runnerInventory.update");
-      input.emit("line", JSON.stringify({ type: "gateway-connection", generation: 1, connection }));
+      input.emit("data", JSON.stringify({ type: "gateway-connection", generation: 1, connection }));
       await setImmediate();
       if (laterFailure) {
         expect(inventories()).toHaveLength(1);
@@ -701,10 +702,10 @@ it.each(["prepared failure", "later failure", "configured opt-out"] as const)(
       expect(inventories()).toHaveLength(laterFailure ? 2 : 1);
       expect(inventories().at(-1)?.params).toEqual(disabledInventory);
       input.emit(
-        "line",
+        "data",
         JSON.stringify({ type: "gateway-connection", generation: 2, connection: null }),
       );
-      input.emit("line", JSON.stringify({ type: "gateway-connection", generation: 3, connection }));
+      input.emit("data", JSON.stringify({ type: "gateway-connection", generation: 3, connection }));
       await setImmediate();
       expect(inventories()).toHaveLength(laterFailure ? 3 : 2);
       expect(inventories().at(-1)).toMatchObject({ generation: 3, params: disabledInventory });

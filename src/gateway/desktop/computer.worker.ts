@@ -1,9 +1,9 @@
-import { createInterface } from "node:readline";
 import {
   requestExitAfterOneShotOutput,
   runCliWithExitFinalization,
 } from "../../cli/one-shot-exit.js";
 import { getRuntimeConfig } from "../../config/config.js";
+import { createJsonlLineReader } from "../../infra/jsonl-lines.js";
 import {
   ensureNodeHostPluginRegistry,
   invokeRegisteredNodeHostCommand,
@@ -20,7 +20,7 @@ import {
 
 /** Private desktop process; shares node provider commands without a node connection. */
 async function runComputerHost(): Promise<void> {
-  const input = createInterface({ input: process.stdin, crlfDelay: Infinity });
+  const input = createJsonlLineReader(process.stdin);
   const requests = new Map<string, AbortController>();
   const operations = new Set<Promise<void>>();
   const completion = createDeferredCore();
@@ -78,7 +78,7 @@ async function runComputerHost(): Promise<void> {
     void stop();
   };
 
-  input.on("line", (line) => {
+  input.on("data", (line) => {
     if (stopping) {
       return;
     }

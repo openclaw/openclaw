@@ -1,6 +1,5 @@
 import fs, { type FileHandle } from "node:fs/promises";
 import path from "node:path";
-import readline from "node:readline";
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
@@ -33,6 +32,7 @@ import {
   type ClaudeCliFallbackSeed,
   readClaudeCliFallbackSeed,
 } from "../../gateway/cli-session-history.claude.js";
+import { createJsonlLineReader } from "../../infra/jsonl-lines.js";
 import { isSubagentSessionKey } from "../../routing/session-key.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import { isDeliverableMessageChannel } from "../../utils/message-channel.js";
@@ -114,20 +114,26 @@ async function scanJsonlFile(filePath: string): Promise<JsonlFileScan> {
     filePath,
     { fileExists: false, hasAssistant: false },
     async (fh) => {
-      const rl = readline.createInterface({ input: fh.createReadStream({ encoding: "utf-8" }) });
+      const input = fh.createReadStream({ autoClose: false });
+      const rl = createJsonlLineReader(input);
       let recordCount = 0;
-      for await (const line of rl) {
-        if (!line.trim()) {
-          continue;
+      try {
+        for await (const line of rl) {
+          if (!line.trim()) {
+            continue;
+          }
+          recordCount++;
+          if (recordCount > CLAUDE_CLI_TRANSCRIPT_MAX_RECORDS) {
+            break;
+          }
+          const message = safeParseJsonRecord(line)?.message;
+          if (isRecord(message) && message.role === "assistant") {
+            return { fileExists: true, hasAssistant: true };
+          }
         }
-        recordCount++;
-        if (recordCount > CLAUDE_CLI_TRANSCRIPT_MAX_RECORDS) {
-          break;
-        }
-        const message = safeParseJsonRecord(line)?.message;
-        if (isRecord(message) && message.role === "assistant") {
-          return { fileExists: true, hasAssistant: true };
-        }
+      } finally {
+        rl.close();
+        input.destroy();
       }
       return { fileExists: true, hasAssistant: false };
     },

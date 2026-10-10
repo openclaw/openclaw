@@ -34,6 +34,16 @@ async function collect(iter: AsyncGenerator<string>): Promise<string[]> {
   return out;
 }
 
+it("preserves JSON Unicode separators in both scan directions and at EOF", async () => {
+  const values = ["雪🦀\u0085NEL\u2028LS\u2029PS", "🦀".repeat(20_000) + "\u2028\u2029end"];
+  const lines = values.map((text) => JSON.stringify({ text }));
+  fs.writeFileSync(transcriptPath, lines.join("\r\n"), "utf8");
+  expect(await collect(streamSessionTranscriptLines(transcriptPath))).toEqual(lines);
+  expect(await collect(streamSessionTranscriptLinesReverse(transcriptPath))).toEqual(
+    lines.toReversed(),
+  );
+});
+
 describe("transcript stream empty files", () => {
   it("returns empty iterators for empty files in both directions", async () => {
     fs.writeFileSync(transcriptPath, "", "utf-8");

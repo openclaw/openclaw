@@ -2,7 +2,6 @@
 import fsSync, { createReadStream } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { createInterface } from "node:readline";
 import type { DatabaseSync } from "node:sqlite";
 import { assertNoSymlinkParents } from "@openclaw/fs-safe/advanced";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -14,6 +13,7 @@ import { TRANSCRIPT_EXPORT_FILE_NAMES } from "../transcripts/store-artifacts.js"
 import type { TranscriptsSummary } from "../transcripts/summary.js";
 import { renderTranscriptsMarkdown } from "../transcripts/summary.js";
 import { sha256File, sha256FileSync, sha256Hex } from "./crypto-digest.js";
+import { createJsonlLineReader } from "./jsonl-lines.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 
 export const LEGACY_UTTERANCE_INSERT_CHUNK_SIZE = 64;
@@ -237,8 +237,8 @@ async function stageUtterances(params: {
   if (!(await optionalRegularFile(filePath))) {
     return 0;
   }
-  const stream = createReadStream(filePath, { encoding: "utf8" });
-  const lines = createInterface({ input: stream, crlfDelay: Infinity });
+  const stream = createReadStream(filePath);
+  const lines = createJsonlLineReader(stream);
   let lineNumber = 0;
   let sequence = 0;
   let pending: string[] = [];
