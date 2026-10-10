@@ -73,6 +73,12 @@ database integrity scans for unchanged receipts within the service manager's
 inspection deadline. New continuation or takeover receipts still use the
 validated ledger writer.
 
+On Linux, nested service-manager inspections share deadline accounting that
+excludes synchronous ownership and admission checks. Slow database inspection
+therefore does not consume the manager I/O allowance. Every authority check
+still runs; manager calls, cancellation, and service stop and drain deadlines
+remain bounded. Database inspection can still increase the total command time.
+
 If Doctor's output pipe closes (for example, `openclaw doctor --fix | head -20`),
 or Doctor receives SIGINT, SIGTERM, or SIGPIPE during maintenance, it waits for
 admitted repair work and service restoration before exiting. An ordinary repair
