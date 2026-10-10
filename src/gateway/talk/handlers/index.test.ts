@@ -131,7 +131,7 @@ const mocks = vi.hoisted(() => ({
   closeStaleClientVoiceSessions: vi.fn(async () => 0),
   createOrResumeClientVoiceSession: vi.fn<
     typeof import("../../../talk/client-voice-session.js").createOrResumeClientVoiceSession
-  >(() => "voice-test"),
+  >(async () => "voice-test"),
   ensureClientVoiceAgentSessionEntry: vi.fn(async () => "session-main"),
   resolveClientVoiceAgentSessionId: vi.fn<() => string | undefined>(() => "session-main"),
   assertClientVoiceSessionOpen: vi.fn(),
@@ -2840,7 +2840,7 @@ describe("talk.client.toolCall handler", () => {
         expectRecordFields(chatInput.req, { method: "chat.send" });
         expectRecordFields(chatInput.params, { sessionKey: "agent:main:main", agentId: "main" });
         expect(chatInput.params?.message).toContain("What is in this repo?");
-        expect(chatInput.params?.idempotencyKey).toMatch(/^talk-call-1-/);
+        expect(chatInput.params?.idempotencyKey).toMatch(/^talk-[a-f0-9]{64}$/);
       }
       expect(mockCallArg(mocks.chatSend, 0, 2)).toEqual({
         toolsAllow: configured
@@ -2852,7 +2852,7 @@ describe("talk.client.toolCall handler", () => {
       });
       const response = expectRespondOk(respond, { runId: "run-voice-1" });
       if (!configured) {
-        expect(response.idempotencyKey).toMatch(/^talk-call-1-/);
+        expect(response.idempotencyKey).toBe(chatInput.params?.idempotencyKey);
       }
     },
   );
@@ -3044,7 +3044,7 @@ describe("talk.client.create handler", () => {
       REALTIME_VOICE_AGENT_CONTEXT_INSTRUCTIONS,
     );
     mocks.createOrResumeClientVoiceSession.mockImplementation(
-      (params: { voiceSessionId?: string }) => params.voiceSessionId ?? "voice-test",
+      async (params: { voiceSessionId?: string }) => params.voiceSessionId ?? "voice-test",
     );
     mocks.resolveClientVoiceAgentSessionId.mockReturnValue("session-main");
     mocks.closeTalkClientGatewayControlSession.mockResolvedValue(false);
@@ -3191,10 +3191,12 @@ describe("talk.client.create handler", () => {
         expect.objectContaining({ provider: "openai" }),
         expect.objectContaining({ source: expect.any(Object), release: expect.any(Function) }),
       );
+      const createdVoiceSessionId = mockCallArg(mocks.createOrResumeClientVoiceSession).voiceSessionId;
+      expect(createdVoiceSessionId).toMatch(/^[a-f0-9-]{36}$/);
       expectRespondOk(respond, {
         provider: "openai",
         transport: "webrtc",
-        voiceSessionId: "voice-test",
+        voiceSessionId: createdVoiceSessionId,
       });
     },
   );
@@ -3281,7 +3283,7 @@ describe("talk.client.create handler", () => {
           unknown
         >;
         expect(consultInput.senderIsOwner).toBe(false);
-        expect(consultInput).not.toHaveProperty("toolsAllow");
+        expect(consultInput.toolsAllow).toBeUndefined();
       }
       expectRespondOk(respond, { provider: "openai", transport: "webrtc" });
     },
@@ -3939,7 +3941,7 @@ describe("role-required Talk session creation", () => {
       mocks.resolveRealtimeVoiceProviderCapabilities.mockImplementation(
         ({ provider }: { provider: { capabilities?: unknown } }) => provider.capabilities,
       );
-      mocks.createOrResumeClientVoiceSession.mockReturnValue("voice-required");
+      mocks.createOrResumeClientVoiceSession.mockResolvedValue("voice-required");
       mocks.createTalkRealtimeRelaySession.mockReturnValue({
         provider: "openai",
         transport: "gateway-relay",

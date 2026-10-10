@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../../../shared/deferred.js";
-import { ensureClientVoiceAgentSessionEntry } from "../../../talk/client-voice-session.js";
+import { ensureClientVoiceAgentSessionEntry } from "../../../talk/client-voice-session-write.js";
 import { clientVoiceSessionTesting } from "../../../talk/client-voice-session.test-support.js";
 import type {
   RealtimeVoiceAgentConsultRunner,
@@ -13,7 +13,7 @@ import {
 import type { TalkAgentConsultLifecycleMethods } from "../client-agent-consult.types.js";
 import { controlBridge, controlContext } from "../client-gateway-control.test-support.js";
 import { prepareTalkSessionTarget } from "../session-target.js";
-import { createTalkRealtimeRelaySession } from "./index.js";
+import { createTalkRealtimeRelaySession } from "./session-create.js";
 import { closeRelaySession } from "./operations.js";
 import { relaySessions, type RelaySession } from "./state.js";
 
@@ -54,7 +54,7 @@ describe("native relay transcript readiness", () => {
   });
 
   function createHarness() {
-    const cfg = { agents: { entries: { main: { default: true } } } };
+    const cfg = { agents: { entries: { main: { workspace: state.workspaceDir } } } };
     let request: RealtimeVoiceBridgeCreateRequest | undefined;
     const session = createTalkRealtimeRelaySession({
       cfg,
@@ -76,6 +76,9 @@ describe("native relay transcript readiness", () => {
       tools: [],
     });
     relaySessionId = session.relaySessionId;
+    if (!relaySessionId) {
+      throw new Error("expected a relay session id");
+    }
     const relay = relaySessions.get(relaySessionId);
     const run: (RealtimeVoiceAgentConsultRunner & TalkAgentConsultLifecycleMethods) | undefined =
       request?.runAgentConsult;

@@ -117,12 +117,19 @@ function configureDelegatedBrowserProvider(
   publicOnly = false,
 ) {
   const fixture = createDelegatedBrowserProviderFixture(createBrowserSession, tempDir);
+  // Public plugins have neither native delegation nor the private cancellation hook.
+  const provider = publicOnly
+    ? {
+        ...fixture.provider,
+        capabilities: { ...fixture.provider.capabilities, handlesAgentConsult: false },
+      }
+    : fixture.provider;
   voiceMocks.resolveConfiguredRealtimeVoiceProvider.mockReturnValue({
-    provider: fixture.provider,
+    provider,
     providerConfig: {},
-    capabilities: fixture.provider.capabilities,
+    capabilities: provider.capabilities,
   });
-  return fixture;
+  return { ...fixture, provider };
 }
 
 async function invokeCreate(options: GatewayRequestHandlerOptions) {
@@ -583,6 +590,11 @@ describe("talk.client.transcript", () => {
       expect(voiceMocks.runEmbeddedAgent).toHaveBeenCalledOnce();
       expect(context.chatAbortControllers.size).toBe(0);
       expect(cancelBrowserSession).toHaveBeenCalledTimes(publicOnly ? 0 : 1);
+      await closeTalkClientGatewayControlSession({
+        voiceSessionId: ownedVoiceSessionId!,
+        sessionKey,
+        connId: client.connId,
+      });
       expect(readLegacyVoiceBinding(client.connId, sessionKey)).toBeUndefined();
     },
   );

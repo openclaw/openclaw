@@ -13,12 +13,12 @@ import { readSessionTranscriptMessageEvents } from "../../../config/sessions/ses
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { resolveOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.paths.js";
 import { prepareClientVoiceSessionClose } from "../../../talk/client-voice-session-lifecycle.js";
-import { resolveOpenClientVoiceSessionId } from "../../../talk/client-voice-session-read.js";
-import * as voiceSessionReads from "../../../talk/client-voice-session-read.js";
 import {
-  flushClientVoiceSessionWrites,
-  isClientVoiceSessionConfirmable,
-} from "../../../talk/client-voice-session.js";
+  assertClientVoiceSessionOpen,
+  resolveOpenClientVoiceSessionId,
+} from "../../../talk/client-voice-session-read.js";
+import * as voiceSessionReads from "../../../talk/client-voice-session-read.js";
+import { flushClientVoiceSessionWrites } from "../../../talk/client-voice-session.js";
 import { VoiceTranscriptOperationRegistry } from "../../../talk/voice-transcript.js";
 import { captureEnv, setTestEnvValue } from "../../../test-utils/env.js";
 import * as talkAgentConsult from "../agent-consult.js";
@@ -41,6 +41,7 @@ import {
   withNativePlugin,
   withParkedNativeTask,
 } from "./client-native-control.test-support.js";
+import { withRegisteredNativeEmbeddedRun } from "./client-native-run.test-support.js";
 import { flushNativeTranscript } from "./client-native-transcript.test-support.js";
 
 describe("native Talk through the public OpenAI plugin registration", () => {
@@ -216,12 +217,12 @@ describe("native Talk through the public OpenAI plugin registration", () => {
       const { result, socket } = await connectNativeSession({ create, offer });
       expect(talkEventTypes(broadcast).filter((type) => type === "session.ready")).toHaveLength(1);
       expect(
-        isClientVoiceSessionConfirmable({
+        assertClientVoiceSessionOpen({
           agentId: AGENT_ID,
           sessionKey: SESSION_KEY,
           voiceSessionId: requireString(result, "voiceSessionId"),
         }),
-      ).toBe(true);
+      ).toBe("client");
       await flushNativeTranscript(
         result,
         () => {

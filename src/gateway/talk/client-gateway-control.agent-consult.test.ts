@@ -144,7 +144,7 @@ describe("Talk client agent consult admission", () => {
     expect(mocks.consultRealtimeVoiceAgent).toHaveBeenCalledWith(
       expect.objectContaining({ senderIsOwner: true }),
     );
-    expect(mocks.consultRealtimeVoiceAgent.mock.calls[0]?.[0]).not.toHaveProperty("toolsAllow");
+    expect(mocks.consultRealtimeVoiceAgent.mock.calls[0]?.[0]?.toolsAllow).toBeUndefined();
   });
 
   it("refreshes steering authority when the admitted run publishes a new attempt", async () => {
@@ -323,12 +323,9 @@ describe("Talk client agent consult admission", () => {
     const secondAnnounced = deferred<void>();
     const releaseFirst = deferred<void>();
     const releaseSecond = deferred<void>();
-    const staleRun = { instanceId: "instance:stale", runId: "run-talk" };
     const currentRun = { instanceId: "instance:current", runId: "run-talk" };
     let invocation = 0;
-    mocks.createOperationalRunInstanceRef
-      .mockReturnValueOnce(staleRun)
-      .mockReturnValueOnce(currentRun);
+    mocks.createOperationalRunInstanceRef.mockReturnValueOnce(currentRun);
     mocks.consultRealtimeVoiceAgent.mockImplementation(async (params: ConsultParams) => {
       invocation += 1;
       await params.onRunStarted?.({ runId: "run-talk", sessionId: "session-talk", timeoutMs: 1 });
@@ -355,6 +352,8 @@ describe("Talk client agent consult admission", () => {
     try {
       releaseFirst.resolve();
       await expect(first).rejects.toThrow("admission is no longer current");
+      expect(mocks.createOperationalRunInstanceRef).not.toHaveBeenCalled();
+      expect(mocks.prepareAgentRunAdmission).not.toHaveBeenCalled();
       releaseSecond.resolve();
       await expect(second).resolves.toEqual({ text: "done" });
       expect(mocks.prepareAgentRunAdmission).toHaveBeenCalledOnce();

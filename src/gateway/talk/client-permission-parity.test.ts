@@ -77,12 +77,13 @@ describe("authenticated Talk permission parity", () => {
         }),
       },
     );
-    voiceSessionId = createOrResumeClientVoiceSession({
+    voiceSessionId = await createOrResumeClientVoiceSession({
       agentId: "main",
       sessionKey,
       origin: "client",
       transcriptCapable: true,
     });
+    await flushClientVoiceSessionWrites({ agentId: "main", voiceSessionId });
   });
   afterAll(async () => {
     await flushClientVoiceSessionWrites({ agentId: "main", voiceSessionId });
