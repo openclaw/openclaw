@@ -11,10 +11,7 @@ import {
   normalizeProviderId,
 } from "../../agents/model-selection.js";
 import { RUNTIME_MODEL_VISIBILITY_NORMALIZATION } from "../../agents/model-visibility-policy.js";
-import {
-  needsThinkHydration,
-  resolveEffectiveAgentRuntime,
-} from "../../agents/thinking-runtime.js";
+import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
@@ -198,10 +195,7 @@ export async function prepareModelSelectionRuntime(params: {
           sessionEntry: runtimeEntry,
         });
   let hydratedSelection: ModelCatalogEntry | undefined;
-  if (
-    params.hydrateThinkingCatalog !== false &&
-    needsThinkHydration(params.catalog, params.provider, params.model, agentRuntime)
-  ) {
+  if (params.hydrateThinkingCatalog !== false && params.cfg.plugins?.enabled !== false) {
     // The selected route owns its capabilities. A prepared default-provider row cannot
     // supply thinking or context metadata for an explicit cross-provider selection.
     const { loadProviderScopedThinkingCatalog } =

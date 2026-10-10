@@ -72,9 +72,7 @@ describe("agents skills panel (browser)", () => {
     const learnedRow = Array.from(container.querySelectorAll(".agent-skill-row")).find((row) =>
       row.textContent?.includes("budget"),
     );
-    const toggle = learnedRow?.querySelector<HTMLElement & { checked: boolean; disabled: boolean }>(
-      'input[role="switch"]',
-    );
+    const toggle = learnedRow?.querySelector<HTMLInputElement>("input.settings-toggle__input");
     expect(toggle?.checked).toBe(true);
     expect(toggle?.disabled).toBe(true);
     expect(learnedRow?.textContent).toContain("archive in Workshop to hide");
@@ -117,8 +115,8 @@ describe("agents skills panel (browser)", () => {
         );
         expect(
           Array.from(
-            container.querySelectorAll<HTMLElement & { checked: boolean }>(
-              '.agent-skill-row input[role="switch"]',
+            container.querySelectorAll<HTMLInputElement>(
+              ".agent-skill-row input.settings-toggle__input",
             ),
           ).map((toggle) => toggle.checked),
         ).toEqual([true, false]);

@@ -10,6 +10,12 @@ sidebarTitle: "Advanced"
 
 ## Advanced configuration
 
+Native Ollama requests keep exact session identities and runtime facts in the
+first user message, after the shared system and tool prefix. This allows local
+prompt caches to reuse that prefix across equivalent subagent spawns while
+preserving earlier message bytes on follow-up turns. Cache reuse still depends
+on the model template, available cache slots, and unchanged instructions/tools.
+
 <AccordionGroup>
   <Accordion title="Legacy OpenAI-compatible mode">
     <Warning>

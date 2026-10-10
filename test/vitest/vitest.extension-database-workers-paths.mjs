@@ -371,6 +371,7 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/msteams/src/monitor-sso.ingress.test.ts",
   "extensions/msteams/src/pending-uploads-fs.test.ts",
   "extensions/msteams/src/polls.test.ts",
+  "extensions/msteams/src/sent-message-cache.state.test.ts",
   "extensions/msteams/src/sso-token-store.test.ts",
   "extensions/msteams/src/token.test.ts",
   "extensions/nostr/src/nostr-state-store.test.ts",

@@ -16,6 +16,7 @@ export function isSessionEntryReplacementReceiptUsable(
       (entry) => isRecord(entry) && typeof entry.sessionId === "string",
     ) ||
     (publication.projection !== undefined && !(publication.projection instanceof Map)) ||
+    (publication.fullEntries !== undefined && !(publication.fullEntries instanceof Map)) ||
     !Array.isArray(publication.ageChanges) ||
     (publication.unavailableParticipantKeys !== undefined &&
       (!Array.isArray(publication.unavailableParticipantKeys) ||
@@ -60,7 +61,10 @@ export function isSessionEntryReplacementReceiptUsable(
       if (
         !isRecord(value) ||
         !isRecord(value.entry) ||
-        !isDeepStrictEqual(value.entry, publication.current.get(key))
+        !isDeepStrictEqual(value.entry, publication.current.get(key)) ||
+        !isDeepStrictEqual(value.fullEntry, publication.fullEntries?.get(key)) ||
+        (value.fullEntry !== undefined &&
+          (!isRecord(value.fullEntry) || value.fullEntry.sessionId !== value.entry.sessionId))
       ) {
         return false;
       }

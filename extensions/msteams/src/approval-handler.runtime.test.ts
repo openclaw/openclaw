@@ -12,6 +12,15 @@ import type {
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { msTeamsApprovalControls } from "./approval-card-actions.js";
+import { maybeHandleMSTeamsApprovalCardSubmit } from "./approval-card-submit.js";
+import { createMSTeamsMessageHandlerDeps } from "./monitor-handler.test-helpers.js";
+import type { MSTeamsTurnContext } from "./sdk-types.js";
+
+const resolveApprovalOverGateway = vi.hoisted(() => vi.fn());
+vi.mock("openclaw/plugin-sdk/approval-gateway-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/approval-gateway-runtime")>()),
+  resolveApprovalOverGateway,
+}));
 
 const sendAdaptiveCardMSTeams = vi.hoisted(() => vi.fn());
 const editAdaptiveCardMSTeams = vi.hoisted(() => vi.fn());
@@ -157,6 +166,97 @@ describe("msTeamsApprovalNativeRuntime", () => {
     editAdaptiveCardMSTeams.mockResolvedValue({ conversationId: "19:channel@thread.tacv2" });
   });
 
+  it("settles an issued card only through its issuing account, not an authorized sibling", async () => {
+    const { request, view, pendingPayload, prepared, plannedTarget } =
+      await createPendingScenario();
+    const entry = await msTeamsApprovalNativeRuntime.transport.deliverPending({
+      cfg,
+      accountId: "support",
+      request,
+      approvalKind: "exec",
+      view,
+      preparedTarget: prepared.target,
+      pendingPayload,
+      plannedTarget,
+    });
+    if (!entry) {
+      throw new Error("Expected issued approval card");
+    }
+    const binding = await msTeamsApprovalNativeRuntime.interactions?.bindPending?.({
+      cfg,
+      accountId: "support",
+      request,
+      approvalKind: "exec",
+      view,
+      pendingPayload,
+      entry,
+    });
+    const token = entry.actionTokens[0]?.token;
+    if (!token || !binding) {
+      throw new Error("Expected bound approval token");
+    }
+    const context: MSTeamsTurnContext = {
+      activity: {
+        type: "message",
+        from: { aadObjectId: "00000000-0000-4000-8000-000000000001" },
+        conversation: { id: entry.conversationId },
+        replyToId: entry.activityId,
+        value: { openclawAction: "approval", token },
+      },
+      sendActivity: vi.fn(async () => undefined),
+      sendActivities: vi.fn(async () => []),
+      updateActivity: vi.fn(async () => undefined),
+      deleteActivity: vi.fn(async () => undefined),
+    };
+    const deps = createMSTeamsMessageHandlerDeps({
+      cfg: {
+        channels: {
+          msteams: {
+            accounts: {
+              support: { allowFrom: ["00000000-0000-4000-8000-000000000001"] },
+              sales: { allowFrom: ["00000000-0000-4000-8000-000000000001"] },
+            },
+          },
+        },
+      },
+    });
+    try {
+      deps.accountId = "sales";
+      await maybeHandleMSTeamsApprovalCardSubmit({ context, deps });
+      expect(resolveApprovalOverGateway).not.toHaveBeenCalled();
+      expect(msTeamsApprovalControls.get(token)).not.toBeNull();
+      resolveApprovalOverGateway.mockResolvedValue({
+        applied: true,
+        approval: {
+          id: request.id,
+          status: "allowed",
+          decision: "allow-once",
+          reason: "user",
+          createdAtMs: request.createdAtMs,
+          expiresAtMs: request.expiresAtMs,
+          resolvedAtMs: Date.now(),
+          urlPath: "/approve/" + request.id,
+          presentation: {
+            kind: "exec",
+            commandText: "deploy --production",
+            allowedDecisions: ["allow-once", "deny"],
+          },
+        },
+      });
+      deps.accountId = "support";
+      await maybeHandleMSTeamsApprovalCardSubmit({ context, deps });
+      expect(resolveApprovalOverGateway).toHaveBeenCalledWith(
+        expect.objectContaining({ accountId: "support", approvalId: request.id }),
+      );
+      expect(context.updateActivity).toHaveBeenCalledWith(
+        expect.objectContaining({ id: entry.activityId }),
+      );
+      expect(msTeamsApprovalControls.get(token)).toBeNull();
+    } finally {
+      msTeamsApprovalControls.unregister(entry.actionTokens.map((action) => action.token));
+    }
+  });
+
   it.each([
     {
       name: "exec command and scope",
@@ -247,6 +347,7 @@ describe("msTeamsApprovalNativeRuntime", () => {
     await vi.waitFor(() => expect(sendMessageMSTeams).toHaveBeenCalledTimes(1));
     const fallback = sendMessageMSTeams.mock.calls[0]?.[0];
     expect(fallback?.to).toBe("msteams:conversation:19:channel@thread.tacv2");
+    expect(fallback?.accountId).toBe("default");
     expect(fallback?.text).toContain("/approve exec-approval-1 <allow-once|deny>");
   });
 
@@ -268,6 +369,7 @@ describe("msTeamsApprovalNativeRuntime", () => {
     }
     expect(sendAdaptiveCardMSTeams).toHaveBeenCalledWith({
       cfg,
+      accountId: "default",
       to: "conversation:19:channel@thread.tacv2;messageid=thread-root",
       card: pendingPayload.card,
     });
@@ -332,6 +434,7 @@ describe("msTeamsApprovalNativeRuntime", () => {
     });
     expect(editAdaptiveCardMSTeams).toHaveBeenCalledWith({
       cfg,
+      accountId: "default",
       to: "19:channel@thread.tacv2",
       activityId: "approval-activity-1",
       card: final.payload,
@@ -350,6 +453,55 @@ describe("msTeamsApprovalNativeRuntime", () => {
     for (const token of binding) {
       expect(msTeamsApprovalControls.get(token)).toBeNull();
     }
+  });
+
+  it("preserves a named account through delivery, update, and fallback", async () => {
+    const { view, request, pendingPayload, plannedTarget, prepared } =
+      await createPendingScenario();
+    const entry = await msTeamsApprovalNativeRuntime.transport.deliverPending({
+      cfg,
+      accountId: "support",
+      plannedTarget,
+      preparedTarget: prepared.target,
+      request,
+      approvalKind: "exec",
+      view,
+      pendingPayload,
+    });
+    expect(entry?.accountId).toBe("support");
+    expect(sendAdaptiveCardMSTeams).toHaveBeenCalledWith(
+      expect.objectContaining({ accountId: "support" }),
+    );
+    if (!entry) {
+      throw new Error("Expected named-account approval entry");
+    }
+    await msTeamsApprovalNativeRuntime.transport.updateEntry?.({
+      cfg,
+      accountId: "support",
+      entry,
+      request,
+      approvalKind: "exec",
+      payload: { type: "AdaptiveCard" },
+      phase: "resolved",
+    });
+    expect(editAdaptiveCardMSTeams).toHaveBeenCalledWith(
+      expect.objectContaining({ accountId: "support" }),
+    );
+
+    msTeamsApprovalNativeRuntime.observe?.onDeliveryError?.({
+      cfg,
+      accountId: "support",
+      error: new Error("card send failed"),
+      plannedTarget,
+      request,
+      approvalKind: "exec",
+      view,
+      pendingPayload,
+    });
+    await vi.waitFor(() => expect(sendMessageMSTeams).toHaveBeenCalledTimes(1));
+    expect(sendMessageMSTeams).toHaveBeenCalledWith(
+      expect.objectContaining({ accountId: "support" }),
+    );
   });
 
   it.each(["unknown", ""])(

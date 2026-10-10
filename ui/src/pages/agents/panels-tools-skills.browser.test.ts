@@ -103,9 +103,9 @@ describe("agents tools panel (browser)", () => {
     expect(absent?.querySelectorAll(".agent-tool-summary__fact dd")[1]?.textContent?.trim()).toBe(
       "Not listed",
     );
-    expect(
-      absent?.querySelector<HTMLElement & { checked: boolean }>('input[role="switch"]')?.checked,
-    ).toBe(true);
+    expect(absent?.querySelector<HTMLInputElement>("input.settings-toggle__input")?.checked).toBe(
+      true,
+    );
     expect(container.querySelector(".agent-tools-group__counts")?.textContent).toContain(
       "1 Listed Tool",
     );
@@ -466,7 +466,7 @@ describe("agents tools panel (browser)", () => {
     const card = Array.from(container.querySelectorAll(".agent-tool-card")).find(
       (entry) => entry.querySelector(".agent-tool-title")?.textContent?.trim() === "openclaw",
     );
-    const toggle = card?.querySelector<HTMLElement & { checked: boolean }>('input[role="switch"]');
+    const toggle = card?.querySelector<HTMLInputElement>("input.settings-toggle__input");
     assert(toggle, "Missing setup helper switch");
     expect(toggle.checked).toBe(false);
     toggle.checked = true;
@@ -597,7 +597,7 @@ describe("agents tools panel (browser)", () => {
 
     const tool = container.querySelector<HTMLDetailsElement>(".agent-tool-card");
     const summary = container.querySelector<HTMLElement>(".agent-tool-summary");
-    const toggle = container.querySelector('.agent-tool-toggle input[role="switch"]');
+    const toggle = container.querySelector(".agent-tool-toggle input.settings-toggle__input");
 
     expect(tool?.open).toBe(false);
     expect(toggle?.closest(".agent-tool-summary")).toBe(summary);
@@ -836,9 +836,7 @@ describe("agents tools panel (browser)", () => {
       const card = Array.from(container.querySelectorAll(".agent-tool-card")).find(
         (entry) => entry.querySelector(".agent-tool-title")?.textContent?.trim() === testCase.tool,
       );
-      const toggle = card?.querySelector<HTMLElement & { checked: boolean }>(
-        'input[role="switch"]',
-      );
+      const toggle = card?.querySelector<HTMLInputElement>("input.settings-toggle__input");
       assert(toggle, `Missing tool switch: ${testCase.tool}`);
       expect(toggle.checked).toBe(!testCase.enabled);
       toggle.checked = testCase.enabled;
@@ -941,7 +939,7 @@ describe("agents tools panel (browser)", () => {
       Object.fromEntries(
         Array.from(container.querySelectorAll(".agent-tool-card"), (card) => [
           card.querySelector(".agent-tool-title")?.textContent?.trim(),
-          card.querySelector<HTMLElement & { checked: boolean }>('input[role="switch"]')?.checked,
+          card.querySelector<HTMLInputElement>("input.settings-toggle__input")?.checked,
         ]),
       ),
     ).toEqual(expected);

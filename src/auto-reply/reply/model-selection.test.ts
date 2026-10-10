@@ -171,6 +171,41 @@ function selectSession(
 }
 
 describe("catalog and thinking selection", () => {
+  it.each([
+    { previous: null, observed: "max", supported: true },
+    { previous: "max", observed: null, supported: false },
+  ])(
+    "uses observed levels for reply thinking ($supported)",
+    async ({ previous, observed, supported }) => {
+      const stale = {
+        provider: "fixture",
+        id: "reasoner",
+        name: "Reasoner",
+        api: "openai-completions" as const,
+        baseUrl: "https://fixture.invalid/v1",
+        reasoning: true,
+        thinkingLevelMap: { max: previous },
+      };
+      vi.mocked(loadProviderScopedThinkingCatalog).mockResolvedValue([
+        { ...stale, thinkingLevelMap: { max: observed } },
+      ]);
+      const state = await createInitialState(
+        { agents: { defaults: { model: "fixture/reasoner" } } },
+        "fixture",
+        "reasoner",
+        { preparedModelCatalog: { entries: [stale], routeVariants: [] } },
+      );
+      expect(
+        isThinkingLevelSupported({
+          provider: "fixture",
+          model: "reasoner",
+          level: "max",
+          catalog: await state.resolveThinkingCatalog(),
+        }),
+      ).toBe(supported);
+    },
+  );
+
   it("retains prepared automatic-primary reasoning outside manual policy", async () => {
     const automatic = {
       provider: "fixture",
@@ -213,7 +248,7 @@ describe("catalog and thinking selection", () => {
 
   it("hydrates thinking separately for embedded and native runtimes", async () => {
     vi.mocked(loadModelCatalogLocal).mockClear();
-    vi.mocked(loadProviderScopedThinkingCatalog).mockResolvedValueOnce([
+    vi.mocked(loadProviderScopedThinkingCatalog).mockResolvedValue([
       { provider: "openai", id: "gpt-5.4", name: "GPT-5.4", reasoning: true },
     ]);
     const cfg: OpenClawConfig = {
@@ -246,6 +281,13 @@ describe("catalog and thinking selection", () => {
       }),
     ).resolves.toBe("medium");
     expect(loadModelCatalogLocal).not.toHaveBeenCalled();
+    expect(loadProviderScopedThinkingCatalog).toHaveBeenCalledWith({
+      config: cfg,
+      agentId: "main",
+      provider: "openai",
+      model: "gpt-5.4",
+      agentRuntime: "openclaw",
+    });
     expect(loadProviderScopedThinkingCatalog).toHaveBeenCalledWith({
       config: cfg,
       agentId: "main",
@@ -329,7 +371,13 @@ describe("catalog and thinking selection", () => {
     expect(await state.resolveThinkingCatalog()).toEqual(entries);
     expect(loadModelCatalogLocal).not.toHaveBeenCalled();
     expect(catalogRuntimeMocks.loadModelCatalogSnapshot).not.toHaveBeenCalled();
-    expect(loadProviderScopedThinkingCatalog).not.toHaveBeenCalled();
+    expect(loadProviderScopedThinkingCatalog).toHaveBeenCalledExactlyOnceWith({
+      config: cfg,
+      agentId: "main",
+      provider: "fixture-primary",
+      model: "shared-model",
+      agentRuntime: "openclaw",
+    });
   });
 
   it.each([
