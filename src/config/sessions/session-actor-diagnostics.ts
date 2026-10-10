@@ -3,7 +3,7 @@ import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import type { SessionActorPhase, SessionActorSettlement } from "./session-actor-contract.js";
 
 type SessionActorObservation = {
-  settled(outcome: SessionActorSettlement | "read" | "rejected"): void;
+  settled(outcome: SessionActorSettlement | "stale-version" | "read" | "rejected"): void;
 };
 
 const commands = channel("openclaw.session.actor.command");

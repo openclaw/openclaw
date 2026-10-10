@@ -113,7 +113,7 @@ export function createSessionActorWorker(
     const resident = residents.get(target.sessionKey)?.state;
     const currentToken = token(database, target, resident?.hot.dependencySessionIds);
     if (!currentToken) {
-      drop(target.sessionKey);
+      // The shared fence can belong to another session; retain this preimage privately.
       throw new Error("Session actor has an unsettled database writer");
     }
     if (resident?.hot.writeToken === currentToken) {
@@ -348,12 +348,11 @@ export function createSessionActorWorker(
           };
         }
         const retained = residents.get(target.sessionKey)?.state;
-        if (
-          retained &&
-          database &&
-          token(database, target, retained.hot.dependencySessionIds) !== retained.hot.writeToken
-        ) {
-          drop(target.sessionKey);
+        if (retained && database) {
+          const currentToken = token(database, target, retained.hot.dependencySessionIds);
+          if (currentToken !== undefined && currentToken !== retained.hot.writeToken) {
+            drop(target.sessionKey);
+          }
         }
         if (stale) {
           observed.settled("stale-version");

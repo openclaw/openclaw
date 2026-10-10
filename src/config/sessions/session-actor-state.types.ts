@@ -66,4 +66,4 @@ export type SessionActorHotState = {
   };
 };
 
-export type SessionActorSettlement = "committed" | "rolled-back" | "stale-version" | "unknown";
+export type SessionActorSettlement = "committed" | "rolled-back" | "unknown";
