@@ -158,6 +158,8 @@ function consumedPromiseAllExports(node: ts.CallExpression): string[] | undefine
       if (
         binding.dotDotDotToken ||
         binding.initializer ||
+        !binding.name ||
+        !name ||
         !ts.isIdentifier(binding.name) ||
         !ts.isIdentifier(name)
       ) {
