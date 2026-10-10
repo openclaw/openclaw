@@ -340,7 +340,8 @@ const detectInterpreterInlineEvalArgvMock = vi.hoisted(() =>
   ),
 );
 
-vi.mock("../infra/exec-approvals.js", () => ({
+vi.mock("../infra/exec-approvals.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/exec-approvals.js")>()),
   countObsoleteGeneratedExecApprovalRules: vi.fn(() => 0),
   evaluateShellAllowlist: evaluateShellAllowlistMock,
   evaluateShellAllowlistWithAuthorization: evaluateShellAllowlistMock,
