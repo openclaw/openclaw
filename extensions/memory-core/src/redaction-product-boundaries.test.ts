@@ -119,7 +119,7 @@ describe("memory-core redaction product boundaries", () => {
     const cfg: OpenClawConfig = {
       agents: {
         defaults: { workspace: workspaceDir, userTimezone: "UTC" },
-        list: [{ id: "main", workspace: workspaceDir }],
+        entries: { main: { workspace: workspaceDir } },
       },
       plugins: {
         entries: {
@@ -142,6 +142,7 @@ describe("memory-core redaction product boundaries", () => {
     await expect(
       runDreamingSweepPhases({
         agentId: "main",
+        narrativeTimeoutMs: 180_000,
         workspaceDir,
         cfg,
         pluginConfig: resolveMemoryDreamingPluginConfig(cfg) ?? {},

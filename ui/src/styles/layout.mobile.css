@@ -1,31 +1,4 @@
-/* ===========================================
-   Mobile Layout
-   =========================================== */
-
 @media (max-width: 1320px) {
-  .content--chat .content-header {
-    align-items: center;
-    gap: 8px;
-    row-gap: 0;
-    min-height: 44px;
-    max-height: 44px;
-    overflow: visible;
-  }
-
-  .content--chat .content-header > div:first-child {
-    min-width: 0;
-  }
-
-  .content--chat .page-meta {
-    align-self: center;
-    height: 36px;
-    align-items: center;
-    min-width: 0;
-    justify-content: flex-end;
-    flex-wrap: nowrap;
-    row-gap: 0;
-  }
-
   .chat-controls__model {
     grid-area: model;
     min-width: 0;
@@ -44,6 +17,7 @@
 .shell--mobile-nav,
 .shell--mobile-nav.shell--nav-collapsed {
   --shell-topbar-height: 58px;
+  --sidebar-nav-row-height: 40px;
   grid-template-columns: minmax(0, 1fr);
   grid-template-rows: var(--shell-topbar-height) minmax(0, 1fr);
   grid-template-areas:
@@ -238,7 +212,6 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
 
 .shell--mobile-nav .nav-item {
   margin: 0;
-  min-height: 40px;
   padding: 0 12px 0 8px;
   font-size: calc(13px * var(--control-ui-text-scale));
   border-radius: var(--radius-md);
@@ -293,14 +266,7 @@ html.openclaw-native-desktop body .shell--mobile-nav {
   }
 }
 
-/* Mobile-specific styles */
 @media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
-  .shell {
-    --shell-pad: 8px;
-    --shell-gap: 8px;
-  }
-
-  /* Topbar */
   .shell--mobile-nav .topbar {
     padding: 10px 12px;
     min-height: auto;
@@ -317,11 +283,6 @@ html.openclaw-native-desktop body .shell--mobile-nav {
 
   .shell--mobile-nav .nav-item {
     font-size: var(--control-ui-text-sm);
-  }
-
-  /* Hide the entire content-header on mobile chat — controls are in mobile gear menu */
-  .content--chat .content-header {
-    display: none;
   }
 
   /* Match desktop: the composer owns its own bottom breathing room, so the
@@ -345,7 +306,6 @@ html.openclaw-native-desktop body .shell--mobile-nav {
     gap: 12px;
   }
 
-  /* Cards */
   .card {
     padding: 12px;
     border-radius: var(--radius-md);
@@ -355,7 +315,6 @@ html.openclaw-native-desktop body .shell--mobile-nav {
     font-size: 13px;
   }
 
-  /* Stats */
   .stat {
     padding: 10px;
     border-radius: var(--radius-md);
@@ -365,7 +324,6 @@ html.openclaw-native-desktop body .shell--mobile-nav {
     font-size: 18px;
   }
 
-  /* Forms */
   .field input,
   .field textarea,
   .field select {
@@ -374,19 +332,11 @@ html.openclaw-native-desktop body .shell--mobile-nav {
     font-size: 14px;
   }
 
-  /* Buttons */
   .btn {
     padding: 8px 12px;
     font-size: 12px;
   }
 
-  /* Pills */
-  .pill {
-    padding: 4px 10px;
-    font-size: 12px;
-  }
-
-  /* Chat */
   .chat-thread {
     margin-top: 0;
     /* Horizontal inset lives on .chat-thread-inner (see layout.css): padding
@@ -416,7 +366,6 @@ html.openclaw-native-desktop body .shell--mobile-nav {
     height: 16px;
   }
 
-  /* Log stream */
   .log-stream {
     border-radius: var(--radius-md);
     max-height: 380px;
@@ -451,48 +400,32 @@ html.openclaw-native-desktop body .shell--mobile-nav {
     padding: 8px;
   }
 
-  .log-time {
-    font-size: 12px; /* was 10px */
-  }
-
-  .log-level {
-    font-size: 12px; /* was 9px */
-  }
-
-  .log-subsystem {
-    font-size: 12px; /* was 11px */
-  }
-
+  .log-time,
+  .log-level,
+  .log-subsystem,
   .log-message {
     font-size: 12px;
   }
 
-  /* Lists */
   .list-title {
     font-size: 13px;
   }
 
-  /* Code blocks */
   .code-block {
     padding: 8px;
     border-radius: var(--radius-md);
-    font-size: 12px; /* was 11px */
+    font-size: 12px;
   }
 }
 
-/* Small mobile */
 @media (max-width: 400px) {
-  .shell {
-    --shell-pad: 4px;
-  }
-
   .topbar {
     padding: 8px 10px;
   }
 
   .nav-item {
     padding: 6px 8px;
-    font-size: var(--control-ui-text-sm); /* was 11px */
+    font-size: var(--control-ui-text-sm);
   }
 
   .content {
@@ -518,19 +451,13 @@ html.openclaw-native-desktop body .shell--mobile-nav {
 
   .btn {
     padding: 6px 10px;
-    font-size: 12px; /* was 11px */
   }
 }
-
-/* ===========================================
-   Sessions table – responsive column hiding
-   =========================================== */
 
 /* nth-child is 1-based and includes the checkbox column (col 1). The optional
    Group column in category mode shifts later indexes; grouping is a desktop
    workflow, so the hide rules target the default 7-column roster. */
 
-/* ≤900px: tighten padding */
 @media (max-width: 900px) {
   .data-table.sessions-table {
     min-width: 640px;
@@ -592,10 +519,7 @@ html.openclaw-native-desktop body .shell--mobile-nav {
     max-width: 200px;
   }
 
-  .session-details-panel {
-    padding: 12px;
-  }
-
+  .session-details-panel,
   .session-details-panel__hero,
   .session-details-section {
     padding: 12px;
@@ -616,11 +540,6 @@ html.openclaw-native-desktop body .shell--mobile-nav {
     white-space: nowrap;
     overflow-wrap: normal;
     word-break: normal;
-  }
-
-  .filters {
-    flex-wrap: wrap;
-    gap: 8px;
   }
 }
 
@@ -658,7 +577,6 @@ html.openclaw-native-desktop body .shell--mobile-nav {
   .data-table th,
   .data-table td {
     padding: 6px 4px;
-    font-size: 12px; /* was 11px */
   }
 
   .session-key-cell {

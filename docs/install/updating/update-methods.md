@@ -74,6 +74,10 @@ Candidate installs and nested build commands use a private pnpm virtual store,
 so preparing an update cannot prune dependencies used by the serving Gateway.
 The candidate's temporary workspace settings are restored before checking for
 source changes; the live checkout's workspace settings are preserved.
+Candidate commands keep the qualified Node first among Node providers on `PATH`,
+while preserving launcher-only prefixes such as scoped pnpm shims ahead of it.
+This also applies when the selected Node directory was already on `PATH`; its
+package-manager executables do not displace those scoped launchers.
 
 Before activating a package or Git update, the updater also checks discoverable
 managed Gateways that share the physical installation. An observed live sibling
@@ -172,8 +176,8 @@ also needs fresh declarations for plugin development.
 
 This reference script requires **Corepack** and creates temporary shims without
 global activation before fetching. After fetching, it freezes the target commit
-and checks that its exact pnpm pin can run through those shims in a private probe
-workspace. The probe contains only package-manager metadata, not the target's
+and checks that its exact pnpm pin can run through those shims in a private check
+workspace. The check contains only package-manager metadata, not the target's
 dependencies, hooks, or configuration. Missing or invalid metadata, provisioning
 failure, or a version mismatch stops before checkout update or restart; repair
 the target pin or install a compatible Corepack, then retry.
@@ -386,7 +390,7 @@ lifecycle work is recorded in `.openclaw-lifecycle-pending` at the package root,
 outside the `dist` inventory. `postinstall` removes that marker after completion.
 If package scripts were skipped, the CLI completes the pending lifecycle before
 running any command, including `--version`; failure stops the command with
-reinstall guidance. The updater probes the owning npm before mutation. On npm
+reinstall guidance. The updater checks the owning npm before mutation. On npm
 11.15 and earlier it omits the unsupported lifecycle-policy flag. On npm 12 and
 npm 11.16+, it approves only the candidate OpenClaw lifecycle; transitive
 dependency scripts remain unapproved.
@@ -395,8 +399,9 @@ the install command fails, OpenClaw retries once with `--omit=optional`, which
 helps hosts where native optional dependencies cannot compile.
 The packaged lifecycle restores the matching precompiled fs-safe dependency
 when that retry omitted it. It uses the version declared by the installed
-fs-safe package and does not run dependency build scripts. A working native
-binding needs no extra download. Unsupported hosts or failed downloads produce
+fs-safe package and does not run dependency build scripts. Repair works on Node
+and Bun and preserves any existing native package. A working native binding
+needs no extra download. Unsupported hosts or failed downloads produce
 a warning and allow installation to finish; explicitly disabling fs-safe native
 support also skips this repair.
 
@@ -440,7 +445,7 @@ bun add -g --trust openclaw@latest
 
 `--trust` allows OpenClaw's lifecycle scripts. The canonical `openclaw update`
 path applies the same OpenClaw-only Bun trust when it owns the install.
-For Bun-owned updates, package-manager probes and installs use the verified
+For Bun-owned updates, package-manager checks and installs use the verified
 service Bun when updating a managed service root. Otherwise they use
 `process.execPath` when the updater runs under Bun, with bare `bun` from PATH
 only as the final fallback. A missing or different PATH Bun does not replace
@@ -546,6 +551,8 @@ needs attention.
     Before staging a replacement, a read-only snapshot check measures the known SQLite database families, including WAL, SHM, and journal files. Its non-warning diagnostic entries in `openclaw update status --json` record each family's size and the existing snapshot budget: twice the total family bytes, three times the largest family, and 64 MiB for metadata. Plugin copies and registered external databases remain unknown until the complete check after staging.
 
     Snapshot space is checked at the existing destinations: `TMPDIR`, the capture directory beside the state directory, and the system temporary directory. An update refuses before staging only when every destination has known free space below the snapshot owner's requirement, because its private state copy cannot be taken. Database sizes are inventory for the temporary snapshot, not database-health or growth warnings. A successful check needs no database cleanup. If measurement fails, the updater warns that it will check again after staging. A usable alternative or unknown free-space reading does not itself stop the update. Package and Git targets that are already current need no candidate snapshot. The updater preserves a config copy, not a full-state backup.
+
+    For a direct CLI update, scratch variables set by the invoking operator (`TMPDIR`, `TMP`, and `TEMP`) take precedence over managed-service defaults. For example, `TMPDIR="$HOME/.cache" openclaw update` checks that directory first and labels it `explicit-tmpdir` in snapshot capacity reports. The service still owns installation, profile, state, and runtime-path selection. This precedence fix belongs to the installed updater and takes effect for updates it performs after installation; a newer candidate cannot change an older updater's environment merge.
 
     This check runs in the installed updater; an already-installed 2026.9.3 updater retains its prior behavior for its own first upgrade hop.
 

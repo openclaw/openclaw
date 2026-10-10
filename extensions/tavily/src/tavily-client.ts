@@ -1,5 +1,8 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { resolveIntegerOption } from "openclaw/plugin-sdk/number-runtime";
+import {
+  parseDateStringTimestampMs,
+  resolveIntegerOption,
+} from "openclaw/plugin-sdk/number-runtime";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import {
   DEFAULT_CACHE_TTL_MINUTES,
@@ -90,7 +93,12 @@ function normalizeTavilyPublishedDate(value: unknown): string | undefined {
     return undefined;
   }
   if (TAVILY_PUBLISHED_DATE_RE.test(value)) {
-    return value;
+    // Preserve accepted timestamp suffixes while rejecting impossible calendar dates.
+    const calendarDate = value.slice(0, 10);
+    const timestamp = parseDateStringTimestampMs(calendarDate);
+    return timestamp !== undefined && new Date(timestamp).toISOString().startsWith(calendarDate)
+      ? value
+      : undefined;
   }
   // Tavily news dates use RFC-style GMT. Exact round-tripping rejects prose,
   // relative ages, and invalid calendar dates before emitting an unwrapped field.

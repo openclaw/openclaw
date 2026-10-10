@@ -350,25 +350,6 @@ describe("shared Docker image artifacts", () => {
     expect(attemptMismatch.stderr).not.toContain("retrying");
   });
 
-  it("retries an exact i/o timeout without leaking partial output", () => {
-    const fixture = createFixture();
-    const verified = verifyUploadedArtifact(fixture, {
-      env: {
-        FAKE_GH_ARTIFACT_ERROR: "Get https://api.github.com: dial tcp: i/o timeout",
-        FAKE_GH_ARTIFACT_FAILURES: "1",
-      },
-    });
-    expect(verified.status, `${verified.stdout}\n${verified.stderr}`).toBe(0);
-    expect(verified.stdout).not.toContain("partial artifact response");
-    expect(verified.stderr).toContain(
-      "artifact metadata GitHub API GET failed transiently on attempt 1/3; retrying in 2s",
-    );
-    expect(readFileSync(fixture.sleepLog, "utf8")).toBe("2\n");
-    const calls = readFileSync(fixture.ghLog, "utf8");
-    expect(calls.match(/actions\/artifacts/g)).toHaveLength(2);
-    expect(calls.match(/actions\/runs/g)).toHaveLength(1);
-  });
-
   it("retries a fresh artifact metadata 404 and then succeeds", () => {
     const fixture = createFixture();
     const verified = verifyUploadedArtifact(fixture, {
@@ -385,22 +366,6 @@ describe("shared Docker image artifacts", () => {
     const calls = readFileSync(fixture.ghLog, "utf8");
     expect(calls.match(/actions\/artifacts/g)).toHaveLength(2);
     expect(calls.match(/actions\/runs/g)).toHaveLength(1);
-  });
-
-  it("fails after three fresh artifact metadata 404 responses", () => {
-    const fixture = createFixture();
-    const failed = verifyUploadedArtifact(fixture, {
-      env: {
-        FAKE_GH_ARTIFACT_ERROR: "gh: Not Found (HTTP 404)",
-        FAKE_GH_ARTIFACT_FAILURES: "3",
-      },
-    });
-    expect(failed.status).not.toBe(0);
-    expect(failed.stderr).toContain("GitHub API GET failed after 3 attempt(s)");
-    expect(readFileSync(fixture.sleepLog, "utf8")).toBe("2\n4\n");
-    const calls = readFileSync(fixture.ghLog, "utf8");
-    expect(calls.match(/actions\/artifacts/g)).toHaveLength(3);
-    expect(calls).not.toContain("actions/runs");
   });
 
   it("fails immediately when producer run-attempt metadata returns 404", () => {

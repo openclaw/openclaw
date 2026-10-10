@@ -31,23 +31,32 @@ export async function recordInboundSession(
   const { storePath, sessionKey, ctx, groupResolution, createIfMissing } = params;
   const canonicalSessionKey = normalizeSessionKeyPreservingOpaquePeerIds(sessionKey);
   const runtime = await loadInboundSessionRuntime();
-  const metaTask = runtime
-    .recordInboundSessionMeta({
-      storePath,
-      sessionKey: canonicalSessionKey,
-      ctx,
-      groupResolution,
-      createIfMissing,
-    })
-    .catch(async (err: unknown) => {
-      try {
-        await Promise.resolve(params.onRecordError(err));
-      } catch {
-        // Error reporting must not reject the detached metadata task.
-      }
-    });
+  const write = runtime.recordInboundSessionMeta({
+    storePath,
+    sessionKey: canonicalSessionKey,
+    ctx,
+    groupResolution,
+    createIfMissing,
+  });
+  const metaTask = write.catch(async (err: unknown) => {
+    try {
+      await Promise.resolve(params.onRecordError(err));
+    } catch {
+      // Error reporting must not reject the tracked metadata task.
+    }
+  });
   params.trackSessionMetaTask?.(metaTask);
-  void metaTask;
+  // Dispatch needs the writer settled, but best-effort reporting stays with its tracker.
+  await write.catch(async (err: unknown) => {
+    const { AgentDatabaseAdmissionError } = await import("../state/agent-database-admission.js");
+    if (
+      err instanceof AgentDatabaseAdmissionError &&
+      err.refusal.code === "agent-database-inspection-pending"
+    ) {
+      // Leave the inbound unhandled so its channel can retry after startup admission.
+      throw err;
+    }
+  });
 
   const update = params.updateLastRoute;
   if (!update) {

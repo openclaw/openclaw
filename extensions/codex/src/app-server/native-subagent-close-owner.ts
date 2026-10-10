@@ -151,11 +151,7 @@ export class CodexNativeSubagentCloseOwner {
       if (call.completing && !call.settled) {
         continue;
       }
-      if (
-        ![...state.owners.values()].some(
-          (owner) => call.owners.has(owner) && (!owner.turnId || owner.turnId === call.turnId),
-        )
-      ) {
+      if (!this.hasCallOwner(state, call, true)) {
         calls.delete(key);
       }
     }
@@ -196,9 +192,7 @@ export class CodexNativeSubagentCloseOwner {
       }
       this.callbacks.markTerminalRevision(childState.childThreadId);
     }
-    if (childState.pendingCompletion) {
-      childState.pendingCompletion = undefined;
-    }
+    childState.pendingCompletion = undefined;
     childState.subscriptionClosed = true;
     this.callbacks.unregisterChild(childState);
     releaseSubscription?.();
@@ -215,6 +209,13 @@ export class CodexNativeSubagentCloseOwner {
       // The captured receiver must still own the subscription being released.
       releaseSubscription();
     }
+  }
+
+  private hasCallOwner(state: ParentState, call: ChildCloseCall, allowUnbound: boolean): boolean {
+    return [...state.owners.values()].some(
+      (owner) =>
+        call.owners.has(owner) && (owner.turnId === call.turnId || (allowUnbound && !owner.turnId)),
+    );
   }
 
   private completeChildClose(state: ParentState, key: string, call: ChildCloseCall): Promise<void> {
@@ -246,13 +247,7 @@ export class CodexNativeSubagentCloseOwner {
         (childState === undefined || childState === target.childState)
       );
     };
-    if (
-      call.completing ||
-      !isCurrent() ||
-      ![...state.owners.values()].some(
-        (owner) => call.owners.has(owner) && owner.turnId === call.turnId,
-      )
-    ) {
+    if (call.completing || !isCurrent() || !this.hasCallOwner(state, call, false)) {
       return;
     }
     // A matching native completion admits local confirmation. Ordinary parent

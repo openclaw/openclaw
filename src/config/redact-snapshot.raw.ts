@@ -1,4 +1,3 @@
-// Applies low-level redaction transforms to raw config snapshot data.
 import { isDeepStrictEqual } from "node:util";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import JSON5 from "json5";

@@ -20,19 +20,16 @@ struct TalkGatewaySpeechAudio: Equatable {
         let outputFormat = self.outputFormat?
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased()
-        let isHeaderlessAudio = if let outputFormat {
-            outputFormat.hasPrefix("raw-") ||
-                outputFormat.hasPrefix("raw_") ||
-                outputFormat == "pcm" ||
-                outputFormat == "mulaw" ||
-                outputFormat == "alaw" ||
-                outputFormat.hasPrefix("mulaw_") ||
-                outputFormat.hasPrefix("ulaw_") ||
-                outputFormat.hasPrefix("alaw_")
-        } else {
-            false
-        }
-        if let outputFormat, isHeaderlessAudio {
+        if let outputFormat,
+           outputFormat.hasPrefix("raw-") ||
+           outputFormat.hasPrefix("raw_") ||
+           outputFormat == "pcm" ||
+           outputFormat == "mulaw" ||
+           outputFormat == "alaw" ||
+           outputFormat.hasPrefix("mulaw_") ||
+           outputFormat.hasPrefix("ulaw_") ||
+           outputFormat.hasPrefix("alaw_")
+        {
             // talk.speak does not expose the sample rate needed to play headerless audio.
             // Keep these codecs out of AVAudioPlayer until that protocol metadata exists.
             return .unsupportedRaw(codec: outputFormat)

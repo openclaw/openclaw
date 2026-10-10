@@ -43,6 +43,10 @@ shared saved-result allowance; it does not cap Node's retained live context.
 
 `timeoutMs` is a wall-clock budget per `exec` or `wait` call. Worker preparation, guest
 computation, and inline tool waits share that budget; approval waits pause it.
+For an explicitly `awaitResults: true` cell, off-VM tool waiting also pauses the
+execution allowance. The same unused allowance resumes after settlement;
+worker preparation and guest execution never receive a fresh budget. Existing
+agent-run and tool deadlines continue running during required waits.
 The model-facing `exec` description includes the effective limit. Blocking guest
 computation that exhausts the budget fails with `timeout`. Unfinished tool calls
 can instead return `waiting`, so a later `wait` can resume them with a fresh call

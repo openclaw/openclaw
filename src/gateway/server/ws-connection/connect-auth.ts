@@ -136,13 +136,7 @@ async function authenticateGatewayConnectCore(
     rateLimiter: authRateLimiter,
     clientIp: browserRateLimitClientIp,
   });
-  const {
-    sharedAuthOk,
-    pendingSharedAuthFailure,
-    bootstrapTokenCandidate,
-    deviceTokenCandidate,
-    deviceTokenCandidateSource,
-  } = connectAuthState;
+  const { sharedAuthOk, pendingSharedAuthFailure, bootstrapTokenCandidate } = connectAuthState;
   let { authResult, authOk, authMethod } = connectAuthState;
   let rejectedPendingSharedAuthFailure = pendingSharedAuthFailure;
   const settleRejectedSharedAuthFailure = async () => {
@@ -286,7 +280,6 @@ async function authenticateGatewayConnectCore(
       sharedAuthOk,
       authOk,
       hasSharedAuth,
-      isLocalClient,
     });
     // Device-less shared auth clears self-declared scopes by default.
     // Only first-party local control paths preserve scopes: backend self-
@@ -350,16 +343,7 @@ async function authenticateGatewayConnectCore(
   }
 
   const authDecision = await resolveConnectAuthDecision({
-    state: {
-      authResult,
-      authOk,
-      authMethod,
-      sharedAuthOk,
-      pendingSharedAuthFailure,
-      bootstrapTokenCandidate,
-      deviceTokenCandidate,
-      deviceTokenCandidateSource,
-    },
+    state: connectAuthState,
     hasDeviceIdentity: Boolean(device),
     deviceId: device?.id,
     publicKey: device?.publicKey,

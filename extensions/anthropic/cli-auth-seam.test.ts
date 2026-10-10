@@ -12,6 +12,9 @@ const { runUtf8CommandWithTimeout } = vi.hoisted(() => ({
 vi.mock("openclaw/plugin-sdk/process-runtime", () => ({ runUtf8CommandWithTimeout }));
 
 const { probeClaudeCliAuthStatus } = await import("./cli-auth-api.js");
+const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/process-runtime")>(
+  "openclaw/plugin-sdk/process-runtime",
+);
 
 beforeEach(() => {
   runUtf8CommandWithTimeout.mockReset();
@@ -73,9 +76,6 @@ it.each(["PATH", "explicit"])("runs a Windows Claude npm shim selected by %s", a
           loggedIn: true, authMethod: "claude.ai", email: "windows@example.test"
         }));
       `,
-    );
-    const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/process-runtime")>(
-      "openclaw/plugin-sdk/process-runtime",
     );
     runUtf8CommandWithTimeout.mockImplementation(actual.runUtf8CommandWithTimeout);
     const resolveProgram = windowsSpawn.resolveWindowsSpawnProgram;

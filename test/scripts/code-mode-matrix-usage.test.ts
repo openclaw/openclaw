@@ -68,13 +68,17 @@ function reportedUsage(calls = 1) {
   };
 }
 
-function accounting(events?: unknown[], rootUsage: unknown = reportedUsage()) {
+function accounting({
+  events,
+  ...options
+}: Partial<Parameters<typeof collectMatrixUsage>[0]> & { events?: unknown[] } = {}) {
   return collectMatrixUsage({
     ledger: ledger(events),
     rootSessionKeys: [ROOT],
     settled: true,
     terminalResponseObserved: true,
-    rootUsage,
+    rootUsage: reportedUsage(),
+    ...options,
   });
 }
 
@@ -147,21 +151,13 @@ describe("matrix task billing", () => {
       .run("qa", 2, JSON.stringify(assistant()));
     parent.close();
     const final = await readMatrixSessionLedger(root);
-    const task = collectMatrixUsage({
+    const task = accounting({
       ledger: final,
       after: taskEnd,
-      rootSessionKeys: [ROOT],
-      settled: true,
-      terminalResponseObserved: true,
-      rootUsage: reportedUsage(),
     });
-    const interview = collectMatrixUsage({
+    const interview = accounting({
       ledger: final,
       before: taskEnd,
-      rootSessionKeys: [ROOT],
-      settled: true,
-      terminalResponseObserved: true,
-      rootUsage: reportedUsage(),
     });
     expect(task).toMatchObject({
       complete: true,
@@ -183,126 +179,91 @@ describe("matrix task billing", () => {
     ]);
   });
 
-  it.each([
+  const consumptionCases: {
+    label: string;
+    events?: unknown[];
+    options?: Partial<Parameters<typeof collectMatrixUsage>[0]>;
+    expected: Record<string, unknown>;
+  }[] = [
     {
       label: "missing response usage",
-      event: assistant({ usage: undefined }),
-      complete: false,
-      costComplete: false,
-      totalTokens: null,
-      knownTotalTokens: 24,
+      events: [assistant({ usage: undefined })],
+      expected: { complete: false, costComplete: false, totalTokens: null, knownTotalTokens: 24 },
     },
     {
       label: "placeholder price",
-      event: assistant({
-        usage: {
-          input: 10,
-          output: 4,
-          cacheRead: 8,
-          cacheWrite: 2,
-          totalTokens: 24,
-          cost: { total: 0 },
-        },
-      }),
-      complete: true,
-      costComplete: false,
-      totalTokens: 24,
-      knownTotalTokens: 24,
+      events: [assistant({ usage: { ...assistant().usage, cost: { total: 0 } } })],
+      expected: { complete: true, costComplete: false, totalTokens: 24, knownTotalTokens: 24 },
     },
     {
       label: "provider-billed zero",
-      event: assistant({
-        usage: {
-          input: 10,
-          output: 4,
-          cacheRead: 8,
-          cacheWrite: 2,
-          totalTokens: 24,
-          cost: { total: 0, totalOrigin: "provider-billed" },
-        },
-      }),
-      complete: true,
-      costComplete: true,
-      totalTokens: 24,
-      knownTotalTokens: 24,
+      events: [
+        assistant({
+          usage: { ...assistant().usage, cost: { total: 0, totalOrigin: "provider-billed" } },
+        }),
+      ],
+      expected: { complete: true, costComplete: true, totalTokens: 24, knownTotalTokens: 24 },
     },
     {
       label: "missing cache bucket",
-      event: assistant({ usage: { input: 10, output: 4, totalTokens: 24, cost: { total: 0.01 } } }),
-      complete: false,
-      costComplete: false,
-      totalTokens: null,
-      knownTotalTokens: 24,
+      events: [
+        assistant({ usage: { input: 10, output: 4, totalTokens: 24, cost: { total: 0.01 } } }),
+      ],
+      expected: { complete: false, costComplete: false, totalTokens: null, knownTotalTokens: 24 },
     },
-  ])(
-    "preserves missingness for $label",
-    ({ event, complete, costComplete, totalTokens, knownTotalTokens }) => {
-      expect(accounting([event])).toMatchObject({
-        complete,
-        costComplete,
-        totalTokens,
-        knownTotalTokens,
-      });
-    },
-  );
-
-  it("counts failed model consumption and tool repair while excluding a delivery mirror", () => {
-    const result = accounting(
-      [
+    {
+      label: "failed model and tool consumption without the delivery mirror",
+      events: [
         assistant({ stopReason: "error" }),
         { role: "toolResult", toolCallId: "failed-call", isError: true },
         assistant(),
         { role: "assistant", provider: "openclaw", model: "delivery-mirror" },
       ],
-      reportedUsage(2),
-    );
-    expect(result).toMatchObject({
-      complete: true,
-      totalTokens: 48,
-      assistantTurns: 2,
-      reasoningTokens: 6,
-      modelErrors: 1,
-      toolFailures: 1,
-    });
-  });
-
-  it("keeps known consumption but withholds a total after a lost terminal response", () => {
-    expect(
-      collectMatrixUsage({
-        ledger: ledger(),
-        rootSessionKeys: [ROOT],
-        settled: true,
-        terminalResponseObserved: false,
-        rootUsage: undefined,
-      }),
-    ).toMatchObject({
-      complete: false,
-      totalTokens: null,
-      knownTotalTokens: 24,
-      knownCostUsd: 0.012,
-    });
-  });
-
-  it("retains root auxiliary usage separately without inventing transcript buckets or doubling totals", () => {
-    const result = accounting([assistant()], reportedUsage(2));
-    expect(result).toMatchObject({
-      complete: false,
-      totalTokens: null,
-      knownTotalTokens: 48,
-      input: 10,
-      output: 4,
-      cacheRead: 8,
-      cacheWrite: 2,
-      parents: { knownTotalTokens: 24 },
-    });
-    expect(result.runtimeReconciliation).toMatchObject([
-      {
-        source: "root-response",
-        tokenGap: 24,
-        reported: { input: 20, output: 8, cacheRead: 16, cacheWrite: 4, total: 48 },
-        matched: false,
+      options: { rootUsage: reportedUsage(2) },
+      expected: {
+        complete: true,
+        totalTokens: 48,
+        assistantTurns: 2,
+        reasoningTokens: 6,
+        modelErrors: 1,
+        toolFailures: 1,
       },
-    ]);
+    },
+    {
+      label: "lost terminal response",
+      options: { terminalResponseObserved: false, rootUsage: undefined },
+      expected: { complete: false, totalTokens: null, knownTotalTokens: 24, knownCostUsd: 0.012 },
+    },
+    {
+      label: "root auxiliary usage without invented buckets or doubled totals",
+      options: { rootUsage: reportedUsage(2) },
+      expected: {
+        complete: false,
+        totalTokens: null,
+        knownTotalTokens: 48,
+        input: 10,
+        output: 4,
+        cacheRead: 8,
+        cacheWrite: 2,
+        parents: { knownTotalTokens: 24 },
+        runtimeReconciliation: [
+          {
+            source: "root-response",
+            tokenGap: 24,
+            reported: { input: 20, output: 8, cacheRead: 16, cacheWrite: 4, total: 48 },
+            matched: false,
+          },
+        ],
+      },
+    },
+  ];
+  it.each(consumptionCases)("accounts for $label", ({ events, options, expected }) => {
+    expect(
+      accounting({
+        events,
+        ...options,
+      }),
+    ).toMatchObject(expected);
   });
 
   it.each([
@@ -344,12 +305,8 @@ describe("matrix task billing", () => {
     if (condition === "multiple runs") {
       final.runs.push({ ...final.runs[0]!, runId: "another-run" });
     }
-    const result = collectMatrixUsage({
+    const result = accounting({
       ledger: final,
-      rootSessionKeys: [ROOT],
-      settled: true,
-      terminalResponseObserved: true,
-      rootUsage: reportedUsage(),
       ...(condition === "reused session"
         ? { before: captureMatrixLedgerBoundary({ ...final, rows: [] }) }
         : {}),
@@ -391,12 +348,8 @@ describe("matrix task billing", () => {
   ])(
     "does not equate a final successful response with observed usage for an internal retry: %s",
     (runtimeLog) => {
-      const result = collectMatrixUsage({
+      const result = accounting({
         ledger: ledger(),
-        rootSessionKeys: [ROOT],
-        settled: true,
-        terminalResponseObserved: true,
-        rootUsage: reportedUsage(),
         runtimeLog,
       });
       expect(result).toMatchObject({ complete: false, knownTotalTokens: 24, totalTokens: null });
@@ -409,12 +362,8 @@ describe("matrix task billing", () => {
   it("does not silently discard unlinked model activity in the isolated state", () => {
     const final = ledger();
     final.rows.push({ ...final.rows[0]!, sessionId: "orphan", sessionKey: CHILD });
-    const result = collectMatrixUsage({
+    const result = accounting({
       ledger: final,
-      rootSessionKeys: [ROOT],
-      settled: true,
-      terminalResponseObserved: true,
-      rootUsage: reportedUsage(),
     });
     expect(result).toMatchObject({
       complete: false,
@@ -444,13 +393,10 @@ describe("matrix task billing", () => {
           executionStatus: "running",
         });
       }
-      const result = collectMatrixUsage({
+      const result = accounting({
         ledger: final,
         ...(condition === "rewritten" ? { after: before } : {}),
-        rootSessionKeys: [ROOT],
         settled: condition !== "unsettled",
-        terminalResponseObserved: true,
-        rootUsage: reportedUsage(),
       });
       expect(result.complete).toBe(false);
       expect(result.totalTokens).toBeNull();
@@ -528,7 +474,6 @@ describe("same-source mode comparisons", () => {
     });
     expect(report.pairs[0]!.totalTokens).toEqual({ direct: 24, code: 24, delta: 0, ratio: 1 });
     expect(report.pairs[1]!.totalTokens).toBeNull();
-    expect(report).toEqual(compareCodeModeMatrixModes(rows));
   });
 
   it("does not claim successful-subset savings when another attempt has missing usage", () => {
@@ -538,7 +483,7 @@ describe("same-source mode comparisons", () => {
       modeRow("direct", 2),
       {
         ...modeRow("code", 2),
-        accounting: accounting([assistant({ usage: undefined })]),
+        accounting: accounting({ events: [assistant({ usage: undefined })] }),
       },
     ];
     const result = compareCodeModeMatrixModes(rows);

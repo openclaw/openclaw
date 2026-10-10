@@ -1,4 +1,3 @@
-// Secret input schema helpers validate plugin-declared credential prompts and storage metadata.
 import { z } from "zod";
 import { SecretRefSchema } from "../config/zod-schema.secret-input.js";
 import { sensitive } from "../config/zod-schema.sensitive.js";

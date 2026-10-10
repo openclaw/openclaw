@@ -10,6 +10,7 @@ import { captureSqliteReaderOwner, type SqliteReaderOwner } from "./sqlite-reade
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 import {
   SQLITE_WORKER_PREPARE_COMMAND,
+  type SqliteWorkerEphemeralTarget,
   type SqliteWorkerPreparedBackend,
 } from "./sqlite-worker-contract.js";
 import { requestSqliteWorkerOperationAdmission } from "./sqlite-worker-operation-admission.js";
@@ -61,7 +62,7 @@ export type FixtureOperations = {
   takeReplyOwnership: { input: undefined; output: ReplyOwnership[] };
   commitThenExit: { input: { value: string }; output: never };
   commitUnserializable: { input: { value: string }; output: symbol };
-  failClose: { input: { aggregate: boolean } | undefined; output: undefined };
+  failClose: { input: undefined; output: undefined };
   delayClose: { input: { markerPath: string; reject: boolean }; output: undefined };
   illegalAsync: {
     input: { value: string; gatePath: string; reject: boolean };
@@ -85,9 +86,9 @@ function waitForFile(file: string): Promise<void> {
 
 export function createSqliteWorkerBackend(
   input: FixtureOpenInput | undefined,
-  context: { databasePath: string },
+  context: { databasePath: string; target?: SqliteWorkerEphemeralTarget },
 ): SqliteWorkerPreparedBackend<FixtureOperations> {
-  return createFixtureBackend(input, context.databasePath, false);
+  return createFixtureBackend(input, context.target ? ":memory:" : context.databasePath, false);
 }
 
 export function openExistingSqliteWorkerBackend(
@@ -123,7 +124,7 @@ function createFixtureBackend(
   let writes = 0;
   let prepared = false;
   const preparationOwners: (SqliteReaderOwner | undefined)[] = [];
-  let failClose: { aggregate: boolean } | undefined;
+  let failClose = false;
   let delayedClose: { markerPath: string; reject: boolean } | undefined;
   function append(value: string): Receipt {
     runSqliteImmediateTransactionSync(db, () => {
@@ -154,16 +155,7 @@ function createFixtureBackend(
     clearNodeSqliteKyselyCacheForDatabase(db);
     db.close();
     if (failClose) {
-      const cause = Object.assign(
-        new Error("Fixture native close detail Authorization: Bearer synthetic-close-secret"),
-        { code: "SQLITE_BUSY", errcode: 5, errno: -16 },
-      );
-      const failure = new Error("Fixture native database closed with a cleanup failure", { cause });
-      throw failClose.aggregate
-        ? new AggregateError([failure, cause], "Fixture database cleanup aggregate", {
-            cause: failure,
-          })
-        : failure;
+      throw new Error("Fixture native database closed with a cleanup failure");
     }
   }
   return {
@@ -197,7 +189,7 @@ function createFixtureBackend(
         return waitForFile(command.input.gatePath).then(() => append(command.input.value));
       }
       if (command.type === "failClose") {
-        failClose = command.input ?? { aggregate: false };
+        failClose = true;
         return undefined;
       }
       if (command.type === "read") {

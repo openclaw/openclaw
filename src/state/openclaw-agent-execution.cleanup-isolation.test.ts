@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import fs from "node:fs";
 import type { Worker } from "node:worker_threads";
 import { afterEach, expect, it, vi } from "vitest";
@@ -6,7 +7,7 @@ import { collectNestedErrorCandidates } from "../infra/error-graph-internal.js";
 import { formatErrorMessageWithCode } from "../infra/errors.js";
 import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import { closeOpenClawAgentDatabasesAsync } from "./openclaw-agent-db-lifecycle.js";
-import type { AgentDatabaseRequestExecutionSource } from "./openclaw-agent-execution-contract.js";
+import type { AgentDatabaseRequestExecutionSource } from "./openclaw-agent-execution-admission-contract.js";
 import {
   captureOpenClawAgentDatabaseExecution,
   getOpenClawAgentDatabaseCleanupFailures,
@@ -88,38 +89,56 @@ const source: AgentDatabaseRequestExecutionSource = {
   },
 };
 
-it("keeps other agents usable while a real worker lease cannot close, then recovers its exact owner", async () => {
+it("keeps healthy agents usable while real worker lease cleanup fails, then recovers its exact owner", async () => {
   const env = { OPENCLAW_STATE_DIR: fs.realpathSync(tempDirs.make("agent-cleanup-isolation-")) };
   const shared = openOpenClawStateDatabase({ env });
   const first = captureOpenClawAgentDatabaseExecution({ agentId: "first", env });
-  const second = captureOpenClawAgentDatabaseExecution({ agentId: "second", env });
+  const initial = [
+    first,
+    ...["second", "third", "fourth"].map((agentId) =>
+      captureOpenClawAgentDatabaseExecution({ agentId, env }),
+    ),
+  ];
+  const fifth = captureOpenClawAgentDatabaseExecution({ agentId: "fifth", env });
   const leases = () =>
-    shared.db.prepare("SELECT * FROM agent_database_leases WHERE path = ?").all(first.path);
+    shared.db.prepare("SELECT lease_id FROM agent_database_leases WHERE path = ?").all(first.path);
   fault.path = first.path;
-  await first.prepare(source);
-  const retained = leases();
-  expect(retained).toHaveLength(1);
-  await first.release();
-  Atomics.store(new Int32Array(fault.enabled), 0, 1);
   let retry: ReturnType<typeof captureOpenClawAgentDatabaseExecution> | undefined;
+  let healthy: ReturnType<typeof captureOpenClawAgentDatabaseExecution> | undefined;
   try {
-    // This must cross the real native-close and retained-lease cleanup boundaries.
-    await second.prepare(source);
-    expect(await second.runExisting(source, async () => "second remains usable")).toBe(
-      "second remains usable",
-    );
+    for (const execution of initial) {
+      await execution.prepare(source);
+      await execution.release();
+    }
+    const retained = leases();
+    expect(retained).toHaveLength(1);
+    const retainedLease = retained[0];
+    assert(retainedLease);
+    Atomics.store(new Int32Array(fault.enabled), 0, 1);
+
+    await fifth.prepare(source);
+    // Releasing a fifth warm owner crosses the real native-close and lease-cleanup boundaries.
+    await fifth.release();
     expect(leases()).toEqual(retained);
     expect(getOpenClawAgentDatabaseCleanupFailures(shared.path)).toEqual([
-      expect.objectContaining({
-        agentId: "first",
-        reason: expect.stringContaining("controlled idle worker lease failure"),
-      }),
+      expect.objectContaining({ agentId: "first" }),
     ]);
-    const diagnostic = getOpenClawAgentDatabaseCleanupFailures(shared.path)[0]!.reason;
+    const reported = getOpenClawAgentDatabaseCleanupFailures(shared.path)[0];
+    assert(reported);
+    const diagnostic = reported.reason;
     expect(diagnostic).toContain("SQLITE_BUSY");
+    expect(diagnostic).toContain("controlled idle worker lease failure");
     expect(diagnostic).toContain("controlled lease release refused");
     expect(diagnostic).not.toContain("synthetic-cleanup-secret");
-    await second.release();
+
+    healthy = captureOpenClawAgentDatabaseExecution({ agentId: "fifth", env });
+    await healthy.prepare(source);
+    expect(
+      await healthy.runExisting(source, (scope) =>
+        scope.execute({ type: "database.recordIntegrity", input: undefined }),
+      ),
+    ).toBeTypeOf("boolean");
+    await healthy.release();
 
     retry = captureOpenClawAgentDatabaseExecution({ agentId: "first", env });
     const failure: unknown = await retry.prepare(source).catch((error: unknown) => error);
@@ -132,12 +151,24 @@ it("keeps other agents usable while a real worker lease cannot close, then recov
     expect(leases()).toEqual(retained);
     Atomics.store(new Int32Array(fault.enabled), 0, 0);
     await retry.prepare(source);
-    expect(await retry.runExisting(source, async () => "first recovered")).toBe("first recovered");
-    expect(leases()).toHaveLength(1);
-    expect(leases()[0]!.lease_id).not.toBe(retained[0]!.lease_id);
+    expect(
+      await retry.runExisting(source, (scope) =>
+        scope.execute({ type: "database.recordIntegrity", input: undefined }),
+      ),
+    ).toBeTypeOf("boolean");
+    const replacement = leases();
+    expect(replacement).toHaveLength(1);
+    const replacementLease = replacement[0];
+    assert(replacementLease);
+    expect(replacementLease.lease_id).not.toBe(retainedLease.lease_id);
     expect(getOpenClawAgentDatabaseCleanupFailures(shared.path)).toEqual([]);
   } finally {
     Atomics.store(new Int32Array(fault.enabled), 0, 0);
-    await Promise.all([first.release(), second.release(), retry?.release()]);
+    await Promise.all([
+      ...initial.map((execution) => execution.release()),
+      fifth.release(),
+      healthy?.release(),
+      retry?.release(),
+    ]);
   }
 });

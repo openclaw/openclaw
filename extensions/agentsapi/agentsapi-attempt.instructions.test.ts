@@ -11,6 +11,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { runAgentsApiAttempt } from "./agentsapi-attempt.js";
 import type { AgentsApiBinding } from "./agentsapi-bindings.js";
 import type { AgentsApiToolSurface } from "./agentsapi-tools.js";
+import { createModel } from "./agentsapi.test-support.js";
 
 const {
   fetchWithSsrFGuardMock,
@@ -27,7 +28,7 @@ const {
     >(),
   watchedSessionsContextMock:
     vi.fn<
-      typeof import("openclaw/plugin-sdk/agent-harness-runtime").buildWatchedSessionsHarnessContext
+      typeof import("openclaw/plugin-sdk/agent-harness-runtime").prepareWatchedSessionsHarnessContext
     >(),
   openModelContextAsyncMock: vi.fn(async () => ({
     buildSessionContext: () => ({ messages: [{ role: "user", content: "Earlier request" }] }),
@@ -49,11 +50,11 @@ vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async () => {
     typeof import("openclaw/plugin-sdk/agent-harness-runtime")
   >("openclaw/plugin-sdk/agent-harness-runtime");
   prepareAgentWorkspaceContextMock.mockImplementation(bootstrap.prepareAgentWorkspaceContext);
-  watchedSessionsContextMock.mockImplementation(bootstrap.buildWatchedSessionsHarnessContext);
+  watchedSessionsContextMock.mockImplementation(bootstrap.prepareWatchedSessionsHarnessContext);
   return {
     ...bootstrap,
     prepareAgentWorkspaceContext: prepareAgentWorkspaceContextMock,
-    buildWatchedSessionsHarnessContext: watchedSessionsContextMock,
+    prepareWatchedSessionsHarnessContext: watchedSessionsContextMock,
     embeddedAgentLog: { warn: vi.fn(), debug: vi.fn() },
     formatErrorMessage: String,
     setActiveEmbeddedRun: vi.fn(),
@@ -68,7 +69,7 @@ vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async () => {
 
 vi.mock("openclaw/plugin-sdk/agent-sessions", () => ({
   SessionManager: {
-    open: () => ({ buildSessionContext: () => ({ messages: [] }) }),
+    openAsync: async () => ({ buildSessionContext: () => ({ messages: [] }) }),
     openModelContextAsync: openModelContextAsyncMock,
   },
 }));
@@ -123,12 +124,12 @@ vi.mock("./agentsapi-session.js", () => ({
 }));
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-afterEach(() => fetchWithSsrFGuardMock.mockReset());
-afterEach(() => prepareAgentWorkspaceContextMock.mockClear());
-afterEach(() => watchedSessionsContextMock.mockClear());
-afterEach(() => openModelContextAsyncMock.mockReset());
-afterEach(() => resetGlobalHookRunner());
 afterEach(() => {
+  fetchWithSsrFGuardMock.mockReset();
+  prepareAgentWorkspaceContextMock.mockClear();
+  watchedSessionsContextMock.mockClear();
+  openModelContextAsyncMock.mockReset();
+  resetGlobalHookRunner();
   promptFixture.declarations = [];
   promptFixture.turnInputs = [];
   vi.restoreAllMocks();
@@ -355,7 +356,7 @@ describe("Agents API agent workspace instructions", () => {
       config: { agents: { defaults: { userTimezone: "America/Los_Angeles" } } },
     });
     promptFixture.declarations = toolDeclarations("message", "sessions_history");
-    watchedSessionsContextMock.mockReturnValueOnce("Watched fixture session: fixture-one");
+    watchedSessionsContextMock.mockResolvedValueOnce("Watched fixture session: fixture-one");
     const binding = await fixture.run();
     expect(promptFixture.turnInputs[0]).toContain("Current date: 2026-09-25");
     expect(promptFixture.turnInputs[0]).toContain("Time zone: America/Los_Angeles");
@@ -366,7 +367,7 @@ describe("Agents API agent workspace instructions", () => {
     expect(promptFixture.turnInputs[0]).toContain("Fixture prompt");
 
     now.mockReturnValue(Date.parse("2026-09-26T12:00:00-07:00"));
-    watchedSessionsContextMock.mockReturnValueOnce("Watched fixture session: fixture-two");
+    watchedSessionsContextMock.mockResolvedValueOnce("Watched fixture session: fixture-two");
     await fixture.run(binding, { sourceReplyDeliveryMode: "message_tool_only" });
     expect(promptFixture.turnInputs[1]).toContain("Current date: 2026-09-26");
     expect(promptFixture.turnInputs[1]).toContain("Use `message(action=send)`");
@@ -380,27 +381,22 @@ describe("Agents API agent workspace instructions", () => {
     expect(fixture.requests[1]).toEqual({ agent: { reasoning: { effort: null } } });
   });
 
-  it.each([undefined, " \n\t"])(
-    "keeps an empty snapshot when AGENTS.md is missing or blank (%s)",
-    async (content) => {
-      const fixture = await createFixture();
-      const instructionsPath = path.join(fixture.workspace, "AGENTS.md");
-      if (content !== undefined) {
-        await fs.writeFile(instructionsPath, content);
-      }
-      const binding = await fixture.run();
-      const initialInstructions = fixture.requests[0]?.agent.instructions;
-      expect(initialInstructions).toContain("Extra fixture instructions");
-      expect(initialInstructions).not.toContain("OpenClaw Agent Workspace Instructions");
-      await fs.writeFile(instructionsPath, "Rules added after session creation.");
-      await fixture.run(binding);
-      expect(fixture.requests[1]).toEqual({ agent: { reasoning: { effort: null } } });
-      await fixture.run();
-      expect(fixture.requests[2]?.agent.instructions).toContain(
-        "Rules added after session creation.",
-      );
-    },
-  );
+  it("keeps an empty snapshot when AGENTS.md is blank", async () => {
+    const fixture = await createFixture();
+    const instructionsPath = path.join(fixture.workspace, "AGENTS.md");
+    await fs.writeFile(instructionsPath, " \n\t");
+    const binding = await fixture.run();
+    const initialInstructions = fixture.requests[0]?.agent.instructions;
+    expect(initialInstructions).toContain("Extra fixture instructions");
+    expect(initialInstructions).not.toContain("OpenClaw Agent Workspace Instructions");
+    await fs.writeFile(instructionsPath, "Rules added after session creation.");
+    await fixture.run(binding);
+    expect(fixture.requests[1]).toEqual({ agent: { reasoning: { effort: null } } });
+    await fixture.run();
+    expect(fixture.requests[2]?.agent.instructions).toContain(
+      "Rules added after session creation.",
+    );
+  });
 
   it.each([
     { bootstrapMaxChars: 300, bootstrapTotalMaxChars: 600, budget: 300 },
@@ -490,18 +486,7 @@ async function createFixture(overrides: Partial<AgentHarnessAttemptParamsV2> = {
     timeoutMs: 60_000,
     provider: "openai",
     modelId: "model-fixture",
-    model: {
-      id: "model-fixture",
-      name: "Fixture Model",
-      provider: "openai",
-      api: "openai-responses",
-      baseUrl: "https://api.openai.com/v1",
-      reasoning: false,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 1024,
-      maxTokens: 512,
-    },
+    model: createModel({ id: "model-fixture" }),
     thinkLevel: "off",
     resolvedApiKey: "fixture-not-a-real-api-key",
     authProfileStore: { version: 1, profiles: {} },

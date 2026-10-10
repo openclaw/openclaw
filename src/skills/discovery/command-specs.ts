@@ -11,6 +11,7 @@ import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snaps
 import { resolveSkillTelemetrySource } from "../loading/source.js";
 import { filterSkillEntries } from "../loading/workspace-skill-filter.js";
 import { loadVisibleSkills, prepareWorkspaceSkills } from "../loading/workspace-skill-loader.js";
+import { resolveSkillFileHost } from "../skill-file-host.js";
 import type {
   SkillEligibilityContext,
   SkillCommandSpec,
@@ -19,6 +20,7 @@ import type {
 } from "../types.js";
 import { resolveEffectiveAgentSkillFilter } from "./agent-filter.js";
 import { sanitizeSkillCommandName, SKILL_COMMAND_MAX_LENGTH } from "./command-name.js";
+import { recordSkillCommandFileHost } from "./skill-command-provenance.js";
 import { isSkillPromptVisible, isSkillUserInvocable } from "./skill-index.js";
 
 const skillsLogger = createSubsystemLogger("skills");
@@ -38,21 +40,17 @@ function logSkillCommandOnce(
 }
 
 function resolveUniqueSkillCommandName(base: string, used: Set<string>): string {
-  const normalizedBase = normalizeLowercaseStringOrEmpty(base);
-  if (!used.has(normalizedBase)) {
+  if (!used.has(base)) {
     return base;
   }
   for (let index = 2; index < 1000; index += 1) {
     const suffix = `_${index}`;
-    const maxBaseLength = Math.max(1, SKILL_COMMAND_MAX_LENGTH - suffix.length);
-    const trimmedBase = base.slice(0, maxBaseLength);
-    const candidate = `${trimmedBase}${suffix}`;
-    const candidateKey = normalizeLowercaseStringOrEmpty(candidate);
-    if (!used.has(candidateKey)) {
+    const candidate = `${base.slice(0, SKILL_COMMAND_MAX_LENGTH - suffix.length)}${suffix}`;
+    if (!used.has(candidate)) {
       return candidate;
     }
   }
-  return `${base.slice(0, Math.max(1, SKILL_COMMAND_MAX_LENGTH - 2))}_x`;
+  return `${base.slice(0, SKILL_COMMAND_MAX_LENGTH - 2)}_x`;
 }
 
 type WorkspaceSkillCommandOptions = {
@@ -125,6 +123,7 @@ function assembleWorkspaceSkillCommandSpecs(
   const used = new Set<string>();
   for (const reserved of opts?.reservedNames ?? []) {
     used.add(normalizeLowercaseStringOrEmpty(reserved));
+    used.add(sanitizeSkillCommandName(reserved));
   }
 
   const specs: SkillCommandSpec[] = [];
@@ -150,7 +149,7 @@ function assembleWorkspaceSkillCommandSpecs(
         level,
       );
     }
-    used.add(normalizeLowercaseStringOrEmpty(unique));
+    used.add(unique);
     return unique;
   };
   for (const entry of userInvocable) {
@@ -160,20 +159,14 @@ function assembleWorkspaceSkillCommandSpecs(
     const dispatch = entry.disableCommandDispatch
       ? undefined
       : (() => {
-          const kindRaw = normalizeLowercaseStringOrEmpty(
-            entry.frontmatter?.["command-dispatch"] ??
-              entry.frontmatter?.["command_dispatch"] ??
-              "",
-          );
+          const readCommandField = (key: string) =>
+            entry.frontmatter?.[key] ?? entry.frontmatter?.[key.replaceAll("-", "_")] ?? "";
+          const kindRaw = normalizeLowercaseStringOrEmpty(readCommandField("command-dispatch"));
           if (kindRaw !== "tool") {
             return undefined;
           }
 
-          const toolName = (
-            entry.frontmatter?.["command-tool"] ??
-            entry.frontmatter?.["command_tool"] ??
-            ""
-          ).trim();
+          const toolName = readCommandField("command-tool").trim();
           if (!toolName) {
             logSkillCommandOnce(
               `dispatch:missingTool:${rawName}`,
@@ -183,11 +176,7 @@ function assembleWorkspaceSkillCommandSpecs(
             return undefined;
           }
 
-          const argModeRaw = normalizeOptionalLowercaseString(
-            entry.frontmatter?.["command-arg-mode"] ??
-              entry.frontmatter?.["command_arg_mode"] ??
-              "",
-          );
+          const argModeRaw = normalizeOptionalLowercaseString(readCommandField("command-arg-mode"));
           if (argModeRaw && argModeRaw !== "raw") {
             logSkillCommandOnce(
               `dispatch:badArgMode:${rawName}:${argModeRaw}`,
@@ -199,7 +188,7 @@ function assembleWorkspaceSkillCommandSpecs(
           return { kind: "tool", toolName, argMode: "raw" } as const;
         })();
 
-    specs.push({
+    const spec: SkillCommandSpec = {
       name: unique,
       displayName: entry.skill.displayName ?? rawName,
       skillFile: canonicalizePath(entry.skill.filePath),
@@ -208,7 +197,12 @@ function assembleWorkspaceSkillCommandSpecs(
       modelVisible: isSkillPromptVisible(entry),
       skillSource: resolveSkillTelemetrySource(entry.skill),
       ...(dispatch ? { dispatch } : {}),
-    });
+    };
+    const fileHost = resolveSkillFileHost(entry.skill);
+    if (fileHost) {
+      recordSkillCommandFileHost(spec, fileHost);
+    }
+    specs.push(spec);
   }
 
   const bundleCommands = loadEnabledClaudeBundleCommands({

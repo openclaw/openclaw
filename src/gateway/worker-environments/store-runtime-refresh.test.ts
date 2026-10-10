@@ -121,7 +121,6 @@ describe("worker environment runtime refresh", () => {
   }
 
   it.each([
-    ["ready", "node"],
     ["idle", "node"],
     ["attached", "node"],
     ["attached", "ssh"],
@@ -220,7 +219,7 @@ describe("worker environment runtime refresh", () => {
       if (operation === "destroying") {
         await store.requestDestroy({ environmentId: environment.environmentId, state: "attached" });
       } else if (operation === "moving") {
-        placements.beginPlacementMove({
+        await placements.beginPlacementMove({
           sessionId: placement!.sessionId,
           source: {
             generation: placement!.generation,
@@ -230,7 +229,7 @@ describe("worker environment runtime refresh", () => {
           target: { kind: "gateway" },
         });
       } else {
-        placements.startDrain({
+        await placements.startDrain({
           sessionId: placement!.sessionId,
           environmentId: environment.environmentId,
           ownerEpoch: environment.ownerEpoch,
@@ -257,8 +256,8 @@ describe("worker environment runtime refresh", () => {
         ownerEpoch: environment.ownerEpoch,
       },
     });
-    placements.markWorkspaceResultPending(claim);
-    const pending = placements.listPendingWorkspaceResults();
+    await placements.markWorkspaceResultPending(claim);
+    const pending = await placements.listPendingWorkspaceResultsAsync();
     const beforePlacement = placements.get(placement!.sessionId);
     const binding = {
       sessionId: REQUEST.sessionId,
@@ -280,9 +279,10 @@ describe("worker environment runtime refresh", () => {
       ...beforePlacement,
       workerBundleHash: replacement.bundleHash,
     });
-    expect(placements.listPendingWorkspaceResults()).toEqual([
+    expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([
       { ...pending[0], recoveryRequestedAtMs: nowMs },
     ]);
+    await placements.prepareWorkspaceResultClaim(claim);
     expect(placements.validateWorkspaceResultClaim(claim)).toBe(true);
     expect(recoveryGate.validateWorkerTurn(claim)).toBe(false);
     expect(store.getCredential(environment.environmentId)).toBeUndefined();

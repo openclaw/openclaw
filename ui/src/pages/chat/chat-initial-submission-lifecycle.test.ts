@@ -39,7 +39,21 @@ function initialSubmissionFixture() {
     "retained initial input",
   );
   admitChatSubmission(host, undefined);
-  return { host, input, retained, replace: () => (sessionId = "physical-b") };
+  const submitNewer = () => {
+    const newer = expectDefined(
+      buildInitialChatSubmission(
+        host.sessionKey,
+        { text: "new initial prompt", createdAt: 2 },
+        input.owner,
+        "new-run",
+      ),
+      "new initial prompt",
+    );
+    host.chatSubmissions.retain(newer);
+    admitChatSubmission(host, undefined);
+    return newer.message;
+  };
+  return { host, input, retained, submitNewer, replace: () => (sessionId = "physical-b") };
 }
 
 describe("initial submission lifecycle", () => {
@@ -66,18 +80,30 @@ describe("initial submission lifecycle", () => {
     expect(host.chatMessages).toEqual([]);
   });
 
-  it.each(["completed", "uncertain", "not-started", "rejected"] as const)(
+  it.each(["completed", "uncertain", "not-started", "rejected", "newer handoff"] as const)(
     "retires an initial prompt only after an issued clear (%s)",
     async (result) => {
-      const { host, input } = initialSubmissionFixture();
+      const { host, input, retained, submitNewer } = initialSubmissionFixture();
       await loadChatHistory(host);
+      const response = createDeferred<"completed">();
       const reset = vi.spyOn(host.sessions, "reset");
       if (result === "rejected") {
         reset.mockRejectedValue(new Error("Reset was refused"));
+      } else if (result === "newer handoff") {
+        reset.mockReturnValue(response.promise);
       } else {
         reset.mockResolvedValue(result);
       }
-      await clearChatHistory(host);
+      const clearing = clearChatHistory(host);
+      if (result === "newer handoff") {
+        const newerMessage = submitNewer();
+        response.resolve("completed");
+        await clearing;
+        expect(host.chatMessages).toEqual([newerMessage]);
+        expect(retained).toMatchObject({ pending: false, message: null });
+        return;
+      }
+      await clearing;
       resetChatHistoryProjection(host);
       host.chatSubmissions.retain(input);
       admitChatSubmission(host, undefined);
@@ -87,33 +113,10 @@ describe("initial submission lifecycle", () => {
     },
   );
 
-  it("does not retire a newer initial handoff when an older clear finishes", async () => {
-    const { host, input, retained } = initialSubmissionFixture();
-    await loadChatHistory(host);
-    const reset = createDeferred<"completed">();
-    vi.spyOn(host.sessions, "reset").mockReturnValue(reset.promise);
-    const clearing = clearChatHistory(host);
-    const newer = expectDefined(
-      buildInitialChatSubmission(
-        host.sessionKey,
-        { text: "new initial prompt", createdAt: 2 },
-        input.owner,
-        "new-run",
-      ),
-      "new initial prompt",
-    );
-    host.chatSubmissions.retain(newer);
-    admitChatSubmission(host, undefined);
-    reset.resolve("completed");
-    await clearing;
-    expect(host.chatMessages).toEqual([newer.message]);
-    expect(retained).toMatchObject({ pending: false, message: null });
-  });
-
   it.each(["reset", "new"])(
     "retires initial ownership on authoritative %s and admits a newer run",
     async (reason) => {
-      const { host, input } = initialSubmissionFixture();
+      const { host, input, submitNewer } = initialSubmissionFixture();
       await loadChatHistory(host);
       handlePageGatewayEvent(host, {
         type: "event",
@@ -129,18 +132,8 @@ describe("initial submission lifecycle", () => {
       host.chatSubmissions.retain(input);
       admitChatSubmission(host, undefined);
       expect(host.chatMessages).toEqual([]);
-      const newer = expectDefined(
-        buildInitialChatSubmission(
-          host.sessionKey,
-          { text: "new initial prompt", createdAt: 2 },
-          input.owner,
-          "new-run",
-        ),
-        "new initial prompt",
-      );
-      host.chatSubmissions.retain(newer);
-      admitChatSubmission(host, undefined);
-      expect(host.chatMessages).toEqual([newer.message]);
+      const newerMessage = submitNewer();
+      expect(host.chatMessages).toEqual([newerMessage]);
     },
   );
 });

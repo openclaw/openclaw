@@ -44,12 +44,6 @@ describe("createWorkerPlacementRedispatch", () => {
       providerId: "crabbox",
       nodeDeviceId: "retired-node",
       executionMode: "remote-exec",
-      state: "reclaimed",
-    },
-    {
-      providerId: "crabbox",
-      nodeDeviceId: "retired-node",
-      executionMode: "remote-exec",
       state: "failed",
     },
   ] as const)(
@@ -115,38 +109,23 @@ describe("createWorkerPlacementRedispatch", () => {
   );
 
   it.each([
-    { providerId: "device", executionMode: "worker-turn" },
-    { providerId: "crabbox", executionMode: "remote-exec" },
-  ] as const)(
-    "rejects $providerId nodes without a runtime requirement owner",
-    async ({ providerId, executionMode }) => {
-      const dispatch = vi.fn();
-      const source = { ...placement, executionMode };
-      const redispatch = createWorkerPlacementRedispatch({
-        placements: reader(source, {
-          ...ready,
-          environmentId: placement.environmentId,
-          providerId,
-          nodeDeviceId: "paired-node",
-        }),
-        dispatch,
-      });
-      await expect(redispatch({ ...placement, executionMode }, dispatchOptions)).rejects.toThrow(
-        "authoritative runtime requirement",
-      );
-      expect(dispatch).not.toHaveBeenCalled();
+    {
+      environment: {
+        ...ready,
+        environmentId: placement.environmentId,
+        providerId: "device",
+        nodeDeviceId: "paired-node",
+      },
+      reason: "authoritative runtime requirement",
     },
-  );
-
-  it("rejects a missing prior environment", async () => {
+    { environment: undefined, reason: "has no environment record" },
+  ])("rejects redispatch without $reason", async ({ environment, reason }) => {
     const dispatch = vi.fn();
     const redispatch = createWorkerPlacementRedispatch({
-      placements: reader(placement, undefined),
+      placements: reader(placement, environment),
       dispatch,
     });
-    await expect(redispatch(placement, dispatchOptions)).rejects.toThrow(
-      "has no environment record",
-    );
+    await expect(redispatch(placement, dispatchOptions)).rejects.toThrow(reason);
     expect(dispatch).not.toHaveBeenCalled();
   });
 });

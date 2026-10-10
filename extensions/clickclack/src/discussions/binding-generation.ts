@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { createAsyncLock } from "openclaw/plugin-sdk/async-lock-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import type {
   PluginStateKeyedStore,
@@ -35,7 +36,7 @@ const GENERATION_STORE_OPTIONS = {
 type GenerationStore = {
   store: PluginStateKeyedStore<DiscussionBindingGeneration>;
   native?: PluginStateSyncKeyedStore<DiscussionBindingGeneration>;
-  tail: Promise<void>;
+  withLock: ReturnType<typeof createAsyncLock>;
 };
 const storesByRuntime = new WeakMap<PluginRuntime, GenerationStore>();
 
@@ -60,17 +61,12 @@ function withGenerationStore<T>(
               ),
           }
         : {}),
-      tail: Promise.resolve(),
+      withLock: createAsyncLock(),
     };
     storesByRuntime.set(runtime, owner);
   }
   const currentOwner = owner;
-  const current = owner.tail.then(() => run(currentOwner));
-  owner.tail = current.then(
-    () => undefined,
-    () => undefined,
-  );
-  return current;
+  return currentOwner.withLock(() => run(currentOwner));
 }
 
 function mutateGeneration<T>(

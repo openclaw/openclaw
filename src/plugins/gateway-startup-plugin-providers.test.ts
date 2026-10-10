@@ -224,7 +224,6 @@ describe("selected CLI backend Gateway startup", () => {
       workspaceDir,
       baseMethods: [],
       loadIntent: "startup",
-      log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
     });
     try {
       expect(loaded.pluginRegistry.diagnostics.filter((entry) => entry.level === "error")).toEqual(

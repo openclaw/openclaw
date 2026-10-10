@@ -1,15 +1,9 @@
 import { isTruthyEnvValue } from "../infra/env.js";
 import type { DoctorOptions } from "./doctor.types.js";
 
-export type DoctorRepairMode = {
-  shouldRepair: boolean;
-  shouldForce: boolean;
-  nonInteractive: boolean;
-  canPrompt: boolean;
-  updateInProgress: boolean;
-};
+export type DoctorRepairMode = ReturnType<typeof resolveDoctorRepairMode>;
 
-export function resolveDoctorRepairMode(options: DoctorOptions): DoctorRepairMode {
+export function resolveDoctorRepairMode(options: DoctorOptions) {
   const yes = options.yes === true;
   const requestedNonInteractive = options.nonInteractive === true;
   const shouldRepair = options.repair === true || yes;
@@ -39,14 +33,9 @@ export function shouldAutoApproveDoctorFix(
     blockDuringUpdate?: boolean;
   } = {},
 ): boolean {
-  if (!mode.shouldRepair) {
-    return false;
-  }
-  if (params.requiresForce && !mode.shouldForce) {
-    return false;
-  }
-  if (params.blockDuringUpdate && isDoctorUpdateRepairMode(mode)) {
-    return false;
-  }
-  return true;
+  return (
+    mode.shouldRepair &&
+    !(params.requiresForce && !mode.shouldForce) &&
+    !(params.blockDuringUpdate && isDoctorUpdateRepairMode(mode))
+  );
 }

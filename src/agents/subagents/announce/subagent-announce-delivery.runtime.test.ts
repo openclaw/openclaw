@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createInternalAgentTurnFacade } from "../../../gateway/agent-turn/internal-facade.js";
 import { WRITE_SCOPE } from "../../../gateway/method-scopes.js";
 import { createGatewayMethodRegistry } from "../../../gateway/methods/registry.js";
@@ -16,10 +16,18 @@ import {
   type EmbeddedAgentQueueHandle,
 } from "../../embedded-agent-runner/runs.js";
 import { createEmbeddedRunHandle } from "../../embedded-agent-runner/runs.test-support.js";
+import {
+  expectDeliveryPath,
+  mockCallArg,
+  taskCompletionEvents,
+} from "../../subagent-test-fixtures.test-helpers.js";
 import { maybeSteerSubagentAnnounce } from "./subagent-announce-active-wake.js";
-import { dispatchSubagentAnnounceAgent } from "./subagent-announce-delivery.runtime.js";
+import { deliverSubagentAnnouncement } from "./subagent-announce-delivery.js";
 import { runSubagentAnnounceDispatch } from "./subagent-announce-dispatch.js";
-import { setSubagentAnnounceDeliveryDepsForTest } from "./subagent-announce-overrides.test-support.js";
+import {
+  setSubagentAnnounceDeliveryDepsForTest,
+  type SubagentAnnounceDeliveryTestDeps,
+} from "./subagent-announce-overrides.test-support.js";
 
 function createContext(handlers: GatewayRequestHandlers): GatewayRequestContext {
   const context = {
@@ -56,32 +64,6 @@ function createRegistry(handlers: GatewayRequestHandlers) {
 }
 
 describe("subagent announce Gateway instance dispatch", () => {
-  it("delivers a detached announce through its explicit instance resolver", async () => {
-    const context = createContext({
-      agent: ({ respond }) => respond(true, { raw: true }),
-    });
-    const idempotencyKey = "detached-subagent-announce";
-    context.dedupe.set(`agent:${idempotencyKey}`, {
-      ts: Date.now(),
-      ok: true,
-      payload: { runId: "announce-run", status: "ok", summary: "delivered" },
-    });
-
-    await expect(
-      dispatchSubagentAnnounceAgent(
-        {
-          message: "Process one completed child result.",
-          idempotencyKey,
-        },
-        {
-          expectFinal: true,
-          forceSyntheticClient: true,
-          resolveGatewayContext: () => context,
-        },
-      ),
-    ).resolves.toEqual({ runId: "announce-run", status: "ok", summary: "delivered" });
-  });
-
   it("delivers through a lifecycle-fenced instance resolver scope", async () => {
     const context = createContext({
       agent: ({ respond }) => respond(true, { raw: true }),
@@ -97,7 +79,8 @@ describe("subagent announce Gateway instance dispatch", () => {
       withPluginRuntimeGatewayContextResolver(
         () => context,
         () =>
-          dispatchSubagentAnnounceAgent(
+          dispatchGatewayMethodInProcess(
+            "agent",
             {
               message: "Process one completed child result.",
               idempotencyKey,
@@ -152,6 +135,86 @@ describe("subagent announce active requester admission", () => {
   const requesterSessionKey = "agent:main:announce-requester";
   const sessionId = "announce-requester";
   const steerMessage = "Child task finished.";
+
+  it("keeps the remaining wake budget after compaction and delivery-mode mismatch", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    onTestFinished(() => {
+      setSubagentAnnounceDeliveryDepsForTest();
+      vi.useRealTimers();
+    });
+    const callGateway = vi.fn(async () => {
+      throw new Error("Active requester completion must not dispatch another Gateway turn");
+    });
+    let attempt = 0;
+    const queueEmbeddedAgentMessageWithOutcome = vi.fn<
+      SubagentAnnounceDeliveryTestDeps["queueEmbeddedAgentMessageWithOutcome"]
+    >((queuedSessionId) => {
+      attempt += 1;
+      if (attempt === 1) {
+        vi.setSystemTime(118_000);
+        return {
+          queued: false,
+          sessionId: queuedSessionId,
+          reason: "compacting",
+          gatewayHealth: "live",
+        };
+      }
+      if (attempt === 2) {
+        vi.setSystemTime(119_500);
+        return {
+          queued: false,
+          sessionId: queuedSessionId,
+          reason: "source_reply_delivery_mode_mismatch",
+          gatewayHealth: "live",
+        };
+      }
+      return {
+        queued: true,
+        sessionId: queuedSessionId,
+        target: "embedded_run",
+        gatewayHealth: "live",
+      };
+    });
+    const budgetRequesterSessionKey = "agent:main:discord:dm:U123";
+    const origin = { channel: "discord", to: "dm:U123", accountId: "acct-1" };
+    setSubagentAnnounceDeliveryDepsForTest({
+      callGateway,
+      getRuntimeConfig: () => ({}),
+      getRequesterSessionActivity: () => ({ sessionId, isActive: true }),
+      loadRequesterSessionEntry: () => ({
+        cfg: {},
+        canonicalKey: budgetRequesterSessionKey,
+        agentId: "main",
+        entry: { sessionId, updatedAt: 1 },
+      }),
+      queueEmbeddedAgentMessageWithOutcome,
+    });
+    const delivery = deliverSubagentAnnouncement({
+      requesterSessionKey: budgetRequesterSessionKey,
+      targetRequesterSessionKey: budgetRequesterSessionKey,
+      triggerMessage: "child done",
+      requesterSessionOrigin: origin,
+      completionDirectOrigin: origin,
+      directOrigin: origin,
+      requesterIsSubagent: false,
+      expectsCompletionMessage: true,
+      bestEffortDeliver: true,
+      directIdempotencyKey: "announce-active-wake-budget",
+      sourceRunId: "child-run",
+      sourceTool: "subagent_announce",
+      internalEvents: taskCompletionEvents({ childSessionId: "child-session-id" }),
+    });
+    await vi.runAllTimersAsync();
+
+    expectDeliveryPath(await delivery, "steered");
+    expect(queueEmbeddedAgentMessageWithOutcome).toHaveBeenCalledTimes(3);
+    const retryOptions = mockCallArg(queueEmbeddedAgentMessageWithOutcome, 2, 2);
+    expect(retryOptions.deliveryTimeoutMs).toBe(500);
+    expect(retryOptions.sourceReplyDeliveryMode).toBeUndefined();
+    expect(retryOptions.waitForTranscriptCommit).toBe(true);
+    expect(callGateway).not.toHaveBeenCalled();
+  });
 
   async function dispatchToRequester(
     handle: EmbeddedAgentQueueHandle,

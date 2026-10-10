@@ -1,5 +1,6 @@
 import {
   assertOperatorModelAllowed,
+  createOperatorModelSelectionAssertion,
   type AdmittedRunOperatorAuthority,
 } from "../agents/admitted-run-context.js";
 import { resolveAgentDir, type AgentModelPrimaryWriteTarget } from "../agents/agent-scope.js";
@@ -32,11 +33,13 @@ import {
   SESSION_MODEL_OVERRIDE_TRANSACTION_FIELDS,
   sessionModelOverrideChangesApplied,
 } from "../config/sessions/session-snapshot-merge.js";
+import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { triggerSessionPatchHook } from "../gateway/session-patch-hooks.js";
 import { resolveSessionWorkerPlacementContext } from "../gateway/session-worker-placement-context.js";
 import { resolveWorkerPlacementSessionRuntimeCapabilities } from "../gateway/worker-environments/placement-session-runtime.js";
+import { readSessionWorkerPlacementAsync } from "../gateway/worker-environments/session-placement-lifecycle.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveSystemEventQueueKey } from "../infra/system-event-ownership.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
@@ -83,6 +86,8 @@ export type ApplySessionModelSelectionParams = {
 
 export type InternalApplySessionModelSelectionParams = ApplySessionModelSelectionParams & {
   operatorAuthority?: AdmittedRunOperatorAuthority;
+  /** Set only by the released SDK adapter for its opaque synchronous validator. */
+  nativeCommitValidation?: true;
 };
 
 export type ApplySessionModelSelectionResult =
@@ -110,45 +115,6 @@ export type ApplySessionModelSelectionResult =
     }
   | { status: "conflict"; message: string };
 
-type AppliedRuntimeDirective = Exclude<
-  Parameters<typeof applyModelRuntimeDirective>[1],
-  { kind: "invalid" }
->;
-
-type ApplySessionModelSelectionToEntryResult = {
-  changed: boolean;
-  runtimeChange?: { kind: "clear" } | { kind: "set"; runtime: string };
-};
-
-/** Applies the model transaction field family to one caller-owned snapshot. */
-function applySessionModelSelectionToEntry(params: {
-  cfg: OpenClawConfig;
-  agentDir: string;
-  entry: SessionEntry;
-  currentProvider: string;
-  request: SessionModelSelectionRequest;
-  runtime: AppliedRuntimeDirective;
-  markLiveSwitchPending?: boolean;
-}): ApplySessionModelSelectionToEntryResult {
-  const modelChange = applyModelOverrideWithAuthProfileCompatibility({
-    cfg: params.cfg,
-    agentDir: params.agentDir,
-    entry: params.entry,
-    currentProvider: params.currentProvider,
-    selection: params.request,
-    explicitDefaultSelection: params.request.isDefault,
-    profileOverride: params.request.profileOverride,
-    markLiveSwitchPending: params.markLiveSwitchPending,
-  });
-  const runtimeChange = applyModelRuntimeDirective(params.entry, params.runtime);
-  return {
-    changed: modelChange.updated || runtimeChange.updated,
-    ...(params.runtime.kind === "clear" || params.runtime.kind === "set"
-      ? { runtimeChange: params.runtime }
-      : {}),
-  };
-}
-
 function formatModelSwitchEvent(provider: string, model: string, alias?: string): string {
   const label = `${provider}/${model}`;
   return alias ? `Model switched to ${alias} (${label}).` : `Model switched to ${label}.`;
@@ -167,18 +133,23 @@ function rejectNotAllowed(provider: string, model: string): ApplySessionModelSel
  * active cloud-worker placement. Mirrors the sessions.patch guard so directive
  * model changes are validated before they persist.
  */
-function resolveActivePlacementModelSelectionError(params: {
-  cfg: OpenClawConfig;
-  agentId: string;
-  sessionKey: string;
-  entry: SessionEntry;
-}): string | undefined {
+function resolveActivePlacementModelSelectionError(
+  params: {
+    cfg: OpenClawConfig;
+    agentId: string;
+    sessionKey: string;
+    entry: SessionEntry;
+  },
+  prepared?: { placement: Awaited<ReturnType<typeof readSessionWorkerPlacementAsync>> },
+): string | undefined {
   const sessionId = params.entry.sessionId;
   if (!sessionId) {
     return undefined;
   }
   const placementService = resolveSessionWorkerPlacementContext().workerSessionPlacementService;
-  const placement = placementService?.getMany([sessionId]).get(sessionId);
+  const placement = prepared
+    ? prepared.placement
+    : placementService?.getMany([sessionId]).get(sessionId);
   if (!placement || placement.state === "local") {
     return undefined;
   }
@@ -291,37 +262,22 @@ export async function applySessionModelSelectionInternal(
   if (authProfileError) {
     return { status: "rejected", reason: "not-allowed", message: authProfileError };
   }
-  // Metadata preparation can yield. Memory-only sessions need the same lock and
-  // replacement fence that persisted sessions enforce in their atomic write.
-  const currentEntry = params.storePath
-    ? startingEntry
-    : (params.sessionStore[params.sessionKey] ?? params.sessionEntry);
-  if (isModelSelectionLocked(currentEntry)) {
-    return { status: "rejected", reason: "locked", message: MODEL_SELECTION_LOCKED_MESSAGE };
-  }
-  if (
-    !params.storePath &&
-    (params.sessionStore[params.sessionKey] !== startingStoreEntry ||
-      currentEntry.sessionId !== initialEntry.sessionId)
-  ) {
-    return {
-      status: "conflict",
-      message: "Model change was not applied because the session changed. Retry.",
-    };
-  }
   const runtime = prepared.runtime;
   const thinkingCatalog = prepared.catalog;
   const selectedCatalogEntry = findSelectedCatalogEntry({ catalog: thinkingCatalog, ...request });
   const nextEntry = { ...startingEntry };
-  const applied = applySessionModelSelectionToEntry({
+  const modelChange = applyModelOverrideWithAuthProfileCompatibility({
     cfg: params.cfg,
     agentDir: resolveAgentDir(params.cfg, params.agentId),
     entry: nextEntry,
     currentProvider: params.currentProvider,
-    request,
-    runtime,
+    selection: request,
+    explicitDefaultSelection: request.isDefault,
+    profileOverride: request.profileOverride,
     markLiveSwitchPending: params.markLiveSwitchPending,
   });
+  const runtimeChange = applyModelRuntimeDirective(nextEntry, runtime);
+  const selectionChanged = modelChange.updated || runtimeChange.updated;
   const thinkingRuntime = resolveEffectiveAgentRuntime({
     cfg: params.cfg,
     provider: request.provider,
@@ -355,12 +311,20 @@ export async function applySessionModelSelectionInternal(
       };
     }
   }
-  const placementError = resolveActivePlacementModelSelectionError({
-    cfg: params.cfg,
-    agentId: params.agentId,
-    sessionKey: params.sessionKey,
-    entry: nextEntry,
-  });
+  const placementError = resolveActivePlacementModelSelectionError(
+    {
+      cfg: params.cfg,
+      agentId: params.agentId,
+      sessionKey: params.sessionKey,
+      entry: nextEntry,
+    },
+    {
+      placement: await readSessionWorkerPlacementAsync({
+        context: resolveSessionWorkerPlacementContext(),
+        sessionId: nextEntry.sessionId,
+      }),
+    },
+  );
   if (placementError) {
     return { status: "rejected", reason: "invalid-runtime", message: placementError };
   }
@@ -371,7 +335,8 @@ export async function applySessionModelSelectionInternal(
   // durable write commits. Revalidate placement inside the synchronous commit boundary so an
   // override that became incompatible during that window is rejected without mutating state.
   const validateCommit = () =>
-    validateSelection() ??
+    params.validateAuthProfileSelection?.() ??
+    prepared.validateRuntimeSelection?.() ??
     resolveActivePlacementModelSelectionError({
       cfg: params.cfg,
       agentId: params.agentId,
@@ -385,10 +350,15 @@ export async function applySessionModelSelectionInternal(
       initialEntry,
       entry: nextEntry,
       allowCreate: params.allowCreate,
-      reassertLiveModelSwitchPending: applied.changed && nextEntry.liveModelSwitchPending === true,
+      reassertLiveModelSwitchPending: selectionChanged && nextEntry.liveModelSwitchPending === true,
       requireModelSelectionUnlocked: true,
       touchedFields: SESSION_MODEL_OVERRIDE_TRANSACTION_FIELDS,
+      commitGuard: composeSessionSourceAssertion([
+        operatorScope?.assertCurrent,
+        createOperatorModelSelectionAssertion(operatorAuthority, selectedRef),
+      ]),
       validateCommit,
+      nativeCommitValidation: params.nativeCommitValidation,
     });
     if (persistence.entry) {
       params.sessionStore[params.sessionKey] = persistence.entry;
@@ -407,7 +377,7 @@ export async function applySessionModelSelectionInternal(
         next: nextEntry,
         current: persistence.entry,
         reassertLiveModelSwitchPending:
-          applied.changed && nextEntry.liveModelSwitchPending === true,
+          selectionChanged && nextEntry.liveModelSwitchPending === true,
       })
     ) {
       return {
@@ -417,9 +387,24 @@ export async function applySessionModelSelectionInternal(
     }
     persistedEntry = persistence.entry;
   } else {
-    const commitError = validateCommit();
+    const commitError = validateOperatorSelection() ?? validateCommit();
     if (commitError) {
       return { status: "rejected", reason: "not-allowed", message: commitError };
+    }
+    // Both metadata and placement preparation can yield. Fence the in-memory
+    // write here, where persisted sessions enforce their lock and identity.
+    const currentEntry = params.sessionStore[params.sessionKey] ?? params.sessionEntry;
+    if (isModelSelectionLocked(currentEntry)) {
+      return { status: "rejected", reason: "locked", message: MODEL_SELECTION_LOCKED_MESSAGE };
+    }
+    if (
+      params.sessionStore[params.sessionKey] !== startingStoreEntry ||
+      currentEntry.sessionId !== initialEntry.sessionId
+    ) {
+      return {
+        status: "conflict",
+        message: "Model change was not applied because the session changed. Retry.",
+      };
     }
     adoptPersistedSessionSnapshot(params.sessionEntry, nextEntry);
     params.sessionStore[params.sessionKey] = params.sessionEntry;
@@ -440,7 +425,7 @@ export async function applySessionModelSelectionInternal(
   const provider = request.provider;
   const model = request.model;
   const effectiveModelRef = `${provider}/${model}`;
-  const changed = applied.changed || thinkingRemap !== undefined;
+  const changed = selectionChanged || thinkingRemap !== undefined;
   operatorScope?.assertCurrent();
   assertOperatorModelAllowed(operatorAuthority, request);
   const configuredDefaultUpdate =
@@ -510,7 +495,7 @@ export async function applySessionModelSelectionInternal(
       modelContextTokens: selectedCatalogEntry?.contextTokens,
     }),
     ...(configuredDefaultUpdate ? { configuredDefaultUpdate } : {}),
-    ...(applied.runtimeChange ? { runtimeChange: applied.runtimeChange } : {}),
+    ...(runtime.kind === "clear" || runtime.kind === "set" ? { runtimeChange: runtime } : {}),
     ...(thinkingRemap ? { thinkingRemap } : {}),
   };
 }

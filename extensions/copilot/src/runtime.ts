@@ -1,4 +1,4 @@
-import { normalize, resolve, sep } from "node:path";
+import { resolve, sep } from "node:path";
 import type { CopilotClient, CopilotClientOptions } from "@github/copilot-sdk";
 import { toStringifiedError as toCopilotRuntimeError } from "openclaw/plugin-sdk/error-runtime";
 import { loadCopilotSdk } from "./sdk-loader.js";
@@ -35,12 +35,7 @@ export interface CopilotClientPoolOptions {
   readonly idleTtlMs?: number;
 }
 
-export interface CopilotClientPool {
-  acquire(key: PoolKey, options: ClientCreateOptions): Promise<PooledClient>;
-  release(handle: PooledClient): Promise<void>;
-  dispose(): Promise<Error[]>;
-  size(): number;
-}
+export type CopilotClientPool = ReturnType<typeof createCopilotClientPool>;
 
 type EntryState =
   | { kind: "creating"; promise: Promise<CopilotClient> }
@@ -60,7 +55,7 @@ interface PoolEntry {
   state: EntryState;
 }
 
-export function createCopilotClientPool(options: CopilotClientPoolOptions = {}): CopilotClientPool {
+export function createCopilotClientPool(options: CopilotClientPoolOptions = {}) {
   const sdkFactory =
     options.sdkFactory ??
     (async (clientOptions: CopilotClientOptions) => {
@@ -340,7 +335,6 @@ function normalizeClientCreateOptions(
 
 function normalizeCopilotHome(copilotHome: string): string {
   let normalizedHome = resolve(copilotHome);
-  normalizedHome = normalize(normalizedHome);
   if (normalizedHome.endsWith(sep) && normalizedHome.length > 1) {
     normalizedHome = normalizedHome.slice(0, -1);
   }

@@ -1,12 +1,18 @@
 /** Shared fixtures for secrets runtime unit tests. */
-import { afterEach, beforeAll, beforeEach, vi } from "vitest";
+import { afterEach, beforeEach, vi } from "vitest";
 import type { AuthProfileStore } from "../agents/auth-profiles.js";
-import type { OpenClawConfig } from "../config/config.js";
+import {
+  clearConfigCache,
+  clearRuntimeConfigSnapshot,
+  type OpenClawConfig,
+} from "../config/config.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import type { PluginWebSearchProviderEntry } from "../plugins/types.js";
+// Keep static: compiled-worker preparation belongs at collection, not in a hook or test deadline.
+import { clearSecretsRuntimeSnapshot, prepareSecretsRuntimeSnapshot } from "./runtime.js";
 
-type PrepareSecretsRuntimeSnapshot = typeof import("./runtime.js").prepareSecretsRuntimeSnapshot;
+type PrepareSecretsRuntimeSnapshot = typeof prepareSecretsRuntimeSnapshot;
 type WebProviderUnderTest = "brave" | "gemini" | "grok" | "kimi" | "perplexity";
 
 const { resolvePluginWebSearchProvidersMock } = vi.hoisted(() => ({
@@ -114,19 +120,6 @@ export function resetPluginWebSearchProvidersMock() {
 export function setupSecretsRuntimeSnapshotTestHooks(): {
   prepareSecretsRuntimeSnapshot: PrepareSecretsRuntimeSnapshot;
 } {
-  let clearConfigCache: typeof import("../config/config.js").clearConfigCache;
-  let clearRuntimeConfigSnapshot: typeof import("../config/config.js").clearRuntimeConfigSnapshot;
-  let clearSecretsRuntimeSnapshot: typeof import("./runtime.js").clearSecretsRuntimeSnapshot;
-  let prepareSecretsRuntimeSnapshotImpl: PrepareSecretsRuntimeSnapshot;
-
-  beforeAll(async () => {
-    ({ clearConfigCache, clearRuntimeConfigSnapshot } = await import("../config/config.js"));
-    ({
-      clearSecretsRuntimeSnapshot,
-      prepareSecretsRuntimeSnapshot: prepareSecretsRuntimeSnapshotImpl,
-    } = await import("./runtime.js"));
-  });
-
   beforeEach(() => {
     resetPluginWebSearchProvidersMock();
   });
@@ -139,7 +132,6 @@ export function setupSecretsRuntimeSnapshotTestHooks(): {
   });
 
   return {
-    prepareSecretsRuntimeSnapshot: ((...args) =>
-      prepareSecretsRuntimeSnapshotImpl(...args)) as PrepareSecretsRuntimeSnapshot,
+    prepareSecretsRuntimeSnapshot,
   };
 }

@@ -1,4 +1,5 @@
 // Gateway-owned GPT-Live bridge over released WebRTC and unlisted direct transport.
+import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import type { PluginLogger } from "openclaw/plugin-sdk/plugin-entry";
 import type {
   RealtimeVoiceAudioOutputPort,
@@ -226,7 +227,7 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
       if (!this.closingPromise) {
         this.releaseResources("abort");
       }
-      throw this.redactAdmissionError(error);
+      throw this.redactError(error, projectOpenAIQuicksilverAuthErrorMessage(error));
     }
     try {
       const requestIds = createOpenAIQuicksilverRequestIds();
@@ -256,12 +257,9 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
     connectSignal: AbortSignal,
   ): Promise<void> {
     this.transport = "direct";
-    let resolveReady!: () => void;
-    const readyPromise = new Promise<void>((resolve) => {
-      resolveReady = resolve;
-    });
+    const ready = createDeferred();
     this.delegations = this.createDelegationController({
-      onSessionStarted: resolveReady,
+      onSessionStarted: ready.resolve,
     });
     await this.connectSocket(
       auth,
@@ -280,7 +278,7 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
         voice: this.config.voice,
       }),
     );
-    await waitForOpenAIQuicksilverConnectStep(readyPromise, connectSignal);
+    await waitForOpenAIQuicksilverConnectStep(ready.promise, connectSignal);
   }
 
   private async connectWebRtc(
@@ -550,16 +548,11 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
     void this.teardown("error", () => this.config.onError?.(redactedError));
   }
 
-  private redactError(error: unknown): Error {
-    const projected = new Error(projectOpenAIQuicksilverErrorMessage("gateway"));
-    if (error instanceof Error && error.name === "TimeoutError") {
-      projected.name = "TimeoutError";
-    }
-    return projected;
-  }
-
-  private redactAdmissionError(error: unknown): Error {
-    const projected = new Error(projectOpenAIQuicksilverAuthErrorMessage(error));
+  private redactError(
+    error: unknown,
+    message = projectOpenAIQuicksilverErrorMessage("gateway"),
+  ): Error {
+    const projected = new Error(message);
     if (error instanceof Error && error.name === "TimeoutError") {
       projected.name = "TimeoutError";
     }

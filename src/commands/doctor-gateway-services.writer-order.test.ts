@@ -9,7 +9,12 @@ import { isDefaultInstallIdentity } from "../config/paths.js";
 import { writeOpenClawConfig } from "../config/test-helpers.js";
 import { runWriteConfigHealth } from "../flows/doctor-health-contribution-runners.config.js";
 import { runGatewayServicesHealth } from "../flows/doctor-health-contribution-runners.gateway.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  listSecretStoreEntries,
+  readSecretStoreValue,
+  writeSecretStoreEntry,
+} from "../secrets/store/secret-store.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { VERSION } from "../version.js";
 import { withDoctorConfigPreflightHome } from "./doctor-config-preflight.test-support.js";
@@ -31,10 +36,9 @@ vi.mock("./doctor-gateway-services.js", async (importOriginal) => ({
   maybeResolveDuelingSystemdGatewayScopes: vi.fn(),
 }));
 vi.mock("./doctor-foreign-launchd-jobs.js", () => ({ noteMacForeignLaunchdJobs: vi.fn() }));
-vi.mock("./doctor-platform-notes.js", () => ({
-  noteMacLaunchAgentOverrides: vi.fn(),
-  noteMacStaleOpenClawUpdateLaunchdJobs: vi.fn(),
-  noteMacLaunchctlGatewayEnvOverrides: vi.fn(),
+vi.mock("./doctor-platform-notes.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./doctor-platform-notes.js")>()),
+  noteMacGatewayPlatformWarnings: vi.fn(),
 }));
 vi.mock("../infra/container-environment.js", () => ({ isContainerEnvironment: () => false }));
 vi.mock("../daemon/service.js", () => ({
@@ -99,12 +103,61 @@ describe("Doctor gateway config writer ordering", () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
-  afterEach(() => {
+  afterEach(async () => {
     vi.restoreAllMocks();
-    closeOpenClawStateDatabaseForTest();
+    await closeOpenClawStateDatabaseAsync();
   });
 
-  it.each(["success", "validation-refusal", "service-failure", "post-commit-failure"])(
+  it.each([false, true])(
+    "preserves an environment token through a store SecretRef (existing=%s)",
+    async (existing) => {
+      await withGatewayServiceHome(async (home) => {
+        const token = "doctor-service-synthetic-credential";
+        const configPath = await writeOpenClawConfig(home, {
+          gateway: { mode: "local" },
+          plugins: { enabled: false },
+          secrets: { providers: { team: { source: "store" } } },
+        });
+        const scope = { kind: "team" as const };
+        if (existing) {
+          await writeSecretStoreEntry({
+            scope,
+            name: "EXISTING_GATEWAY_TOKEN",
+            value: token,
+            kind: "secret",
+            updatedBy: "fixture",
+          });
+        }
+        const entriesBefore = await listSecretStoreEntries({ scope });
+        const originalBytes = await fs.readFile(configPath, "utf8");
+        const ctx = await prepareWriterContext(configPath);
+        const programArguments = [process.execPath, path.join(home, "openclaw.mjs"), "gateway"];
+        service.readCommand.mockResolvedValue({ programArguments, environment: {} });
+        service.buildPlan.mockResolvedValue({ programArguments, environment: {} });
+        service.install.mockResolvedValue(undefined);
+        ctx.prompter.confirmRuntimeRepair = async () => true;
+        await withEnvAsync({ OPENCLAW_GATEWAY_TOKEN: token }, () => runGatewayServicesHealth(ctx));
+
+        const bytes = await fs.readFile(configPath, "utf8");
+        expect(bytes.includes(token)).toBe(false);
+        const ref = JSON.parse(bytes).gateway.auth.token;
+        expect(ref).toMatchObject({ source: "store", provider: "team" });
+        const stored = await readSecretStoreValue({ scope, name: ref.id });
+        expect(stored.ok && stored.value === token).toBe(true);
+        const entriesAfter = await listSecretStoreEntries({ scope });
+        if (existing) {
+          expect(ref.id).toBe("EXISTING_GATEWAY_TOKEN");
+          expect(entriesAfter).toEqual(entriesBefore);
+        } else {
+          expect(entriesAfter).toHaveLength(1);
+        }
+        expect(await fs.readFile(`${configPath}.bak`, "utf8")).toBe(originalBytes);
+        expect(service.install).toHaveBeenCalledOnce();
+      });
+    },
+  );
+
+  it.each(["validation-refusal", "service-failure", "post-commit-failure"])(
     "uses Doctor's persisted baseline through service repair (%s)",
     async (outcome) => {
       await withGatewayServiceHome(
@@ -167,7 +220,8 @@ describe("Doctor gateway config writer ordering", () => {
             expect(service.restart).not.toHaveBeenCalled();
             const committed = await fs.readFile(configPath, "utf8");
             const backup = await fs.readFile(`${configPath}.bak`, "utf8");
-            expect(JSON.parse(committed).gateway.auth.token).toBe("recovered-fixture-token");
+            expect(JSON.parse(committed).gateway.auth.token).toMatchObject({ source: "store" });
+            expect(committed.includes("recovered-fixture-token")).toBe(false);
             // A later contribution must not retry a context whose publication failed.
             ctx.cfg = { ...ctx.cfg, gateway: { ...ctx.cfg.gateway, port: 19092 } };
             await expect(runWriteConfigHealth(ctx, { runPostWriteRepairs: false })).rejects.toBe(
@@ -195,15 +249,17 @@ describe("Doctor gateway config writer ordering", () => {
           } else {
             expect(service.install).toHaveBeenCalledOnce();
             expect(installedSnapshot?.valid).toBe(true);
-            expect(installedSnapshot?.sourceConfig.gateway?.auth?.token).toBe(
-              "recovered-fixture-token",
-            );
+            expect(installedSnapshot?.sourceConfig.gateway?.auth?.token).toMatchObject({
+              source: "store",
+            });
             expect(installedSnapshot?.sourceConfig.browser?.executablePath).toBe(
               "/opt/example/browser-service",
             );
             expect(installedBaseline).toEqual(ctx.cfg);
             expect(ctx.configWriteRefusal).toBeUndefined();
-            expect(ctx.cfg.gateway?.auth?.token).toBe("recovered-fixture-token");
+            expect(ctx.cfg.gateway?.auth?.token).toEqual(
+              installedSnapshot?.sourceConfig.gateway?.auth?.token,
+            );
             expect(ctx.cfg).toEqual(ctx.cfgForPersistence);
             if (outcome === "service-failure") {
               expect(ctx.runtime.error).toHaveBeenCalledWith(
@@ -221,11 +277,14 @@ describe("Doctor gateway config writer ordering", () => {
               expect(snapshot.sourceConfig.browser?.executablePath).toBe(
                 "/opt/example/browser-final",
               );
-              expect(snapshot.sourceConfig.gateway?.auth?.token).toBe("recovered-fixture-token");
+              expect(snapshot.sourceConfig.gateway?.auth?.token).toEqual(
+                installedSnapshot?.sourceConfig.gateway?.auth?.token,
+              );
               expect(ctx.configResult.confirmedConfigSource?.hash).toBe(snapshot.hash);
             });
           }
           const finalBytes = await fs.readFile(configPath, "utf8");
+          expect(finalBytes.includes("recovered-fixture-token")).toBe(false);
           expect(JSON.parse(finalBytes).browser.executablePath).toBe("${BROWSER_BIN}");
           const finalBackup = await fs.readFile(`${configPath}.bak`, "utf8");
           expect(await runWriteConfigHealth(ctx, { runPostWriteRepairs: false })).toBe(

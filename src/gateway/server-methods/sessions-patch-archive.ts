@@ -3,21 +3,18 @@ import {
   ErrorCodes,
   errorShape,
   type ErrorShape,
-  type SessionCreatedActor,
   type SessionsPatchParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { ModelCatalogSnapshot } from "../../agents/model-catalog.js";
+import { SessionWorktreeLifecycleError } from "../../agents/worktrees/errors.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { SessionAccessScope } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { resolveMissingAgentHarnessSessionError } from "../../sessions/agent-harness-session-key.js";
-import {
-  SessionWorktreeLifecycleError,
-  synchronizeSessionWorktreeArchive,
-} from "../../sessions/session-worktree-lifecycle.js";
+import { restoreSessionWorktree } from "../../sessions/session-worktree-lifecycle.js";
 import type { UserModelAccountSelection } from "../model-account-authority.js";
-import { ModelAccountConnectAuthorityError } from "../model-account-connect.js";
+import { ModelAccountConnectAuthorityError } from "../model-account-connect-errors.js";
 import { resolvePluginSessionOwnershipError } from "../session-plugin-ownership.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
 import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
@@ -28,31 +25,30 @@ import {
 import { projectSessionsPatchEntry } from "../sessions-patch.js";
 import { WorkerInferenceSessionDrainBusyError } from "../worker-environments/inference-control-internal.js";
 import {
-  prepareSessionWorkerPlacementArchiveCheck,
+  prepareSessionWorkerPlacementArchiveCheckAsync,
   prepareSessionWorkerPlacementMutationCheck,
   SessionWorkerPlacementStopError,
 } from "../worker-environments/session-placement-lifecycle.js";
 import {
   prepareSessionLifecycleDrain,
   SessionLifecycleWorkspaceRecoveryError,
-  type SessionLifecycleDrain,
 } from "./sessions-lifecycle-drain.js";
+import type {
+  SessionPatchArchivePreparation,
+  SessionPatchArchiveTarget,
+} from "./sessions-patch-archive.types.js";
 import {
   sessionChangedError as archiveChangedError,
   unexpectedPatchError,
 } from "./sessions-patch-errors.js";
+import { resolveSessionPatchTargetError } from "./sessions-patch-expectations.js";
 import {
-  isAgentMainSessionKey,
+  resolveProtectedSessionVisibilityError,
   resolveSessionWorkerPlacementPatchError,
+  prepareSessionWorkerPlacementPatchError,
   sessionLog,
 } from "./sessions-shared.js";
 import type { GatewayRequestContext } from "./types.js";
-
-export type SessionPatchArchivePreparation = {
-  canonicalKey: string;
-  drain: SessionLifecycleDrain;
-  entry?: SessionEntry;
-};
 
 export function releaseSessionPatchArchive(preparation?: SessionPatchArchivePreparation): void {
   try {
@@ -64,18 +60,6 @@ export function releaseSessionPatchArchive(preparation?: SessionPatchArchivePrep
   }
 }
 
-export type SessionPatchArchiveTarget = {
-  archiveActor: SessionCreatedActor | undefined;
-  canonicalKey: string;
-  fullPatch: SessionsPatchParams;
-  initialEntry?: SessionEntry;
-  initialStoreKeys: string[];
-  key: string;
-  lifecycleIdentities: Array<string | undefined>;
-  requestedAgentId?: string;
-  storePath: string;
-};
-
 function archiveUnavailableError(key: string, message: "active" | "stopping"): ErrorShape {
   return errorShape(
     ErrorCodes.UNAVAILABLE,
@@ -84,16 +68,6 @@ function archiveUnavailableError(key: string, message: "active" | "stopping"): E
       : `Session ${key} did not finish stopping; retry the archive.`,
     { retryable: true },
   );
-}
-
-function protectedArchiveError(cfg: OpenClawConfig, canonicalKey: string): ErrorShape | undefined {
-  if (canonicalKey === "unknown") {
-    return errorShape(ErrorCodes.INVALID_REQUEST, "Cannot archive the unknown session sentinel.");
-  }
-  if (canonicalKey === "global" || isAgentMainSessionKey(cfg, canonicalKey)) {
-    return errorShape(ErrorCodes.INVALID_REQUEST, "Cannot archive an agent's main session.");
-  }
-  return undefined;
 }
 
 function archiveTargetChanged(params: {
@@ -166,6 +140,10 @@ export async function prepareSessionPatchArchive(params: {
     ) {
       return err(archiveChangedError(target.key));
     }
+    const expectationError = resolveSessionPatchTargetError(fresh.entry, target);
+    if (expectationError) {
+      return err(expectationError);
+    }
     const missingHarnessSessionError = resolveMissingAgentHarnessSessionError(
       freshCanonicalKey,
       fresh.entry,
@@ -173,7 +151,11 @@ export async function prepareSessionPatchArchive(params: {
     if (missingHarnessSessionError) {
       return err(errorShape(ErrorCodes.INVALID_REQUEST, missingHarnessSessionError));
     }
-    const protectedError = protectedArchiveError(cfg, freshCanonicalKey);
+    const protectedError = resolveProtectedSessionVisibilityError(
+      cfg,
+      freshCanonicalKey,
+      "archive",
+    );
     if (protectedError) {
       return err(protectedError);
     }
@@ -226,7 +208,7 @@ export async function prepareSessionPatchArchive(params: {
   if (!preview.ok) {
     return err(preview.error);
   }
-  const previewPlacementError = resolveSessionWorkerPlacementPatchError({
+  const previewPlacementError = await prepareSessionWorkerPlacementPatchError({
     agentId: freshResolved.agentId,
     cfg,
     context: params.context,
@@ -319,7 +301,7 @@ export function validateSessionPatchArchiveProjection(params: {
     return archiveChangedError(params.key);
   }
   return (
-    protectedArchiveError(params.cfg, params.primaryKey) ??
+    resolveProtectedSessionVisibilityError(params.cfg, params.primaryKey, "archive") ??
     resolvePluginSessionOwnershipError({
       action: "patch",
       entry: params.existingEntry,
@@ -329,7 +311,7 @@ export function validateSessionPatchArchiveProjection(params: {
   );
 }
 
-/** Restore before opening admission; remove only after archive metadata is durable. */
+/** Restore before opening admission; durable archive metadata delegates removal to GC. */
 export async function prepareSessionPatchArchiveTransition(params: {
   archived: boolean;
   entry: SessionEntry;
@@ -339,13 +321,12 @@ export async function prepareSessionPatchArchiveTransition(params: {
   preparation?: SessionPatchArchivePreparation;
 }): Promise<{
   assertCommitAllowed: () => void;
-  afterCommit?: (entry: SessionEntry) => Promise<void>;
 }> {
   const placementTarget = {
     context: params.context,
     sessionId: params.entry.sessionId,
   };
-  const placement = prepareSessionWorkerPlacementArchiveCheck(placementTarget);
+  const placement = await prepareSessionWorkerPlacementArchiveCheckAsync(placementTarget);
   let assertWorktreeMutationAllowed: (() => void) | undefined;
   const commitGuard = () => {
     const authorizationError = params.authorize();
@@ -361,35 +342,17 @@ export async function prepareSessionPatchArchiveTransition(params: {
       );
     }
   };
-  const synchronize = (entry: SessionEntry) =>
-    synchronizeSessionWorktreeArchive({
-      archived: params.archived,
-      entry,
-      scope: params.scope,
-      commitGuard,
-      assertRestoreAllowed: () => {
-        assertWorktreeMutationAllowed = prepareSessionWorkerPlacementMutationCheck(placementTarget);
-      },
-    });
-  // Carry the exact restored binding through the later metadata commit.
-  const assertCommitAllowed = params.archived ? commitGuard : await synchronize(params.entry);
   return {
-    assertCommitAllowed,
-    afterCommit:
-      params.archived && params.entry.worktree && !placement.cleanupPending
-        ? async (entry) => {
-            try {
-              // The durable archive row hands failed cleanup to GC. Keep the lifecycle
-              // fence and compare the exact committed projection, never a fresh successor.
-              assertWorktreeMutationAllowed =
-                prepareSessionWorkerPlacementMutationCheck(placementTarget);
-              await synchronize(entry);
-            } catch (error) {
-              sessionLog.warn(
-                `sessions.patch: archived worktree cleanup deferred for ${params.scope.sessionKey}: ${formatErrorMessage(error)}`,
-              );
-            }
-          }
-        : undefined,
+    assertCommitAllowed: params.archived
+      ? commitGuard
+      : await restoreSessionWorktree({
+          entry: params.entry,
+          scope: params.scope,
+          commitGuard,
+          assertRestoreAllowed: () => {
+            assertWorktreeMutationAllowed =
+              prepareSessionWorkerPlacementMutationCheck(placementTarget);
+          },
+        }),
   };
 }

@@ -40,6 +40,9 @@ export function sessionMenuReasons(params: {
     });
   const renameReason = patchReason({ label: null }, true);
   const pinReason = patchReason({ pinned: true }, true);
+  const promotionReason = !session.sessionId?.trim()
+    ? "Session lifecycle action requires a durable session identity."
+    : patchReason({ sidebarRoot: true }, true);
   const iconReason = patchReason({ icon: null });
   const colorReason = patchReason({ color: null });
   const batchSession = batchRows ? sessionAccessRowForBatch(batchRows) : session;
@@ -60,6 +63,9 @@ export function sessionMenuReasons(params: {
   const archiveReason = lifecycleRows.some((row) => !row.sessionId?.trim())
     ? "Session lifecycle action requires a durable session identity."
     : batchPatchReason({ archived: true }, true);
+  const snoozeReason = !session.sessionId?.trim()
+    ? "Session lifecycle action requires a durable session identity."
+    : patchReason({ snoozedUntil: null }, true);
   const groupReason = reason({
     method: "sessions.groups.put",
     requiredScope: "operator.write",
@@ -85,6 +91,7 @@ export function sessionMenuReasons(params: {
   const cloudWorkerStopReason = cloudWorkerStopAction ? reason(cloudWorkerStopAction) : undefined;
   return {
     ...(pinReason ? { "toggle-pin": pinReason } : {}),
+    ...(snoozeReason ? { snooze: snoozeReason, wake: snoozeReason } : {}),
     ...(renameReason ? { rename: renameReason } : {}),
     ...(iconReason ? { "set-icon": iconReason } : {}),
     ...(colorReason ? { "set-color": colorReason } : {}),
@@ -92,7 +99,8 @@ export function sessionMenuReasons(params: {
     ...(unreadReason ? { "toggle-unread": unreadReason } : {}),
     ...(involvementReason ? { "toggle-involving-me": involvementReason } : {}),
     ...(categoryReason ? { "move-to-group": categoryReason } : {}),
-    ...(archiveReason ? { "toggle-archived": archiveReason } : {}),
+    ...(archiveReason ? { "toggle-archived": archiveReason, "archive-tree": archiveReason } : {}),
+    ...(promotionReason ? { "move-to-top-level": promotionReason } : {}),
     ...(groupReason || categoryReason ? { "new-group": groupReason ?? categoryReason } : {}),
     ...(forkReason ? { fork: forkReason } : {}),
     ...(cloudWorkerStopReason ? { "stop-cloud-worker": cloudWorkerStopReason } : {}),

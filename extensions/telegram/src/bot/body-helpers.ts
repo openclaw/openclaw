@@ -11,13 +11,14 @@ import { renderTelegramTextEntities } from "./inbound-text-entities.js";
 
 type TelegramMediaMessage = Pick<
   Message,
-  "photo" | "video" | "video_note" | "audio" | "voice" | "document" | "sticker"
+  "photo" | "video" | "video_note" | "animation" | "audio" | "voice" | "document" | "sticker"
 >;
 
 type TelegramMediaFileRef =
   | NonNullable<Message["photo"]>[number]
   | NonNullable<Message["video"]>
   | NonNullable<Message["video_note"]>
+  | NonNullable<Message["animation"]>
   | NonNullable<Message["audio"]>
   | NonNullable<Message["voice"]>
   | NonNullable<Message["document"]>
@@ -43,23 +44,17 @@ export function resolveTelegramPrimaryMedia(
   if (!msg) {
     return undefined;
   }
-  const photo = msg.photo?.[msg.photo.length - 1];
-  if (photo) {
-    return { kind: "image", fileRef: photo };
-  }
-  const video = msg.video ?? msg.video_note;
-  if (video) {
-    return { kind: "video", fileRef: video };
-  }
-  const audio = msg.audio ?? msg.voice;
-  if (audio) {
-    return { kind: "audio", fileRef: audio };
-  }
-  if (msg.document) {
-    return { kind: "document", fileRef: msg.document };
-  }
-  if (msg.sticker) {
-    return { kind: "sticker", fileRef: msg.sticker };
+  const candidates: Array<[TelegramMediaKind, TelegramMediaFileRef | undefined]> = [
+    ["image", msg.photo?.[msg.photo.length - 1]],
+    ["video", msg.video ?? msg.video_note ?? msg.animation],
+    ["audio", msg.audio ?? msg.voice],
+    ["document", msg.document],
+    ["sticker", msg.sticker],
+  ];
+  for (const [kind, fileRef] of candidates) {
+    if (fileRef) {
+      return { kind, fileRef };
+    }
   }
   return undefined;
 }
@@ -67,23 +62,12 @@ export function resolveTelegramPrimaryMedia(
 export function buildSenderLabel(msg: Message, senderId?: number | string) {
   const name = buildSenderName(msg);
   const username = msg.from?.username ? `@${msg.from.username}` : undefined;
-  let label = name;
-  if (name && username) {
-    label = `${name} (${username})`;
-  } else if (!name && username) {
-    label = username;
-  }
+  const label = name && username ? `${name} (${username})` : name || username;
   const normalizedSenderId =
     senderId != null ? normalizeOptionalString(String(senderId)) : undefined;
   const fallbackId = normalizedSenderId ?? (msg.from?.id != null ? String(msg.from.id) : undefined);
   const idPart = fallbackId ? `id:${fallbackId}` : undefined;
-  if (label && idPart) {
-    return `${label} ${idPart}`;
-  }
-  if (label) {
-    return label;
-  }
-  return idPart ?? "id:unknown";
+  return [label, idPart].filter(Boolean).join(" ") || "id:unknown";
 }
 
 export type TelegramTextEntity = NonNullable<Message["entities"]>[number];
@@ -103,8 +87,8 @@ function compactRichText(value: string): string {
     .join("\n");
 }
 
-function joinRichText(parts: string[], separator: string): string {
-  return parts.map(compactRichText).filter(Boolean).join(separator);
+function joinRichText(parts: string[]): string {
+  return parts.map(compactRichText).filter(Boolean).join("\n");
 }
 
 function renderRichInlineText(value: RichText | undefined): string {
@@ -133,10 +117,7 @@ function renderRichInlineText(value: RichText | undefined): string {
 
 function renderRichCaption(caption: RichBlockCaption | undefined): string {
   return caption
-    ? joinRichText(
-        [renderRichInlineText(caption.text), renderRichInlineText(caption.credit ?? "")],
-        "\n",
-      )
+    ? joinRichText([renderRichInlineText(caption.text), renderRichInlineText(caption.credit)])
     : "";
 }
 
@@ -150,38 +131,25 @@ function renderRichBlock(block: RichBlock): string {
       return renderRichInlineText(block.text);
     case "expandable_blockquote":
     case "pullquote":
-      return joinRichText(
-        [renderRichInlineText(block.text), renderRichInlineText(block.credit ?? "")],
-        "\n",
-      );
+      return renderRichCaption(block);
     case "mathematical_expression":
       return block.expression;
     case "blockquote":
-      return joinRichText(
-        [renderRichInlineText(block.credit ?? ""), renderRichBlocks(block.blocks)],
-        "\n",
-      );
+      return joinRichText([renderRichInlineText(block.credit), renderRichBlocks(block.blocks)]);
     case "collage":
     case "slideshow":
-      return joinRichText([renderRichCaption(block.caption), renderRichBlocks(block.blocks)], "\n");
+      return joinRichText([renderRichCaption(block.caption), renderRichBlocks(block.blocks)]);
     case "details":
-      return joinRichText(
-        [renderRichInlineText(block.summary), renderRichBlocks(block.blocks)],
-        "\n",
-      );
+      return joinRichText([renderRichInlineText(block.summary), renderRichBlocks(block.blocks)]);
     case "list":
       return joinRichText(
-        block.items.map((item) => joinRichText([item.label, renderRichBlocks(item.blocks)], "\n")),
-        "\n",
+        block.items.map((item) => joinRichText([item.label, renderRichBlocks(item.blocks)])),
       );
     case "table":
-      return joinRichText(
-        [
-          renderRichInlineText(block.caption ?? ""),
-          ...block.cells.flatMap((row) => row.map((cell) => renderRichInlineText(cell.text ?? ""))),
-        ],
-        "\n",
-      );
+      return joinRichText([
+        renderRichInlineText(block.caption),
+        ...block.cells.flatMap((row) => row.map((cell) => renderRichInlineText(cell.text))),
+      ]);
     case "animation":
     case "audio":
     case "document":
@@ -191,10 +159,7 @@ function renderRichBlock(block: RichBlock): string {
     case "voice_note":
       return renderRichCaption(block.caption);
     case "buttons":
-      return joinRichText(
-        block.buttons.map((button) => renderRichInlineText(button.text)),
-        "\n",
-      );
+      return joinRichText(block.buttons.map((button) => renderRichInlineText(button.text)));
     case "anchor":
     case "divider":
       return "";
@@ -204,7 +169,7 @@ function renderRichBlock(block: RichBlock): string {
 }
 
 function renderRichBlocks(blocks: readonly RichBlock[]): string {
-  return joinRichText(blocks.map(renderRichBlock), "\n");
+  return joinRichText(blocks.map(renderRichBlock));
 }
 
 export function resolveTelegramRichMessagePlaceholder(
@@ -217,7 +182,7 @@ export function resolveTelegramRichMessageText(msg: TelegramTextMessage): string
   if (!msg.rich_message) {
     return undefined;
   }
-  return compactRichText(renderRichBlocks(msg.rich_message.blocks)) || undefined;
+  return renderRichBlocks(msg.rich_message.blocks) || undefined;
 }
 
 export function resolveTelegramRichMessageBody(msg: TelegramTextMessage): string | undefined {
@@ -451,30 +416,18 @@ export function normalizeForwardedContext(msg: Message): TelegramForwardedContex
 }
 
 export function extractTelegramLocation(msg: Message): NormalizedLocation | null {
-  const { venue, location } = msg;
-
-  if (venue) {
-    return {
-      latitude: venue.location.latitude,
-      longitude: venue.location.longitude,
-      accuracy: venue.location.horizontal_accuracy,
-      name: venue.title,
-      address: venue.address,
-      source: "place",
-      isLive: false,
-    };
+  const { venue } = msg;
+  const location = venue?.location ?? msg.location;
+  if (!location) {
+    return null;
   }
-
-  if (location) {
-    const isLive = typeof location.live_period === "number" && location.live_period > 0;
-    return {
-      latitude: location.latitude,
-      longitude: location.longitude,
-      accuracy: location.horizontal_accuracy,
-      source: isLive ? "live" : "pin",
-      isLive,
-    };
-  }
-
-  return null;
+  const isLive = !venue && typeof location.live_period === "number" && location.live_period > 0;
+  return {
+    latitude: location.latitude,
+    longitude: location.longitude,
+    accuracy: location.horizontal_accuracy,
+    ...(venue ? { name: venue.title, address: venue.address } : {}),
+    source: venue ? "place" : isLive ? "live" : "pin",
+    isLive,
+  };
 }

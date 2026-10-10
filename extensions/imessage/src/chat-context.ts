@@ -1,4 +1,3 @@
-// Imessage plugin module normalizes equivalent provider conversation identifiers.
 import { normalizeE164 } from "openclaw/plugin-sdk/account-resolution";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { IMessageService, IMessageTarget } from "./targets.js";
@@ -133,16 +132,12 @@ export function resolveIMessageChatMatch(
   cached: IMessageChatContext,
   current: IMessageChatContext,
 ): "match" | "mismatch" | "unknown" {
-  const cachedChatGuid = normalizeOptionalString(cached.chatGuid);
-  const currentChatGuid = normalizeOptionalString(current.chatGuid);
-  const cachedChatIdentifier = normalizeOptionalString(cached.chatIdentifier);
-  const currentChatIdentifier = normalizeOptionalString(current.chatIdentifier);
   const comparisons = [
-    compareChatSelector(cachedChatGuid, currentChatGuid),
-    compareChatSelector(cachedChatIdentifier, currentChatIdentifier),
+    compareChatSelector(cached.chatGuid, current.chatGuid),
+    compareChatSelector(cached.chatIdentifier, current.chatIdentifier),
     compareOptional(cached.chatId, current.chatId),
-    compareChatSelector(cachedChatGuid, currentChatIdentifier, true),
-    compareChatSelector(cachedChatIdentifier, currentChatGuid, true),
+    compareChatSelector(cached.chatGuid, current.chatIdentifier, true),
+    compareChatSelector(cached.chatIdentifier, current.chatGuid, true),
   ].filter((comparison): comparison is boolean => comparison !== undefined);
   if (comparisons.length === 0) {
     return "unknown";

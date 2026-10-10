@@ -1,3 +1,5 @@
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
 import {
   enumerateConversationKeyForms,
   type IMessageApprovalConversationKey,
@@ -30,27 +32,19 @@ function beginIMessageApprovalControlBinding(params: {
   conversation: IMessageApprovalConversationKey;
 }): { close: () => void } {
   const keys = bindingKeys(params.accountId, params.conversation);
-  let resolveDone = () => {};
+  const { promise, resolve } = createDeferred<void>();
   const window: BindingWindow = {
-    done: new Promise<void>((resolve) => {
-      resolveDone = resolve;
-    }),
-    close: () => {},
-  };
-  let closed = false;
-  window.close = () => {
-    if (closed) {
-      return;
-    }
-    closed = true;
-    for (const key of keys) {
-      const windows = pendingByConversation.get(key);
-      windows?.delete(window);
-      if (windows?.size === 0) {
-        pendingByConversation.delete(key);
+    done: promise,
+    close: () => {
+      for (const key of keys) {
+        const windows = pendingByConversation.get(key);
+        windows?.delete(window);
+        if (windows?.size === 0) {
+          pendingByConversation.delete(key);
+        }
       }
-    }
-    resolveDone();
+      resolve();
+    },
   };
   for (const key of keys) {
     const windows = pendingByConversation.get(key) ?? new Set<BindingWindow>();
@@ -78,17 +72,11 @@ async function waitForIMessageApprovalControlBinding(params: {
   if (params.abortSignal?.aborted) {
     throw approvalControlBindingAbortError(params.abortSignal);
   }
-  let detachAbort = () => {};
-  const aborted = new Promise<never>((_resolve, reject) => {
-    const onAbort = () => reject(approvalControlBindingAbortError(params.abortSignal));
-    params.abortSignal?.addEventListener("abort", onAbort, { once: true });
-    detachAbort = () => params.abortSignal?.removeEventListener("abort", onAbort);
-  });
-  try {
-    await Promise.race([Promise.race([...windows].map((window) => window.done)), aborted]);
-  } finally {
-    detachAbort();
-  }
+  await racePromiseWithAbortSignal(
+    Promise.race([...windows].map((window) => window.done)),
+    params.abortSignal,
+    approvalControlBindingAbortError,
+  );
   return true;
 }
 

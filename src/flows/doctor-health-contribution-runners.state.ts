@@ -2,10 +2,11 @@ import { noteBackupDoctorHint } from "../commands/backup-health.js";
 import { isLegacyParentWritableUpdateDoctorPass } from "../commands/doctor/shared/update-phase.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import type { DoctorHealthFlowContext } from "./doctor-health-contribution-types.js";
+import {
+  noteDoctorRepairResult,
+  resolveDoctorWorkspaceDir,
+} from "./doctor-health-contribution-utils.js";
 import { recordDoctorHealthWarnings } from "./doctor-health-contribution.js";
-
-const loadDoctorStateIntegrityModule = async () =>
-  await import("../commands/doctor-state-integrity.js");
 
 export async function runLegacyPluginManifestHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { maybeRepairLegacyPluginManifestContracts } =
@@ -43,8 +44,13 @@ export async function runLegacyPluginSourceCapturesHealth(
 }
 
 export async function runRetainedUpdateRuntimesHealth(ctx: DoctorHealthFlowContext): Promise<void> {
-  const { noteRetainedUpdateRuntimes } = await import("../commands/doctor-retained-runtime.js");
-  await noteRetainedUpdateRuntimes(ctx.env ?? process.env, ctx.prompter.shouldRepair);
+  if (ctx.gatewayMaintenanceActive && ctx.prompter.shouldRepair) {
+    return;
+  }
+  const { prepareRetainedUpdateRuntimeCleanup } =
+    await import("../commands/doctor-retained-runtime.js");
+  const cleanup = await prepareRetainedUpdateRuntimeCleanup(ctx.env ?? process.env);
+  await cleanup(ctx.prompter.shouldRepair);
 }
 
 export async function runReleaseConfiguredPluginInstallsHealth(
@@ -68,12 +74,7 @@ export async function runReleaseConfiguredPluginInstallsHealth(
   if (result.postInstallDoctorResult) {
     ctx.postInstallDoctorResult = result.postInstallDoctorResult;
   }
-  if (result.changes.length > 0) {
-    note(result.changes.join("\n"), "Doctor changes");
-  }
-  if (result.warnings.length > 0) {
-    note(result.warnings.join("\n"), "Doctor warnings");
-  }
+  noteDoctorRepairResult(result, note);
   if (!result.touchedConfig) {
     return;
   }
@@ -121,11 +122,11 @@ export async function runStateIntegrityHealth(ctx: DoctorHealthFlowContext): Pro
     ctx.updateWarnings ??= [];
     ctx.updateWarnings.push(...warnings);
   }
-  const { noteStateIntegrity } = await loadDoctorStateIntegrityModule();
+  const { noteStateIntegrity } = await import("../commands/doctor-state-integrity.js");
   await noteStateIntegrity(ctx.cfg, ctx.prompter, ctx.configPath, {
     stateDirExistedAtStart: ctx.stateDirExistedAtStart,
   });
-  await noteBackupDoctorHint(ctx.env ?? process.env);
+  await noteBackupDoctorHint(ctx.env ?? process.env, ctx.cfg);
   const { noteBackupScratchHealth } = await import("../commands/doctor-backup-scratch.js");
   await noteBackupScratchHealth(ctx.env ?? process.env, ctx.prompter.shouldRepair);
 }
@@ -151,12 +152,7 @@ export async function runCodexSessionRouteHealth(ctx: DoctorHealthFlowContext): 
         }
       : {}),
   });
-  if (result.changes.length > 0) {
-    note(result.changes.join("\n"), "Doctor changes");
-  }
-  if (result.warnings.length > 0) {
-    note(result.warnings.join("\n"), "Doctor warnings");
-  }
+  noteDoctorRepairResult(result, note);
 }
 
 export async function runSessionTranscriptsHealth(ctx: DoctorHealthFlowContext): Promise<void> {
@@ -231,6 +227,14 @@ export async function runSandboxHealth(ctx: DoctorHealthFlowContext): Promise<vo
   const { maybeRepairSandboxImages, maybeRepairSandboxRegistryFiles, noteSandboxScopeWarnings } =
     await import("../commands/doctor-sandbox.js");
   await maybeRepairSandboxRegistryFiles(ctx.prompter);
-  ctx.cfg = await maybeRepairSandboxImages(ctx.cfg, ctx.runtime, ctx.prompter);
+  await maybeRepairSandboxImages(ctx.cfg, ctx.runtime, ctx.prompter);
   noteSandboxScopeWarnings(ctx.cfg);
+}
+
+export async function runCodexBwrapHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  const { noteCodexBwrapNamespaceWarnings } = await import("../commands/doctor-sandbox.js");
+  await noteCodexBwrapNamespaceWarnings(ctx.cfg, {
+    env: ctx.env,
+    cwd: resolveDoctorWorkspaceDir(ctx.cfg, ctx.env),
+  });
 }

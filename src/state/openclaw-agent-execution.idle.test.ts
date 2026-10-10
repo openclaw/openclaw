@@ -1,257 +1,363 @@
+import assert from "node:assert/strict";
+import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
+import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
+import {
+  markGatewayRestartDraining,
+  resetGatewayWorkAdmission,
+} from "../process/gateway-work-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { revokeAgentDatabaseResources } from "./openclaw-agent-db-resources.js";
-import type { AgentDatabaseRequestExecutionSource } from "./openclaw-agent-execution-contract.js";
-import { createAgentDatabaseNativeGeneration } from "./openclaw-agent-execution-native.js";
+import {
+  closeOpenClawAgentDatabaseByPathAsync,
+  closeOpenClawAgentDatabasesAsync,
+} from "./openclaw-agent-db-lifecycle.js";
+import type { AgentDatabaseRequestExecutionSource } from "./openclaw-agent-execution-admission-contract.js";
+import * as native from "./openclaw-agent-execution-native.js";
 import {
   captureOpenClawAgentDatabaseExecution,
   getOpenClawAgentDatabaseCleanupFailures,
 } from "./openclaw-agent-execution.js";
+import { closeOpenClawStateDatabaseAsync } from "./openclaw-state-db.js";
+import { resolveDatabasePath } from "./openclaw-state-db.paths.js";
 
-const fixture = vi.hoisted(() => ({ warn: vi.fn() }));
-vi.mock("../logging/subsystem.js", () => ({ createSubsystemLogger: () => fixture }));
-vi.mock("./agent-database-admission.js", () => ({
-  captureAgentDatabaseAdmission: () => vi.fn(),
-}));
-vi.mock("./agent-deletion-cleanup.js", () => ({
-  getAgentDeletionDatabaseCleanup: () => undefined,
-}));
-vi.mock("./openclaw-agent-db-lease.js", () => ({
-  hasAgentDatabaseMaintenanceAuthority: () => false,
-}));
-vi.mock("./openclaw-agent-db-lifecycle.js", () => ({
-  agentDatabaseLifecycle: { pending: new Map() },
-}));
-vi.mock("./openclaw-agent-db.paths.js", () => ({
-  isIncognitoOpenClawAgentSqlitePath: () => false,
-  resolveOpenClawAgentSqlitePath: (options: { path: string }) => options.path,
-}));
-vi.mock("./openclaw-state-db-async-lifecycle.js", () => ({
-  getOpenClawDatabaseMaintenanceScope: () => undefined,
-  observeOpenClawDatabaseMaintenanceResource: vi.fn(),
-  runOutsideOpenClawDatabaseMaintenanceScope: (operation: () => unknown) => operation(),
-}));
-vi.mock("./openclaw-state-db-cache.js", () => ({
-  registerOpenClawStateDatabaseAsyncResource: () => () => undefined,
-}));
-vi.mock("./openclaw-state-worker-context.js", () => ({
-  captureOpenClawStateReadContext: () => ({
-    admission: { identity: { key: "idle-test-state" } },
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    await closeOpenClawAgentDatabasesAsync();
+    await closeOpenClawStateDatabaseAsync();
+    resetGatewayWorkAdmission();
+    clearRuntimeConfigSnapshot();
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+    cleanup();
   }),
-  captureOpenClawStateWorkerContext: () => ({
-    admission: {
-      databasePath: "idle-test-state.sqlite",
-      identity: { key: "idle-test-state" },
-      assertCurrent: vi.fn(),
-    },
-    environment: {},
-  }),
-}));
-vi.mock("./openclaw-state-db.paths.js", () => ({
-  resolveOpenClawStateSqlitePath: () => "idle-test-state.sqlite",
-}));
-vi.mock("./openclaw-agent-execution-native.js", () => ({
-  createAgentDatabaseNativeGeneration: vi.fn(),
-}));
+);
+const opened: { agentId: string; close: ReturnType<typeof vi.fn<() => Promise<void>>> }[] = [];
+let env: NodeJS.ProcessEnv;
 
-const createNative = vi.mocked(createAgentDatabaseNativeGeneration);
-const closes = new Map<string, ReturnType<typeof vi.fn<() => Promise<void>>>>();
-const borrowed: ReturnType<typeof captureOpenClawAgentDatabaseExecution>[] = [];
-const source: AgentDatabaseRequestExecutionSource = {
-  assertCurrent: () => undefined,
-  createAdmission: () => {
-    throw new Error("Native admission is outside this owner test");
-  },
-};
-function borrow(agentId: string) {
-  const execution = captureOpenClawAgentDatabaseExecution({
-    agentId,
-    path: path.resolve("idle-owner-test", `${agentId}.sqlite`),
-  });
-  borrowed.push(execution);
-  return execution;
-}
-async function run(execution: ReturnType<typeof borrow>, authority = source) {
-  return execution.runExisting(authority, async () => "committed");
-}
 beforeEach(() => {
-  fixture.warn.mockClear();
-  createNative.mockReset().mockImplementation((agentId) => {
-    const close = vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
-    closes.set(agentId, close);
+  vi.useFakeTimers();
+  env = { OPENCLAW_STATE_DIR: fs.realpathSync(tempDirs.make("agent-idle-")) };
+  opened.length = 0;
+  // Exercise the real borrow/release owner without booting native workers for timer tests.
+  vi.spyOn(native, "createAgentDatabaseNativeGeneration").mockImplementation((agentId) => {
+    const close = vi.fn(async () => {});
+    opened.push({ agentId, close });
     return {
-      failed: () => false,
       close,
-      captureClaim: () => ({
-        identity: agentId,
-        incarnation: `fixture:${agentId}`,
-        assertCurrent() {},
-      }),
-      async run(authority, operation, assertCallerCurrent) {
-        authority.assertCurrent();
-        assertCallerCurrent?.();
-        return operation({ execute: vi.fn() });
+      run: async () => undefined,
+      failure: () => undefined,
+      isPrepared: () => false,
+      captureClaim: () => {
+        throw new Error("Unused native claim");
       },
     };
   });
 });
-afterEach(async () => {
-  for (const close of closes.values()) {
-    close.mockResolvedValue(undefined);
+
+const source: AgentDatabaseRequestExecutionSource = {
+  assertCurrent() {},
+  createAdmission() {
+    throw new Error("Native workers are isolated in this lifecycle fixture");
+  },
+};
+
+function capture(agentId: string) {
+  return captureOpenClawAgentDatabaseExecution({ agentId, env });
+}
+
+async function use(agentId: string) {
+  const execution = capture(agentId);
+  await execution.prepare(source);
+  await execution.release();
+  return execution;
+}
+
+function closedAgents() {
+  return opened.filter(({ close }) => close.mock.calls.length > 0).map(({ agentId }) => agentId);
+}
+
+it("opens only two executors for six alternating agent borrows", async () => {
+  for (const agentId of ["first", "second", "first", "second", "first", "second"]) {
+    await use(agentId);
   }
-  await Promise.all(borrowed.splice(0).map((execution) => execution.release()));
-  await Promise.all(revokeAgentDatabaseResources({}));
-  closes.clear();
+  expect(opened.map(({ agentId }) => agentId)).toEqual(["first", "second"]);
+  expect(closedAgents()).toEqual([]);
 });
 
-it.each(["eviction", "timer"] as const)(
-  "isolates failed idle cleanup during %s while retaining exact retry custody",
-  async (trigger) => {
-    vi.useFakeTimers();
-    try {
-      const first = borrow("first");
-      expect(await run(first)).toBe("committed");
-      await first.release();
-      const close = closes.get("first")!;
-      const failure = new Error("controlled native close failure");
-      close.mockRejectedValue(failure);
-      if (trigger === "timer") {
-        await vi.advanceTimersByTimeAsync(SQLITE_IDLE_HANDLE_TTL_MS);
-      }
+it("evicts the least recently used idle executor when a fifth agent finishes", async () => {
+  for (const agentId of ["first", "second", "third", "fourth", "first", "fifth"]) {
+    await use(agentId);
+  }
+  expect(closedAgents()).toEqual(["second"]);
+  await use("first");
+  expect(opened).toHaveLength(5);
+  await use("second");
+  expect(opened).toHaveLength(6);
+  expect(closedAgents()).toEqual(["second", "third"]);
+});
 
-      const second = borrow("second");
-      expect(await run(second)).toBe("committed");
-      await second.release();
-      expect(close).toHaveBeenCalledTimes(1);
-      expect(closes.get("second")).not.toHaveBeenCalled();
-      const secondAgain = borrow("second");
-      expect(await run(secondAgain)).toBe("committed");
-      await secondAgain.release();
-      // The failed owner retains cleanup custody without forcing healthy turns to
-      // create and close a native worker for every request.
-      expect(createNative).toHaveBeenCalledTimes(2);
-      expect(closes.get("second")).not.toHaveBeenCalled();
-      const third = borrow("third");
-      expect(await run(third)).toBe("committed");
-      await third.release();
-      // Unrelated turns neither retry the failed close nor retain extra idle natives;
-      // the normal single reusable slot moves between healthy owners.
-      expect(close).toHaveBeenCalledTimes(1);
-      expect(closes.get("second")).toHaveBeenCalledTimes(1);
-      expect(closes.get("third")).not.toHaveBeenCalled();
-
-      const original = borrow("first");
-      await expect(run(original)).rejects.toBe(failure);
-      expect(createNative).toHaveBeenCalledTimes(3);
-      expect(close).toHaveBeenCalledTimes(2);
-      close.mockResolvedValue(undefined);
-      expect(await run(original)).toBe("committed");
-      expect(close).toHaveBeenCalledTimes(3);
-      expect(createNative).toHaveBeenCalledTimes(4);
-      expect(closes.get("third")).toHaveBeenCalledTimes(1);
-      expect(fixture.warn).toHaveBeenCalledTimes(1);
-    } finally {
-      vi.useRealTimers();
-    }
-  },
-);
-
-it.each(["resolve", "reject"] as const)(
-  "rechecks caller authority after another owner cleanup %ss",
-  async (settlement) => {
-    const first = borrow("first");
-    await run(first);
+it("keeps a shared creating owner out of idle eviction until its last borrower releases", async () => {
+  const options = {
+    agentId: "creating",
+    env,
+    path: path.join(env.OPENCLAW_STATE_DIR!, "creating.sqlite"),
+  };
+  const constraints = { expectedCreationIdentity: readDatabasePathIdentitySync(options.path) };
+  const first = captureOpenClawAgentDatabaseExecution(options, constraints);
+  const joining = captureOpenClawAgentDatabaseExecution(options, constraints);
+  try {
+    await first.prepare(source);
     await first.release();
-    const cleanup = createDeferredCore();
-    const entered = createDeferredCore();
-    closes.get("first")!.mockImplementation(() => {
-      entered.resolve();
-      return cleanup.promise;
-    });
-    let current = true;
-    const second = borrow("second");
-    const pending = run(second, {
-      ...source,
-      assertCurrent() {
-        if (!current) {
-          throw new Error("request revoked");
-        }
-      },
-    });
-    const refused = expect(pending).rejects.toThrow("request revoked");
-    await entered.promise;
-    current = false;
-    if (settlement === "resolve") {
-      cleanup.resolve();
-    } else {
-      cleanup.reject(new Error("close failed"));
+    for (const agentId of ["first", "second", "third", "fourth", "fifth"]) {
+      await use(agentId);
     }
-    await refused;
-    expect(createNative).toHaveBeenCalledTimes(1);
-  },
-);
+    expect(closedAgents()).toEqual(["first"]);
+    await joining.prepare(source);
+    expect(opened.filter(({ agentId }) => agentId === "creating")).toHaveLength(1);
+    const ordinary = captureOpenClawAgentDatabaseExecution(options);
+    try {
+      await expect(ordinary.prepare(source)).rejects.toThrow(/captured creating reference/);
+    } finally {
+      await ordinary.release();
+    }
+  } finally {
+    await Promise.allSettled([first.release(), joining.release()]);
+  }
+});
 
-it("keeps explicit drainage fail-closed until the retained native cleanup succeeds", async () => {
-  const first = borrow("first");
-  await run(first);
-  await first.release();
-  const close = closes.get("first")!;
-  close.mockRejectedValue(new Error("native cleanup refused"));
-  const selection = { agentId: "first", path: first.path };
-  await expect(Promise.all(revokeAgentDatabaseResources(selection))).rejects.toThrow(
-    "native cleanup refused",
+it("expires each executor independently and refreshes only the borrowed one", async () => {
+  await use("first");
+  await vi.advanceTimersByTimeAsync(SQLITE_IDLE_HANDLE_TTL_MS / 2);
+  await use("second");
+  await use("first");
+  await vi.advanceTimersByTimeAsync(SQLITE_IDLE_HANDLE_TTL_MS / 2);
+  expect(closedAgents()).toEqual([]);
+  await vi.advanceTimersByTimeAsync(SQLITE_IDLE_HANDLE_TTL_MS / 2);
+  expect(closedAgents()).toEqual(["first", "second"]);
+  await use("first");
+  expect(opened).toHaveLength(3);
+});
+
+it.each(["shutdown", "restart drain"] as const)("closes all warm executors on %s", async (mode) => {
+  for (const agentId of ["first", "second", "third", "fourth"]) {
+    await use(agentId);
+  }
+  expect(closedAgents()).toEqual([]);
+  if (mode === "restart drain") {
+    markGatewayRestartDraining();
+    await vi.advanceTimersByTimeAsync(0);
+  } else {
+    await closeOpenClawAgentDatabasesAsync();
+  }
+  expect(closedAgents()).toEqual(["first", "second", "third", "fourth"]);
+  expect(opened.every(({ close }) => close.mock.calls.length === 1)).toBe(true);
+});
+
+it("shares physical aliases and retains revoked cleanup custody until retirement", async () => {
+  const first = await use("first");
+  await use("second");
+  fs.mkdirSync(path.dirname(first.path), { recursive: true });
+  const alias = path.join(env.OPENCLAW_STATE_DIR!, "alias");
+  fs.symlinkSync(
+    path.dirname(first.path),
+    alias,
+    process.platform === "win32" ? "junction" : "dir",
   );
-  expect(() => borrow("first")).toThrow("admission is closed");
-  expect(getOpenClawAgentDatabaseCleanupFailures("idle-test-state.sqlite")).toEqual([
+  const borrowed = captureOpenClawAgentDatabaseExecution({
+    agentId: "first",
+    env,
+    path: path.join(alias, path.basename(first.path)),
+  });
+  await borrowed.prepare(source);
+  await borrowed.release();
+  expect(opened).toHaveLength(2);
+  const firstExecutor = opened[0];
+  assert(firstExecutor);
+  firstExecutor.close.mockRejectedValueOnce(new Error("controlled aliased cleanup failure"));
+  await expect(closeOpenClawAgentDatabaseByPathAsync(borrowed.path, "first")).rejects.toThrow();
+  const statePath = resolveDatabasePath({ env });
+  expect(getOpenClawAgentDatabaseCleanupFailures(statePath)).toEqual([
     expect.objectContaining({
       agentId: "first",
+      reason: expect.stringContaining("controlled aliased cleanup failure"),
       repairHint: expect.stringContaining("cannot retry on a request"),
     }),
   ]);
-  expect(createNative).toHaveBeenCalledTimes(1);
-  close.mockResolvedValue(undefined);
-  await Promise.all(revokeAgentDatabaseResources(selection));
-  expect(await run(borrow("first"))).toBe("committed");
-  expect(createNative).toHaveBeenCalledTimes(2);
+  expect(getOpenClawAgentDatabaseCleanupFailures(`${statePath}.other`)).toEqual([]);
+  expect(() => capture("first")).toThrow("admission is closed");
+  await closeOpenClawAgentDatabaseByPathAsync(borrowed.path, "first");
+  expect(getOpenClawAgentDatabaseCleanupFailures(statePath)).toEqual([]);
+  expect(closedAgents()).toEqual(["first"]);
+  await use("first");
+  await use("second");
+  expect(opened.map(({ agentId }) => agentId)).toEqual(["first", "second", "first"]);
 });
 
-it.each(["single", "aggregate"] as const)(
-  "projects redacted %s cleanup failures only for their shared database",
-  async (shape) => {
-    const first = borrow("first");
-    await run(first);
-    await first.release();
-    const native = Object.assign(
-      new Error("native close refused; Authorization: Bearer synthetic-cleanup-secret"),
-      { code: "SQLITE_BUSY" },
-    );
-    const failure =
-      shape === "single"
-        ? native
-        : new AggregateError(
-            [native, new Error("lease retained")],
-            "Agent database cleanup failed",
-          );
-    closes.get("first")!.mockRejectedValue(failure);
-    expect(getOpenClawAgentDatabaseCleanupFailures("idle-test-state.sqlite")).toEqual([]);
-    await run(borrow("second"));
-    expect(getOpenClawAgentDatabaseCleanupFailures("other-state.sqlite")).toEqual([]);
-    const failures = getOpenClawAgentDatabaseCleanupFailures("idle-test-state.sqlite");
-    expect(failures).toHaveLength(1);
-    expect(failures[0]).toMatchObject({
-      agentId: "first",
-      repairHint: expect.stringContaining("next request"),
-    });
-    expect(failures[0]!.reason).toContain("native close refused");
-    expect(failures[0]!.reason).toContain("SQLITE_BUSY");
-    expect(failures[0]!.reason).not.toContain("synthetic-cleanup-secret");
-    expect(fixture.warn).toHaveBeenCalledOnce();
-    expect(fixture.warn.mock.calls[0]![0]).toContain("native close refused");
-    expect(fixture.warn.mock.calls[0]![0]).not.toContain("synthetic-cleanup-secret");
-    closes.get("first")!.mockResolvedValue(undefined);
-    await run(borrow("first"));
-    expect(getOpenClawAgentDatabaseCleanupFailures("idle-test-state.sqlite")).toEqual([]);
+it("keeps a reborrow live while another idle executor is being evicted", async () => {
+  for (const agentId of ["first", "second", "third", "fourth"]) {
+    await use(agentId);
+  }
+  const evicting = createDeferredCore();
+  const entered = createDeferredCore();
+  const first = opened[0];
+  assert(first);
+  first.close.mockImplementationOnce(() => {
+    entered.resolve();
+    return evicting.promise;
+  });
+  const fifth = capture("fifth");
+  await fifth.prepare(source);
+  const releasing = fifth.release();
+  await entered.promise;
+  const borrowed = capture("fifth");
+  evicting.resolve();
+  await releasing;
+  await borrowed.prepare(source);
+  expect(opened).toHaveLength(5);
+  expect(closedAgents()).toEqual(["first"]);
+  await borrowed.release();
+});
+
+it("retains failed eviction custody without consuming healthy idle capacity", async () => {
+  for (const agentId of ["first", "second", "third", "fourth"]) {
+    await use(agentId);
+  }
+  const first = opened[0];
+  assert(first);
+  first.close.mockRejectedValueOnce(new Error("synthetic cleanup failure"));
+  await use("fifth");
+  expect(closedAgents()).toEqual(["first"]);
+  for (const agentId of ["second", "fifth", "third", "fourth"]) {
+    await use(agentId);
+  }
+  expect(opened).toHaveLength(5);
+  expect(first.close).toHaveBeenCalledTimes(1);
+
+  await use("first");
+  expect(first.close).toHaveBeenCalledTimes(2);
+  expect(opened).toHaveLength(6);
+  expect(closedAgents()).toEqual(["first", "second"]);
+});
+
+it.each(["removal", "rename", "agent path", "session path"] as const)(
+  "retires affected warm executors after a committed agent %s change",
+  async (change) => {
+    const config: OpenClawConfig = { agents: { entries: { first: {}, second: {} } } };
+    setRuntimeConfigSnapshot(config);
+    await use("first");
+    await use("second");
+    // Publication supports in-place mutations; the executor must retain resolved values.
+    if (change === "removal" || change === "rename") {
+      config.agents!.entries = { second: {}, ...(change === "rename" ? { renamed: {} } : {}) };
+    } else if (change === "agent path") {
+      const first = config.agents!.entries!.first;
+      assert(first);
+      first.agentDir = path.join(env.OPENCLAW_STATE_DIR!, "relocated");
+    } else {
+      config.session = {
+        store: path.join(env.OPENCLAW_STATE_DIR!, "relocated", "{agentId}.sqlite"),
+      };
+    }
+    setRuntimeConfigSnapshot(config);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(closedAgents()).toEqual(change === "session path" ? ["first", "second"] : ["first"]);
+    await use("second");
+    expect(opened).toHaveLength(change === "session path" ? 3 : 2);
   },
 );
+
+it("keeps warm executors through unrelated configuration publication", async () => {
+  setRuntimeConfigSnapshot({ agents: { entries: { first: {}, second: {} } } });
+  await use("first");
+  await use("second");
+  setRuntimeConfigSnapshot({
+    agents: { entries: { first: { name: "New display name" }, second: {} } },
+  });
+  await use("first");
+  await use("second");
+  expect(opened).toHaveLength(2);
+  expect(closedAgents()).toEqual([]);
+});
+
+it("joins config-triggered idle drainage without letting a released borrower close its successor", async () => {
+  const config: OpenClawConfig = { agents: { entries: { first: {} } } };
+  setRuntimeConfigSnapshot(config);
+  const previous = capture("first");
+  await previous.prepare(source);
+  await previous.release();
+  const first = opened[0];
+  assert(first);
+  const closing = createDeferredCore();
+  first.close.mockImplementation(() => closing.promise);
+  let next: ReturnType<typeof capture> | undefined;
+  try {
+    setRuntimeConfigSnapshot({
+      ...config,
+      session: { store: path.join(env.OPENCLAW_STATE_DIR!, "relocated", "{agentId}.sqlite") },
+    });
+    expect(() => previous.assertCurrent()).toThrow("reference is released");
+    next = capture("first");
+    let prepared = false;
+    const preparing = next.prepare(source).then(() => {
+      prepared = true;
+    });
+    await Promise.resolve();
+    expect(prepared).toBe(false);
+    expect(opened).toHaveLength(1);
+    closing.resolve();
+    await preparing;
+    expect(opened).toHaveLength(2);
+    expect(() => previous.assertCurrent()).toThrow("reference is released");
+    const staleCleanup = vi.fn(async () => undefined);
+    await expect(
+      previous.runExisting(source, staleCleanup, { retireNativeOnFailure: true }),
+    ).rejects.toThrow("reference is released");
+    expect(staleCleanup).not.toHaveBeenCalled();
+    expect(opened[1]?.close).not.toHaveBeenCalled();
+    next.assertCurrent();
+    setRuntimeConfigSnapshot(config);
+    next.assertCurrent();
+    await next.release();
+    expect(closedAgents()).toEqual(["first", "first"]);
+    await closeOpenClawAgentDatabasesAsync();
+    expect(opened.every(({ close }) => close.mock.calls.length === 1)).toBe(true);
+  } finally {
+    closing.resolve();
+    await previous.release();
+    await next?.release();
+  }
+});
+
+it("drains a configuration-retired executor only after its last borrower releases", async () => {
+  setRuntimeConfigSnapshot({ agents: { entries: { first: {}, second: {} } } });
+  const first = capture("first");
+  const joining = capture("first");
+  try {
+    await first.prepare(source);
+    await use("second");
+    setRuntimeConfigSnapshot({ agents: { entries: { second: {} } } });
+    expect(closedAgents()).toEqual([]);
+    await first.prepare(source);
+    await first.release();
+    expect(closedAgents()).toEqual([]);
+    await joining.prepare(source);
+    expect(opened).toHaveLength(2);
+    await joining.release();
+    expect(closedAgents()).toEqual(["first"]);
+    await use("second");
+    expect(opened).toHaveLength(2);
+    await closeOpenClawAgentDatabasesAsync();
+    expect(closedAgents()).toEqual(["first", "second"]);
+    expect(opened.every(({ close }) => close.mock.calls.length === 1)).toBe(true);
+  } finally {
+    await Promise.allSettled([first.release(), joining.release()]);
+  }
+});

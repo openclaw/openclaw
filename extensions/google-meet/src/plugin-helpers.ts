@@ -100,26 +100,15 @@ type ResolvedGoogleMeetArtifactQuery = Awaited<ReturnType<typeof resolveArtifact
 
 export function fetchResolvedGoogleMeetArtifacts(query: ResolvedGoogleMeetArtifactQuery) {
   return fetchGoogleMeetArtifacts({
+    ...query,
     accessToken: query.token.accessToken,
-    meeting: query.meeting,
-    conferenceRecord: query.conferenceRecord,
-    pageSize: query.pageSize,
-    includeTranscriptEntries: query.includeTranscriptEntries,
-    includeDocumentBodies: query.includeDocumentBodies,
-    allConferenceRecords: query.allConferenceRecords,
   });
 }
 
 export function fetchResolvedGoogleMeetAttendance(query: ResolvedGoogleMeetArtifactQuery) {
   return fetchGoogleMeetAttendance({
+    ...query,
     accessToken: query.token.accessToken,
-    meeting: query.meeting,
-    conferenceRecord: query.conferenceRecord,
-    pageSize: query.pageSize,
-    allConferenceRecords: query.allConferenceRecords,
-    mergeDuplicateParticipants: query.mergeDuplicateParticipants,
-    lateAfterMinutes: query.lateAfterMinutes,
-    earlyBeforeMinutes: query.earlyBeforeMinutes,
   });
 }
 

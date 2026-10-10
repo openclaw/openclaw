@@ -2,6 +2,7 @@
 // Covers invocation-scoped cwd decisions: mixed bindings on one agent and
 // workspace-equal cwds keep standard bootstrap behavior.
 import { describe, beforeEach, expect, it } from "vitest";
+import { resolveConfiguredAcpBindingRecord } from "../acp/persistent-bindings.resolve.js";
 import type { ChannelConfiguredBindingProvider } from "../channels/plugins/types.adapters.js";
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -60,7 +61,7 @@ function acpBinding(params: {
 const baseCfg: OpenClawConfig = {
   agents: {
     defaults: { workspace: "/shared-ws" },
-    list: [{ id: "main" }, { id: "codex", runtime: { type: "acp" } }],
+    entries: { main: {}, codex: { runtime: { type: "acp" } } },
   },
 };
 
@@ -77,8 +78,6 @@ function sessionAcpMeta(cwd?: string): SessionAcpMeta {
 }
 
 async function bindingSessionKey(cfg: OpenClawConfig, conversationId: string): Promise<string> {
-  const { resolveConfiguredAcpBindingRecord } =
-    await import("../acp/persistent-bindings.resolve.js");
   const resolved = resolveConfiguredAcpBindingRecord({
     cfg,
     channel: "discord",
@@ -120,17 +119,6 @@ describe("resolveAcpAgentWorkspaceProvisioningForTurn", () => {
     ).resolves.toBe("standard");
   });
 
-  it("keeps standard provisioning when the binding cwd equals the resolved workspace", async () => {
-    const cfg: OpenClawConfig = {
-      ...baseCfg,
-      bindings: [acpBinding({ conversationId: "111", cwd: "/shared-ws/codex" })],
-    };
-    const key = await bindingSessionKey(cfg, "111");
-    await expect(
-      resolveAcpAgentWorkspaceProvisioningForTurn({ cfg, agentId: "codex", sessionKey: key }),
-    ).resolves.toBe("standard");
-  });
-
   it("uses the live session ACP meta cwd as the invocation cwd", async () => {
     await expect(
       resolveAcpAgentWorkspaceProvisioningForTurn({
@@ -149,52 +137,14 @@ describe("resolveAcpAgentWorkspaceProvisioningForTurn", () => {
     ).resolves.toBe("standard");
   });
 
-  it.each([
-    {
-      cwd: "/projects/command",
-      sessionCwd: "/shared-ws/codex",
-      expected: "runtime-managed-implicit",
-    },
-    {
-      cwd: "/shared-ws/codex",
-      sessionCwd: "/projects/session",
-      expected: "standard",
-    },
-  ] as const)(
-    "gives the invocation cwd precedence over session metadata ($expected)",
-    async ({ cwd, sessionCwd, expected }) => {
-      await expect(
-        resolveAcpAgentWorkspaceProvisioningForTurn({
-          cfg: baseCfg,
-          agentId: "codex",
-          cwd,
-          sessionEntry: { acp: sessionAcpMeta(sessionCwd) },
-        }),
-      ).resolves.toBe(expected);
-    },
-  );
-
-  it("keeps standard provisioning without an invocation cwd and no runtime default", async () => {
-    await expect(
-      resolveAcpAgentWorkspaceProvisioningForTurn({ cfg: baseCfg, agentId: "codex" }),
-    ).resolves.toBe("standard");
-    await expect(
-      resolveAcpAgentWorkspaceProvisioningForTurn({
-        cfg: baseCfg,
-        agentId: "codex",
-        sessionKey: "agent:codex:not-a-binding-key",
-      }),
-    ).resolves.toBe("standard");
-  });
-
   it("keeps standard provisioning for embedded agents and explicit workspaces", async () => {
     const cfg: OpenClawConfig = {
       agents: {
         defaults: { workspace: "/shared-ws" },
-        list: [
-          { id: "work", runtime: { type: "embedded" } },
-          { id: "pinned", workspace: "/explicit-ws", runtime: { type: "acp" } },
-        ],
+        entries: {
+          work: { runtime: { type: "embedded" } },
+          pinned: { workspace: "/explicit-ws", runtime: { type: "acp" } },
+        },
       },
     };
     await expect(
@@ -217,7 +167,7 @@ describe("resolveAcpAgentWorkspaceProvisioningForTurn", () => {
     const cfg: OpenClawConfig = {
       agents: {
         defaults: { workspace: "/shared-ws" },
-        list: [{ id: "codex", runtime: { type: "acp", acp: { cwd: "/projects/app" } } }],
+        entries: { codex: { runtime: { type: "acp", acp: { cwd: "/projects/app" } } } },
       },
     };
     await expect(

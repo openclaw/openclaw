@@ -32,14 +32,8 @@
   --chat-thread-max-width: 48rem;
   /* Keep overlays clear of the edge-hugging scrollbar and add room on wide screens. */
   --chat-thread-gutter: 18px;
-  /* Composer box insets. The docked progress card derives its own edge from
-     both, so the two never overlap and their bottoms stay on one line. */
   --chat-composer-side-inset: 36px;
   --chat-composer-bottom-gap: 14px;
-  /* Docked progress-card width. Kept in step with PROGRESS_CARD_DOCK_MIN_GUTTER_PX
-     in chat-pane-rails.ts, which gates the placement on a gutter wide enough for
-     this card plus the gutter stack's insets. */
-  --chat-progress-dock-width: 250px;
   --chat-thread-side-inset: clamp(6px, 1vw, 12px);
 
   position: relative;
@@ -65,7 +59,6 @@
   }
 }
 
-/* Chat thread - scrollable middle section, transparent */
 .chat-thread-viewport,
 .chat-thread {
   --chat-thread-padding-top: clamp(20px, 3vh, 28px);
@@ -235,7 +228,6 @@
   padding-inline-end: var(--chat-avatar-gutter);
 }
 
-/* User messages on right */
 .chat-group.user {
   --chat-user-content-align: end;
   flex-direction: row-reverse;
@@ -243,11 +235,12 @@
 }
 
 .chat-group-messages {
+  --chat-message-gap: 2px;
   --chat-message-type-boundary-gap: var(--space-1);
   position: relative; /* anchors message-local popovers */
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--chat-message-gap);
   flex: 1 1 auto;
   align-items: flex-start;
   width: 100%;
@@ -277,7 +270,6 @@
   border: 1px solid var(--border);
 }
 
-/* Minimal Bubble Design - dynamic width based on content */
 .chat-bubble {
   position: relative;
   display: block;
@@ -359,21 +351,11 @@
 }
 
 .chat-pane__header-leading,
-.chat-pane__header-center,
 .chat-pane__header-trailing {
   display: flex;
   min-width: 0;
   align-items: center;
-}
-
-.chat-pane__header-leading,
-.chat-pane__header-trailing {
   gap: 8px;
-}
-
-.chat-pane__header-center {
-  position: relative;
-  justify-self: center;
 }
 
 .chat-pane__header-trailing {
@@ -408,7 +390,7 @@
 }
 
 /* The title hugs its text so the segments after it stay adjacent (the trail's
-   shared 8px gap provides the spacing); it may shrink with ellipsis
+   shared gap provides the spacing); it may shrink with ellipsis
    when space runs out, and the action row pushes itself to the right edge. */
 .chat-pane__session-title {
   display: inline-flex;
@@ -525,12 +507,9 @@
     max-width: none;
   }
 
-  .chat-pane__workspace-chip span {
-    display: none;
-  }
-
   /* The project name is gone at this width, so the separator would trail an
      icon-only pill and read as punctuation with nothing on its left. */
+  .chat-pane__workspace-chip span,
   .chat-pane__project-row + .chat-pane__session-trail > .chat-pane__crumb-sep:first-child {
     display: none;
   }
@@ -671,7 +650,7 @@ openclaw-chat-sidebar-region,
 .sidebar-region__primary[hidden],
 .sidebar-region:not(.sidebar-region--open) [data-region-header="side"],
 .sidebar-region--expanded:not(.sidebar-region--expanded-side) [data-region-header="side"],
-.sidebar-region--expanded-side .sidebar-region__header {
+.sidebar-region--expanded-side > .sidebar-region__header {
   display: none;
 }
 
@@ -727,10 +706,7 @@ openclaw-chat-sidebar-region,
 }
 
 .sidebar-region:not(.sidebar-region--open) .side-panel__empty-body,
-.sidebar-region--expanded .side-panel__empty-body {
-  display: none;
-}
-
+.sidebar-region--expanded .side-panel__empty-body,
 .side-panel__panel[hidden] {
   display: none;
 }

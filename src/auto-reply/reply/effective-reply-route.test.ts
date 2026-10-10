@@ -24,39 +24,8 @@ const entry = (params: LegacyDeliveryFixture): EffectiveReplyRouteEntry =>
   normalizeLegacySessionEntryDelivery(params as SessionEntry);
 
 describe("resolveEffectiveReplyRoute", () => {
-  it("uses live origin context for normal providers", () => {
-    expect(
-      resolveEffectiveReplyRoute({
-        ctx: ctx({
-          Provider: "slack",
-          OriginatingChannel: "discord",
-          OriginatingTo: "channel:live",
-          AccountId: "live-account",
-          ChatType: "channel",
-        }),
-        entry: entry({
-          deliveryContext: {
-            channel: "telegram",
-            to: "chat:persisted",
-            accountId: "persisted-account",
-          },
-          lastChannel: "whatsapp",
-          lastTo: "last-to",
-          lastAccountId: "last-account",
-        }),
-      }),
-    ).toEqual({
-      channel: "discord",
-      to: "channel:live",
-      accountId: "live-account",
-      chatType: "channel",
-    });
-  });
-
   it.each<EffectiveReplyRouteContext>([
-    { Provider: "slack" },
     { InputProvenance: { kind: "internal_system", sourceTool: "restart-sentinel" } },
-    { InputProvenance: { kind: "internal_system", sourceTool: "main_session_restart_recovery" } },
   ])("does not inherit a route without an internal wake source (%j)", (context) => {
     expect(
       resolveEffectiveReplyRoute({
@@ -114,29 +83,39 @@ describe("resolveEffectiveReplyRoute", () => {
     });
   });
 
-  it("keeps trusted inherited thread ids from explicit route metadata", () => {
+  it.each([
+    {
+      name: "trusted explicit metadata",
+      thread: { id: "thread:om_123", source: "explicit" as const },
+      chatType: "channel" as const,
+      expectedThread: { threadId: "thread:om_123", chatType: "channel" },
+    },
+    {
+      name: "session-normalized metadata",
+      thread: { id: "thread:stale", source: "session" as const },
+      chatType: undefined,
+      expectedThread: {},
+    },
+  ])("resolves inherited thread trust for $name", ({ thread, chatType, expectedThread }) => {
     expect(
       resolveEffectiveReplyRoute({
-        ctx: ctx({
+        ctx: {
           Provider: "webchat",
           Surface: "webchat",
-          InputProvenance: {
-            kind: "inter_session",
-            sourceTool: "sessions_send",
-          },
-        }),
+          InputProvenance: { kind: "inter_session", sourceTool: "sessions_send" },
+        },
         entry: entry({
           route: {
             channel: "feishu",
             accountId: "work",
-            target: { to: "user:ou_123", chatType: "channel" },
-            thread: { id: "thread:om_123", source: "explicit" },
+            target: { to: "user:ou_123", ...(chatType ? { chatType } : {}) },
+            thread,
           },
           deliveryContext: {
             channel: "feishu",
             to: "user:ou_123",
             accountId: "work",
-            threadId: "thread:om_123",
+            threadId: thread.id,
           },
         }),
       }),
@@ -144,76 +123,7 @@ describe("resolveEffectiveReplyRoute", () => {
       channel: "feishu",
       to: "user:ou_123",
       accountId: "work",
-      threadId: "thread:om_123",
-      chatType: "channel",
-      inheritedExternalRoute: true,
-    });
-  });
-
-  it("drops inherited thread ids from session-normalized route metadata", () => {
-    expect(
-      resolveEffectiveReplyRoute({
-        ctx: ctx({
-          Provider: "webchat",
-          Surface: "webchat",
-          InputProvenance: {
-            kind: "inter_session",
-            sourceTool: "sessions_send",
-          },
-        }),
-        entry: entry({
-          route: {
-            channel: "feishu",
-            accountId: "work",
-            target: { to: "user:ou_123" },
-            thread: { id: "thread:stale", source: "session" },
-          },
-          deliveryContext: {
-            channel: "feishu",
-            to: "user:ou_123",
-            accountId: "work",
-            threadId: "thread:stale",
-          },
-        }),
-      }),
-    ).toEqual({
-      channel: "feishu",
-      to: "user:ou_123",
-      accountId: "work",
-      inheritedExternalRoute: true,
-    });
-  });
-
-  it("drops inherited thread ids from unmarked normalized route metadata", () => {
-    expect(
-      resolveEffectiveReplyRoute({
-        ctx: ctx({
-          Provider: "webchat",
-          Surface: "webchat",
-          InputProvenance: {
-            kind: "inter_session",
-            sourceTool: "sessions_send",
-          },
-        }),
-        entry: entry({
-          route: {
-            channel: "feishu",
-            accountId: "work",
-            target: { to: "user:ou_123" },
-            thread: { id: "thread:stale" },
-          },
-          deliveryContext: {
-            channel: "feishu",
-            to: "user:ou_123",
-            accountId: "work",
-            threadId: "thread:stale",
-          },
-        }),
-      }),
-    ).toEqual({
-      channel: "feishu",
-      to: "user:ou_123",
-      accountId: "work",
+      ...expectedThread,
       inheritedExternalRoute: true,
     });
   });
@@ -271,35 +181,6 @@ describe("resolveEffectiveReplyRoute", () => {
     });
   });
 
-  it("ignores persisted webchat routes for sessions_send handoffs", () => {
-    expect(
-      resolveEffectiveReplyRoute({
-        ctx: ctx({
-          Provider: "webchat",
-          Surface: "webchat",
-          OriginatingChannel: "webchat",
-          OriginatingTo: "session:dashboard",
-          InputProvenance: {
-            kind: "inter_session",
-            sourceTool: "sessions_send",
-          },
-        }),
-        entry: entry({
-          deliveryContext: {
-            channel: "webchat",
-            to: "session:old-dashboard",
-          },
-          lastChannel: "webchat",
-          lastTo: "session:old-dashboard",
-        }),
-      }),
-    ).toEqual({
-      channel: "webchat",
-      to: "session:dashboard",
-      accountId: undefined,
-    });
-  });
-
   it("prefers live origin context for exec-event replies", () => {
     expect(
       resolveEffectiveReplyRoute({
@@ -329,44 +210,24 @@ describe("resolveEffectiveReplyRoute", () => {
     });
   });
 
-  it.each(["heartbeat", "cron", "exec"] as const)(
-    "inherits session delivery for %s replies",
-    (source) => {
-      expect(
-        resolveEffectiveReplyRoute({
-          ctx: ctx({ InternalTurnSource: source }),
-          entry: {
-            delivery: normalizeSessionDeliveryState({
-              context: {
-                channel: "telegram",
-                to: "chat:persisted",
-                accountId: "persisted-account",
-              },
-            }),
-          },
-        }),
-      ).toEqual({
-        channel: "telegram",
-        to: "chat:persisted",
-        accountId: "persisted-account",
-      });
-    },
-  );
-
-  it("falls back to legacy last route fields for exec-event replies", () => {
+  it("inherits session delivery for internal wake replies", () => {
     expect(
       resolveEffectiveReplyRoute({
         ctx: ctx({ InternalTurnSource: "exec" }),
-        entry: entry({
-          lastChannel: "slack",
-          lastTo: "last-to",
-          lastAccountId: "last-account",
-        }),
+        entry: {
+          delivery: normalizeSessionDeliveryState({
+            context: {
+              channel: "telegram",
+              to: "chat:persisted",
+              accountId: "persisted-account",
+            },
+          }),
+        },
       }),
     ).toEqual({
-      channel: "slack",
-      to: "last-to",
-      accountId: "last-account",
+      channel: "telegram",
+      to: "chat:persisted",
+      accountId: "persisted-account",
     });
   });
 

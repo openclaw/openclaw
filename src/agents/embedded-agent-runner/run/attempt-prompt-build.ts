@@ -2,6 +2,7 @@ import { ensureSystemPromptCacheBoundary } from "@openclaw/ai/internal/shared";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { filterHeartbeatTranscriptArtifacts } from "../../../auto-reply/heartbeat-filter.js";
 import { getRuntimeConfig } from "../../../config/config.js";
+import { createRuntimeConfigReader } from "../../../config/runtime-snapshot.js";
 import type { SessionSystemPromptReport } from "../../../config/sessions/types.js";
 import {
   type DiagnosticTraceContext,
@@ -36,7 +37,7 @@ import {
 import { log } from "../logger.js";
 import { normalizeAssistantReplayContent } from "../replay-history.js";
 import {
-  cloneToolResultPromptProjectionState,
+  createToolResultPromptProjectionState,
   type ToolResultPromptProjectionState,
 } from "../session-prompt-state.js";
 import {
@@ -47,6 +48,10 @@ import {
   truncateOversizedToolResultsInMessages,
 } from "../tool-result-truncation.js";
 import { buildEmbeddedAgentHookContext } from "./agent-hook-context.js";
+import {
+  evaluateAttemptDecisionToolPrefilter,
+  type DecisionPrefilterResult,
+} from "./attempt-decision-prefilter.js";
 import {
   normalizeCurrentPromptTextForLlmBoundary,
   usesEscapedRuntimeContext,
@@ -62,7 +67,6 @@ import { applyResolvedToolPromptFinalizer } from "./attempt-prompt-support.js";
 import { composeSystemPromptWithHookContext } from "./attempt-thread-helpers.js";
 import { pruneProcessedHistoryImages } from "./history-image-prune.js";
 import {
-  buildCurrentInboundPrompt,
   buildRuntimeContextCustomMessage,
   resolveRuntimeContextPromptParts,
 } from "./runtime-context-prompt.js";
@@ -71,16 +75,26 @@ import type { EmbeddedRunAttemptParams } from "./types.js";
 type HookRunner = ReturnType<typeof getGlobalHookRunner>;
 type OrphanRepairPlan = ReturnType<typeof resolveOrphanRepairPlan>;
 
-type EmbeddedAttemptSteeringLease = {
+export type EmbeddedAttemptSteeringLease = {
   leaseId: string;
   runIds: string[];
   isCurrent: () => boolean;
 };
 
 export async function prepareEmbeddedAttemptPromptAssembly(input: {
-  attempt: EmbeddedRunAttemptParams;
-  activeSession: AgentSession;
-  sessionManager: SessionManager;
+  attempt: Omit<
+    EmbeddedRunAttemptParams,
+    | "authStorage"
+    | "authProfileStore"
+    | "modelRegistry"
+    | "sessionFile"
+    | "thinkLevel"
+    | "timeoutMs"
+    | "modelId"
+    | "fastMode"
+  >;
+  activeSession: Pick<AgentSession, "messages">;
+  sessionManager: Pick<SessionManager, "getLeafId">;
   hookRunner: HookRunner;
   hookAgentId: string;
   diagnosticTrace: DiagnosticTraceContext;
@@ -89,12 +103,26 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
   sessionAgentId: string;
   runtimeModel: string;
   systemPromptText: string;
-  applyPromptBuildToolsAllow: (toolsAllow: string[] | undefined) => string[];
+  runAbortSignal?: AbortSignal;
+  applyPromptBuildToolsAllow: (
+    toolsAllow: string[] | undefined,
+    decisionIsCurrent?: () => boolean,
+  ) => string[];
   prepareSystemPrompt?: (currentSystemPrompt: string) => Promise<string>;
   setActiveSessionSystemPrompt: (systemPrompt: string) => void;
   setLeasedSteering: (lease: EmbeddedAttemptSteeringLease) => void;
 }) {
   const { attempt } = input;
+  // Capture runtime ownership before hook/steering awaits; explicit scopes stay pinned.
+  const readConfig = createRuntimeConfigReader(attempt.config ?? getRuntimeConfig());
+  const attemptAbortSignal = attempt.abortSignal;
+  const runAbortSignal = input.runAbortSignal;
+  const activeAbortSignal =
+    attemptAbortSignal && runAbortSignal
+      ? AbortSignal.any([attemptAbortSignal, runAbortSignal])
+      : (attemptAbortSignal ?? runAbortSignal);
+  activeAbortSignal?.throwIfAborted();
+
   const isSettledTurnFinalization = attempt.operation === "settled-tool-finalization";
   const preserveExactPrompt = input.isRawModelRun || isSettledTurnFinalization;
   let systemPromptText = input.systemPromptText;
@@ -143,7 +171,95 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
         hookCtx,
         hookRunner: input.hookRunner,
       });
-  const callableToolNames = input.applyPromptBuildToolsAllow(hookResult?.toolsAllow);
+
+  let leasedSteering: EmbeddedAttemptSteeringLease | undefined;
+  let leasedSteeringPrompt: string | undefined;
+  if (attempt.sessionKey && !preserveExactPrompt) {
+    const leaseId = `${attempt.runId}:agent-steering`;
+    const leased = await leasePendingAgentSteeringItems({
+      requesterSessionKey: attempt.sessionKey,
+      leaseId,
+    });
+    if (leased) {
+      leasedSteering = { leaseId, runIds: leased.runIds, isCurrent: leased.isCurrent };
+      // Transfer cleanup ownership before any prompt mutation can throw.
+      input.setLeasedSteering(leasedSteering);
+      if (!leased.isCurrent()) {
+        throw new Error(
+          "The queued child results lost authority before requester prompt injection.",
+        );
+      }
+      leasedSteeringPrompt = leased.prompt;
+    }
+  }
+
+  const assertHostActive = resolveAdmittedRunActiveAssertion(
+    attempt.admittedRunContext,
+    activeAbortSignal,
+  );
+  assertHostActive?.();
+  const hasPendingActionInstructions = Boolean(
+    // Authorized enrichment runs after policy; do not pre-empt its required actions.
+    input.hookRunner?.hasAuthorizedPromptBuildHooks(hookCtx) ||
+    hookResult?.hasPendingNonPromptBuildContext ||
+    input.orphanRepair?.messageEntry ||
+    leasedSteering,
+  );
+
+  const effectiveToolsAllow = hookResult?.toolsAllow;
+  const guard = preserveExactPrompt
+    ? "exact-prompt"
+    : !assertHostActive || !activeAbortSignal
+      ? "missing-authority"
+      : attempt.supportsTurnScopedToolRestrictions !== true
+        ? "unsupported-harness"
+        : attempt.fallbackActive
+          ? "primary-fallback"
+          : attempt.skipPreparedUserTurnMessage
+            ? "continuation"
+            : attempt.trigger !== "user" || attempt.internalEvents?.length
+              ? "internal-input"
+              : attempt.disableTools
+                ? "tools-disabled"
+                : effectiveToolsAllow !== undefined
+                  ? "hook-tool-policy"
+                  : hasPendingActionInstructions
+                    ? "pending-action-context"
+                    : undefined;
+  let decisionPrefilter: DecisionPrefilterResult = {
+    shouldPruneTools: false,
+    status: "skipped",
+    reason: guard ?? "not-evaluated",
+  };
+  if (!guard && assertHostActive && activeAbortSignal) {
+    decisionPrefilter = await evaluateAttemptDecisionToolPrefilter({
+      config: readConfig(),
+      agentId: input.sessionAgentId,
+      userMessage: effectivePrompt,
+      messages: promptBuildMessages,
+      promptBuildFields: hookResult?.decisionPromptBuildFields,
+      currentInputExcluded: Boolean(
+        attempt.images?.length ||
+        attempt.media?.length ||
+        attempt.inputAttachmentMedia?.length ||
+        (attempt.inputProvenance && attempt.inputProvenance.kind !== "external_user") ||
+        attempt.userTurnTranscriptRecorder?.message?.excludeFromContext ||
+        attempt.isTurnTainted?.(),
+      ),
+      signal: activeAbortSignal,
+      assertActive: assertHostActive,
+      supportsTurnScopedToolRestrictions: attempt.supportsTurnScopedToolRestrictions,
+    });
+    if (decisionPrefilter.shouldPruneTools && decisionPrefilter.isCurrent?.()) {
+      decisionPrefilter.restrictionApplied = true;
+    }
+  }
+  activeAbortSignal?.throwIfAborted();
+  assertHostActive?.();
+  const callableToolNames = input.applyPromptBuildToolsAllow(
+    effectiveToolsAllow,
+    decisionPrefilter.restrictionApplied ? decisionPrefilter.isCurrent : undefined,
+  );
   // Regenerate owned capability guidance before composing hook additions, without
   // rerunning hooks or altering already-recorded conversation messages.
   if (input.prepareSystemPrompt) {
@@ -153,10 +269,6 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
     }
   }
   const hookRunner = input.hookRunner;
-  const assertHostActive = resolveAdmittedRunActiveAssertion(
-    attempt.admittedRunContext,
-    attempt.abortSignal,
-  );
   const authorizedHookResult =
     preserveExactPrompt || !hookRunner || !attempt.toolAuthorityFingerprint || !assertHostActive
       ? undefined
@@ -259,42 +371,22 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
         ? " to prevent consecutive user turns. "
         : " without removing the active session leaf. ") +
       `runId=${attempt.runId} sessionId=${attempt.sessionId} trigger=${attempt.trigger}`;
-    if (shouldWarnOnOrphanedUserRepair(attempt.trigger)) {
-      log.warn(message);
-    } else {
-      log.debug(message);
-    }
+    log[shouldWarnOnOrphanedUserRepair(attempt.trigger) ? "warn" : "debug"](message);
   }
 
-  let leasedSteering: EmbeddedAttemptSteeringLease | undefined;
-  if (attempt.sessionKey && !preserveExactPrompt) {
-    const leaseId = `${attempt.runId}:agent-steering`;
-    const leased = await leasePendingAgentSteeringItems({
-      requesterSessionKey: attempt.sessionKey,
-      leaseId,
+  if (leasedSteering && leasedSteeringPrompt) {
+    effectivePrompt = prependAgentSteeringPrompt({
+      steeringPrompt: leasedSteeringPrompt,
+      prompt: effectivePrompt,
     });
-    if (leased) {
-      leasedSteering = { leaseId, runIds: leased.runIds, isCurrent: leased.isCurrent };
-      // Transfer cleanup ownership before any prompt mutation can throw.
-      input.setLeasedSteering(leasedSteering);
-      if (!leased.isCurrent()) {
-        throw new Error(
-          "The queued child results lost authority before requester prompt injection.",
-        );
-      }
-      effectivePrompt = prependAgentSteeringPrompt({
-        steeringPrompt: leased.prompt,
-        prompt: effectivePrompt,
-      });
-      effectiveTranscriptPrompt = prependAgentSteeringPrompt({
-        steeringPrompt: leased.prompt,
-        prompt: effectiveTranscriptPrompt,
-      });
-      log.debug(
-        `agent steering: injected ${leased.runIds.length} queued item(s) into parent turn ` +
-          `runId=${attempt.runId} sessionKey=${attempt.sessionKey}`,
-      );
-    }
+    effectiveTranscriptPrompt = prependAgentSteeringPrompt({
+      steeringPrompt: leasedSteeringPrompt,
+      prompt: effectiveTranscriptPrompt,
+    });
+    log.debug(
+      `agent steering: injected ${leasedSteering.runIds.length} queued item(s) into parent turn ` +
+        `runId=${attempt.runId} sessionKey=${attempt.sessionKey}`,
+    );
   }
 
   const currentUserAdmission =
@@ -312,6 +404,7 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
       : undefined;
 
   return {
+    decisionPrefilter,
     assertHostActive,
     hookCtx,
     effectivePrompt,
@@ -349,6 +442,8 @@ type PromptAssemblyContext = {
 export async function prepareEmbeddedAttemptPromptContext(input: {
   sessionVersion?: number;
   appendOnlyRuntimeContext?: boolean;
+  executionHost?: boolean;
+  inHistorySystemUpdates?: boolean;
   attempt: PromptContextAttempt;
   capabilityToolNames: ReadonlySet<string>;
   boundaryTimezone?: string;
@@ -400,13 +495,11 @@ export async function prepareEmbeddedAttemptPromptContext(input: {
     contextTokenBudget,
     promptToolResultMaxChars,
     promptToolResultAggregateMaxChars,
-    cloneToolResultPromptProjectionState(input.toolResultPromptProjectionState),
+    createToolResultPromptProjectionState(input.toolResultPromptProjectionState),
   );
   const promptHistoryChanged = promptToolResultTruncation.messages !== sessionMessages;
   const { aggregatePressureEngaged } = promptToolResultTruncation;
-  if (promptHistoryChanged) {
-    sessionMessages = promptToolResultTruncation.messages;
-  }
+  sessionMessages = promptToolResultTruncation.messages;
   if (promptHistoryChanged || aggregatePressureEngaged) {
     const sessionLogKey = attempt.sessionKey ?? attempt.sessionId ?? "unknown";
     const truncationLog =
@@ -429,7 +522,7 @@ export async function prepareEmbeddedAttemptPromptContext(input: {
 
   const escapedProjection = !input.isRawModelRun && usesEscapedRuntimeContext(input.sessionVersion);
   const eventFragments: RuntimeContextFragment[] = [
-    ...buildAgentInternalEventContext(attempt.internalEvents, !escapedProjection),
+    ...buildAgentInternalEventContext(attempt.internalEvents),
     ...(attempt.runtimeContextFragments ?? []),
     ...(input.prompt.originContext
       ? escapedProjection
@@ -443,15 +536,8 @@ export async function prepareEmbeddedAttemptPromptContext(input: {
     fragments: eventFragments,
     allowRuntimeOnly: !attempt.suppressNextUserMessagePersistence,
   });
-  const inlineContext = promptSubmission.runtimeOnly ? attempt.currentInboundContext : undefined;
-  const promptForSession = buildCurrentInboundPrompt({
-    context: inlineContext,
-    prompt: promptSubmission.prompt,
-  });
-  const promptForModel = buildCurrentInboundPrompt({
-    context: inlineContext,
-    prompt: promptSubmission.modelPrompt ?? promptSubmission.prompt,
-  });
+  const promptForSession = promptSubmission.prompt;
+  const promptForModel = promptSubmission.modelPrompt ?? promptSubmission.prompt;
   const fragments: RuntimeContextFragment[] = [
     ...((escapedProjection ? attempt.currentInboundContext?.fragments : undefined) ??
       (attempt.currentInboundContext?.text
@@ -473,20 +559,21 @@ export async function prepareEmbeddedAttemptPromptContext(input: {
       ? []
       : await buildRuntimeFactsContext({
           capabilityToolNames: input.capabilityToolNames,
+          executionHost: input.executionHost,
           cfg: attempt.config ?? {},
           sessionKey: attempt.sessionKey,
           sessionId: attempt.sessionId,
           agentId: input.sessionAgentId,
+          includeEmptySnapshots: input.appendOnlyRuntimeContext === true,
         });
-  const contextFragments = promptSubmission.runtimeOnly
-    ? [...eventFragments, ...runtimeFacts]
-    : [...fragments, ...runtimeFacts];
+  const contextFragments = [...fragments, ...runtimeFacts];
   const runtimeContextForHook = joinPresentTextSegments(
     contextFragments.map((fragment) => fragment.text),
   );
   const runtimeContextMessageForCurrentTurn = buildRuntimeContextCustomMessage(
     runtimeContextForHook,
     contextFragments,
+    input.inHistorySystemUpdates,
   );
   const messagesForCurrentPrompt = runtimeContextMessageForCurrentTurn
     ? [...sessionMessages, runtimeContextMessageForCurrentTurn]
@@ -494,6 +581,7 @@ export async function prepareEmbeddedAttemptPromptContext(input: {
   const boundaryInput = {
     sessionVersion: input.isRawModelRun ? undefined : input.sessionVersion,
     appendOnlyRuntimeContext: input.appendOnlyRuntimeContext,
+    inHistorySystemUpdates: input.inHistorySystemUpdates,
     prompt: promptForModel,
     ...(input.boundaryTimezone ? { timezone: input.boundaryTimezone } : {}),
     ...(input.includeBoundaryTimestamp ? {} : { includeTimestamp: false }),
@@ -538,6 +626,7 @@ export async function prepareEmbeddedAttemptPromptContext(input: {
     promptToolResultAggregateMaxChars,
     promptToolResultMaxChars,
     ...(runtimeContextMessageForCurrentTurn ? { runtimeContextMessageForCurrentTurn } : {}),
+    runtimeContextFragments: contextFragments,
     systemPromptForHook,
   };
 }

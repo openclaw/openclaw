@@ -1,4 +1,3 @@
-/** Plugin node-host bridge for loading plugin registry commands and dispatching node capabilities. */
 import { asOptionalRecord as normalizeRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { NodePluginToolDescriptor } from "../../packages/gateway-protocol/src/schema/nodes.js";
@@ -21,6 +20,7 @@ import type {
 } from "../plugins/types.js";
 import type { OpenClawPluginNodeHostCommandContext } from "../plugins/types.node-host.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import { throwNodeHostCleanupErrors } from "./cleanup-errors.js";
 import { preparePluginExecAuthorization } from "./plugin-exec-policy.js";
 
 const loadPluginRegistryLoaderModule = createLazyRuntimeModule(
@@ -69,13 +69,8 @@ export async function ensureNodeHostPluginRegistry(params: {
 /** List registered node-host capabilities and command ids in deterministic order. */
 export function listRegisteredNodeHostCapsAndCommands(
   context: OpenClawPluginNodeHostCommandAvailabilityContext,
-  options: { includeDuplex?: boolean; commandAllowlist?: ReadonlySet<string> } = {},
-): {
-  caps: string[];
-  commands: string[];
-  computerUse?: ComputerUseCapabilityDescriptor;
-  nodePluginTools: NodePluginToolDescriptor[];
-} {
+  options: { commandAllowlist?: ReadonlySet<string> } = {},
+) {
   const registry = resolveNodeHostPluginRegistry();
   return withPluginRuntimeRegistryScope(registry, () => {
     const caps = new Set<string>();
@@ -84,9 +79,6 @@ export function listRegisteredNodeHostCapsAndCommands(
     const nodePluginTools = new Map<string, NodePluginToolDescriptor>();
     for (const entry of registry?.nodeHostCommands ?? []) {
       if (options.commandAllowlist && !options.commandAllowlist.has(entry.command.command)) {
-        continue;
-      }
-      if (entry.command.duplex === true && options.includeDuplex === false) {
         continue;
       }
       // Availability belongs to the node-local plugin. Gateway policy still keeps
@@ -157,12 +149,7 @@ export function watchRegisteredNodeHostCommandAvailability(
         const failures = results.flatMap((result) =>
           result.status === "rejected" ? [result.reason] : [],
         );
-        if (failures.length === 1) {
-          throw failures[0];
-        }
-        if (failures.length > 1) {
-          throw new AggregateError(failures, "node-host watcher cleanup failed");
-        }
+        throwNodeHostCleanupErrors(failures, "node-host watcher cleanup failed");
       })
       .catch((error: unknown) => {
         stopping = undefined;

@@ -1,13 +1,25 @@
 import type { MarkdownIRWithBlockMetadata } from "./text-styles-shared.js";
 
+export function createMarkdownSource(source: string, ir: MarkdownIRWithBlockMetadata) {
+  const lines = source.split("\n");
+  let offset = 0;
+  const lineStarts = lines.map((line) => {
+    const start = offset;
+    offset += line.length + 1;
+    return start;
+  });
+  return { source, ir, lines, lineStarts };
+}
+
+export type MarkdownSource = ReturnType<typeof createMarkdownSource>;
+
 export function sourceContainerProjection(
-  line: string,
+  context: MarkdownSource,
   lineIndex: number,
-  ir: MarkdownIRWithBlockMetadata,
-  sourceLineStarts: number[],
-  sourceLines: string[],
   blockquoteDepth: number,
 ): { offset: number; residual: number } {
+  const { ir, lines: sourceLines, lineStarts: sourceLineStarts } = context;
+  const line = sourceLines[lineIndex] ?? "";
   const quotePrefix = sourceBlockquotePrefixLength(line, blockquoteDepth);
   const quoteResidual = blockquoteTabResidual(line.slice(0, quotePrefix));
   const listProjection = (ir.listItems ?? []).reduce(
@@ -81,12 +93,10 @@ export function sourceContainerProjection(
 }
 
 export function sourceListItemContent(
-  source: string,
-  ir: MarkdownIRWithBlockMetadata,
-  sourceLineStarts: number[],
-  sourceLines: string[],
+  context: MarkdownSource,
   item: NonNullable<MarkdownIRWithBlockMetadata["listItems"]>[number],
 ): string {
+  const { source, ir, lineStarts: sourceLineStarts } = context;
   if (
     item.sourceContent === undefined ||
     item.sourceStartLine === undefined ||
@@ -113,15 +123,7 @@ export function sourceListItemContent(
     const contentEnd = Math.min(item.sourceContent.end, lineEnd);
     const projectedStart = Math.max(
       contentStart,
-      lineStart +
-        sourceContainerProjection(
-          sourceLines[lineIndex] ?? "",
-          lineIndex,
-          ir,
-          sourceLineStarts,
-          sourceLines,
-          blockquoteDepth,
-        ).offset,
+      lineStart + sourceContainerProjection(context, lineIndex, blockquoteDepth).offset,
     );
     contentLines.push(
       source.slice(Math.min(projectedStart, contentEnd), contentEnd).replace(/\r$/u, ""),

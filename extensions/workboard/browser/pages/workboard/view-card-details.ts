@@ -6,7 +6,7 @@ import {
   renderDialog,
 } from "../../components/host-components.ts";
 import { icons } from "../../components/icons.ts";
-import { renderWorkboardToast } from "../../components/toast.ts";
+import { renderWorkboardErrorToast } from "../../components/toast.ts";
 import { t } from "../../i18n/index.ts";
 import {
   workboardCardBoardId,
@@ -43,6 +43,7 @@ import {
   formatLifecycle,
   formatPriorityLabel,
   workboardErrorMessage,
+  workboardMutationContext,
   renderPriorityIcon,
   renderLifecycleIcon,
   formatStatusLabel,
@@ -470,46 +471,25 @@ export function renderCardDetailsPanel(props: WorkboardProps) {
                                 ${t("workboard.detailExecutionOptions")}
                               </summary>
                               <div class="workboard-detail__engine-groups">
-                                ${
-                                  props.canModelOverride !== false
-                                    ? html`
-                                        <div class="workboard-detail__engine-group">
-                                          <span>${t("workboard.detailRunAutomatically")}</span>
-                                          <div class="workboard-detail__actions">
-                                            ${renderStartExecutionButton(
+                                ${(["autonomous", "manual"] as const).map((mode) =>
+                                  mode === "autonomous" && props.canModelOverride === false
+                                    ? nothing
+                                    : html`<div class="workboard-detail__engine-group">
+                                        <span
+                                          >${t(mode === "autonomous" ? "workboard.detailRunAutomatically" : "workboard.detailOpenManually")}</span
+                                        >
+                                        <div class="workboard-detail__actions">
+                                          ${(["codex", "claude"] as const).map((engine) =>
+                                            renderStartExecutionButton(
                                               actionProps,
                                               card,
-                                              "codex",
-                                              "autonomous",
-                                            )}
-                                            ${renderStartExecutionButton(
-                                              actionProps,
-                                              card,
-                                              "claude",
-                                              "autonomous",
-                                            )}
-                                          </div>
+                                              engine,
+                                              mode,
+                                            ),
+                                          )}
                                         </div>
-                                      `
-                                    : nothing
-                                }
-                                <div class="workboard-detail__engine-group">
-                                  <span>${t("workboard.detailOpenManually")}</span>
-                                  <div class="workboard-detail__actions">
-                                    ${renderStartExecutionButton(
-                                      actionProps,
-                                      card,
-                                      "codex",
-                                      "manual",
-                                    )}
-                                    ${renderStartExecutionButton(
-                                      actionProps,
-                                      card,
-                                      "claude",
-                                      "manual",
-                                    )}
-                                  </div>
-                                </div>
+                                      </div>`,
+                                )}
                               </div>
                             </details>
                           `
@@ -602,11 +582,9 @@ export function renderCardDetailsPanel(props: WorkboardProps) {
                             ?disabled=${busy || !state.detailCommentBody.trim()}
                             @click=${() =>
                               addWorkboardCardComment({
-                                host: props.host,
-                                client: props.client,
+                                ...workboardMutationContext(props),
                                 cardId: card.id,
                                 body: state.detailCommentBody,
-                                requestUpdate: props.onRequestUpdate,
                               })}
                           >
                             ${t("workboard.detailAddNote")}
@@ -643,12 +621,7 @@ export function renderCardDetailsPanel(props: WorkboardProps) {
           </div>
         </div>
       </aside>
-      ${renderWorkboardToast({
-        owner: state,
-        message: visibleError ?? "",
-        key: visibleError,
-        tone: "error",
-      })}
+      ${renderWorkboardErrorToast(state, visibleError)}
     `,
   );
   return html`

@@ -1,5 +1,5 @@
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
-import { projectSessionResultRows } from "./reconcile.ts";
+import { mapSessionResultRows } from "./reconcile.ts";
 import type { createSessionRowProvenance } from "./session-row-provenance.ts";
 import { isOlderSessionSnapshot } from "./session-row-reconcile.ts";
 
@@ -42,7 +42,7 @@ export function createSessionRosterProjection(
       return result;
     }
     const offered = indexRows(rows, sourceAgentId);
-    const sessions = result.sessions.map((current) => {
+    return mapSessionResultRows(result, (current) => {
       const key = identity(current, agentId);
       const row = key && offered.get(key);
       if (!row) {
@@ -62,7 +62,6 @@ export function createSessionRosterProjection(
           : inheritRow({ ...held, key: current.key }, held)
         : mergeRow(current, row, agentId);
     });
-    return projectSessionResultRows(result, sessions);
   };
   const prepareProjection = (requestedRows?: readonly GatewaySessionRow[]) => {
     // Identity includes the verbatim session ID; other IDs cannot donate facts.

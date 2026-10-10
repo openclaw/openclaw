@@ -1,4 +1,6 @@
-import type { WorkerOptions } from "node:worker_threads";
+import type { Worker, WorkerOptions } from "node:worker_threads";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { createDeferred } from "../../../test/helpers/promise.js";
 
 const integrityCounterPreload = `
   import { DatabaseSync } from "node:sqlite";
@@ -18,13 +20,22 @@ const integrityCounterPreload = `
         const execute = statement[method].bind(statement);
         statement[method] = (...args) => {
           Atomics.add(new Int32Array(workerData.integrityChecks), 0, 1);
+          const held = workerData.integrityFirstCheck
+            ? Atomics.compareExchange(new Int32Array(workerData.integrityFirstCheck), 0, 0, 1) === 0
+            : undefined;
+          const report = (phase) => parentPort.postMessage({
+            type: "test-integrity-check", phase,
+            ...(held === undefined ? {} : { held }),
+          });
           if (workerData.integrityRelease) {
-            parentPort.postMessage({ type: "test-integrity-check", phase: "checking" });
-            Atomics.wait(new Int32Array(workerData.integrityRelease), 0, 0);
+            report("checking");
+            if (held !== false) {
+              Atomics.wait(new Int32Array(workerData.integrityRelease), 0, 0);
+            }
           }
           const result = execute(...args);
           if (workerData.integrityRelease) {
-            parentPort.postMessage({ type: "test-integrity-check", phase: "checked" });
+            report("checked");
           }
           return result;
         };
@@ -40,6 +51,7 @@ export function withWorkerSqliteIntegrityCounter(
   counts: SharedArrayBuffer | undefined,
   release?: SharedArrayBuffer,
   databasePath?: string,
+  firstCheck?: SharedArrayBuffer,
 ): WorkerOptions | undefined {
   return counts
     ? {
@@ -54,7 +66,65 @@ export function withWorkerSqliteIntegrityCounter(
           integrityChecks: counts,
           ...(databasePath ? { integrityDatabasePath: databasePath } : {}),
           ...(release ? { integrityRelease: release } : {}),
+          ...(firstCheck ? { integrityFirstCheck: firstCheck } : {}),
         },
       }
     : options;
+}
+
+/** Arm after fixture preparation, including when the executor is already retained. */
+export function createWorkerSqliteIntegrityGate(databasePath: string) {
+  const counts = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT);
+  const release = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT);
+  const firstCheck = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT);
+  Atomics.store(new Int32Array(firstCheck), 0, 1);
+  const entered = createDeferred();
+  const workers = new Set<Worker>();
+  return {
+    entered: entered.promise,
+    workers,
+    arm() {
+      Atomics.store(new Int32Array(counts), 0, 0);
+      Atomics.store(new Int32Array(firstCheck), 0, 0);
+    },
+    count: () => Atomics.load(new Int32Array(counts), 0),
+    release: () => {
+      Atomics.store(new Int32Array(release), 0, 1);
+      Atomics.notify(new Int32Array(release), 0);
+    },
+    options: (options?: WorkerOptions) =>
+      withWorkerSqliteIntegrityCounter(options, counts, release, databasePath, firstCheck),
+    message(worker: Worker, message: unknown) {
+      if (!isRecord(message) || message.type !== "test-integrity-check") {
+        return false;
+      }
+      workers.add(worker);
+      if (message.phase === "checking" && message.held === true) {
+        entered.resolve();
+      }
+      return true;
+    },
+  };
+}
+
+export function observeWorkerSqliteIntegrity(
+  WorkerConstructor: typeof Worker,
+  currentGate: () => ReturnType<typeof createWorkerSqliteIntegrityGate> | undefined,
+): typeof Worker {
+  return class extends WorkerConstructor {
+    private readonly integrityGate: ReturnType<typeof currentGate>;
+
+    constructor(filename: string | URL, options?: WorkerOptions) {
+      const gate = currentGate();
+      super(filename, gate?.options(options) ?? options);
+      this.integrityGate = gate;
+    }
+
+    override emit(event: string | symbol, ...args: unknown[]): boolean {
+      if (event === "message" && this.integrityGate?.message(this, args[0])) {
+        return true;
+      }
+      return super.emit(event, ...args);
+    }
+  };
 }

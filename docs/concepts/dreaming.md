@@ -17,9 +17,11 @@ Dreaming is enabled by default. Set
 
 When the cron scheduler is disabled (`cron.enabled: false` or
 `OPENCLAW_SKIP_CRON=1`), dreaming defers automatic job creation and updates while
-preserving existing jobs. Startup cleanup of historical dreaming artifacts still
-runs. Explicitly disabling dreaming removes jobs carrying its canonical
-declaration key in the active cron store.
+preserving existing jobs. Startup cleanup of historical dreaming artifacts waits
+for each agent's pending database preparation before running, including managed
+background cleanup after a restart or upgrade. Database preparation failures are
+reported with repair guidance. Explicitly disabling dreaming removes jobs carrying
+its canonical declaration key in the active cron store.
 
 ## What dreaming writes
 
@@ -124,6 +126,12 @@ Dreaming keeps a narrative **Dream Diary** in `DREAMS.md`. After each phase has 
 
 Diary and consolidation completions use fresh contexts without retaining conversation sessions or delivering chat replies. Failed or empty diary generation writes a local fallback entry and reports a degraded outcome, so missing model output leaves a visible trace.
 
+Diary generation uses the existing agent run budget, `agents.defaults.timeoutSeconds`,
+instead of a separate one-minute deadline. It inherits the same 48-hour default and
+timer-safe unlimited setting as agent runs. The selected provider's
+`models.providers.<provider>.timeoutSeconds` still bounds its model requests, so
+keep both budgets long enough for slow local inference.
+
 <Note>
 The diary is for human reading in the Dreams UI, not a promotion source. Diary/report artifacts are excluded from short-term promotion; only grounded memory snippets are eligible to promote into `MEMORY.md`.
 </Note>
@@ -176,6 +184,10 @@ Light and REM phase hits recorded in SQLite-backed plugin state add a small rece
 ## Scheduling
 
 When enabled, `memory-core` auto-manages one cron job for a full dreaming sweep, deduped across the primary runtime workspace and any configured agent workspaces so subagent workspace fan-out does not exclude the main agent's `DREAMS.md` and memory state.
+
+Plugin reloads preserve the managed schedule. The previous instance stops its
+background callbacks and settles pending diary publication before its replacement
+takes over, so scheduled sweeps can continue without a Gateway restart.
 
 Runtime reconciliation owns only jobs declared as
 `memory-core:memory-dreaming-promotion`. It uses Doctor's read-only classifier

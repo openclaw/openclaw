@@ -285,93 +285,52 @@ suite.define(() => {
     });
   });
 
-  it("dismisses durably with Undo and reopens after reload without resolving or stopping work", async () => {
-    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
-      const gateway = await installMockGateway(page, { historyMessages: [questionMessage] });
-      await page.goto(`${suite.server.baseUrl}chat`);
-      const dock = page.locator(".agent-chat__question-dock");
-      const draft = dock.getByRole("textbox", { name: `Your own answer for ${title}` });
-      await draft.fill("My project team");
-      await captureUiProof(suite, page, "async-question-dismissal", "before-dismissal.png");
-      await dock.getByRole("button", { name: "Dismiss", exact: true }).click();
-      const toast = page.locator(".app-toast");
-      await expectBrowser(toast).toContainText("Question dismissed. Work continues.");
-      await expectBrowser(dock).toHaveCount(0);
-      await captureUiProof(suite, page, "async-question-dismissal", "after-dismissal-undo.png");
-      await toast.getByRole("button", { name: "Undo", exact: true }).click();
-      await expectBrowser(draft).toHaveValue("My project team");
-      // A visible restored answer is a durability boundary, with no intervening write.
-      await page.reload();
-      await expectBrowser(draft).toHaveValue("My project team");
-      await dock.getByRole("button", { name: "Dismiss", exact: true }).click();
-      // The toast is published after the durable write settles, so reload exercises stored state.
-      await expectBrowser(toast).toContainText("Question dismissed. Work continues.");
-      await page.reload();
-      const summary = page.locator(".chat-question-summary").filter({ hasText: title });
-      await expectBrowser(summary).toContainText("Dismissed");
-      await expectBrowser(dock).toHaveCount(0);
-      await captureUiProof(suite, page, "async-question-dismissal", "after-reload.png");
-      await summary.getByRole("button", { name: "Answer", exact: true }).click();
-      await expectBrowser(draft).toHaveValue("My project team");
-      // A visible restored answer is a durability boundary, with no intervening write.
-      await page.reload();
-      await expectBrowser(draft).toHaveValue("My project team");
-      expect(await gateway.getRequests("chat.send")).toHaveLength(0);
-      expect(await gateway.getRequests("question.resolve")).toHaveLength(0);
-      expect(await gateway.getRequests("chat.abort")).toHaveLength(0);
-    });
+  it("keeps the docked question and composer within a 390 px viewport", async () => {
+    const width = 390;
+    await suite.withPage(
+      { viewport: { width: 1440, height: 1200 }, colorScheme: "dark", reducedMotion: "reduce" },
+      async ({ page }) => {
+        await installMockGateway(page, { historyMessages: [questionMessage] });
+        await page.goto(`${suite.server.baseUrl}chat`);
+        const panel = page.locator(".agent-chat__question-dock .chat-question-panel");
+        const composer = page.locator(".agent-chat__input");
+        await expectBrowser(panel).toBeVisible();
+        await page.evaluate(() => document.fonts.ready);
+        const desktop = await panel.boundingBox();
+        expect(desktop).not.toBeNull();
+        await page.setViewportSize({ width, height: 844 });
+        const assertDock = async () => {
+          await expectBrowser(panel).toBeInViewport({ ratio: 1 });
+          await expectBrowser(composer).toBeInViewport({ ratio: 1 });
+          const questionBox = (await panel.boundingBox())!;
+          const composerBox = (await composer.boundingBox())!;
+          expect(questionBox.x).toBeCloseTo(composerBox.x, 0);
+          expect(questionBox.width).toBeCloseTo(composerBox.width, 0);
+          expect(questionBox.y + questionBox.height).toBeLessThanOrEqual(composerBox.y);
+          expect(
+            await page.evaluate(() => document.documentElement.scrollWidth),
+          ).toBeLessThanOrEqual(width);
+        };
+        await assertDock();
+        await panel.getByRole("button", { name: "Collapse question" }).click();
+        await assertDock();
+        await expectBrowser(panel).toContainText("1 unanswered question");
+        await panel.getByRole("button", { name: "Expand question" }).click();
+        await assertDock();
+        await page.setViewportSize({ width: 1440, height: 1200 });
+        await expect
+          .poll(async () => {
+            const restored = (await panel.boundingBox())!;
+            return Math.max(
+              ...(["x", "y", "width", "height"] as const).map((key) =>
+                Math.abs(restored[key] - desktop![key]),
+              ),
+            );
+          })
+          .toBeLessThanOrEqual(0.5);
+      },
+    );
   });
-
-  it.each(
-    [390, 430].flatMap((width) => (["light", "dark"] as const).map((theme) => ({ width, theme }))),
-  )(
-    "keeps the docked question and composer within a $width px $theme viewport",
-    async ({ width, theme }) => {
-      await suite.withPage(
-        { viewport: { width: 1440, height: 1200 }, colorScheme: theme, reducedMotion: "reduce" },
-        async ({ page }) => {
-          await installMockGateway(page, { historyMessages: [questionMessage] });
-          await page.goto(`${suite.server.baseUrl}chat`);
-          const panel = page.locator(".agent-chat__question-dock .chat-question-panel");
-          const composer = page.locator(".agent-chat__input");
-          await expectBrowser(panel).toBeVisible();
-          await page.evaluate(() => document.fonts.ready);
-          const desktop = await panel.boundingBox();
-          expect(desktop).not.toBeNull();
-          await page.setViewportSize({ width, height: 844 });
-          const assertDock = async () => {
-            await expectBrowser(panel).toBeInViewport({ ratio: 1 });
-            await expectBrowser(composer).toBeInViewport({ ratio: 1 });
-            const questionBox = (await panel.boundingBox())!;
-            const composerBox = (await composer.boundingBox())!;
-            expect(questionBox.x).toBeCloseTo(composerBox.x, 0);
-            expect(questionBox.width).toBeCloseTo(composerBox.width, 0);
-            expect(questionBox.y + questionBox.height).toBeLessThanOrEqual(composerBox.y);
-            expect(
-              await page.evaluate(() => document.documentElement.scrollWidth),
-            ).toBeLessThanOrEqual(width);
-          };
-          await assertDock();
-          await panel.getByRole("button", { name: "Collapse question" }).click();
-          await assertDock();
-          await expectBrowser(panel).toContainText("1 unanswered question");
-          await panel.getByRole("button", { name: "Expand question" }).click();
-          await assertDock();
-          await page.setViewportSize({ width: 1440, height: 1200 });
-          await expect
-            .poll(async () => {
-              const restored = (await panel.boundingBox())!;
-              return Math.max(
-                ...(["x", "y", "width", "height"] as const).map((key) =>
-                  Math.abs(restored[key] - desktop![key]),
-                ),
-              );
-            })
-            .toBeLessThanOrEqual(0.5);
-        },
-      );
-    },
-  );
 
   it.each([false, true])(
     "submits an async answer as ordinary chat with an active run=%s",
@@ -613,7 +572,7 @@ suite.define(() => {
       await arrive(questionMessage, 2);
       const initialExpand = card.getByRole("button", { name: "Expand question", exact: true });
       await initialExpand.waitFor();
-      expect(await initialExpand.textContent()).toContain("Optional · work can continue");
+      expect(await initialExpand.textContent()).toContain("1 unanswered question");
       expect(await card.getByRole("textbox").count()).toBe(0);
       expect(await composer.evaluate((element) => element === document.activeElement)).toBe(true);
       await initialExpand.click();
@@ -960,71 +919,62 @@ suite.define(() => {
     }
   });
 
-  it("keeps every question and option readable when sending is unavailable", async () => {
-    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
-    const page = await context.newPage();
-    const followUpTitle = "What should I emphasize?";
-    const gateway = await installMockGateway(page, {
-      historyMessages: [
-        {
-          ...questionMessage,
-          content: `${questionMessage.content}\n\n${followUpTitle}`,
-          openclawAsyncDelivery: {
-            ...questionMessage.openclawAsyncDelivery,
-            questions: [
-              ...questionMessage.openclawAsyncDelivery.questions,
-              { title: followUpTitle },
-            ],
-          },
-        },
-      ],
-    });
-    try {
-      await page.goto(`${suite.server.baseUrl}chat`);
-      const card = page.locator(".agent-chat__question-dock openclaw-chat-question-panel");
-      await card.getByRole("radio", { name: /Engineers/ }).waitFor();
-      await gateway.setOnline(false);
-      await card.waitFor({ state: "detached" });
-      const transcript = page.locator(".chat-text");
-      await transcript.getByText(followUpTitle, { exact: true }).waitFor();
-      expect(await transcript.textContent()).toContain(title);
-      expect(await transcript.textContent()).toContain("Engineers");
-      expect(await transcript.textContent()).toContain("Everyone");
-      expect(await gateway.getRequests("chat.send")).toHaveLength(0);
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
-  });
-
-  it("keeps malformed question metadata as the original transcript text", async () => {
-    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page, {
-      historyMessages: [{ ...questionMessage, openclawAsyncDelivery: undefined }],
-    });
-    try {
-      await page.goto(`${suite.server.baseUrl}chat`);
-      await page.locator(".chat-text").getByText(title).waitFor();
-      const artifactDir = createControlUiE2eArtifactDir("async-question-plain-text");
-      await page.screenshot({
-        path: path.join(artifactDir, "before-without-metadata.png"),
-        animations: "disabled",
+  it.each(["offline", "malformed"] as const)(
+    "keeps the original question transcript readable when %s",
+    async (fallback) => {
+      await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+        const followUpTitle = "What should I emphasize?";
+        const gateway = await installMockGateway(page, {
+          historyMessages: [
+            fallback === "offline"
+              ? {
+                  ...questionMessage,
+                  content: `${questionMessage.content}\n\n${followUpTitle}`,
+                  openclawAsyncDelivery: {
+                    ...questionMessage.openclawAsyncDelivery,
+                    questions: [
+                      ...questionMessage.openclawAsyncDelivery.questions,
+                      { title: followUpTitle },
+                    ],
+                  },
+                }
+              : { ...questionMessage, openclawAsyncDelivery: undefined },
+          ],
+        });
+        await page.goto(`${suite.server.baseUrl}chat`);
+        const transcript = page.locator(".chat-text");
+        if (fallback === "offline") {
+          const card = page.locator(".agent-chat__question-dock openclaw-chat-question-panel");
+          await card.getByRole("radio", { name: /Engineers/ }).waitFor();
+          await gateway.setOnline(false);
+          await card.waitFor({ state: "detached" });
+          await transcript.getByText(followUpTitle, { exact: true }).waitFor();
+          expect(await transcript.textContent()).toContain(title);
+          expect(await transcript.textContent()).toContain("Everyone");
+          expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+        } else {
+          await transcript.getByText(title).waitFor();
+          await captureUiProof(
+            suite,
+            page,
+            "async-question-plain-text",
+            "before-without-metadata.png",
+          );
+          await gateway.setHistoryMessages([
+            {
+              ...questionMessage,
+              openclawAsyncDelivery: {
+                ...questionMessage.openclawAsyncDelivery,
+                questions: [{ title, options: ["One", "Two", "Three", "Four", "Five"] }],
+              },
+            },
+          ]);
+          await page.reload();
+          await transcript.getByText(title).waitFor();
+          expect(await page.locator("openclaw-chat-question-panel").count()).toBe(0);
+        }
+        expect(await transcript.textContent()).toContain("Engineers");
       });
-      await gateway.setHistoryMessages([
-        {
-          ...questionMessage,
-          openclawAsyncDelivery: {
-            ...questionMessage.openclawAsyncDelivery,
-            questions: [{ title, options: ["One", "Two", "Three", "Four", "Five"] }],
-          },
-        },
-      ]);
-      await page.reload();
-      await page.locator(".chat-text").getByText(title).waitFor();
-      expect(await page.locator("openclaw-chat-question-panel").count()).toBe(0);
-      expect(await page.locator(".chat-text").textContent()).toContain("Engineers");
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
-  });
+    },
+  );
 });

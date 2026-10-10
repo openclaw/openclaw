@@ -1,17 +1,22 @@
+import {
+  DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS,
+  GatewayProtocolRequestTimeoutError,
+} from "@openclaw/gateway-client/browser";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { sleepWithAbort } from "@openclaw/retry";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { t } from "../../i18n/index.ts";
 import { visibleChatHistoryMessages } from "../../lib/chat/message-visibility.ts";
+import {
+  isAgentDatabaseInspectionPendingError,
+  resolveGatewayReadRetryDelayMs,
+} from "../../lib/gateway-availability.ts";
 import {
   isUiSelectedGlobalSessionKey,
   resolveUiSelectedSessionAgentId,
 } from "../../lib/sessions/session-key.ts";
 import { subscribeToSharedRequest } from "../../lib/shared-request-subscription.ts";
-import {
-  isRetryableStartupUnavailable,
-  resolveStartupRetryDelayMs,
-  sleep,
-} from "./chat-history-retry.ts";
+import { CHAT_HISTORY_RETRY_WINDOW_MS, isRetryableChatReadError } from "./chat-history-retry.ts";
 import {
   type ChatHistoryResult,
   type ChatHistoryObservation,
@@ -34,13 +39,12 @@ import type { ChatSessionSnapshot } from "./session-message-cache.ts";
 
 export const CHAT_HISTORY_REQUEST_LIMIT = 80;
 const CHAT_HISTORY_REQUEST_MAX_BYTES = 256 * 1024;
+const CHAT_HISTORY_TOOL_RESULT_MAX_CHARS = 2_000;
 const CHAT_HISTORY_PREFETCH_BUDGET = { limit: 20, maxBytes: 64 * 1024 };
 
 // Keep startup small, then amortize older-history reads and prepend work across
 // larger pages. The Gateway owns the response byte and single-message limits.
 const CHAT_HISTORY_OLDER_PAGE_LIMIT = 1000;
-
-const CHAT_HISTORY_STARTUP_RETRY_TIMEOUT_MS = 60_000;
 
 export function attachHistoryActivity<Result extends ChatHistoryResponse>(result: Result): Result {
   if (isHistoryCursor(result) && result.kind === "reset") {
@@ -88,6 +92,8 @@ type SharedChatHistoryConsumer = {
   isCurrent: () => boolean;
   captureRun?: () => ChatHistoryRunObservation | undefined;
   retryDeadlineMs: number;
+  lastRetryableError?: unknown;
+  onRetry?: () => void;
 };
 
 // The capability owns roster observations; a shared socket alone cannot transfer them.
@@ -118,31 +124,6 @@ function updateChatHistoryOwnerRequestCount(
   counts.set(requestKey, nextCount);
 }
 
-async function requestChatHistory<T extends ChatHistoryResponse>(
-  method: "chat.history" | "chat.startup",
-  attempt: () => Promise<T>,
-  shouldContinue: () => boolean,
-  shouldRetry: () => boolean,
-): Promise<T> {
-  for (;;) {
-    try {
-      return await attempt();
-    } catch (err) {
-      if (!shouldContinue()) {
-        throw err;
-      }
-      if (shouldRetry() && isRetryableStartupUnavailable(err, method)) {
-        await sleep(resolveStartupRetryDelayMs(err));
-        if (!shouldContinue()) {
-          throw err;
-        }
-        continue;
-      }
-      throw err;
-    }
-  }
-}
-
 type SharedChatHistoryArgs = [
   client: GatewayBrowserClient,
   requestKey: string,
@@ -150,7 +131,7 @@ type SharedChatHistoryArgs = [
   sessionKey: string,
   requestAgentId: string | undefined,
   consumerOwner: object,
-  consumerObservation: Pick<SharedChatHistoryConsumer, "isCurrent" | "captureRun">,
+  consumerObservation: Pick<SharedChatHistoryConsumer, "isCurrent" | "captureRun" | "onRetry">,
   cursor?: string,
   inputRunIds?: string[],
   budget?: { limit: number; maxBytes: number },
@@ -199,11 +180,12 @@ export function requestSharedHistory(
   const existingOwner = (registry.ownerRequestCounts.get(consumerOwner)?.get(requestKey) ?? 0) > 0;
   const consumer: SharedChatHistoryConsumer = {
     ...consumerObservation,
-    retryDeadlineMs: Date.now() + CHAT_HISTORY_STARTUP_RETRY_TIMEOUT_MS,
+    retryDeadlineMs: Date.now() + CHAT_HISTORY_RETRY_WINDOW_MS,
   };
   if (!shared || existingOwner) {
     const params = {
       sessionKey,
+      toolResultMaxChars: CHAT_HISTORY_TOOL_RESULT_MAX_CHARS,
       ...(requestAgentId ? { agentId: requestAgentId } : {}),
       ...(cursor !== undefined ? { cursor } : {}),
       ...budget,
@@ -216,25 +198,46 @@ export function requestSharedHistory(
     // it could inherit the first consumer's nearly expired startup deadline.
     const shouldRetry = () =>
       [...consumers].some((entry) => entry.isCurrent() && Date.now() < entry.retryDeadlineMs);
-    const promise = requestChatHistory(
-      method,
-      async () => {
-        // Each attempt observes only its present consumers and their current runs.
-        // A late join acquires custody on a retry, never from an earlier read.
-        const consumersAtIssue = new Map(
-          [...consumers].map((entry) => [entry, entry.captureRun?.()] as const),
-        );
-        const observation = sessions
-          ? { owner: sessions, reconcile: sessions.captureReconcile() }
-          : undefined;
-        const response = attachHistoryActivity(
-          await client.request<ChatHistoryResponse>(method, params, { signal: controller.signal }),
-        );
-        return { ...response, observation, consumersAtIssue };
-      },
-      shouldContinue,
-      shouldRetry,
-    ).finally(() => {
+    const attempt = async () => {
+      // Each attempt observes only its present consumers and their current runs.
+      // A late join acquires custody on a retry, never from an earlier read.
+      const consumersAtIssue = new Map(
+        [...consumers].map((entry) => [entry, entry.captureRun?.()] as const),
+      );
+      const observation = sessions
+        ? { owner: sessions, reconcile: sessions.captureReconcile() }
+        : undefined;
+      const response = attachHistoryActivity(
+        await client.request<ChatHistoryResponse>(method, params, {
+          signal: controller.signal,
+          timeoutMs: DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS,
+        }),
+      );
+      return { ...response, observation, consumersAtIssue };
+    };
+    const signal = controller.signal;
+    const promise = (async () => {
+      let attemptNumber = 0;
+      for (;;) {
+        try {
+          return await attempt();
+        } catch (error) {
+          if (!shouldContinue() || !shouldRetry() || !isRetryableChatReadError(error, method)) {
+            throw error;
+          }
+          for (const entry of consumers) {
+            if (entry.isCurrent()) {
+              entry.lastRetryableError = error;
+              entry.onRetry?.();
+            }
+          }
+          await sleepWithAbort(resolveGatewayReadRetryDelayMs(error, attemptNumber++), signal);
+          if (!shouldContinue() || !shouldRetry()) {
+            throw error;
+          }
+        }
+      }
+    })().finally(() => {
       if (requests?.get(requestKey)?.promise === promise) {
         requests.delete(requestKey);
       }
@@ -251,7 +254,15 @@ export function requestSharedHistory(
   const deadline = new AbortController();
   const timeout = setTimeout(
     () => {
-      deadline.abort(new Error(t("chat.historyRequestTimedOut")));
+      const timeoutError = new GatewayProtocolRequestTimeoutError(
+        { method, timeoutMs: CHAT_HISTORY_RETRY_WINDOW_MS, requestSent: true },
+        t("chat.historyRequestTimedOut"),
+      );
+      deadline.abort(
+        isAgentDatabaseInspectionPendingError(consumer.lastRetryableError)
+          ? consumer.lastRetryableError
+          : timeoutError,
+      );
     },
     Math.max(0, consumer.retryDeadlineMs - Date.now()),
   );
@@ -337,6 +348,7 @@ async function requestOlderChatHistoryPage(
   const result = attachHistoryActivity(
     await client.request<ChatHistoryResult>("chat.history", {
       sessionKey,
+      toolResultMaxChars: CHAT_HISTORY_TOOL_RESULT_MAX_CHARS,
       ...(requestAgentId ? { agentId: requestAgentId } : {}),
       limit: CHAT_HISTORY_OLDER_PAGE_LIMIT,
       offset,
@@ -374,29 +386,15 @@ export async function loadOlderChatHistoryPage(
   return result;
 }
 
-export type StagedOlderHistoryPage = {
-  claim: {
-    client: GatewayBrowserClient;
-    connectionEpoch: number;
-    sessionKey: string;
-    agentId?: string;
-    /** Projection fence: any later history request or reset (tail reload,
-     * rewind, branch switch) advances the version and voids this page even
-     * when the replacement projection lands on the same cursor. */
-    historyVersion: number;
-  };
-  requestedOffset: number;
-  result: ChatHistoryResult;
-};
+export type StagedOlderHistoryPage = NonNullable<
+  Awaited<ReturnType<typeof fetchStagedOlderHistoryPage>>
+>;
 
 // The staged prefetch deliberately skips beginHistoryRequest: request
 // ownership is last-writer-wins, so a background fetch bumping the version
 // could invalidate a concurrent tail load's apply. The claim below carries the
 // same facts and the pane validates it at consume time instead.
-export async function fetchStagedOlderHistoryPage(
-  state: ChatState,
-  offset: number,
-): Promise<StagedOlderHistoryPage | undefined> {
+export async function fetchStagedOlderHistoryPage(state: ChatState, offset: number) {
   if (!state.client || !state.connected) {
     return undefined;
   }
@@ -413,6 +411,7 @@ export async function fetchStagedOlderHistoryPage(
       client,
       connectionEpoch,
       sessionKey,
+      // Any later history request or reset voids this page even on the same cursor.
       historyVersion,
       ...(requestAgentId ? { agentId: requestAgentId } : {}),
     },

@@ -15,6 +15,7 @@ import {
   captureSqliteWorkerStateContext,
   type SqliteWorkerStateContext,
 } from "./sqlite-worker-state-context.js";
+import { classifyWorkerRequest } from "./worker-request-diagnostics.js";
 
 export function runSqliteWorkerClientOperation<Operations extends SqliteWorkerOperations, T>(
   client: StoreClient | undefined,
@@ -23,7 +24,6 @@ export function runSqliteWorkerClientOperation<Operations extends SqliteWorkerOp
   track: (pending: Promise<void>) => () => void,
   assertCurrent?: (commandType: PropertyKey) => void,
   createAdmission?: SqliteWorkerAdmissionFactory,
-  includeOrdinaryErrors?: true,
 ): Promise<T> {
   if (!client || client.sealed) {
     return Promise.reject(new SqliteWorkerError("SQLite worker store is closed", "closed"));
@@ -32,7 +32,6 @@ export function runSqliteWorkerClientOperation<Operations extends SqliteWorkerOp
     maintenanceScope: getOpenClawDatabaseMaintenanceScope(),
     createAdmission,
     assertCurrent,
-    includeOrdinaryErrors,
     active: true,
     pending: new Set(),
     ...(stateContext ? { stateContext: captureSqliteWorkerStateContext(stateContext) } : {}),
@@ -71,6 +70,7 @@ export function createSqliteWorkerClient<Operations extends SqliteWorkerOperatio
     scope: OperationScope | undefined,
     assertCurrent: (() => void) | undefined,
     createAdmission: SqliteWorkerAdmissionFactory | undefined,
+    requestClass: string,
   ) => Promise<unknown>;
   release: () => Promise<void>;
 }) {
@@ -92,6 +92,7 @@ export function createSqliteWorkerClient<Operations extends SqliteWorkerOperatio
         );
       }
       let payload: Buffer;
+      let requestClass: string;
       let assertCurrent: (() => void) | undefined;
       const admission = scope?.assertCurrent;
       const createAdmission = scope?.createAdmission;
@@ -99,6 +100,7 @@ export function createSqliteWorkerClient<Operations extends SqliteWorkerOperatio
       const inCaller = admission || createAdmission ? AsyncLocalStorage.snapshot() : undefined;
       try {
         const commandType = command.type;
+        requestClass = classifyWorkerRequest(commandType);
         assertCurrent = admission && inCaller ? () => inCaller(admission, commandType) : undefined;
         assertCurrent?.();
         // The queued guard and wire command must observe the same captured type.
@@ -116,6 +118,7 @@ export function createSqliteWorkerClient<Operations extends SqliteWorkerOperatio
         createAdmission && inCaller
           ? (admissionOperation) => inCaller(createAdmission, admissionOperation)
           : undefined,
+        requestClass,
       );
       pending.add(operation);
       scope?.pending.add(operation);

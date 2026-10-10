@@ -2,7 +2,10 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ChannelId } from "../../channels/plugins/index.js";
 import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
-import { createAgentDatabaseInspectionRefusal } from "../../state/agent-database-admission.js";
+import {
+  createAgentDatabaseInspectionRefusal,
+  type AgentDatabaseAdmissionRefusal,
+} from "../../state/agent-database-admission.js";
 import type { AgentDatabaseCleanupFailure } from "../../state/openclaw-agent-execution.js";
 import type { ChannelRuntimeSnapshot } from "../server-channel-runtime.types.js";
 import type { ChannelManager } from "../server-channels.js";
@@ -40,7 +43,7 @@ function createManager(snapshot: ChannelRuntimeSnapshot): ChannelManager {
     releaseChannelRouteHandoffs: vi.fn(),
     setAutostartSuppression: vi.fn(),
     getAutostartSuppression: vi.fn(() => null),
-    recoverAutostartSuppression: vi.fn(async () => false),
+    recoverAutostartSuppression: vi.fn(() => undefined),
     setAmbientAutostartSuppressedChannelIds: vi.fn(),
     isAmbientAutostartSuppressed: vi.fn(() => false),
     markChannelLoggedOut: vi.fn(),
@@ -200,34 +203,49 @@ describe("createReadinessChecker", () => {
   it("reports a terminal state database failure immediately and discards cached channel health", () => {
     withReadinessClock(() => {
       const stateDatabase = { failure: undefined as Error | undefined };
-      const cleanup: AgentDatabaseCleanupFailure = {
-        agentId: "optional-agent",
-        reason: "Agent native cleanup failed: database is locked",
-        repairHint: "Restart the Gateway if cleanup remains blocked.",
-      };
-      let cleanupFailures: AgentDatabaseCleanupFailure[] = [];
+      let agentCleanup: AgentDatabaseCleanupFailure[] = [];
       const { manager, readiness } = createReadinessHarness({
         getStateDatabaseFailure: () => stateDatabase.failure,
-        getAgentDatabaseCleanupFailures: () => cleanupFailures,
+        getAgentDatabaseCleanupFailures: () => agentCleanup,
         cacheTtlMs: 1_000,
       });
       expect(readiness()).toEqual(readySnapshot());
 
       stateDatabase.failure = new Error("newer shared-state schema");
-      cleanupFailures = [cleanup];
+      agentCleanup = [{ agentId: "main", reason: "retained cleanup", repairHint: "Restart." }];
       expect(readiness()).toEqual({
         ...failingSnapshot(["state-database"]),
         stateDatabase: { reason: "newer shared-state schema" },
-        agentDatabaseCleanup: [cleanup],
+        agentCleanup,
       });
       expect(manager.getRuntimeSnapshot).toHaveBeenCalledTimes(1);
 
       stateDatabase.failure = undefined;
-      cleanupFailures = [];
+      agentCleanup = [];
       expect(readiness()).toEqual(readySnapshot());
       expect(manager.getRuntimeSnapshot).toHaveBeenCalledTimes(2);
     });
   });
+
+  it.each([false, true])(
+    "reports fresh cleanup diagnostics without blocking readiness (skip channels: %s)",
+    (skipChannels) => {
+      withReadinessClock(() => {
+        let agentCleanup: AgentDatabaseCleanupFailure[] = [];
+        const { manager, readiness } = createReadinessHarness({
+          getAgentDatabaseCleanupFailures: () => agentCleanup,
+          shouldSkipChannelReadiness: () => skipChannels,
+          cacheTtlMs: 1_000,
+        });
+        expect(readiness()).toEqual(readySnapshot());
+        agentCleanup = [{ agentId: "main", reason: "retained cleanup", repairHint: "Retry." }];
+        expect(readiness()).toEqual(readySnapshot(FIVE_MIN_MS, { agentCleanup }));
+        agentCleanup = [];
+        expect(readiness()).toEqual(readySnapshot());
+        expect(manager.getRuntimeSnapshot).toHaveBeenCalledTimes(skipChannels ? 0 : 1);
+      });
+    },
+  );
 
   it("reports plugin replacement recovery immediately and resumes channel readiness after settlement", () => {
     withReadinessClock(() => {
@@ -270,115 +288,57 @@ describe("createReadinessChecker", () => {
     });
   });
 
-  it.each([false, true])(
-    "reports core agent refusal and recovery immediately (skip channels: %s)",
-    (skipChannels) => {
+  it.each([
+    { skipChannels: false, channelFailed: false, allowPending: true },
+    { skipChannels: true, channelFailed: false, allowPending: true },
+    { skipChannels: false, channelFailed: true, allowPending: true },
+    { skipChannels: true, channelFailed: false, allowPending: false },
+  ])(
+    "reports warming, failed, and recovered core agents (skip channels: $skipChannels, channel failed: $channelFailed, allow pending: $allowPending)",
+    ({ skipChannels, channelFailed, allowPending }) => {
       withReadinessClock(() => {
+        const pending = createAgentDatabaseInspectionRefusal({
+          agentId: "main",
+          paths: ["/isolated/agents/main/openclaw-agent.sqlite"],
+          reason: "Startup inspection and preparation are still running.",
+          pending: true,
+        });
         const refusal = createAgentDatabaseInspectionRefusal({
           agentId: "main",
           paths: ["/isolated/agents/main/openclaw-agent.sqlite"],
           reason: "Session identities require migration before this agent can run.",
         });
-        let refused = false;
+        let refusals: AgentDatabaseAdmissionRefusal[] = [];
         const readiness = createReadinessChecker({
-          channelManager: createManager(snapshotWith({})),
+          channelManager: createManager(
+            snapshotWith(channelFailed ? { discord: stoppedAccount({ connected: false }) } : {}),
+          ),
           startedAt: Date.now() - FIVE_MIN_MS,
           cacheTtlMs: 1_000,
           shouldSkipChannelReadiness: () => skipChannels,
-          getAgentDatabaseAdmissionRefusals: () => (refused ? [refusal] : []),
+          allowPendingAgentDatabases: allowPending,
+          getAgentDatabaseAdmissionRefusals: () => refusals,
         });
-        expect(readiness()).toEqual(readySnapshot());
+        const channelReadiness = channelFailed ? failingSnapshot(["discord"]) : readySnapshot();
+        expect(readiness()).toEqual(channelReadiness);
 
-        refused = true;
+        refusals = [pending];
+        expect(readiness()).toEqual({
+          ...(allowPending ? channelReadiness : failingSnapshot(["agent-database:main"])),
+          agentDatabases: [pending],
+        });
+
+        refusals = [refusal];
         expect(readiness()).toEqual({
           ...failingSnapshot(["agent-database:main"]),
           agentDatabases: [refusal],
         });
 
-        refused = false;
-        expect(readiness()).toEqual(readySnapshot());
+        refusals = [];
+        expect(readiness()).toEqual(channelReadiness);
       });
     },
   );
-
-  it.each([false, true])(
-    "keeps cleanup failures diagnostic while requests remain admissible (skip channels: %s)",
-    (skipChannels) => {
-      withReadinessClock(() => {
-        let failures: AgentDatabaseCleanupFailure[] = [];
-        const manager = createManager(snapshotWith({ discord: managedAccount() }));
-        const readiness = createReadinessChecker({
-          channelManager: manager,
-          startedAt: Date.now() - FIVE_MIN_MS,
-          cacheTtlMs: 1_000,
-          shouldSkipChannelReadiness: () => skipChannels,
-          getAgentDatabaseCleanupFailures: () => failures,
-        });
-        expect(readiness()).toEqual(readySnapshot());
-        expect(readiness()).toEqual(readySnapshot());
-        expect(manager.getRuntimeSnapshot).toHaveBeenCalledTimes(skipChannels ? 0 : 1);
-
-        failures = ["optional-agent", "retired-agent"].map((agentId) => ({
-          agentId,
-          reason: "Agent native cleanup failed: database is locked",
-          repairHint: "Retry the affected agent; restart the Gateway if cleanup remains blocked.",
-        }));
-        expect(readiness()).toEqual({
-          ...readySnapshot(),
-          agentDatabaseCleanup: failures,
-        });
-        expect(manager.getRuntimeSnapshot).toHaveBeenCalledTimes(skipChannels ? 0 : 1);
-
-        vi.mocked(manager.getRuntimeSnapshot).mockReturnValue(
-          snapshotWith({ discord: stoppedAccount({ connected: false }) }),
-        );
-        failures = [];
-        expect(readiness()).toEqual(readySnapshot());
-        expect(manager.getRuntimeSnapshot).toHaveBeenCalledTimes(skipChannels ? 0 : 1);
-
-        vi.setSystemTime(Date.now() + 1_000);
-        expect(readiness()).toEqual(
-          skipChannels
-            ? readySnapshot(FIVE_MIN_MS + 1_000)
-            : failingSnapshot(["discord"], FIVE_MIN_MS + 1_000),
-        );
-        expect(manager.getRuntimeSnapshot).toHaveBeenCalledTimes(skipChannels ? 0 : 2);
-
-        vi.mocked(manager.getRuntimeSnapshot).mockReturnValue(
-          snapshotWith({ discord: managedAccount() }),
-        );
-        vi.setSystemTime(Date.now() + 1_000);
-        expect(readiness()).toEqual(readySnapshot(FIVE_MIN_MS + 2_000));
-        expect(manager.getRuntimeSnapshot).toHaveBeenCalledTimes(skipChannels ? 0 : 3);
-      });
-    },
-  );
-
-  it("keeps cleanup failures distinct from agent admission refusals", () => {
-    withReadinessClock(() => {
-      const refusal = createAgentDatabaseInspectionRefusal({
-        agentId: "main",
-        paths: ["/isolated/agents/main/openclaw-agent.sqlite"],
-        reason: "Session identities require migration before this agent can run.",
-      });
-      const cleanup: AgentDatabaseCleanupFailure = {
-        agentId: "optional-agent",
-        reason: "Agent native cleanup failed: database is locked",
-        repairHint: "Restart the Gateway if cleanup remains blocked.",
-      };
-      const readiness = createReadinessChecker({
-        channelManager: createManager(snapshotWith({})),
-        startedAt: Date.now() - FIVE_MIN_MS,
-        getAgentDatabaseAdmissionRefusals: () => [refusal],
-        getAgentDatabaseCleanupFailures: () => [cleanup],
-      });
-      expect(readiness()).toEqual({
-        ...failingSnapshot(["agent-database:main"]),
-        agentDatabases: [refusal],
-        agentDatabaseCleanup: [cleanup],
-      });
-    });
-  });
 
   it("ignores disabled and unconfigured channels", () => {
     withReadinessClock(() => {
@@ -469,7 +429,12 @@ describe("createReadinessChecker", () => {
     withReadinessClock(() => {
       const { readiness } = createReadinessHarness({
         accounts: {
-          slack: managedAccount({ lifecycle: "blocked" }),
+          slack: stoppedAccount({
+            lifecycle: "blocked",
+            linked: false,
+            ingressUnavailable: true,
+            restartPending: true,
+          }),
         },
       });
       expect(readiness()).toEqual(failingSnapshot(["slack"]));

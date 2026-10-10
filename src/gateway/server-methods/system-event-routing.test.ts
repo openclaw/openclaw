@@ -52,7 +52,7 @@ describe("system-event routing", () => {
       respond,
       context: {
         publishPresence: vi.fn(),
-        getRuntimeConfig: vi.fn(() => ({ agents: { list: [{ id: "main" }] } })),
+        getRuntimeConfig: vi.fn(() => ({ agents: { entries: { main: {} } } })),
       },
     } as unknown as GatewayRequestHandlerOptions;
 
@@ -86,7 +86,7 @@ describe("system-event routing", () => {
           session: { store: "/tmp/shared-sessions.sqlite", scope: "global" },
           agents: {
             ownership: "explicit",
-            list: [{ id: "ops" }, { id: "research" }],
+            entries: { ops: {}, research: {} },
             defaults: { sessionStore: { agentId: "ops" } },
           },
         })),
@@ -154,7 +154,7 @@ describe("system-event routing", () => {
       respond,
       context: {
         publishPresence: vi.fn(),
-        getRuntimeConfig: vi.fn(() => ({ agents: { list: [{ id: "main" }] } })),
+        getRuntimeConfig: vi.fn(() => ({ agents: { entries: { main: {} } } })),
       },
     } as unknown as GatewayRequestHandlerOptions;
 
@@ -189,7 +189,7 @@ describe("system-event routing", () => {
         respond,
         context: {
           publishPresence: vi.fn(),
-          getRuntimeConfig: vi.fn(() => ({ agents: { list: [{ id: "main" }] } })),
+          getRuntimeConfig: vi.fn(() => ({ agents: { entries: { main: {} } } })),
         },
       } as unknown as GatewayRequestHandlerOptions;
 
@@ -221,7 +221,7 @@ describe("system-event routing", () => {
       respond,
       context: {
         publishPresence: vi.fn(),
-        getRuntimeConfig: vi.fn(() => ({ agents: { list: [{ id: "main" }] } })),
+        getRuntimeConfig: vi.fn(() => ({ agents: { entries: { main: {} } } })),
       },
     } as unknown as GatewayRequestHandlerOptions;
 
@@ -248,7 +248,7 @@ describe("system-event routing", () => {
     );
     const context = {
       publishPresence: vi.fn(),
-      getRuntimeConfig: vi.fn(() => ({ agents: { list: [{ id: "main" }] } })),
+      getRuntimeConfig: vi.fn(() => ({ agents: { entries: { main: {} } } })),
     };
 
     await handler({

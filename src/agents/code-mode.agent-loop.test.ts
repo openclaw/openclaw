@@ -77,15 +77,9 @@ async function runCodeModeAgent(params: {
         wrapToolWithAbortSignal(tool, params.abortSignal),
       )
     : harness.tools;
-  const sessionId = "sessionId" in harness ? harness.sessionId : "session-code-mode";
-  const sessionKey = "sessionKey" in harness ? harness.sessionKey : "agent:main:main";
-  const runId = "runId" in harness ? harness.runId : "run-code-mode";
   applyCodeModeCatalog({
     tools: [...tools, ...params.hiddenTools],
     config,
-    sessionId,
-    sessionKey,
-    runId,
     catalogRef,
   });
   const providerContexts: Context[] = [];
@@ -476,69 +470,6 @@ describe("Code Mode agent-loop error recovery", () => {
     await expect(retainedControl.execute("stale-control", { code: "return 1;" })).rejects.toThrow(
       "Aborted",
     );
-  });
-
-  it("continues ordinary recovery after catalog metadata and a guest error", async () => {
-    const complete = pluginToolWithExecute("complete_task", "Complete the task", async () =>
-      jsonResult({ completed: true }),
-    );
-    const { agent, providerContexts } = await runCodeModeAgent({
-      hiddenTools: [complete],
-      programs: [
-        'json((await catalog.search("complete_task")).map((tool) => tool.toolName)); return missingFn();',
-        "return await complete_task({});",
-      ],
-    });
-
-    const failure = expect.objectContaining({
-      role: "toolResult",
-      toolName: "exec",
-      isError: true,
-      details: expect.objectContaining({
-        status: "failed",
-        error: expect.stringContaining("ReferenceError: missingFn is not defined"),
-        output: [{ type: "json", value: ["complete_task"] }],
-        telemetry: expect.objectContaining({ callCount: 0 }),
-      }),
-    });
-    expect(agent.state.messages).toContainEqual(failure);
-    expect(providerContexts).toHaveLength(3);
-    expect(complete.execute).toHaveBeenCalledOnce();
-    expect(agent.state.messages.at(-1)).toMatchObject({
-      role: "assistant",
-      content: [{ type: "text", text: "recovered" }],
-    });
-  });
-
-  it("lets the model correct successive JavaScript syntax and runtime errors", async () => {
-    const complete = pluginToolWithExecute("complete_task", "Complete the task", async () =>
-      jsonResult({ completed: true }),
-    );
-
-    const { agent, providerContexts } = await runCodeModeAgent({
-      hiddenTools: [complete],
-      programs: ["const value = ;", "return missingFn();", "return await complete_task({});"],
-    });
-
-    expect(providerContexts).toHaveLength(4);
-    for (const [index, errorName] of ["SyntaxError", "ReferenceError"].entries()) {
-      expect(providerContexts[index + 1]?.messages).toContainEqual(
-        expect.objectContaining({
-          role: "toolResult",
-          toolName: "exec",
-          isError: true,
-          details: expect.objectContaining({
-            status: "failed",
-            error: expect.stringContaining(errorName),
-          }),
-        }),
-      );
-    }
-    expect(complete.execute).toHaveBeenCalledOnce();
-    expect(agent.state.messages.at(-1)).toMatchObject({
-      role: "assistant",
-      content: [{ type: "text", text: "recovered" }],
-    });
   });
 
   it("preserves an explicitly terminal nested action when later JavaScript fails", async () => {

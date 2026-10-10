@@ -1,3 +1,4 @@
+import type { SessionEntryCurrentFacts } from "../../config/sessions/session-entry-current.types.js";
 import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
 import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
 import {
@@ -6,7 +7,9 @@ import {
   type WorkspaceInspectionInput,
   type WorkspaceInspectionResult,
 } from "../../worker/workspace-inspection-protocol.js";
+import { captureSessionMutationRouting } from "../session-sharing-preparation.js";
 import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
+import { readSessionWorkerPlacementAsync } from "../worker-environments/session-placement-lifecycle.js";
 import type { GatewayRequestContext } from "./types.js";
 
 type LoadedSession = ReturnType<typeof loadGatewaySessionEntryReadOnly>;
@@ -36,16 +39,17 @@ export async function resolveRepositoryWorkspaceAccess(
     throw new Error("The cloud repository session is unavailable.");
   }
   const sessionId = entry.sessionId;
-  const assertSession = (expectedRevision?: number) => {
-    const current = loadGatewaySessionEntryReadOnly(loaded.canonicalKey, {
-      agentId: repository.agentId,
-    });
+  const assertRoutingCurrent = captureSessionMutationRouting(loaded.cfg);
+  const assertSessionFacts = (
+    current: SessionEntryCurrentFacts | undefined,
+    expectedRevision?: number,
+  ) => {
     const source = prepared.current();
     if (
-      current.entry?.sessionId !== sessionId ||
-      current.entry?.repositoryWorkspaceId !== workspaceId ||
-      (current.entry.lifecycleRevision ?? null) !== (entry.lifecycleRevision ?? null) ||
-      current.entry.archivedAt !== entry.archivedAt ||
+      current?.sessionId !== sessionId ||
+      current.repositoryWorkspaceId !== workspaceId ||
+      (current.lifecycleRevision ?? null) !== (entry.lifecycleRevision ?? null) ||
+      current.archivedAt !== entry.archivedAt ||
       source?.agentId !== repository.agentId ||
       source.sessionKey !== repository.sessionKey ||
       (expectedRevision !== undefined && source.revision !== expectedRevision)
@@ -53,10 +57,15 @@ export async function resolveRepositoryWorkspaceAccess(
       throw new Error("The cloud repository workspace owner changed; refresh this session.");
     }
   };
-  assertSession(repository.revision);
+  const assertSession = (expectedRevision?: number) =>
+    assertSessionFacts(
+      loadGatewaySessionEntryReadOnly(loaded.canonicalKey, { agentId: repository.agentId }).entry,
+      expectedRevision,
+    );
   const placements = context?.workerSessionPlacementService;
   const environments = context?.workerEnvironmentService;
-  const placement = placements?.getMany([sessionId]).get(sessionId);
+  const placement = await readSessionWorkerPlacementAsync({ context: context ?? {}, sessionId });
+  assertSession(repository.revision);
   if (placement?.state !== "active" || !environments) {
     return {
       kind: "stored" as const,
@@ -137,15 +146,23 @@ export async function resolveRepositoryWorkspaceAccess(
       if (!mutationService) {
         throw new Error("Cloud repository editing is unavailable; restart the Gateway and retry.");
       }
-      return await runExclusiveSessionLifecycleMutation({
+      return await runExclusiveSessionLifecycleMutation("workspace-edit", {
         scope: loaded.storePath,
         identities: [loaded.canonicalKey, ...loaded.storeKeys, sessionId],
-        run: () =>
-          mutationService.mutate({
+        run: () => {
+          assertAuthorized();
+          return mutationService.mutate({
             sessionId,
             sessionKey: repository.sessionKey,
             agentId: repository.agentId,
-            assertCurrent: assertAuthorized,
+            // Native grants retain caller lifetime without invoking host row readers.
+            assertCurrent: () => {
+              authorize?.();
+              assertRoutingCurrent(
+                (context?.getCommittedRuntimeConfig ?? context?.getRuntimeConfig)?.() ?? loaded.cfg,
+              );
+            },
+            assertEntryCurrent: (current) => assertSessionFacts(current),
             mutate: async (assertMutationCurrent) => {
               const value = await run(() => {
                 assertAuthorized();
@@ -153,7 +170,8 @@ export async function resolveRepositoryWorkspaceAccess(
               });
               return { changed: "status" in value && value.status === "updated", value };
             },
-          }),
+          });
+        },
       });
     },
   };

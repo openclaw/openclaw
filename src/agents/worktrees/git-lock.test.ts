@@ -74,7 +74,7 @@ describe("lockWorktreeForProcess", () => {
     );
     expect(await lockState(record)).toEqual({ kind: "dead", pid: stalePid });
 
-    await expect(lockWorktreeForProcess(record)).resolves.toBeUndefined();
+    await expect(lockWorktreeForProcess(record)).resolves.toBe(true);
 
     expect(await lockedReason(record.repoRoot, record.path)).toBe(`openclaw pid=${process.pid}`);
   });
@@ -106,11 +106,11 @@ describe("lockWorktreeForProcess", () => {
     expect(await lockedReason(record.repoRoot, record.path)).toBe("held by hand");
   });
 
-  it("is idempotent for a lock this process already holds", async () => {
+  it("reports new and existing same-process lock ownership", async () => {
     const record = await setupWorktree();
-    await lockWorktreeForProcess(record);
+    await expect(lockWorktreeForProcess(record)).resolves.toBe(true);
 
-    await expect(lockWorktreeForProcess(record)).resolves.toBeUndefined();
+    await expect(lockWorktreeForProcess(record)).resolves.toBe(false);
 
     expect(await lockedReason(record.repoRoot, record.path)).toBe(`openclaw pid=${process.pid}`);
   });

@@ -4,13 +4,22 @@ import { existsSync } from "node:fs";
 // Package executable entrypoint that forwards to the CLI bootstrap.
 import process from "node:process";
 import { fileURLToPath } from "node:url";
+import { disableExitUnsafeCompilers } from "./bootstrap/node-exit-safe-compilers.js";
 import { resolveCliArgvInvocation } from "./cli/argv-invocation.js";
 import { tryRunUpdateAdmissionBeforeStartup } from "./cli/run-main-update-admission.js";
+import {
+  configureGatewayStartupTraceConsoleFormatting,
+  createGatewayDispatchStartupTrace,
+} from "./cli/startup-trace.js";
 import { isMainModule } from "./infra/is-main.js";
+import "./shared/detached-async-context.js";
 
 const isMain = isMainModule({
   currentFile: fileURLToPath(import.meta.url),
 });
+if (isMain) {
+  disableExitUnsafeCompilers();
+}
 const handledAdmission =
   isMain && (await tryRunUpdateAdmissionBeforeStartup(resolveCliArgvInvocation(process.argv)));
 const packageRootUrl = new URL("../", import.meta.url);
@@ -30,28 +39,6 @@ if (
     );
   }
 }
-
-const [
-  { formatCliFailureLines, formatCliJsonFailure, isExpectedCliError },
-  { isJsonOutputModeActive },
-  { runCliWithExitFinalization },
-  { withCliProcessScope },
-  { installDistEsmResolveFastPath },
-  { tryHandleRootVersionFastPath },
-  { formatUncaughtError },
-  { runFatalErrorHooks },
-  { installUnhandledRejectionHandler, isBenignUncaughtExceptionError, isUncaughtExceptionHandled },
-] = await Promise.all([
-  import("./cli/failure-output.js"),
-  import("./cli/json-output-mode.js"),
-  import("./cli/one-shot-exit.js"),
-  import("./cli/runtime-cleanup-scope.js"),
-  import("./entry.esm-resolve-fast-path.js"),
-  import("./entry.version-fast-path.js"),
-  import("./infra/errors.js"),
-  import("./infra/fatal-error-hooks.js"),
-  import("./infra/unhandled-rejections.js"),
-]);
 
 type LegacyCliDeps = {
   runCli: (
@@ -75,8 +62,6 @@ export let ensurePortAvailable: LibraryExports["ensurePortAvailable"];
 export let getReplyFromConfig: LibraryExports["getReplyFromConfig"];
 export let handlePortError: LibraryExports["handlePortError"];
 export let loadConfig: LibraryExports["loadConfig"];
-/** @deprecated Use SQLite-backed session APIs. Scheduled for removal after 2026-10-12. */
-export let loadSessionStore: LibraryExports["loadSessionStore"];
 export let monitorWebChannel: LibraryExports["monitorWebChannel"];
 export let normalizeE164: LibraryExports["normalizeE164"];
 export let PortInUseError: LibraryExports["PortInUseError"];
@@ -85,12 +70,15 @@ export let resolveSessionKey: LibraryExports["resolveSessionKey"];
 export let resolveStorePath: LibraryExports["resolveStorePath"];
 export let runCommandWithTimeout: LibraryExports["runCommandWithTimeout"];
 export let runExec: LibraryExports["runExec"];
-/** @deprecated Use SQLite-backed session APIs. Scheduled for removal after 2026-10-12. */
-export let saveSessionStore: LibraryExports["saveSessionStore"];
 export let waitForever: LibraryExports["waitForever"];
 
-async function loadLegacyCliDeps(): Promise<LegacyCliDeps> {
-  const { runCli } = await import("./cli/run-main.js");
+async function loadLegacyCliDeps(argv: string[]): Promise<LegacyCliDeps> {
+  const startupTrace = createGatewayDispatchStartupTrace(argv, "entry");
+  await configureGatewayStartupTraceConsoleFormatting(startupTrace);
+  const { runCli } = await startupTrace.measure(
+    "run-main-import",
+    () => import("./cli/run-main.js"),
+  );
   return { runCli };
 }
 
@@ -102,16 +90,14 @@ export async function runLegacyCliEntry(
     retainConsoleRoutingUntilProcessExit?: boolean;
   },
 ): Promise<void> {
-  const { runCli } = deps ?? (await loadLegacyCliDeps());
+  const { runCli } = deps ?? (await loadLegacyCliDeps(argv));
   await runCli(argv, options);
 }
 
-if (isMain && !handledAdmission) {
-  installDistEsmResolveFastPath(import.meta.url);
-}
 const handledRootVersion =
-  isMain && !handledAdmission && tryHandleRootVersionFastPath(process.argv);
-
+  isMain &&
+  !handledAdmission &&
+  (await import("./entry.version-fast-path.js")).tryHandleRootVersionFastPath(process.argv);
 if (!isMain) {
   ({
     applyTemplate,
@@ -123,7 +109,6 @@ if (!isMain) {
     getReplyFromConfig,
     handlePortError,
     loadConfig,
-    loadSessionStore,
     monitorWebChannel,
     normalizeE164,
     PortInUseError,
@@ -132,12 +117,36 @@ if (!isMain) {
     resolveStorePath,
     runCommandWithTimeout,
     runExec,
-    saveSessionStore,
     waitForever,
   } = await import("./library.js"));
 }
 
 if (isMain && !handledRootVersion && !handledAdmission) {
+  const [
+    { formatCliFailureLines, formatCliJsonFailure, isExpectedCliError },
+    { isJsonOutputModeActive },
+    { runCliWithExitFinalization },
+    { withCliProcessScope },
+    { installDistEsmResolveFastPath },
+    { formatUncaughtError },
+    { runFatalErrorHooks },
+    {
+      installUnhandledRejectionHandler,
+      isBenignUncaughtExceptionError,
+      isUncaughtExceptionHandled,
+    },
+  ] = await Promise.all([
+    import("./cli/failure-output.js"),
+    import("./cli/json-output-mode.js"),
+    import("./cli/one-shot-exit.js"),
+    import("./cli/runtime-cleanup-scope.js"),
+    import("./entry.esm-resolve-fast-path.js"),
+    import("./infra/errors.js"),
+    import("./infra/fatal-error-hooks.js"),
+    import("./infra/unhandled-rejections.js"),
+  ]);
+  installDistEsmResolveFastPath(import.meta.url);
+
   const { defaultRuntime, restoreRuntimeTerminalState } = await import("./runtime.js");
 
   // Global error handlers to prevent silent crashes from unhandled rejections/exceptions.

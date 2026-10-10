@@ -288,9 +288,9 @@ suite.define(() => {
         .toBe("false");
       await page.keyboard.press("Escape");
       await page.locator('[data-chat-thinking-select="true"]').click();
-      const fastMode = page.locator("[data-chat-speed-toggle]");
+      const fastMode = page.locator('[data-chat-speed-option="on"]');
       await expect.poll(() => fastMode.getAttribute("aria-checked")).toBe("true");
-      await fastMode.click();
+      await page.locator('[data-chat-speed-option="off"]').click();
       await expect.poll(() => fastMode.getAttribute("aria-checked")).toBe("false");
       await page.keyboard.press("Escape");
       await page.getByRole("button", { name: "Start session" }).click();
@@ -752,6 +752,7 @@ suite.define(() => {
           expect.objectContaining({
             params: {
               sessionKey,
+              toolResultMaxChars: 2_000,
               limit: 1000,
               inputRunIds: [(firstSend.params as { idempotencyKey: string }).idempotencyKey],
             },

@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
 import {
   ONE_PIXEL_PNG_B64,
   SESSION_LIST_DEFAULTS,
@@ -15,8 +16,6 @@ import {
   waitForCommittedChatRoute,
 } from "./new-session-page.test-support.ts";
 const suite = createNewSessionPageE2eSuite();
-const SESSION_PLACEMENT_STARTUP_RUNTIME_REQUEST =
-  /\/assets\/session-placement-startup\.runtime-[^/?]+\.js(?:\?.*)?$/;
 
 suite.define(() => {
   it("clears cloud placement when the selected agent changes", async () => {
@@ -232,7 +231,10 @@ suite.define(() => {
       );
       expect(startupError).toContain("send outcome unknown");
       let recoveryRuntimeRequested = false;
-      await page.route(SESSION_PLACEMENT_STARTUP_RUNTIME_REQUEST, async (route) => {
+      const recoveryRuntimeRequest = controlUiE2eBuiltModuleRequest(
+        "ui/src/app/session-placement-startup.runtime.ts",
+      );
+      await page.route(recoveryRuntimeRequest, async (route) => {
         recoveryRuntimeRequested = true;
         await recoveryRuntimeLoad.promise;
         await route.continue();
@@ -269,7 +271,12 @@ suite.define(() => {
         .poll(async () => (await gateway.getRequests("chat.history")).slice(historyCount))
         .toContainEqual(
           expect.objectContaining({
-            params: { sessionKey, limit: 1000, inputRunIds: [messageId] },
+            params: {
+              sessionKey,
+              toolResultMaxChars: 2_000,
+              limit: 1000,
+              inputRunIds: [messageId],
+            },
           }),
         );
       await pollLocatorText(page.getByRole("alert")).toContain("No matching user message");

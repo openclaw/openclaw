@@ -17,16 +17,20 @@ import type { SessionLifecycleEvent } from "../sessions/session-lifecycle-events
 import type { InternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import type { ChatAbortControllerEntry } from "./chat-abort.js";
+import { prepareForwardedMessageCronJobNameResolver } from "./chat-display-projection.history.js";
 import { projectChatDisplayMessage } from "./chat-display-projection.js";
 import type { GatewayBroadcastToConnIdsFn } from "./server-broadcast-types.js";
 import type {
   SessionEventSubscriberRegistry,
   SessionMessageSubscriberRegistry,
-} from "./server-chat.js";
+} from "./server-chat-state.js";
 import { resolveVisibleActiveSessionRunState } from "./server-methods/session-active-runs.js";
 import { hasSessionChangeReceivers } from "./session-change-receivers.js";
 import { buildGatewaySessionSnapshot } from "./session-event-payload.js";
-import { withPreparedEventRow } from "./session-event-prepared-row.js";
+import {
+  readTranscriptUpdateLifecycleOwner,
+  withPreparedEventRow,
+} from "./session-event-prepared-row.js";
 import { prepareSessionEventProjection } from "./session-event-projection.js";
 import {
   resolvePrivateSessionEventBroadcastScope,
@@ -55,39 +59,6 @@ function hasCompleteTranscriptTarget(update: InternalSessionTranscriptUpdate): b
     normalizeOptionalString(update.target?.sessionKey) &&
     normalizeOptionalString(update.target?.storePath),
   );
-}
-
-function readTranscriptUpdateLifecycleOwner(
-  update: InternalSessionTranscriptUpdate,
-  projection: SessionRowProjection | undefined,
-): { sessionId: string; lifecycleRevision?: string } | undefined {
-  const marker = parseSqliteSessionFileMarker(update.sessionFile);
-  const sessionKey =
-    normalizeOptionalString(update.target?.sessionKey) ??
-    normalizeOptionalString(update.sessionKey) ??
-    (marker ? projection?.findBySessionId(marker)[0]?.key : undefined);
-  if (!sessionKey) {
-    return undefined;
-  }
-  const agentId =
-    normalizeOptionalString(update.target?.agentId) ??
-    normalizeOptionalString(update.agentId) ??
-    marker?.agentId;
-  const sessionId =
-    normalizeOptionalString(update.target?.sessionId) ??
-    normalizeOptionalString(update.sessionId) ??
-    marker?.sessionId;
-  const storePath = normalizeOptionalString(update.target?.storePath) ?? marker?.storePath;
-  const ownerAgentId =
-    agentId ?? resolveSessionEventAgentScope(getRuntimeConfig(), sessionKey)?.[1];
-  const entry = ownerAgentId
-    ? projection?.capture({ agentId: ownerAgentId, key: sessionKey, storePath })?.entry
-    : undefined;
-  if (!entry || (sessionId && entry.sessionId !== sessionId)) {
-    return undefined;
-  }
-  const lifecycleRevision = normalizeOptionalString(entry.lifecycleRevision);
-  return { sessionId: entry.sessionId, ...(lifecycleRevision ? { lifecycleRevision } : {}) };
 }
 
 /** Creates a serialized transcript-update broadcaster for session websocket clients. */
@@ -376,10 +347,7 @@ async function handleTranscriptUpdateBroadcast(
   }
   const [eventAgentId, routingAgentId, compatibilityOwnerAgentId] = agentScope;
   const privateBroadcastScope = resolvePrivateSessionEventBroadcastScope(sessionKey, agentScope);
-  const connIds = new Set<string>();
-  for (const connId of params.sessionEventSubscribers.getAll()) {
-    connIds.add(connId);
-  }
+  const connIds = new Set(params.sessionEventSubscribers.getAll());
   const broadcastKeys = routingAgentId
     ? resolveSessionSubscriptionKeys(sessionKey, routingAgentId, compatibilityOwnerAgentId)
     : [sessionKey];
@@ -391,7 +359,9 @@ async function handleTranscriptUpdateBroadcast(
   if (connIds.size === 0) {
     if (
       !hasSessionChangeReceivers(connIds) ||
-      (update.message !== undefined && projectChatDisplayMessage(update.message))
+      (update.message !== undefined &&
+        // This probe checks visibility only; it does not publish sender labels.
+        projectChatDisplayMessage(update.message, { resolveCronJobName: () => undefined }))
     ) {
       return;
     }
@@ -401,16 +371,18 @@ async function handleTranscriptUpdateBroadcast(
     (markerObservation
       ? normalizeOptionalString(markerOwner?.entry?.lifecycleRevision)
       : undefined);
+  const lifecycleIsCurrent = () => {
+    if (!lifecycleRevision) {
+      return true;
+    }
+    const current = readTranscriptUpdateLifecycleOwner(update, projection);
+    return Boolean(
+      current && (!current.lifecycleRevision || current.lifecycleRevision === lifecycleRevision),
+    );
+  };
   if (!eventAgentId && !compatibilityOwnerAgentId && !parseAgentSessionKey(sessionKey)) {
-    if (lifecycleRevision) {
-      const currentLifecycleOwner = readTranscriptUpdateLifecycleOwner(update, projection);
-      if (
-        !currentLifecycleOwner ||
-        (currentLifecycleOwner.lifecycleRevision &&
-          currentLifecycleOwner.lifecycleRevision !== lifecycleRevision)
-      ) {
-        return;
-      }
+    if (!lifecycleIsCurrent()) {
+      return;
     }
     params.broadcastToConnIds(
       "sessions.changed",
@@ -490,6 +462,9 @@ async function handleTranscriptUpdateBroadcast(
       message = undefined;
     }
   }
+  const resolveCronJobName = await prepareForwardedMessageCronJobNameResolver(
+    message === undefined ? [] : [message],
+  );
   await withPreparedEventRow(
     projection,
     routingAgentId
@@ -502,17 +477,9 @@ async function handleTranscriptUpdateBroadcast(
       if (!markerIsCurrent()) {
         return;
       }
-      if (lifecycleRevision) {
-        // A reset can retain sessionId, so validate the captured owner after every
-        // awaited transcript read before projecting the current session snapshot.
-        const currentLifecycleOwner = readTranscriptUpdateLifecycleOwner(update, projection);
-        if (
-          !currentLifecycleOwner ||
-          (currentLifecycleOwner.lifecycleRevision &&
-            currentLifecycleOwner.lifecycleRevision !== lifecycleRevision)
-        ) {
-          return;
-        }
+      // A reset can retain sessionId; consume current ownership after awaited reads.
+      if (!lifecycleIsCurrent()) {
+        return;
       }
       const record = routingAgentId
         ? read?.describe({
@@ -545,42 +512,29 @@ async function handleTranscriptUpdateBroadcast(
         read && projection
           ? { prepareSessionProjection: prepareSessionEventProjection(projection, read) }
           : undefined;
-      if (message === undefined) {
-        // A committed batch or unavailable selected row must invalidate
-        // both session-list and targeted transcript subscribers exactly once.
-        params.broadcastToConnIds(
-          "sessions.changed",
-          {
-            sessionKey,
-            ...(eventAgentId ? { agentId: eventAgentId } : {}),
-            phase: "message",
-            ts: Date.now(),
-            ...sessionSnapshot,
-          },
-          connIds,
-          broadcastOptions,
-        );
-        return;
-      }
-      const projected = projectSessionMessagePayload({
-        sessionKey,
-        ...(eventAgentId ? { agentId: eventAgentId } : {}),
-        message,
-        transcriptPosition,
-        ...(typeof update.messageId === "string" ? { messageId: update.messageId } : {}),
-        ...(messageSeq !== undefined ? { messageSeq } : {}),
-        ...(update.runId ? { runId: update.runId } : {}),
-        sessionSnapshot,
-      });
-      if (projected.payload) {
+      const projected =
+        message === undefined
+          ? undefined
+          : projectSessionMessagePayload({
+              sessionKey,
+              ...(eventAgentId ? { agentId: eventAgentId } : {}),
+              message,
+              resolveCronJobName,
+              transcriptPosition,
+              ...(typeof update.messageId === "string" ? { messageId: update.messageId } : {}),
+              ...(messageSeq !== undefined ? { messageSeq } : {}),
+              ...(update.runId ? { runId: update.runId } : {}),
+              sessionSnapshot,
+            });
+      const historyReset = message === undefined || projected?.requiresHistoryReset;
+      if (!historyReset && projected?.payload) {
         params.broadcastToConnIds("session.message", projected.payload, connIds, broadcastOptions);
         return;
       }
 
-      // Messages suppressed from display can still change transcript state, so
-      // notify broad session listeners even when no session.message is emitted.
-      const sessionEventConnIds = params.sessionEventSubscribers.getAll();
-      if (!hasSessionChangeReceivers(sessionEventConnIds)) {
+      // Resets invalidate both audiences; hidden messages notify only broad session listeners.
+      const recipients = historyReset ? connIds : params.sessionEventSubscribers.getAll();
+      if (!historyReset && !hasSessionChangeReceivers(recipients)) {
         return;
       }
       params.broadcastToConnIds(
@@ -590,12 +544,14 @@ async function handleTranscriptUpdateBroadcast(
           ...(eventAgentId ? { agentId: eventAgentId } : {}),
           phase: "message",
           ts: Date.now(),
-          ...(typeof update.messageId === "string" ? { messageId: update.messageId } : {}),
-          ...(messageSeq !== undefined ? { messageSeq } : {}),
+          ...(!historyReset && typeof update.messageId === "string"
+            ? { messageId: update.messageId }
+            : {}),
+          ...(!historyReset && messageSeq !== undefined ? { messageSeq } : {}),
           ...sessionSnapshot,
         },
-        sessionEventConnIds,
-        { dropIfSlow: true, ...broadcastOptions },
+        recipients,
+        historyReset ? broadcastOptions : { dropIfSlow: true, ...broadcastOptions },
       );
     },
   );

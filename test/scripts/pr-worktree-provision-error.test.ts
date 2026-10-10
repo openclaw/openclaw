@@ -152,37 +152,34 @@ describe("native PR provisioning diagnostics", () => {
     expect(held.outcome.holder.owner).not.toContain(credential);
   });
 
-  it.each(["cause", "message", "name", "outcome"])(
-    "falls back if a %s getter prevents safe reporting",
-    (field) => {
-      const error = storage(new Error("nested"));
-      Object.defineProperty(error, field, {
-        get() {
-          throw new Error("unsafe diagnostic getter");
-        },
-      });
-      expect(formatProvisionError(error)).toBe(unavailable);
-    },
-  );
-
-  it.each(["message", "name", "outcome"])(
-    "rejects an object-valued %s without calling toJSON",
-    (field) => {
-      let calls = 0;
-      const opaque = {
-        toJSON() {
-          calls++;
-          return { secret: "must-not-appear" };
-        },
-      };
-      const error = storage(new Error("nested"));
-      Object.defineProperty(error, field, {
-        value: field === "outcome" ? { kind: "store-unavailable", reason: opaque } : opaque,
-      });
-      expect(formatProvisionError(error)).toBe(unavailable);
-      expect(calls).toBe(0);
-    },
-  );
+  it.each([
+    ...["cause", "message", "name", "outcome"].map((field) => ({ field, getter: true })),
+    ...["message", "name", "outcome"].map((field) => ({ field, getter: false })),
+  ])("safely rejects $field diagnostics (getter=$getter)", ({ field, getter }) => {
+    let calls = 0;
+    const opaque = {
+      toJSON() {
+        calls++;
+        return { secret: "must-not-appear" };
+      },
+    };
+    const error = storage(new Error("nested"));
+    Object.defineProperty(
+      error,
+      field,
+      getter
+        ? {
+            get() {
+              throw new Error("unsafe diagnostic getter");
+            },
+          }
+        : {
+            value: field === "outcome" ? { kind: "store-unavailable", reason: opaque } : opaque,
+          },
+    );
+    expect(formatProvisionError(error)).toBe(unavailable);
+    expect(calls).toBe(0);
+  });
 
   it("reports ordinary errors without fabricating storage facts and safely handles primitives", () => {
     const out = render(new Error("plain failure"));
@@ -215,7 +212,7 @@ describe("native PR provisioning diagnostics", () => {
       const report = result.stderr.split("\n").find((line) => line.startsWith('{"error":'));
       expect(report, result.stderr).toBeDefined();
       const out = JSON.parse(report!);
-      expect(out.outcome).toEqual({ kind: "store-unavailable", reason: "storage-error" });
+      expect(out.outcome, report).toEqual({ kind: "store-unavailable", reason: "storage-error" });
       expect(out.error.nodes).toEqual(
         expect.arrayContaining([
           expect.objectContaining({ code: "OPENCLAW_STATE_LEASE_STORAGE_FAILED" }),

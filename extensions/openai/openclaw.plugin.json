@@ -54,6 +54,38 @@
         "defaultUtilityModel": "gpt-5.6-luna",
         "models": [
           {
+            "id": "gpt-daybreak-blue-latest",
+            "name": "Daybreak Blue",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 1050000,
+            "contextTokens": 272000,
+            "maxTokens": 128000,
+            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
+            "thinkingLevelMap": { "off": null, "minimal": "low", "xhigh": "xhigh", "max": "max" },
+            "compat": {
+              "supportsReasoningEffort": true,
+              "supportedReasoningEfforts": ["low", "medium", "high", "xhigh", "max"],
+              "supportsTemperature": false
+            }
+          },
+          {
+            "id": "gpt-daybreak-red-latest",
+            "name": "Daybreak Red",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 400000,
+            "contextTokens": 272000,
+            "maxTokens": 128000,
+            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
+            "thinkingLevelMap": { "off": "none", "minimal": "low", "xhigh": "xhigh", "max": "max" },
+            "compat": {
+              "supportsReasoningEffort": true,
+              "supportedReasoningEfforts": ["none", "low", "medium", "high", "xhigh", "max"],
+              "supportsTemperature": false
+            }
+          },
+          {
             "id": "gpt-6-astra",
             "name": "GPT-6 Astra",
             "reasoning": true,

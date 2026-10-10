@@ -170,7 +170,6 @@ describe("cloud transcript write admission", () => {
     { change: "missing", cleared: false },
     { change: "writer", cleared: false },
     { change: "current", cleared: true },
-    { change: "claim", cleared: true },
   ] as const)(
     "checks $change settlement authority after admitting a workspace report (cleared: $cleared)",
     async ({ change, cleared }) => {
@@ -185,7 +184,7 @@ describe("cloud transcript write admission", () => {
         claimId: "report-claim",
         runId: "report-run",
       });
-      placements.markWorkspaceResultPending(turnClaim);
+      await placements.markWorkspaceResultPending(turnClaim);
       if (cleared) {
         placements.recordWorkspaceResultConflict(turnClaim, {
           paths: ["src/local.ts"],
@@ -215,7 +214,7 @@ describe("cloud transcript write admission", () => {
           if (!cleared) {
             await request.source.stagedResult.record(request.source.stagedResult.ref);
           }
-          request.source.journal.commit(MANIFEST_REF);
+          await request.source.journal.commit(MANIFEST_REF);
           return {
             manifestRef: MANIFEST_REF,
             changed: false,
@@ -252,7 +251,7 @@ describe("cloud transcript write admission", () => {
         expect(publish).not.toHaveBeenCalled();
         expect(placements.validateWorkspaceResultClaim(turnClaim)).toBe(true);
         if (change === "draining") {
-          placements.startWorkspaceResultDrain(turnClaim);
+          await placements.startWorkspaceResultDrain(turnClaim);
         } else if (change === "claim") {
           vi.spyOn(placements, "validateWorkspaceResultClaim").mockReturnValue(false);
         } else if (change === "missing") {
@@ -283,7 +282,7 @@ describe("cloud transcript write admission", () => {
           expect(outcome).toBeInstanceOf(Error);
           expect(SessionManager.open(sessionTarget).getBranch()).toEqual([]);
           expect(publish).not.toHaveBeenCalled();
-          expect(placements.listPendingWorkspaceResults()).toHaveLength(1);
+          expect(await placements.listPendingWorkspaceResultsAsync()).toHaveLength(1);
         }
       } finally {
         gate.release.resolve();

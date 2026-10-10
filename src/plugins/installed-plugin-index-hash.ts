@@ -1,4 +1,3 @@
-// Hashes installed plugin index records for change detection.
 import fs from "node:fs";
 import { safeStatSync } from "@openclaw/fs-safe/path";
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";

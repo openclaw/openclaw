@@ -2,11 +2,10 @@ import { randomUUID } from "node:crypto";
 import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import {
   openOpenClawAgentSqliteWorkerStore,
-  resolveOpenClawAgentSqlitePath,
   runOpenClawAgentWriteAdmission,
-  withOpenClawAgentDatabaseAsync,
+  withOpenClawAgentDatabaseRuntime,
 } from "openclaw/plugin-sdk/sqlite-runtime";
-import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
+import { captureMemoryAgentDatabaseOptions } from "./memory-agent-database.js";
 import { memoryCpuProcessEntrypoints } from "./memory/manager-cpu-entrypoints.js";
 import {
   DEFAULT_INTENT_COOLDOWN_SECONDS,
@@ -38,23 +37,17 @@ async function executeStandingIntent<Key extends keyof StandingIntentOperations>
   params: { agentId: string; assertCurrent?: () => void },
   command: { type: Key; input: StandingIntentOperations[Key]["input"] },
 ): Promise<StandingIntentOperations[Key]["output"]> {
-  const assertCaller = params.assertCurrent;
-  const assertCurrent = () => assertCaller?.();
-  assertCurrent();
-  const env = { ...process.env, OPENCLAW_STATE_DIR: resolveStateDir() };
-  const options = {
-    agentId: params.agentId,
-    env,
-    path: resolveOpenClawAgentSqlitePath({ agentId: params.agentId, env }),
-  };
+  const assertCurrent = params.assertCurrent;
+  assertCurrent?.();
+  const options = captureMemoryAgentDatabaseOptions(params.agentId);
   return runOpenClawAgentWriteAdmission(
     options,
     async (_identity, assertAdmission) =>
       // Caller expiry refuses its operation, never a coalesced physical open.
-      withOpenClawAgentDatabaseAsync(
+      withOpenClawAgentDatabaseRuntime(
         options,
         async ({ db }) => {
-          assertCurrent();
+          assertCurrent?.();
           const worker = await openOpenClawAgentSqliteWorkerStore<StandingIntentOperations>(
             options,
             db,
@@ -68,7 +61,7 @@ async function executeStandingIntent<Key extends keyof StandingIntentOperations>
               (scope) => scope.execute(command),
               () => {
                 assertAdmission();
-                assertCurrent();
+                assertCurrent?.();
               },
             );
           } finally {

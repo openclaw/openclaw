@@ -1,5 +1,5 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   loadTranscriptEvents,
   upsertSessionEntryCore,
@@ -9,19 +9,15 @@ import {
   createUpdateRun,
   finishUpdateRun,
   getUpdateRun,
+  recordUpdateRunStep,
   recordUpdateRunVerification,
 } from "../infra/update-run-ledger.js";
-import { renderUpdateRunNotice } from "../infra/update-run-report.js";
+import { renderUpdateRunNotice } from "../infra/update-run-notice.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { createUpdateRunNotifier } from "./update-run-notice.runtime.js";
-
-const confirmGatewayReachable = vi.hoisted(() =>
-  vi.fn<typeof import("../cli/daemon-cli/restart-health-probe.js").confirmGatewayReachable>(),
-);
-vi.mock("../cli/daemon-cli/restart-health-probe.js", () => ({ confirmGatewayReachable }));
 
 describe("host-owned update notices", () => {
   let state: OpenClawTestState;
@@ -32,51 +28,71 @@ describe("host-owned update notices", () => {
     await state.cleanup();
   });
 
-  it("delivers failed-update advice as superseded history after the Gateway answers", async () => {
-    const target = {
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      sessionId: "update-session",
-      storePath: state.statePath("agents", "main", "sessions", "sessions.json"),
-    };
-    await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
-    const advice =
-      "Managed gateway remains stopped. Keep the gateway stopped until the update succeeds.";
-    const initial = createUpdateRun({
-      trigger: "chat",
-      origin: { sessionKey: target.sessionKey, nextAction: advice },
-    });
-    recordUpdateRunVerification(initial.runId, { port: 19123, versionMatch: false });
-    const finished = finishUpdateRun(initial.runId, {
-      status: "failed",
-      reason: "restart-unhealthy",
-    });
-    if (!finished) {
-      throw new Error("Missing failed update");
-    }
-    confirmGatewayReachable.mockResolvedValue({
-      reachable: true,
-      gatewayVersion: "2026.9.4",
-      gatewayBuildId: undefined,
-      activatedPluginErrors: [],
-      unavailablePlugins: [],
-      channelProbeErrors: [],
-    });
+  it.each(["succeeded", "failed"] as const)(
+    "keeps %s notices concise and saves diagnostic details",
+    async (status) => {
+      const target = {
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        sessionId: "update-session",
+        storePath: state.statePath("agents", "main", "sessions", "sessions.json"),
+      };
+      await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
+      const advice =
+        "Managed gateway remains stopped. Keep the gateway stopped until the update succeeds.";
+      const warning = "gateway.auth.token is SecretRef-managed; verify the daemon runtime context.";
+      const initial = createUpdateRun({
+        trigger: "chat",
+        origin: { sessionKey: target.sessionKey, nextAction: advice },
+      });
+      recordUpdateRunStep(initial.runId, {
+        step: "warning:gateway-auth",
+        status: "completed",
+        detail: warning,
+      });
+      recordUpdateRunVerification(initial.runId, { port: 19123, versionMatch: false });
+      const finished = finishUpdateRun(initial.runId, {
+        status,
+        ...(status === "failed" ? { reason: "restart-unhealthy" } : {}),
+      });
+      if (!finished) {
+        throw new Error("Missing finished update");
+      }
 
-    const notify = await createUpdateRunNotifier(initial, () => ({}), {});
-    expect(await notify(finished, "finished")).toEqual({
-      delivered: true,
-      owned: true,
-    });
+      const notify = await createUpdateRunNotifier(initial, () => ({}), {});
+      expect(await notify(finished, "finished")).toEqual({
+        delivered: true,
+        owned: true,
+      });
 
-    const transcript = JSON.stringify(await loadTranscriptEvents(target));
-    expect(transcript).toContain("service identity unavailable");
-    expect(transcript).toContain("Historical recovery advice:");
-    expect(transcript).toContain("supersedes saved claims that the Gateway is stopped");
-    expect(transcript).toContain("Gateway answered on the recorded port (2026.9.4)");
-    expect(getUpdateRun(initial.runId)?.origin.nextAction).toBe(advice);
-    expect(getUpdateRun(initial.runId)?.status).toBe("failed");
-  });
+      const messages = (await loadTranscriptEvents(target)).filter(
+        (event) => asOptionalRecord(event)?.type === "message",
+      );
+      const headline =
+        status === "failed" ? "⚠️ OpenClaw couldn't finish updating." : "✅ OpenClaw updated.";
+      expect(messages).toMatchObject([
+        {
+          message: {
+            role: "assistant",
+            content: [
+              {
+                type: "text",
+                text: `${headline}\nFor details, open Settings → Updates in the Control UI or run \`openclaw update status\` in your terminal.`,
+              },
+            ],
+          },
+        },
+      ]);
+      expect(getUpdateRun(initial.runId)).toMatchObject({
+        status,
+        origin: { nextAction: advice },
+        steps: expect.arrayContaining([
+          expect.objectContaining({ step: "warning:gateway-auth", detail: warning }),
+        ]),
+        verification: { port: 19123, versionMatch: false, noticeDelivered: true },
+      });
+    },
+  );
 
   it.each([false, true])(
     "outlives the requesting attempt while honoring session replacement (%s)",

@@ -5,6 +5,7 @@ import { getAiTransportHost } from "../host.js";
 import type { BaseOpenAIStreamOptions } from "../provider-options.js";
 import type { OpenAIResponsesReplayMode } from "../transports/openai-responses-compaction-replay.js";
 import type { OpenAIResponsesRequestParams } from "../transports/openai-responses-contracts.js";
+import { resolvePromptCacheKey } from "../transports/openai-transport-shared.js";
 import type { Context, Model, SimpleStreamOptions, StreamFunction } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { requireApiKey } from "../utils/required-api-key.js";
@@ -13,7 +14,6 @@ import {
   isOpenAICompatibleAzureResponsesBaseUrl,
   isTraditionalAzureOpenAIHost,
 } from "./azure-openai-responses-client-compat.js";
-import { clampOpenAIPromptCacheKey } from "./openai-prompt-cache.js";
 import {
   resolveOpenAISimpleReasoningEffort,
   type OpenAIRequestReasoningEffort,
@@ -54,11 +54,7 @@ interface AzureOpenAIResponsesOptions extends BaseOpenAIStreamOptions {
 export const streamAzureOpenAIResponses: StreamFunction<
   "azure-openai-responses",
   AzureOpenAIResponsesOptions
-> = (
-  model: Model<"azure-openai-responses">,
-  context: Context,
-  options?: AzureOpenAIResponsesOptions,
-) => {
+> = (model, context, options) => {
   const stream = new AssistantMessageEventStream();
   const output = createResponsesAssistantOutput(model, "azure-openai-responses");
 
@@ -91,7 +87,7 @@ export const streamAzureOpenAIResponses: StreamFunction<
 export const streamSimpleAzureOpenAIResponses: StreamFunction<
   "azure-openai-responses",
   SimpleStreamOptions
-> = (model: Model<"azure-openai-responses">, context: Context, options?: SimpleStreamOptions) => {
+> = (model, context, options) => {
   const apiKey = requireApiKey(model.provider, options?.apiKey);
 
   const base = buildBaseOptions(model, options, apiKey);
@@ -106,10 +102,8 @@ export const streamSimpleAzureOpenAIResponses: StreamFunction<
 
 function normalizeAzureBaseUrl(baseUrl: string): string {
   const trimmed = baseUrl.trim().replace(/\/+$/, "");
-  let url: URL;
-  try {
-    url = new URL(trimmed);
-  } catch {
+  const url = URL.parse(trimmed);
+  if (!url) {
     throw new Error(`Invalid Azure OpenAI base URL: ${baseUrl}`);
   }
 
@@ -191,7 +185,7 @@ function buildParams(
   context: Context,
   options: AzureOpenAIResponsesOptions | undefined,
   deploymentName: string,
-  replayMode: OpenAIResponsesReplayMode = "checkpoint",
+  replayMode: OpenAIResponsesReplayMode,
 ) {
   const messages = convertResponsesMessages(model, context, AZURE_TOOL_CALL_PROVIDERS, {
     sessionId: options?.sessionId,
@@ -203,10 +197,7 @@ function buildParams(
     model: deploymentName,
     input: messages,
     stream: true,
-    prompt_cache_key:
-      options?.cacheRetention === "none"
-        ? undefined
-        : clampOpenAIPromptCacheKey(options?.promptCacheKey ?? options?.sessionId),
+    prompt_cache_key: resolvePromptCacheKey(options, options?.cacheRetention ?? "short"),
     store: false,
   };
 

@@ -1,4 +1,3 @@
-// Extracts provider diagnostic metadata from error objects and text.
 import { sha256HexPrefixCore } from "./crypto-digest.js";
 
 const HTTP_STATUS_MIN = 100;
@@ -11,10 +10,8 @@ const PROVIDER_REQUEST_ID_KEYS = [
   "request_id",
 ] as const;
 const PROVIDER_REQUEST_ID_RE = /^[A-Za-z0-9._:-]{1,128}$/u;
-const PROVIDER_REQUEST_ID_TEXT_PATTERNS = [
-  /\b(?:x-request-id|request-id|request_id|requestId|trace-id|trace_id)\b["'\s:=([]+([A-Za-z0-9._:-]{1,128})/i,
-  /\((?:request_id|trace_id)\s*:\s*([A-Za-z0-9._:-]{1,128})\)/i,
-] as const;
+const PROVIDER_REQUEST_ID_TEXT_PATTERN =
+  /\b(?:x-request-id|request-id|request_id|requestId|trace-id|trace_id)\b["'\s:=([]+([A-Za-z0-9._:-]{1,128})/i;
 
 type DiagnosticErrorFailureKind =
   | "aborted"
@@ -101,10 +98,6 @@ function normalizeProviderRequestId(value: unknown): string | undefined {
   return undefined;
 }
 
-function hashDiagnosticIdentifier(value: string): string {
-  return `sha256:${sha256HexPrefixCore(value, REQUEST_ID_HASH_PREFIX_LEN)}`;
-}
-
 function readDirectProviderRequestId(err: unknown): string | undefined {
   for (const key of PROVIDER_REQUEST_ID_KEYS) {
     const normalized = normalizeProviderRequestId(readOwnDataProperty(err, key));
@@ -129,16 +122,7 @@ function readDirectCode(err: unknown): string | undefined {
 }
 
 function extractProviderRequestIdFromText(text: string | undefined): string | undefined {
-  if (!text) {
-    return undefined;
-  }
-  for (const pattern of PROVIDER_REQUEST_ID_TEXT_PATTERNS) {
-    const normalized = normalizeProviderRequestId(text.match(pattern)?.[1]);
-    if (normalized) {
-      return normalized;
-    }
-  }
-  return undefined;
+  return normalizeProviderRequestId(text?.match(PROVIDER_REQUEST_ID_TEXT_PATTERN)?.[1]);
 }
 
 /** Returns a low-cardinality error category without trusting mutable `Error.name`. */
@@ -207,12 +191,12 @@ export function diagnosticErrorFailureKind(err: unknown): DiagnosticErrorFailure
 
 /** Extracts and hashes bounded provider request ids so diagnostics never expose raw ids. */
 export function diagnosticProviderRequestIdHash(err: unknown): string | undefined {
-  const fromProperty = findDiagnosticErrorProperty(err, readDirectProviderRequestId);
-  if (fromProperty) {
-    return hashDiagnosticIdentifier(fromProperty);
-  }
-  const fromMessage = findDiagnosticErrorProperty(err, (candidate) =>
-    extractProviderRequestIdFromText(readDirectMessage(candidate)),
-  );
-  return fromMessage ? hashDiagnosticIdentifier(fromMessage) : undefined;
+  const requestId =
+    findDiagnosticErrorProperty(err, readDirectProviderRequestId) ??
+    findDiagnosticErrorProperty(err, (candidate) =>
+      extractProviderRequestIdFromText(readDirectMessage(candidate)),
+    );
+  return requestId
+    ? `sha256:${sha256HexPrefixCore(requestId, REQUEST_ID_HASH_PREFIX_LEN)}`
+    : undefined;
 }

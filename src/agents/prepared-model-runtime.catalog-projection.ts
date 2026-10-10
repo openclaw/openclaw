@@ -55,7 +55,7 @@ export function createPreparedModelCatalogProjection(params: {
     prepareModelCatalogThinkingPolicies({
       catalog: projected,
       metadataSnapshot: params.pluginGeneration.pluginMetadataSnapshot,
-      providers: params.pluginGeneration.pluginRegistry?.providers,
+      pluginRegistry: params.pluginGeneration.pluginRegistry,
     });
     return projected;
   };

@@ -1,35 +1,37 @@
-import type { SkillResourceDelivery } from "../../packages/gateway-protocol/src/schema/skill-resources.js";
-import type { WorkerTranscriptMessage } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
-import type {
-  WorkerInferenceModelRef,
-  WorkerInferenceOptions,
-} from "../../packages/gateway-protocol/src/schema/worker-inference.js";
-import type { OperationalRunInstanceRef } from "../agents/admitted-run-context.js";
+import os from "node:os";
+import path from "node:path";
+import { getSupportedThinkingLevels } from "@openclaw/ai/internal/runtime";
+import { projectSessionEntryMessage } from "../../packages/agent-core/src/harness/session/session.js";
+import type { WorkerToolSurface } from "../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
 import { toToolDefinitions } from "../agents/agent-tool-definition-adapter.js";
+import { copyAgentToolMetadata } from "../agents/agent-tool-metadata.js";
 import { wrapToolWithAbortSignal } from "../agents/agent-tools.abort.js";
-import { finalizeAgentTools } from "../agents/agent-tools.finalize.js";
-import { isApplyPatchAllowedForModel } from "../agents/apply-patch-policy.js";
-import { buildBootstrapContextForFiles } from "../agents/bootstrap-files.js";
-import { createCoreCodingTools } from "../agents/core-coding-tools.js";
-import { createEmbeddedAgentResourceLoader } from "../agents/embedded-agent-runner/resource-loader.js";
-import { createNativeModelOwnedRuntimeModel } from "../agents/embedded-agent-runner/run/setup.js";
+import { wrapToolWithBeforeToolCallHook } from "../agents/agent-tools.before-tool-call.wrapper.js";
+import { projectMemoryFlushTools } from "../agents/agent-tools.memory-flush.js";
+import { disposeAllCodeModeRuns } from "../agents/code-mode-state.js";
+import { createNativeModelOwnedRuntimeModel } from "../agents/defaults.js";
+import { buildRuntimeContextCustomMessage } from "../agents/embedded-agent-runner/run/runtime-context-prompt.js";
 import { recordModelFallbackStop } from "../agents/failover-error.js";
-import type { PreparedGitHubToolEnvironment } from "../agents/github-tool-identity.js";
-import {
-  projectEffectiveExecPolicy,
-  resolveSessionPermissionCoreToolPolicy,
-} from "../agents/session-permission-exec-mode.js";
+import type { PreparedGitHubToolEnvironment } from "../agents/github-tool-identity.types.js";
+import { createAgentHarnessToolSurfaceRuntimeCore } from "../agents/harness/tool-surface-bridge.js";
+import { projectRuntimeContextFragments } from "../agents/internal-runtime-context.js";
+import { buildExecutionHostRuntimeFacts } from "../agents/runtime-execution-facts.js";
 import { guardSessionManager } from "../agents/session-tool-result-guard-wrapper.js";
 import { AuthStorage } from "../agents/sessions/auth-storage.js";
 import { ModelRegistry } from "../agents/sessions/model-registry.js";
+import { DefaultResourceLoader } from "../agents/sessions/resource-loader.js";
 import { createAgentSession } from "../agents/sessions/sdk.js";
 import { SessionManager } from "../agents/sessions/session-manager.js";
 import { SettingsManager } from "../agents/sessions/settings-manager.js";
-import { resolveToolLoopDetectionConfig } from "../agents/tool-loop-detection-config.js";
+import { detectRuntimeShell, getShellConfig } from "../agents/shell-utils.js";
+import { resolveSystemPromptRepoRoot } from "../agents/system-prompt-params.js";
+import { completeSystemPromptRuntime } from "../agents/system-prompt-runtime.js";
 import { wrapToolWithGatewayCallerIdentity } from "../agents/tools/gateway-caller-context.js";
-import { DEFAULT_AGENTS_FILENAME, loadWorkspaceBootstrapFiles } from "../agents/workspace.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { getMachineDisplayName } from "../infra/machine-name.js";
+import { resolveRuntimeOsLabel } from "../infra/os-summary.js";
 import type { AssistantMessage } from "../llm/types.js";
+import { setPluginToolMeta } from "../plugins/tool-metadata.js";
+import { toAgentStoreSessionKey } from "../routing/session-key.js";
 import { materializeSkillResources } from "../skills/runtime/resources.js";
 import { createWorkerBrowserToolRuntime, type WorkerBrowserRuntime } from "./browser-runtime.js";
 import { createWorkerComputerTool } from "./computer-runtime.js";
@@ -40,55 +42,45 @@ import {
   type WorkerTranscriptClient,
 } from "./embedded-agent-transcript.runtime.js";
 import type { createWorkerInferenceStreamAdapter } from "./inference-stream.runtime.js";
-import type { WorkerBrowserLaunchDescriptor, WorkerLaunchPlan } from "./launch-descriptor.js";
-import {
-  WORKER_LOCAL_TOOL_NAMES,
-  WORKER_REQUIRED_LOCAL_TOOL_NAMES,
-  WORKER_SESSION_TOOL_NAMES,
-  WORKER_TOOL_NAMES,
-  type WorkerToolAuthority,
-  type WorkerToolName,
-} from "./tool-authority.js";
+import type { WorkerLaunchPlan } from "./launch-descriptor.js";
+import { createNativeInferenceStreamGuard } from "./native-inference-stream.js";
+import type { NativeRuntimeResolved } from "./native-runtime.js";
 import { WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE } from "./transcript-message.js";
-import { createWorkerSessionTools } from "./worker-session-tools.js";
+import { createWorkerGatewayToolProxies } from "./worker-gateway-tools.js";
+import { createWorkerPlacementTools, WORKER_TOOL_CONFIG } from "./worker-placement-tools.js";
 
 function toWorkerAgentError(value: unknown, fallback: string): Error {
   return value instanceof Error ? value : new Error(fallback, { cause: value });
 }
 
-type RunWorkerEmbeddedTurnParams = {
-  skillResources?: SkillResourceDelivery;
-  skillAuthoring?: import("../../packages/gateway-protocol/src/schema/worker-skill-workshop.js").WorkerSkillWorkshopBinding;
-  agentId: string;
-  operationalRunInstance: OperationalRunInstanceRef;
-  agentRuntimeIdentityToken: string;
+type RunWorkerEmbeddedTurnParams = Omit<
+  WorkerLaunchPlan["assignment"],
+  | "workspaceDir"
+  | "github"
+  | "transcript"
+  | "liveEvents"
+  | "computer"
+  | "toolAuthority"
+  | "inference"
+> & {
   cwd: string;
   workerContainmentRoot: string;
   stateDir: string;
   github?: PreparedGitHubToolEnvironment;
   sessionId: string;
   sessionKey: string;
-  runId: string;
-  prompt: WorkerLaunchPlan["assignment"]["prompt"];
-  modelRef: WorkerInferenceModelRef;
   inference: { stream: ReturnType<typeof createWorkerInferenceStreamAdapter> };
+  nativeInference?: NativeRuntimeResolved;
   transcript: WorkerTranscriptClient;
   live: WorkerLiveClient;
-  sessions?: Parameters<typeof createWorkerSessionTools>[0];
-  initialMessages?: WorkerTranscriptMessage[];
-  suppressPromptTranscript?: boolean;
-  systemPrompt?: string;
-  inferenceOptions?: WorkerInferenceOptions;
-  allowedToolNames: readonly WorkerToolName[];
-  permissionMode?: import("../../packages/gateway-protocol/src/schema/sessions-row.js").SessionPermissionMode;
-  execAuthority: WorkerToolAuthority["exec"];
-  browser?: WorkerBrowserLaunchDescriptor;
+  gatewayTools: Parameters<typeof createWorkerGatewayToolProxies>[1];
+  toolSurface: WorkerToolSurface;
+  allowedToolNames: readonly string[];
+  execAuthority: WorkerLaunchPlan["assignment"]["toolAuthority"]["exec"];
   browserRuntime?: WorkerBrowserRuntime;
   computer?: Omit<Parameters<typeof createWorkerComputerTool>[0], "runId" | "registerRunCleanup">;
   signal?: AbortSignal;
 };
-
-const WORKER_TOOL_CONFIG = { plugins: { enabled: false } } satisfies OpenClawConfig;
 
 export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams): Promise<void> {
   const resources = params.skillResources
@@ -99,9 +91,6 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
       )
     : undefined;
   try {
-    if (params.allowedToolNames.includes("skill_workshop") !== Boolean(params.skillAuthoring)) {
-      throw new Error("Worker Workshop capability and tool authority must agree.");
-    }
     const browserAuthorized = params.allowedToolNames.includes("browser");
     if (browserAuthorized !== (params.browser !== undefined)) {
       throw new Error("Worker Browser authority and launch descriptor must be provided together.");
@@ -112,34 +101,54 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
     if (params.operationalRunInstance.runId !== params.runId) {
       throw new Error("worker operational run instance disagrees with the admitted turn");
     }
-    const model = createNativeModelOwnedRuntimeModel({
-      provider: params.modelRef.provider,
-      modelId: params.modelRef.model,
-    });
+    const toolSurface = params.toolSurface;
+    const model =
+      params.nativeInference?.model ??
+      createNativeModelOwnedRuntimeModel({
+        provider: params.modelRef.provider,
+        modelId: params.modelRef.model,
+      });
+    if (!params.nativeInference) {
+      model.contextWindow = toolSurface.policy.modelContextWindowTokens ?? model.contextWindow;
+      if (toolSurface.policy.modelHasVision !== undefined) {
+        model.input = toolSurface.policy.modelHasVision ? ["text", "image"] : ["text"];
+      }
+    }
+    const requestedReasoning = params.inferenceOptions?.reasoning;
+    if (params.nativeInference && requestedReasoning === "adaptive") {
+      throw new Error("Adaptive thinking is not supported by runtime-local worker inference");
+    }
+    const thinkingLevel = params.nativeInference
+      ? requestedReasoning === "adaptive"
+        ? "off"
+        : (requestedReasoning ?? "off")
+      : "medium";
+    if (params.nativeInference && !getSupportedThinkingLevels(model).includes(thinkingLevel)) {
+      throw new Error("Requested thinking level is not supported by the node-local model");
+    }
+    if (
+      params.nativeInference &&
+      ((params.inferenceOptions?.maxTokens !== undefined &&
+        params.inferenceOptions.maxTokens !== model.maxTokens) ||
+        Object.values(params.inferenceOptions?.thinkingBudgets ?? {}).some(
+          (budget) => budget !== undefined && budget > model.maxTokens,
+        ))
+    ) {
+      throw new Error("Worker inference options exceed or override the node-local model budget");
+    }
     const authStorage = AuthStorage.inMemory({});
     const modelRegistry = ModelRegistry.inMemory(authStorage);
     const settingsManager = SettingsManager.inMemory({
       compaction: { enabled: false },
       retry: { enabled: false },
     });
-    const bootstrapFiles = await loadWorkspaceBootstrapFiles(params.cwd, [DEFAULT_AGENTS_FILENAME]);
-    const contextFiles = buildBootstrapContextForFiles(bootstrapFiles, {});
-    const resourceLoader = createEmbeddedAgentResourceLoader({
+    const resourceLoader = new DefaultResourceLoader({
       cwd: params.cwd,
       agentDir: params.stateDir,
-      settingsManager,
-      // The Gateway supplies literal text, not a local prompt-file path.
-      appendSystemPromptTransform: () =>
-        [params.systemPrompt, resources?.snapshot.prompt].filter((prompt): prompt is string =>
-          Boolean(prompt),
-        ),
-      agentsFilesOverride: () => ({ agentsFiles: contextFiles }),
     });
-    await resourceLoader.reload();
-
     const baseSessionManager = SessionManager.inMemory(params.cwd);
     for (const message of params.initialMessages ?? []) {
-      baseSessionManager.appendMessage(structuredClone(message));
+      await baseSessionManager.appendMessageAsync(structuredClone(message));
     }
 
     const transcriptRuntime = createWorkerTranscriptRuntime(params.transcript, params.signal);
@@ -147,109 +156,64 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
       suppressNextUserMessagePersistence: params.suppressPromptTranscript,
       onMessagePersisted: transcriptRuntime.onMessagePersisted,
     });
-
-    // Exec security/ask are host-relative, and workers have no Gateway transport for node RPC:
-    // snapshotNodeWorkerEnv strips the Gateway URL/token, so resolveNodeExecutionTarget ->
-    // callGatewayTool has no loopback. Fail closed; the descriptor still carries audit authority.
-    const execUnavailable =
-      params.execAuthority === undefined ||
-      params.execAuthority.host === "sandbox" ||
-      params.execAuthority.host === "node";
-    const allowedToolNameSet = new Set<string>(params.allowedToolNames);
-    if (execUnavailable) {
-      allowedToolNameSet.delete("exec");
-      allowedToolNameSet.delete("process");
-    }
-    const permissionToolPolicy = params.permissionMode
-      ? resolveSessionPermissionCoreToolPolicy({ mode: params.permissionMode })
-      : undefined;
-    const omittedToolNames = permissionToolPolicy?.readOnly
-      ? new Set<WorkerToolName>(["write", "edit", "apply_patch"])
-      : undefined;
-    const activeToolNames = WORKER_TOOL_NAMES.filter(
-      (name) => allowedToolNameSet.has(name) && !omittedToolNames?.has(name),
-    );
-    const localToolNameSet = new Set<string>(WORKER_LOCAL_TOOL_NAMES);
-    const headlessApprovalText = params.permissionMode
-      ? `Exec denied (approval_required) in worker ${params.permissionMode} permission mode. Run this command locally for interactive approval, or ask an administrator to clear the session permission mode.`
-      : undefined;
-    // The Gateway resolves effective exec policy before dispatch; deriving it from the worker's
-    // isolated config would reconstruct restricted turns with wider authority.
-    const execAuthority = params.execAuthority ?? {
-      host: "gateway" as const,
-      security: "deny" as const,
-      ask: "off" as const,
+    const appendCustomMessage = sessionManager.appendCustomMessageEntryAsync.bind(sessionManager);
+    // Custom entries bypass the message guard but share its remote commit queue.
+    sessionManager.appendCustomMessageEntryAsync = async (
+      customType,
+      content,
+      display,
+      details,
+    ) => {
+      const entryId = await appendCustomMessage(customType, content, display, details);
+      const entry = sessionManager.getEntry(entryId);
+      const message = entry && projectSessionEntryMessage(entry);
+      if (!message) {
+        throw new Error("Worker custom message was not committed");
+      }
+      transcriptRuntime.onMessagePersisted(message);
+      return entryId;
     };
-    const {
-      security: execSecurity,
-      ask: execAsk,
-      mode: execMode,
-    } = projectEffectiveExecPolicy({
-      base: execAuthority,
-      overrides: execAuthority,
-      permissionPolicy: params.permissionMode ? { mode: params.permissionMode } : undefined,
-    });
-    const coreTools = createCoreCodingTools({
-      skillsSnapshot: resources?.snapshot,
-      codingRoot: params.cwd,
-      containmentRoot: params.workerContainmentRoot,
-      includeBaseCodingTools: true,
-      shellTools: execUnavailable ? "patch-only" : "full",
-      workspaceOnly: permissionToolPolicy?.workspaceOnly ?? false,
-      readOnly: permissionToolPolicy?.readOnly ?? false,
-      modelContextWindowTokens: model.contextWindow,
-      imageSanitization: {},
-      applyPatchEnabled:
-        permissionToolPolicy?.readOnly !== true &&
-        isApplyPatchAllowedForModel({
-          modelProvider: params.modelRef.provider,
-          modelId: params.modelRef.model,
-        }),
-      applyPatchWorkspaceOnly: permissionToolPolicy?.applyPatchWorkspaceOnly ?? true,
-      applyPatchContainmentSource: permissionToolPolicy ? "session" : "worker",
-      execDefaults: {
-        bypassHostApprovalFloors:
-          permissionToolPolicy?.bypassHostApprovalFloors && execSecurity === "full",
-        safeBins: execAuthority.safeBins ?? [],
-        host: execAuthority.host,
-        node: execAuthority.host === "node" ? execAuthority.node : undefined,
-        security: execSecurity,
-        ask: execAsk,
-        ...(execMode ? { mode: execMode } : {}),
-        // Host-specific approvals are not portable; misses require local execution.
-        // Worker LLM review and interactive approval RPC remain a named follow-up.
-        nonInteractiveApproval: Boolean(
-          permissionToolPolicy && permissionToolPolicy.execMode !== "full",
-        ),
-        approvalFollowupText: headlessApprovalText,
-        config: WORKER_TOOL_CONFIG,
-        ...(params.github ? { preparedRunEnvironment: params.github } : {}),
-        commandHighlighting: false,
-        agentId: params.agentId,
-        allowBackground: true,
-        scopeKey: params.sessionKey,
-        sessionKey: params.sessionKey,
-        runId: params.runId,
-        notifySessionKey: params.sessionKey,
-        sessionId: params.sessionId,
-        eventRouting: { preserveSessionKey: false },
-      },
-      processDefaults: { scopeKey: params.sessionKey },
-    });
-    const browserRuntime = params.browser
-      ? await createWorkerBrowserToolRuntime({
-          descriptor: params.browser,
-          sessionKey: params.sessionKey,
-          stateDir: params.stateDir,
-          workspaceDir: params.cwd,
-          ...(params.browserRuntime ? { runtime: params.browserRuntime } : {}),
-        })
-      : undefined;
+
+    const allowedToolNameSet = new Set<string>(params.allowedToolNames);
+    for (const entry of toolSurface.tools) {
+      if (entry.execution === "placement" && !allowedToolNameSet.has(entry.definition.name)) {
+        throw new Error(`Worker tool surface exceeds launch authority: ${entry.definition.name}`);
+      }
+    }
+    const activeToolNames = new Set(toolSurface.tools.map(({ definition }) => definition.name));
+    const coreTools = projectMemoryFlushTools(
+      createWorkerPlacementTools({
+        ...params,
+        policy: toolSurface.policy,
+        containmentRoot: params.workerContainmentRoot,
+        skillsSnapshot: resources?.snapshot,
+      }),
+      toolSurface.policy.memoryFlushWritePath
+        ? {
+            root: params.workerContainmentRoot,
+            relativePath: toolSurface.policy.memoryFlushWritePath,
+          }
+        : undefined,
+    );
+    const browserRuntime =
+      params.browser && activeToolNames.has("browser")
+        ? await createWorkerBrowserToolRuntime({
+            descriptor: params.browser,
+            sessionKey: toAgentStoreSessionKey({
+              agentId: params.agentId,
+              requestKey: params.sessionKey,
+            }),
+            stateDir: params.stateDir,
+            workspaceDir: params.cwd,
+            ...(params.browserRuntime ? { runtime: params.browserRuntime } : {}),
+          })
+        : undefined;
     const turnLifetime = new AbortController();
     const toolSignal = params.signal
       ? AbortSignal.any([params.signal, turnLifetime.signal])
       : turnLifetime.signal;
     let computerCleanup: ((reason: string) => Promise<void>) | undefined;
+    let toolSurfaceRuntime: ReturnType<typeof createAgentHarnessToolSurfaceRuntimeCore> | undefined;
     function disposeTools(failure: Error): Promise<Error>;
     function disposeTools(failure?: Error): Promise<Error | undefined>;
     async function disposeTools(failure?: Error): Promise<Error | undefined> {
@@ -258,9 +222,12 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
       computerCleanup = undefined;
       const failures = failure ? [failure] : [];
       const disposals = await Promise.allSettled(
-        [() => cleanup?.("Worker turn finished"), () => browserRuntime?.dispose()].map(
-          async (dispose) => await dispose(),
-        ),
+        [
+          () => toolSurfaceRuntime?.cleanup(),
+          () => cleanup?.("Worker turn finished"),
+          () => browserRuntime?.dispose(),
+          disposeAllCodeModeRuns,
+        ].map(async (dispose) => await dispose()),
       );
       for (const disposal of disposals) {
         if (disposal.status === "rejected") {
@@ -273,83 +240,97 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
     }
     const { session } = await (async () => {
       try {
-        const computerTool = params.computer
-          ? createWorkerComputerTool({
-              ...params.computer,
-              runId: params.runId,
-              registerRunCleanup: (cleanup) => {
-                computerCleanup = cleanup;
-              },
-            })
-          : undefined;
-        const unboundLocalTools = finalizeAgentTools({
-          tools: [
+        const computerTool =
+          params.computer && activeToolNames.has("computer")
+            ? createWorkerComputerTool({
+                ...params.computer,
+                runId: params.runId,
+                registerRunCleanup: (cleanup) => {
+                  computerCleanup = cleanup;
+                },
+              })
+            : undefined;
+        const localTools = new Map(
+          [
             ...coreTools,
             ...(browserRuntime ? [browserRuntime.tool] : []),
             ...(computerTool ? [computerTool] : []),
-          ],
-          modelProvider: params.modelRef.provider,
-          modelId: params.modelRef.model,
-          hookContext: {
-            agentId: params.agentId,
-            config: WORKER_TOOL_CONFIG,
-            cwd: params.cwd,
-            workspaceDir: params.cwd,
-            sessionKey: params.sessionKey,
-            sessionId: params.sessionId,
-            runId: params.runId,
-            requester: { senderIsOwner: true },
-            loopDetection: resolveToolLoopDetectionConfig({
-              cfg: WORKER_TOOL_CONFIG,
+          ].map((tool) => [tool.name, tool]),
+        );
+        const gatewayTools = new Map(
+          createWorkerGatewayToolProxies(toolSurface, params.gatewayTools).map((tool) => [
+            tool.name,
+            tool,
+          ]),
+        );
+        const tools = toolSurface.tools.map((entry) => {
+          if (entry.execution === "gateway") {
+            return wrapToolWithAbortSignal(gatewayTools.get(entry.definition.name)!, toolSignal);
+          }
+          const source = localTools.get(entry.definition.name);
+          if (!source) {
+            throw new Error(`Worker placement tool unavailable: ${entry.definition.name}`);
+          }
+          const tool = copyAgentToolMetadata(source, { ...source, ...entry.definition });
+          if (entry.plugin) {
+            setPluginToolMeta(tool, entry.plugin);
+          }
+          return wrapToolWithGatewayCallerIdentity(
+            wrapToolWithAbortSignal(
+              wrapToolWithBeforeToolCallHook(tool, {
+                agentId: params.agentId,
+                config: WORKER_TOOL_CONFIG,
+                cwd: params.cwd,
+                workspaceDir: params.cwd,
+                sessionKey: params.sessionKey,
+                sessionId: params.sessionId,
+                runId: params.runId,
+                requester: { senderIsOwner: true },
+              }),
+              toolSignal,
+            ),
+            {
               agentId: params.agentId,
-            }),
-          },
-          abortSignal: toolSignal,
-        }).filter((tool) => localToolNameSet.has(tool.name));
-        const localTools = unboundLocalTools.map((tool) =>
-          wrapToolWithGatewayCallerIdentity(tool, {
-            agentId: params.agentId,
-            sessionKey: params.sessionKey,
-            operationalRunInstance: params.operationalRunInstance,
-            signedAgentRuntimeIdentityToken: params.agentRuntimeIdentityToken,
-          }),
-        );
-        const discoveredToolNames = new Set(localTools.map((tool) => tool.name));
-        for (const toolName of WORKER_REQUIRED_LOCAL_TOOL_NAMES) {
-          if (
-            omittedToolNames?.has(toolName) ||
-            (execUnavailable && (toolName === "exec" || toolName === "process"))
-          ) {
-            continue;
-          }
-          if (!discoveredToolNames.has(toolName)) {
-            throw new Error(`Worker coding tool unavailable: ${toolName}`);
-          }
-        }
-        const activeSessionToolNames = WORKER_SESSION_TOOL_NAMES.filter((name) =>
-          allowedToolNameSet.has(name),
-        );
-        if (activeSessionToolNames.length > 0 && !params.sessions) {
-          throw new Error("Worker session tool client unavailable");
-        }
-        const sessionTools = params.sessions
-          ? createWorkerSessionTools(params.sessions, params.skillAuthoring).filter((tool) =>
-              allowedToolNameSet.has(tool.name),
-            )
-          : [];
+              sessionKey: params.sessionKey,
+              operationalRunInstance: params.operationalRunInstance,
+              signedAgentRuntimeIdentityToken: params.agentRuntimeIdentityToken,
+            },
+          );
+        });
 
+        toolSurfaceRuntime = createAgentHarnessToolSurfaceRuntimeCore({
+          agentId: params.agentId,
+          sessionId: params.sessionId,
+          sessionKey: params.sessionKey,
+          runId: params.runId,
+          abortSignal: toolSignal,
+          presentation: toolSurface.presentation,
+          supportsDeferredToolCalls: false,
+          modelToolsEnabled: tools.length > 0,
+          model,
+        });
+        const projected = toolSurfaceRuntime
+          .compactTools(tools, {
+            prepared: { abortSignal: toolSignal, preserveToolNames: [] },
+          })
+          .promptToolPolicy.apply();
+        await resourceLoader.reload();
+        const systemPrompt = completeSystemPromptRuntime(params.systemPrompt ?? "", {
+          host: await getMachineDisplayName(),
+          os: resolveRuntimeOsLabel(),
+          arch: os.arch(),
+          node: process.version,
+          shell: detectRuntimeShell() ?? path.basename(getShellConfig().shell),
+          repoRoot: resolveSystemPromptRepoRoot({ workspaceDir: params.cwd, cwd: params.cwd }),
+        });
         return await createAgentSession({
+          systemPrompt: resources?.rewriteReferences(systemPrompt) ?? systemPrompt,
           cwd: params.cwd,
-          agentDir: params.stateDir,
-          authStorage,
           modelRegistry,
           model,
-          thinkingLevel: "medium",
-          tools: [...activeToolNames],
-          customTools: toToolDefinitions([
-            ...localTools.filter((tool) => allowedToolNameSet.has(tool.name)),
-            ...sessionTools.map((tool) => wrapToolWithAbortSignal(tool, toolSignal)),
-          ]),
+          thinkingLevel,
+          tools: projected.tools.map((tool) => tool.name),
+          customTools: toToolDefinitions(projected.tools),
           sessionManager,
           settingsManager,
           resourceLoader,
@@ -360,8 +341,22 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
       }
     })();
     session.agent.sessionId = params.sessionId;
-    session.setActiveToolsByName([...activeToolNames]);
-    session.agent.streamFn = (_model, context, options) => {
+    const guardNativeStream = params.nativeInference
+      ? createNativeInferenceStreamGuard(params.nativeInference)
+      : undefined;
+    session.agent.streamFn = async (_model, context, options) => {
+      if (params.nativeInference && guardNativeStream) {
+        const native = params.nativeInference;
+        return guardNativeStream(
+          () =>
+            native.streamFn(model, context, {
+              ...params.inferenceOptions,
+              reasoning: thinkingLevel,
+              signal: options?.signal,
+            }),
+          options?.signal,
+        );
+      }
       const projected = toWorkerInferenceContext(context);
       if (projected.kind === "provider-replay-unavailable") {
         throw new Error(
@@ -371,7 +366,7 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
       return params.inference.stream({
         modelRef: params.modelRef,
         context: projected.context,
-        options: structuredClone(params.inferenceOptions ?? {}),
+        options: structuredClone(params.inferenceOptions),
         ...(options?.signal ? { signal: options.signal } : {}),
       });
     };
@@ -398,11 +393,21 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
           }
         }
       }
-      await session.agent.prompt({
-        role: "user",
-        content,
-        timestamp: Date.now(),
-      });
+      const fragments = params.runtimeContext
+        ? [
+            ...buildExecutionHostRuntimeFacts({ ...params, capabilityToolNames: activeToolNames }),
+            ...params.runtimeContext,
+          ]
+        : [];
+      const runtimeContext = buildRuntimeContextCustomMessage(
+        projectRuntimeContextFragments(fragments),
+        fragments,
+        params.inHistorySystemUpdates,
+      );
+      await session.agent.prompt([
+        { role: "user", content, timestamp: Date.now() },
+        ...(runtimeContext ? [runtimeContext] : []),
+      ]);
       await session.agent.waitForIdle();
       if (params.signal?.aborted) {
         throw toWorkerAgentError(params.signal.reason, "Worker agent turn aborted.");

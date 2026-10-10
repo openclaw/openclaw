@@ -48,14 +48,17 @@ function redactTelegramBotTokens(text: string) {
   return text.replace(TELEGRAM_BOT_TOKEN_RE, (token) => `${token.slice(0, 6)}…${token.slice(-4)}`);
 }
 
-function redactSecretEnvKeyPattern(text: string, pattern: RegExp) {
-  const source = pattern.source.replace(/^\^/u, "").replace(/\$$/u, "");
+function redactSecretEnvKey(text: string, source: string, preserveSpacing: boolean) {
+  const jsonKey = preserveSpacing ? `("${source}"\\s*:\\s*)` : `"(${source})"\\s*:\\s*`;
   return text
     .replace(
       new RegExp(`\\b(${source})(\\s*[=:]\\s*)([^\\s"';,]+|"[^"]*"|'[^']*')`, "g"),
       `$1$2<redacted>`,
     )
-    .replace(new RegExp(`"(${source})"\\s*:\\s*"[^"]*"`, "g"), `"$1":"<redacted>"`);
+    .replace(
+      new RegExp(`${jsonKey}"[^"]*"`, "g"),
+      preserveSpacing ? `$1"<redacted>"` : `"$1":"<redacted>"`,
+    );
 }
 
 function redactSecretValueKey(text: string, key: string) {
@@ -103,18 +106,11 @@ export function redactQaGatewayDebugText(text: string) {
     );
   }
   for (const envVar of QA_GATEWAY_DEBUG_SECRET_ENV_VARS) {
-    const escapedEnvVar = escapeRegExp(envVar);
-    redacted = redacted.replace(
-      new RegExp(`\\b(${escapedEnvVar})(\\s*[=:]\\s*)([^\\s"';,]+|"[^"]*"|'[^']*')`, "g"),
-      `$1$2<redacted>`,
-    );
-    redacted = redacted.replace(
-      new RegExp(`("${escapedEnvVar}"\\s*:\\s*)"[^"]*"`, "g"),
-      `$1"<redacted>"`,
-    );
+    redacted = redactSecretEnvKey(redacted, escapeRegExp(envVar), true);
   }
   for (const pattern of QA_PROVIDER_SECRET_ENV_KEY_PATTERNS) {
-    redacted = redactSecretEnvKeyPattern(redacted, pattern);
+    const source = pattern.source.replace(/^\^/u, "").replace(/\$$/u, "");
+    redacted = redactSecretEnvKey(redacted, source, false);
   }
   for (const key of QA_GATEWAY_DEBUG_SECRET_VALUE_KEYS) {
     redacted = redactSecretValueKey(redacted, key);

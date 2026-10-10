@@ -3,13 +3,10 @@ import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { isIncognitoSessionKey } from "openclaw/plugin-sdk/session-key-runtime";
 import { closeCodexStartupClientBestEffort } from "./attempt-client-cleanup.js";
 import { resolveCodexAppServerClientInstanceId } from "./client.js";
-import { assertCodexInferenceRouteConfig } from "./inference-routing.js";
-import { applyCodexNativeSkillIsolation } from "./native-skill-isolation.js";
 import { hasCodexNativeToolCatalog, loadCodexNativeToolCatalog } from "./native-tool-catalog.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
 import {
   isCodexPluginThreadBindingStale,
-  mergeCodexThreadConfigs,
   type CodexPluginThreadConfig,
 } from "./plugin-thread-config.js";
 import {
@@ -37,6 +34,7 @@ import {
 import { resumeExistingCodexThread, startFreshCodexThread } from "./thread-lifecycle-io.js";
 import {
   buildCodexThreadBindingPolicy,
+  buildCodexThreadRequestConfig,
   prepareCodexThreadLifecyclePreflight,
   prepareCodexThreadFinalConfigPatch,
   prepareCodexThreadRequestContext,
@@ -59,8 +57,9 @@ export async function startOrResumeThread(
 ): Promise<CodexAppServerThreadLifecycleBinding> {
   const incognito = isIncognitoSessionKey(input.params.sessionKey);
   const clientId = resolveCodexAppServerClientInstanceId(input.client);
-  return await withCodexThreadLifecycleBinding(input, async (bindingIdentity, saved, assert) => {
-    const params: CodexStartOrResumeThreadParams = { ...input, assertCurrent: assert };
+  return await withCodexThreadLifecycleBinding(input, async (bindingIdentity, saved, authority) => {
+    const assert = authority.assertCurrent;
+    const params: CodexStartOrResumeThreadParams = { ...input, assertCurrent: assert, authority };
     const expectedOwnership = params.params.expectedSessionRuntimeOwnership;
     let binding = saved;
     let selectionBinding = binding;
@@ -72,6 +71,7 @@ export async function startOrResumeThread(
         binding,
         appServer: params.appServer,
         agentDir: resolveCodexThreadAgentDir(params),
+        authority,
         assertCurrent: () => {
           params.signal?.throwIfAborted();
           assert();
@@ -93,7 +93,6 @@ export async function startOrResumeThread(
       legacyDynamicToolsFingerprint,
       legacyUserMcpServersFingerprint,
       lifecycleTiming,
-      nativeSkillIsolation,
       nativeSkillIsolationFingerprint,
       networkProxyConfigFingerprint,
       ringZeroActive,
@@ -101,7 +100,6 @@ export async function startOrResumeThread(
       ringZeroConfigFingerprint,
       restrictedToolSurface,
       restrictedToolSurfaceInheritedMcpServerNames,
-      userMcpServersConfigPatch,
       userMcpServersFingerprint,
       webSearchThreadConfigFingerprint,
     } = preflight;
@@ -121,8 +119,10 @@ export async function startOrResumeThread(
         throwIfAborted,
       });
       // Managed requests own a parent-local carrier. Only uncovered connections
-      // put the catalog in native thread state; recompute after route changes.
-      params.skillsInstructions = params.inferenceRoute ? undefined : input.skillsInstructions;
+      // put refreshable instructions in native thread state; recompute after route changes.
+      params.refreshableInstructions = params.inferenceRoute
+        ? undefined
+        : input.refreshableInstructions;
       return context;
     };
     const releaseRetainedThread = (
@@ -138,6 +138,8 @@ export async function startOrResumeThread(
         lifecycleTiming,
         threadId,
         assertCurrent,
+        withCurrent: authority.withCurrent,
+        signal: params.signal,
       });
     if (binding?.pendingSupervisionBranch) {
       const requestContext = await prepareRequestContext();
@@ -155,54 +157,31 @@ export async function startOrResumeThread(
         requestContext.nativeModelInputTools,
       );
       const config = lifecycleTiming.measureSync("merge-thread-config", () =>
-        applyCodexNativeSkillIsolation(
-          mergeCodexThreadConfigs(
-            params.config,
-            userMcpServersConfigPatch,
-            pluginThreadConfig?.configPatch,
-            finalConfigPatch.configPatch,
-          ),
-          nativeSkillIsolation,
+        buildCodexThreadRequestConfig(
+          params,
+          preflight,
+          pluginThreadConfig?.configPatch,
+          finalConfigPatch.configPatch,
         ),
       );
       return publishCodexThreadInferenceBinding(
         params,
         await materializePendingSupervisionBranch({
-          client: params.client,
+          ...params,
           abandonClient:
             params.abandonClient ?? (() => closeCodexStartupClientBestEffort(params.client)),
-          bindingStore: params.bindingStore,
           bindingIdentity,
+          authority,
           binding: pendingBinding,
           attempt: params.params,
-          cwd: params.cwd,
-          dynamicTools: params.dynamicTools,
-          appServer: params.appServer,
-          developerInstructions: params.developerInstructions,
-          skillsInstructions: params.skillsInstructions,
           config,
-          nativeCodeModeEnabled: params.nativeCodeModeEnabled,
-          nativeProviderWebSearchSupport: params.nativeProviderWebSearchSupport,
-          nativeCodeModeOnlyEnabled: params.nativeCodeModeOnlyEnabled,
-          webSearchAllowed: params.webSearchAllowed,
           hostSystemAgentActive,
           restrictedToolSurface,
           restrictedToolSurfaceInheritedMcpServerNames,
-          shellEnvironment: params.shellEnvironment,
-          shellPathPrepend: params.shellPathPrepend,
-          disableLoginShell: params.disableLoginShell,
-          environmentSelection: params.environmentSelection,
           provisionalAppIds: pluginThreadConfig?.provisionalAppIds,
-          signal: params.signal,
           throwIfAborted: () => {
             params.assertCurrent?.();
-            assertCodexInferenceRouteConfig(
-              params.client,
-              params.inferenceRoute,
-              config,
-              undefined,
-              params.inferenceProviderRoutes,
-            );
+            requestContext.assertInferenceConfig(config);
           },
           lifecycleTiming,
           normalizeBindingModelProvider: requestContext.normalizeBindingModelProvider,
@@ -276,69 +255,57 @@ export async function startOrResumeThread(
       return publishCodexThreadInferenceBinding(params, resumed);
     }
 
-    if (
-      binding?.threadId &&
-      !restrictedToolSurface &&
-      binding.nativeToolPolicyRestricted === true
-    ) {
-      stageBindingReplacement("rotating a host-policy-restricted thread binding");
-    }
-    if (
-      binding?.threadId &&
-      binding.nativeSkillIsolationFingerprint !== nativeSkillIsolationFingerprint
-    ) {
-      embeddedAgentLog.debug(
-        "codex app-server native skill isolation changed; starting a new thread",
-        { threadId: binding.threadId },
-      );
-      stageBindingReplacement("rotating stale native skill isolation");
-    }
-    if (
-      binding?.threadId &&
-      (binding.ringZeroConfigFingerprint !== ringZeroConfigFingerprint ||
-        binding.ringZeroClientInstanceId !== ringZeroClientInstanceId) &&
-      (ringZeroActive || binding.ringZeroConfigFingerprint !== undefined)
-    ) {
-      // Resume config cannot safely change a loaded Codex thread. Reuse a
-      // ring-zero thread only when its creation-time restrictions still match.
-      embeddedAgentLog.debug("codex app-server ring-zero restriction changed; rotating thread", {
-        threadId: binding.threadId,
-      });
-      stageBindingReplacement("rotating a ring-zero thread binding");
-    }
-    if (
-      binding?.threadId &&
-      shouldRotateCodexAppServerBindingForRuntime({
-        connectionClass: params.appServer.connectionClass,
-        current:
-          binding.connectionScope === "supervision"
-            ? buildCodexAppServerConnectionFingerprint(params.appServer, params.params.agentDir)
-            : params.appServerRuntimeFingerprint,
-        binding: binding.appServerRuntimeFingerprint,
-      })
-    ) {
-      rotateStaleBinding(binding, "runtime identity", {
-        connectionClass: params.appServer.connectionClass,
-      });
-    }
-    if (
-      binding?.threadId &&
-      shouldRotateCodexGpt56MultiAgentBinding({
-        bindingModel: binding.model,
-        requestedModel: params.params.modelId,
-      })
-    ) {
-      // Codex locks the model-selected multi-agent version on the first turn.
-      // Sol/Terra (V2) and Luna (V1) therefore cannot share one resumed thread.
-      embeddedAgentLog.debug(
-        "codex app-server GPT-5.6 multi-agent version changed; starting a new thread",
-        {
+    if (binding?.threadId) {
+      if (!restrictedToolSurface && binding.nativeToolPolicyRestricted === true) {
+        stageBindingReplacement("rotating a host-policy-restricted thread binding");
+      } else if (binding.nativeSkillIsolationFingerprint !== nativeSkillIsolationFingerprint) {
+        embeddedAgentLog.debug(
+          "codex app-server native skill isolation changed; starting a new thread",
+          { threadId: binding.threadId },
+        );
+        stageBindingReplacement("rotating stale native skill isolation");
+      } else if (
+        (binding.ringZeroConfigFingerprint !== ringZeroConfigFingerprint ||
+          binding.ringZeroClientInstanceId !== ringZeroClientInstanceId) &&
+        (ringZeroActive || binding.ringZeroConfigFingerprint !== undefined)
+      ) {
+        // Resume config cannot safely change a loaded Codex thread. Reuse a
+        // ring-zero thread only when its creation-time restrictions still match.
+        embeddedAgentLog.debug("codex app-server ring-zero restriction changed; rotating thread", {
           threadId: binding.threadId,
+        });
+        stageBindingReplacement("rotating a ring-zero thread binding");
+      } else if (
+        shouldRotateCodexAppServerBindingForRuntime({
+          connectionClass: params.appServer.connectionClass,
+          current:
+            binding.connectionScope === "supervision"
+              ? buildCodexAppServerConnectionFingerprint(params.appServer, params.params.agentDir)
+              : params.appServerRuntimeFingerprint,
+          binding: binding.appServerRuntimeFingerprint,
+        })
+      ) {
+        rotateStaleBinding(binding, "runtime identity", {
+          connectionClass: params.appServer.connectionClass,
+        });
+      } else if (
+        shouldRotateCodexGpt56MultiAgentBinding({
           bindingModel: binding.model,
           requestedModel: params.params.modelId,
-        },
-      );
-      stageBindingReplacement("rotating a GPT-5.6 multi-agent thread binding");
+        })
+      ) {
+        // Codex locks the model-selected multi-agent version on the first turn.
+        // Sol/Terra (V2) and Luna (V1) therefore cannot share one resumed thread.
+        embeddedAgentLog.debug(
+          "codex app-server GPT-5.6 multi-agent version changed; starting a new thread",
+          {
+            threadId: binding.threadId,
+            bindingModel: binding.model,
+            requestedModel: params.params.modelId,
+          },
+        );
+        stageBindingReplacement("rotating a GPT-5.6 multi-agent thread binding");
+      }
     }
     selectionBinding = binding;
     // Capability read failures use managed search for this turn but must not
@@ -514,37 +481,31 @@ export async function startOrResumeThread(
         rotatedContextEngineBinding = true;
       }
     }
-    if (
-      binding?.threadId &&
-      !areUserMcpServersFingerprintsCompatible({
-        previous: binding.userMcpServersFingerprint,
-        next: userMcpServersFingerprint,
-        nextLegacy: legacyUserMcpServersFingerprint,
-      })
-    ) {
-      rotateStaleBinding(binding, "user MCP config");
-    }
-    if (
-      binding?.threadId &&
-      (binding.networkProxyConfigFingerprint !== networkProxyConfigFingerprint ||
-        binding.networkProxyProfileName !== params.appServer.networkProxy?.profileName)
-    ) {
-      rotateStaleBinding(binding, "network proxy config");
-    }
-    if (binding?.threadId) {
-      const pluginBindingStale = isCodexPluginThreadBindingStale({
-        codexPluginsEnabled: params.pluginThreadConfig?.enabled ?? false,
-        bindingFingerprint: binding.pluginAppsFingerprint,
-        bindingInputFingerprint: binding.pluginAppsInputFingerprint,
-        currentInputFingerprint: params.pluginThreadConfig?.inputFingerprint,
-        hasBindingPolicyContext: Boolean(binding.pluginAppPolicyContext),
-      });
-      if (pluginBindingStale) {
-        rotateStaleBinding(binding, "plugin app config");
-      }
-    }
     if (binding?.threadId) {
       if (
+        !areUserMcpServersFingerprintsCompatible({
+          previous: binding.userMcpServersFingerprint,
+          next: userMcpServersFingerprint,
+          nextLegacy: legacyUserMcpServersFingerprint,
+        })
+      ) {
+        rotateStaleBinding(binding, "user MCP config");
+      } else if (
+        binding.networkProxyConfigFingerprint !== networkProxyConfigFingerprint ||
+        binding.networkProxyProfileName !== params.appServer.networkProxy?.profileName
+      ) {
+        rotateStaleBinding(binding, "network proxy config");
+      } else if (
+        isCodexPluginThreadBindingStale({
+          codexPluginsEnabled: params.pluginThreadConfig?.enabled ?? false,
+          bindingFingerprint: binding.pluginAppsFingerprint,
+          bindingInputFingerprint: binding.pluginAppsInputFingerprint,
+          currentInputFingerprint: params.pluginThreadConfig?.inputFingerprint,
+          hasBindingPolicyContext: Boolean(binding.pluginAppPolicyContext),
+        })
+      ) {
+        rotateStaleBinding(binding, "plugin app config");
+      } else if (
         binding.dynamicToolsFingerprint &&
         params.dynamicTools.length > 0 &&
         binding.dynamicToolsContainDeferred !== dynamicToolsContainDeferred &&

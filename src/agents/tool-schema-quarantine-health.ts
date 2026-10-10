@@ -1,11 +1,14 @@
 // Persists runtime tool-schema quarantines in the shared SQLite-backed core
 // plugin-state store so health surfaces can see failures from any live
 // runtime process.
-import { hasNonEmptyString as isNonEmptyString } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeToolSchemaQuarantineRecord,
+  runtimeToolSchemaIdentityKey,
+  type ToolSchemaQuarantineRecord,
+} from "../plugin-state/runtime-health-records.js";
 import {
   createRuntimeHealthRecordEnvelope,
   createRuntimeHealthStore,
-  type RuntimeHealthRecordEnvelope,
 } from "../plugin-state/runtime-health-store.js";
 
 type RuntimeToolSchemaQuarantine = {
@@ -15,40 +18,21 @@ type RuntimeToolSchemaQuarantine = {
   failedAt: Date;
 };
 
-type PersistedRuntimeToolSchemaQuarantineRecord = RuntimeHealthRecordEnvelope & {
-  toolName: string;
-  owner?: string;
-  reason: string;
-};
-
-const quarantineStore = createRuntimeHealthStore<PersistedRuntimeToolSchemaQuarantineRecord>({
+const quarantineStore = createRuntimeHealthStore<ToolSchemaQuarantineRecord>({
   ownerId: "core:runtime-tool-quarantine-health",
   namespace: "schema-quarantines",
   maxEntries: 128,
   // Failing runs re-register their quarantine and refresh this TTL, so it only
   // expires records that stop recurring (e.g. a schema fixed without restart).
   ttlMs: 24 * 60 * 60 * 1_000,
-  normalizeRecord: (value) => {
-    if (!isNonEmptyString(value.toolName) || !isNonEmptyString(value.reason)) {
-      return undefined;
-    }
-    return {
-      toolName: value.toolName,
-      reason: value.reason,
-      failedAtMs: value.failedAtMs,
-      processId: value.processId,
-      processToken: value.processToken,
-      processStartTime: value.processStartTime,
-      ...(isNonEmptyString(value.owner) ? { owner: value.owner } : {}),
-    };
-  },
+  normalizeRecord: normalizeToolSchemaQuarantineRecord,
   displayKey: (record) => JSON.stringify([record.owner ?? "", record.toolName]),
   // Latest wins: the most recent violation message is the actionable one.
   pick: "latest",
 });
 
 function recordKey(
-  record: Pick<PersistedRuntimeToolSchemaQuarantineRecord, "owner" | "toolName" | "processId">,
+  record: Pick<ToolSchemaQuarantineRecord, "owner" | "toolName" | "processId">,
 ): string {
   return JSON.stringify([record.owner ?? "", record.toolName, record.processId]);
 }
@@ -58,26 +42,24 @@ export type RuntimeToolSchemaQuarantineIdentity = {
   owner?: string;
 };
 
-function identityKey(identity: RuntimeToolSchemaQuarantineIdentity): string {
-  return JSON.stringify([identity.owner ?? "", identity.toolName]);
-}
+// Remember submitted records before awaiting them, so recovery also joins a pending write.
+// Identity checks below keep a late clear reply from forgetting a newer same-key failure.
+const submittedQuarantines = new Map<string, symbol>();
 
-// Keys this process has persisted. Recovery clearing checks this set first so
-// the per-run path does zero store IO unless this process actually recorded a
-// quarantine that may have recovered.
-const locallyPersistedKeys = new Set<string>();
-
-export function recordPersistedRuntimeToolSchemaQuarantine(
+export async function recordPersistedRuntimeToolSchemaQuarantine(
   quarantine: RuntimeToolSchemaQuarantine,
-): void {
-  const record: PersistedRuntimeToolSchemaQuarantineRecord = {
+): Promise<void> {
+  const record: ToolSchemaQuarantineRecord = {
     toolName: quarantine.toolName,
     reason: quarantine.reason,
     ...createRuntimeHealthRecordEnvelope(quarantine.failedAt),
     ...(quarantine.owner ? { owner: quarantine.owner } : {}),
   };
-  quarantineStore.register(recordKey(record), record);
-  locallyPersistedKeys.add(identityKey(record));
+  submittedQuarantines.set(
+    runtimeToolSchemaIdentityKey(record),
+    Symbol("runtime-tool-quarantine-submission"),
+  );
+  await quarantineStore.register(recordKey(record), record);
 }
 
 /**
@@ -85,24 +67,40 @@ export function recordPersistedRuntimeToolSchemaQuarantine(
  * cleanly. `listHealthyTools` is only invoked when this process has persisted
  * quarantines, keeping the common per-run path free of work.
  */
-export function clearRecoveredPersistedRuntimeToolSchemaQuarantines(
+export async function clearRecoveredPersistedRuntimeToolSchemaQuarantines(
   listHealthyTools: () => readonly RuntimeToolSchemaQuarantineIdentity[],
-): void {
-  if (locallyPersistedKeys.size === 0) {
+): Promise<void> {
+  if (submittedQuarantines.size === 0) {
     return;
   }
-  const recoveredKeys = new Set(
+  const recoveredKeys = new Map(
     listHealthyTools()
-      .map(identityKey)
-      .filter((key) => locallyPersistedKeys.has(key)),
+      .map(runtimeToolSchemaIdentityKey)
+      .flatMap((key) => {
+        const submission = submittedQuarantines.get(key);
+        return submission ? [[key, submission] as const] : [];
+      }),
   );
   if (recoveredKeys.size === 0) {
     return;
   }
-  quarantineStore.clearForProcess(process.pid, (record) => recoveredKeys.has(identityKey(record)));
-  for (const key of recoveredKeys) {
-    locallyPersistedKeys.delete(key);
-  }
+  // Capture every key's source now; a renewed failure must not veto another key's recovery.
+  await Promise.all(
+    Array.from(recoveredKeys, async ([key, submission]) => {
+      const cleared = await quarantineStore.clearForProcess(
+        process.pid,
+        { kind: "tool-schema", keys: [key] },
+        () => {
+          if (submittedQuarantines.get(key) !== submission) {
+            throw new Error("Runtime tool quarantine changed during recovery");
+          }
+        },
+      );
+      if (cleared && submittedQuarantines.get(key) === submission) {
+        submittedQuarantines.delete(key);
+      }
+    }),
+  );
 }
 
 export async function listPersistedRuntimeToolSchemaQuarantines(): Promise<

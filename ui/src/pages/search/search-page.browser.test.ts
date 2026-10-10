@@ -253,36 +253,64 @@ describe("Search settings", () => {
     );
   });
 
-  it("edits a custom provider endpoint inline through its canonical plugin configuration", async () => {
-    const fixture = await mount();
-    fixture.runtime.state.configSchema = providerPath.reduceRight<unknown>(
-      (schema, key) => ({ type: "object", properties: { [key]: schema } }),
-      { type: "object", properties: { baseUrl: { type: "string", title: "Search endpoint" } } },
-    );
-    fixture.element.requestUpdate();
-    await fixture.element.updateComplete;
-    const endpoint = fixture.element.querySelector<HTMLInputElement>(
-      'input[aria-label="Search endpoint"]',
-    )!;
-    expect(endpoint).not.toBeNull();
-    expect(endpoint.value).toBe("https://search.example.com");
-    endpoint.focus();
-    endpoint.value = "https://custom.example.com";
-    endpoint.dispatchEvent(new Event("input", { bubbles: true }));
-    endpoint.blur();
-    await fixture.settle();
-    expect(fixture.runtime.patchForm).toHaveBeenCalledWith(
-      [...providerPath, "baseUrl"],
-      "https://custom.example.com",
-    );
-    fixture.setResult({
-      ...ready,
-      providers: ready.providers.map((provider) => ({ ...provider, configPath: [] })),
-    });
-    button(fixture.element, "Refresh search status").click();
-    await fixture.settle();
-    expect(fixture.element.querySelector('input[aria-label="Search endpoint"]')).toBeNull();
-  });
+  it.each(["endpoint", "advanced"] as const)(
+    "edits %s fields through the config owner",
+    async (kind) => {
+      const fixture = await mount();
+      const endpoint = kind === "endpoint";
+      const path = endpoint ? providerPath : ["tools", "web", "search"];
+      const label = endpoint ? "Search endpoint" : "Result limit";
+      fixture.runtime.state.configSchema = path.reduceRight<unknown>(
+        (schema, key) => ({ type: "object", properties: { [key]: schema } }),
+        {
+          type: "object",
+          properties: endpoint
+            ? { baseUrl: { type: "string", title: label } }
+            : {
+                enabled: { type: "boolean" },
+                provider: { type: "string" },
+                maxResults: { type: "integer", title: label, default: 5 },
+              },
+        },
+      );
+      fixture.element.requestUpdate();
+      await fixture.element.updateComplete;
+      if (!endpoint) {
+        const advanced = fixture.element.querySelector<HTMLDetailsElement>("details")!;
+        expect(advanced.open).toBe(false);
+        advanced.open = true;
+      }
+      const field = fixture.element.querySelector<HTMLInputElement>(
+        `input[aria-label="${label}"]`,
+      )!;
+      expect(field).not.toBeNull();
+      if (endpoint) {
+        expect(field.value).toBe("https://search.example.com");
+      }
+      field.focus();
+      field.value = endpoint ? "https://custom.example.com" : "8";
+      field.dispatchEvent(new Event("input", { bubbles: true }));
+      field.blur();
+      await fixture.settle();
+      expect(fixture.runtime.patchForm).toHaveBeenCalledWith(
+        [...path, endpoint ? "baseUrl" : "maxResults"],
+        endpoint ? "https://custom.example.com" : 8,
+      );
+      if (endpoint) {
+        fixture.setResult({
+          ...ready,
+          providers: ready.providers.map((provider) => ({ ...provider, configPath: [] })),
+        });
+        button(fixture.element, "Refresh search status").click();
+        await fixture.settle();
+        expect(fixture.element.querySelector('input[aria-label="Search endpoint"]')).toBeNull();
+      } else {
+        expect(
+          fixture.element.querySelectorAll('select[aria-label="Search provider"]'),
+        ).toHaveLength(1);
+      }
+    },
+  );
 
   it.each([
     { label: "other subtree", configPath: providerPath, stored: REDACTED_SENTINEL },
@@ -357,39 +385,6 @@ describe("Search settings", () => {
     );
   });
 
-  it("exposes existing advanced search fields without adding another provider selector", async () => {
-    const fixture = await mount();
-    fixture.runtime.state.configSchema = ["tools", "web", "search"].reduceRight<unknown>(
-      (schema, key) => ({ type: "object", properties: { [key]: schema } }),
-      {
-        type: "object",
-        properties: {
-          enabled: { type: "boolean" },
-          provider: { type: "string" },
-          maxResults: { type: "integer", title: "Result limit", default: 5 },
-        },
-      },
-    );
-    fixture.element.requestUpdate();
-    await fixture.element.updateComplete;
-    const advanced = fixture.element.querySelector<HTMLDetailsElement>("details")!;
-    expect(advanced.open).toBe(false);
-    advanced.open = true;
-    const limit = advanced.querySelector<HTMLInputElement>('input[aria-label="Result limit"]')!;
-    limit.focus();
-    limit.value = "8";
-    limit.dispatchEvent(new Event("input", { bubbles: true }));
-    limit.blur();
-    await fixture.settle();
-    expect(fixture.runtime.patchForm).toHaveBeenCalledWith(
-      ["tools", "web", "search", "maxResults"],
-      8,
-    );
-    expect(fixture.element.querySelectorAll('select[aria-label="Search provider"]')).toHaveLength(
-      1,
-    );
-  });
-
   it("retries a failed configuration read without attempting a write", async () => {
     const fixture = await mount();
     fixture.runtime.state.lastError = "Could not load search settings";
@@ -435,70 +430,55 @@ describe("Search settings", () => {
     },
   );
 
-  it("keeps the tested query immutable until its request settles", async () => {
-    const fixture = await mount();
-    const query = fixture.element.querySelector<HTMLInputElement>(
-      'input[aria-label="Search query"]',
-    )!;
-    query.value = "Query A";
-    query.dispatchEvent(new Event("input", { bubbles: true }));
-    const pending = createDeferred<unknown>();
-    fixture.setTestResponse(pending.promise);
-    button(fixture.element, "Test search").click();
-    await fixture.element.updateComplete;
-    try {
-      expect(query.disabled).toBe(true);
-      expect(query.value).toBe("Query A");
-    } finally {
-      pending.resolve({
-        provider: "searxng",
-        status: "ok",
-        latencyMs: 1,
-        content: "Answer for query A",
-      });
-      await fixture.settle();
-    }
-    expect(query.disabled).toBe(false);
-    expect(fixture.element.textContent).toContain("Answer for query A");
-    expect(
-      fixture.request.mock.calls.find(([method]) => method === "webSearch.test")?.[1],
-    ).toMatchObject({ query: "Query A" });
-  });
-
   it.each(["success", "provider error", "request error"] as const)(
-    "clears a completed search %s when its query is edited",
+    "locks the tested query until %s settles and clears health on editing",
     async (outcome) => {
       const fixture = await mount();
+      const query = fixture.element.querySelector<HTMLInputElement>(
+        'input[aria-label="Search query"]',
+      )!;
+      query.value = "Query A";
+      query.dispatchEvent(new Event("input", { bubbles: true }));
       const pending = createDeferred<unknown>();
       fixture.setTestResponse(pending.promise);
       button(fixture.element, "Test search").click();
-      if (outcome === "request error") {
-        pending.reject(new Error("Previous transport error"));
-      } else {
-        pending.resolve(
-          outcome === "success"
-            ? {
-                provider: "searxng",
-                status: "ok",
-                latencyMs: 1,
-                content: "Previous answer",
-                results: [{ title: "Previous source", url: "https://example.com/previous" }],
-              }
-            : {
-                provider: "searxng",
-                status: "error",
-                latencyMs: 1,
-                error: "Previous provider error",
-              },
-        );
+      await fixture.element.updateComplete;
+      try {
+        expect(query.disabled).toBe(true);
+        expect(query.value).toBe("Query A");
+      } finally {
+        if (outcome === "request error") {
+          pending.reject(new Error("Previous transport error"));
+        } else {
+          pending.resolve(
+            outcome === "success"
+              ? {
+                  provider: "searxng",
+                  status: "ok",
+                  latencyMs: 1,
+                  content: "Previous answer",
+                  results: [{ title: "Previous source", url: "https://example.com/previous" }],
+                }
+              : {
+                  provider: "searxng",
+                  status: "error",
+                  latencyMs: 1,
+                  error: "Previous provider error",
+                },
+          );
+        }
       }
       await fixture.settle();
       expect(fixture.element.textContent).toContain(
         outcome === "success" ? "Search succeeded" : "Search failed",
       );
-      const query = fixture.element.querySelector<HTMLInputElement>(
-        'input[aria-label="Search query"]',
-      )!;
+      expect(query.disabled).toBe(false);
+      expect(
+        fixture.request.mock.calls.find(([method]) => method === "webSearch.test")?.[1],
+      ).toMatchObject({ query: "Query A" });
+      if (outcome === "success") {
+        expect(fixture.element.textContent).toContain("Previous answer");
+      }
       query.value = "Query B";
       query.dispatchEvent(new Event("input", { bubbles: true }));
       await fixture.element.updateComplete;

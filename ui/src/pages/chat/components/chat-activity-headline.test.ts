@@ -60,31 +60,31 @@ describe("activity headline cadence", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it("removes the same operation's ellipsis immediately without restarting its dwell", () => {
-    update(operation("first"));
-    vi.advanceTimersByTime(2_000);
-    update(operation("first", "completed"));
-    expect(label()).toBe("Read first");
-    update(operation("next"));
-    vi.advanceTimersByTime(999);
-    expect(label()).toBe("Read first");
-    vi.advanceTimersByTime(1);
-    expect(label()).toBe("Read next…");
+  it("keeps outcome labels with a held purpose and drops them beside the count", () => {
+    const draw = (activity: ActivityHeadline) =>
+      render(
+        html`<button>
+          ${activityHeadline("session:run", activity, "2 reads · 1 unknown", undefined, undefined, [
+            "1 unknown",
+          ])}
+        </button>`,
+        container,
+      );
+    const outcomes = () =>
+      [...container.querySelectorAll(".chat-activity-group__outcome")].map(
+        (node) => node.textContent,
+      );
+    draw(operation("first"));
+    vi.advanceTimersByTime(100);
+    // A step with no title waits its turn; the purpose still on show keeps its label.
+    draw({ ...operation("untitled"), title: "" });
+    expect(label()).toBe("Read first…");
+    expect(outcomes()).toEqual(["1 unknown"]);
+    vi.advanceTimersByTime(2_900);
+    // The count line carries the outcome itself.
+    expect(label()).toBe("2 reads · 1 unknown");
+    expect(outcomes()).toEqual([]);
   });
-
-  it.each(["failed", "blocked"] as const)(
-    "shows %s immediately and discards pending copy",
-    (status) => {
-      update(operation("first"));
-      vi.advanceTimersByTime(100);
-      update(operation("pending"));
-      update(operation("urgent", status));
-      expect(label()).toBe("Read urgent");
-      expect(vi.getTimerCount()).toBe(0);
-      vi.advanceTimersByTime(3_000);
-      expect(label()).toBe("Read urgent");
-    },
-  );
 
   it("clears to the summary immediately and cannot resurrect a pending headline", () => {
     update(operation("first"));
@@ -96,16 +96,6 @@ describe("activity headline cadence", () => {
     vi.advanceTimersByTime(3_000);
     expect(label()).toBe("2 reads");
     update(operation("fresh"));
-    expect(label()).toBe("Read fresh…");
-  });
-
-  it("bypasses dwell on a scope change and cancels the previous scope's callback", () => {
-    update(operation("first"));
-    update(operation("stale"));
-    update(operation("fresh"), "other-session:other-run");
-    expect(label()).toBe("Read fresh…");
-    expect(vi.getTimerCount()).toBe(0);
-    vi.advanceTimersByTime(3_000);
     expect(label()).toBe("Read fresh…");
   });
 
@@ -160,6 +150,84 @@ function prepared(key: string, status: AgentActivityItem["status"] = "running"):
     status,
   };
 }
+
+it.each([
+  {
+    name: "exec",
+    args: { title: "Update investigation progress", code: "return null" },
+    phase: "start",
+    expected: "Update investigation progress…",
+  },
+  {
+    name: "web_search",
+    args: { query: "new plugin APIs" },
+    phase: "start",
+    expected: 'for "new plugin APIs"…',
+  },
+  {
+    name: "lookup_record",
+    args: { query: "release notes" },
+    phase: "start",
+    expected: "release notes…",
+  },
+  {
+    name: "exec",
+    args: { title: "Inspect source", code: "return null" },
+    phase: "result",
+    status: "unknown",
+    expected: "Outcome unknown",
+  },
+  // A step with no title of its own leaves the row reading as its count.
+  { name: "session_status", phase: "result", isError: false, expected: "1 other operation" },
+] as const)("renders accessible $name activity: $expected", ({ expected, ...params }) => {
+  const activity = projectAgentToolActivity({ toolCallId: "purpose", ...params });
+  render(renderActivityGroup([group("current", [activity])], liveOptions), container);
+  const summary = container.querySelector<HTMLButtonElement>(".chat-activity-group__summary")!;
+  const icon = summary.querySelector('.chat-activity-group__icon[role="img"]');
+  expect(label()).toBe(expected);
+  expect(icon?.getAttribute("aria-label")).toBe(params.name);
+  expect(icon?.getAttribute("title")).toBe(params.name);
+  expect(icon?.querySelector("svg")).not.toBeNull();
+  if (params.phase === "start") {
+    expect(summary.textContent?.trim()).toBe(expected);
+  }
+});
+
+it("keeps the icon paired with the held purpose and restores the aggregate icon", () => {
+  const exec = projectAgentToolActivity({
+    toolCallId: "exec",
+    name: "exec",
+    args: { title: "Inspect source", code: "return null" },
+    phase: "start",
+  });
+  const search = projectAgentToolActivity({
+    toolCallId: "search",
+    name: "web_search",
+    args: { query: "API docs" },
+    phase: "start",
+  });
+  const draw = (items: AgentActivityItem[], runActive = true) =>
+    render(
+      renderActivityGroup([group("current", items)], { ...liveOptions, runActive }),
+      container,
+    );
+  const icon = () => container.querySelector(".chat-activity-group__icon");
+  draw([exec]);
+  expect(icon()?.getAttribute("aria-label")).toBe("exec");
+  const execSvg = icon()?.innerHTML;
+  vi.advanceTimersByTime(100);
+  draw([exec, search]);
+  expect(label()).toBe("Inspect source…");
+  expect(icon()?.getAttribute("aria-label")).toBe("exec");
+  vi.advanceTimersByTime(2_900);
+  expect(label()).toBe('for "API docs"…');
+  expect(icon()?.getAttribute("aria-label")).toBe("web_search");
+  expect(icon()?.innerHTML).not.toBe(execSvg);
+  draw([exec, search], false);
+  expect(label()).toBe("1 command · 1 search");
+  expect(icon()?.getAttribute("aria-hidden")).toBe("true");
+  expect(icon()?.getAttribute("aria-label")).toBeNull();
+});
 
 const liveOptions = {
   showToolCalls: true,
@@ -332,87 +400,13 @@ it("uses the newest group's live card label without inheriting an earlier failur
   expect(activitySummary.getAttribute("aria-label")).toBeNull();
   expect(activitySummary.classList.contains("chat-activity-group__summary--error")).toBe(false);
   expect(container.querySelector(".chat-activity-group__label")?.textContent).toBe(
-    "Edit in /repo/src/a.ts…",
+    "in /repo/src/a.ts…",
   );
 
   render(renderActivityGroup(groups, { ...opts, runActive: false }), container);
   expect(activitySummary.textContent?.replace(/\s+/gu, " ").trim()).toBe(
     "1 read · 1 edit 1 failed",
   );
-});
-
-it("uses the prepared running mutation title in an active group summary", () => {
-  const runningGroup = createToolGroup(
-    "running-tool-group",
-    [
-      createMessageEntry("finished-read", {
-        role: "toolResult",
-        runId: "active-mutation",
-        toolCallId: "call-read",
-        toolName: "read",
-        activity: [
-          projectAgentToolActivity({
-            toolCallId: "call-read",
-            name: "read",
-            phase: "result",
-            isError: false,
-          }),
-        ],
-        content: "done",
-      }),
-      createMessageEntry("running-edit", {
-        role: "assistant",
-        runId: "active-mutation",
-        activity: [
-          projectAgentToolActivity({
-            toolCallId: "call-edit",
-            name: "edit",
-            phase: "start",
-            args: { path: "/repo/src/a.ts" },
-          }),
-        ],
-        __openclawToolStreamLive: true,
-        __openclawToolStreamResultReceived: false,
-        content: [
-          {
-            type: "tool_use",
-            id: "call-edit",
-            name: "edit",
-            input: { path: "/repo/src/a.ts", oldText: "old", newText: "new" },
-          },
-        ],
-      }),
-    ],
-    { timestamp: 1000, isStreaming: true },
-  );
-
-  render(
-    renderActivityGroup([runningGroup], {
-      runActive: true,
-      activityRunId: "active-mutation",
-      showReasoning: false,
-    }),
-    container,
-  );
-
-  expect(container.querySelector(".chat-activity-group__label")?.textContent).toBe(
-    "Edit in /repo/src/a.ts…",
-  );
-});
-
-it("refreshes a held operation's status when completion and the next start arrive together", () => {
-  render(renderActivityGroup([group("current", [prepared("first")])], liveOptions), container);
-  vi.advanceTimersByTime(200);
-  render(
-    renderActivityGroup(
-      [group("current", [prepared("first", "completed"), prepared("next")])],
-      liveOptions,
-    ),
-    container,
-  );
-  expect(label()).toBe("Read first");
-  vi.advanceTimersByTime(2_800);
-  expect(label()).toBe("Read next…");
 });
 
 it.each(["failed", "blocked"] as const)(
@@ -452,17 +446,67 @@ it.each(["failed", "blocked"] as const)(
   },
 );
 
-it("uses the latest status when start and result projections coexist", () => {
-  render(renderActivityGroup([group("current", [prepared("first")])], liveOptions), container);
-  vi.advanceTimersByTime(200);
-  const settled = [prepared("first"), prepared("first", "completed")];
-  render(renderActivityGroup([group("current", settled)], liveOptions), container);
-  expect(label()).toBe("Read first");
-  render(
-    renderActivityGroup([group("current", [...settled, prepared("next")])], liveOptions),
-    container,
+it("keeps the live row for a step with a routine nested call until the run settles", () => {
+  const step = (status: AgentActivityItem["status"]) =>
+    createToolGroup("current", [
+      createMessageEntry(
+        "step",
+        createAssistantMessage(
+          [
+            createToolCall(
+              "parent",
+              "exec",
+              { title: "Build the snake game", code: "// Build game" },
+              { runId: "active-run" },
+            ),
+            createToolCall(
+              "child",
+              "progress_card",
+              { plan: [] },
+              { runId: "active-run", parentToolCallId: "parent" },
+            ),
+          ],
+          {
+            runId: "active-run",
+            activity: [
+              { ...prepared("parent", status), name: "exec", title: "Build the snake game" },
+              { ...prepared("child", "completed"), hideFromChannelProgress: true },
+            ],
+          },
+        ),
+      ),
+    ]);
+  render(renderActivityGroup([step("running")], liveOptions), container);
+  expect(label()).toBe("Build the snake game…");
+  // Finishing mid-run keeps the live row; only settlement swaps in the step's own row.
+  render(renderActivityGroup([step("completed")], liveOptions), container);
+  expect(label()).toBe("Build the snake game");
+  render(renderActivityGroup([step("completed")], { ...liveOptions, runActive: false }), container);
+  expect(container.querySelector(".chat-activity-group__summary")).toBeNull();
+  expect(container.querySelector(".chat-tool-row__title")?.textContent).toBe(
+    "Build the snake game",
   );
-  expect(label()).toBe("Read first");
-  vi.advanceTimersByTime(2_800);
-  expect(label()).toBe("Read next…");
 });
+
+it.each([false, true])(
+  "refreshes a held operation when completion and the next start coexist (duplicate start: %s)",
+  (duplicateStart) => {
+    render(renderActivityGroup([group("current", [prepared("first")])], liveOptions), container);
+    vi.advanceTimersByTime(200);
+    const settled = [
+      ...(duplicateStart ? [prepared("first")] : []),
+      prepared("first", "completed"),
+    ];
+    if (duplicateStart) {
+      render(renderActivityGroup([group("current", settled)], liveOptions), container);
+      expect(label()).toBe("Read first");
+    }
+    render(
+      renderActivityGroup([group("current", [...settled, prepared("next")])], liveOptions),
+      container,
+    );
+    expect(label()).toBe("Read first");
+    vi.advanceTimersByTime(2_800);
+    expect(label()).toBe("Read next…");
+  },
+);

@@ -99,41 +99,33 @@ describe("composer camera capture", () => {
     vi.clearAllMocks();
   });
 
-  it("requests only the camera on demand and stops it on modal dismissal", async () => {
-    const capture = media();
-    getUserMedia.mockResolvedValue(capture.stream);
-    expect(getUserMedia).not.toHaveBeenCalled();
-    expect(component.renderRoot.querySelector("openclaw-modal-dialog")).toBeNull();
-    component.show();
-    expect(getUserMedia).toHaveBeenCalledWith({
-      audio: false,
-      video: { facingMode: { ideal: "environment" } },
-    });
-    component.show();
-    expect(getUserMedia).toHaveBeenCalledOnce();
-    await settle();
-    const video = component.renderRoot.querySelector("video");
-    expect(video?.srcObject).toBe(capture.stream);
-    expect(video?.hasAttribute("playsinline")).toBe(true);
-    expect(video?.hasAttribute("muted")).toBe(true);
-    expect(button("Capture").disabled).toBe(false);
-    component.renderRoot
-      .querySelector("openclaw-modal-dialog")
-      ?.dispatchEvent(new CustomEvent("modal-cancel"));
-    await settle();
-    expect(capture.track.stop).toHaveBeenCalledOnce();
-    expect(component.renderRoot.querySelector("openclaw-modal-dialog")).toBeNull();
-  });
-
-  it.each(["abort", "retarget", "disable", "disconnect", "pagehide"])(
-    "releases an active camera on %s",
+  it.each(["modal-cancel", "abort", "retarget", "disable", "disconnect", "pagehide"])(
+    "requests the camera on demand and releases it on %s",
     async (action) => {
       const scope = new AbortController();
       component.readSignal = scope.signal;
       const capture = media();
       getUserMedia.mockResolvedValue(capture.stream);
+      expect(getUserMedia).not.toHaveBeenCalled();
+      expect(component.renderRoot.querySelector("openclaw-modal-dialog")).toBeNull();
       component.show();
+      expect(getUserMedia).toHaveBeenCalledWith({
+        audio: false,
+        video: { facingMode: { ideal: "environment" } },
+      });
+      component.show();
+      expect(getUserMedia).toHaveBeenCalledOnce();
       await settle();
+      const video = component.renderRoot.querySelector("video");
+      expect(video?.srcObject).toBe(capture.stream);
+      expect(video?.hasAttribute("playsinline")).toBe(true);
+      expect(video?.hasAttribute("muted")).toBe(true);
+      expect(button("Capture").disabled).toBe(false);
+      if (action === "modal-cancel") {
+        component.renderRoot
+          .querySelector("openclaw-modal-dialog")
+          ?.dispatchEvent(new CustomEvent("modal-cancel"));
+      }
       if (action === "abort") {
         scope.abort();
       }
@@ -174,20 +166,29 @@ describe("composer camera capture", () => {
   });
 
   it.each([
-    ["NotAllowedError", "Camera access was denied"],
-    ["NotFoundError", "No camera was found"],
-    ["NotReadableError", "The camera could not start"],
-  ])("reports %s and only uploads on explicit selection", async (name, copy) => {
+    ["NotAllowedError", "Camera access was denied", "Upload photo"],
+    ["NotFoundError", "No camera was found", "Upload photo"],
+    ["NotReadableError", "The camera could not start", "Upload photo"],
+    ["NotAllowedError", "Camera access was denied", "Use device camera"],
+    ["SecurityError", "Camera access was denied", "Use device camera"],
+    ["NotReadableError", "The camera could not start", "Use device camera"],
+  ])("reports %s and offers explicit recovery through %s (%s)", async (name, copy, action) => {
     getUserMedia.mockRejectedValue(new DOMException("camera error", name));
     component.show();
     await settle();
     expect(component.renderRoot.querySelector("[role=alert]")?.textContent).toContain(copy);
     expect(component.onUpload).not.toHaveBeenCalled();
-    expect(component.renderRoot.textContent).not.toContain("Use device camera");
-    const onUpload = component.onUpload;
-    button("Upload photo").click();
+    expect(component.renderRoot.textContent).toContain("Use device camera");
+    expect(component.onNativeCapture).not.toHaveBeenCalled();
+    expect(button("Try again").disabled).toBe(false);
+    const destination = action === "Upload photo" ? component.onUpload : component.onNativeCapture;
+    button(action).click();
     await settle();
-    expect(onUpload).toHaveBeenCalledOnce();
+    if (action === "Upload photo") {
+      expect(destination).toHaveBeenCalledOnce();
+    } else {
+      expect(destination).toHaveBeenCalledExactlyOnceWith(component);
+    }
     expect(component.renderRoot.querySelector("openclaw-modal-dialog")).toBeNull();
   });
 

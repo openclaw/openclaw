@@ -3,13 +3,13 @@ import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
 import { isSessionRouteId, type RouteId } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { i18n } from "../i18n/index.ts";
-import type { createStoredChatOutboxReader } from "../lib/chat/outbox-store-projection.ts";
+import type { SidebarOutboxSummary } from "../lib/chat/outbox-store-projection.ts";
 import type { SidebarSessionsGrouping } from "../lib/sessions/grouping.ts";
-import { projectSidebarHomeSession } from "./app-sidebar-agent-session-rows.ts";
 import {
-  projectSidebarSessionCatalogs,
-  type SidebarSessionCatalog,
-} from "./app-sidebar-session-catalogs.ts";
+  projectSidebarHomeSession,
+  type SidebarHomeSession,
+} from "./app-sidebar-agent-session-rows.ts";
+import type { SidebarSessionCatalog } from "./app-sidebar-session-catalogs.ts";
 import { findActiveSidebarLineageRow } from "./app-sidebar-session-lookup.ts";
 import {
   buildSidebarSessionNavigationState,
@@ -19,6 +19,7 @@ import type {
   SidebarSessionProjection,
   SidebarVisibleSections,
 } from "./app-sidebar-session-projection.ts";
+import { projectSidebarSnoozeCatalogs } from "./app-sidebar-session-snooze-visibility.ts";
 import type {
   SidebarEmptyGroupsMode,
   SidebarRecentSession,
@@ -52,9 +53,7 @@ export type SidebarProjectionHost = {
   readonly sessionOwnerFilterId: string | null;
   readonly sessionOwnerFilterActive: boolean;
   readonly sessionInvolvingMeFilterActive: boolean;
-  readonly storedOutboxes:
-    | ReturnType<ReturnType<typeof createStoredChatOutboxReader>["read"]>
-    | undefined;
+  readonly storedOutboxes: SidebarOutboxSummary | undefined;
   resolveSessionAttention: Parameters<typeof projectSidebarHomeSession>[0]["resolveAttention"];
   getRouteSessionKey(): string;
   getSessionNavigationState(): SidebarSessionNavigationState;
@@ -235,10 +234,13 @@ export function memoizedSidebarCatalogs(
   memo: SidebarProjectionMemo<SidebarSessionCatalog[]>,
   host: SidebarProjectionHost,
   ownerId: string | null,
-  liveRows: () => GatewaySessionRow[],
 ) {
   return memo.read(
     () => [
+      host.sessionDataContext,
+      host.sessionDataContext?.sessions.revision,
+      host.expandedAgentId(),
+      host.resolveSessionAttention,
       host.sessionData.sessionCatalogs,
       host.sessionData.pendingCatalogArchives,
       host.hiddenSessionCatalogIds,
@@ -247,7 +249,7 @@ export function memoizedSidebarCatalogs(
       host.sessionData.sessionsResult,
       host.sessionData.sessionResultsByAgent,
     ],
-    () => projectSidebarSessionCatalogs(host.visibleSessionCatalogs(), ownerId, liveRows()),
+    () => projectSidebarSnoozeCatalogs(host, ownerId),
   );
 }
 
@@ -274,7 +276,7 @@ export function sidebarRowsInputs(
 }
 
 export function memoizedSidebarHome(
-  memo: SidebarProjectionMemo<SidebarRecentSession>,
+  memo: SidebarProjectionMemo<SidebarHomeSession>,
   host: SidebarProjectionHost,
   row: GatewaySessionRow,
   agentId: string,
@@ -287,6 +289,9 @@ export function memoizedSidebarHome(
       agentId,
       result,
       navigationState,
+      host.sessionOwnerFilterId,
+      host.sessionInvolvingMeFilterActive,
+      host.sessionDataContext?.gateway.snapshot.selfUser,
       host.sessionData.loadedChildSessionKeys,
       host.sessionData.childSessionErrorsByParent,
     ],

@@ -2,6 +2,11 @@
 const currentModuleUrl = import.meta.url;
 
 export const cronOwnerHardeningEntrypoints = {
+  receiptAuthorityFailure: {
+    currentModuleUrl,
+    sourceWorkerName: "store/receipt-authority-failure-child.test-support",
+    distWorkerPath: "cron/store/receipt-authority-failure-child.test-support.js",
+  },
   schedulerClock: {
     currentModuleUrl,
     sourceWorkerName: "../test-utils/gateway-scheduler-clock",

@@ -14,14 +14,10 @@ import type {
 } from "./chrome-mcp-contracts.js";
 import { redactChromeMcpProfileLabelForDiagnostic } from "./chrome-mcp-diagnostics.js";
 import { buildChromeMcpSessionCacheKey } from "./chrome-mcp-options.js";
-import {
-  cleanupTarget,
-  closeChromeMcpSessionHandle,
-  setChromeMcpProcessCleanupDepsForTest,
-} from "./chrome-mcp-process.js";
+import { cleanupTarget, closeChromeMcpSessionHandle } from "./chrome-mcp-process.js";
 import { BrowserProfileUnavailableError } from "./errors.js";
 
-export { setChromeMcpProcessCleanupDepsForTest, setChromeMcpSessionFactoryForTest };
+export { setChromeMcpSessionFactoryForTest };
 
 const owners = new Map<string, ChromeMcpSessionOwner>();
 
@@ -394,5 +390,4 @@ export async function closeChromeMcpSession(profileName: string): Promise<boolea
 export async function resetChromeMcpSessionsForTest(): Promise<void> {
   setChromeMcpSessionFactoryForTest(null);
   await stopOwners();
-  setChromeMcpProcessCleanupDepsForTest(null);
 }

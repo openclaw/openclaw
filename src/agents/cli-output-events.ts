@@ -18,6 +18,8 @@ import type {
 } from "./cli-output-contracts.js";
 import {
   isClaudeSubagentRecord,
+  isClaudeToolResultBlockType,
+  isClaudeToolUseBlockType,
   isGeminiStreamJsonDialect,
   supportsCliJsonlToolEvents,
 } from "./cli-output-records.js";
@@ -36,19 +38,14 @@ type PendingToolUse = {
   blockInput?: Record<string, unknown>;
 };
 
-type ToolUseTracker = {
-  pendingByIndex: Map<number, PendingToolUse>;
-  nameById: Map<string, string>;
-  startedIds: Set<string>;
-  resultDeliveredIds: Set<string>;
-};
+type ToolUseTracker = ReturnType<typeof createToolUseTracker>;
 
-export function createToolUseTracker(): ToolUseTracker {
+export function createToolUseTracker() {
   return {
-    pendingByIndex: new Map(),
-    nameById: new Map(),
-    startedIds: new Set(),
-    resultDeliveredIds: new Set(),
+    pendingByIndex: new Map<number, PendingToolUse>(),
+    nameById: new Map<string, string>(),
+    startedIds: new Set<string>(),
+    resultDeliveredIds: new Set<string>(),
   };
 }
 
@@ -117,12 +114,14 @@ export function projectCliBackendEvent(params: {
     return;
   }
   state.sawCustomJsonlEvent = true;
-  if (event.kind === "sessionId") {
-    const sessionId = event.sessionId.trim();
+  const observeSessionId = (sessionId: string | undefined) => {
     if (sessionId && sessionId !== state.sessionId) {
       state.sessionId = sessionId;
       params.onSessionId?.(sessionId);
     }
+  };
+  if (event.kind === "sessionId") {
+    observeSessionId(event.sessionId.trim());
     if (state.output) {
       state.output = { ...state.output, sessionId: state.sessionId };
     }
@@ -177,11 +176,7 @@ export function projectCliBackendEvent(params: {
     );
     return;
   }
-  const normalizedSessionId = event.sessionId?.trim();
-  if (normalizedSessionId && normalizedSessionId !== state.sessionId) {
-    state.sessionId = normalizedSessionId;
-    params.onSessionId?.(normalizedSessionId);
-  }
+  observeSessionId(event.sessionId?.trim());
   if (event.usage) {
     state.usage = event.usage;
     params.onUsage?.(event.usage, true);
@@ -228,12 +223,8 @@ export function projectCliTaggedReasoning(params: {
   return text;
 }
 
-export function isClaudeToolUseBlockType(type: unknown): type is CliToolUseStartDelta["kind"] {
-  return type === "tool_use" || type === "server_tool_use" || type === "mcp_tool_use";
-}
-
 function isClaudeAssistantToolResultBlockType(type: unknown): boolean {
-  return typeof type === "string" && type.endsWith("_tool_result") && type !== "tool_result";
+  return isClaudeToolResultBlockType(type) && type !== "tool_result";
 }
 
 function isClaudeToolResultError(content: unknown): boolean {
@@ -409,17 +400,10 @@ function resetThinkingTrackerForMessage(
 }
 
 function beginClaudeContentBlock(tracker: ThinkingTracker, index: unknown): void {
-  if (typeof index === "number") {
-    tracker.currentSyntheticBlockIndex = index;
-    tracker.nextSyntheticBlockIndex = Math.max(tracker.nextSyntheticBlockIndex, index + 1);
-    return;
-  }
-  if (index !== undefined) {
-    tracker.currentSyntheticBlockIndex = undefined;
-    return;
-  }
-  tracker.currentSyntheticBlockIndex = tracker.nextSyntheticBlockIndex;
-  tracker.nextSyntheticBlockIndex += 1;
+  tracker.currentSyntheticBlockIndex =
+    index === undefined
+      ? tracker.nextSyntheticBlockIndex++
+      : (resolveClaudeContentBlockIndex(tracker, index) ?? undefined);
 }
 
 function resolveClaudeContentBlockIndex(tracker: ThinkingTracker, index: unknown): number | null {

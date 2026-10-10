@@ -4,6 +4,7 @@ import type { DatabasePathIdentity } from "../infra/sqlite-worker-identity.js";
 
 export type OpenClawStateSchemaReadAdmission = (database: DatabaseSync) => (() => void) | undefined;
 
+// v20 fences possibly delivered cron completions across restart recovery.
 // v19 preserves original channel-owner authorization across recovery.
 // v18 binds shared GitHub publication to its original requesting authority.
 // v17 records one-use prepared worker capacity and node workspace ownership.
@@ -19,7 +20,7 @@ export type OpenClawStateSchemaReadAdmission = (database: DatabaseSync) => (() =
 // v7 retires the inert shared commitments table.
 // v6 makes every committed shared-state table part of the canonical runtime schema.
 // v5 records durable cloud-worker result refs on pending workspace fences.
-export const OPENCLAW_STATE_SCHEMA_VERSION = 19;
+export const OPENCLAW_STATE_SCHEMA_VERSION = 20;
 export const OPENCLAW_STATE_STRICT_SCHEMA_VERSION = 3;
 // Absence records lost history; only Doctor may reconstruct these on existing state.
 export const DOCTOR_OWNED_STATE_TABLES = ["agent_deletion_journal"] as const;
@@ -91,10 +92,7 @@ export const LAZY_ADDITIVE_STATE_TABLES = [
   "device_pair_setup_completions",
   "github_publication_requests",
   "device_pairing_join_codes",
-  "skill_workshop_proposal_events",
-  "skill_workshop_collection_reviews",
-  "skill_workshop_proposal_rollbacks",
-  "skill_workshop_proposals",
+  "skill_workshop_changes",
   "worker_environment_ssh_fallback_ports",
   "worker_session_placement_moves",
 ] as const;
@@ -104,7 +102,7 @@ export const LAZY_ADDITIVE_STATE_INDEXES = [
   "idx_cron_run_receipts_job_history",
   "idx_github_publication_requests_pending",
   "secret_store_entries_live_idx",
-  "idx_skill_workshop_collection_reviews_owner_time",
+  "idx_skill_workshop_changes_agent_time",
 ] as const;
 /** Maximum time one synchronous SQLite call may wait for a lock. */
 export const OPENCLAW_SQLITE_BUSY_TIMEOUT_MS = 5_000;
@@ -140,24 +138,29 @@ export type OpenClawStateDatabaseOptions = {
   /** Additional known agent stores can only make first-use classification more conservative. */
   initializationAgentPaths?: readonly string[];
 };
+export const STATE_SCHEMA_MIGRATION_DESCRIPTIONS = {
+  "agent-databases-composite-primary-key": "agent database registry primary key → agent_id,path",
+  "audit-events-v2": "audit event ledger → versioned message lifecycle schema",
+  "commitments-retirement-v7": "retired commitments storage → discarded rows, table, and indexes",
+  "worker-placement-execution-mode-v8": "cloud worker placements → execution-mode claims",
+  "agent-databases-relative-paths-v9": "agent database registry paths → state-relative storage",
+  "state-table-retirement-v10": "retired shared-state tables → removed tables and indexes",
+  "state-table-retirement-v11": "retired skill curator tables → removed tables and indexes",
+  "singleton-state-foldin-v12": "singleton state tables → shared configuration state",
+  "state-consolidation-v13": "cron jobs and subagent runs → canonical JSON storage",
+  "creator-namespace-v14": "historical cron creators → unknown source attribution",
+  "conversation-binding-targets-v15":
+    "conversation bindings → exact target keys without agent/session projections",
+  "prepared-worker-ownership-v17":
+    "prepared workers → one-use capacity and fixed workspace ownership",
+  "github-publication-requester-authority-v18":
+    "GitHub publication receipts → original requesting authority",
+  "operator-approvals-system-agent": "operator approvals → OpenClaw system changes",
+  "session-watch-cursor-provenance-v4": "session watch cursors → provenance column",
+  "strict-tables-v3": "tables → SQLite STRICT typing",
+} as const;
+
 export type OpenClawStateDatabaseSchemaMigration = {
-  kind:
-    | "agent-databases-composite-primary-key"
-    | "audit-events-v2"
-    | "commitments-retirement-v7"
-    | "worker-placement-execution-mode-v8"
-    | "agent-databases-relative-paths-v9"
-    | "state-table-retirement-v10"
-    | "state-table-retirement-v11"
-    | "singleton-state-foldin-v12"
-    | "state-consolidation-v13"
-    | "creator-namespace-v14"
-    | "conversation-binding-targets-v15"
-    | "skill-workshop-directory-ownership-v16"
-    | "prepared-worker-ownership-v17"
-    | "github-publication-requester-authority-v18"
-    | "operator-approvals-system-agent"
-    | "session-watch-cursor-provenance-v4"
-    | "strict-tables-v3";
+  kind: keyof typeof STATE_SCHEMA_MIGRATION_DESCRIPTIONS;
   path: string;
 };

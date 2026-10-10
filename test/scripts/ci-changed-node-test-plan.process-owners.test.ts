@@ -2,14 +2,11 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { resolveTestGitCommits } from "../../.github/actions/git-owner/test-prerequisites.mjs";
 import { resolveShardPlans } from "../../scripts/ci-run-node-test-shard.mts";
-import {
-  createChangedNodeTestShards as createChangedNodeTestShardsWithSmoke,
-  resolveChangedNodeTestTargets,
-} from "../../scripts/lib/ci-changed-node-test-plan.mts";
 import { encodeNodeTestGroups } from "../../scripts/lib/ci-node-test-groups-codec.mts";
 import {
   createNodeTestShardBundles,
   createSelectedNodeTestShardBundles,
+  resolveCanonicalNodeTestConfig,
 } from "../../scripts/lib/ci-node-test-plan.mts";
 import { buildVitestRunPlans } from "../../scripts/test-projects.test-support.mts";
 import {
@@ -19,44 +16,23 @@ import {
 } from "./ci-changed-node-test-plan.test-support.js";
 
 describe("CI changed Node test plan", () => {
-  it("keeps system-runtime process proofs serial beside SQLite worker coverage", () => {
-    const changedPaths = [
-      "src/infra/sqlite-worker-store.ts",
-      "src/state/openclaw-agent-execution.ts",
-    ];
-    const selectedTestTargets = resolveChangedNodeTestTargets(changedPaths, {
-      includePrExemptRuntimeTests: false,
-      includeReleaseOnlyRuntimeTests: false,
-    });
-    const shards = expectDefined(
-      createChangedNodeTestShardsWithSmoke(changedPaths, {
-        compactNodeJobCap: 130,
+  it.each(["src/tui/tui-pty-local-test-support.test.ts"])(
+    "keeps the TUI support unit owner without a fallback for %s",
+    (target) => {
+      const reasons: string[] = [];
+      const shards = createChangedNodeTestShards([target], {
         dedicatedBuildArtifacts: false,
-        dedicatedMaxLinesRatchet: true,
-        dedicatedNativeChecks: { android: false, ios: false, macos: false },
-        dedicatedUiE2e: true,
-        dedicatedUiTests: true,
-        includePrExemptRuntimeTests: false,
-        includeReleaseOnlyRuntimeTests: false,
-        runnerBackend: "hybrid",
-        selectedTestTargets,
-      }),
-      "changed process and storage plan",
-    );
-    const systemRuntime = expectDefined(
-      shards
-        .flatMap((job) => job.groups ?? [])
-        .find((group) => group.shard_name.startsWith("core-runtime-infra-system-runtime-hosted-")),
-      "system-runtime process owner",
-    );
-    const job = expectDefined(
-      shards.find((candidate) => candidate.groups?.includes(systemRuntime)),
-      "system-runtime process job",
-    );
-
-    expect(systemRuntime.env?.OPENCLAW_VITEST_MAX_WORKERS).toBe("2");
-    expect(job.planConcurrency).toBe(1);
-  });
+        onFallback: (reason) => reasons.push(reason),
+      });
+      expect(reasons).toEqual([]);
+      expect(shards).not.toBeNull();
+      expect(selectedFiles(shards).filter((file) => file === target)).toEqual([target]);
+      const config = "test/vitest/vitest.tui.config.ts";
+      expect(buildVitestRunPlans([target])[0]?.config).toBe(config);
+      expect(resolveCanonicalNodeTestConfig(target, config)).toBe(config);
+      expect(shards?.some((shard) => shard.requiresDist)).toBe(false);
+    },
+  );
 
   it.each(["blacksmith", "github", "hybrid"])(
     "retains the complete paired tooling descriptor and job metadata (%s)",
@@ -222,7 +198,6 @@ describe("CI changed Node test plan", () => {
     expect(selectedFiles(shards)).toEqual(
       expect.arrayContaining([
         "test/vitest-projects-config.test.ts",
-        "test/vitest-scoped-config.test.ts",
         "test/scripts/ci-node-test-plan.commands.test.ts",
       ]),
     );

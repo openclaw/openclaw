@@ -1,4 +1,10 @@
 import { MEETING_AUDIO_BRIDGE_SOURCE } from "./audio-bridge-source.js";
+import {
+  createMeetingBrowserAudioCaptureSource,
+  type MeetingBrowserAudioCaptureRequest,
+} from "./browser-audio-capture-source.js";
+import { createMeetingStatusCallSource } from "./status-call-source.js";
+import { createMeetingStatusPreludeSource } from "./status-prejoin-source.js";
 
 type MeetingPageScriptGlobals = {
   audioOutputs: string;
@@ -6,6 +12,90 @@ type MeetingPageScriptGlobals = {
   captions: string;
   meeting: string;
 };
+
+type MeetingPageIdentity = { expectedIdentity?: string; pageIdentitySource: string };
+type MeetingStatusPreludeParams = Parameters<typeof createMeetingStatusPreludeSource>[0];
+type MeetingPageStatusParams = Omit<
+  MeetingStatusPreludeParams,
+  keyof MeetingPageIdentity | "selectors" | "toggleStateFunction"
+> & { meetingUrl: string };
+type MeetingPageLeaveParams = {
+  leaveInitiated: boolean;
+  meetingSessionId: string;
+  meetingUrl: string;
+};
+
+export function createMeetingPageScripts(options: {
+  platform: Parameters<typeof createMeetingStatusPreludeSource>[1]["platform"] &
+    Parameters<typeof createMeetingStatusCallSource>[0]["platform"];
+  normalizeUrl(meetingUrl: string): string | undefined;
+  pageIdentitySource(expectedIdentity?: string): string;
+  selectors: Readonly<Record<string, string | readonly string[]>>;
+  toggleStateFunction(): string;
+  statusPrelude: Omit<Parameters<typeof createMeetingStatusPreludeSource>[1], "platform">;
+  statusCall: Omit<Parameters<typeof createMeetingStatusCallSource>[0], "platform">;
+  audioOwnershipSource?(identity: MeetingPageIdentity): string;
+  leave: Pick<
+    Parameters<typeof createMeetingLeaveSource>[0],
+    | "controlSource"
+    | "departedMarkerSource"
+    | "documentSetupSource"
+    | "meetingStateSource"
+    | "sessionMatchSource"
+  >;
+}) {
+  const identity = (meetingUrl: string): MeetingPageIdentity => {
+    const expectedIdentity = options.normalizeUrl(meetingUrl);
+    return { expectedIdentity, pageIdentitySource: options.pageIdentitySource(expectedIdentity) };
+  };
+  return {
+    audioCapture: (params: MeetingBrowserAudioCaptureRequest): string => {
+      const page = identity(params.meetingUrl);
+      return createMeetingBrowserAudioCaptureSource({
+        ...params,
+        audioOutputsGlobal: options.platform.globals.audioOutputs,
+        ownershipSource:
+          options.audioOwnershipSource?.(page) ??
+          `
+      ${page.pageIdentitySource}
+      const expectedIdentity = ${JSON.stringify(page.expectedIdentity)};
+      const state = ${pageGlobalSource(options.platform.globals.meeting)};
+      return Boolean(expectedIdentity && state?.sessionId === sessionId &&
+        state.identity === expectedIdentity && !state.leavePending &&
+        (meetingIdentity(location.href) === expectedIdentity ||
+          (state.inCallUrl === location.href && state.inCallControl?.isConnected)));
+    `,
+      });
+    },
+    status: (params: MeetingPageStatusParams): string =>
+      createMeetingStatusPreludeSource(
+        {
+          ...params,
+          ...identity(params.meetingUrl),
+          selectors: JSON.stringify(options.selectors),
+          toggleStateFunction: options.toggleStateFunction(),
+        },
+        { ...options.statusPrelude, platform: options.platform },
+      ) + createMeetingStatusCallSource({ ...options.statusCall, platform: options.platform }),
+    transcript: (meetingUrl: string, meetingSessionId: string, finalize: boolean): string =>
+      createMeetingTranscriptSource({
+        ...identity(meetingUrl),
+        finalize,
+        globals: options.platform.globals,
+        meetingSessionId,
+        platformDisplayName: options.platform.displayName,
+      }),
+    leave: (params: MeetingPageLeaveParams): string =>
+      createMeetingLeaveSource({
+        ...options.leave,
+        ...identity(params.meetingUrl),
+        leaveInitiated: params.leaveInitiated,
+        meetingSessionId: params.meetingSessionId,
+        platform: options.platform,
+        selectors: JSON.stringify(options.selectors),
+      }),
+  };
+}
 
 function pageGlobalSource(name: string): string {
   if (!/^[$A-Z_a-z][$\w]*$/u.test(name)) {
