@@ -116,6 +116,14 @@ const GatewayOperatorRoleNameSchema = z.string().trim().min(1).max(128);
 const GATEWAY_HTTP_LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
 const GatewayHttpImagesSchema = z.strictObject(ResponsesEndpointUrlFetchShape).optional();
 
+// CSP sources, not URLs: no paths, credentials, directive delimiters, or broad network schemes.
+const ControlUiFrameAncestorSchema = z
+  .string()
+  .regex(
+    /^(?:'self'|(?!(?:https?|wss?|ftps?|sftp|ssh|gopher|file|filesystem|data|blob|javascript|about):)[a-z][a-z0-9+.-]*:|https:\/\/(?:\*\.)?[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?)*(?::[0-9]+)?)(?![\s\S])/u,
+    "Expected 'self', a non-network custom scheme (e.g. codex-sandbox:), or an HTTPS host source with an optional leading *. wildcard and port",
+  );
+
 function validateGatewayPublicOrigin(value: string): boolean {
   if (!validateHttpOrigin(value)) {
     return false;
@@ -253,6 +261,8 @@ export const GatewayConfigSchema = z
         automaticallyFetchFavicons: z.boolean().optional(),
         /** Allowed browser origins for Control UI/WebChat websocket connections. */
         allowedOrigins: z.array(z.string()).optional(),
+        /** Opt-in CSP frame ancestors for Control UI documents; absent/empty prevents framing. */
+        frameAncestors: z.array(ControlUiFrameAncestorSchema).optional(),
         /**
          * DANGEROUS: Keep Host-header origin fallback behavior.
          * Supported long-term for deployments that intentionally rely on this policy.

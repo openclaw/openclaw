@@ -53,6 +53,7 @@ export async function serveControlUiIndexHtml(
   buildId?: string,
   sessionEntryPath?: string,
   isSessionEntryCurrent?: () => boolean,
+  frameAncestors?: readonly string[],
 ) {
   const normalizedBasePath = normalizeControlUiBasePath(basePath);
   const preloadRoute =
@@ -103,6 +104,7 @@ export async function serveControlUiIndexHtml(
       inlineScriptHashes: hashes,
       allowWasm,
       portalHost: req.headers.host,
+      frameAncestors,
     }),
   );
   res.setHeader("Content-Type", "text/html; charset=utf-8");

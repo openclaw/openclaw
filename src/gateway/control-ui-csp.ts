@@ -33,6 +33,8 @@ export function computeInlineScriptHashes(html: string): string[] {
 /** Build the CSP header applied to Gateway-served Control UI HTML. */
 export function buildControlUiCspHeader(opts?: {
   inlineScriptHashes?: string[];
+  /** Config-validated sources; absent/empty retains the default framing denial. */
+  frameAncestors?: readonly string[];
   /** Current document Host header, used only to permit cross-port portal probes. */
   portalHost?: string;
   /**
@@ -78,7 +80,7 @@ export function buildControlUiCspHeader(opts?: {
     "default-src 'self'",
     "base-uri 'none'",
     "object-src 'none'",
-    "frame-ancestors 'none'",
+    `frame-ancestors ${opts?.frameAncestors?.length ? opts.frameAncestors.join(" ") : "'none'"}`,
     // Gateway selection can move to a remote dedicated MCP Apps origin after
     // this document loads. The component still validates the exact endpoint.
     "frame-src 'self' blob: http: https:",
@@ -92,9 +94,16 @@ export function buildControlUiCspHeader(opts?: {
   ].join("; ");
 }
 
-export function applyControlUiSecurityHeaders(res: ServerResponse) {
-  res.setHeader("X-Frame-Options", "DENY");
-  res.setHeader("Content-Security-Policy", buildControlUiCspHeader());
+export function applyControlUiSecurityHeaders(
+  res: ServerResponse,
+  frameAncestors?: readonly string[],
+) {
+  if (frameAncestors?.length) {
+    res.removeHeader("X-Frame-Options");
+  } else {
+    res.setHeader("X-Frame-Options", "DENY");
+  }
+  res.setHeader("Content-Security-Policy", buildControlUiCspHeader({ frameAncestors }));
   res.setHeader("X-Content-Type-Options", "nosniff");
   res.setHeader("Referrer-Policy", "no-referrer");
   // Browser Talk is owned by this same-origin Control UI document. Keep camera

@@ -175,6 +175,7 @@ const CORE_RELOAD_POLICIES: ReloadPolicy[] = [
       "gateway.controlUi.automaticallyFetchFavicons",
       "gateway.controlUi.experimental.customPlugins",
       "gateway.controlUi.allowedOrigins",
+      "gateway.controlUi.frameAncestors",
       "gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback",
       "gateway.nodes.browser",
       "gateway.nodes.pairing",
