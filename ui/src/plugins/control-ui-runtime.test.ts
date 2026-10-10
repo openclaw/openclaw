@@ -61,9 +61,13 @@ it.each([false, true])(
       ...document.head.querySelectorAll<HTMLLinkElement>(`link[href*="${prefix}"]`),
     ];
     try {
-      if (published) await config.refresh();
+      if (published) {
+        await config.refresh();
+      }
       runtime.start();
-      if (!published) await config.refresh();
+      if (!published) {
+        await config.refresh();
+      }
       const first = links();
       expect(first.map((link) => [new URL(link.href).pathname, link.rel])).toEqual([
         [descriptor.entryUrl, "modulepreload"],
