@@ -8,13 +8,13 @@ read_when:
   - You need trusted tool policy or tool-result middleware
 ---
 
-The SDK seams for plugins that participate in the host lifecycle rather than
+The SDK hooks for plugins that participate in the host lifecycle rather than
 only adding a provider, channel, or tool. Part of the
 [Plugin SDK overview](/plugins/sdk-overview).
 
 ## Host hooks for workflow plugins
 
-Host hooks are the SDK seams for plugins that need to participate in the host
+Host hooks are the SDK interfaces for plugins that need to participate in the host
 lifecycle rather than only adding a provider, channel, or tool. They are
 generic contracts; Plan Mode can use them, but so can approval workflows,
 workspace policy gates, background monitors, setup wizards, and UI companion
@@ -154,7 +154,7 @@ secrets. Unregistered paths and registrations without this callback stay private
 Opting in reserves every declared path in one global sandbox namespace: no other
 content kind may declare the same path, even without a public reader. Registration
 rejects these collisions regardless of order; only private registrations may
-share paths. Public paths must already be canonical URL pathnames, without dot
+share paths. Public paths must already be normalized URL pathnames, without dot
 segments, backslashes, query strings, or fragments. The sandbox host endpoint
 `/mcp-app-sandbox` is reserved. These additional path restrictions apply only to
 registrations with `readPublicResource`; private paths retain their capability
@@ -201,7 +201,7 @@ sandboxed frame can load without copying the Gateway bearer token into its URL
 or JavaScript. The authenticated parent renews the grant while the external tab
 is active and before mounting it after navigation or browser resume. It also
 checks the grant from the same opaque sandbox before mounting, so browser
-privacy modes that block the cookie fail closed with an unavailable panel.
+privacy modes that block the cookie leave the panel unavailable.
 The frame grant accepts only `GET` and `HEAD` and always carries
 `operator.read`; `requiredScopes` controls tab visibility but never widens the
 cookie grant. Mutations remain on explicit Gateway-authenticated parent or
@@ -341,7 +341,7 @@ Examples of non-Plan consumers:
   manifest contracts can use `api.registerAgentToolResultMiddleware(...)` when
   they need to rewrite a tool result after execution and before the runtime
   feeds that result back into the model. This is the trusted runtime-neutral
-  seam for async output reducers such as tokenjuice.
+  interface for async output reducers such as tokenjuice.
 
 Plugins must declare `contracts.agentToolResultMiddleware` for each targeted
 runtime. Supported ids are `agentsapi`, `codex`, and `openclaw`; for example,
@@ -566,7 +566,7 @@ activate embedded app widgets, script, file actions, or code execution. Inline
 remote images use anonymous CORS and no referrer unless the reader declares
 `imageMethod`. That method resolves images through the plugin when the source
 does not support browser CORS. It must validate the source and every redirect,
-bound response size and time, and return the requested URL with a canonical
+bound response size and time, and return the requested URL with a normalized
 base64 raster image data URL; SVG and HTML are not supported. Do not forward
 browser cookies or service credentials to image hosts. The host displays the
 validated image data without executing remote content. The host accepts PNG, JPEG, GIF, and WebP data up to

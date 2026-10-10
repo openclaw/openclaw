@@ -247,7 +247,7 @@ Cancelled preparation must reject after cleanup, not report a missing login.
 | `prepareExtraParams`              | Default request params                                                                      |
 | `createStreamFn`                  | Fully custom StreamFn transport                                                             |
 | `wrapStreamFn`                    | Custom headers/body wrappers on the normal stream path                                      |
-| `reconcileLocalService`           | Cheap, idempotent managed-service repair after health and before every request              |
+| `reconcileLocalService`           | Cheap managed-service repair safe to repeat after health and before every request           |
 | `resolveTransportTurnState`       | Native per-turn headers/metadata and WebSocket headers/cool-down                            |
 | `resolveWebSocketSessionPolicy`   | Deprecated WebSocket compatibility hook; use `resolveTransportTurnState`                    |
 | `formatApiKey`                    | Custom runtime token shape                                                                  |

@@ -106,11 +106,11 @@ api.registerGatewayMethod("my-plugin.session.open", handleOpen, {
 });
 ```
 
-This requires a current authenticated profile, an existing canonical top-level
+This requires a current authenticated profile, an existing normalized top-level
 `sessionKey`, and, when supplied, its matching `agentId`. Broad writers retain
 the session's sharing rules. `allowOwnSessionScope` additionally admits
 `operator.sessions.write` only for the caller's own session. `requiredTool`
-checks the canonical effective session tool policy and an admitted agent run's
+checks the shared effective session tool policy and an admitted agent run's
 tool limits. Agent callers are bound to their own conversation. Currently,
 resource tool-policy admission does not support locked model selection.
 
@@ -142,7 +142,7 @@ the selected Gateway method still authorizes the request.
 
 `api.registerGatewayAccessPolicy({ authorize })` adds a plugin-owned access
 requirement to authenticated person admission. The callback receives the current
-configuration and the canonical profile's ID, email aliases, optional verified
+configuration and the primary profile's ID, email aliases, optional verified
 `githubAccountIds`, and assigned role. Account IDs come from the existing identity
 owner; display logins and public email do not establish that binding.
 The Gateway resolves `requiredByRole` from the person's effective role and this
@@ -295,10 +295,10 @@ applicable policy also requires fresh publication admission.
     implementing a private lookup. The transport owns timeout and identity validation.
 
     `await api.runtime.gateway.withUserProfileIdentity({ profileId, emails, githubAccountIds }, run)`
-    prepares the canonical profile's original binding lifetimes for up to 500
+    prepares the primary profile's original binding lifetimes for up to 500
     selected email aliases under the existing `users.list` / `operator.read`
     permission. Optional `githubAccountIds` binds up to 500 positive safe numeric
-    account IDs to that same canonical profile. The callback receives a synchronous `assertCurrent()` function.
+    account IDs to that same primary profile. The callback receives a synchronous `assertCurrent()` function.
     Compose it with the action's own authorization in the store's final commit
     guard and immediately before dispatching an external mutation. It reads
     current facts published by the profile owner without querying SQLite on the
@@ -384,7 +384,7 @@ applicable policy also requires fresh publication admission.
     retirement, or Gateway shutdown closes the channel and cancels outstanding
     node work. Successful node command completion and `channel.closed` wait
     for asynchronous message listeners already in progress. `close()` is
-    idempotent, and retained channel methods reject after closure.
+    safe to repeat, and retained channel methods reject after closure.
     `channel.closed` resolves with the successful command result or rejects
     with the node, authorization, transport, or cancellation error. Channels
     cannot reconnect or survive a node disconnection.
@@ -542,7 +542,7 @@ cleanup remains owned.
 
 Trusted official diagnostics exporter services can also receive
 `ctx.internalDiagnostics.getRuntimeIdentity?.()`. It returns the hosting
-process's canonical `processInstanceId` and optional loaded `buildId`, with no
+process's actual `processInstanceId` and optional loaded `buildId`, with no
 filesystem lookup or RPC. Capture it during service startup; a retained getter
 throws after the service lease is revoked. Hosts that do not provide this
 optional capability leave runtime identity unavailable. This diagnostic fact

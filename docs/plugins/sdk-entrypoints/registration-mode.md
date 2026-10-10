@@ -71,7 +71,7 @@ lowercase segment, payloads must be bounded JSON, and the scope must be
 `operator.read`, `operator.write`, or `operator.admin`. The emitter exists only
 for the service lifetime and is revoked after stop or failed start. Prefer
 version or invalidation payloads over full records so authorized clients reread
-canonical state through the plugin's scoped Gateway methods.
+stored state through the plugin's scoped Gateway methods.
 
 Discovery mode builds a non-activating registry snapshot. It may still
 evaluate the plugin entry and the channel plugin object so OpenClaw can

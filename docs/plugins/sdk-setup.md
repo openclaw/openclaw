@@ -75,7 +75,7 @@ Your `package.json` needs an `openclaw` field that tells the plugin system what 
 </Tabs>
 
 <Note>
-Publishing externally on ClawHub requires `compat` and `build`. Canonical publish snippets live in `docs/snippets/plugin-publish/`.
+Publishing externally on ClawHub requires `compat` and `build`. Shared publish snippets live in `docs/snippets/plugin-publish/`.
 </Note>
 
 ### `openclaw` fields
@@ -179,7 +179,7 @@ Use `afterAccountConfigWritten` (or a wizard's `afterConfigWritten`) for connect
 
 | Field                                  | Type       | What it means                                                                 |
 | -------------------------------------- | ---------- | ----------------------------------------------------------------------------- |
-| `id`                                   | `string`   | Canonical channel id.                                                         |
+| `id`                                   | `string`   | Primary channel id.                                                           |
 | `label`                                | `string`   | Primary channel label.                                                        |
 | `selectionLabel`                       | `string`   | Picker/setup label when it should differ from `label`.                        |
 | `detailLabel`                          | `string`   | Secondary detail label for richer channel catalogs and status surfaces.       |
@@ -240,16 +240,16 @@ Example:
 
 `openclaw.install` is package metadata, not manifest metadata.
 
-| Field                        | Type                                | What it means                                                                     |
-| ---------------------------- | ----------------------------------- | --------------------------------------------------------------------------------- |
-| `clawhubSpec`                | `string`                            | Canonical ClawHub spec for install/update and onboarding install-on-demand flows. |
-| `npmSpec`                    | `string`                            | Canonical npm spec for install/update fallback flows.                             |
-| `localPath`                  | `string`                            | Local development or bundled install path.                                        |
-| `defaultChoice`              | `"clawhub"` \| `"npm"` \| `"local"` | Preferred install source when multiple sources are available.                     |
-| `minHostVersion`             | `string`                            | Minimum supported OpenClaw version, `>=x.y.z` or `>=x.y.z-prerelease`.            |
-| `expectedIntegrity`          | `string`                            | Expected npm dist integrity string, usually `sha512-...`, for pinned installs.    |
-| `allowInvalidConfigRecovery` | `boolean`                           | Lets bundled-plugin reinstall flows recover from specific stale-config failures.  |
-| `requiredPlatformPackages`   | `string[]`                          | Required platform-specific npm aliases verified during npm install.               |
+| Field                        | Type                                | What it means                                                                    |
+| ---------------------------- | ----------------------------------- | -------------------------------------------------------------------------------- |
+| `clawhubSpec`                | `string`                            | Primary ClawHub spec for install/update and onboarding install-on-demand flows.  |
+| `npmSpec`                    | `string`                            | Primary npm spec for install/update fallback flows.                              |
+| `localPath`                  | `string`                            | Local development or bundled install path.                                       |
+| `defaultChoice`              | `"clawhub"` \| `"npm"` \| `"local"` | Preferred install source when multiple sources are available.                    |
+| `minHostVersion`             | `string`                            | Minimum supported OpenClaw version, `>=x.y.z` or `>=x.y.z-prerelease`.           |
+| `expectedIntegrity`          | `string`                            | Expected npm dist integrity string, usually `sha512-...`, for pinned installs.   |
+| `allowInvalidConfigRecovery` | `boolean`                           | Lets bundled-plugin reinstall flows recover from specific stale-config failures. |
+| `requiredPlatformPackages`   | `string[]`                          | Required platform-specific npm aliases verified during npm install.              |
 
 <AccordionGroup>
   <Accordion title="Onboarding behavior">
@@ -275,7 +275,7 @@ Example:
 
   </Accordion>
   <Accordion title="allowInvalidConfigRecovery scope">
-    `allowInvalidConfigRecovery` is not a general bypass for broken configs. It is narrow bundled-plugin recovery only, letting reinstall/setup repair known upgrade leftovers like a missing bundled plugin path or a stale `channels.<id>` entry for that same plugin. If config is broken for unrelated reasons, install still fails closed and tells the operator to run `openclaw doctor --fix`.
+    `allowInvalidConfigRecovery` is not a general bypass for broken configs. It is narrow bundled-plugin recovery only, letting reinstall/setup repair known upgrade leftovers like a missing bundled plugin path or a stale `channels.<id>` entry for that same plugin. If config is broken for unrelated reasons, install still stops and tells the operator to run `openclaw doctor --fix`.
   </Accordion>
 </AccordionGroup>
 
@@ -373,14 +373,14 @@ Bundled workspace channels that keep setup-safe exports in sidecar modules can u
 
 ### Narrow setup helper imports
 
-For hot setup-only paths, prefer the narrow setup helper seams over the broader `plugin-sdk/setup` umbrella when you only need part of the setup surface:
+For hot setup-only paths, prefer the narrow setup helper interfaces over the broader `plugin-sdk/setup` umbrella when you only need part of the setup surface:
 
 | Import path                | Use it for                                                     | Key exports                                                                                                                                                                                                                                                                                                           |
 | -------------------------- | -------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `plugin-sdk/setup-runtime` | setup-time runtime helpers that stay available in `setupEntry` | `createSetupTranslator`, `createPatchedAccountSetupAdapter`, `createEnvPatchedAccountSetupAdapter`, `createSetupInputPresenceValidator`, `noteChannelLookupFailure`, `noteChannelLookupSummary`, `promptResolvedAllowFrom`, `splitSetupEntries`, `createAllowlistSetupWizardProxy`, `createDelegatedSetupWizardProxy` |
 | `plugin-sdk/setup-tools`   | setup/install CLI/archive/docs helpers                         | `formatCliCommand`, `detectBinary`, `extractArchive`, `resolveBrewExecutable`, `formatDocsLink`, `CONFIG_DIR`                                                                                                                                                                                                         |
 
-Use the broader `plugin-sdk/setup` seam when you want the full shared setup toolbox, including config-patch helpers such as `moveSingleAccountChannelSectionToDefaultAccount(...)`.
+Use the broader `plugin-sdk/setup` interface when you want the full shared setup toolbox, including config-patch helpers such as `moveSingleAccountChannelSectionToDefaultAccount(...)`.
 
 Use `createSetupTranslator(...)` for fixed setup wizard copy. It uses the first nonblank value from `OPENCLAW_LOCALE`, `LC_ALL`, `LC_MESSAGES`, and `LANG`, in that order, then falls back to English. Set `OPENCLAW_LOCALE=en` for an explicit English override. Keep plugin-specific setup text in plugin-owned code and use shared catalog keys only for common setup labels, status text, and official bundled plugin setup copy.
 
@@ -449,7 +449,7 @@ For a plugin-owned root layout, also declare `openclaw.setupFeatures.configPromo
 When calling `moveSingleAccountChannelSectionToDefaultAccount(...)` with an already resolved plugin, pass its setup adapter as `setupSurface`. Caller-supplied setup surfaces take precedence over loaded and bundled lookup, which keeps scoped or setup-only plugins independent of global registration.
 
 <Note>
-Matrix is the current bundled example. If exactly one named Matrix account already exists, or if `defaultAccount` points at an existing non-canonical key such as `Ops`, promotion preserves that account instead of creating a new `accounts.default` entry.
+Matrix is the current bundled example. If exactly one named Matrix account already exists, or if `defaultAccount` points at an existing custom key such as `Ops`, promotion preserves that account instead of creating a new `accounts.default` entry.
 </Note>
 
 ## Config schema
@@ -589,7 +589,7 @@ does not replace the existing asynchronous preparation callback.
 
     `plugin-sdk/channel-setup` also exposes the lower-level `createOptionalChannelSetupAdapter(...)` and `createOptionalChannelSetupWizard(...)` builders when you only need one half of that optional-install surface.
 
-    The generated optional adapter/wizard fail closed on real config writes. They reuse one install-required message across `validateInput`, `applyAccountConfig`, and `finalize`, and append a docs link when `docsPath` is set.
+    The generated optional adapter/wizard reject real config writes. They reuse one install-required message across `validateInput`, `applyAccountConfig`, and `finalize`, and append a docs link when `docsPath` is set.
 
   </Accordion>
   <Accordion title="Binary-backed setup helpers">
@@ -613,7 +613,7 @@ does not replace the existing asynchronous preparation callback.
     openclaw plugins install @myorg/openclaw-my-plugin
     ```
 
-    Bare package specs install from npm, unless the name matches a bundled or official plugin id, in which case OpenClaw uses that local/official copy instead. Use `clawhub:`, `npm:`, `git:`, or `npm-pack:` for deterministic source selection — see [Manage plugins](/plugins/manage-plugins).
+    Bare package specs install from npm, unless the name matches a bundled or official plugin id, in which case OpenClaw uses that local/official copy instead. Use `clawhub:`, `npm:`, `git:`, or `npm-pack:` to select the source explicitly — see [Manage plugins](/plugins/manage-plugins).
 
   </Tab>
   <Tab title="ClawHub only">

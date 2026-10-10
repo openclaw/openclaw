@@ -124,7 +124,7 @@ whose working directory differs from the attempt may pass
 bounded action fact while keeping identity and policy authority closure-bound. The closure
 binds the host-resolved run, sandbox, requester, route, and approval identity;
 plugins must not reconstruct those fields or retain the capability after the
-attempt returns. Calls made after attempt settlement fail closed.
+attempt returns. Calls made after attempt settlement are rejected.
 
 When supplied, `assertNativeSubagentSpawnAllowed()` must run at native spawn
 admission. It rejects ambiguous participant identity; direct the model to
@@ -145,8 +145,8 @@ message injection, including question answers delivered through that path.
 
 For independently retained native work, call the optional
 `retainSourceAuthority()` while the host capability is active. When an operator
-source exists, the returned `assertCurrent`, optional `signal`, and idempotent
-`release` retain that original source independently of foreground completion.
+source exists, the returned `assertCurrent`, optional `signal`, and
+`release` (safe to repeat) retain that original source independently of foreground completion.
 The method returns `undefined` for a run without an operator source. It supplies
 neither new tool permission nor a replacement foreground capability. Bind it to
 the exact resources admitted through the existing native policy path, recheck it
@@ -179,7 +179,7 @@ Older hosts without this capability provide only the current attempt's
 When trajectory capture has a valid host-owned session target,
 `params.hostCapabilities.trajectory` provides closure-bound `recordEvent(...)`
 and `flush()` operations. The host adds session attribution, bounds and redacts
-event data, and persists it through the canonical trajectory store. Treat the
+event data, and persists it through the shared trajectory store. Treat the
 capability as optional, send only structured non-secret facts, and await
 `flush()` before the attempt settles; do not infer storage paths or create a
 plugin-side fallback when the capability is absent.
