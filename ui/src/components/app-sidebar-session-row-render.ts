@@ -366,11 +366,9 @@ export function renderRecentSession(params: {
   const team = host.sidebarAgentsMode === "roster";
   const ownAttention = session.ownAttention ?? session.attention;
   const label = session.label;
-  const { subtitle, narration, toolName } = resolveSidebarSessionRowSubtitle(
-    host,
-    session,
-    display,
-  );
+  const { subtitle, narration, toolName } =
+    (host.sidebarSnapshot ? session.snapshotSubtitle : undefined) ??
+    resolveSidebarSessionRowSubtitle(host, session, display);
   const indicators = renderSidebarSessionIndicators(host, session, display, icon);
   const { running, stateId, metaId, pullRequest, persistentIndicator, childrenExpanded } =
     indicators;

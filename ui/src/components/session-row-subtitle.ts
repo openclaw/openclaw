@@ -5,7 +5,6 @@ import { t } from "../i18n/index.ts";
 import { resolveToolDisplayIcon } from "../lib/chat/tool-display-icon.ts";
 import { isCriticalObserverHealth, pickFreshestObserverDigest } from "../lib/observer-digest.ts";
 import type { CatalogBackingSessionDisplay } from "./app-sidebar-session-catalogs.ts";
-import type { SessionListHost } from "./app-sidebar-session-row-render.ts";
 import type { SidebarRecentSession, SidebarToolActivity } from "./app-sidebar-session-types.ts";
 import { icons } from "./icons.ts";
 import { sessionAttentionSubtitle } from "./session-attention-presentation.ts";
@@ -17,23 +16,18 @@ type SidebarSessionSubtitle = {
 };
 
 export function resolveSidebarSessionRowSubtitle(
-  host: Pick<
-    SessionListHost,
-    | "sidebarSnapshot"
-    | "sidebarAgentsMode"
-    | "sessionsShowPreview"
-    | "sidebarLiveActivity"
-    | "sidebarTools"
-    | "sessionProjection"
-    | "sidebarNarrationLines"
-    | "sidebarObserverDigests"
-  >,
+  host: {
+    readonly sidebarAgentsMode?: "chip" | "roster";
+    readonly sessionsShowPreview: boolean;
+    readonly sidebarLiveActivity: boolean;
+    readonly sidebarTools: ReadonlyMap<string, SidebarToolActivity>;
+    readonly sessionProjection: { resolveSubtitle: typeof resolveSidebarSessionSubtitle };
+    readonly sidebarNarrationLines: ReadonlyMap<string, string>;
+    readonly sidebarObserverDigests: ReadonlyMap<string, SessionObserverDigest>;
+  },
   session: SidebarRecentSession,
   display?: CatalogBackingSessionDisplay,
 ) {
-  if (host.sidebarSnapshot && session.snapshotSubtitle) {
-    return session.snapshotSubtitle;
-  }
   const toolActivity =
     host.sidebarAgentsMode !== "roster" &&
     host.sessionsShowPreview &&
