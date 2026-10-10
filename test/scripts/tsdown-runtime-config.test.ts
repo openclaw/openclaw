@@ -206,6 +206,7 @@ describe("tsdown config", () => {
       expectDefined(workerGraph, "deploy worker graph"),
       requireStandaloneRuntimeGraph("worker/code-mode-node.worker"),
       requireStandaloneRuntimeGraph("worker/file-tool-planning.worker"),
+      requireStandaloneRuntimeGraph("worker/file-tool-read.worker"),
       requireStandaloneRuntimeGraph("worker/image-processor.worker"),
       requireStandaloneRuntimeGraph("worker/sqlite-store.worker"),
       requireStandaloneRuntimeGraph("worker/openclaw-state-read.worker"),
