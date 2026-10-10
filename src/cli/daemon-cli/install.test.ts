@@ -10,7 +10,8 @@ import { nodeProbeOutput } from "./install.test-helpers.js";
 import type { DaemonInstallOptions } from "./types.js";
 
 const resolveSupervisorGuidance = vi.hoisted(() => vi.fn());
-vi.mock("../../plugins/supervisor-guidance-runtime.js", () => ({
+vi.mock("../../plugins/supervisor-guidance-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../plugins/supervisor-guidance-runtime.js")>()),
   resolveExternalSupervisorGuidance: resolveSupervisorGuidance,
 }));
 
