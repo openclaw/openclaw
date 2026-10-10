@@ -373,11 +373,9 @@ export function createOpenClawCodingToolsInternal(
         }),
     options?.clientCaps,
   );
-  // Provider flushes must not regain setup tools outside their declared projection.
+  // Neither flush arm may regain execution tools outside its persistence projection.
   const ringZeroTools =
-    includeOpenClawTools && !(isMemoryFlushRun && options?.memoryFlushTools)
-      ? getActiveAgentRingZeroTools()
-      : [];
+    includeOpenClawTools && !isMemoryFlushRun ? getActiveAgentRingZeroTools() : [];
   const toolSearchTools =
     toolSearchControlsEnabled && ringZeroTools.length === 0
       ? createToolSearchTools({
