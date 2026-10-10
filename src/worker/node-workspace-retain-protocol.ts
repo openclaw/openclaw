@@ -80,6 +80,7 @@ const RetainResultSchema = z.strictObject({
   bundleStatus: BundleStatusSchema.optional(),
 });
 
+export type NodeWorkerWorkspaceRetainEntry = z.infer<typeof RetainEntrySchema>;
 export type NodeWorkerWorkspaceRetainInput = z.infer<typeof RetainInputSchema>;
 export type NodeWorkerWorkspaceRetainResult = z.infer<typeof RetainResultSchema>;
 
