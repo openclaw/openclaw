@@ -21,6 +21,19 @@ External-plugin compatibility work follows this order:
 6. Remove only after the announced migration window, usually in a major
    release.
 
+SQLite and SDK writer migrations use one shared runtime warning budget per plugin
+identity and deprecated capability family per Gateway process. Warnings occur on
+actual legacy use, never import, and survive plugin reloads. They name the invoked
+method, supported replacement, current compatibility promise, and “removed in the
+next Plugin SDK major.” Unknown direct SDK consumers share one bounded SDK-level
+warning per family. Diagnostics contain no database paths, credentials, payloads,
+or stack dumps. This policy replaces the earlier no-new-runtime-warnings rule for
+these writer migrations; documentation-only reader records retain their own policy.
+
+Synchronous compatibility calls still commit before returning. Awaited mutations
+complete only after committed facts have been installed. SessionManager and its
+extension/provider adapters share the session-persistence warning budget.
+
 ### Retained helper contracts
 
 Transcript append and lock preparation now uses
@@ -300,8 +313,8 @@ Use `listAsync` and `dismissAsync` with their synchronous result-publication
 callbacks, and await `recordCommittedInputAsync` and `invalidateAsync`; see
 [awaited Mention Inbox operations](/plugins/sdk-migration/how-to-migrate#await-mention-inbox-operations).
 Core and bundled callers use these worker-backed methods. Legacy calls emit one
-`DEP_SESSION_PERSISTENCE` warning per plugin and method per process, with a
-once-per-method warning for unscoped calls. Schemas, retained data, and update
+`DEP_SESSION_PERSISTENCE` warning per plugin and capability family per process, with one
+SDK-level family warning for unscoped calls. Schemas, retained data, and update
 behavior are unchanged.
 
 ### Personal model-account control plane
@@ -317,7 +330,7 @@ explicit breaking-release approval. In particular, the released action shape
 Core and bundled callers use the corresponding `Async` methods; see
 [awaited personal model-account operations](/plugins/sdk-migration/how-to-migrate#await-personal-model-account-operations).
 Synchronous calls emit one `DEP_SESSION_PERSISTENCE` warning per plugin and
-method per process; unscoped callers warn once per method. The compatibility
+capability family per process; unscoped callers share one family warning. The compatibility
 adapters retain native database access during this window. RPC schemas,
 credential storage, retention, and update behavior are unchanged.
 
@@ -328,8 +341,8 @@ The October 1, 2026 records `session-manager-sync-persistence`,
 retain the shipped synchronous transcript contracts as named third-party
 compatibility adapters. Their removal gate is `next-plugin-sdk-major`, with no
 calendar removal date. Existing exports and immediate return values remain
-available while plugins migrate; synchronous SessionManager methods warn once
-per method per process.
+available while plugins migrate; synchronous SessionManager methods and their extension/provider adapters share
+one warning per plugin and session-persistence family per process.
 
 Use the [awaited session persistence migration](/plugins/sdk-migration/how-to-migrate#await-session-transcript-persistence)
 for the complete method mapping, extension calls, and versioned provider replay
@@ -498,6 +511,24 @@ Bundled memory search and memory-forget use the awaited readers. The synchronous
 exports retain their signatures and behavior for existing consumers until removal
 at the next Plugin SDK major. Deprecation is communicated through JSDoc and the
 compatibility registry; these readers emit no runtime warnings.
+
+The prepared incognito actor adapters remain inactive for ordinary unbound
+calls. Under an explicit actor binding, Memory entry, reset-cutoff, corpus, and
+selector reads retain that actor; a selected missing actor returns the normal
+missing result, while a retained ended actor rejects. Archive discovery returns
+no durable artifacts for that actor. Private transcripts are not added to the
+durable Memory ingestion corpus.
+
+The synchronous `loadMemorySessionMetadata` and
+`loadMemorySessionMetadataBatch` helpers remain durable ingestion admission
+guards. `statSessionEntrySync`, batch transcript stats, and synchronous archive
+and selector readers retain their existing native/offline contracts. Explicitly
+bound actor calls refuse synchronous database access with
+`IncognitoSessionSyncAccessError`: await `resolveMemorySessionTargetsAsync`,
+`loadArchivedSessionsAsync`, or `buildSessionEntry` as named by the error.
+Worker snapshot kernels and supplied transcript statistics remain synchronous;
+this preparation does not change production incognito selection or the
+released synchronous full-row session getter.
 
 ### Memory read missing results
 

@@ -11,7 +11,6 @@ import { resolveAgentEffectiveModelPrimary, resolveDefaultAgentId } from "../age
 import type { WorkspaceStateGuard } from "../agents/workspace-state-store.worker-contract.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../agents/workspace.js";
 import { printClawBanner } from "../cli/claw-banner.js";
-import { runWithLocalStateOwner } from "../cli/local-state-owner.js";
 import { readSourceConfigBestEffort } from "../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
@@ -201,30 +200,6 @@ export async function ensureWorkspaceAndSessions(
     agentId: string;
     guard?: WorkspaceStateGuard;
   },
-): Promise<{ bootstrapPending: boolean }> {
-  return await runWithLocalStateOwner({
-    method: "agents.workspace.setup",
-    params: {},
-    target: options.agentId,
-    onForeignOwner: "refuse",
-    runLocal: ({ assertCurrent }) =>
-      ensureWorkspaceAndSessionsUnderOwner(workspaceDir, runtime, {
-        ...options,
-        guard: {
-          ...options.guard,
-          assertHost: () => {
-            assertCurrent();
-            options.guard?.assertHost?.();
-          },
-        },
-      }),
-  });
-}
-
-async function ensureWorkspaceAndSessionsUnderOwner(
-  workspaceDir: string,
-  runtime: RuntimeEnv,
-  options: Parameters<typeof ensureWorkspaceAndSessions>[2],
 ): Promise<{ bootstrapPending: boolean }> {
   const ws = await ensureAgentWorkspace({
     dir: workspaceDir,

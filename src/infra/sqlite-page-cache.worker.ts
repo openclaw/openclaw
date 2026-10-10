@@ -147,22 +147,16 @@ function* agentHotPages(
         db,
         query
           .selectFrom("transcript_events")
-          .select((eb) => [
-            eb
-              .case()
-              .when(eb.fn<number>("octet_length", ["event_json"]), "<=", MAX_PAYLOAD_BYTES)
-              .then(eb.ref("event_json"))
-              .else(null)
-              .end()
-              .as("json"),
-            eb
-              .case()
-              .when(eb.fn<number>("octet_length", ["event_zstd"]), "<=", MAX_PAYLOAD_BYTES)
-              .then(eb.ref("event_zstd"))
-              .else(null)
-              .end()
-              .as("compressed"),
-          ])
+          .select((eb) => {
+            const bounded = <Column extends "event_json" | "event_zstd">(column: Column) =>
+              eb
+                .case()
+                .when(eb.fn<number>("octet_length", [column]), "<=", MAX_PAYLOAD_BYTES)
+                .then(eb.ref(column))
+                .else(null)
+                .end();
+            return [bounded("event_json").as("json"), bounded("event_zstd").as("compressed")];
+          })
           .where("session_id", "=", row.current_session_id)
           .where("seq", "in", sequences),
       );

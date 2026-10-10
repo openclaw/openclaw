@@ -34,9 +34,10 @@ suite.define(() => {
       });
       await page.goto(`${suite.server.baseUrl}chat#token=test-token`);
       await page.locator(".agent-chat__composer-combobox textarea").waitFor();
-      await gateway.waitForRequest("agent.identity.get");
-      await pauseVirtualClock(page);
       const methods = ["agent.identity.get", "cron.list", "cron.status", "models.list"];
+      // The sidebar defers startup reads until the foreground conversation is ready.
+      await Promise.all(methods.map((method) => gateway.waitForRequest(method)));
+      await pauseVirtualClock(page);
       const counts = async () =>
         Object.fromEntries(
           await Promise.all(

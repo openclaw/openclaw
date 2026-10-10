@@ -450,6 +450,61 @@ describe("maybeRestartService", () => {
       warning,
     );
   });
+  it("records measured reconciliation child timing in the outcome and run history", async () => {
+    const home = tempDirs.make("service-timing-history-");
+    const options = { env: { HOME: home, OPENCLAW_STATE_DIR: home } };
+    const admitted = createUpdateRun({ trigger: "cli" }, options);
+    const liveRun = { ...run, runId: admitted.runId, env: options.env };
+    const ledger = await vi.importActual<typeof import("../../infra/update-run-ledger.js")>(
+      "../../infra/update-run-ledger.js",
+    );
+    const install = {
+      name: "managed-service-install",
+      command: "openclaw gateway install --force --port 18789 --json",
+      cwd: "/fixture/root",
+      durationMs: 24_000,
+      exitCode: 0,
+    };
+    mocks.runUpdatedInstallGatewayCommand.mockImplementationOnce(async (params) => {
+      params.onTimedStep?.(install);
+      return "unverified";
+    });
+    const result: UpdateRunResult = {
+      status: "ok",
+      mode: "npm",
+      root: "/fixture/root",
+      after: { version: gateway.version, buildId: gateway.buildId },
+      steps: [],
+      durationMs: 0,
+    };
+    await vi
+      .mocked(recordUpdateRunStep)
+      .withImplementation(ledger.recordUpdateRunStep, async () => {
+        await expect(
+          maybeRestartService({
+            shouldRestart: true,
+            result,
+            opts: { json: true, run: liveRun },
+            refreshServiceEnv: true,
+            serviceEnv: { HOME: "/home/operator" },
+            serviceInstallEnv: {},
+            gatewayPort: 18789,
+            timeoutMs: 1_000,
+          }),
+        ).resolves.toBe("ok");
+      });
+    expect(result.steps).toContainEqual(install);
+    const row = getUpdateRun(admitted.runId, options)?.steps.find(
+      (step) => step.step === "managed-service-install",
+    );
+    expect(row).toMatchObject({
+      status: "completed",
+      exitCode: 0,
+      startedAtMs: expect.any(Number),
+      endedAtMs: expect.any(Number),
+    });
+    expect((row?.endedAtMs ?? 0) - (row?.startedAtMs ?? 0)).toBe(24_000);
+  });
   it.for([
     { outcome: "installed", profile: "default" },
     { outcome: "registration rejected", profile: "default" },

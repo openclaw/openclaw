@@ -1,6 +1,5 @@
 import path from "node:path";
 import { isUnconfiguredConfigSource } from "../cli/fresh-install-config.js";
-import { runWithLocalStateOwner } from "../cli/local-state-owner.js";
 import { hasResolvedRosterBeforeMigrations } from "../config/agent-roster-provenance.js";
 import {
   ConfigMutationConflictError,
@@ -42,25 +41,6 @@ export async function createAgentTeam(
     beforePersistentApply?: () => void;
     provenance?: Parameters<typeof createAgent>[0]["provenance"];
   } = {},
-): Promise<TeamResult> {
-  return await runWithLocalStateOwner({
-    method: "agents.team.create",
-    params: {},
-    target: params.coordinator ?? "agent team",
-    onForeignOwner: "refuse",
-    runLocal: ({ assertCurrent }) =>
-      createAgentTeamUnderOwner({
-        ...params,
-        beforePersistentApply: () => {
-          assertCurrent();
-          params.beforePersistentApply?.();
-        },
-      }),
-  });
-}
-
-async function createAgentTeamUnderOwner(
-  params: NonNullable<Parameters<typeof createAgentTeam>[0]>,
 ): Promise<TeamResult> {
   const preset = await loadAgentTeamPreset(params.preset);
   const members = [preset.coordinator, ...preset.specialists].map((member, index) => {

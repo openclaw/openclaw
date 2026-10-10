@@ -1,4 +1,3 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import { statSync } from "node:fs";
 import path from "node:path";
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
@@ -9,13 +8,11 @@ import {
 import { GATEWAY_SERVER_CAPS } from "../../packages/gateway-protocol/src/server-capabilities.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.js";
+import type { OperatorScope } from "../gateway/operator-scopes.js";
 import { resolveIdentityPathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { GatewayLockIdentity } from "../infra/gateway-lock.js";
-import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import type { OpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-maintenance-context.js";
 import { registerSignalExitGate } from "./signal-exit-barrier.js";
 
 type LocalMutationScope = {
@@ -23,34 +20,7 @@ type LocalMutationScope = {
   config: OpenClawConfig;
   signal: AbortSignal;
   assertCurrent: () => void;
-  /** Already accepted compensation retains custody after interruption. */
-  assertSettlementCurrent: () => void;
-  runSettlement: <U>(run: () => Promise<U>) => Promise<U>;
 };
-
-type LocalOwnerScope = {
-  assertCurrent: () => void;
-  assertSettlementCurrent: () => void;
-  ownerLockPath: string;
-  configPath: string;
-  settling?: true;
-};
-const localOwnerAssertions = resolveGlobalSingleton(
-  Symbol.for("openclaw.localStateOwnerAssertions"),
-  () => new AsyncLocalStorage<LocalOwnerScope>(),
-);
-const offlineOwnerResources = resolveGlobalSingleton(
-  Symbol.for("openclaw.localStateOwnerResources"),
-  () =>
-    new Map<
-      string,
-      {
-        ownerId: string | undefined;
-        resources: OpenClawDatabaseMaintenanceScope;
-        uncertainCleanup: boolean;
-      }
-    >(),
-);
 
 class LocalStateOwnerError extends Error {
   constructor(
@@ -66,27 +36,19 @@ class LocalStateOwnerError extends Error {
 /** Select one owner before domain admission and retain offline custody through resource settlement. */
 export async function runWithLocalStateOwner<T>(params: {
   method: string;
-  /** Explicit configuration targets retain their own selector environment. */
-  env?: NodeJS.ProcessEnv;
   params: Record<string, unknown>;
   target: string;
   recoveryCommand?: string;
   requiredCapabilities?: readonly string[];
+  scopes?: readonly OperatorScope[];
+  timeoutMs?: number;
+  expectFinal?: boolean;
   /** Local inspection must stay read-only and must not load mutation-capable runtime config. */
-  onForeignOwner?:
-    | "refuse"
-    | ((scope: Omit<LocalMutationScope, "config" | "runSettlement">) => Promise<T>);
+  onForeignOwner?: "refuse" | ((scope: Omit<LocalMutationScope, "config">) => Promise<T>);
   assertTargetCurrent?: () => void;
   runLocal: (scope: LocalMutationScope) => Promise<T>;
 }): Promise<T> {
-  const parent = localOwnerAssertions.getStore();
-  if (parent?.settling) {
-    parent.assertSettlementCurrent();
-  } else {
-    parent?.assertCurrent();
-  }
-  const sourceEnv = params.env ?? process.env;
-  const selectedEnv = { ...sourceEnv };
+  const selectedEnv = { ...process.env };
   const selectedStateDir = resolveStateDir(selectedEnv);
   const stateDir = resolveIdentityPathViaExistingAncestorSync(selectedStateDir);
   const rootIdentity = statSync(stateDir, { bigint: true, throwIfNoEntry: false });
@@ -96,6 +58,7 @@ export async function runWithLocalStateOwner<T>(params: {
     OPENCLAW_CONFIG_PATH: resolveConfigPath(selectedEnv, selectedStateDir),
   };
   const input = structuredClone(params.params);
+  const scopes: OperatorScope[] = [...(params.scopes ?? ["operator.admin"])];
   const [
     {
       acquireGatewayLock,
@@ -105,7 +68,7 @@ export async function runWithLocalStateOwner<T>(params: {
       readLockPayloadSync,
       resolveGatewayLockPaths,
     },
-    { captureGatewayStateOwner, tryBorrowGatewayStateOwner },
+    { captureGatewayStateOwner },
     { createOpenClawDatabaseMaintenanceScope },
   ] = await Promise.all([
     import("../infra/gateway-lock.js"),
@@ -113,31 +76,13 @@ export async function runWithLocalStateOwner<T>(params: {
     import("../state/openclaw-state-db-async-lifecycle.js"),
   ]);
   const paths = resolveGatewayLockPaths(env);
-  if (
-    parent &&
-    (parent.ownerLockPath !== paths.ownerLockPath || parent.configPath !== paths.configPath)
-  ) {
-    throw new LocalStateOwnerError(
-      "OWNER_UNAVAILABLE",
-      "Nested operation changed the selected state root or config path; rerun the command.",
-    );
-  }
   const databasePath = path.join(paths.stateDir, "state", "openclaw.sqlite");
   const controller = new AbortController();
   const finished = createDeferredCore();
   const releaseExitGate = registerSignalExitGate(finished.promise, () => controller.abort());
-  const assertTargetCurrent = (settlement = false) => {
-    if (settlement) {
-      parent?.assertSettlementCurrent();
-    } else {
-      if (parent?.settling) {
-        parent.assertSettlementCurrent();
-      } else {
-        parent?.assertCurrent();
-      }
-      controller.signal.throwIfAborted();
-    }
-    const ambientPaths = resolveGatewayLockPaths(sourceEnv);
+  const assertTargetCurrent = () => {
+    controller.signal.throwIfAborted();
+    const ambientPaths = resolveGatewayLockPaths(process.env);
     const currentRoot = rootIdentity
       ? statSync(stateDir, { bigint: true, throwIfNoEntry: false })
       : undefined;
@@ -168,20 +113,19 @@ export async function runWithLocalStateOwner<T>(params: {
   const discover = async () => {
     try {
       assertTargetCurrent();
-      return await readActiveGatewayLockIdentity({
+      const options = {
         env,
         requireInspection: true,
         signal: controller.signal,
-      });
+      };
+      return params.onForeignOwner
+        ? await readActiveGatewayLockIdentity({ ...options, includeEmbedded: true })
+        : await readActiveGatewayLockIdentity(options);
     } catch (error) {
       return refuse(error);
     }
   };
   const runLocal = async (assertOwnerCurrent: () => void): Promise<T> => {
-    const assertSettlementCurrent = () => {
-      assertTargetCurrent(true);
-      assertOwnerCurrent();
-    };
     const assertCurrent = () => {
       assertTargetCurrent();
       assertOwnerCurrent();
@@ -189,55 +133,29 @@ export async function runWithLocalStateOwner<T>(params: {
     assertCurrent();
     const { getRuntimeConfig } = await import("../config/config.js");
     assertCurrent();
-    const selectedScope: LocalOwnerScope = {
+    let config: OpenClawConfig | undefined;
+    return await params.runLocal({
+      env,
+      // Loading config can write state. Config-free owners must reach their own admission first.
+      get config() {
+        assertCurrent();
+        config ??= getRuntimeConfig();
+        assertCurrent();
+        return config;
+      },
+      signal: controller.signal,
       assertCurrent,
-      assertSettlementCurrent,
-      ownerLockPath: paths.ownerLockPath,
-      configPath: paths.configPath,
-    };
-    const runSettlement = async <U>(run: () => Promise<U>): Promise<U> => {
-      assertSettlementCurrent();
-      let active = true;
-      const assertRetainedSettlement = () => {
-        assertSettlementCurrent();
-        if (!active) {
-          throw new Error("Local state settlement scope has completed");
-        }
-      };
-      return await localOwnerAssertions.run(
-        { ...selectedScope, assertSettlementCurrent: assertRetainedSettlement, settling: true },
-        async () => {
-          try {
-            return await run();
-          } finally {
-            active = false;
-            assertSettlementCurrent();
-          }
-        },
-      );
-    };
-    return await localOwnerAssertions.run(selectedScope, () =>
-      params.runLocal({
-        env,
-        get config() {
-          assertCurrent();
-          return getRuntimeConfig();
-        },
-        signal: controller.signal,
-        assertCurrent,
-        assertSettlementCurrent,
-        runSettlement,
-      }),
-    );
+    });
   };
-  const route = async (owner: GatewayLockIdentity): Promise<T> => {
+  const route = async (
+    owner: Omit<GatewayLockIdentity, "port"> & { port?: number },
+  ): Promise<T> => {
     if (typeof params.onForeignOwner === "function") {
       assertTargetCurrent();
       const result = await params.onForeignOwner({
         env,
         signal: controller.signal,
         assertCurrent: assertTargetCurrent,
-        assertSettlementCurrent: () => assertTargetCurrent(true),
       });
       assertTargetCurrent();
       return result;
@@ -248,6 +166,10 @@ export async function runWithLocalStateOwner<T>(params: {
     if (!owner.ownerId) {
       return refuse(new Error("Gateway lacks the expected-owner contract; update the Gateway."));
     }
+    const port = owner.port;
+    if (port === undefined) {
+      return refuse(new Error("The state owner has no Gateway listener"));
+    }
     const { callGateway, isGatewayClientRequestError } = await import("../gateway/call.js");
     let dispatched = false;
     try {
@@ -257,21 +179,26 @@ export async function runWithLocalStateOwner<T>(params: {
         method: params.method,
         configPath: paths.configPath,
         params: { ...input, expectedOwnerId: owner.ownerId },
-        localPortOverride: owner.port,
+        localPortOverride: port,
         ignoreEnvUrlOverride: true,
         requiredMethods: [params.method],
         requiredCapabilities: [
           GATEWAY_SERVER_CAPS.LOCAL_STATE_OWNER_ROUTING,
           ...(params.requiredCapabilities ?? []),
         ],
-        timeoutMs: 600_000,
+        timeoutMs: params.timeoutMs ?? 600_000,
+        expectFinal: params.expectFinal,
         signal: controller.signal,
-        scopes: ["operator.admin"],
+        scopes,
         clientName: GATEWAY_CLIENT_NAMES.CLI,
         mode: GATEWAY_CLIENT_MODES.CLI,
         prepareDispatchCurrent: async () => {
           const current = await discover();
-          if (!current || !isSameGatewayLockIdentity(owner, current)) {
+          if (
+            !current ||
+            current.port === undefined ||
+            !isSameGatewayLockIdentity({ ...owner, port }, { ...current, port: current.port })
+          ) {
             refuse(new Error("Gateway owner changed before dispatch"));
           }
         },
@@ -306,17 +233,6 @@ export async function runWithLocalStateOwner<T>(params: {
     assertTargetCurrent();
     const hosted = captureGatewayStateOwner(databasePath);
     if (hosted) {
-      const offline = offlineOwnerResources.get(paths.ownerLockPath);
-      if (offline && offline.ownerId === hosted.ownerId) {
-        return await offline.resources.run(async () => {
-          try {
-            return await runLocal(hosted.assertCurrent);
-          } catch (error) {
-            offline.uncertainCleanup ||= hasCommandProcessCleanupError(error);
-            throw error;
-          }
-        });
-      }
       return await runLocal(hosted.assertCurrent);
     }
     const owner = await discover();
@@ -343,29 +259,12 @@ export async function runWithLocalStateOwner<T>(params: {
       assertOwnerCurrent: () => lock.assertCurrent(),
       assertDatabaseAccess: lock.assertDatabaseAccess,
     });
-    const offline = {
-      ownerId: captureGatewayStateOwner(databasePath)?.ownerId,
-      resources,
-      uncertainCleanup: false,
-    };
-    offlineOwnerResources.set(paths.ownerLockPath, offline);
     try {
       return await resources.run(() => runLocal(lock.assertCurrent));
-    } catch (error) {
-      offline.uncertainCleanup ||= hasCommandProcessCleanupError(error);
-      throw error;
     } finally {
       // Failed cleanup keeps physical custody; release cannot race accepted worker/native work.
       await resources.close();
-      // Unknown child settlement keeps physical custody after the process owner stops lending.
-      const retained = offline.uncertainCleanup
-        ? tryBorrowGatewayStateOwner(databasePath)
-        : undefined;
       await lock.release();
-      retained?.assertCurrent();
-      if (offlineOwnerResources.get(paths.ownerLockPath) === offline) {
-        offlineOwnerResources.delete(paths.ownerLockPath);
-      }
     }
   } finally {
     finished.resolve();

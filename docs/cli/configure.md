@@ -7,10 +7,6 @@ title: "Configure"
 
 # `openclaw configure`
 
-Workspace provisioning requires the local Gateway to be stopped. Stop it through
-its service owner before selecting the workspace section, then rerun configure.
-The provisioning owner retains exclusive access until workspace state has settled.
-
 Interactive prompts for targeted changes to an existing setup: credentials, devices, agent defaults, gateway, channels, plugins, skills, and health checks.
 
 Use `openclaw onboard` or `openclaw setup` for the full guided first-run journey, `openclaw setup --baseline` for the baseline config/workspace only, and `openclaw channels add` when you only need channel account setup.

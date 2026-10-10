@@ -199,6 +199,44 @@ describe("Skill Workshop page", () => {
     expect(button(page, "Undo")).toBeUndefined();
   });
 
+  it("opens the skill a chat notice links to, even when it is archived", async () => {
+    const archivedVersion = "20260930T010000000Z-archive";
+    const request = vi.fn(async (method: string) => {
+      if (method === "skills.workshop.list") {
+        return {
+          ...list,
+          archived: [
+            ...list.archived,
+            {
+              name: "release-notes",
+              live: false,
+              versions: [{ id: archivedVersion, action: "archive", createdAtMs: Date.now() }],
+            },
+          ],
+        };
+      }
+      return method === "skills.workshop.changes"
+        ? { changes: [] }
+        : { content: "", files: ["SKILL.md"] };
+    });
+    const page = await mount(createContext(request, { search: "?skill=release-notes" }));
+
+    await vi.waitFor(() =>
+      expect(request).toHaveBeenCalledWith("skills.workshop.read", {
+        agentId: "research",
+        name: "release-notes",
+        filePath: "SKILL.md",
+        versionId: archivedVersion,
+      }),
+    );
+    expect(request).not.toHaveBeenCalledWith(
+      "skills.workshop.read",
+      expect.objectContaining({ name: SKILL }),
+    );
+    // The Archived list is shown, so the linked skill is visible: sorting exists only on Active.
+    await vi.waitFor(() => expect(page.querySelector(".sw-sort")).toBeNull());
+  });
+
   it("offers no undo to an operator without admin scope", async () => {
     const page = await mount(
       createContext(workshopGateway(), {
@@ -208,6 +246,45 @@ describe("Skill Workshop page", () => {
     );
     await vi.waitFor(() => expect(page.textContent).toContain("tightened reconciliation step"));
     expect(button(page, "Undo")).toBeUndefined();
+  });
+
+  it("compares a saved version's own metadata against today's", async () => {
+    const skillFile = (description: string) =>
+      `---\nname: ${SKILL}\ndescription: ${description}\n---\n\nSynthetic procedure`;
+    const workshopRequest = workshopGateway();
+    const request = vi.fn(async (method: string, params?: { versionId?: string }) =>
+      method === "skills.workshop.read"
+        ? {
+            name: SKILL,
+            filePath: "SKILL.md",
+            content: skillFile(
+              params?.versionId ? "Synthetic old summary" : list.skills[0]!.description,
+            ),
+            files: ["SKILL.md"],
+          }
+        : workshopRequest(method),
+    );
+    const page = await mount(createContext(request));
+    await vi.waitFor(() => expect(page.textContent).toContain("Synthetic procedure"));
+
+    page.querySelectorAll<HTMLButtonElement>(".sw-tab")[2]!.click();
+    await page.updateComplete;
+    button(page, "Compare")!.click();
+
+    await vi.waitFor(() =>
+      expect(page.querySelector(".sw-detail__desc")?.textContent).toBe("Synthetic old summary"),
+    );
+    const lines = Array.from(page.querySelectorAll(".sw-diff__line"), (line) => [
+      line.classList.contains("sw-diff__line--remove")
+        ? "-"
+        : line.classList.contains("sw-diff__line--add")
+          ? "+"
+          : " ",
+      line.querySelector(".sw-diff__text")?.textContent,
+    ]);
+    expect(lines).toContainEqual(["-", "description: Synthetic old summary"]);
+    expect(lines).toContainEqual(["+", `description: ${list.skills[0]!.description}`]);
+    expect(page.querySelector(".sw-diff__same")).toBeNull();
   });
 
   it("switches the learning mode through the config key", async () => {

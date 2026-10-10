@@ -13,9 +13,11 @@ import {
   addSessionMember,
   removeSessionMember,
 } from "../config/sessions/session-sharing-store.native.js";
-import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { registerOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
-import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
+import {
+  openOpenClawAgentDatabase,
+  runOpenClawAgentWriteTransaction,
+} from "../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
@@ -43,14 +45,9 @@ function inWriterTransaction(db: DatabaseSync, check: () => void) {
 }
 
 describe("committed session mutation authorization", () => {
-  it.each([
-    { mode: "resident", revocation: "membership" },
-    { mode: "fixed", revocation: "membership" },
-    { mode: "fixed", revocation: "schema-owner" },
-    { mode: "fixed", revocation: "schema-version" },
-  ] as const)(
-    "keeps $mode worker grants current after $revocation changes without shared-state reads",
-    async ({ mode, revocation }) => {
+  it.each(["resident", "fixed"] as const)(
+    "keeps %s worker grants current after membership changes without shared-state reads",
+    async (mode) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
         const cfg = rolePolicyConfig();
         if (mode === "fixed") {
@@ -159,17 +156,9 @@ describe("committed session mutation authorization", () => {
           } else {
             const foreign = new DatabaseSync(source.path);
             try {
-              if (revocation === "schema-owner") {
-                foreign
-                  .prepare("UPDATE schema_meta SET agent_id = ? WHERE meta_key = 'primary'")
-                  .run("another-owner");
-              } else if (revocation === "schema-version") {
-                foreign.exec(`PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION + 1}`);
-              } else {
-                foreign
-                  .prepare("DELETE FROM session_members WHERE session_key = ? AND identity_id = ?")
-                  .run(sessionKey, identityId);
-              }
+              foreign
+                .prepare("DELETE FROM session_members WHERE session_key = ? AND identity_id = ?")
+                .run(sessionKey, identityId);
             } finally {
               foreign.close();
             }
@@ -371,18 +360,20 @@ describe("committed session mutation authorization", () => {
           throw new Error("Expected session mutation authorization");
         }
         const owner = openOpenClawAgentDatabase({ agentId: "main" });
-        inWriterTransaction(owner.db, () => {
-          if (opened === "before") {
+        runOpenClawAgentWriteTransaction(
+          () => {
+            if (opened === "before") {
+              expect(() => authorization.assertCurrent()).not.toThrow();
+            }
+            setCanonicalSqliteSessionMainKey(owner, "work");
+            owner.db
+              .prepare("UPDATE session_nodes SET parent_session_key = ? WHERE session_key = ?")
+              .run("agent:main:unrecorded-parent", "agent:main:main");
             expect(() => authorization.assertCurrent()).not.toThrow();
-          }
-          setCanonicalSqliteSessionMainKey(owner, "work");
-          owner.db
-            .prepare("UPDATE session_nodes SET parent_session_key = ? WHERE session_key = ?")
-            .run("agent:main:unrecorded-parent", "agent:main:main");
-          expect(() => authorization.assertCurrent()).not.toThrow();
-          expect(() => authorization.assertCurrent()).not.toThrow();
-          owner.db.exec("COMMIT");
-        });
+            expect(() => authorization.assertCurrent()).not.toThrow();
+          },
+          { agentId: "main" },
+        );
 
         // A policy change never makes this valid target depend on an invalid sibling.
         inWriterTransaction(owner.db, () => {

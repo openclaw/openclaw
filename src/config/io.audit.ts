@@ -7,13 +7,10 @@ import {
   readStringField,
 } from "@openclaw/normalization-core/record-coerce";
 import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
+import { createSqliteAuditRecordWriter } from "../infra/sqlite-audit-record-store.async.js";
 import { createSqliteAuditRecordStore } from "../infra/sqlite-audit-record-store.js";
 import { redactSecrets } from "../logging/redact.js";
-import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { resolveConfigAuditStoreEnv } from "./config-journal-snapshot.js";
-import { mutateConfigState } from "./config-state-mutation.js";
-import { CONFIG_AUDIT_SCOPE, CONFIG_AUDIT_MAX_ENTRIES } from "./io.audit-policy.js";
-export { CONFIG_AUDIT_SCOPE, CONFIG_AUDIT_MAX_ENTRIES } from "./io.audit-policy.js";
 import type { ConfigHealthFingerprint } from "./io.health-state.types.js";
 import type { ConfigWriteAuditOrigin } from "./io.types.js";
 import { resolveStateDir } from "./paths.js";
@@ -132,6 +129,8 @@ function capArgv(argv: readonly string[] | undefined): string[] {
   return argv.slice(0, CONFIG_AUDIT_ARGV_CAP);
 }
 
+export const CONFIG_AUDIT_SCOPE = "config-audit";
+export const CONFIG_AUDIT_MAX_ENTRIES = 50_000;
 export const CONFIG_AUDIT_STORE_LABEL =
   "SQLite diagnostic_events/config-audit state (latest 50000 rows)";
 const LEGACY_CONFIG_AUDIT_LOG_FILENAME = ["config-audit", "jsonl"].join(".");
@@ -538,26 +537,29 @@ export function captureConfigAuditAppender(
   params: Pick<ConfigAuditAppendParams, "env" | "homedir">,
   assertCurrent?: () => void,
 ): (record: ConfigAuditRecord) => Promise<void> {
-  const env = resolveConfigAuditStoreEnv(params);
-  let captured: ReturnType<typeof captureOpenClawStateWorkerContext> | undefined;
-  let captureError: unknown;
+  let captured:
+    | { writer: ReturnType<typeof createSqliteAuditRecordWriter<ConfigAuditRecord>> }
+    | { error: unknown };
   try {
-    captured = captureOpenClawStateWorkerContext({ env });
+    captured = {
+      writer: createSqliteAuditRecordWriter<ConfigAuditRecord>({
+        scope: CONFIG_AUDIT_SCOPE,
+        maxEntries: CONFIG_AUDIT_MAX_ENTRIES,
+        env: resolveConfigAuditStoreEnv(params),
+        assertCurrent,
+      }),
+    };
   } catch (error) {
-    captureError = error;
+    captured = { error };
   }
   return async (input) => {
     assertCurrent?.();
     try {
-      if (!captured) {
-        throw captureError;
+      if ("error" in captured) {
+        throw captured.error;
       }
-      const context = captured;
       const record = sanitizeConfigAuditRecord(input);
-      await mutateConfigState({ kind: "audit", record }, env, () => {
-        context.admission.assertCurrent();
-        assertCurrent?.();
-      });
+      await captured.writer.register(configAuditEntryKey(record), record, Date.parse(record.ts));
     } catch {
       assertCurrent?.();
       // best-effort

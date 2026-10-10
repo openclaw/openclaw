@@ -1,4 +1,3 @@
-import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { createAgent } from "../../agents/agent-create.js";
 import { hasAgentRosterProperty, tryResolveSoleAgentId } from "../../agents/agent-roster.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
@@ -11,16 +10,10 @@ import {
 } from "../../commands/agents.config.js";
 import { mutateConfigFileWithRetry, transformConfigFileWithRetry } from "../../config/config.js";
 import type { ConfigWriteOptions } from "../../config/io.js";
-import {
-  attachRuntimeConfigWriteApplication,
-  copyRuntimeConfigWriteApplication,
-  createRuntimeConfigWriteApplication,
-} from "../../config/runtime-write-application.js";
+import { copyRuntimeConfigWriteApplication } from "../../config/runtime-write-application.js";
 import { resolveSessionTranscriptsDirForAgent } from "../../config/sessions.js";
 import type { AgentConfig } from "../../config/types.agents.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { captureGatewayRootWorkAdmissionContinuationScope } from "../../process/gateway-work-admission.js";
-import type { RespondFn } from "./types.js";
 
 type AgentDeleteMutationResult = {
   workspaceDir: string;
@@ -32,46 +25,6 @@ type AgentDeleteMutationResult = {
 export class AgentConfigPreconditionError extends Error {}
 
 export class AgentModelSelectionError extends Error {}
-
-export function createAgentConfigApplication(respond: RespondFn) {
-  const application = createRuntimeConfigWriteApplication(
-    captureGatewayRootWorkAdmissionContinuationScope()?.run,
-  );
-  return {
-    attach: <T extends object>(options: T) =>
-      attachRuntimeConfigWriteApplication(options, application),
-    confirm: async () => {
-      const outcome = application.claimed ? await application.result : "unclaimed";
-      if (outcome === "applied") {
-        return true;
-      }
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.UNAVAILABLE,
-          `Agent configuration was saved but its application to the active Gateway was not confirmed (${outcome}); run config.get, then apply the saved config or restart the Gateway.`,
-        ),
-      );
-      return false;
-    },
-  };
-}
-
-/** Carry the Gateway's publication receipt through the canonical creation transaction. */
-export async function createAgentConfigEntry(
-  params: Omit<Parameters<typeof createAgent>[0], "transformConfig">,
-  writeOptions: ConfigWriteOptions,
-) {
-  return await createAgent({
-    ...params,
-    transformConfig: (mutation) =>
-      transformConfigFileWithRetry({
-        ...mutation,
-        writeOptions: copyRuntimeConfigWriteApplication(writeOptions, mutation.writeOptions ?? {}),
-      }),
-  });
-}
 
 type AgentConfigUpdate = Omit<Parameters<typeof applyAgentConfig>[1], "agentDir"> & {
   agentRuntime?: string;
@@ -120,6 +73,20 @@ export function isImplicitAgentModelUpdate(
     isModelOnlyUpdate(params) &&
     params.agentRuntime !== undefined
   );
+}
+
+export function createAgentConfigEntry(
+  params: Omit<Parameters<typeof createAgent>[0], "transformConfig">,
+  writeOptions?: ConfigWriteOptions,
+) {
+  return createAgent({
+    ...params,
+    transformConfig: (mutation) =>
+      transformConfigFileWithRetry({
+        ...mutation,
+        writeOptions: copyRuntimeConfigWriteApplication(writeOptions, mutation.writeOptions ?? {}),
+      }),
+  });
 }
 
 export async function updateAgentConfigEntry(

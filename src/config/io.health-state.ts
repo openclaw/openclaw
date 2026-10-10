@@ -10,7 +10,7 @@ import {
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
-import { mutateConfigState } from "./config-state-mutation.js";
+import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
 import {
   prepareConfigHealthPatch,
   readConfigHealthStateInDatabase,
@@ -296,10 +296,14 @@ export function captureConfigHealthStateStore(
           const prior = previous.basis?.[configPath];
           const expected = previous.basis === null ? undefined : prior ? { ...prior } : null;
           const updatedAtMs = Date.now();
-          const applied = await mutateConfigState(
-            { kind: "health", configPath, patch, expected, updatedAtMs },
-            env,
-            guard.assertCurrent,
+          const applied = await runOpenClawStateWorkerOperation(
+            captured.context,
+            (scope) =>
+              scope.execute({
+                type: "config.health.patch",
+                input: { configPath, patch, expected, updatedAtMs },
+              }),
+            { assertCurrent: guard.assertCurrent },
           );
           if (applied && observations.has(observation)) {
             loggedHealthWriteFailures.delete(databasePath);

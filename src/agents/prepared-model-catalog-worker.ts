@@ -10,6 +10,7 @@ import { WorkerTaskError, WorkerTaskPool } from "../infra/worker-task-pool.js";
 import type { Model } from "../llm/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { captureRemoteModelCatalogSnapshot } from "../model-catalog/remote-overlay.js";
+import { resolveCodexClientVersion } from "../plugin-sdk/codex-client-version-runtime.js";
 import {
   getPluginCacheRetirementSignal,
   getPluginMetadataSnapshotCache,
@@ -280,6 +281,7 @@ type PreparedModelCatalogWorker = Readonly<{
   loadCatalog: (
     providerIds?: readonly string[],
     onRecovery?: (error: Error) => void,
+    refresh?: boolean,
   ) => Promise<
     Pick<PreparedModelRuntimeCatalogFacts, "modelCatalog" | "configuredRuntimeModels"> & {
       runtimeModels: Map<string, Model[]>;
@@ -310,7 +312,7 @@ export function createPreparedModelCatalogWorker(
   let pendingAuth:
     | { key: string; promise: ReturnType<PreparedModelCatalogWorker["loadAuth"]> }
     | undefined;
-  const captures = new Map<AbortController, Promise<PreparedSyntheticAuthFacts>>();
+  const captures = new Map<AbortController, Promise<unknown>>();
   const tasks = new Map<
     Promise<PreparedModelWorkerResult>,
     { onRecovery?: (error: Error) => void }
@@ -420,36 +422,52 @@ export function createPreparedModelCatalogWorker(
       const capture = withPluginRuntimeGenerationScope(
         { metadataSnapshot, pluginRegistry: params.pluginRegistry },
         () =>
-          captureProviderSyntheticAuthFacts({
-            config: input.config,
-            env: input.env,
-            workspaceDir: input.workspaceDir,
-            providerRefs:
-              command.kind === "catalog" && !command.providerIds
-                ? [
-                    ...manifestRefs,
-                    // Full discovery also runs credential-only providers, whose runtime hooks can
-                    // answer for refs no manifest declares (such as the provider's own id). The
-                    // closed worker cannot probe those refs, so capture them here.
-                    ...listRegistrySyntheticAuthProviderRefs(params.pluginRegistry),
-                    ...workerInput.providerIds,
-                  ]
-                : [
-                    ...providerScope,
-                    ...scopeSyntheticAuthProviderRefs(manifestRefs, providerScope),
-                  ],
-            signal: controller.signal,
-          }),
+          Promise.all([
+            captureProviderSyntheticAuthFacts({
+              config: input.config,
+              env: input.env,
+              workspaceDir: input.workspaceDir,
+              providerRefs:
+                command.kind === "catalog" && !command.providerIds
+                  ? [
+                      ...manifestRefs,
+                      // Full discovery also runs credential-only providers, whose runtime hooks can
+                      // answer for refs no manifest declares (such as the provider's own id). The
+                      // closed worker cannot probe those refs, so capture them here.
+                      ...listRegistrySyntheticAuthProviderRefs(params.pluginRegistry),
+                      ...workerInput.providerIds,
+                    ]
+                  : [
+                      ...providerScope,
+                      ...scopeSyntheticAuthProviderRefs(manifestRefs, providerScope),
+                    ],
+              signal: controller.signal,
+            }),
+            // Codex turns run in this process, so its binary decision is what discovery reports.
+            command.kind === "catalog" &&
+            (!command.providerIds || command.providerIds.includes("openai"))
+              ? resolveCodexClientVersion({
+                  config: input.config,
+                  env: input.env,
+                  agentDir: input.agentDir,
+                })
+              : undefined,
+          ]),
       );
       captures.set(controller, capture);
       let syntheticAuth: PreparedSyntheticAuthFacts;
+      let codexClientVersion: string | undefined;
       try {
-        syntheticAuth = await capture;
+        [syntheticAuth, codexClientVersion] = await capture;
       } finally {
         captures.delete(controller);
       }
       controller.signal.throwIfAborted();
-      const value = { ...command, syntheticAuth };
+      const value = {
+        ...command,
+        syntheticAuth,
+        ...(codexClientVersion ? { codexClientVersion } : {}),
+      };
       const shared = gatewayOwned
         ? await getGatewayCatalogPool(workerInput, metadataSnapshot, environmentFingerprint)
         : undefined;
@@ -562,11 +580,8 @@ export function createPreparedModelCatalogWorker(
   };
 
   return {
-    loadCatalog: async (providerIds, onRecovery) => {
-      const message = await request(
-        { kind: "catalog", ...(providerIds ? { providerIds } : {}) },
-        onRecovery,
-      );
+    loadCatalog: async (providerIds, onRecovery, refresh) => {
+      const message = await request({ kind: "catalog", providerIds, refresh }, onRecovery);
       if (message.kind !== "catalog") {
         throw new Error("prepared model catalog worker returned an auth refresh result");
       }

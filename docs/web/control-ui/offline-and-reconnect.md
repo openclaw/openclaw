@@ -61,12 +61,21 @@ and account. Switching accounts cannot send or overwrite the previous account's
 input. Retiring offline access does not discard unsent drafts or queued work;
 that work remains under its original storage owner. Live state replaces cached
 roster data on connect, and chat resumes from its saved transcript cursor. The
+cached transcript opens at its latest messages without an initial scroll animation.
+It retains participant and completed-work timing information and the last task
+progress card for display while connecting; live Gateway results replace those
+cached facts in place. Cached progress does not authorize offline actions. The
 first chat request waits up to 300 ms for stored history before falling back to
 a live read. Agent switches and stale asynchronous reads retain their own
 identity checks. Agent pickers and the agent directory wait for a live roster;
 stored agent lists cannot establish the current role’s discovery permissions. Short
 conversation links use cached routing defaults and session rows before agent
 discovery; the Gateway revalidates the established session after connecting.
+
+Exact conversation links also wait for the scoped cached roster before presenting
+their header. Dashboard layouts restore before the pane renders, and embedded
+HTML widgets keep one loading surface while their board metadata and document
+arrive. Widget requests still require the current Gateway connection.
 
 Boot and roster records retain the existing 30-day expiry, and transcripts keep
 their bounded cache limits. Clearing site data removes local recovery data.
@@ -105,10 +114,15 @@ Gateway-rendered private HTML, API responses, or authorization tickets are
 added to this shell cache.
 
 Reloads reuse cached build-versioned fonts, themes, and the web manifest without
-contacting the Gateway. The service worker retains the current build and at most
-two previous builds, so open tabs can still load their original assets. Uploaded
-profile avatars use private browser caching only when the URL matches the image's
-content revision; unversioned URLs and external avatar fallbacks still revalidate.
+contacting the Gateway. The service worker keeps only the current build's assets.
+After an update, open tabs reload automatically unless unsaved-work protection
+blocks recovery; then save or discard the protected work and use the **Reload**
+banner. Uploaded profile avatars use private browser caching only when the URL
+matches the image's content revision; unversioned URLs and external avatar
+fallbacks still revalidate.
+Content-addressed plugin interface assets stay in the private browser HTTP cache
+across grant renewal; requests reaching the Gateway still require current plugin
+authorization, and plugin data remains subject to per-call RPC authorization.
 
 Online navigations still go directly to the network so reverse-proxy HTTP
 authentication dialogs work normally. If the browser reports itself online
@@ -144,7 +158,8 @@ an explicit browser reload or closing the browser tab discards them.
 ## Visualizations during a connection loss
 
 Already-rendered inline visualizations keep their iframe and local interaction
-state when the same Gateway connection temporarily drops. They do not need to
+state when the connection to the same Gateway and account temporarily drops,
+including wake recovery and **Retry now**. They do not need to
 download their contents again just to remain visible. On reconnect, the client
 revalidates the document; changed content or a changed account, Gateway, or
 authorization scope replaces the old view. Server-dependent widget actions
@@ -295,7 +310,7 @@ the **System · restart recovery** notice shows that outcome and asks you to sen
 message to continue. It does not mean the agent resumed. Messages forwarded from
 other sessions keep their own delivery status next to each message.
 
-Once the Gateway confirms that a message is in the transcript, reconnecting retires its temporary browser copy even when the original message is outside the latest history page. Loading older history shows the saved message in its original position without adding a second copy.
+Once the Gateway confirms that a message is in the transcript, reconnecting retires its temporary browser copy even when the original message is outside the latest history page. Delivery checks also clear confirmed later messages when an earlier unconfirmed message still blocks the queue, so those delivered copies no longer raise sidebar or Inbox attention. This does not retry the uncertain message or send later queued messages out of order. Loading older history shows the saved message in its original position without adding a second copy.
 
 Retiring a delivered attachment does not discard the run's completion. If the browser misses
 that completion, a queue recovery read that confirms the same session and run have finished
@@ -410,3 +425,12 @@ browser-stored credential. The login gate appears only after the initial connect
 Gateway actively rejects authentication (bad token/password, missing trusted identity, revoked
 pairing). Transient connection failures retry automatically; authentication failures explain
 what needs your input.
+
+## Reloading a session link
+
+Authenticated app documents carry the same presentation and capability config as
+`control-ui-config.json`, so the first render can use the configured assistant
+identity without waiting for the WebSocket. These documents use private, no-store
+caching. Public and unauthenticated documents carry no protected bootstrap data;
+the app starts its config request alongside connection startup. Reconnects and
+configuration-change events refresh the serving Gateway's config.

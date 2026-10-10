@@ -11,6 +11,7 @@ import { compareCloudProfiles, resolveCloudProfileIcon } from "../../components/
 import { t } from "../../i18n/index.ts";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import { registerSessionPlacementEnglish } from "../../i18n/locales/en-session-placement.ts";
+import { readSessionPlacementPolicy } from "../../lib/sessions/session-placement-policy.ts";
 import type { DraftCloudProfile, DraftEnvironment } from "./discovery.ts";
 import {
   cloudMachinesForOs,
@@ -23,10 +24,23 @@ import {
 registerNewSessionSetupEnglish();
 registerSessionPlacementEnglish();
 
+/** Read the destination directive through the existing session-writer bootstrap grant. */
+export async function requestSessionPlacement(client: Pick<GatewayBrowserClient, "request">) {
+  const policy = await readSessionPlacementPolicy(client);
+  const required = policy.requiredProfile;
+  return {
+    requiredProfile: required?.id,
+    profiles: readDraftCloudProfiles(required ? [required] : []),
+  };
+}
+
 export async function requestPlaceCatalog(
   client: Pick<GatewayBrowserClient, "request">,
   runtimeId?: string,
-): Promise<{ profiles: DraftCloudProfile[]; environments: DraftEnvironment[] }> {
+): Promise<{
+  profiles: DraftCloudProfile[];
+  environments: DraftEnvironment[];
+}> {
   const result = await client.request<EnvironmentsListResult>(
     "environments.list",
     runtimeId ? { runtimeId } : {},
@@ -393,57 +407,48 @@ function renderCloudConfiguration(params: {
   onSelectOs: (id: string) => void;
   onSelectMachine: (id: string) => void;
 }) {
-  const operatingSystems = params.operatingSystems.filter((os) => !os.disabledReason);
-  const fixedOs = operatingSystems.length === 1 ? operatingSystems[0] : undefined;
-  const fixedMachine = params.machines.length === 1 ? params.machines[0] : undefined;
   const groups = [
-    [
-      operatingSystems.length,
-      t("newSession.operatingSystem"),
-      () =>
-        fixedOs
-          ? html`<span class="new-session-page__fixed-os" data-value=${`os:${fixedOs.id}`}
-              >${fixedOs.label}</span
-            >`
-          : renderCloudChoiceMenuItems({
-              kind: "os",
-              choices: operatingSystems,
-              selectedId: params.selectedOs,
-              suggestedId: params.suggested ? defaultCloudOs(params.profile) : undefined,
-              submitting: params.submitting,
-              onSelect: params.onSelectOs,
-            }),
-    ],
-    [
-      params.machines.length,
-      t("newSession.machine"),
-      () =>
-        fixedMachine
-          ? renderFixedMachine(fixedMachine)
-          : renderCloudChoiceMenuItems({
-              kind: "machine",
-              choices: params.machines,
-              selectedId: params.selectedMachine,
-              suggestedId: params.suggested
-                ? defaultCloudMachine(params.profile, params.selectedOs)?.id
-                : undefined,
-              submitting: params.submitting,
-              onSelect: params.onSelectMachine,
-            }),
-    ],
+    {
+      kind: "os",
+      label: t("newSession.operatingSystem"),
+      choices: params.operatingSystems.filter((os) => !os.disabledReason),
+      selectedId: params.selectedOs,
+      suggestedId: params.suggested ? defaultCloudOs(params.profile) : undefined,
+      onSelect: params.onSelectOs,
+    },
+    {
+      kind: "machine",
+      label: t("newSession.machine"),
+      choices: params.machines,
+      selectedId: params.selectedMachine,
+      suggestedId: params.suggested
+        ? defaultCloudMachine(params.profile, params.selectedOs)?.id
+        : undefined,
+      onSelect: params.onSelectMachine,
+    },
   ] as const;
   return html`<section
     class="new-session-page__cloud-configuration"
     aria-label=${params.profile.id}
   >
-    ${groups.map(([count, label, renderChoices]) =>
-      count
-        ? html`<div class="new-session-page__environment-heading">${label}</div>
-            <div class="new-session-page__cloud-choice-list" role="group" aria-label=${label}>
-              ${renderChoices()}
-            </div>`
-        : nothing,
-    )}
+    ${groups.map((group) => {
+      if (!group.choices.length) {
+        return nothing;
+      }
+      const fixed = group.choices.length === 1 ? group.choices[0] : undefined;
+      return html`<div class="new-session-page__environment-heading">${group.label}</div>
+        <div class="new-session-page__cloud-choice-list" role="group" aria-label=${group.label}>
+          ${
+            fixed
+              ? group.kind === "machine"
+                ? renderFixedMachine(fixed)
+                : html`<span class="new-session-page__fixed-os" data-value=${`os:${fixed.id}`}
+                    >${fixed.label}</span
+                  >`
+              : renderCloudChoiceMenuItems({ ...group, submitting: params.submitting })
+          }
+        </div>`;
+    })}
   </section>`;
 }
 

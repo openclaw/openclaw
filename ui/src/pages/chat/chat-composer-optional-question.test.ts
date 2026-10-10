@@ -59,7 +59,7 @@ it.each(["draft", "focus"])(
     );
     await (container.firstElementChild as HTMLElement & { updateComplete: Promise<unknown> })
       .updateComplete;
-    expect(container.textContent).toContain("Optional · work can continue");
+    expect(container.textContent).not.toContain("Optional · work can continue");
     expect(container.textContent).toContain("1 unanswered question");
     if (editing === "focus") {
       expect(document.activeElement).toBe(textarea);

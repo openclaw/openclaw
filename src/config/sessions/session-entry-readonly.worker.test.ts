@@ -1,6 +1,14 @@
-import { mkdirSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  symlinkSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { dirname, join } from "node:path";
-import type { DatabaseSync } from "node:sqlite";
+import { backup, type DatabaseSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
 import {
   isSessionNodePayloadSelect,
@@ -55,7 +63,7 @@ function createEntryFixture(env: NodeJS.ProcessEnv) {
   return { database, scope };
 }
 
-it("reuses listing revisions without payload scans and invalidates foreign edits and reopened readers", async () => {
+it("reuses listing revisions without payload scans and invalidates sibling edits and reopened readers", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
     const database = openOpenClawAgentDatabase({ agentId: "main", env });
     const sessionKey = "agent:main:catalog-revision";
@@ -66,7 +74,7 @@ it("reuses listing revisions without payload scans and invalidates foreign edits
     });
     const target = { agentId: database.agentId, path: database.path };
     await closeOpenClawAgentDatabaseByPathAsync(database.path, database.agentId);
-    const peer = new (nodeSqlite.requireNodeSqlite().DatabaseSync)(target.path);
+    const peer = nodeSqlite.openNodeSqliteDatabase(target.path);
     const retained = new OpenClawAgentDatabaseReadOnlyScope();
     const read = (ifRevision?: string) =>
       readSessionEntryList({
@@ -151,7 +159,7 @@ it("reuses listing revisions without payload scans and invalidates foreign edits
   });
 });
 
-it("resolves runtime targets through one fresh admitted reader", async () => {
+it("resolves runtime targets through an admitted reader without freshness probes", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
     const database = openOpenClawAgentDatabase({ agentId: "main", env });
     const sessionId = "runtime-target-session";
@@ -181,19 +189,22 @@ it("resolves runtime targets through one fresh admitted reader", async () => {
         target: { agentId: "main", sessionId, sessionKey, storePath: database.path },
         source: { agentId: database.agentId, path: database.path },
       });
-      expect(queries.counts.freshness).toBe(1);
+      expect(queries.counts.freshness).toBe(0);
     } finally {
       queries.restore();
     }
 
-    const peer = new (nodeSqlite.requireNodeSqlite().DatabaseSync)(database.path);
+    const replacement = `${database.path}.replacement`;
+    await backup(database.db, replacement);
+    await closeOpenClawAgentDatabaseByPathAsync(database.path);
+    const peer = new (nodeSqlite.requireNodeSqlite().DatabaseSync)(replacement);
     try {
       peer.exec(`PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION + 1}`);
-      await expect(read()).rejects.toThrow("newer schema version");
     } finally {
-      peer.exec(`PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION}`);
       peer.close();
     }
+    renameSync(replacement, database.path);
+    await expect(read()).rejects.toThrow("newer schema version");
   });
 });
 

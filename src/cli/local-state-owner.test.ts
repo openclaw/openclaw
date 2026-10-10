@@ -19,6 +19,38 @@ afterEach(async () => {
   vi.unstubAllEnvs();
 });
 
+it.each(["missing", "zero-byte"])(
+  "preserves a %s database when the local operation refuses before needing config",
+  async (kind) => {
+    const root = roots.make("openclaw-routing-refusal-");
+    const configPath = path.join(root, "openclaw.json");
+    const databasePath = path.join(root, "state", "openclaw.sqlite");
+    await fs.mkdir(path.dirname(databasePath));
+    await fs.writeFile(configPath, "{}");
+    if (kind === "zero-byte") {
+      await fs.writeFile(databasePath, "");
+    }
+    vi.stubEnv("OPENCLAW_STATE_DIR", root);
+    vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
+    const refusal = new Error("Outcome refused before writing");
+    await expect(
+      runWithLocalStateOwner({
+        method: "backup.recordOutcome",
+        params: {},
+        target: "backup outcome ledger",
+        runLocal: async () => {
+          throw refusal;
+        },
+      }),
+    ).rejects.toBe(refusal);
+    if (kind === "missing") {
+      await expect(fs.readFile(databasePath)).rejects.toMatchObject({ code: "ENOENT" });
+    } else {
+      expect(await fs.readFile(databasePath)).toEqual(Buffer.alloc(0));
+    }
+  },
+);
+
 it("refuses an ambient state/config switch during offline admission before creating a worktree", async () => {
   const root = roots.make("openclaw-routing-selector-");
   const repoRoot = await initializeRepository(root);
@@ -65,39 +97,4 @@ it("refuses an ambient state/config switch during offline admission before creat
   for (const config of configs) {
     await expect(fs.access(config.worktreeRoot)).rejects.toMatchObject({ code: "ENOENT" });
   }
-});
-
-it("refuses an explicit nested target override before admitting the second root", async () => {
-  const root = roots.make("openclaw-routing-nested-");
-  const selected = {
-    ...process.env,
-    OPENCLAW_STATE_DIR: path.join(root, "selected"),
-    OPENCLAW_CONFIG_PATH: path.join(root, "selected", "openclaw.json"),
-  };
-  const replacement = {
-    ...selected,
-    OPENCLAW_STATE_DIR: path.join(root, "replacement"),
-    OPENCLAW_CONFIG_PATH: path.join(root, "replacement", "openclaw.json"),
-  };
-  const nestedMutation = vi.fn(async () => {});
-  await expect(
-    runWithLocalStateOwner({
-      env: selected,
-      method: "fixture.outer",
-      params: {},
-      target: "selected root",
-      runLocal: async () => {
-        await Promise.resolve();
-        return await runWithLocalStateOwner({
-          env: replacement,
-          method: "fixture.nested",
-          params: {},
-          target: "replacement root",
-          runLocal: nestedMutation,
-        });
-      },
-    }),
-  ).rejects.toThrow("Nested operation changed the selected state root or config path");
-  expect(nestedMutation).not.toHaveBeenCalled();
-  await expect(fs.access(replacement.OPENCLAW_STATE_DIR)).rejects.toMatchObject({ code: "ENOENT" });
 });

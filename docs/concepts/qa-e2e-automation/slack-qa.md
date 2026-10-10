@@ -65,6 +65,12 @@ temporary capture state is removed, then removes only owned fixtures before
 releasing the lease. Private `<scenario-id>-slack-e2e.json` receipts distinguish
 accepted writes, stored state, and incomplete cleanup.
 
+With `agentE2e: true`, message scenarios in the leased channel also record their
+driver roots through the native receipt owner. Cleanup includes those roots and
+their captured SUT replies and standalone progress messages even when a scenario
+assertion fails. Capture reads acquire current database admission so Gateway
+restarts do not invalidate final cleanup.
+
 ### Direct credential setup
 
 Required env when `--credential-source env`:

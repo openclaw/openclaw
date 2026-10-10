@@ -23,7 +23,10 @@ import { readSessionTranscriptCurrentTurnEntry } from "./session-accessor.sqlite
 import { readTranscriptRawDeltaInDatabase } from "./session-accessor.sqlite-delta.js";
 import { readExactSessionEntryRow } from "./session-accessor.sqlite-entry-read.js";
 import { listTranscriptInstancesFromDatabase } from "./session-accessor.sqlite-history.js";
-import { readCurrentProjectionSnapshot } from "./session-accessor.sqlite-projection-read.js";
+import {
+  readCurrentProjectionSnapshot,
+  type CurrentTranscriptProjection,
+} from "./session-accessor.sqlite-projection-read.js";
 import {
   loadTranscriptReadSnapshotSync,
   readTranscriptExportSnapshotReadOnlySync,
@@ -33,7 +36,10 @@ import {
   readVisibleMessageRange,
   resolveVisibleMessagePositions,
 } from "./session-accessor.sqlite-reset-window.js";
-import { hasSessionTranscriptMessageInDatabase } from "./session-accessor.sqlite-transcript-metadata-read.js";
+import {
+  hasSessionTranscriptMessageInDatabase,
+  readLatestAssistantTextFromDatabase,
+} from "./session-accessor.sqlite-transcript-metadata-read.js";
 import { readTranscriptStatsFromDatabase } from "./session-accessor.sqlite-transcript-stats.js";
 import { readHarnessCompletionSourceInDatabase } from "./session-harness-completion-source.kernel.js";
 import {
@@ -165,6 +171,13 @@ export function createIncognitoHistoryWorker(
       }
       return { ...target, sessionId: readSessionId };
     };
+    const readProjection = <T>(read: (projection: CurrentTranscriptProjection) => T): T => {
+      const snapshot = readCurrentProjectionSnapshot(database, resolvedScope, read);
+      if (snapshot.kind === "unavailable") {
+        throw new SessionTranscriptProjectionUnavailableError(sessionId);
+      }
+      return snapshot.value;
+    };
     if (command.type === "session.history.visibility") {
       const sources = command.input.sourceDiscovery
         ? resolveGatewaySessionStoreReadSources(command.input.sourceDiscovery)
@@ -174,13 +187,7 @@ export function createIncognitoHistoryWorker(
         const incognitoSources = new Map(command.input.incognitoSources);
         const missing = new Error("Incognito source lineage requires its owning actor facts");
         const resolver = createBoundSessionHistorySubagentProjection(
-          (read) => {
-            const snapshot = readCurrentProjectionSnapshot(database, resolvedScope, read);
-            if (snapshot.kind === "unavailable") {
-              throw new SessionTranscriptProjectionUnavailableError(sessionId);
-            }
-            return snapshot.value;
-          },
+          readProjection,
           command.input.stateDatabase,
           () => sources?.sources,
           (sourceSessionKey) => {
@@ -217,15 +224,11 @@ export function createIncognitoHistoryWorker(
     const selection = resolveIncognitoHistoryProjectionSelection(command);
     if (selection) {
       prepared = prepareHistoryRead(command.type, () =>
-        runWithSessionTranscriptReadFence(admission, () => {
-          const snapshot = readCurrentProjectionSnapshot(database, resolvedScope, (projection) =>
+        runWithSessionTranscriptReadFence(admission, () =>
+          readProjection((projection) =>
             selectSessionTranscriptProjection(projection, selection, sessionKey),
-          );
-          if (snapshot.kind === "unavailable") {
-            throw new SessionTranscriptProjectionUnavailableError(sessionId);
-          }
-          return snapshot.value;
-        }),
+          ),
+        ),
       );
       return;
     }
@@ -311,20 +314,16 @@ export function createIncognitoHistoryWorker(
       case "session.history.accounting":
       case "session.history.bounded-tail":
         prepared = prepareHistoryRead(command.type, () =>
-          runWithSessionTranscriptReadFence(admission, () => {
-            const snapshot = readCurrentProjectionSnapshot(database, resolvedScope, (projection) =>
+          runWithSessionTranscriptReadFence(admission, () =>
+            readProjection((projection) =>
               command.type === "session.history.accounting"
                 ? readSessionTranscriptAccountingFromProjection(projection, command.input.options)
                 : readSessionTranscriptBoundedMessageTailPageFromProjection(
                     projection,
                     command.input.options,
                   ),
-            );
-            if (snapshot.kind === "unavailable") {
-              throw new SessionTranscriptProjectionUnavailableError(sessionId);
-            }
-            return snapshot.value;
-          }),
+            ),
+          ),
         );
         return;
       case "session.history.pending-inputs":
@@ -363,6 +362,13 @@ export function createIncognitoHistoryWorker(
               readOnly: true,
               resolvedScope,
             }),
+          ),
+        );
+        return;
+      case "session.history.latest-assistant":
+        prepared = prepareHistoryRead(command.type, () =>
+          runWithSessionTranscriptReadFence(admission, () =>
+            readLatestAssistantTextFromDatabase(database, resolvedScope),
           ),
         );
         return;
@@ -475,49 +481,41 @@ export function createIncognitoHistoryWorker(
         return;
       case "session.history.visitor-source":
         prepared = prepareHistoryRead(command.type, () =>
-          runWithSessionTranscriptReadFence(admission, () => {
-            const snapshot = readCurrentProjectionSnapshot(
-              database,
-              resolvedScope,
-              (projection) => {
-                const { total } = resolveVisibleMessagePositions(projection);
-                const start = resolveIntegerOption(command.input.offset, 0, { min: 0, max: total });
-                let end = start;
-                let bytes = 0;
-                for (const row of iterateVisibleMessageMetadata(
-                  projection,
-                  start,
-                  Math.min(total, start + SOURCE_PAGE_MAX_MESSAGES),
-                )) {
-                  if (row.serialized_bytes > SOURCE_PAGE_MAX_BYTES) {
-                    throw new Error(
-                      `Transcript source message exceeds the ${SOURCE_PAGE_MAX_BYTES}-byte page limit`,
-                    );
-                  }
-                  if (bytes + row.serialized_bytes > SOURCE_PAGE_MAX_BYTES) {
-                    break;
-                  }
-                  bytes += row.serialized_bytes;
-                  end++;
+          runWithSessionTranscriptReadFence(admission, () =>
+            readProjection((projection) => {
+              const { total } = resolveVisibleMessagePositions(projection);
+              const start = resolveIntegerOption(command.input.offset, 0, { min: 0, max: total });
+              let end = start;
+              let bytes = 0;
+              for (const row of iterateVisibleMessageMetadata(
+                projection,
+                start,
+                Math.min(total, start + SOURCE_PAGE_MAX_MESSAGES),
+              )) {
+                if (row.serialized_bytes > SOURCE_PAGE_MAX_BYTES) {
+                  throw new Error(
+                    `Transcript source message exceeds the ${SOURCE_PAGE_MAX_BYTES}-byte page limit`,
+                  );
                 }
-                if (end === start && start < total) {
-                  throw new Error("Transcript visitor page is incomplete");
+                if (bytes + row.serialized_bytes > SOURCE_PAGE_MAX_BYTES) {
+                  break;
                 }
-                const events = readVisibleMessageRange(projection, start, end);
-                return {
-                  ...(end < total ? { nextOffset: end } : {}),
-                  messages: events.flatMap(({ event, seq }) => {
-                    const message = asOptionalRecord(event)?.message;
-                    return message === undefined ? [] : [{ message, seq }];
-                  }),
-                };
-              },
-            );
-            if (snapshot.kind === "unavailable") {
-              throw new SessionTranscriptProjectionUnavailableError(sessionId);
-            }
-            return snapshot.value;
-          }),
+                bytes += row.serialized_bytes;
+                end++;
+              }
+              if (end === start && start < total) {
+                throw new Error("Transcript visitor page is incomplete");
+              }
+              const events = readVisibleMessageRange(projection, start, end);
+              return {
+                ...(end < total ? { nextOffset: end } : {}),
+                messages: events.flatMap(({ event, seq }) => {
+                  const message = asOptionalRecord(event)?.message;
+                  return message === undefined ? [] : [{ message, seq }];
+                }),
+              };
+            }),
+          ),
         );
         return;
       case "session.history.memory-entry": {
@@ -668,7 +666,13 @@ export function createIncognitoHistoryWorker(
             (command.type !== "session.history.context" &&
               command.type !== "session.history.native-context" &&
               command.type !== "session.history.native-context-current" &&
-              command.type !== "session.history.anchors")
+              command.type !== "session.history.anchors" &&
+              command.type !== "session.history.raw-delta" &&
+              command.type !== "session.history.visible-delta" &&
+              command.type !== "session.history.latest-assistant" &&
+              command.type !== "session.history.hydrate" &&
+              command.type !== "session.history.stats" &&
+              command.type !== "session.history.watermark")
           ) {
             throw new Error("Incognito missing context no longer matches its captured session");
           }

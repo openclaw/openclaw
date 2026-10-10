@@ -33,6 +33,7 @@ import { renderGatewayStatus } from "./gateway-status.ts";
 import { icons } from "./icons.ts";
 import { renderKbd } from "./kbd.ts";
 import type { SettingsSaveIndicatorProps } from "./settings-save-indicator.ts";
+import { renderThemeBrandIcon } from "./theme-brand-icon.ts";
 import "./agent-select-registration.ts";
 import "./settings-save-indicator.ts";
 import "../styles/settings.css";
@@ -194,7 +195,7 @@ function renderItem(props: SettingsSidebarProps, routeId: RouteId) {
       }}
     >
       <span class="settings-sidebar__item-icon" aria-hidden="true"
-        >${icons[navigationIconForRoute(routeId)]}</span
+        >${routeId === "custodian" ? renderThemeBrandIcon() : icons[navigationIconForRoute(routeId)]}</span
       >
       <span class="settings-sidebar__item-label"
         >${settingsNavigationLabelForRoute(routeId, props.nativeDeviceSettings?.snapshot)}</span

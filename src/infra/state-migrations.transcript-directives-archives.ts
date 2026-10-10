@@ -120,7 +120,7 @@ function transformArchiveContent(
   };
 }
 
-function encodeArchiveContent(
+export function encodeArchiveContent(
   content: string,
   encoding: "identity" | "zstd",
   owner: string,

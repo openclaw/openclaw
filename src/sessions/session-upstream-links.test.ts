@@ -1,11 +1,12 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
-import { constants, DatabaseSync, StatementSync } from "node:sqlite";
+import { constants, StatementSync } from "node:sqlite";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
-import { runSqlitePinnedReadSnapshotSync } from "../infra/sqlite-pinned-read-snapshot.js";
+import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
+import { runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
 import * as operationAdmission from "../infra/sqlite-worker-operation-admission.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -109,7 +110,7 @@ describe("session upstream links", () => {
       expect(read()?.threadId).toBe(`thread-${key}`);
       update.run("local-replacement", key);
       expect(read()?.threadId).toBe("local-replacement");
-      const foreign = new DatabaseSync(databasePath);
+      const foreign = openNodeSqliteDatabase(databasePath);
       try {
         foreign
           .prepare("UPDATE session_upstream_links SET thread_id = ? WHERE session_key = ?")
@@ -133,7 +134,7 @@ describe("session upstream links", () => {
         db.exec("ROLLBACK");
       }
       expect(read()?.threadId).toBe("foreign-replacement");
-      runSqlitePinnedReadSnapshotSync(db, () => {
+      runSqliteReadSnapshotSync(db, () => {
         const before = count();
         expect(read()?.threadId).toBe("foreign-replacement");
         expect(read()?.threadId).toBe("foreign-replacement");

@@ -90,6 +90,62 @@ const routes: Array<{
 describe("Anthropic cache checkpoint transport parity", () => {
   registerParityHostLifecycle();
 
+  it.each(["provider", "transport"] as const)(
+    "%s retains the previous checkpoint beyond the provider's 20-block lookback",
+    async (implementation) => {
+      const messages = appendToolTurn(context.messages, 1);
+      const first = await captureAnthropicRequest(implementation, {
+        cacheRetention: "short",
+        context: { ...context, messages },
+      });
+      messages.push({
+        role: "user",
+        timestamp: 4,
+        content: Array.from({ length: 21 }, (_, i) => ({ type: "text", text: `Document ${i}` })),
+      });
+      const next = await captureAnthropicRequest(implementation, {
+        cacheRetention: "short",
+        context: { ...context, messages },
+      });
+      const paths = markers(next.payload).map((marker) => marker.path);
+      // A large new user turn must not hide the last tool-result checkpoint.
+      expect(paths).toContain("messages[2].content[0]");
+      expect(paths).toContain("messages[3].content[20]");
+      expect(paths).toHaveLength(4);
+      expect(first.payload.tools).toEqual(next.payload.tools);
+      expect((next.payload.messages as unknown[])[2]).toEqual(
+        (first.payload.messages as unknown[])[2],
+      );
+    },
+  );
+
+  it("keeps a reusable checkpoint before transient context during a tool loop", async () => {
+    const messages = appendToolTurn(
+      appendToolTurn(
+        [
+          ...context.messages,
+          {
+            role: "user",
+            content: "Transient runtime facts",
+            timestamp: 1,
+            runtimeContext: { retained: false },
+          },
+        ],
+        1,
+      ),
+      2,
+    );
+    const { payload } = await captureAnthropicRequest("transport", {
+      cacheRetention: "short",
+      context: { ...context, messages },
+    });
+    expect(
+      markers(payload)
+        .map((marker) => marker.path)
+        .toSorted(),
+    ).toEqual(["messages[0].content[0]", "messages[5].content[0]", "system[0]", "tools[0]"]);
+  });
+
   it.each([
     { name: "absent", systemPrompt: undefined },
     { name: "only dynamic", systemPrompt: `${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic` },
@@ -181,7 +237,7 @@ describe("Anthropic cache checkpoint transport parity", () => {
               : [
                   ...(withTools && route.toolCache !== false ? ["tools[1]"] : []),
                   `system[${route.apiKey ? 2 : 0}]`,
-                  "messages[0].content[0]",
+                  `messages[${turn > 1 ? (turn - 1) * 2 : 0}].content[0]`,
                   ...(turn > 0 ? [`messages[${turn * 2}].content[0]`] : []),
                 ];
           expect(actual.map((marker) => marker.path).toSorted()).toEqual(expectedPaths.toSorted());

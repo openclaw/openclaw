@@ -5,6 +5,7 @@ import {
   type NavigationRouteId,
 } from "../app-navigation.ts";
 import type { NativeDeviceSettingsSnapshot } from "../app/native-device-settings.ts";
+import { askBrandLabel } from "../components/theme-brand-label.ts";
 import { i18n, t } from "../i18n/index.ts";
 
 const SETTINGS_SUBPAGE_OWNER_ROUTES: Partial<
@@ -26,7 +27,7 @@ export function settingsNavigationLabelForRoute(
     return t(deviceSettingsGroupLabelKey(snapshot));
   }
   if (routeId === "custodian") {
-    return t("nav.askOpenClaw");
+    return askBrandLabel();
   }
   return titleForRoute(routeId);
 }
