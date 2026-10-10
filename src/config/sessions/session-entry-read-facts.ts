@@ -139,6 +139,7 @@ export function readRetainedSessionEntryFacts(
       identity: target.database.physicalIdentity,
       incarnation,
       filename: database.path,
+      canonicalPath: target.database.nativeLocation,
       birthtime: target.database.birthtime,
     };
     if (facts.entry) {
