@@ -2,6 +2,7 @@ import { cleanup, render } from "@solidjs/testing-library";
 import { flush } from "solid-js";
 import { afterEach, describe, expect, it } from "vitest";
 import { userEvent } from "vitest/browser";
+import { afterModalHidden } from "../../test-helpers/modal-dialog.ts";
 import { ModalDialog, type OpenClawModalDialog } from "../modal-dialog.ts";
 
 function modalDialog(host: OpenClawModalDialog): HTMLDialogElement {
@@ -60,7 +61,11 @@ describe("native Solid modal focus and top layer", () => {
       expect(notes.value).toBe("First draft");
       expect(name.value).toBe("Original name");
 
+      const hidden = afterModalHidden(handle);
       await userEvent.keyboard("{Escape}");
+      expect(handle.open).toBe(false);
+      expect(dialog.inert).toBe(true);
+      await hidden;
       expect(dialog.open).toBe(false);
       expect(document.activeElement).toBe(trigger);
       handle.show();
@@ -90,7 +95,11 @@ describe("native Solid modal focus and top layer", () => {
     } finally {
       document.removeEventListener("modal-cancel", veto);
     }
+    const hidden = afterModalHidden(handle);
     await userEvent.keyboard("{Escape}");
+    expect(handle.open).toBe(false);
+    expect(modalDialog(handle).inert).toBe(true);
+    await hidden;
     expect(modalDialog(handle).open).toBe(false);
   });
 
@@ -106,7 +115,11 @@ describe("native Solid modal focus and top layer", () => {
     await userEvent.keyboard("Nested draft");
     expect(inner.notes.value).toBe("Nested draft");
     expect(outer.notes.value).toBe("");
+    const hidden = afterModalHidden(inner.handle);
     await userEvent.keyboard("{Escape}");
+    expect(inner.handle.open).toBe(false);
+    expect(modalDialog(inner.handle).inert).toBe(true);
+    await hidden;
     expect(modalDialog(inner.handle).open).toBe(false);
     expect(modalDialog(outer.handle).matches(":modal")).toBe(true);
     expect(document.activeElement).toBe(outer.notes);

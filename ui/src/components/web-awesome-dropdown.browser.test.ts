@@ -900,6 +900,11 @@ describe.runIf(browserMode)("Web Awesome dropdown lifecycle", () => {
     "waits for %s reactive popup rendering and its actual opening animation",
     async (kind) => {
       const f = await fixture();
+      if (kind === "tooltip") {
+        const { page } = await import("vitest/browser");
+        await page.elementLocator(f.trigger).hover();
+        expect(f.outside.matches(":hover")).toBe(false);
+      }
       const surface = await secondarySurface(f.host, f.outside, kind);
       let shown = false;
       let hidden = false;
@@ -908,7 +913,13 @@ describe.runIf(browserMode)("Web Awesome dropdown lifecycle", () => {
       await duringSecondaryOpening(surface, () => expect(shown).toBe(false));
       await expect.poll(() => shown).toBe(true);
       if (surface.kind === "tooltip") {
+        expect(surface.anchor.matches(":hover")).toBe(false);
+        expect(
+          surface.element.shadowRoot!.querySelector(".tooltip-surface")!.matches(":hover"),
+        ).toBe(false);
+        expect(document.activeElement).toBe(surface.anchor);
         surface.anchor.blur();
+        expect(document.activeElement).not.toBe(surface.anchor);
       } else {
         surface.element.open = false;
       }

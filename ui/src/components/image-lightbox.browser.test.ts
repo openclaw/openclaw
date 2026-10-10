@@ -1,6 +1,6 @@
 import { nothing, render } from "lit";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { page } from "vitest/browser";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished } from "vitest";
+import { page, userEvent } from "vitest/browser";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { renderChatImageLightbox } from "../pages/chat/components/chat-image-lightbox.ts";
 import { nextFrame } from "../test-helpers/modal-dialog.ts";
@@ -23,11 +23,17 @@ afterEach(async () => {
   await page.viewport(previousViewport.width, previousViewport.height);
 });
 
-async function mountImage(item: ImageLightboxItem) {
+async function mountImage(item: ImageLightboxItem, deferredClose = false) {
   const container = document.body.appendChild(document.createElement("div"));
   containers.add(container);
   render(
-    renderChatImageLightbox(item, () => render(nothing, container)),
+    renderChatImageLightbox(item, () => {
+      if (deferredClose) {
+        queueMicrotask(() => render(nothing, container));
+      } else {
+        render(nothing, container);
+      }
+    }),
     container,
   );
   const viewer = container.querySelector("openclaw-image-lightbox")!;
@@ -54,6 +60,73 @@ function imageSource(width: number, height: number, color: string) {
 }
 
 describe("progressive image viewer geometry", () => {
+  it("restores its original tile after Escape removes a still-closing native modal", async () => {
+    const trigger = document.createElement("button");
+    trigger.textContent = "Open image tile";
+    document.body.append(trigger);
+    onTestFinished(() => trigger.remove());
+    trigger.focus();
+    const { viewer } = await mountImage(
+      { src: imageSource(320, 200, "#264060"), title: "Focus return" },
+      true,
+    );
+    const modal = viewer.shadowRoot!.querySelector("openclaw-modal-dialog")!;
+    const dialog = modal.querySelector("dialog")!;
+    const animation = dialog.animate({ opacity: [1, 0.5] }, { duration: 60_000 });
+    animation.pause();
+    onTestFinished(() => animation.cancel());
+    expect(dialog.matches(":modal")).toBe(true);
+
+    await userEvent.keyboard("{Escape}");
+    await expect.poll(() => viewer.isConnected).toBe(false);
+    expect(dialog.open).toBe(false);
+    expect(document.activeElement).toBe(trigger);
+  });
+
+  it.each([false, true])(
+    "returns focus after retained native close without stealing newer focus (newer=%s)",
+    async (newer) => {
+      const trigger = document.createElement("button");
+      trigger.textContent = "Open image tile";
+      document.body.append(trigger);
+      onTestFinished(() => trigger.remove());
+      trigger.focus();
+      const { viewer } = await mountImage({
+        src: imageSource(320, 200, "#264060"),
+        title: "Retained close",
+      });
+      const modal = viewer.shadowRoot!.querySelector("openclaw-modal-dialog")!;
+      const dialog = modal.querySelector("dialog")!;
+      const animation = dialog.animate({ opacity: [1, 0.5] }, { duration: 60_000 });
+      animation.pause();
+      onTestFinished(() => animation.cancel());
+      const hidden = new Promise<void>((resolve) => {
+        modal.addEventListener("wa-after-hide", () => resolve(), { once: true });
+      });
+      modal.hide();
+      expect(modal.open).toBe(false);
+      expect(dialog.open).toBe(true);
+      expect(document.activeElement).not.toBe(trigger);
+
+      let expected: HTMLElement = trigger;
+      if (newer) {
+        const next = document.createElement("openclaw-modal-dialog");
+        const input = document.createElement("input");
+        input.autofocus = true;
+        next.append(input);
+        document.body.append(next);
+        onTestFinished(() => next.remove());
+        await next.updateComplete;
+        expect(document.activeElement).toBe(input);
+        expected = input;
+      }
+      animation.finish();
+      await hidden;
+      expect(dialog.open).toBe(false);
+      expect(document.activeElement).toBe(expected);
+    },
+  );
+
   it.each([
     { name: "landscape", width: 1600, height: 960, previewWidth: 1200, previewHeight: 720 },
     { name: "portrait", width: 1600, height: 3000, previewWidth: 640, previewHeight: 1200 },

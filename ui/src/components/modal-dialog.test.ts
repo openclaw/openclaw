@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { subscribeNativeOverlayOcclusion } from "../lib/native-overlay-occlusion.ts";
 import { showToast } from "../lib/toast.ts";
 import {
+  afterModalHidden,
   getRenderedModalDialog,
   installDialogPolyfill,
   nextFrame,
@@ -145,12 +146,15 @@ describe("openclaw-modal-dialog", () => {
       nested.remove();
       expect(changes.mock.calls).toEqual([[false], [true]]);
       expect(modalChanges).toEqual([true]);
+      const hidden = afterModalHidden(modal);
       modal.hide();
       await commitRender(modal);
+      expect(modal.open).toBe(false);
+      expect(modal.querySelector<HTMLDialogElement>("dialog")!.inert).toBe(true);
       expect(modalChanges).toEqual([true, false]);
       // The platform view must stay hidden until the dialog leaves the top layer.
       expect(changes.mock.calls).toEqual([[false], [true]]);
-      await nextFrame();
+      await hidden;
       expect(changes.mock.calls).toEqual([[false], [true], [false]]);
       await commitRender(modal);
       modal.show();
@@ -291,10 +295,13 @@ describe("openclaw-modal-dialog", () => {
 
         showToast({ message: "Saved" });
         expect(appHost.parentElement).toBe(modal.getOverlayContainer());
+        const hidden = action === "hide" ? afterModalHidden(modal) : undefined;
         modal[action]();
         await commitRender(modal);
-        if (action === "hide") {
-          await nextFrame();
+        if (hidden) {
+          expect(modal.open).toBe(false);
+          expect(modal.querySelector<HTMLDialogElement>("dialog")!.inert).toBe(true);
+          await hidden;
         }
         await commitRender(appHost);
 
@@ -363,8 +370,9 @@ describe("openclaw-modal-dialog", () => {
     const { modal } = await renderModal();
 
     modal.setReturnFocusTarget(returnTarget);
+    const hidden = afterModalHidden(modal);
     modal.hide();
-    await nextFrame();
+    await hidden;
 
     expect(document.activeElement).toBe(returnTarget);
     originalTrigger.remove();
@@ -378,8 +386,9 @@ describe("openclaw-modal-dialog", () => {
     const { modal } = await renderModal();
 
     modal.setReturnFocusTarget(null);
+    const hidden = afterModalHidden(modal);
     modal.hide();
-    await nextFrame();
+    await hidden;
 
     expect(document.activeElement).not.toBe(originalTrigger);
     originalTrigger.remove();

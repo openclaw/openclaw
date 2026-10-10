@@ -40,8 +40,11 @@ describe("Solid menu branch lifetime", () => {
       expect(document.activeElement).toBe(item("Engineering", "people-move"));
       await userEvent.keyboard(dir === "ltr" ? "{ArrowLeft}" : "{ArrowRight}");
       expect(document.activeElement).toBe(trigger("people-move"));
+      expect(trigger("people-move").getAttribute("aria-expanded")).toBe("false");
+      expect(surface("people-move").inert).toBe(true);
       await userEvent.keyboard("{ArrowDown}");
       expect(document.activeElement).toBe(item("Archive"));
+      await phase(surface("people-move"), "hidden");
       expect(openSurfaces()).toEqual([surface()]);
     },
   );

@@ -220,7 +220,10 @@ export function createOverlay(
         return;
       }
       setPhase("closing");
-      if (native.isOpen(surface) && (disposed || !hasPendingPresentation())) {
+      if (
+        native.isOpen(surface) &&
+        (disposed || !surface.isConnected || !hasPendingPresentation())
+      ) {
         setNativeOpen(false);
       }
       if (requested !== intent) {

@@ -10,6 +10,26 @@ export function nextFrame() {
   });
 }
 
+export function afterModalHidden(modal: OpenClawModalDialog): Promise<void> {
+  const dialog = modal.querySelector<HTMLDialogElement>(":scope > .oc-modal-dialog");
+  if (!dialog) {
+    throw new Error("Expected a rendered native modal dialog");
+  }
+  if (dialog.dataset.phase === "hidden") {
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => {
+    const onHidden = (event: Event) => {
+      if (event.target !== modal) {
+        return;
+      }
+      modal.removeEventListener("wa-after-hide", onHidden);
+      resolve();
+    };
+    modal.addEventListener("wa-after-hide", onHidden);
+  });
+}
+
 function restoreDescriptor(name: DialogMethodName, descriptor: PropertyDescriptor | undefined) {
   if (descriptor) {
     Object.defineProperty(HTMLDialogElement.prototype, name, descriptor);

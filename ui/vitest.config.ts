@@ -127,6 +127,7 @@ const webkitTestFiles = [
   "src/components/web-awesome.test.ts",
   "src/components/web-awesome-theme.browser.test.ts",
   "src/components/menu-surface.browser.test.ts",
+  "src/components/image-lightbox.browser.test.ts",
   "src/components/modal-dialog.test.ts",
   "src/components/modal-dialog.browser.test.ts",
   "src/components/tooltip.test.ts",

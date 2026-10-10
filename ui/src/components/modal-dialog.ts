@@ -143,10 +143,20 @@ function createModalPolicy(host: OpenClawModalDialog, props: ModalDialogProperti
   };
 
   const restoreReturnFocus = () => {
+    if (dialog.open) {
+      return;
+    }
     const target = returnOverride === undefined ? returnFocus : returnOverride;
-    if (target?.isConnected) {
+    const active = activeElement(host);
+    const mayRestore =
+      !active ||
+      active === host.ownerDocument.body ||
+      active === host.ownerDocument.documentElement ||
+      active === returnFocus ||
+      containsComposed(dialog, active);
+    if (target?.isConnected && mayRestore) {
       restoreFocus(target);
-    } else if (returnOverride === null && activeElement(host) === returnFocus) {
+    } else if (returnOverride === null && active === returnFocus) {
       returnFocus?.blur();
     }
     returnFocus = null;
@@ -178,7 +188,10 @@ function createModalPolicy(host: OpenClawModalDialog, props: ModalDialogProperti
           finishInitialFocus();
         }
       },
-      hide: () => dialog.close(),
+      hide: () => {
+        dialog.close();
+        restoreReturnFocus();
+      },
     },
     dismissOutsidePointer: false,
     dismissOutsideFocus: false,
@@ -302,6 +315,7 @@ function createModalPolicy(host: OpenClawModalDialog, props: ModalDialogProperti
   const afterHide = (event: Event) => {
     if (event.target === dialog) {
       event.stopPropagation();
+      restoreReturnFocus();
       dispatch("wa-after-hide");
     }
   };
@@ -350,7 +364,6 @@ function createModalPolicy(host: OpenClawModalDialog, props: ModalDialogProperti
       setModalLayer(host, open && host.isConnected);
       if (!open) {
         initialFocusPending = false;
-        restoreReturnFocus();
       }
       publishOpen(open);
     });
