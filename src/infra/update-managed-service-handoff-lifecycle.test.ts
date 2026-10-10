@@ -15,6 +15,7 @@ import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import { SUPERVISOR_HINT_ENV_VARS } from "./supervisor-markers.js";
 import { CONTROL_PLANE_UPDATE_SENTINEL_META_ENV } from "./update-control-plane-sentinel.js";
 import { registerManagedCampaignFailureTests } from "./update-managed-service-handoff-campaign.test-support.js";
@@ -573,7 +574,7 @@ describe("managed service update handoff", () => {
         : path.join(home, "old", "node");
     const wrapper = path.join(home, "gateway-wrapper");
     if (scenario !== "direct-missing") {
-      await fs.symlink(originalExecPath, replacement);
+      await fs.symlink(resolveTestNodeExecPath(), replacement);
     }
     if (wrapperScenario) {
       await fs.writeFile(
@@ -628,14 +629,15 @@ describe("managed service update handoff", () => {
           expect(beforePark).not.toHaveBeenCalled();
         }
       } else {
-        await expect(handoff).resolves.toMatchObject({ status: "started" });
-        const [command, args] = spawnMock.mock.calls[0] as unknown as [string, string[]];
-        tempDirs.add(path.dirname(expectDefined(args[0], "handoff script")));
+        const result = await handoff;
+        expect(result).toMatchObject({ status: "started" });
+        const [command] = spawnMock.mock.calls[0] as unknown as [string, string[]];
+        expect(path.isAbsolute(result.logPath)).toBe(true);
+        tempDirs.add(path.dirname(result.logPath));
+        const paramsPath = path.join(path.dirname(result.logPath), "handoff.json");
         expect(command).toBe(scenario === "wrapper-present" ? originalExecPath : replacement);
         if (scenario === "versioned-service") {
-          const helperParams = JSON.parse(
-            await fs.readFile(expectDefined(args[1], "handoff parameters"), "utf8"),
-          ) as {
+          const helperParams = JSON.parse(await fs.readFile(paramsPath, "utf8")) as {
             commandArgv: string[];
             recoveryCommandArgv: string[];
             triageCommandArgv: string[];
@@ -752,9 +754,10 @@ describe("managed service update handoff", () => {
           { env: NodeJS.ProcessEnv; detached?: boolean; cwd?: string },
         ];
         const scriptIndex = systemd ? 5 : 0;
-        tempDirs.add(path.dirname(args[scriptIndex] ?? result.logPath));
+        expect(path.isAbsolute(result.logPath)).toBe(true);
+        tempDirs.add(path.dirname(result.logPath));
         const helperParams = JSON.parse(
-          await fs.readFile(args[scriptIndex + 1] ?? "", "utf-8"),
+          await fs.readFile(path.join(path.dirname(result.logPath), "handoff.json"), "utf-8"),
         ) as {
           metaPath: string;
           triageContextPath: string;

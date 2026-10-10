@@ -7,6 +7,7 @@ import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, expect, vi } from "vitest";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { createManagedServiceManagerBoundary } from "./update-managed-service-handoff-boundary.test-support.js";
+import { cleanupManagedHandoffTempDirs } from "./update-managed-service-handoff-temp.test-support.js";
 import { signalMockManagedUpdateHandoffReady } from "./update-managed-service-handoff.test-support.js";
 
 const { forceKillChildProcessTreeMock, resolvePreferredOpenClawTmpDirMock, spawnMock } = vi.hoisted(
@@ -62,11 +63,20 @@ vi.mock("./tmp-openclaw-dir.js", async (importOriginal) => ({
 
 export function useManagedServiceHandoffLifecycleFixture() {
   const tempDirs = new Set<string>();
+  const systemTempRoot = os.tmpdir();
+  let fixtureTempRoot: string;
+  let restoreTempRoot: (() => void) | undefined;
   const managedProcessCleanups = new Set<() => Promise<void>>();
   const mockedHandoffLeaseCleanups = new Set<() => void>();
   const mockedHandoffs = new Map<string, { handoffId: string }>();
 
   beforeEach(async () => {
+    // openclaw-temp-dir: allow owns the cleanup boundary for production-created handoff artifacts.
+    fixtureTempRoot = await fs.realpath(
+      await fs.mkdtemp(path.join(systemTempRoot, "handoff-fixture-")),
+    );
+    const tempRootSpy = vi.spyOn(os, "tmpdir").mockReturnValue(fixtureTempRoot);
+    restoreTempRoot = () => tempRootSpy.mockRestore();
     // Helpers in one fixture share a coordinator without touching the operator's database.
     const coordinatorDir = await fs.realpath(
       await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-handoff-coordinator-")),
@@ -94,40 +104,45 @@ export function useManagedServiceHandoffLifecycleFixture() {
   });
 
   afterEach(async () => {
-    vi.useRealTimers();
-    await Promise.all([...managedProcessCleanups].map((cleanup) => cleanup()));
-    managedProcessCleanups.clear();
-    for (const child of mockedChildren) {
-      child.emit("exit", 0, null);
-    }
-    for (const cleanup of mockedHandoffLeaseCleanups) {
-      cleanup();
-    }
     try {
-      if (mockedHandoffs.size > 0) {
-        const { cancelManagedServiceUpdateHandoff } =
-          await import("./update-managed-service-handoff.js");
-        for (const [installRoot, { handoffId }] of mockedHandoffs) {
-          // Cancellation retires the exited owner only after verifying its lease was released.
-          await expect(
-            cancelManagedServiceUpdateHandoff({
-              kind: "managed-update-handoff",
-              installRoot,
-              handoffId,
-            }),
-          ).resolves.toBe("restored-in-process");
+      vi.useRealTimers();
+      await Promise.all([...managedProcessCleanups].map((cleanup) => cleanup()));
+      managedProcessCleanups.clear();
+      for (const child of mockedChildren) {
+        child.emit("exit", 0, null);
+      }
+      for (const cleanup of mockedHandoffLeaseCleanups) {
+        cleanup();
+      }
+      try {
+        if (mockedHandoffs.size > 0) {
+          const { cancelManagedServiceUpdateHandoff } =
+            await import("./update-managed-service-handoff.js");
+          for (const [installRoot, { handoffId }] of mockedHandoffs) {
+            // Cancellation retires the exited owner only after verifying its lease was released.
+            await expect(
+              cancelManagedServiceUpdateHandoff({
+                kind: "managed-update-handoff",
+                installRoot,
+                handoffId,
+              }),
+            ).resolves.toBe("restored-in-process");
+          }
         }
+      } finally {
+        mockedHandoffs.clear();
+        for (const child of mockedChildren) {
+          child.stdin.destroy();
+          child.stdout.destroy();
+        }
+        mockedChildren.clear();
+        closeOpenClawStateDatabaseForTest();
+        await cleanupManagedHandoffTempDirs(tempDirs, fixtureTempRoot);
+        await fs.rm(fixtureTempRoot, { recursive: true, force: true });
+        tempDirs.clear();
       }
     } finally {
-      mockedHandoffs.clear();
-      for (const child of mockedChildren) {
-        child.stdin.destroy();
-        child.stdout.destroy();
-      }
-      mockedChildren.clear();
-      closeOpenClawStateDatabaseForTest();
-      await Promise.all([...tempDirs].map((dir) => fs.rm(dir, { recursive: true, force: true })));
-      tempDirs.clear();
+      restoreTempRoot?.();
     }
   });
 
