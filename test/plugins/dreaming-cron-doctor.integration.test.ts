@@ -227,7 +227,7 @@ async function runRegisteredDreamingService(
   scheduler: ReturnType<typeof createTestGatewayScheduler>,
 ) {
   const registry = createEmptyPluginRegistry();
-  const startFailures: unknown[] = [];
+  const starts: Array<{ mock: { results: Array<{ value: unknown }> } }> = [];
   memoryCore.register(
     createTestPluginApi({
       id: "memory-core",
@@ -235,20 +235,14 @@ async function runRegisteredDreamingService(
       logger,
       runtime: createPluginRuntimeMock({ config: { current: () => config } }),
       registerService(service) {
-        const start = service.start.bind(service);
+        // Boot-path starts log failures instead of rejecting; observe them here.
+        starts.push(vi.spyOn(service, "start"));
         registry.services.push({
           pluginId: "memory-core",
           origin: "bundled",
           source: "memory-core/index.ts",
           id: service.id,
-          service: {
-            ...service,
-            // Boot-path starts log failures instead of rejecting; surface them here.
-            start: (ctx) =>
-              Promise.resolve(start(ctx)).catch((error: unknown) => {
-                startFailures.push(error);
-              }),
-          },
+          service,
         });
       },
     }),
@@ -268,7 +262,10 @@ async function runRegisteredDreamingService(
         services = handle;
       },
     });
-    expect(startFailures).toEqual([]);
+    const settled = await Promise.allSettled(
+      starts.flatMap(({ mock }) => mock.results.map(({ value }) => value)),
+    );
+    expect(settled.filter(({ status }) => status === "rejected")).toEqual([]);
     expect(logger.error).not.toHaveBeenCalled();
   } finally {
     await services?.stop({ strict: true });
