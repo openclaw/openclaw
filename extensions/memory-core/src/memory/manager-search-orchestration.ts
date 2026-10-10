@@ -19,7 +19,10 @@ import { redactSensitiveText } from "openclaw/plugin-sdk/security-runtime";
 import { uniqueValues } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { mergeHybridResults, selectHybridSearchResults } from "./hybrid.js";
 import { runMemoryVectorFallback } from "./manager-cpu-worker-runtime.js";
-import { isMemoryEmbeddingOperationError } from "./manager-embedding-errors.js";
+import {
+  createMemoryEmbeddingOperationError,
+  isMemoryEmbeddingOperationError,
+} from "./manager-embedding-errors.js";
 import { acquireMemoryIndexReadGeneration } from "./manager-index-generation-lease.js";
 import {
   MemoryKeywordRetrieval,
@@ -463,6 +466,16 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
               semanticProviderRuntime,
               opts?.[MEMORY_SEARCH_DEADLINE_CONTROL],
             );
+            const dimensions = indexState.meta?.vectorDims;
+            if (dimensions !== undefined && queryVec.length !== dimensions) {
+              throw createMemoryEmbeddingOperationError({
+                operation: "query",
+                providerId: semanticProvider.id,
+                cause: new Error(
+                  `query embedding has ${queryVec.length} dimensions, but the memory index expects ${dimensions}; rebuild with openclaw memory index --force --agent ${this.agentId}`,
+                ),
+              });
+            }
             break;
           } catch (err) {
             releaseProvider();
@@ -641,7 +654,7 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
       vectorTable: VECTOR_TABLE,
       ...query,
       signal,
-      ensureVectorReady: async (dimensions) => {
+      ensureVectorReady: async () => {
         if (!this.vector.enabled) {
           return false;
         }
@@ -652,10 +665,7 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
           this.markConfiguredSourcesForFullReindex();
           return false;
         }
-        return (
-          indexState.vectorState.state === "complete" &&
-          (indexState.meta?.vectorDims === undefined || indexState.meta.vectorDims === dimensions)
-        );
+        return indexState.vectorState.state === "complete";
       },
       runFallback: readVectorRows,
       runVectorKnn: async (request, knnSignal) => {

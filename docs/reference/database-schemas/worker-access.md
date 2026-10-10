@@ -991,6 +991,52 @@ the native fallback. Final session authority still uses the synchronous guard.
 
 ## Keep one store owner
 
+Plugin-state compound operations use `store.createOperation` over host-owned
+asynchronous handles. One command invokes a captured plugin module inside the
+existing shared-state worker transaction. The synchronous transaction facade
+shares row reads, enforces declared write namespaces, and applies existing
+quotas and TTLs. Module loading happens before the transaction under the plugin
+instance's captured source generation. No independent writer or schema is added.
+See [plugin-state operations](/plugins/sdk-runtime/state-and-system#synchronous-keyed-store-migration).
+
+Online state belongs to the Gateway. This operation path uses admitted schema
+facts and in-process mutation receipts rather than foreign-commit probes.
+Canonical asynchronous and retained synchronous keyed-store mutations invalidate
+receipts before queueing or execution. Committed facts, expiry, source identity,
+and live plugin/action authority govern later effects. Refusal and unknown
+settlement do not authorize replay. Accepted writes retain their existing FIFO
+and settlement owner.
+
+Reef runs key loads, review decisions and capacity changes, trust edits, audit
+appends, cursor changes, and rejection reservation/completion as complete worker
+commands. Audit groups read the head once and commit their links, retention, and
+final head together. Outbound composition uses a preparation command before the
+external guard, then a finalization command for remaining audit events and the
+exact delivery binding. Neither guard classification nor relay HTTP keeps a
+SQLite transaction open. Expected denials return after the applicable audit
+records commit.
+
+Reef checks the final in-process receipt in the transport's effect-initiation
+callback, after host preparation and immediately before fetch. Inbound metadata,
+transaction/commit admission, agent dispatch, and owner notices use the same
+live receipt boundary. These assertions execute no main-thread SQLite. Recovery
+carries its original source receipt into combined operations; a mismatch refuses
+composition before dispatch.
+
+Reef retains synchronous `listCurrent` reads only for the released
+`ChannelPlugin` config, account-description, and security-policy adapters;
+asynchronous directory listings use the worker. Replacing those released
+synchronous policy surfaces belongs to the next approved SDK migration. Hosts
+without `createOperation` retain their existing native adapters, selected before
+awaiting. Worker failures never select a fallback.
+
+Older hosts without the additive direct-DM authority callback retain their
+historical host behavior and do not gain the current host's checks after their
+own awaits. See the
+[channel authority contract](/plugins/sdk-channel-plugins) for current-host
+checks. These changes preserve schemas, stored formats, retention, permissions,
+and update behavior.
+
 Manual `sessions.compact` trimming with `maxLines` runs on the existing agent
 writer. The worker plans retained transcript rows before its synchronous write
 transaction, then compares the complete transcript bytes and selected entry before

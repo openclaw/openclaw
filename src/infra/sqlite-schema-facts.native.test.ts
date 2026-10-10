@@ -51,10 +51,11 @@ describe("native SQLite schema snapshots and callbacks", () => {
       filename,
     );
     installSqliteTempTrackingSchema(database, {
-      kind: "generation",
-      table: "local_status",
-      triggers: [],
-      advance: false,
+      kind: "transcript-index",
+      statusTable: "local_status",
+      pendingTable: "local_pending",
+      pendingIndex: "local_pending_state",
+      observedTables: [],
     });
     const schema = getAdmittedSqliteSchemaFacts(database);
     const localRevision = () =>
@@ -73,7 +74,7 @@ describe("native SQLite schema snapshots and callbacks", () => {
       expect(schemaMutation).not.toHaveBeenCalled();
       expect(observation.queries).toEqual([]);
       const beforeWrite = readSqliteDatabaseWriteRevision(sibling);
-      database.exec("UPDATE temp.local_status SET generation=1");
+      database.exec("UPDATE temp.local_status SET sibling_write_revision=1");
       expect(readSqliteDatabaseWriteRevision(sibling)).not.toBe(beforeWrite);
     } finally {
       observation.restore();
