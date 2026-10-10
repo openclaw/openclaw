@@ -209,6 +209,7 @@ export async function tryPrepareFreshManagerRuntimeSession(params: {
   missingBackendError?: unknown;
 }): Promise<void> {
   const configuredBackend = (params.meta.backend || params.cfg.acp?.backend || "").trim();
+  let preparationInvoked = false;
   try {
     const backend = params.deps.getRuntimeBackend(configuredBackend || undefined);
     if (!backend) {
@@ -227,6 +228,7 @@ export async function tryPrepareFreshManagerRuntimeSession(params: {
       );
       return;
     }
+    preparationInvoked = true;
     await backend.runtime.prepareFreshSession({
       persistedHandle: persistedAcpRuntimeHandle(params, params.meta),
       sessionKey: params.sessionKey,
@@ -236,8 +238,14 @@ export async function tryPrepareFreshManagerRuntimeSession(params: {
     if (isAcpOwnerRepairRequired(error)) {
       throw error;
     }
+    // Missing-plugin lookup stays best-effort. Once preparation itself runs,
+    // a failure must surface before metadata is cleared, or the file record
+    // stays reusable.
     logVerbose(
       `${params.logPrefix}: unable to prepare fresh session for ${params.sessionKey}: ${formatErrorMessage(error)}`,
     );
+    if (preparationInvoked) {
+      throw error;
+    }
   }
 }
