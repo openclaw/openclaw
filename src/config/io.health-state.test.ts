@@ -71,6 +71,7 @@ it("preserves typed maintenance errors for a reloaded caller after broker reuse"
       failure = error;
     }
     expect(incoming).toBeInstanceOf(errors.StartupMaintenanceRequiredError);
+    expect(failure).toBe(incoming);
     expect(errors.findStartupMaintenanceRequiredError(failure)).toMatchObject({
       kind: "newer-schema",
     });

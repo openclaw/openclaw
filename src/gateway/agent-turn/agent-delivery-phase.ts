@@ -174,7 +174,7 @@ export async function resolveAgentDeliveryPhase(params: {
   }
 
   if (!resolvedTo && isDeliverableMessageChannel(resolvedChannel)) {
-    const fallback = resolveAgentOutboundTarget({
+    const fallback = await resolveAgentOutboundTarget({
       cfg: params.cfgForAgent ?? params.cfg,
       plan: effectivePlan,
       targetMode: deliveryTargetMode ?? "implicit",

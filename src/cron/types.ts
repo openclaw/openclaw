@@ -180,6 +180,33 @@ export type CronRunOutcome = {
   diagnostics?: CronRunDiagnostics;
 };
 
+export type CronRunDeliveryResult = {
+  /** True after verified delivery, including a matching messaging-tool send. */
+  delivered?: boolean;
+  /** Delivery may have been attempted without a confirmed transport acknowledgment. */
+  deliveryAttempted?: boolean;
+  deliveryError?: string;
+  deliverySuppressionReason?: NormalizeReplySkipReason;
+  deliveryState?: CronResolvedDeliveryState;
+  delivery?: CronDeliveryTrace;
+};
+
+export type CronTriggerEvalOutcome = {
+  fired: boolean;
+  stateChanged: boolean;
+  state?: unknown;
+  busy?: true;
+};
+
+export type CronJobExecutionResult = CronRunOutcome &
+  CronRunTelemetry &
+  CronRunDeliveryResult & {
+    nextCheck?: CronNextCheckProposal;
+    scriptStateChanged?: boolean;
+    scriptState?: unknown;
+    triggerEval?: CronTriggerEvalOutcome;
+  };
+
 /** One run's requested delay before the same paced job runs again. */
 export type CronNextCheckProposal = {
   delayMs: number;

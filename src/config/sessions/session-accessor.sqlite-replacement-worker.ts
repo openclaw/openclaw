@@ -1,5 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type { Result } from "@openclaw/normalization-core/result";
+import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSqliteLifecycleAggregateError } from "../../infra/sqlite-lifecycle-errors.js";
 import {
@@ -36,6 +36,8 @@ import {
 import { publishCommittedSessionIdentity } from "./session-accessor.sqlite-identity.js";
 import type { SessionEntryReplacementCommitted } from "./session-accessor.sqlite-replacement-types.js";
 import type { SessionEntryCommitContext } from "./session-accessor.types.js";
+import { withSessionEntryWriterReads } from "./session-entry-read-facts.js";
+import { decodeSessionTranscriptWorkerReadError } from "./session-history-worker-errors.js";
 import { parseSessionTranscriptAuthorityReceipts } from "./session-transcript-authority.js";
 
 type ReplacementDatabaseOptions = OpenClawAgentDatabaseOptions & { path: string };
@@ -184,6 +186,52 @@ export async function withSessionEntryWorker<T>(
       };
     },
   };
+  const withWriterReads = <Value>(
+    nativeWorker: AgentDatabaseExecutionScope | undefined,
+    consume: () => Promise<Value>,
+  ): Promise<Value> => {
+    const read = <Read>(operation: (scope: AgentDatabaseExecutionScope) => Promise<Read>) =>
+      nativeWorker ? operation(nativeWorker) : execution.runExisting(source, operation);
+    return withSessionEntryWriterReads(
+      options,
+      {
+        async entry(scope) {
+          const result = await read((worker) =>
+            worker.execute({
+              type: "session.entry.readResult",
+              input: {
+                kind: "session-entry-read",
+                database: { agentId: options.agentId, path: options.path },
+                scope: { ...scope, databaseAgentId: options.agentId },
+              },
+            }),
+          );
+          assertHeld();
+          if (!result || result.kind !== "session-entry-read") {
+            throw new Error("Session entry read lost its active writer");
+          }
+          return {
+            ...(result.readError
+              ? err(decodeSessionTranscriptWorkerReadError(result.readError))
+              : ok(result.entry)),
+            source: result.source,
+            facts: result.facts,
+          };
+        },
+        async entries(request) {
+          const result = await read((worker) =>
+            worker.execute({ type: "session.entry.read", input: request }),
+          );
+          assertHeld();
+          if (!result) {
+            throw new Error("Session entry read lost its active writer");
+          }
+          return result;
+        },
+      },
+      consume,
+    );
+  };
   let preparation: ReturnType<SessionEntryWorkerPreparation> | undefined;
   let outcome: Result<T, unknown>;
   try {
@@ -221,7 +269,21 @@ export async function withSessionEntryWorker<T>(
             options,
             () => {
               preparation?.beforeWrite();
-              return run(execution, source, context);
+              const writingExecution: OpenClawAgentDatabaseExecution = {
+                ...execution,
+                get fileIdentity() {
+                  return execution.fileIdentity;
+                },
+                runExisting(readSource, operation, readOptions) {
+                  // Lend the existing scope so a failed read unwinds before native cleanup.
+                  return execution.runExisting(
+                    readSource,
+                    (worker) => withWriterReads(worker, () => operation(worker)),
+                    readOptions,
+                  );
+                },
+              };
+              return withWriterReads(undefined, () => run(writingExecution, source, context));
             },
             undefined,
             signal,

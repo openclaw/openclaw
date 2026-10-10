@@ -8,13 +8,15 @@ import {
   markConversationDeliverySent,
 } from "../../config/sessions/conversation-delivery-store.js";
 import { conversationIdentityFromMsgContext } from "../../config/sessions/conversation-identity.js";
-import { resolveConversationRegistryScope } from "../../config/sessions/conversation-registry.js";
+import { prepareConversationRegistryScope } from "../../config/sessions/conversation-registry.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { resolveSqliteSessionKey } from "../../config/sessions/session-accessor.sqlite-scope-helpers.js";
 import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
+import { captureSessionStoreCandidateIdentities } from "../../config/sessions/session-store-read-candidates.js";
+import { captureSessionStoreReadCandidates } from "../../config/sessions/session-store-target-inventory.js";
 import { appendPreparedTranscriptEvent } from "../../config/sessions/session-transcript-event.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
-import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import { buildConversationRef } from "../../routing/conversation-ref.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { claimPendingConversationTurnReply } from "../../sessions/conversation-turns.js";
@@ -63,6 +65,9 @@ async function capturePendingConversationTurnReplyUnsafe(params: {
   const replyToId =
     normalizeOptionalString(params.ctx.ReplyToIdFull) ??
     normalizeOptionalString(params.ctx.ReplyToId);
+  if (!replyToId) {
+    return false;
+  }
   const threadId =
     params.ctx.MessageThreadId == null
       ? undefined
@@ -74,29 +79,42 @@ async function capturePendingConversationTurnReplyUnsafe(params: {
   };
   const agentId =
     normalizeOptionalString(params.ctx.AgentId) ?? resolveAgentIdFromSessionKey(sessionKey);
-  const scope = resolveConversationRegistryScope({ agentId, config: params.cfg });
-  const databaseIdentity = readDatabasePathIdentitySync(scope.storePath).key;
+  const storePath = resolveSessionStorePathCore(params.cfg.session?.store, { agentId });
+  const databaseIdentities = new Set(
+    [
+      ...captureSessionStoreCandidateIdentities(
+        captureSessionStoreReadCandidates(storePath),
+      ).values(),
+    ].map((identity) => identity.key),
+  );
   const storeSessionKey = resolveSqliteSessionKey(sessionKey, agentId);
   let identityChanged = false;
   // A reset during the first worker read must not become this reply's new lifecycle.
   const unsubscribe = onSessionIdentityMutation((mutation) => {
     if (
       typeof mutation.databaseIdentity === "string" &&
-      `file:${mutation.databaseIdentity}` === databaseIdentity &&
+      databaseIdentities.has(`file:${mutation.databaseIdentity}`) &&
       (mutation.previous.sessionKeys.includes(storeSessionKey) ||
         (mutation.kind !== "delete" && mutation.current.sessionKeys.includes(storeSessionKey)))
     ) {
       identityChanged = true;
     }
   });
-  const sessionEntry = await readSessionEntryReadOnlyInWorker(
-    { ...scope, sessionKey, readConsistency: "latest" },
-    () => {
-      if (identityChanged) {
-        throw new Error("session changed before captured reply persistence");
-      }
-    },
-  ).finally(unsubscribe);
+  let scope: Awaited<ReturnType<typeof prepareConversationRegistryScope>>;
+  let sessionEntry: Awaited<ReturnType<typeof readSessionEntryReadOnlyInWorker>>;
+  try {
+    scope = await prepareConversationRegistryScope({ agentId, config: params.cfg });
+    sessionEntry = await readSessionEntryReadOnlyInWorker(
+      { ...scope, sessionKey, readConsistency: "latest" },
+      () => {
+        if (identityChanged) {
+          throw new Error("session changed before captured reply persistence");
+        }
+      },
+    );
+  } finally {
+    unsubscribe();
+  }
   if (!sessionEntry) {
     return false;
   }
@@ -139,9 +157,6 @@ async function capturePendingConversationTurnReplyUnsafe(params: {
     timestamp,
   });
   if (!claim) {
-    if (!replyToId) {
-      return false;
-    }
     const operation =
       (await findConversationTurnDeliveryByReplyTarget(scope, {
         conversationRef: conversation.conversationRef,
@@ -213,7 +228,10 @@ async function capturePendingConversationTurnReplyUnsafe(params: {
           ...scope,
           sessionId: sessionEntry.sessionId,
           sessionKey,
-          expectedLifecycleRevision: sessionEntry.lifecycleRevision,
+          expectedOwner: {
+            lifecycleRevision: sessionEntry.lifecycleRevision,
+            activeWriterRunId: sessionEntry.activeWriterRunId,
+          },
         },
         {
           type: "custom",

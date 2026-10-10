@@ -28,13 +28,9 @@ describe("cron view saved metadata", () => {
         expected,
       );
       const toggle = getElement(row, `[data-test-id="cron-row-toggle-${job.id}"]`, HTMLSpanElement);
-      const toggleInput = getElement(toggle, "wa-switch", HTMLElement) as HTMLElement & {
-        checked: boolean;
-      };
+      const toggleInput = getElement(toggle, "input.settings-toggle__input", HTMLInputElement);
       const actionLabel = `${enabled ? "Pause" : "Resume"}: ${expected}`;
-      expect(toggleInput.querySelector(".settings-control__sr-label")?.textContent).toBe(
-        actionLabel,
-      );
+      expect(toggle.querySelector(".settings-control__sr-label")?.textContent).toBe(actionLabel);
       expect(toggle.title).toBe(actionLabel);
       expect(toggleInput.checked).toBe(enabled);
 

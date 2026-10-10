@@ -217,7 +217,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +3: approved async session entry reads and typed incognito refusal on the existing subpath.
       // +7: approved prepared/data-only session patches and their authority contracts.
       // +4: CLI state-owner routing, Gateway owner guards, target selection, and timeout parsing.
-      3655,
+      // +1: requester-bound transport effects for owner-routed plugin commands.
+      3656,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -233,7 +234,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +3: approved async session entry reads and typed incognito refusal on the existing subpath.
       // +3: approved prepared/data-only session patches and authority-bound routes.
       // +4: the same four CLI state-owner and transport functions.
-      2121,
+      // +1: runWithLocalStateMutationOwner shares the existing transport authority scope.
+      2122,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
