@@ -10,6 +10,19 @@ sidebarTitle: "Advanced"
 
 ## Advanced configuration
 
+### Cloud quota in `/usage`
+
+Ollama 0.40.1 and later can proxy `GET /api/balance` through a signed-in local
+server. When the `ollama` provider has a configured local `apiKey: "ollama-local"`,
+OpenClaw includes its balance in `/usage` and `openclaw status --usage`. Legacy
+plans show session and weekly usage with reset times; current plans show the
+included balance and its period reset. Purchased credits appear separately.
+
+The local server must be signed in to Ollama Cloud. Local-only models have no
+cloud quota, and an unsigned-in or older server reports an unavailable balance.
+OpenClaw does not need your Ollama web session cookie. If `plugins.allow` is set,
+include `ollama` in that list so its usage hook can load.
+
 <AccordionGroup>
   <Accordion title="Legacy OpenAI-compatible mode">
     <Warning>
