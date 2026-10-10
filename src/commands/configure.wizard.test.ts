@@ -13,12 +13,6 @@ import {
   wizardTestMocks as mocks,
 } from "./configure.wizard.test-support.js";
 
-// mock-isolation: Wizard fixtures use synthetic IO; registered CLI tests cover real state ownership.
-vi.mock("../cli/local-state-owner.js", () => ({
-  runWithLocalStateOwner: async ({ runLocal }: { runLocal: () => Promise<unknown> }) =>
-    await runLocal(),
-}));
-
 const { configureCommandFromSectionsArg } = await import("./configure.commands.js");
 
 const written = () => mocks.writeConfigFile.mock.calls.at(-1)![0];

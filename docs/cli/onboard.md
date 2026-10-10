@@ -14,14 +14,6 @@ systems or whenever an onboarding option is present; configured systems use
 bare `openclaw setup` for system-agent chat. `openclaw setup --baseline` only
 writes the baseline config/workspace.
 
-Stop the local Gateway before onboarding. Setup holds exclusive ownership while
-writing configuration, credentials, and agent state. `--install-daemon` is refused
-before any writes; run `openclaw gateway install` and `openclaw gateway start`
-after setup finishes. Guided setup releases ownership before starting its
-foreground Gateway or terminal handoff. Classic and non-interactive setup defer
-automatic health checks and browser launch; run `openclaw health` once the Gateway
-has started.
-
 <CardGroup cols={2}>
   <Card title="CLI onboarding hub" href="/start/wizard" icon="rocket">
     Walkthrough of the interactive CLI flow.

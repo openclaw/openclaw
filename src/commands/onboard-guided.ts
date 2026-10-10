@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { formatCliCommand } from "../cli/command-format.js";
 import { isUnconfiguredConfigSource } from "../cli/fresh-install-config.js";
-import { runWithLocalStateOwner } from "../cli/local-state-owner.js";
 import { hasResolvedRosterBeforeMigrations } from "../config/agent-roster-provenance.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -538,9 +537,7 @@ async function runGuidedOnboardingFlow(
               ? { finalizeConfig: enableDefaultOnboardingInternalHooks }
               : {}),
             surface: "cli",
-            ...(quickstart || skippedInference || opts.installDaemon === false
-              ? { installDaemon: false }
-              : {}),
+            ...(quickstart || skippedInference ? { installDaemon: false } : {}),
             runtime,
           },
           localSetup?.status === "pending"
@@ -564,6 +561,7 @@ async function runGuidedOnboardingFlow(
       }
       gatewayExternallyManaged =
         applied.gateway.status === "skipped" && applied.gateway.reason === "external";
+      // Accepted one-shot setup exception: record completion after Gateway startup.
       const appliedSnapshot =
         localSetup?.status === "pending"
           ? await (
@@ -671,7 +669,7 @@ async function runGuidedOnboardingFlow(
     await prompter.outro(t("wizard.guided.complete"));
     return null;
   }
-  if (opts.tui !== true && (opts.installDaemon !== false || gatewayExternallyManaged)) {
+  if (opts.tui !== true) {
     const runBrowserHandoff =
       deps.runBrowserHandoff ??
       (await import("./onboard-browser-handoff.js")).runBrowserHatchHandoff;
@@ -697,7 +695,7 @@ async function runGuidedOnboardingFlow(
   return {
     workspace: hatchWorkspace,
     next: "hatch",
-    local: !gatewayExternallyManaged && (alreadyConfigured || opts.installDaemon === false),
+    local: alreadyConfigured,
     ...(handoffAgentId ? { agentId: handoffAgentId } : {}),
   };
 }
@@ -713,19 +711,8 @@ export async function runGuidedOnboarding(
     return;
   }
   const state: { handoff: GuidedOnboardingHandoff | null } = { handoff: null };
-  await runWithLocalStateOwner({
-    method: "onboard",
-    params: {},
-    target: "onboarding configuration and agent state",
-    onForeignOwner: "refuse",
-    runLocal: () =>
-      runInteractiveOnboarding(async () => {
-        state.handoff = await runGuidedOnboardingFlow(
-          { ...opts, installDaemon: false },
-          runtime,
-          deps,
-        );
-      }, runtime),
-  });
+  await runInteractiveOnboarding(async () => {
+    state.handoff = await runGuidedOnboardingFlow(opts, runtime, deps);
+  }, runtime);
   await runGuidedOnboardingHandoff(state.handoff, opts, runtime, deps);
 }

@@ -28,11 +28,6 @@ vi.mock("./auth-choice-prompt.js", () => ({
 }));
 
 vi.mock("../agents/auth-profiles.runtime.js", () => ({ ensureAuthProfileStore }));
-// mock-isolation: Guided-flow fixtures use synthetic IO; CLI process tests cover real custody.
-vi.mock("../cli/local-state-owner.js", () => ({
-  runWithLocalStateOwner: async ({ runLocal }: { runLocal: () => Promise<unknown> }) =>
-    await runLocal(),
-}));
 vi.mock("../plugins/provider-setup-availability.js", () => ({
   detectAvailableSetupProviderIds,
 }));

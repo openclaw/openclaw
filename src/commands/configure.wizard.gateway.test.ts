@@ -70,15 +70,6 @@ describe("runConfigureWizard", () => {
   });
   afterEach(() => vi.unstubAllEnvs());
 
-  it("defers the service action while an offline configuration owner is held", async () => {
-    setupBaseWizardState({ gateway: { mode: "local", port: 18991 } });
-    queueWizardPrompts({ select: ["local"], confirm: [] });
-    await runConfigureWizard({ sections: ["daemon"], deferGatewayStart: true }, createRuntime());
-    expect(maybeInstallDaemon).not.toHaveBeenCalled();
-    expect(noted("Gateway service")).toContain("openclaw gateway install");
-    expect(noted("Gateway service")).toContain("openclaw gateway start");
-  });
-
   it("commits selected sections in canonical order before installing the configured daemon", async () => {
     setupBaseWizardState({ gateway: { port: 18991 } });
     mocks.resolveGatewayPort.mockReturnValue(18991);

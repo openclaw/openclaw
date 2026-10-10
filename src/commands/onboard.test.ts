@@ -118,12 +118,6 @@ vi.mock("../wizard/setup.migration-snapshot.js", () => ({
   withSetupMigrationTargetLock: mocks.withSetupMigrationTargetLock,
 }));
 
-// mock-isolation: Option-dispatch fixtures must not acquire state; CLI process tests cover custody.
-vi.mock("../cli/local-state-owner.js", () => ({
-  runWithLocalStateOwner: async ({ runLocal }: { runLocal: () => Promise<unknown> }) =>
-    await runLocal(),
-}));
-
 vi.mock("./onboard-helpers.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./onboard-helpers.js")>()),
   DEFAULT_WORKSPACE: "~/.openclaw/workspace",
@@ -197,37 +191,6 @@ describe("setupWizardCommand", () => {
       expect.objectContaining({ agentName }),
       runtime,
     );
-  });
-
-  it("rejects service installation before reset or setup writes", async () => {
-    const runtime = makeRuntime();
-    await setupWizardCommand(
-      { nonInteractive: true, acceptRisk: true, reset: true, installDaemon: true },
-      runtime,
-    );
-    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("gateway install"));
-    expect(runtime.exit).toHaveBeenCalledWith(1);
-    expect(mocks.handleReset).not.toHaveBeenCalled();
-    expect(mocks.runNonInteractiveSetup).not.toHaveBeenCalled();
-  });
-
-  it("defers service and UI startup without changing authored setup options", async () => {
-    const runtime = makeRuntime();
-    await setupWizardCommand(
-      { nonInteractive: true, acceptRisk: true, agentName: "robby", gatewayPort: 19001 },
-      runtime,
-    );
-    expect(mocks.runNonInteractiveSetup).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentName: "robby",
-        gatewayPort: 19001,
-        installDaemon: false,
-        skipHealth: true,
-        skipUi: true,
-      }),
-      runtime,
-    );
-    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("browser launch"));
   });
 
   it.each(["openclaw"])(
@@ -883,10 +846,7 @@ describe("setupWizardCommand", () => {
 
     await setupWizardCommand(opts, runtime);
 
-    expect(mocks.runGuidedOnboarding).toHaveBeenCalledWith(
-      { ...opts, installDaemon: false },
-      runtime,
-    );
+    expect(mocks.runGuidedOnboarding).toHaveBeenCalledWith(opts, runtime);
     expect(mocks.runInteractiveSetup).not.toHaveBeenCalled();
   });
 

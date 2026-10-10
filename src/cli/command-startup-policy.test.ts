@@ -40,7 +40,6 @@ describe("command-startup-policy", () => {
       ["config", "set"],
       ["config", "patch"],
       ["config", "unset"],
-      ["onboard"],
       ["docs"],
       ["reset"],
       ["uninstall"],

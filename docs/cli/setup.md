@@ -15,16 +15,9 @@ title: "Setup CLI"
 falls through to guided onboarding. Use `-m`/`--message` for one request or
 `--baseline` to initialize config/workspace folders without the wizard.
 
-Baseline setup and onboarding require the local Gateway to be stopped. They hold
-exclusive ownership while writing agent state. Stop the Gateway through its
-service owner, wait for it to exit, then rerun setup. Normal system-agent chat
-continues to use the running Gateway.
-
-Onboarding refuses `--install-daemon` before writing state. Install and start the
-background service afterward with `openclaw gateway install` and
-`openclaw gateway start`. Guided setup releases ownership before its foreground
-Gateway or terminal handoff. Classic and non-interactive setup defer automatic
-health checks and browser launch; run `openclaw health` after starting the Gateway.
+Baseline setup (`--baseline`) requires the local Gateway to be stopped and holds
+exclusive ownership while creating agent state. Stop the Gateway through its
+service owner, wait for it to exit, then rerun the command.
 
 Routing order:
 
@@ -71,7 +64,7 @@ Gemini CLI and Antigravity are not offered as detected setup routes.
 
 `setup` accepts the same onboarding flags as `openclaw onboard`, including
 auth (`--auth-choice`, `--token`, provider key flags), Gateway
-(`--gateway-port`, `--gateway-bind`, `--gateway-auth`),
+(`--gateway-port`, `--gateway-bind`, `--gateway-auth`, `--install-daemon`),
 Tailscale (`--tailscale`), reset (`--reset`, `--reset-scope`), flow
 (`--flow quickstart|advanced|manual|import`), and skip flags
 (`--skip-channels`, `--skip-skills`, `--skip-bootstrap`, `--skip-search`,

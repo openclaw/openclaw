@@ -139,7 +139,7 @@ describe("runGuidedOnboarding quick start", () => {
       expect.objectContaining({ firstAgent: { name: "helper" } }),
       { beforePersistentApply: expect.any(Function) },
     );
-    expect(vi.mocked(deps.applySetup).mock.calls[0]?.[0]).toEqual(
+    expect(vi.mocked(deps.applySetup).mock.calls[0]?.[0]).not.toEqual(
       expect.objectContaining({ installDaemon: false }),
     );
     expect(deps.runSetupMemoryImportStep).toHaveBeenCalledOnce();

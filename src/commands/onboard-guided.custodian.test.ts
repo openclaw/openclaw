@@ -49,7 +49,7 @@ describe("runGuidedOnboarding", () => {
     expect(prompter.outro).toHaveBeenCalledWith("OpenClaw is ready.");
   });
 
-  it("launches the local terminal hatch after offline setup", async () => {
+  it("launches the guided terminal hatch through the running Gateway", async () => {
     const prompter = createWizardPrompter();
     const deps: GuidedOnboardingDeps = setupDeps({ prompter });
     delete deps.launchHatchTui;
@@ -62,7 +62,8 @@ describe("runGuidedOnboarding", () => {
 
     expect(launchTuiCli).toHaveBeenCalledOnce();
     const options = launchTuiCli.mock.calls[0]?.[0] as Record<string, unknown>;
-    expect(options).toMatchObject({ deliver: false, local: true });
+    expect(options).toMatchObject({ deliver: false });
+    expect(options).not.toHaveProperty("local");
   });
 
   it("keeps the local terminal hatch for configured reruns", async () => {

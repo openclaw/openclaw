@@ -225,7 +225,7 @@ async function promptWebToolsConfig(
 
 /** Run the configure wizard, optionally limited to selected sections. */
 export async function runConfigureWizard(
-  opts: { sections?: WizardSection[]; deferGatewayStart?: boolean },
+  opts: { sections?: WizardSection[] },
   runtime: RuntimeEnv = defaultRuntime,
 ) {
   const prompts = createConfigurePrompts(runtime);
@@ -547,13 +547,6 @@ export async function runConfigureWizard(
         );
       },
       daemon: async () => {
-        if (opts.deferGatewayStart) {
-          note(
-            "Finish configure, then run `openclaw gateway install` and `openclaw gateway start`. Configuration holds exclusive offline state ownership until it finishes.",
-            "Gateway service",
-          );
-          return;
-        }
         if (!didConfigureGateway) {
           const portInput = await prompts.text({
             message: "Gateway port for service install",
