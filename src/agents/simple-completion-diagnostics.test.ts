@@ -61,8 +61,9 @@ describe("prepared background completion diagnostics", () => {
         events.push(event);
       });
       const error = new Error("provider unavailable");
-      if (outcome === "throw") completeSimple.mockRejectedValue(error);
-      else
+      if (outcome === "throw") {
+        completeSimple.mockRejectedValue(error);
+      } else {
         completeSimple.mockResolvedValue(
           outcome === "success"
             ? assistant
@@ -72,14 +73,18 @@ describe("prepared background completion diagnostics", () => {
                 errorMessage: error.message,
               },
         );
+      }
       try {
         const pending = completeWithPreparedSimpleCompletionModel({
           model,
           auth: { apiKey: "synthetic", source: "test", mode: "api-key" },
           context: { messages: [{ role: "user", content: "Generate a title", timestamp: 1 }] },
         });
-        if (outcome === "throw") await expect(pending).rejects.toBe(error);
-        else await expect(pending).resolves.toMatchObject({ role: "assistant" });
+        if (outcome === "throw") {
+          await expect(pending).rejects.toBe(error);
+        } else {
+          await expect(pending).resolves.toMatchObject({ role: "assistant" });
+        }
         await waitForDiagnosticEventsDrained();
         const calls = events.filter(
           (event) =>
