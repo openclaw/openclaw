@@ -930,17 +930,6 @@ const reviewedOperations = new Map([
     ],
   ],
   [
-    "src/config/sessions/session-accessor.sqlite-transcript-write.ts",
-    [
-      {
-        tier: "T3",
-        operations: ["replaceTranscriptEvents"],
-        evidence:
-          "Only production invocations are developer benchmarks scripts/bench-agent-database-holds.ts:142 and scripts/bench-session-history.ts:383; remaining references are internal reexports and excluded test helpers. Synchronous replacement is separately retained.",
-      },
-    ],
-  ],
-  [
     "src/config/sessions/session-canonical-key-read.ts",
     [
       {

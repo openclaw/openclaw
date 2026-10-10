@@ -9,9 +9,9 @@ import {
 import { describe, expect, it } from "vitest";
 import {
   appendTranscriptMessage,
-  replaceTranscriptEvents,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import type { ContextEngine, ContextEngineSessionTarget } from "../../context-engine/types.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";

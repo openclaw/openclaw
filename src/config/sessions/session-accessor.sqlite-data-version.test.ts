@@ -13,7 +13,6 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import {
-  appendTranscriptEventSync,
   appendTranscriptMessageSync,
   assignSessionOwner,
   cleanupPluginHostSessionStore,
@@ -29,6 +28,7 @@ import { captureSessionEntryRead } from "./session-accessor.sqlite-entry-read-li
 import { readReferencedSessionIds } from "./session-accessor.sqlite-lifecycle-state.js";
 import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
 import { ensureTranscriptSessionRoot } from "./session-accessor.sqlite-transcript-state.js";
+import { appendTranscriptEventSync } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import type { SessionEntry } from "./types.js";
 
 const parseSessionEntryCalls = vi.hoisted(() => vi.fn());

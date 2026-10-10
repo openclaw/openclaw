@@ -205,13 +205,13 @@ function createCleanupClient(parent: Parent) {
       let released = false;
       const release = (joined: boolean, waitForRelease = false) => {
         if (released) {
-          return;
+          return Promise.resolve();
         }
         released = true;
         operations--;
         if (!joined) {
           markFailed();
-          return;
+          return Promise.resolve();
         }
         // Physical joining completes this operation. The ordered exchange still
         // fences later admission, without extending the command's own lifetime.

@@ -800,6 +800,9 @@ const config = {
         // Loaded via createRequire in src/agents/utils/syntax-highlight.ts because its
         // d.ts force-includes lib.dom; knip cannot see the dynamic require.
         "highlight.js",
+        // Solid plugin builds createRequire the compiler from the plugin author's package.json;
+        // the host never resolves or ships it (docs/plugins/feature-plugins.md).
+        "@solidjs/compiler",
         "playwright-core",
         "partial-json",
         // The native Canvas bundle falls back without optional Markdown support.
@@ -857,6 +860,12 @@ const config = {
         "src/lib/browser-redact.{ts,tsx}!",
         "vite.config.ts!",
         "vitest*.ts!",
+        // Dormant Solid 2 foundation (#168305 smoke fixture, #168405 state-owner projections):
+        // only their tests import them until Control UI views adopt Solid; drop these entries
+        // with the first production importer.
+        "src/lib/reactive/*.ts!",
+        "!src/lib/reactive/*.test.ts!",
+        "src/solid-smoke/solid-smoke.tsx!",
       ],
       // Workboard lazy-loads Three.js at runtime; Knip's dependency pass misses it.
       ignoreDependencies: ["three"],

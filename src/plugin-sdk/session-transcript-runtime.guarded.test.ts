@@ -10,8 +10,8 @@ import {
   replaceSessionEntry,
   upsertSessionEntryCore,
   loadTranscriptEventsSync,
-  replaceTranscriptEventsSync,
 } from "../config/sessions/session-accessor.js";
+import { replaceTranscriptEventsSync } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { runSessionColdStorageMaintenance } from "../config/sessions/session-cold-storage.js";
 import {
   runWithSessionTranscriptReadFence,

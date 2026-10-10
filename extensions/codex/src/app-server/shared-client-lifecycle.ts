@@ -67,7 +67,8 @@ export function recordSharedClientAcquireBoundary(
 }
 
 export type SharedCodexAppServerClientEntry = {
-  readonly key: string;
+  /** Moves only through rekeySharedClientEntry. */
+  key: string;
   client?: CodexAppServerClient;
   startup?: SharedCodexAppServerClientStartup;
   startupTransport?: Promise<CodexAppServerClient>;
@@ -107,6 +108,41 @@ export function getOrCreateSharedClientEntry(
     state.clients.set(key, entry);
   }
   return entry;
+}
+
+export class SharedCodexFallbackJoinError extends Error {
+  readonly code = "CODEX_SHARED_FALLBACK_JOIN";
+
+  constructor() {
+    super("Shared Codex fallback already has a startup owner");
+    this.name = "SharedCodexFallbackJoinError";
+  }
+}
+
+export function isSharedCodexFallbackJoinError(error: unknown): boolean {
+  return error instanceof Error && "code" in error && error.code === "CODEX_SHARED_FALLBACK_JOIN";
+}
+
+/**
+ * Moves a current entry to the fallback key. False means the caller must
+ * re-acquire instead of starting a second client under an already-owned key.
+ */
+export function rekeySharedClientEntry(
+  entry: SharedCodexAppServerClientEntry,
+  key: string,
+): boolean {
+  const state = getSharedCodexAppServerClientState();
+  if (state.clients.get(entry.key) !== entry) {
+    return false;
+  }
+  const target = state.clients.get(key);
+  if (target) {
+    return target === entry;
+  }
+  state.clients.delete(entry.key);
+  entry.key = key;
+  state.clients.set(key, entry);
+  return true;
 }
 
 export function closeSharedClientEntryIfUnclaimed(entry: SharedCodexAppServerClientEntry): boolean {
