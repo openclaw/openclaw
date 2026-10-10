@@ -302,6 +302,17 @@ Use the plugin approval timeout independently of the agent-run timeout. Authenti
 Control UI reviewers can inspect `detail`, while channel messages retain
 the bounded description. Oversized detail is rejected by the existing request schema.
 
+## Session persistence
+
+`agent-sessions` exposes awaited SessionManager mutations and versioned extension
+actions. `session-store-runtime` provides `prepareSessionEntryPatch` for host
+preparation followed by a conditional worker commit, and `applySessionEntryPatch`
+for already prepared data. `session-transcript-runtime` provides
+`withSessionTranscriptWrite` and duplicate-aware message preparation. Released
+synchronous and opaque transaction callback forms remain deprecated until the
+next Plugin SDK major. See [session entry migration](/plugins/sdk-migration/how-to-migrate#prepare-session-entry-changes)
+and [transcript migration](/plugins/sdk-migration/how-to-migrate#await-locked-transcript-preparation).
+
 ## Stateful CLI commands
 
 `openclaw/plugin-sdk/cli-state-owner` exports `runWithLocalStateOwner`. Supply the
