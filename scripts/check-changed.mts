@@ -1041,7 +1041,11 @@ export function createChangedCheckPlan(
   }
 
   if (runAll) {
-    addLint("lint", ["lint"]);
+    addLint("lint", [
+      "lint",
+      ...(options.staged ? ["--staged"] : []),
+      ...(options.base ? ["--base", options.base] : []),
+    ]);
     add("runtime import cycles", ["check:import-cycles"]);
     return finishPlan("all");
   }

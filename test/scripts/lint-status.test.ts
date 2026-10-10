@@ -53,6 +53,8 @@ export function waitForFile(file) {
     "tsx.mjs",
     "windows-cmd-helpers.mjs",
     "lib/tsx-cli-shim.mjs",
+    "lib/arg-utils.mts",
+    "lib/arg-utils.runtime.mjs",
     "lib/local-check-runtime.mts",
     "lib/check-limits.mts",
     "lib/oxlint-changed-scope.mts",

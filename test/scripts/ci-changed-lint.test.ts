@@ -431,6 +431,14 @@ describe("CI changed lint", () => {
         { base: undefined, staged: false, expectedBase: "ci-base" },
         { base: undefined, staged: true, expectedBase: "HEAD" },
       ]) {
+        if (file === ".oxlintrc.json") {
+          expect(
+            createChangedCheckPlan(detectChangedLanes(["pnpm-lock.yaml"]), {
+              base,
+              staged,
+            }).commands.find(({ args }) => args[0] === "lint")?.args,
+          ).toEqual(["lint", ...(staged ? ["--staged"] : []), ...(base ? ["--base", base] : [])]);
+        }
         const commands = createChangedCheckPlan(result, {
           lintOnly: true,
           base,

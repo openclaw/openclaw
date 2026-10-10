@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -27,6 +27,46 @@ const legacy = [
 ].join("\n");
 
 describe("Control UI Lit ratchet", () => {
+  it("preserves staged and explicit base scope through the full lint entry point", () => {
+    const root = tempDirs.make("openclaw-lit-full-lint-");
+    const source = path.join(root, "ui/src/view.ts");
+    fs.mkdirSync(path.dirname(source), { recursive: true });
+    fs.writeFileSync(source, "export {};\n");
+    for (const args of [["init"], ["add", "."], ["commit", "-m", "base"], ["tag", "baseline"]]) {
+      git(root, args);
+    }
+    const runLint = (args: string[]) =>
+      spawnSync(
+        process.execPath,
+        [
+          "--import",
+          path.resolve("scripts/tsx.mjs"),
+          path.resolve("scripts/run-lint.mts"),
+          ...args,
+        ],
+        {
+          cwd: root,
+          env: { ...createNestedGitEnv(), CHECKOUT_BASE_SHA: "HEAD" },
+          encoding: "utf8",
+        },
+      );
+
+    fs.writeFileSync(source, legacy);
+    git(root, ["add", "."]);
+    fs.writeFileSync(source, "export {};\n");
+    const staged = runLint(["--staged", "--only=extensions"]);
+    expect(staged.error).toBeUndefined();
+    expect(staged.status, staged.stderr).toBe(1);
+    expect(staged.stderr).toContain("litImports: 3 > 0");
+
+    git(root, ["commit", "-m", "existing Lit"]);
+    fs.writeFileSync(source, legacy);
+    const based = runLint(["--base", "baseline", "--only=extensions"]);
+    expect(based.error).toBeUndefined();
+    expect(based.status, based.stderr).toBe(1);
+    expect(based.stderr).toContain("litImports: 3 > 0");
+  });
+
   it("recognizes Lit syntax and aliases without counting commented code", () => {
     const counts = countMigrationSources(
       process.cwd(),
