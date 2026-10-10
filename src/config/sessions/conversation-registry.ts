@@ -46,19 +46,6 @@ export type PreparedConversationRegistryScope = {
   storePath: string;
 };
 
-export function resolveConversationRegistryScope(params: {
-  agentId: string;
-  config: OpenClawConfig;
-}): PreparedConversationRegistryScope {
-  const scope = {
-    agentId: params.agentId,
-    storePath: resolveSessionStorePathCore(params.config.session?.store, {
-      agentId: params.agentId,
-    }),
-  };
-  return pinConversationDatabaseScope(scope).scope;
-}
-
 export async function prepareConversationRegistryScope(params: {
   agentId: string;
   config: OpenClawConfig;

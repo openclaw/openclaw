@@ -65,7 +65,6 @@ function wrapStreamPromoteStandaloneTextToolCalls(
         id,
         name,
         arguments: block.arguments,
-        partialArgs: JSON.stringify(block.arguments),
       };
     };
     const promoted = projectPlainTextToolCallMessage({

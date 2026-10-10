@@ -8,6 +8,7 @@ import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/pr
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resetConfigRuntimeState } from "../config/config.js";
 import type { CallGatewayOptions } from "../gateway/call.js";
+import { runWithLocalStateMutationOwner } from "../gateway/server-methods/local-state-owner.js";
 import { memorySearchHandlers } from "../gateway/server-methods/memory-search.js";
 import type {
   GatewayRequestHandler,
@@ -19,13 +20,13 @@ import {
   resolveGatewayLockPaths,
   type GatewayLockHandle,
 } from "../infra/gateway-lock.js";
-import type { MemorySearchManager } from "../memory-host-sdk/host/types.js";
+import type { MemoryCliSearchOutcome, MemorySearchManager } from "../memory-host-sdk/host/types.js";
+import { runWithLocalStateOwner } from "../plugin-sdk/cli-state-owner.js";
 import { createTestPluginApi } from "../plugin-sdk/plugin-test-api.js";
 import { createPluginRuntimeMock } from "../plugin-sdk/test-helpers/plugin-runtime-mock.js";
 import type { OpenClawPluginApi } from "../plugins/plugin-api.types.js";
 import type { OpenClawPluginCliRegistrar } from "../plugins/plugin-registration.types.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
-import { loadBundledPluginFacade } from "../test-utils/bundled-plugin-public-surface.js";
 
 const fixture = vi.hoisted(() => ({
   external: false,
@@ -58,11 +59,6 @@ vi.mock("../gateway/call.js", async (importOriginal) => ({
   callGateway: fixture.callGateway,
 }));
 
-// mock-isolation: Exercise the real Gateway adapter without transcript/model execution.
-vi.mock("../../extensions/memory-core/src/session-backfill-gateway.runtime.js", () => ({
-  executeSessionBackfillBatch: fixture.executeBatch,
-}));
-
 vi.mock("../infra/gateway-state-owner.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../infra/gateway-state-owner.js")>();
   return {
@@ -73,53 +69,196 @@ vi.mock("../infra/gateway-state-owner.js", async (importOriginal) => {
   };
 });
 
-// mock-isolation: Domain behavior has plugin-owned coverage; this fixture observes admission.
-vi.mock("../../extensions/memory-core/src/cli.runtime.js", () => ({
-  runMemoryStatus: fixture.memory,
-  runMemoryIndex: fixture.memory,
-  runMemorySearch: fixture.memory,
-  runMemoryForget: fixture.memory,
-  runMemoryReset: fixture.memory,
-  runMemoryPromote: fixture.memory,
-  runMemoryPromoteExplain: fixture.memory,
-  runMemoryRemHarness: fixture.memory,
-  runMemoryRemBackfill: fixture.memory,
-  runMemorySessionBackfill: fixture.memory,
-}));
+// Synthetic command families retain the caller shapes without loading bundled plugins.
+// Admission, physical custody, transport dispatch, and response revocation stay real.
+function registerSyntheticPlugin(api: OpenClawPluginApi) {
+  const registerOwnedMethod = (
+    method: string,
+    run: (params: Record<string, unknown>) => Promise<unknown>,
+  ) => {
+    api.registerGatewayMethod(method, async (options) => {
+      try {
+        const params = options.params as Record<string, unknown>;
+        const result = await runWithLocalStateMutationOwner(
+          String(params.expectedOwnerId),
+          options,
+          () => run(params),
+        );
+        options.respond(true, result);
+      } catch (error) {
+        options.respond(false, undefined, { code: "UNAVAILABLE", message: String(error) });
+      }
+    });
+  };
+  for (const operation of ["preview", "apply", "rollback"]) {
+    registerOwnedMethod(`fixture.batch.${operation}.owner`, async (params) => ({
+      execution: await fixture.executeBatch(),
+      ownerId: params.expectedOwnerId,
+    }));
+  }
+  for (const [operation, mock] of [
+    ["status", fixture.status],
+    ["bootstrap", fixture.bootstrap],
+    ["recoveryKey", fixture.recovery],
+  ] as const) {
+    registerOwnedMethod(`fixture.verify.${operation}.owner`, async (params) => ({
+      result: await mock({ cfg: api.runtime.config.current(), accountId: params.accountId }),
+      accountId: params.accountId,
+    }));
+  }
+  api.registerCli(({ program }) => {
+    program
+      .command("memory <operation> [value]")
+      .allowUnknownOption()
+      .allowExcessArguments()
+      .option("--apply")
+      .option("--rollback")
+      .option("--rem")
+      .option("--archive-files <path>")
+      .option("--json")
+      .option("--agent <id>")
+      .option("--max-results <n>", "limit", Number)
+      .option("--min-score <n>", "score", Number)
+      .action(
+        async (
+          operation: string,
+          value: string | undefined,
+          opts: {
+            apply?: boolean;
+            rollback?: boolean;
+            rem?: boolean;
+            archiveFiles?: string;
+            agent?: string;
+            maxResults?: number;
+            minScore?: number;
+          },
+        ) => {
+          if (operation === "session-backfill") {
+            await runSyntheticBatches(opts);
+          } else if (operation === "search") {
+            const result = await runWithLocalStateOwner<MemoryCliSearchOutcome | undefined>({
+              method: "memory.search.owner",
+              target: "fixture search",
+              params: {
+                query: value,
+                ...(opts.agent === undefined ? {} : { agentId: opts.agent }),
+                ...(opts.maxResults === undefined ? {} : { maxResults: opts.maxResults }),
+                ...(opts.minScore === undefined ? {} : { minScore: opts.minScore }),
+              },
+              runLocal: async () => {
+                await fixture.memory();
+                return undefined;
+              },
+            });
+            if (result) {
+              if ("status" in result && result.status === "failed") {
+                const message = `memory search failed (${result.agentId}): ${result.error}`;
+                console.error(message);
+                process.exitCode = 1;
+                printJson({
+                  agentId: result.agentId,
+                  ok: false,
+                  error: { type: "cli_error", message },
+                });
+              } else {
+                printJson(result);
+              }
+            }
+          } else {
+            await runWithLocalStateOwner({
+              method: "fixture.offline",
+              target: "fixture stores",
+              params: {},
+              onForeignOwner: "refuse",
+              runLocal: fixture.memory,
+            });
+          }
+        },
+      );
+    program
+      .command("matrix")
+      .command("verify <operation> [value]")
+      .option("--json")
+      .option("--account <id>")
+      .option("--include-recovery-key")
+      .action(async (operation: string, _value: string | undefined, opts: { account?: string }) => {
+        try {
+          const routed = ["status", "bootstrap", "device"].includes(operation);
+          const result = await runWithLocalStateOwner<{ result: unknown }>({
+            method: routed
+              ? `fixture.verify.${operation === "device" ? "recoveryKey" : operation}.owner`
+              : "fixture.offline",
+            target: "fixture account",
+            params: { accountId: opts.account },
+            ...(routed ? {} : { onForeignOwner: "refuse" as const }),
+            runLocal: async () => {
+              fixture.config();
+              return { result: await fixture.matrix() };
+            },
+          });
+          printJson(result.result);
+          if (operation === "bootstrap" && !(result.result as { success: boolean }).success) {
+            process.exitCode = 1;
+          }
+        } catch (error) {
+          process.exitCode = 1;
+          printJson({ error: String(error) });
+        }
+      });
+  });
+}
 
-vi.mock("../../extensions/matrix/src/matrix/actions/verification.js", async (importOriginal) => ({
-  ...(await importOriginal<Record<string, unknown>>()),
-  listMatrixVerifications: fixture.matrix,
-  getMatrixVerificationSas: fixture.matrix,
-  getMatrixVerificationStatus: fixture.status,
-  bootstrapMatrixVerification: fixture.bootstrap,
-  verifyMatrixRecoveryKey: fixture.recovery,
-}));
+function printJson(value: unknown) {
+  process.stdout.write(`${JSON.stringify(value)}\n`);
+}
 
-// mock-isolation: Do not create a Matrix SDK/network runtime to test CLI owner admission.
-vi.mock("../../extensions/matrix/src/runtime.js", () => ({
-  getMatrixRuntime: () => ({ config: { current: fixture.config } }),
-  setMatrixRuntimeLifecycle: () => {},
-}));
-
-const { registerMatrixCliMetadata } = await loadBundledPluginFacade<{
-  registerMatrixCliMetadata: (api: OpenClawPluginApi) => void;
-}>({ pluginId: "matrix", artifactBasename: "cli-metadata.js" });
-const { registerMatrixFullRuntime } = await loadBundledPluginFacade<{
-  registerMatrixFullRuntime: (api: OpenClawPluginApi) => void;
-}>({ pluginId: "matrix", artifactBasename: "index.js" });
-const { registerMemoryCli } = await loadBundledPluginFacade<{
-  registerMemoryCli: (program: Command) => void;
-}>({ pluginId: "memory-core", artifactBasename: "cli.js" });
-const { default: memoryCore } = await loadBundledPluginFacade<{
-  default: { register(api: OpenClawPluginApi): void };
-}>({ pluginId: "memory-core", artifactBasename: "index.js" });
+async function runSyntheticBatches(opts: {
+  apply?: boolean;
+  rollback?: boolean;
+  rem?: boolean;
+  archiveFiles?: string;
+}) {
+  const operation = opts.rollback ? "rollback" : opts.apply ? "apply" : "preview";
+  let operationOwnerId: string | undefined;
+  const batches: ReturnType<typeof backfillExecution>["result"][] = [];
+  for (;;) {
+    const reply = await runWithLocalStateOwner<{
+      execution: ReturnType<typeof backfillExecution>;
+      ownerId: string;
+    } | null>({
+      method: `fixture.batch.${operation}.owner`,
+      target: "fixture batches",
+      params: { cliResult: true, ...(operationOwnerId ? { operationOwnerId } : {}) },
+      ...(opts.rem || opts.archiveFiles ? { onForeignOwner: "refuse" as const } : {}),
+      runLocal: async () => {
+        if (operationOwnerId) {
+          throw new Error("The selected Gateway is no longer running");
+        }
+        await fixture.memory();
+        return null;
+      },
+    });
+    if (!reply) {
+      return;
+    }
+    operationOwnerId ??= reply.ownerId;
+    batches.push(reply.execution.result);
+    if (!opts.apply || !reply.execution.continuation.hasMore) {
+      break;
+    }
+  }
+  const result = { ...batches[0], batchCount: batches.length };
+  for (const field of ["candidateCount", "writtenDiaryEntries", "replacedDiaryEntries"] as const) {
+    result[field] = batches.reduce((sum, batch) => sum + batch[field], 0);
+  }
+  printJson(result);
+}
 
 const roots = useAutoCleanupTempDirTracker(afterAll);
 let root: string;
 let owner: GatewayLockHandle | null = null;
 let ownerId: string | undefined;
-let matrixRegistrar: OpenClawPluginCliRegistrar;
+let registrar: OpenClawPluginCliRegistrar;
 const methods = new Map<string, GatewayRequestHandler>();
 const gatewayConfig = {
   plugins: { entries: { "memory-core": { config: { dreaming: { enabled: false } } } } },
@@ -188,22 +327,17 @@ beforeAll(() => {
       config: { current: () => gatewayConfig },
       agent: { resolveAgentWorkspaceDir: () => "/gateway/workspace" },
     }),
+    registerCli(value) {
+      registrar = value;
+    },
     registerGatewayMethod: (name, handler) => {
       methods.set(name, handler);
     },
   });
-  registerMatrixFullRuntime(api);
-  memoryCore.register(api);
+  registerSyntheticPlugin(api);
   for (const [method, handler] of Object.entries(memorySearchHandlers)) {
     methods.set(method, handler);
   }
-  registerMatrixCliMetadata(
-    createTestPluginApi({
-      registerCli(registrar) {
-        matrixRegistrar = registrar;
-      },
-    }),
-  );
 });
 
 beforeEach(() => {
@@ -244,16 +378,12 @@ afterEach(async () => {
 
 async function runCli(args: string[]) {
   const program = new Command();
-  if (args[0] === "memory") {
-    registerMemoryCli(program);
-  } else {
-    await matrixRegistrar({
-      program,
-      parentPath: [],
-      config: {},
-      logger: { info() {}, warn() {}, error() {}, debug() {} },
-    });
-  }
+  await registrar({
+    program,
+    parentPath: [],
+    config: {},
+    logger: { info() {}, warn() {}, error() {}, debug() {} },
+  });
   await program.parseAsync(args, { from: "user" });
 }
 
@@ -270,7 +400,7 @@ async function occupyState() {
   fixture.external = true;
 }
 
-describe("plugin commands respect the local state owner", () => {
+describe("synthetic plugin commands respect the local state owner", () => {
   it.each([
     ["status"],
     ["index"],
@@ -346,15 +476,21 @@ describe("plugin commands respect the local state owner", () => {
   );
 
   it.each([
-    ["status", [], "matrix.verify.status.owner", "status", { pendingVerifications: 0 }],
+    ["status", [], "fixture.verify.status.owner", "status", { pendingVerifications: 0 }],
     [
       "bootstrap",
       [],
-      "matrix.verify.bootstrap.owner",
+      "fixture.verify.bootstrap.owner",
       "bootstrap",
       { success: false, error: "verification incomplete" },
     ],
-    ["device", ["synthetic-key"], "matrix.verify.recoveryKey.owner", "recovery", { success: true }],
+    [
+      "device",
+      ["synthetic-key"],
+      "fixture.verify.recoveryKey.owner",
+      "recovery",
+      { success: true },
+    ],
   ] as const)(
     "routes Matrix verify %s to the discovered owner's existing handler",
     async (command, flags, method, mock, result) => {
@@ -427,9 +563,9 @@ describe("plugin commands respect the local state owner", () => {
       }
       expect(fixture.callGateway).toHaveBeenCalledWith(
         expect.objectContaining({
-          method: `memory.sessionBackfill.${operation}.owner`,
+          method: `fixture.batch.${operation}.owner`,
           params: expect.objectContaining({ expectedOwnerId: ownerId, cliResult: true }),
-          requiredMethods: [`memory.sessionBackfill.${operation}.owner`],
+          requiredMethods: [`fixture.batch.${operation}.owner`],
           requiredCapabilities: [GATEWAY_SERVER_CAPS.LOCAL_STATE_OWNER_ROUTING],
         }),
       );
