@@ -393,7 +393,6 @@ export async function createFullModelCatalogAccess(
           snapshot,
           selection,
           catalogAcquired: published.nativeCatalogAcquired,
-          failedProviders: params.inventoryOwner.catalogAttempt?.failedProviders.native,
         });
       // Readiness invokes plugin code, which may close the captured authority.
       assertObservationCurrent();
@@ -454,11 +453,10 @@ export async function createFullModelCatalogAccess(
         },
       });
       assertObservationCurrent();
-      if (!completed && failures.length && (selection || refresh)) {
-        failedProviders = failures.flatMap((failure) => failure.providers ?? []);
-        throw failures[0]!.error;
-      }
       if (!params.isCurrent()) {
+        if (!completed && failures.length) {
+          throw failures[0]!.error;
+        }
         const catalog = projectInventory(rawCatalog, params.catalogFacts.configuredRuntimeModels);
         setCatalogAuth(
           catalog,
@@ -488,21 +486,22 @@ export async function createFullModelCatalogAccess(
         : auth;
       const acquiredNative =
         latest.nativeCatalogAcquired || (!selection && (!providerIds || completed));
-      const nextInventory = completed
-        ? {
-            catalog: {
-              ...rawCatalog,
-              authoritative: (latestInventory?.catalog ?? params.catalogFacts.modelCatalog)
-                .authoritative,
-            },
-            runtimeModels: latestInventory?.runtimeModels ?? new Map(),
-            key: inventoryKey,
-            pluginFingerprint,
-            nativeSource,
-            providers: latestInventory?.providers ?? new Map(),
-            discoveryOrigins: latestInventory?.discoveryOrigins ?? [],
-          }
-        : latestInventory;
+      const nextInventory =
+        completed || failures.length
+          ? {
+              catalog: {
+                ...rawCatalog,
+                authoritative: (latestInventory?.catalog ?? params.catalogFacts.modelCatalog)
+                  .authoritative,
+              },
+              runtimeModels: latestInventory?.runtimeModels ?? new Map(),
+              key: inventoryKey,
+              pluginFingerprint,
+              nativeSource,
+              providers: latestInventory?.providers ?? new Map(),
+              discoveryOrigins: latestInventory?.discoveryOrigins ?? [],
+            }
+          : latestInventory;
       if (nextInventory) {
         if (nativeAuth) {
           accountCatalog.reconcileAuth(nativeAuth.authStore, (provider) =>
@@ -526,13 +525,14 @@ export async function createFullModelCatalogAccess(
       if (params.isPublished?.() !== false) {
         notifyPreparedModelCatalogPublication(change);
       }
+      if (!completed && failures.length && (selection || refresh)) {
+        failedProviders = failures.flatMap((failure) => failure.providers ?? []);
+        throw failures[0]!.error;
+      }
       return published.catalog ?? staticCatalog;
     })()
       .catch((error: unknown) => {
         attempt.failed(error, failedProviders ?? providerIds, "native");
-        if (params.isCurrent() && !selection && !providerIds) {
-          published = { ...published, nativeCatalogAcquired: true };
-        }
         if (params.isCurrent() && published.catalog) {
           attempt.withRefreshStatus(published.catalog);
         }

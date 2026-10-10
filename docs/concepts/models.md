@@ -133,7 +133,8 @@ and discover models. Pending providers show `checking models…`.
 Open the menu again to see newly discovered models; completing discovery does not
 edit a list that was already sent. If optional native discovery fails, ordinary
 catalog requests keep the published rows and report `refreshFailed`; selecting a
-native model or explicitly refreshing still reports the discovery error.
+native model or explicitly refreshing still reports the discovery error. A failed
+harness does not prevent healthy runtimes from refreshing after their clients retire.
 
 Refreshing a selected account also keeps its last completed catalog available to
 other readers until discovery succeeds. Failed refreshes retain that catalog;

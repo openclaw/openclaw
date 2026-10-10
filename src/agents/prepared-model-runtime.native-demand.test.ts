@@ -239,3 +239,97 @@ it.each(["discovery failure", "superseded owner", "changed authorization"])(
     expect(loadNative).toHaveBeenCalledTimes(3);
   },
 );
+
+it.each([false, true])(
+  "reacquires a retired healthy runtime after a sibling failure (shared provider: %s)",
+  async (sharedProvider) => {
+    const config: OpenClawConfig = {
+      agents: {
+        entries: { pro: {} },
+        defaults: {
+          model: "demo/native-model",
+          models: {
+            "demo/native-model": {
+              agentRuntime: { id: "native-test" },
+              ...(sharedProvider ? { pickerRuntimes: ["failed-native"] } : {}),
+            },
+          },
+        },
+      },
+    };
+    mocks.configuredAgentIds = ["pro"];
+    mocks.resolveNativeModelPrimary.mockReturnValue("demo/native-model");
+    const native = {
+      provider: "demo",
+      id: "native-model",
+      name: "Native model",
+      nativeRuntime: "native-test",
+    };
+    let healthyReady = false;
+    let failedReady = sharedProvider;
+    const loadHealthy = vi.fn(async () => {
+      healthyReady = true;
+      return [native];
+    });
+    const loadFailed = vi.fn(async () => {
+      if (!failedReady) {
+        throw new Error("Sibling native discovery unavailable");
+      }
+      return [{ ...native, nativeRuntime: "failed-native" }];
+    });
+    mocks.loadAgentRuntimePluginRegistryHandle.mockImplementation(() => {
+      const registry = createEmptyPluginRegistry();
+      for (const [id, loadModelCatalog, isReady] of [
+        ["native-test", loadHealthy, () => healthyReady],
+        ["failed-native", loadFailed, () => failedReady],
+      ] as const) {
+        registry.agentHarnesses.push({
+          pluginId: id,
+          source: "fixture",
+          harness: {
+            id,
+            label: id,
+            authBootstrap: "harness",
+            supports: () => ({ supported: true }),
+            runAttempt: vi.fn(),
+            loadModelCatalog,
+            readModelCatalogReadiness: () => (isReady() ? { accountType: "apiKey" } : undefined),
+          },
+        });
+      }
+      return registry;
+    });
+    await refreshPreparedModelRuntimeSnapshots(config, {
+      gatewayLifecycle: true,
+      catalogMode: "static",
+    });
+    const owner = getPreparedModelRuntimeSnapshot(fixture.agentInput("pro", config))!;
+    await owner.loadFullModelCatalog!({ changedOnly: true });
+    const pick = createPicker(config);
+    await pick();
+    if (sharedProvider) {
+      failedReady = false;
+      await pick(true);
+    }
+    const acquisitions = loadHealthy.mock.calls.length;
+    const expectHealthy = async () => {
+      expect(await pick()).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({
+          models: expect.arrayContaining([
+            expect.objectContaining({ id: native.id, available: true }),
+          ]),
+          refreshFailed: true,
+        }),
+        undefined,
+      );
+    };
+    await expectHealthy();
+    expect(loadHealthy).toHaveBeenCalledTimes(acquisitions);
+    expect(loadFailed).toHaveBeenCalledTimes(acquisitions);
+    healthyReady = false;
+    await expectHealthy();
+    expect(loadHealthy).toHaveBeenCalledTimes(acquisitions + 1);
+    expect(loadFailed).toHaveBeenCalledTimes(acquisitions + 1);
+  },
+);
