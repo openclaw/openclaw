@@ -5,6 +5,7 @@ import { isDeepStrictEqual } from "node:util";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
+import * as pendingInputs from "../config/sessions/session-accessor.pending-inputs.js";
 import { listSessionPendingInputs } from "../config/sessions/session-accessor.pending-inputs.js";
 import {
   resolveSqliteStoreScope,
@@ -190,9 +191,9 @@ describe("agent RPC real delegated-authority effects", () => {
       let writer: Promise<unknown> | undefined;
       let replacement: ReturnType<typeof createAgentDedupeLifecycle> | undefined;
       let inputRecorded = false;
-      const stage = sessionAccessor.stageSessionPendingInput;
+      const stage = pendingInputs.stageSessionPendingInput;
       const observer = vi
-        .spyOn(sessionAccessor, "stageSessionPendingInput")
+        .spyOn(pendingInputs, "stageSessionPendingInput")
         .mockImplementationOnce(async (...args) => {
           const writerEntered = createDeferred();
           writer = runExclusiveSqliteSessionWrite(

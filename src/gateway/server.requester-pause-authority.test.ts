@@ -18,6 +18,7 @@ import {
   withGatewayToolCallerIdentity,
 } from "../agents/tools/gateway-caller-context.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
+import * as pendingInputs from "../config/sessions/session-accessor.pending-inputs.js";
 import { listSessionPendingInputs } from "../config/sessions/session-accessor.pending-inputs.js";
 import { registerAgentRunContext } from "../infra/agent-run-registry.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
@@ -310,11 +311,11 @@ describe("requester pause authority at the Gateway effect", () => {
         });
         const entered = createDeferred();
         const resume = createDeferred();
-        const stage = sessionAccessor.stageSessionPendingInput;
+        const stage = pendingInputs.stageSessionPendingInput;
         const stageSpy =
           outcome === "requester reset"
             ? vi
-                .spyOn(sessionAccessor, "stageSessionPendingInput")
+                .spyOn(pendingInputs, "stageSessionPendingInput")
                 .mockImplementationOnce(async (...args) => {
                   entered.resolve();
                   await resume.promise;

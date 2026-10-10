@@ -27,6 +27,7 @@ import {
   loadTranscriptEventsSync,
   updateSessionEntry,
 } from "../config/sessions/session-accessor.js";
+import * as pendingInputs from "../config/sessions/session-accessor.pending-inputs.js";
 import { resolvePhysicalSessionStorePath } from "../config/sessions/session-store-path.js";
 import { bindGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
@@ -419,11 +420,11 @@ describe("public yielded settle replay with real Gateway admission", () => {
       persistChild(entry);
     }
     const completion = vi.fn();
-    const acceptedMessages: Parameters<typeof sessionAccessor.stageSessionPendingInput>[1][] = [];
+    const acceptedMessages: Parameters<typeof pendingInputs.stageSessionPendingInput>[1][] = [];
     const admittedSources: Array<string | undefined> = [];
-    const realStage = sessionAccessor.stageSessionPendingInput;
+    const realStage = pendingInputs.stageSessionPendingInput;
     const observeAdmission = vi
-      .spyOn(sessionAccessor, "stageSessionPendingInput")
+      .spyOn(pendingInputs, "stageSessionPendingInput")
       .mockImplementation(async (scope, options) => {
         acceptedMessages.push(options);
         if (revoked && acceptedMessages.length === 2) {
