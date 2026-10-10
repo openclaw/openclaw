@@ -401,7 +401,6 @@ describe("dispatchReplyFromConfig owner settlement", () => {
       mocks.tryFastAbortFromMessage.mockReset();
       setNoAbort();
       hookMocks.runner.runReplyDispatch.mockReset().mockResolvedValue(undefined);
-      sessionStoreMocks.resolveSessionStoreEntry.mockReturnValue({ existing: undefined });
       sessionStoreMocks.updateSessionEntry.mockClear();
       acpManagerRuntimeMocks.getAcpSessionManager.mockImplementation(() => ({
         resolveSessionAsync: async () => ({ kind: "none" as const }),
