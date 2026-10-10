@@ -496,14 +496,14 @@ describe("persistUserTurnTranscript", () => {
     const [stored] = await readTranscriptMessages(target);
     expect(stored).toMatchObject({ content: "approved input" });
     expect(recorder.hasPersisted()).toBe(true);
-    expect(recorder.getPersistedMessage()).toEqual(stored);
+    expect(recorder.getPersistedMessage?.()).toEqual(stored);
     const admission = recorder.getAdmissionReceipt();
     expect(admission).toMatchObject({ sessionId: target.sessionId, role: "user" });
     await recorder.persistFallback();
 
     const reopened = createRecorder();
     await expect(reopened.persistApproved()).resolves.toMatchObject({ appended: false });
-    expect(reopened.getPersistedMessage()).toEqual(stored);
+    expect(reopened.getPersistedMessage?.()).toEqual(stored);
     expect(reopened.getAdmissionReceipt()?.entryId).toBe(admission?.entryId);
     expect(approvals).toBe(1);
     expect(await readTranscriptMessages(target)).toEqual([stored]);
