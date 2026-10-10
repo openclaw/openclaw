@@ -73,10 +73,13 @@ again. Pairing requires a connected relay socket; check
 ## Show the full Control UI in ChatGPT
 
 The relay's MCP App can frame your real Control UI in the ChatGPT sidebar.
-The Gateway must be reachable **over HTTPS from your machine**, using Tailscale
-Serve, Cloudflare Tunnel, or an existing reverse proxy. A private Tailnet URL
-works when that machine can reach it; the relay does not need access to it.
-Plain `http://127.0.0.1` is not supported by the ChatGPT embed host.
+The Control UI URL must be **public HTTPS without a login gate in front of it**,
+for example a Cloudflare Tunnel or reverse proxy that leaves authentication to
+the Gateway. ChatGPT's app sandbox refuses private-network addresses without
+sending a request, so Tailscale Serve (tailnet IPs), LAN addresses, and
+`http://127.0.0.1` do not load. An SSO gate such as Cloudflare Access also
+fails, because its login page cannot run inside the frame. The relay itself
+never contacts this URL.
 
 Configure the trusted frame ancestors and advertise the Control UI URL:
 
