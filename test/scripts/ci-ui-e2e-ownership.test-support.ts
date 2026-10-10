@@ -113,6 +113,7 @@ export function assertControlUiE2eOwnership(
     "ui/src/e2e/agent-switch-roster.e2e.test.ts",
     "ui/src/e2e/background-work.real-gateway.e2e.test.ts",
     "ui/src/e2e/boot-module-boundaries.e2e.test.ts",
+    "ui/src/e2e/browser-capabilities.e2e.test.ts",
     "ui/src/e2e/chat-agent-avatar.real-gateway.e2e.test.ts",
     "ui/src/e2e/chat-collaborator-scroll.real-gateway.e2e.test.ts",
     "ui/src/e2e/chat-composer-websearch-kill-switch.real-gateway.e2e.test.ts",
@@ -138,6 +139,7 @@ export function assertControlUiE2eOwnership(
     "ui/src/e2e/provider-browser-login.real-gateway.e2e.test.ts",
     "ui/src/e2e/quota-reset-status.real-gateway.e2e.test.ts",
     "ui/src/e2e/session-management.delete.e2e.test.ts",
+    "ui/src/e2e/session-management.promotion.e2e.test.ts",
     "ui/src/e2e/session-roster-request-rate.real-gateway.e2e.test.ts",
     "ui/src/e2e/sidebar-account-footer.e2e.test.ts",
   ]);
@@ -209,7 +211,7 @@ export function assertControlUiE2eOwnership(
   expect(localSelected[1]).toEqual([
     "ui/src/e2e/board-fixture.e2e.test.ts",
     "ui/src/e2e/control-ui-build-publication.e2e.test.ts",
-    "ui/src/e2e/control-ui-retained-assets.e2e.test.ts",
+    "ui/src/e2e/control-ui-stale-build-reload.e2e.test.ts",
     "ui/src/e2e/service-worker-update.e2e.test.ts",
   ]);
   expect(localSelected[3]).toEqual(uiE2ePrivateServerTestFiles);

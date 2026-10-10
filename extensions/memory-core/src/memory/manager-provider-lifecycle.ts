@@ -215,7 +215,7 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
     let activeFailure = failure;
     if (currentIdentity.status !== "valid") {
       try {
-        await this.syncAdmitted({ reason: "search", force: true });
+        await this.syncAdmitted({ reason: "embedding-bootstrap-recovery", force: true });
       } catch (err) {
         const message = redactSensitiveText(formatErrorMessage(err), { mode: "tools" });
         log.warn(`memory sync failed (embedding-bootstrap-recovery): ${message}`);

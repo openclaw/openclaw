@@ -26,12 +26,26 @@ look up hidden entries returned by `model/list`. The model must still be listed
 and support the required input modalities. Listing does not prove account
 entitlement.
 
-Native discovery reads `model/list` and `account/read` from the same scoped
+Native discovery is demand-driven. Gateway startup publishes configured model
+hints without starting an app-server for each agent. Opening an agent's model
+picker or catalog, creating a Codex session, running a turn, or requesting native
+auth/status information starts that agent's client when needed. Before discovery,
+native account readiness is unknown; configured hints are not proof of sign-in.
+First use of an idle agent can take a few seconds for the cold start.
+
+Discovery reads `model/list` and `account/read` from the same scoped
 app-server client. An API-key account remains API-key authentication; model
 listing does not imply a ChatGPT transport or endpoint. Picker readiness is
 valid only while that native owner and its account/config observation remain
 current. A missing account, failed refresh, account/config mutation, or retired
-client leaves native models unavailable until discovery succeeds again.
+client leaves native models unavailable until discovery succeeds again. The next
+picker/catalog request or native execution reacquires retired observations.
+
+A client with no owned work retires after 30 idle seconds. Requests in that grace
+period reuse it. Active requests, turns, retained or releasing threads, native
+children, background terminals, and ephemeral history retain their client until
+their owners release it. The existing warm-session executor and thread-retention
+policies remain in effect. Clients and accounts stay isolated by agent home.
 
 Use the Models page **Refresh** action (`models.list` with `view: "all"` and
 `refresh: true`) to publish the full catalog for the selected agent. Prepared-only
@@ -154,8 +168,7 @@ fallback and leave native models unavailable until discovery succeeds.
 }
 ```
 
-Disable discovery when you want startup to avoid checking Codex and use only
-the fallback catalog:
+Disable discovery to avoid native model/account catalog checks even on demand:
 
 ```json5
 {

@@ -481,7 +481,11 @@ export class DraftSubmissionFlow {
         !startup && !input.pendingPlacement,
       );
       const remoteProject =
-        !startup && !input.pendingPlacement && !placementTarget && !input.hasInitialTurn
+        !this.place.hostedEnvironment &&
+        !startup &&
+        !input.pendingPlacement &&
+        !placementTarget &&
+        !input.hasInitialTurn
           ? this.place.browser.remoteProject
           : null;
       if (remoteProject && !remoteProject.projectId && !this.place.browser.projectId) {

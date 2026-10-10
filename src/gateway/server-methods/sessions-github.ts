@@ -17,6 +17,7 @@ import { prepareControlUiSessionPrRead } from "../control-ui-session-pr-read.js"
 import {
   prepareCurrentGitHubPublicationOptionsIdentity,
   hasSupportedGitHubPublicationTarget,
+  readGitHubPublicationSession,
   type PublicationSessionIdentity,
 } from "../github-publication-availability.js";
 import { GitHubPublicationKnownFailure } from "../github-publication-failure.js";
@@ -25,7 +26,6 @@ import { captureGitHubPublicationRequester } from "../github-publication-request
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
 import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
-import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
 import { SessionWorkspaceReservationBusyError } from "../worker-environments/placement-workspace-reservation.kernel.js";
 import {
   prepareGitHubPublicationOptionsRead,
@@ -199,7 +199,7 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
         respond(true, result);
         return;
       }
-      const loaded = loadGatewaySessionEntryReadOnly(sessionKey, agentId ? { agentId } : undefined);
+      const loaded = readGitHubPublicationSession(sessionKey, agentId ? { agentId } : undefined);
       if (!loaded.entry?.sessionId) {
         respond(
           false,

@@ -10,6 +10,7 @@ import { localParticipantIdentityKey } from "../../../lib/chat/sender-label.ts";
 import { chatItemGroups } from "../chat-agent-run-grouping.ts";
 import { messageRecoveryKey, resolveSourceMessageId } from "../chat-message-recovery.ts";
 import { resolveTurnRecap } from "../chat-progress.ts";
+import { projectChatReasoning } from "../chat-reasoning.ts";
 import { projectSubagentStatus } from "../chat-subagent-wait.ts";
 import {
   assistantGroupCanOwnActiveRunStatus,
@@ -79,7 +80,7 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
   const { showOwnSenderName, sessionPeople } = resolveTranscriptParticipants(props);
   const mediaPolicyKey = assistantMediaPolicyKey(activeSession, props.mediaPolicyEpoch);
   const isGlobalAliasKey = isTranscriptGlobalAlias(props);
-  const showReasoning = props.showThinking && activeSession?.reasoningLevel === "on";
+  const { showReasoning, reasoning } = projectChatReasoning(props);
   const assistantAgentId = props.currentAgentId ?? props.fullMessageAgentId;
   const assistantAvatar = resolveAssistantDisplayAvatar({
     currentAgentId: assistantAgentId,
@@ -113,6 +114,7 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
     guardianNotices: props.guardianNotices,
     streamSegments: props.streamSegments,
     stream: props.stream ?? null,
+    reasoning,
     streamStartedAt: props.streamStartedAt,
     queue: props.queue,
     initialTurnId: props.initialTurnId,
