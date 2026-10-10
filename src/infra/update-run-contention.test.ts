@@ -62,7 +62,9 @@ function retentionCommand(
     { run: { runId, env: options.env } },
     options.env.HOME,
   );
-  if (handedOff) guards.onStateHandoff();
+  if (handedOff) {
+    guards.onStateHandoff();
+  }
   const captured = guards.captureWriteOptions();
   return {
     type: "updateRuns.recordStep",
@@ -192,7 +194,9 @@ it("skips a real SQLite writer lock without waiting or creating a receipt", () =
     });
     expect(blocker.isTransaction).toBe(true);
   } finally {
-    if (blocker.isTransaction) blocker.exec("ROLLBACK");
+    if (blocker.isTransaction) {
+      blocker.exec("ROLLBACK");
+    }
     blocker.close();
   }
   expect(getUpdateRun(runId, options)?.steps).toHaveLength(1);
@@ -228,7 +232,9 @@ it("restores the ordinary transaction wait after driver admission", () => {
 it("does not replay or discard a lock failure after transaction admission", () => {
   const cause = busyError();
   const admit = vi.fn((stage) => {
-    if (stage === "commit") throw cause;
+    if (stage === "commit") {
+      throw cause;
+    }
   });
   expect(() => recordUpdateRunMutationInWorker(retentionCommand(), options, admit, writer)).toThrow(
     cause,
