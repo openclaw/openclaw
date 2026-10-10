@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createAgentIdentityCapability } from "../../lib/agents/identity.ts";
 import { setAvatarGatewayOrigin } from "../../lib/identity-avatar-context.ts";
 import { invalidateChatAvatarCache, refreshSenderAgentAvatars } from "./chat-avatar.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
@@ -23,7 +24,6 @@ describe("forwarded avatar publication", () => {
   it.each(["append", "reorder", "identity refresh"])(
     "keeps settled rows idle after %s and publishes revised avatars",
     async (change) => {
-      const now = vi.spyOn(Date, "now").mockReturnValue(60_000);
       setAvatarGatewayOrigin("https://gateway.example.test", ["test-token"]);
       vi.spyOn(globalThis, "fetch").mockImplementation(
         async () =>
@@ -54,6 +54,10 @@ describe("forwarded avatar publication", () => {
         senderAgentAvatars: undefined as ReadonlyMap<string, string | null> | undefined,
         requestUpdate: vi.fn(),
       };
+      const identities = createAgentIdentityCapability({
+        snapshot: { client: host.client, phase: "connected" },
+        subscribe: () => () => undefined,
+      });
       const props = {
         ...threadProps(`avatar-${change}`, host.sessionKey, host.chatMessages),
         currentAgentId: "main",
@@ -82,7 +86,7 @@ describe("forwarded avatar publication", () => {
             ? [...messages, { role: "user", content: "Continue", timestamp: 3 }]
             : [...messages].toReversed();
         if (change === "identity refresh") {
-          now.mockReturnValue(120_001);
+          identities.invalidate(["research", "planner"]);
         }
         // Commit the transcript first, just as the pane does before its avatar refresh.
         rerender();
@@ -98,7 +102,7 @@ describe("forwarded avatar publication", () => {
         expect(host.request).toHaveBeenCalledTimes(change === "identity refresh" ? 4 : 2);
 
         avatarRevision += 1;
-        now.mockReturnValue(180_002);
+        identities.invalidate(["research", "planner"]);
         host.chatMessages = [...host.chatMessages];
         rerender();
         renderGroup.mockClear();
