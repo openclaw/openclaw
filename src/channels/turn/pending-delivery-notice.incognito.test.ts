@@ -2,6 +2,7 @@ import "../../test-utils/prepare-compiled-subprocesses.js";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import {
   withIncognitoSessionActor,
   withIncognitoSessionBinding,
@@ -80,7 +81,7 @@ describe("actor-owned pending delivery notices", () => {
   });
 
   it("does not acknowledge a successor when the notice transport yields", async () => {
-    const { sessionKey, entry } = await create("replaced");
+    const { sessionKey } = await create("replaced");
     const entered = createDeferredCore();
     const sent = createDeferredCore<{ suppressed: boolean }>();
     sendRecoveryNotice.mockImplementationOnce(() => {
@@ -90,14 +91,19 @@ describe("actor-owned pending delivery notices", () => {
     const attempt = withIncognitoSessionActor(actor, () =>
       deliverPendingDeliveryNotice(sessionKey, actor.path),
     );
-    const rejected = expect(attempt).rejects.toThrow("generation");
-    await entered.promise;
-    await actor.sessions.create(authority, {
-      sessionKey,
-      entry: { ...entry, sessionId: "successor", lifecycleRevision: "successor" },
-    });
-    sent.resolve({ suppressed: false });
-    await rejected;
+    const failure = attempt.catch((error: unknown) => error);
+    try {
+      await entered.promise;
+      await withIncognitoSessionActor(actor, () =>
+        patchSessionEntryCore({ sessionKey, storePath: actor.path }, () => ({
+          lifecycleRevision: "successor",
+        })),
+      );
+    } finally {
+      sent.resolve({ suppressed: false });
+      await failure;
+    }
+    expect(await failure).toMatchObject({ message: expect.stringContaining("generation") });
     expect(
       (await actor.sessions.read(authority, { sessionKey })).entry?.pendingDeliveryNotice?.state,
     ).toBe("owed");

@@ -4,7 +4,11 @@ import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { appendTranscriptEvent, replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import {
+  appendTranscriptEvent,
+  appendTranscriptMessage,
+  replaceSessionEntry,
+} from "../config/sessions/session-accessor.js";
 import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { withIncognitoSessionActor } from "../config/sessions/session-incognito-binding.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
@@ -104,15 +108,13 @@ it("keeps an exact active-entry claim across unrelated appends and revokes it on
         incognito: true,
       },
     });
-    await appendTranscriptEvent(target, {
-      type: "message",
-      id: "anchor-input",
+    await appendTranscriptMessage(target, {
+      eventId: "anchor-input",
       parentId: null,
       message: { role: "user", content: "input" },
     });
-    await appendTranscriptEvent(target, {
-      type: "message",
-      id: "anchor-answer",
+    await appendTranscriptMessage(target, {
+      eventId: "anchor-answer",
       parentId: "anchor-input",
       message: { role: "assistant", content: "answer" },
     });
@@ -122,9 +124,8 @@ it("keeps an exact active-entry claim across unrelated appends and revokes it on
       entryId: "anchor-answer",
     });
     try {
-      await appendTranscriptEvent(target, {
-        type: "message",
-        id: "anchor-later",
+      await appendTranscriptMessage(target, {
+        eventId: "anchor-later",
         parentId: "anchor-answer",
         message: { role: "user", content: "later" },
       });
@@ -172,9 +173,15 @@ it("uses the actor's TTS preference and rejects a change during preference prepa
       return {};
     });
     const pending = maybeApplyTtsToMessageActionSendPayload(params);
-    await entered.promise;
-    await replaceSessionEntry(target, { ...entry, ttsAuto: "off" });
-    release.resolve();
+    void pending.catch(() => undefined);
+    try {
+      await entered.promise;
+      await replaceSessionEntry(target, { ...entry, ttsAuto: "off" });
+      expect((await readSessionEntryReadOnlyInWorker(target))?.ttsAuto).toBe("off");
+    } finally {
+      release.resolve();
+      await pending.catch(() => undefined);
+    }
     await expect(pending).rejects.toThrow("TTS preference changed");
   });
 });
@@ -190,6 +197,14 @@ it("inherits actor source policy into a separate durable destination and fences 
       sandbox: "required" as const,
       createdVia: "spawn" as const,
       createdActor: { type: "human" as const, source: "profile" as const, id: "source-owner" },
+      skillLibrarySelections: [
+        {
+          skillId: "00000000-0000-0000-0000-000000000001",
+          revision: "a".repeat(64),
+          name: "selected",
+          ownerProfileId: null,
+        },
+      ],
     };
     await actor.sessions.create(authority, { sessionKey: source.sessionKey, entry });
     const storePath = resolveOpenClawAgentSqlitePath({ agentId: "main", env });
@@ -221,9 +236,20 @@ it("inherits actor source policy into a separate durable destination and fences 
         env,
         sessionKey: route.sessionKey,
       }),
-    ).toMatchObject({ sandbox: "required", createdVia: "spawn", createdActor: entry.createdActor });
+    ).toMatchObject({
+      sandbox: "required",
+      createdVia: "spawn",
+      createdActor: entry.createdActor,
+      skillLibrarySelections: entry.skillLibrarySelections,
+    });
     const captured = capture();
-    await replaceSessionEntry(source, { ...entry, sandbox: undefined });
+    const skillLibrarySelections = [
+      { ...entry.skillLibrarySelections[0]!, revision: "b".repeat(64) },
+    ];
+    await replaceSessionEntry(source, { ...entry, skillLibrarySelections });
+    expect((await readSessionEntryReadOnlyInWorker(source))?.skillLibrarySelections).toEqual(
+      skillLibrarySelections,
+    );
     await expect(
       bindOutboundSessionEntry(
         { cfg, channel: "test", route, sourceSessionKey: source.sessionKey },

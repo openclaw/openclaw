@@ -1,6 +1,10 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
 import { afterEach, expect, it, vi } from "vitest";
-import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import {
+  isSessionEntryDataSql,
+  observeHostDataSql,
+} from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
 import {
   withIncognitoSessionActor,
   withIncognitoSessionBinding,
@@ -13,6 +17,7 @@ import {
   enqueueSessionDelivery,
 } from "../infra/session-delivery-queue-storage.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { openIncognitoTestActor } from "../state/openclaw-agent-execution-incognito.test-support.js";
 import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
@@ -27,6 +32,24 @@ import {
 } from "./server-restart-sentinel.js";
 
 const sessionKey = "agent:main:dashboard:incognito-ended";
+
+function observeHostSessionSql(env: NodeJS.ProcessEnv) {
+  const agentPath = resolveOpenClawAgentSqlitePath({ agentId: "main", env });
+  const sourceQueries: string[] = [];
+  const observed = observeHostDataSql((sql, database) => {
+    if (database?.location() === agentPath) {
+      sourceQueries.push(sql);
+    }
+  });
+  return {
+    restore: observed.restore,
+    assertNoSessionSql() {
+      expect(sourceQueries).toEqual([]);
+      expect(observed.queries.filter(isSessionEntryDataSql)).toEqual([]);
+    },
+  };
+}
+
 afterEach(() => {
   vi.restoreAllMocks();
   resetPluginRuntimeStateForTest();
@@ -67,7 +90,7 @@ it.each([false, true])(
         },
         env,
       );
-      const sql = observeHostDataSql();
+      const sql = observeHostSessionSql(context.workerContext.environment);
       try {
         await withIncognitoSessionBinding(
           { kind: "absent", agentId: "main", env, authority: { assertCurrent() {} } },
@@ -84,7 +107,7 @@ it.each([false, true])(
         expect(captureOpenClawAgentDatabaseExecution.listIncognito(env)).toEqual([]);
         expect(dispatch).not.toHaveBeenCalled();
         expect(send).toHaveBeenCalledTimes(explicit ? 1 : 0);
-        expect(sql.queries).toEqual([]);
+        sql.assertNoSessionSql();
       } finally {
         sql.restore();
         await scheduler.stop();
@@ -132,36 +155,36 @@ it.each([false, true])(
       });
       const entry = { sessionId: "media-requester", lifecycleRevision: "original", updatedAt: 1 };
       await actor.sessions.create({ assertCurrent() {} }, { sessionKey, entry });
-      const id = await enqueueSessionDelivery(
-        {
-          kind: "agentTurn",
-          sessionKey,
-          message: "Generated media is ready",
-          messageId: "live-private-media",
-          requesterBinding: {
-            agentId: "main",
+      const id = await withIncognitoSessionActor(actor, () =>
+        enqueueSessionDelivery(
+          {
+            kind: "agentTurn",
             sessionKey,
-            storePath: state.statePath("agents", "main", "sessions", "sessions.json"),
-            sessionId: entry.sessionId,
-            lifecycleRevision: entry.lifecycleRevision,
+            message: "Generated media is ready",
+            messageId: "live-private-media",
+            requesterBinding: {
+              agentId: "main",
+              sessionKey,
+              storePath: state.statePath("agents", "main", "sessions", "sessions.json"),
+              sessionId: entry.sessionId,
+              lifecycleRevision: entry.lifecycleRevision,
+            },
+            inputProvenance: { kind: "inter_session", sourceTool: "image_generate" },
+            sourceReplyDeliveryMode: "automatic",
+            route: { channel: "matrix", to: "@owner:example.org", chatType: "direct" },
           },
-          inputProvenance: { kind: "inter_session", sourceTool: "image_generate" },
-          sourceReplyDeliveryMode: "automatic",
-          route: { channel: "matrix", to: "@owner:example.org", chatType: "direct" },
-        },
-        context.workerContext,
+          context.workerContext,
+        ),
       );
       let sent = false;
       const dispatch = vi
         .spyOn(lifecycle, "dispatchGatewayLifecycleMethod")
         .mockImplementation(async (_method, _params, options) => {
           if (replaced) {
-            await actor.sessions.create(
-              { assertCurrent() {} },
-              {
-                sessionKey,
-                entry: { ...entry, sessionId: "successor", lifecycleRevision: "successor" },
-              },
+            await withIncognitoSessionActor(actor, () =>
+              patchSessionEntryCore({ sessionKey, storePath: actor.path }, () => ({
+                lifecycleRevision: "successor",
+              })),
             );
           }
           options?.assertAdmissionCurrent?.();
@@ -171,7 +194,7 @@ it.each([false, true])(
             result: { payloads: [{ text: "ready" }], deliveryStatus: { status: "sent" } },
           };
         });
-      const sql = observeHostDataSql();
+      const sql = observeHostSessionSql(context.workerContext.environment);
       try {
         await withIncognitoSessionActor(actor, () =>
           drainPendingSessionDelivery({
@@ -216,10 +239,10 @@ it.each([false, true])(
           expect(await loadPendingSessionDeliveries(context.workerContext)).toEqual([]);
           expect(dispatch).toHaveBeenCalledOnce();
         }
-        expect(actor.sessions.readSharing(sessionKey)?.entry.sessionId).toBe(
-          replaced ? "successor" : entry.sessionId,
+        expect(actor.sessions.readSharing(sessionKey)?.entry.lifecycleRevision).toBe(
+          replaced ? "successor" : entry.lifecycleRevision,
         );
-        expect(sql.queries).toEqual([]);
+        sql.assertNoSessionSql();
       } finally {
         sql.restore();
         await actor.close();
