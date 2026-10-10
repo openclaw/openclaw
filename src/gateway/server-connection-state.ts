@@ -1,9 +1,11 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 // Gateway connection and run registries.
 // This state is transport-fed but can be constructed without HTTP or WebSocket servers.
 import type { ChatAbortControllerEntry } from "./chat-abort.js";
 import { createEventWebPushDelivery } from "./event-web-push.js";
+import { omitRuntimeConfigHealthForClient } from "./health/runtime-config-cap.js";
 import { createMentionInbox } from "./mention-inbox.js";
 import { createPresenceRecipientProjection } from "./presence-projection.js";
 import { createGatewayBroadcaster } from "./server-broadcast.js";
@@ -105,6 +107,14 @@ export function createGatewayConnectionState(params: {
       }
     },
     prepareSessionEventProjection(event, payload, eventScope) {
+      // The broadcaster consults this per-recipient hook for every event family.
+      if (event === "health") {
+        return isRecord(payload) && payload.runtimeConfig !== undefined
+          ? (client) => ({
+              payload: omitRuntimeConfigHealthForClient(payload, client.connect.caps),
+            })
+          : undefined;
+      }
       const projection = sessionRowProjection;
       if (!projection) {
         return undefined;

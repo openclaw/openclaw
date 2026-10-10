@@ -106,10 +106,14 @@ const caps = [GATEWAY_CLIENT_CAPS.TOOL_EVENTS];
 ```
 
 The current registry contains `agent-kind`, `approvals`, `exec-approvals`,
-`inline-widgets`, `plugin-approvals`, `run-tool-bindings`, `session-scoped-events`,
-`task-suggestions`, `terminal-offset-seq`, `tool-events`, `ui-commands`, and
-`usage-refreshing`.
+`inline-widgets`, `plugin-approvals`, `run-tool-bindings`, `runtime-config-health`,
+`session-scoped-events`, `task-suggestions`, `terminal-offset-seq`, `tool-events`,
+`ui-commands`, and `usage-refreshing`.
 Advertise only capabilities the client actually implements.
+
+`runtime-config-health` opts in to the `runtimeConfig` drift diagnostic in the
+`hello-ok` health snapshot, `health` events, and `health` responses. Clients that do
+not advertise it receive those payloads without the field.
 
 `usage-refreshing` allows a cold `usage.status` request to return immediately
 with `refreshing: true` and an empty provider list. A client advertising it must

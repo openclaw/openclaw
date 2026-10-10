@@ -177,6 +177,15 @@ const HealthSnapshotSchema = closedObject({
       hotReloadStatus: Type.Union([Type.Literal("active"), Type.Literal("disabled")]),
     }),
   ),
+  runtimeConfig: Type.Optional(
+    closedObject({
+      state: Type.Union([Type.Literal("ok"), Type.Literal("drift"), Type.Literal("unknown")]),
+      liveDefaultModel: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+      observedDefaultModel: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+      driftPaths: Type.Optional(Type.Array(Type.String())),
+      message: Type.Optional(Type.String()),
+    }),
+  ),
   // The running process reports the Node binary it will use for child workers.
   // A deleted Homebrew Cellar path stays reachable at the Gateway port.
   childRuntime: Type.Optional(

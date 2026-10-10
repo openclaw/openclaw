@@ -7,6 +7,7 @@ import { readGatewayMaintenanceWork } from "../../infra/gateway-active-work.js";
 import { getStatusSummary } from "../../status/summary.js";
 import { buildContextEngineHealthSummary } from "../health/context-engine.js";
 import { buildDeliveryQueueHealthSummary } from "../health/delivery-queue.js";
+import { omitRuntimeConfigHealthForClient } from "../health/runtime-config-cap.js";
 import type { ChannelHealthSummary, HealthSummary } from "../health/types.js";
 import { createGatewayServerActiveWorkInspectors } from "../server-active-work.js";
 import type { ChannelRuntimeSnapshot } from "../server-channel-runtime.types.js";
@@ -72,6 +73,22 @@ export const healthHandlers: GatewayRequestHandlers = {
     const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
     const includeSensitive = scopes.includes(ADMIN_SCOPE);
     const now = Date.now();
+    const respondFresh = () =>
+      respondUnavailableOnThrow(respond, async () => {
+        const snap = await refreshHealthSnapshot({ probe: wantsProbe, includeSensitive });
+        respond(
+          true,
+          omitRuntimeConfigHealthForClient(
+            {
+              ...snap,
+              modelRuntime: getPreparedModelRuntimeStartupStatus(),
+              childRuntime: readChildRuntimeViability(),
+            },
+            client?.connect?.caps,
+          ),
+          undefined,
+        );
+      });
     const cached = getHealthCache();
     let cachedDiffersFromRuntime = false;
     if (!wantsProbe && cached) {
@@ -105,22 +122,31 @@ export const healthHandlers: GatewayRequestHandlers = {
         _cachedDeliveryQueues?.ingressPressure ?? [],
       );
       const contextEngines = await buildContextEngineHealthSummary();
+      if (getHealthCache() !== cached) {
+        // A config observation or runtime publication retired this snapshot during the
+        // reads above. Its runtimeConfig is stale with it, so answer from a refresh.
+        await respondFresh();
+        return;
+      }
       // A reset sampler has no current window; never revive the cached reading.
       const eventLoop = getEventLoopHealth?.();
       respond(
         true,
-        {
-          ...cachedState,
-          modelRuntime: getPreparedModelRuntimeStartupStatus(),
-          ...(eventLoop ? { eventLoop } : {}),
-          ...(contextEngines ? { contextEngines } : {}),
-          ...(deliveryQueues ? { deliveryQueues } : {}),
-          ...(configReloadHotReloadStatus
-            ? { configReload: { hotReloadStatus: configReloadHotReloadStatus } }
-            : {}),
-          // Live check. The cache must not keep a path that disappeared after it was stored.
-          childRuntime: readChildRuntimeViability(),
-        },
+        omitRuntimeConfigHealthForClient(
+          {
+            ...cachedState,
+            modelRuntime: getPreparedModelRuntimeStartupStatus(),
+            ...(eventLoop ? { eventLoop } : {}),
+            ...(contextEngines ? { contextEngines } : {}),
+            ...(deliveryQueues ? { deliveryQueues } : {}),
+            ...(configReloadHotReloadStatus
+              ? { configReload: { hotReloadStatus: configReloadHotReloadStatus } }
+              : {}),
+            // Live check. The cache must not keep a path that disappeared after it was stored.
+            childRuntime: readChildRuntimeViability(),
+          },
+          client?.connect?.caps,
+        ),
         undefined,
         { cached: true },
       );
@@ -131,18 +157,7 @@ export const healthHandlers: GatewayRequestHandlers = {
       }
       return;
     }
-    await respondUnavailableOnThrow(respond, async () => {
-      const snap = await refreshHealthSnapshot({ probe: wantsProbe, includeSensitive });
-      respond(
-        true,
-        {
-          ...snap,
-          modelRuntime: getPreparedModelRuntimeStartupStatus(),
-          childRuntime: readChildRuntimeViability(),
-        },
-        undefined,
-      );
-    });
+    await respondFresh();
   },
   status: async ({ respond, client, params, context }) => {
     const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];

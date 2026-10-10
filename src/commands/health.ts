@@ -1,4 +1,5 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import { GATEWAY_CLIENT_CAPS } from "../../packages/gateway-protocol/src/client-info.js";
 import { styleHealthChannelLine } from "../../packages/terminal-core/src/health-style.js";
 import { isRich } from "../../packages/terminal-core/src/theme.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
@@ -43,6 +44,7 @@ import {
   formatDeliveryQueueHealthLine,
   formatHealthChannelLines,
 } from "./health-format.js";
+import { formatRuntimeConfigHealthLine } from "./health-runtime-config.js";
 import { logGatewayConnectionDetails } from "./status.gateway-connection.js";
 export { formatHealthChannelLines } from "./health-format.js";
 export type { HealthSummary } from "../gateway/health/types.js";
@@ -148,6 +150,7 @@ export async function healthCommand(
         await callGateway<HealthSummary>({
           method: "health",
           params: opts.verbose ? { probe: true } : undefined,
+          caps: [GATEWAY_CLIENT_CAPS.RUNTIME_CONFIG_HEALTH],
           timeoutMs: remainingMs,
           config: cfg,
           token: opts.token,
@@ -290,6 +293,7 @@ export async function healthCommand(
       formatContextEngineHealthLine,
       formatDeliveryQueueHealthLine,
       formatConfigReloadHealthLine,
+      formatRuntimeConfigHealthLine,
     ]) {
       const line = formatLine(summary);
       if (line) {
