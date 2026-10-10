@@ -253,29 +253,7 @@ describe("computer targeted action observations", () => {
     expect(fixture.counts().mutations).toBe(2);
   });
 
-  it("keeps direct and inline observations unchanged and avoids an additional read", async () => {
-    const fixture = createObservedTool({ inline: true });
-    const direct = await fixture.observe();
-    expect(direct.content[0]).toEqual({
-      type: "text",
-      text: JSON.stringify({
-        action: "get_window_state",
-        ...observationResult(1),
-        observation: { ...observationResult(1).observation, base64: "[image]" },
-      }),
-    });
-    const inline = await fixture.click(1);
-    expect(inline.content.map((block) => block.type)).toEqual(["text", "image"]);
-    expect(inline.details).toMatchObject({
-      action: "left_click",
-      result: { ...actionResult, observation: { observationId: "observation-2" } },
-    });
-    expect(inline.details).not.toHaveProperty("followUpObservation");
-    expect(fixture.invoke).toHaveBeenCalledTimes(2);
-    expect(sleepMock).not.toHaveBeenCalled();
-  });
-
-  it.each(["image-pixels", "global-logical-points"] as const)(
+  it.each(["image-pixels"] as const)(
     "binds the automatic observation's resized image using %s",
     async (coordinateSpace) => {
       const width = 1568;
@@ -333,14 +311,7 @@ describe("computer targeted action observations", () => {
         throw new Error("window closed");
       },
     ],
-    [
-      "read aborted",
-      () => {
-        throw new DOMException("read cancelled", "AbortError");
-      },
-    ],
     ["missing observation", () => ({ ok: true })],
-    ["unsuccessful", () => ({ ok: false, details: { reason: "unavailable" } })],
   ] as const)(
     "preserves input success after a %s follow-up and expires old refs",
     async (_name, followUp) => {

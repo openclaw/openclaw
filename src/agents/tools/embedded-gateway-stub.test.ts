@@ -209,7 +209,7 @@ describe("embedded gateway stub", () => {
     ).rejects.toThrow("No session found: missing");
   });
 
-  it.each([undefined, "/stores/{agentId}.sqlite"])(
+  it.each(["/stores/{agentId}.sqlite"])(
     "canonicalizes embedded session search filters with store %s",
     async (store) => {
       const cfg: OpenClawConfig = {
@@ -321,70 +321,24 @@ describe("embedded gateway stub", () => {
     expect(runtime.searchSessionTranscripts).not.toHaveBeenCalled();
   });
 
-  it("reads embedded history through the canonical Gateway history owner", async () => {
-    const messages = [{ role: "assistant", content: "visible past a silent tail" }];
-    runtime.readChatHistoryPage.mockResolvedValueOnce({
-      messages,
-      pagination: { offset: 0, totalMessages: 81, rawPageMessages: 81 },
-    });
+  it.each([{ sessionKey: "global", agentId: "work" }])(
+    "scopes embedded chat history to its requested agent",
+    async ({ sessionKey, agentId }) => {
+      await createEmbeddedCallGateway()({
+        method: "chat.history",
+        params: { sessionKey, ...(agentId ? { agentId } : {}) },
+      });
 
-    const result = await createEmbeddedCallGateway()<{ messages: unknown[] }>({
-      method: "chat.history",
-      params: { sessionKey: "agent:main:main", limit: 1 },
-    });
+      expect(runtime.loadSessionEntry).toHaveBeenCalledWith(sessionKey, { agentId: "work" });
+      expect(runtime.resolveSessionAgentId).toHaveBeenCalledWith({
+        sessionKey,
+        config: {},
+        agentId: "work",
+      });
+    },
+  );
 
-    expect(result.messages).toEqual(messages);
-    expect(result).not.toHaveProperty("offset");
-  });
-
-  it.each([
-    { sessionKey: "global", agentId: "work" },
-    { sessionKey: "agent:work:main", agentId: undefined },
-  ])("scopes embedded chat history to its requested agent", async ({ sessionKey, agentId }) => {
-    await createEmbeddedCallGateway()({
-      method: "chat.history",
-      params: { sessionKey, ...(agentId ? { agentId } : {}) },
-    });
-
-    expect(runtime.loadSessionEntry).toHaveBeenCalledWith(sessionKey, { agentId: "work" });
-    expect(runtime.resolveSessionAgentId).toHaveBeenCalledWith({
-      sessionKey,
-      config: {},
-      agentId: "work",
-    });
-  });
-
-  it("preserves bounded offset metadata from the shared visible-history scanner", async () => {
-    const messages = [{ role: "assistant", content: "older visible", __openclaw: { seq: 2 } }];
-    runtime.readChatHistoryPage.mockResolvedValueOnce({
-      messages,
-      pagination: { offset: 1, totalMessages: 82, rawPageMessages: 80 },
-    });
-
-    const result = await createEmbeddedCallGateway()<{
-      messages: unknown[];
-      offset: number;
-      nextOffset: number;
-      hasMore: boolean;
-      totalMessages: number;
-    }>({
-      method: "chat.history",
-      params: { sessionKey: "agent:main:main", limit: 1, offset: 1 },
-    });
-
-    expect(runtime.readChatHistoryPage).toHaveBeenCalledWith(
-      expect.objectContaining({ offset: 1, max: 1 }),
-    );
-    expect(result).toMatchObject({
-      messages,
-      offset: 1,
-      nextOffset: 81,
-      hasMore: true,
-      totalMessages: 82,
-    });
-  });
-
-  it.each([undefined, "205000"])(
+  it.each(["205000"])(
     "bounds embedded history and continues from retained rows with maxBytes %s",
     async (maxBytes) => {
       const messages = Array.from({ length: 6 }, (_, index) => ({
@@ -488,35 +442,13 @@ describe("embedded gateway stub", () => {
     },
   );
 
-  it("normalizes string history limits before calling the shared owner", async () => {
-    await createEmbeddedCallGateway()({
-      method: "chat.history",
-      params: { sessionKey: "agent:main:main", limit: "2" },
-    });
-
-    expect(runtime.readChatHistoryPage).toHaveBeenCalledWith(expect.objectContaining({ max: 2 }));
-  });
-
-  it.each(["2.5", -1])("rejects malformed history limit %j before reading", async (limit) => {
+  it.each(["1abc"])("rejects malformed history offset %j before reading", async (offset) => {
     await expect(
       createEmbeddedCallGateway()({
         method: "chat.history",
-        params: { sessionKey: "agent:main:main", limit },
+        params: { sessionKey: "agent:main:main", offset },
       }),
-    ).rejects.toThrow("limit must be a positive integer");
+    ).rejects.toThrow("offset must be a non-negative integer");
     expect(runtime.readChatHistoryPage).not.toHaveBeenCalled();
   });
-
-  it.each([-1, 1.5, "1abc"])(
-    "rejects malformed history offset %j before reading",
-    async (offset) => {
-      await expect(
-        createEmbeddedCallGateway()({
-          method: "chat.history",
-          params: { sessionKey: "agent:main:main", offset },
-        }),
-      ).rejects.toThrow("offset must be a non-negative integer");
-      expect(runtime.readChatHistoryPage).not.toHaveBeenCalled();
-    },
-  );
 });

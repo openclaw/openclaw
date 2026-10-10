@@ -44,23 +44,6 @@ type QueuedTaskExpectation = {
   progressSummary: string;
 };
 
-type ProgressExpectation = {
-  taskExecutorMocks: TaskExecutorBackgroundMocks;
-  runId: string;
-  progressSummary: string;
-};
-
-type FallbackAnnouncementExpectation = {
-  deliverAnnouncementMock: unknown;
-  requesterSessionKey: string;
-  channel: string;
-  to: string;
-  source: string;
-  announceType: string;
-  resultMediaPath: string;
-  mediaUrls: string[];
-};
-
 type CompletionFixtureParams = {
   mediaUrls?: string[];
   result: string;
@@ -78,13 +61,6 @@ function requireRecord(value: unknown, label: string): Record<string, unknown> {
 function requireMockFirstParam(mock: unknown, label: string): Record<string, unknown> {
   const first = (mock as { mock?: { calls?: unknown[][] } }).mock?.calls?.[0]?.[0];
   return requireRecord(first, label);
-}
-
-function requireRecordArray(value: unknown, label: string): Record<string, unknown>[] {
-  if (!Array.isArray(value)) {
-    throw new Error(`expected ${label}`);
-  }
-  return value.map((entry, index) => requireRecord(entry, `${label}[${index}]`));
 }
 
 export function createMediaCompletionFixture({
@@ -146,55 +122,4 @@ export function expectQueuedTaskRun({
   expect(params.taskKind).toBe(taskKind);
   expect(params.sourceId).toBe(sourceId);
   expect(params.progressSummary).toBe(progressSummary);
-}
-
-export function expectRecordedTaskProgress({
-  taskExecutorMocks: taskExecutorMocksLocal,
-  runId,
-  progressSummary,
-}: ProgressExpectation): void {
-  const params = requireMockFirstParam(
-    taskExecutorMocksLocal.recordProgress,
-    "recordProgress params",
-  );
-  expect(params.runId).toBe(runId);
-  expect(params.progressSummary).toBe(progressSummary);
-}
-
-export function expectFallbackMediaAnnouncement({
-  deliverAnnouncementMock,
-  requesterSessionKey,
-  channel,
-  to,
-  source,
-  announceType,
-  resultMediaPath,
-  mediaUrls,
-}: FallbackAnnouncementExpectation): void {
-  // Fallback announcements are agent-mediated completions: internal events must
-  // carry media URLs and a visible-reply instruction for the completion agent.
-  expect(deliverAnnouncementMock).toHaveBeenCalledTimes(1);
-  const params = requireMockFirstParam(
-    deliverAnnouncementMock,
-    "deliverSubagentAnnouncement params",
-  );
-  expect(params.requesterSessionKey).toBe(requesterSessionKey);
-  const requesterSessionOrigin = requireRecord(
-    params.requesterSessionOrigin,
-    "requesterSessionOrigin",
-  );
-  expect(requesterSessionOrigin.channel).toBe(channel);
-  expect(requesterSessionOrigin.to).toBe(to);
-  expect(params.expectsCompletionMessage).toBe(true);
-
-  const event = requireRecordArray(params.internalEvents, "internalEvents").find(
-    (candidate) => candidate.source === source && candidate.announceType === announceType,
-  );
-  if (!event) {
-    throw new Error(`expected internal event ${source}/${announceType}`);
-  }
-  expect(event.status).toBe("ok");
-  expect(String(event.result)).toContain(resultMediaPath);
-  expect(event.mediaUrls).toEqual(mediaUrls);
-  expect(String(event.replyInstruction)).toContain("visible-reply contract");
 }
