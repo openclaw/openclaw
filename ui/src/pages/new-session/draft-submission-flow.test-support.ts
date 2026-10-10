@@ -22,12 +22,24 @@ type FixtureOptions = {
   data?: NewSessionRouteData;
   request?: (method: string, params?: unknown) => Promise<unknown>;
   modelCatalog?: (params?: unknown) => Promise<unknown>;
+  placementPolicy?: () => Promise<unknown>;
 };
 
 export function createDraftFixture(options: FixtureOptions = {}) {
   const request = vi.fn((method: string, params?: unknown) => {
     if (method === "models.list") {
       return options.modelCatalog ? options.modelCatalog(params) : Promise.resolve({ models: [] });
+    }
+    if (
+      method === "agents.list" &&
+      params &&
+      typeof params === "object" &&
+      "includeSessionPlacement" in params &&
+      params.includeSessionPlacement === true
+    ) {
+      return options.placementPolicy
+        ? options.placementPolicy()
+        : Promise.resolve({ sessionPlacement: {} });
     }
     if (options.request) {
       return options.request(method, params);
@@ -141,6 +153,11 @@ export function createDraftFixture(options: FixtureOptions = {}) {
         place?.adoptAgentDefaults({ preserveSelectedAgent: true, preserveSelectedFolder: true }),
     },
   );
+  // Synchronous unit fixtures that omit catalog discovery model an already-loaded
+  // Gateway with no placement policy. Catalog tests exercise the real async owner.
+  if (!options.methods?.includes("environments.list")) {
+    vi.spyOn(gateway, "placementPolicyReady", "get").mockReturnValue(true);
+  }
   const browser = new DraftPlaceBrowser(
     host,
     gateway,

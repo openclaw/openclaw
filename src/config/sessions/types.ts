@@ -314,6 +314,8 @@ type SessionEntryCore = SessionRestartRecoveryState &
     archiveReason?: SessionEntryArchiveReason;
     /** Timestamp (ms) when the session was pinned for quick access. */
     pinnedAt?: number;
+    /** Independent sidebar placement; origin, execution ownership, and access remain unchanged. */
+    sidebarRoot?: boolean;
     /** Epoch ms wake time; suppresses the active session in sidebar lists until then. */
     snoozedUntil?: number;
     /** Server-stamped epoch ms when the current snooze was set. */

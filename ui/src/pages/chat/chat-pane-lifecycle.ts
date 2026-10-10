@@ -461,8 +461,11 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
           if (event.event === "config.changed") {
             state.mediaPolicyEpoch = (state.mediaPolicyEpoch ?? 0) + 1;
             state.requestUpdate?.();
+          }
+          if (event.event === "config.changed" || event.event === "agent.identity.changed") {
             chatAvatars.invalidateChatAvatarCache(state);
             void chatAvatars.refreshChatAvatar(state).finally(() => state.requestUpdate?.());
+            void chatAvatars.refreshSenderAgentAvatars(state);
           }
           handleQuestionPromptEvent(this.questionPromptState, event);
         }

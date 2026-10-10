@@ -9,7 +9,6 @@ import { normalizeSqliteNumber } from "../../infra/sqlite-number.js";
 import { registerSecretValueForRedaction } from "../../logging/secret-redaction-registry.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { executeExistingOpenClawStateRead } from "../../state/openclaw-state-db-readonly.js";
-import { ensureSecretStoreSchema } from "../../state/openclaw-state-db-schema-additive.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
 import {
   runOpenClawStateWriteTransaction,
@@ -31,7 +30,6 @@ import { withMissingSecretStoreFallback } from "./secret-store-sqlite.js";
 import { SecretStoreValidationError } from "./secret-store-validation-error.js";
 import {
   assertSecretStoreEnvName,
-  normalizeSecretAllowedHosts,
   parseSecretAllowedHosts,
   type SecretStoreKind,
   type SecretStoreScope,
@@ -46,6 +44,7 @@ export {
 } from "./secret-store-validation.js";
 export {
   deleteSecretStoreEntry,
+  updateSecretStoreAllowedHosts,
   writeSecretStoreEntry,
   writeSecretStoreEntries,
   writeSecretStoreEntryWithRollback,
@@ -298,47 +297,6 @@ export async function readSecretStoreValue(params: {
       cause: error,
     });
   }
-}
-
-export function updateSecretStoreAllowedHosts(params: {
-  scope: SecretStoreScope;
-  name: string;
-  allowedHosts: readonly string[];
-  updatedBy: string | null;
-  database?: OpenClawStateDatabaseOptions;
-}): void {
-  assertSecretStoreEnvName(params.name);
-  const allowedHosts = normalizeSecretAllowedHosts(params.allowedHosts);
-  const now = Date.now();
-  runOpenClawStateWriteTransaction(
-    ({ db: sqlite }) => {
-      ensureSecretStoreSchema(sqlite);
-      const db = getNodeSqliteKysely<SecretStoreDatabase>(sqlite);
-      const updated = executeSqliteQuerySync(
-        sqlite,
-        db
-          .updateTable("secret_store_entries")
-          .set({
-            allowed_hosts: allowedHosts.length ? JSON.stringify(allowedHosts) : null,
-            updated_at_ms: now,
-            updated_by: params.updatedBy,
-          })
-          .where("scope_kind", "=", "team")
-          .where("scope_id", "=", "")
-          .where("name", "=", params.name)
-          .where("kind", "=", "secret")
-          .where("deleted_at_ms", "is", null),
-      );
-      if (Number(updated.numAffectedRows ?? 0n) !== 1) {
-        throw new SecretStoreValidationError(
-          "SECRET_STORE_INVALID_ALLOWED_HOST",
-          `Secret store entry "${params.name}" is missing or is not a secret entry.`,
-        );
-      }
-    },
-    params.database,
-    { operationLabel: "secrets.store.allowed-hosts" },
-  );
 }
 
 export async function purgeExpiredSecretStoreEntries(
