@@ -59,12 +59,11 @@ export async function resolveClickClackDiscussionRoute(params: {
   let binding: ClickClackDiscussionBinding | undefined;
   try {
     const prepared = await prepareDiscussionSessionEntry(params.runtime, matched.sessionKey);
+    // SAFETY: account resolution only reads the SDK's deep-readonly, schema-validated config.
+    const currentConfig = params.runtime.config.current() as CoreConfig;
     if (
       isClickClackDiscussionChannelRevoked(params) ||
-      resolveDiscussionBindingAccount(
-        params.runtime.config.current() as CoreConfig,
-        matched.binding,
-      ).state !== "active"
+      resolveDiscussionBindingAccount(currentConfig, matched.binding).state !== "active"
     ) {
       return { state: "revoked" };
     }

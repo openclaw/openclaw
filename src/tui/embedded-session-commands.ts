@@ -7,7 +7,6 @@ import { resolveSharedAuthStoreOwnershipAsync } from "../agents/auth-profiles/pa
 import { loadPreparedModelCatalogSnapshot } from "../agents/prepared-model-catalog.js";
 import { executeSessionGoalCommand, parseGoalCommand } from "../auto-reply/reply/commands-goal.js";
 import { getRuntimeConfig } from "../config/config.js";
-import type { SessionEntry } from "../config/sessions.js";
 import { applySessionPatchProjection } from "../config/sessions/session-accessor.js";
 import { captureSessionEntrySourceAssertion } from "../config/sessions/session-entry-source-authority.js";
 import {
@@ -89,7 +88,7 @@ export function createEmbeddedSessionCommands(lifecycle: {
         const { target: migratedTarget, primaryKey } = resolveCanonicalGatewaySessionStoreKey({
           cfg,
           key: opts.key,
-          store: store as Record<string, SessionEntry>,
+          store,
           agentId: opts.agentId,
         });
         return { primaryKey, candidateKeys: migratedTarget.storeKeys };

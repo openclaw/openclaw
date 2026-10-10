@@ -62,6 +62,7 @@ export async function prepareDiscussionSessionEntry(
   sessionKey: string,
   options: { allowCurrentIncarnation?: boolean } = {},
 ) {
+  // SAFETY: session-agent resolution only reads the SDK's schema-validated, deep-readonly config.
   const config = runtime.config.current() as CoreConfig;
   const agentId = resolveSessionAgentIdStrict({ config, sessionKey });
   return await captureSessionEntryCurrentCheck({
