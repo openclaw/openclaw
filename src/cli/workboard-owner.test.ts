@@ -4,6 +4,7 @@ import { Command } from "commander";
 import { describe, expect, it, vi } from "vitest";
 import { readActiveGatewayLockIdentity } from "../infra/gateway-lock.js";
 import { createTestPluginApi } from "../plugin-sdk/plugin-test-api.js";
+import { createPluginRuntimeMock } from "../plugin-sdk/test-helpers/plugin-runtime-mock.js";
 import type { OpenClawPluginApi } from "../plugins/plugin-api.types.js";
 import {
   loadBundledPluginFacade,
@@ -116,7 +117,7 @@ describe("Workboard CLI owner routing", () => {
         }
         return { runId: "accepted-run" };
       });
-      await startOwner({ subagent: { run } } as OpenClawPluginApi["runtime"]);
+      await startOwner(createPluginRuntimeMock({ subagent: { run } }));
       const cli = await program();
       await cli.parseAsync(["workboard", "create", "First", "--status", "ready"], { from: "user" });
       await cli.parseAsync(["workboard", "create", "Later", "--status", "ready"], { from: "user" });
