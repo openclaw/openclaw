@@ -461,11 +461,8 @@ function settleSqliteTransactionSync<T>(
   };
   let commitStarted = false;
   try {
-    // BEGIN may wait for a foreign writer. Admit its committed schema inside
-    // rollback protection, then share that snapshot's facts with all kernels.
-    const result = reservedSourceFence
-      ? operation()
-      : runSqliteReadOperationSync(db, operation, "fresh");
+    // Share admitted schema inside rollback protection unless the source fence already owns it.
+    const result = reservedSourceFence ? operation() : runSqliteReadOperationSync(db, operation);
     assertSyncTransactionResult(result);
     assertTransactionUsable(db);
     commitStarted = true;
@@ -514,6 +511,22 @@ export function runSqliteDeferredTransactionSync<T>(
   return withSqlitePostCommitPublications(db, () =>
     runSqliteTransactionSync(db, operation, "deferred", options),
   );
+}
+
+/** Read-only composition reuses the caller's snapshot and rollback owner. */
+export function runSqliteReadSnapshotSync<T>(
+  db: DatabaseSync,
+  operation: () => T,
+  options?: SqliteTransactionOptions,
+): T {
+  assertTransactionUsable(db);
+  if (!db.isTransaction) {
+    return runSqliteDeferredTransactionSync(db, operation, options);
+  }
+  const result = runSqliteReadOperationSync(db, operation);
+  assertSyncTransactionResult(result);
+  assertTransactionUsable(db);
+  return result;
 }
 
 export function runSqliteImmediateTransactionSync<T>(

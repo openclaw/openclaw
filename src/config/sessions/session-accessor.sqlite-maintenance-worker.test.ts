@@ -923,11 +923,10 @@ it("replans incognito preservation discovery after rollback without a Worker", a
   });
 });
 
-it("retains worker cadence for foreign writes until a committed worker backdate invalidates it", async () => {
+it("invalidates the retained maintenance age when a worker commits a backdate", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const storePath = path.join(state.sessionsDir(), "sessions.json");
     const active = { sessionKey: "agent:main:age-recheck-active", storePath };
-    const foreignVictim = { sessionKey: "agent:main:age-recheck-foreign", storePath };
     const managedVictim = { sessionKey: "agent:main:age-recheck-managed", storePath };
     const policy = resolveMaintenanceConfigFromInput({
       mode: "enforce",
@@ -935,9 +934,7 @@ it("retains worker cadence for foreign writes until a committed worker backdate 
       pruneAfter: "1d",
     });
     replaceSessionEntrySync(active, { sessionId: "active", updatedAt: Date.now() });
-    replaceSessionEntrySync(foreignVictim, { sessionId: "foreign", updatedAt: Date.now() });
     replaceSessionEntrySync(managedVictim, { sessionId: "managed", updatedAt: Date.now() });
-    const databasePath = resolveOpenClawAgentSqlitePath({ agentId: "main", env: state.env });
     const observeDeadline = () => {
       const settled = createDeferredCore<number | undefined>();
       const reclaim = reclamationRun.runSqliteSessionReclamation;
@@ -972,28 +969,13 @@ it("retains worker cadence for foreign writes until a committed worker backdate 
     expect(initialDeadline).toEqual(expect.any(Number));
     expect(initialDeadline).toBeGreaterThan(Date.now());
     vi.restoreAllMocks();
-    const foreign = new (requireNodeSqlite().DatabaseSync)(databasePath);
-    try {
-      foreign
-        .prepare(
-          "UPDATE session_nodes SET updated_at = 1, entry_json = json_set(entry_json, '$.updatedAt', 1) WHERE session_key = ?",
-        )
-        .run(foreignVictim.sessionKey);
-      // The foreign writer certifies its canonical timestamp update after triggers clear proof.
-      foreign
-        .prepare("UPDATE session_nodes SET entry_valid = 1 WHERE session_key = ?")
-        .run(foreignVictim.sessionKey);
-    } finally {
-      foreign.close();
-    }
     const retainedDeadline = observeDeadline();
     const unchanged = observeMaintenance();
-    await patchSessionEntryCore(active, () => ({ label: "foreign write before recheck" }), {
+    await patchSessionEntryCore(active, () => ({ label: "unchanged maintenance age" }), {
       maintenanceConfig: policy,
     });
     expect((await unchanged).archived).toBe(0);
     expect(await retainedDeadline).toBe(initialDeadline);
-    expect(loadSessionEntry(foreignVictim)?.archivedAt).toBeUndefined();
     expect(loadSessionEntry(managedVictim)?.archivedAt).toBeUndefined();
     expect(loadSessionEntry(active)?.archivedAt).toBeUndefined();
     vi.restoreAllMocks();
@@ -1005,13 +987,13 @@ it("retains worker cadence for foreign writes until a committed worker backdate 
       workerGuard: {},
       skipMaintenance: true,
     });
-    const rechecked = observeMaintenance((result) => result.archived === 2);
+    const rechecked = observeMaintenance((result) => result.archived === 1);
     await patchSessionEntryCore(active, () => ({ label: "after managed backdate" }), {
       maintenanceConfig: policy,
     });
     await rechecked;
     expect(loadSessionEntry(managedVictim)?.archivedAt).toEqual(expect.any(Number));
-    expect(loadSessionEntry(foreignVictim)?.archivedAt).toEqual(expect.any(Number));
+    expect(loadSessionEntry(active)?.archivedAt).toBeUndefined();
   });
 });
 

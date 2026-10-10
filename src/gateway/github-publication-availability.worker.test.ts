@@ -1,8 +1,17 @@
+import "../test-utils/prepare-compiled-subprocesses.js";
+import assert from "node:assert/strict";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { insertRegistryWorktree, updateRegistryWorktree } from "../agents/worktrees/registry.js";
+import {
+  deleteRegistryWorktree,
+  insertRegistryWorktree,
+  updateRegistryWorktree,
+} from "../agents/worktrees/registry.js";
 import { findLiveRegistryWorktreeByOwner } from "../agents/worktrees/registry.test-support.js";
 import type { ManagedWorktreeRecord } from "../agents/worktrees/types.js";
+import { patchSessionEntryCore } from "../config/sessions/session-accessor.sqlite-entry.js";
+import { withIncognitoSessionBinding } from "../config/sessions/session-incognito-binding.js";
+import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import {
@@ -245,4 +254,52 @@ it("keeps target discovery on the captured physical store across session prepara
     return mocks.session();
   });
   expect(await hasSupportedGitHubPublicationTarget(session, () => {})).toBe(true);
+});
+
+it("qualifies bound private worktrees without host session SQL and refuses a changed branch", async () => {
+  const authority = { assertCurrent() {} };
+  const actor = await captureOpenClawAgentDatabaseExecution({
+    kind: "ephemeral",
+    agentId: "main",
+    env: process.env,
+    authority,
+  });
+  assert(actor);
+  const selected = {
+    ...session,
+    sessionKey: "agent:main:dashboard:incognito-publication-availability",
+  };
+  await actor.sessions.create(authority, {
+    sessionKey: selected.sessionKey,
+    entry: { ...mocks.session().entry, updatedAt: Date.now() },
+  });
+  await deleteRegistryWorktree(process.env, worktree.id);
+  await insertRegistryWorktree(process.env, { ...worktree, ownerId: selected.sessionKey });
+  mocks.session.mockImplementation(() => {
+    throw new Error("Private authority must not read host session SQL");
+  });
+  const sql = observeMainThreadSql();
+  try {
+    await withIncognitoSessionBinding({ actor }, async () => {
+      expect(await prepareGitHubPublicationAvailability(selected)).toBe(true);
+      mocks.identity.mockImplementationOnce(async () => {
+        await patchSessionEntryCore(
+          {
+            agentId: "main",
+            sessionKey: selected.sessionKey,
+            storePath: actor.path,
+          },
+          () => ({
+            worktree: { id: worktree.id, repoRoot: worktree.repoRoot, branch: "replacement" },
+          }),
+        );
+        return { source: "system-configured" };
+      });
+      expect(await prepareGitHubPublicationAvailability(selected)).toBe(false);
+      sql.expectIdle();
+    });
+  } finally {
+    sql.restore();
+    await actor.close();
+  }
 });

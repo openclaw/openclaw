@@ -623,7 +623,7 @@ export function renderChat(props: ChatProps) {
                 <div class="chat-main__conversation-frame">
                   <!-- Chromium can crash when DevTools inspects a blocking Lit object listener. -->
                   <div
-                    class="chat-main__conversation ${props.detailsEnabled ? "chat-main__conversation--details" : ""}"
+                    class="chat-main__conversation"
                     .onwheel=${(event: WheelEvent) =>
                       forwardChatWheelToTranscript(event, props.transcript.scrollElement)}
                   >

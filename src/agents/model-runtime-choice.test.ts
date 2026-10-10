@@ -862,7 +862,7 @@ describe("prepared model support admission", () => {
             },
           }
         : implicitNative;
-      // Configured ownership must renew without a row-owned runtime.
+      // A configured hint has unknown readiness until native discovery.
       const { nativeRuntime: _, ...configuredRow } = nativeRow;
       const { state, reload } = publishNativeRenewal(config, {
         row: configured ? configuredRow : nativeRow,
@@ -871,6 +871,13 @@ describe("prepared model support admission", () => {
         prepareModelChoice({ ...selection, source, cfg: config, raw });
       expect(await choose()).toMatchObject(nativeResolved);
       expect(reload).not.toHaveBeenCalled();
+      if (configured) {
+        state.registered = false;
+        expect(await choose()).toMatchObject(nativeResolved);
+        expect(reload).not.toHaveBeenCalled();
+        // Discovery publishes native provenance alongside the configured hint.
+        state.renewed.routeVariants = [nativeRow];
+      }
       state.registered = false;
       expect(await choose()).toMatchObject(nativeResolved);
       expect(reload).toHaveBeenCalledExactlyOnceWith(nativeRenewal);
