@@ -25,6 +25,7 @@ import { createSessionCompoundWorkerFixture } from "./session-compound-worker.te
 vi.mock("./session-accessor.sqlite-maintenance-kick.js", () => ({
   kickSessionEntryMaintenanceAfterWrite() {},
 }));
+// mock-isolation: Keep background disk-budget eviction out of the fixture's transport proof.
 vi.mock("./session-history-eviction.js", () => ({ kickSessionHistoryDiskBudgetMaintenance() {} }));
 
 const authority: SessionActorAuthority = { assertCurrent() {}, authorize() {} };

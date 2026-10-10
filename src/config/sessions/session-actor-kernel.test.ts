@@ -33,6 +33,7 @@ import { applySessionTurn } from "./session-turn.worker.js";
 vi.mock("./session-accessor.sqlite-maintenance-kick.js", () => ({
   kickSessionEntryMaintenanceAfterWrite() {},
 }));
+// mock-isolation: Keep background disk-budget eviction out of the fixture's transaction proof.
 vi.mock("./session-history-eviction.js", () => ({ kickSessionHistoryDiskBudgetMaintenance() {} }));
 
 it("hydrates once and commits, rejects, and rolls back against the exact actor preimage", async () => {
