@@ -631,6 +631,8 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "tools.web.fetch.provider": "Web fetch fallback provider id.",
   "tools.web.fetch.timeoutSeconds": "Timeout in seconds for web_fetch requests.",
   "tools.web.fetch.cacheTtlMinutes": "Cache TTL in minutes for web_fetch results.",
+  "tools.web.fetch.decisionQuality":
+    "Experimental Decision-model page-quality check after extraction. Requires Decision assistance and the owning agent's decisionModel. shadow reports a judgment without changing content; apply withholds content only on a strong likely-unusable result. Unavailable or uncertain judgments retain content. Sends a bounded page excerpt to the selected Decision provider, which may be hosted and billable. Unset disables the check.",
   "tools.web.fetch.maxRedirects": "Maximum redirects allowed for web_fetch (default: 3).",
   "tools.web.fetch.userAgent": "Override User-Agent header for web_fetch requests.",
   "tools.web.fetch.headers":

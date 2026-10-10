@@ -242,6 +242,8 @@ const ToolsWebFetchSchema = z
     maxResponseBytes: z.number().int().positive().optional(),
     timeoutSeconds: z.number().int().positive().optional(),
     cacheTtlMinutes: z.number().nonnegative().optional(),
+    /** Optional Decision-model assessment of extracted content; omission disables it. */
+    decisionQuality: z.enum(["shadow", "apply"]).optional(),
     /** Maximum number of redirects to follow (default: 3). */
     maxRedirects: z.number().int().nonnegative().optional(),
     /** Override User-Agent header for fetch requests. */

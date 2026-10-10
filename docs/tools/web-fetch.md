@@ -43,6 +43,9 @@ Truncate output to this many characters. Clamped to `tools.web.fetch.maxCharsCap
 - Wrapped content metadata: `externalContent`, `truncated`, `length`, `rawLength`,
   `fetchedAt`, `tookMs`, and `text`
 - Optional `cached: true` on a cache hit
+- Optional `quality: { mode, status, probabilityUnusable?, suppressed }` when the
+  experimental Decision page-quality check runs. The probability is a model
+  estimate, not calibrated accuracy.
 - Optional `spill: { path, chars, truncated? }` when truncated content was written
   to a private temporary file; `truncated` is present only when that file contains
   partial source content
@@ -88,6 +91,40 @@ reads and writes. A positive value limits reuse by the current request's TTL;
 cached entries still expire at their original deadline. Provider-side caching,
 such as Firecrawl's `maxAgeMs`, is configured separately.
 
+## Experimental Decision page-quality check
+
+`tools.web.fetch.decisionQuality` is off when unset. Set it to `"shadow"` to
+inspect a page-quality judgment without changing the returned content, or
+`"apply"` to withhold extracted text only when the selected Decision model
+estimates at least 0.90 probability that the page is unusable. Access-denied,
+login, CAPTCHA, bot-check, error, empty-extraction, and navigation-only pages
+are candidates; a short or specialized page with useful facts should remain.
+An uncertain or unavailable judgment, or a truncated page excerpt, leaves the
+original page intact. The
+fetch cache stores the original result, so changing modes does not cache a
+withheld version.
+
+Both modes also require the global [Decision assistance opt-in](/concepts/experimental-features#decision-assistance)
+and an effective Decision model for the owning agent. The check sends up to
+6,000 characters of the extracted result, plus bounded page metadata, to that
+model. A hosted provider may receive sensitive page content and charge for the
+evaluation. It does not send request headers, credentials, or the full URL.
+The check uses a five-second Decision deadline; slow providers may produce no
+judgment, and cleanup can extend observed latency. It applies
+to direct and provider-fallback results, including cached fetches, but not
+failed fetches. `quality.status: "unavailable"` means no valid Boolean judgment
+was returned; `suppressed` reports whether content was actually withheld.
+When content is withheld, disable `decisionQuality` and re-fetch to inspect it.
+
+```json5
+{
+  agents: {
+    defaults: { decisionModel: "typesafe/kev-latest", experimental: { decisionAssistance: true } },
+  },
+  tools: { web: { fetch: { decisionQuality: "shadow" } } },
+}
+```
+
 ## Progress updates
 
 `web_fetch` emits a public progress line only when the fetch is still pending
@@ -122,6 +159,7 @@ adding a result to the fetch cache.
         maxResponseBytes: 750000, // max download size before truncation (32000-10000000)
         timeoutSeconds: 30,
         cacheTtlMinutes: 15,
+        decisionQuality: "shadow", // optional: "shadow" or "apply"; unset = off
         maxRedirects: 3,
         useTrustedEnvProxy: false, // let a trusted HTTP(S) env proxy resolve DNS
         readability: true, // use Readability extraction

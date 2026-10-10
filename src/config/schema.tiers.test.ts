@@ -45,6 +45,7 @@ describe("config schema tiers", () => {
       expect(baseSchema.uiHints[path]?.advanced, path).toBe(false);
     }
     expect(baseSchema.uiHints["agents.defaults.experimental.localModelLean"]?.advanced).toBe(true);
+    expect(baseSchema.uiHints["tools.web.fetch.decisionQuality"]?.advanced).toBe(true);
   });
 
   it.each([

@@ -92,7 +92,7 @@ describe("web_fetch output contract", () => {
 
     expect(tool?.outputSchema).toBeDefined();
     expect(compactToolOutputHint(tool?.outputSchema)).toBe(
-      '{ externalContent: { source: "web_fetch"; untrusted: true; wrapped: true; provider?: string }; extractMode: "markdown" | "text"; extractor: string; fetchedAt: string; finalUrl: string; length: number; rawLength: number; status: number; text: string; tookMs: number; truncated: boolean; url: string; cached?: true; contentType?: string; spill?: { chars: number; path: string; truncated?: true }; title?: string; warning?: string }',
+      '{ externalContent: { source: "web_fetch"; untrusted: true; wrapped: true; provider?: string }; extractMode: "markdown" | "text"; extractor: string; fetchedAt: string; finalUrl: string; length: number; rawLength: number; status: number; text: string; tookMs: number; truncated: boolean; url: string; cached?: true; contentType?: string; quality?: { mode: "shadow" | "apply"; status: "evaluated" | "unavailable"; suppressed: boolean; probabilityUnusable?: number }; spill?: { chars: number; path: string; truncated?: true }; title?: string; warning?: string }',
     );
   });
 

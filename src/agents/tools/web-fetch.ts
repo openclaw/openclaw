@@ -10,7 +10,8 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { containsAsciiControlCharacter } from "@openclaw/normalization-core/string-normalization";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { Type, type Static } from "typebox";
+import type { Static } from "typebox";
+import { createRuntimeConfigReader } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { sha256Hex } from "../../infra/crypto-digest.js";
 import { SsrFBlockedError, type LookupFn, type SsrFPolicy } from "../../infra/net/ssrf.js";
@@ -27,7 +28,6 @@ import { createLazyPromise } from "../../shared/lazy-promise.js";
 import { isRecord } from "../../utils.js";
 import { extractReadableContent } from "../../web-fetch/content-extractors.runtime.js";
 import { resolveWebProviderConfig } from "../../web/provider-runtime-shared.js";
-import { stringEnum } from "../schema/string-enum.js";
 import { writePrivateTempFile } from "../sessions/tools/private-temp-file.js";
 import { formatFullOutputFooter } from "../sessions/tools/tool-contracts.js";
 import { setToolTerminalPresentation } from "../tool-terminal-presentation.js";
@@ -38,6 +38,7 @@ import {
   readToolStringParam,
   scheduleToolProgress,
 } from "./common.js";
+import { WebFetchOutputSchema, WebFetchSchema } from "./web-fetch-schema.js";
 import {
   extractBasicHtmlContent,
   htmlToMarkdown,
@@ -57,8 +58,6 @@ import {
 } from "./web-shared.js";
 import type { CacheEntry } from "./web-shared.js";
 import { resolveWebToolRuntimeContext } from "./web-tool-runtime-context.js";
-
-const EXTRACT_MODES = ["markdown", "text"] as const;
 
 const DEFAULT_FETCH_MAX_CHARS = 20_000;
 const DEFAULT_FETCH_MAX_RESPONSE_BYTES = 750_000;
@@ -100,62 +99,6 @@ const FETCH_BLOCKED_HEADER_NAMES = new Set([
   "transfer-encoding",
   "upgrade",
 ]);
-
-const WebFetchSchema = Type.Object({
-  url: Type.String({ description: "HTTP(S) URL." }),
-  extractMode: Type.Optional(
-    stringEnum(EXTRACT_MODES, {
-      description: "Extract as markdown/text.",
-      default: "markdown",
-    }),
-  ),
-  maxChars: Type.Optional(
-    Type.Integer({
-      description: "Max chars returned; truncates.",
-      minimum: 100,
-    }),
-  ),
-});
-
-const WebFetchOutputSchema = Type.Object(
-  {
-    url: Type.String(),
-    finalUrl: Type.String(),
-    status: Type.Integer({ minimum: 0 }),
-    contentType: Type.Optional(Type.String()),
-    title: Type.Optional(Type.String()),
-    extractMode: stringEnum(EXTRACT_MODES),
-    extractor: Type.String(),
-    externalContent: Type.Object(
-      {
-        untrusted: Type.Literal(true),
-        source: Type.Literal("web_fetch"),
-        wrapped: Type.Literal(true),
-        provider: Type.Optional(Type.String()),
-      },
-      { additionalProperties: false },
-    ),
-    truncated: Type.Boolean(),
-    length: Type.Integer({ minimum: 0 }),
-    rawLength: Type.Integer({ minimum: 0 }),
-    spill: Type.Optional(
-      Type.Object(
-        {
-          path: Type.String(),
-          chars: Type.Integer({ minimum: 0 }),
-          truncated: Type.Optional(Type.Literal(true)),
-        },
-        { additionalProperties: false },
-      ),
-    ),
-    fetchedAt: Type.String(),
-    tookMs: Type.Integer({ minimum: 0 }),
-    text: Type.String(),
-    warning: Type.Optional(Type.String()),
-    cached: Type.Optional(Type.Literal(true)),
-  },
-  { additionalProperties: false },
-);
 
 type WebFetchConfig = NonNullable<NonNullable<OpenClawConfig["tools"]>["web"]>["fetch"];
 type ResolveWebFetchDefinition =
@@ -758,6 +701,8 @@ async function fetchWebPayload(params: WebFetchRuntimeParams): Promise<Record<st
 
 export function createWebFetchTool(options?: {
   config?: OpenClawConfig;
+  agentId?: string;
+  assertInvocationCurrent?: () => void;
   sandboxed?: boolean;
   runtimeWebFetch?: RuntimeWebFetchMetadata;
   lateBindRuntimeConfig?: boolean;
@@ -831,7 +776,18 @@ export function createWebFetchTool(options?: {
         DEFAULT_FETCH_MAX_CHARS,
         { min: 100 },
       );
+      const effectiveMaxChars = resolveIntegerOption(
+        maxChars ?? executionFetch?.maxChars,
+        DEFAULT_FETCH_MAX_CHARS,
+        { min: 100, max: maxCharsCap },
+      );
       const hostnameAllowlist = options?.hostnameAllowlistRef?.value;
+      // Bind to the current runtime owner before the network wait. A later config
+      // replacement must revoke Decision consent before any page is dispatched.
+      const readQualityConfig =
+        config?.tools?.web?.fetch?.decisionQuality && options?.agentId
+          ? createRuntimeConfigReader(config)
+          : undefined;
       // The progress line is emitted only if the fetch is still pending after
       // the threshold; fast cache/network hits clear the timer before it fires.
       const clearProgressTimer = scheduleToolProgress(
@@ -844,11 +800,7 @@ export function createWebFetchTool(options?: {
         const result = await runWebFetch({
           url,
           extractMode,
-          maxChars: resolveIntegerOption(
-            maxChars ?? executionFetch?.maxChars,
-            DEFAULT_FETCH_MAX_CHARS,
-            { min: 100, max: maxCharsCap },
-          ),
+          maxChars: effectiveMaxChars,
           maxResponseBytes,
           maxRedirects: resolveIntegerOption(
             executionFetch?.maxRedirects,
@@ -873,7 +825,26 @@ export function createWebFetchTool(options?: {
           signal,
           resolveProviderFallback,
         });
-        return jsonResult(result);
+        if (!config?.tools?.web?.fetch?.decisionQuality || !options?.agentId) {
+          return jsonResult(result);
+        }
+        // Metadata already spends part of the shared model-visible allowance.
+        const bodyMaxChars =
+          effectiveMaxChars -
+          (typeof result.title === "string" ? result.title.length : 0) -
+          (typeof result.warning === "string" ? result.warning.length : 0);
+        const { assessWebFetchQuality } = await import("./web-fetch-decision-quality.js");
+        return jsonResult(
+          await assessWebFetchQuality({
+            config,
+            readConfig: readQualityConfig,
+            agentId: options?.agentId,
+            signal,
+            assertInvocationCurrent: options?.assertInvocationCurrent,
+            maxChars: bodyMaxChars,
+            payload: result,
+          }),
+        );
       } finally {
         clearProgressTimer();
       }

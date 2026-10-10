@@ -66,6 +66,9 @@ judges whether the request needs tools. A conversational result can omit optiona
 tools for that turn. Other harnesses keep their normal tools and perform no
 automatic prefilter inference. The switch does not select a provider, provision
 credentials, download models, or enable unrelated consumer modes.
+The optional [`web_fetch` page-quality check](/tools/web-fetch#experimental-decision-page-quality-check)
+also requires its own `tools.web.fetch.decisionQuality` mode; enabling this Labs
+switch alone never inspects fetched pages.
 
 The switch and manually authored config use the same global Boolean:
 
