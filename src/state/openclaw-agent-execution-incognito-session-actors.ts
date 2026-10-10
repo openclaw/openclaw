@@ -9,7 +9,10 @@ import type {
 } from "../config/sessions/session-actor-contract.js";
 import { assertCanonicalSessionKeyWrite } from "../config/sessions/session-canonical-key.js";
 import type { IncognitoSessionActor } from "../config/sessions/session-incognito-actor.js";
-import type { IncognitoSessionAuthority } from "../config/sessions/session-incognito-contract.js";
+import type {
+  IncognitoSessionAuthority,
+  IncognitoSessionFacts,
+} from "../config/sessions/session-incognito-contract.js";
 import type { SqliteWorkerStore } from "../infra/sqlite-worker-contract.js";
 import {
   createSqliteWorkerOperationAdmission,
@@ -19,6 +22,37 @@ import {
 import { isIncognitoSessionKey } from "../shared/incognito-session-key.js";
 import type { OpenClawAgentDatabaseOptions } from "./openclaw-agent-db-contract.js";
 import type { AgentDatabaseIncognitoIdentity } from "./openclaw-agent-execution-identity.types.js";
+
+type IncognitoActorWriteTokens = Map<
+  string,
+  { writeToken: string; dependencySessionIds: string[] }
+>;
+
+/** Revoke exact keys and shared transcript dependencies in the existing owner's replica. */
+export function invalidateIncognitoSessionActorTokens(
+  writeTokens: IncognitoActorWriteTokens,
+  targets: readonly Pick<IncognitoSessionFacts, "sessionKey" | "sharing">[] | undefined,
+): void {
+  if (!targets) {
+    writeTokens.clear();
+    return;
+  }
+  const keys = new Set(targets.map((target) => target.sessionKey));
+  const sessionIds = new Set(
+    targets.flatMap((target) => {
+      const sessionId = target.sharing?.entry?.sessionId;
+      return [
+        ...(sessionId ? [sessionId] : []),
+        ...(writeTokens.get(target.sessionKey)?.dependencySessionIds ?? []),
+      ];
+    }),
+  );
+  for (const [key, held] of writeTokens) {
+    if (keys.has(key) || held.dependencySessionIds.some((id) => sessionIds.has(id))) {
+      writeTokens.delete(key);
+    }
+  }
+}
 
 /** The execution owner lends its queue, authority, and custody; this adapter owns no database. */
 export function createIncognitoSessionActorFactory(params: {
@@ -36,7 +70,7 @@ export function createIncognitoSessionActorFactory(params: {
     operation: (scope: Pick<SqliteWorkerStore<SessionActorOperations>, "execute">) => Promise<T>,
     admission: SqliteWorkerAdmissionFactory,
   ): Promise<T>;
-  writeTokens: Map<string, { writeToken: string; dependencySessionIds: string[] }>;
+  writeTokens: IncognitoActorWriteTokens;
   sessionFacts: { invalidate(sessionKey: string): void };
   sessionActors: Set<SessionActor>;
   acquiredActors: Set<SessionActor>;

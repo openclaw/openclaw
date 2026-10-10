@@ -48,7 +48,10 @@ import type {
 } from "./openclaw-agent-execution-contract.js";
 import { createIncognitoAbsenceScopes } from "./openclaw-agent-execution-incognito-absence.js";
 import type { IncognitoAgentDatabaseOperations } from "./openclaw-agent-execution-incognito-contract.js";
-import { createIncognitoSessionActorFactory } from "./openclaw-agent-execution-incognito-session-actors.js";
+import {
+  createIncognitoSessionActorFactory,
+  invalidateIncognitoSessionActorTokens,
+} from "./openclaw-agent-execution-incognito-session-actors.js";
 import { runOpenClawAgentWorkerWrite } from "./openclaw-agent-write-admission.js";
 import { registerOpenClawStateDatabaseAsyncResource } from "./openclaw-state-db-cache.js";
 import { captureOpenClawStateReadWorkerContext } from "./openclaw-state-worker-context.js";
@@ -161,27 +164,7 @@ function createIncognitoAgentExecutionOwner(
     assertRetainedCurrent,
     withGrant,
     assertOutsideGrant,
-    (targets) => {
-      if (!targets) {
-        actorWriteTokens.clear();
-        return;
-      }
-      const keys = new Set(targets.map((target) => target.sessionKey));
-      const sessionIds = new Set(
-        targets.flatMap((target) => {
-          const sessionId = target.sharing?.entry?.sessionId;
-          return [
-            ...(sessionId ? [sessionId] : []),
-            ...(actorWriteTokens.get(target.sessionKey)?.dependencySessionIds ?? []),
-          ];
-        }),
-      );
-      for (const [key, held] of actorWriteTokens) {
-        if (keys.has(key) || held.dependencySessionIds.some((id) => sessionIds.has(id))) {
-          actorWriteTokens.delete(key);
-        }
-      }
-    },
+    (targets) => invalidateIncognitoSessionActorTokens(actorWriteTokens, targets),
     assertCurrent,
   );
   const admission =
@@ -242,7 +225,6 @@ function createIncognitoAgentExecutionOwner(
               onNativeLost(error) {
                 loss ??= new IncognitoSessionEndedError({ cause: error });
                 state = "lost";
-                actorWriteTokens.clear();
                 sessionFacts.clear();
               },
               onNativeStopped(stopped) {
@@ -544,7 +526,6 @@ function createIncognitoAgentExecutionOwner(
         await drain(pending);
         await opening?.catch(() => undefined);
         await Promise.all([...sessionActors].map((actor) => actor.release()));
-        actorWriteTokens.clear();
         // Accepted compositions own their cleanup and commit facts until they settle.
         sessionFacts.clear();
         await store?.close();

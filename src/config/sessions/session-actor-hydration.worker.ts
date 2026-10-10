@@ -418,7 +418,7 @@ export function projectSessionActorHotState(state: SessionActorStoredState): Ses
       ...(state.window ? [state.window.session_id] : []),
       ...(hot.entry ? [hot.entry.sessionId] : []),
     ]),
-  ].sort();
+  ].toSorted();
   hot.pendingInputs = [...state.pendingInputs.values()].map(
     ({ message_json: _message, ...row }) => row,
   );
