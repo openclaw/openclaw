@@ -390,6 +390,8 @@ export function streamOpenAICompletionsRequest(
         async *[Symbol.asyncIterator]() {
           // Parse only after provider acceptance; JSON bodies are consumed here too.
           if (!params.stream) {
+            // SAFETY: Chat Completions JSON uses the documented message wire shape;
+            // the shared reducer handles these fields alongside SDK stream chunks.
             yield (await boundResponseBody(response, {
               maxBytes: 16 * 1024 * 1024,
               onOverflow: ({ maxBytes }) =>
