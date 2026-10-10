@@ -601,6 +601,7 @@ function withoutPluginHarnessPrivateState(
     preparedSessionTarget: _preparedSessionTarget,
     onContextAccountingEvent: _onContextAccountingEvent,
     onCompactionRequestBudget: _onCompactionRequestBudget,
+    onCompletedSourceReplyDelivered: _onCompletedSourceReplyDelivered,
     contextEngineLogicalTurnLease: _contextEngineLogicalTurnLease,
     hostCapabilities: _hostCapabilities,
     onContextEngineTurnCandidate: _onContextEngineTurnCandidate,

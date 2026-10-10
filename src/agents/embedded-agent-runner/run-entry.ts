@@ -286,6 +286,7 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
       ? () => {
           const evidence = readChannelDeliveryEvidence();
           return (
+            evidence.hasCompletedSourceReply !== true &&
             !evidence.hasDirectlySentBlockReply &&
             !evidence.hasBlockReplyPipelineOutput &&
             !evidence.hasRetryBlockedDelivery

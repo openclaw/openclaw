@@ -123,6 +123,9 @@ export async function runCodexAppServerAttempt(
                 notifications,
                 turnRequest,
                 activeTurn,
+                (projectedResult) => {
+                  finalizedResult = projectedResult;
+                },
               );
             } finally {
               await cleanupCodexAttempt(resources, turnRuntime, lifecycle, turnRequest, activeTurn);
@@ -131,22 +134,31 @@ export async function runCodexAppServerAttempt(
             // Rejected cleanup admission must not hide the model permission loss
             // behind a secondary subscription-release error.
             connection.assertModelExecutionCurrent();
-            if (!finalizedResult || !turnRuntime.state.pluginRuntimeRefreshStop) {
+            const completedSourceReply = finalizedResult?.sourceReplyDelivered === true;
+            if (
+              !finalizedResult ||
+              (!turnRuntime.state.pluginRuntimeRefreshStop && !completedSourceReply)
+            ) {
               throw error;
             }
-            // A failed handoff still owns completed effects. Return their replay
-            // evidence rather than throwing them away at the cleanup boundary.
+            // A failed handoff or native finalization still owns completed effects.
+            // Return canonical delivery evidence rather than throwing it away at
+            // the cleanup boundary and permitting a contradictory fallback reply.
             const original = attemptTerminal.project(finalizedResult.terminal).promptError;
             finalizedResult.terminal = attemptTerminal.merge(finalizedResult.terminal, {
               kind: "failed",
               source: "prompt",
               error: new AggregateError(
                 original ? [original, error] : [error],
-                "Plugin runtime changed, but native continuation failed. Inspect the existing thread before continuing; do not repeat completed actions.",
+                turnRuntime.state.pluginRuntimeRefreshStop
+                  ? "Plugin runtime changed, but native continuation failed. Inspect the existing thread before continuing; do not repeat completed actions."
+                  : "Native finalization failed after the source reply was delivered. Inspect the existing thread before continuing; do not repeat the completed reply.",
               ),
             });
-            delete finalizedResult.pluginRuntimeRefreshMessages;
-            delete finalizedResult.settledTurnFinalizationContext;
+            if (turnRuntime.state.pluginRuntimeRefreshStop) {
+              delete finalizedResult.pluginRuntimeRefreshMessages;
+              delete finalizedResult.settledTurnFinalizationContext;
+            }
           }
           // Cleanup retires the execution lease; only then can device loss no longer
           // race the final result captured during asynchronous terminal processing.

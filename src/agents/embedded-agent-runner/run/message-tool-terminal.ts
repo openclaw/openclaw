@@ -11,7 +11,7 @@ import {
   extractToolAuthoredSourceReplyPayload,
   isDeliveredMessagingToolSendToCurrentSource,
 } from "../../embedded-agent-messaging-extraction.js";
-import type { AfterToolCallContext, Agent } from "../../runtime/index.js";
+import type { AfterToolCallContext, AfterToolCallResult, Agent } from "../../runtime/index.js";
 import {
   getInternalToolTurnCompletion,
   setInternalToolTurnCompletion,
@@ -64,10 +64,27 @@ export function installToolAuthoredSourceReplyTerminalHook(params: {
   );
 }
 
+function isCompletedMessageToolOnlySourceReply(params: {
+  context: AfterToolCallContext;
+  hookResult?: AfterToolCallResult;
+}): boolean {
+  const deliveryFact =
+    readEmbeddedMessageDeliveryFact(
+      readToolResultDetails(params.context.result)?.messageDelivery,
+    ) ?? readEmbeddedMessageDeliveryFact(readToolResultDetails(params.hookResult)?.messageDelivery);
+  const isError = params.hookResult?.isError ?? params.context.isError;
+  return (
+    resolveMessageToolSourceReplyFinal(argsRecordForToolCall(params.context)) &&
+    !isError &&
+    deliveryFact?.sourceReplyDelivered === true
+  );
+}
+
 export function installMessageToolOnlyTerminalHook(
   params: MessageToolTerminalRoute & {
     agent: Agent;
     onDeliveredSourceReply?: () => void;
+    onCompletedSourceReply?: () => void;
   },
 ): void {
   if (params.sourceReplyDeliveryMode !== "message_tool_only") {
@@ -114,6 +131,10 @@ export function installMessageToolOnlyTerminalHook(
     });
     if (delivered) {
       params.onDeliveredSourceReply?.();
+      if (isCompletedMessageToolOnlySourceReply({ context, hookResult })) {
+        params.onCompletedSourceReply?.();
+        return { ...hookResult, terminate: true };
+      }
       if (resolveMessageToolSourceReplyFinal(argsRecordForToolCall(context))) {
         return { ...hookResult, terminate: true };
       }
