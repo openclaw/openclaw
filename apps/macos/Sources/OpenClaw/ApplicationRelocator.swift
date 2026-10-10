@@ -40,7 +40,8 @@ enum ApplicationRelocator {
         case continueLaunch(startUpdater: Bool)
         /// A self-install is running in the background. The caller must not start
         /// gateway, menu, onboarding, or other services from the transient bundle;
-        /// the app will relaunch from the installed location once the copy finishes.
+        /// the app relaunches from the installed location once the copy finishes.
+        /// If the copy fails, the caller resumes that skipped startup instead of quitting.
         case installing
         case terminating
     }
@@ -278,21 +279,23 @@ enum ApplicationRelocator {
                             replacing: replacing,
                             fileManager: fileManager)
                         let relaunchDisposition = relaunchAndTerminate(at: destination)
-                        // Helper spawn failure already showed the manual-open alert.
-                        // .installing skipped menu, dock, and gateway startup, so
-                        // continuing would leave a headless LSUIElement process.
+                        // The Applications copy exists. Spawn failure already asked the
+                        // user to open it. Quitting avoids a headless transient process
+                        // beside that installed app; a deferred session stays running.
                         if ownsLaunch, case .continueLaunch = relaunchDisposition {
                             AppDelegate.requestTermination()
                         }
                     } catch {
                         self.logger.error(
                             "Could not install app: \(error.localizedDescription, privacy: .public)")
+                        progressWindow.close()
                         showFailure(
                             "OpenClaw couldn’t be installed in Applications. Move it there manually, then open that copy.")
-                        // A deferred --no-activate confirmation already continued
-                        // launch, so only the .installing path terminates here.
+                        // Same contract as .cannotInstall: show the alert, then keep this
+                        // temporary copy usable. .installing skipped startup, so resume it.
+                        // A deferred confirmation already continued launch.
                         if ownsLaunch {
-                            AppDelegate.requestTermination()
+                            AppDelegate.resumeLaunchAfterFailedInstall()
                         }
                     }
                 }
@@ -1332,8 +1335,8 @@ extension ApplicationRelocator {
 
         let text = NSTextField(frame: NSRect(x: 64, y: 44, width: 280, height: 32))
         text.stringValue = replacing
-            ? "Replacing OpenClaw in Applications…"
-            : "Copying OpenClaw to Applications…"
+            ? String(localized: "Replacing OpenClaw in Applications…")
+            : String(localized: "Copying OpenClaw to Applications…")
         text.isBezeled = false
         text.isEditable = false
         text.drawsBackground = false

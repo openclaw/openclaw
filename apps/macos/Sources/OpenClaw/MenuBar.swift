@@ -330,9 +330,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if !AppProfile.current.isActive, !launchPlan.isElevationHost {
             switch ApplicationRelocator.handleLaunch() {
             case .terminating, .installing:
-                // .terminating hands off to an installed copy. .installing is a
-                // background self-install that relaunches from Applications.
-                // Neither path may start services from the transient bundle.
+                // .terminating hands off to an installed copy. .installing copies in
+                // the background and relaunches from Applications, so services stay
+                // off until then. Install failure resumes them below.
                 return
             case let .continueLaunch(shouldStartUpdater):
                 startUpdater = shouldStartUpdater && launchPlan.allowsUpdater
@@ -340,6 +340,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         } else {
             startUpdater = false
         }
+        self.continueLaunchAfterRelocation(launchPlan: launchPlan, startUpdater: startUpdater)
+    }
+
+    /// Work skipped while `.installing` owns this launch. Copy failure resumes the
+    /// same credential and service startup a declined install uses.
+    static func resumeLaunchAfterFailedInstall() {
+        guard let delegate = NSApp.delegate as? AppDelegate else {
+            Logger(subsystem: "ai.openclaw", category: "app-relocation").error(
+                "Install failed before the app delegate could resume launch")
+            return
+        }
+        // Declined install is `.continueLaunch(startUpdater: false)`. Failure uses
+        // that path and leaves this temporary process running.
+        delegate.continueLaunchAfterRelocation(
+            launchPlan: AppLaunchRuntimePlan.current,
+            startUpdater: false)
+    }
+
+    private func continueLaunchAfterRelocation(launchPlan: AppLaunchRuntimePlan, startUpdater: Bool) {
         TerminationSignalWatcher.shared.start()
         self.credentialStartupTask = Task { @MainActor [weak self] in
             guard let self else { return }
