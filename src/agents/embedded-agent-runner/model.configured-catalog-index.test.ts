@@ -16,6 +16,7 @@ import type {
 import { materializePreparedRuntimeModel } from "../runtime-plan/materialize-model.js";
 import { makeProviderModelFixture } from "../test-helpers/provider-model-fixture.js";
 import { createEmptyAgentDiscoveryStores, resolveModelAsync } from "./model.js";
+import { makeModel } from "./model.test-harness.js";
 
 const PROVIDER = "configured-index-fixture";
 const BASE_URL = "https://configured-index.example.invalid/v1";
@@ -293,8 +294,7 @@ describe("configured model discovery facts", () => {
               baseUrl,
               models: [
                 {
-                  id: modelId,
-                  name: modelId,
+                  ...makeModel(modelId),
                   contextWindow: configuredContext,
                   contextTokens: configuredContext,
                 },
@@ -304,7 +304,7 @@ describe("configured model discovery facts", () => {
         },
       };
       const stores = createEmptyAgentDiscoveryStores();
-      const catalogModel: ProviderRuntimeModel = {
+      const catalogModel = {
         ...makeProviderModelFixture({
           provider,
           id: modelId,
@@ -313,8 +313,8 @@ describe("configured model discovery facts", () => {
         }),
         contextWindow: 32_768,
         contextTokens: 32_768,
-        compat: { supportsTools },
-      };
+        compat: { supportsTools, supportsUsageInStreaming: true },
+      } satisfies ProviderRuntimeModel;
       stores.modelRegistry.registerProvider(provider, {
         api: "openai-completions",
         baseUrl,
