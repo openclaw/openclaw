@@ -9,14 +9,11 @@ import {
   normalizeUniqueTrimmedStringList,
   uniqueStrings,
 } from "@openclaw/normalization-core/string-normalization";
-import {
-  readConnectPairingRequiredMessage,
-  type ConnectPairingRequiredDetails,
-} from "../../packages/gateway-protocol/src/connect-error-details.js";
+import { readConnectPairingRequiredMessage } from "../../packages/gateway-protocol/src/connect-error-details.js";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core/src/table.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
-import { buildGatewayConnectionDetails, formatGatewayTransportErrorJson } from "../gateway/call.js";
+import { formatGatewayTransportErrorJson } from "../gateway/call.js";
 import type {
   DevicePairingList,
   DeviceTokenSummary,
@@ -24,7 +21,6 @@ import type {
   PendingDevice,
 } from "../gateway/device-pairing-list.types.js";
 import { ADMIN_SCOPE, PAIRING_SCOPE, type OperatorScope } from "../gateway/method-scopes.js";
-import { isLoopbackHost } from "../gateway/net.js";
 import { isOperatorScope } from "../gateway/operator-scopes.js";
 import {
   approveDevicePairing,
@@ -44,8 +40,14 @@ import {
   type PendingDeviceApprovalKind,
 } from "../shared/device-pairing-access.js";
 import { formatCliCommand } from "./command-format.js";
+import {
+  assertLocalFallbackMatchesGatewayRequest,
+  buildFallbackStateMismatchError,
+  resolveLocalPairingFallback,
+} from "./devices-cli-fallback.js";
 import { ExpectedCliError } from "./failure-output.js";
 import { callGatewayFromCliWithTransport } from "./gateway-rpc.js";
+import { runWithLocalStateOwner } from "./local-state-owner.js";
 import { formatConnectionFlagReminder } from "./nodes-cli/cli-utils.js";
 import { formatPairingApproveCommand } from "./pairing-command-format.js";
 import { quoteCliArg } from "./quote-cli-arg.js";
@@ -74,8 +76,6 @@ type ApprovePairingGatewayContext = {
 
 const FALLBACK_NOTICE = "Direct scope access failed; using local fallback.";
 const DEFAULT_DEVICES_TIMEOUT_MS = 10_000;
-const FALLBACK_STATE_MISMATCH_MESSAGE =
-  "Gateway requires device pairing, but local fallback pairing state does not contain the gateway request.";
 const OPERATOR_ROLE = "operator";
 const OPERATOR_SCOPE_PREFIX = "operator.";
 
@@ -169,72 +169,6 @@ function isScopeUpgradePendingApproval(error: unknown): boolean {
   );
 }
 
-function resolveLocalPairingFallback(
-  opts: DevicesRpcOpts,
-  error: unknown,
-): { details: ConnectPairingRequiredDetails } | null {
-  // Local fallback is only safe for implicit loopback gateway URLs.
-  const message = normalizeLowercaseStringOrEmpty(normalizeErrorMessage(error));
-  const details = readConnectPairingRequiredMessage(message);
-  if (!details) {
-    return null;
-  }
-  if (typeof opts.url === "string" && opts.url.trim().length > 0) {
-    // Explicit --url might point at a remote/tunneled gateway; never silently
-    // switch to local pairing files in that case.
-    return null;
-  }
-  const connection = buildGatewayConnectionDetails();
-  if (connection.urlSource !== "local loopback") {
-    return null;
-  }
-  try {
-    return isLoopbackHost(new URL(connection.url).hostname) ? { details } : null;
-  } catch {
-    return null;
-  }
-}
-
-function buildFallbackStateMismatchError(
-  details: ConnectPairingRequiredDetails,
-  pendingRequestIds: string[],
-): Error {
-  const heading = details.requestId
-    ? `${FALLBACK_STATE_MISMATCH_MESSAGE} Missing requestId: ${details.requestId}.`
-    : FALLBACK_STATE_MISMATCH_MESSAGE;
-  // A populated local pending list means the CLI and gateway share this store:
-  // each rejected connect re-mints the request, so the held id is stale rather
-  // than foreign. Only an empty list suggests a genuinely different store, and
-  // shared-auth flags are only a fix when the gateway actually uses shared auth.
-  const currentRequestId = pendingRequestIds[0];
-  const guidance = currentRequestId
-    ? [
-        "That request was superseded by a newer pending request.",
-        `Approve the current request instead: ${formatPairingApproveCommand("devices", currentRequestId)}`,
-      ]
-    : [
-        "The running gateway may be using a different OPENCLAW_PROFILE or OPENCLAW_STATE_DIR than this CLI.",
-        "Rerun with the gateway's profile/state-dir; if the gateway uses shared auth, pass --token/--password to approve through it.",
-      ];
-  return new Error([heading, ...guidance].join("\n"));
-}
-
-function assertLocalFallbackMatchesGatewayRequest(
-  details: ConnectPairingRequiredDetails,
-  list: DevicePairingList,
-) {
-  const requestId = normalizeOptionalString(details.requestId);
-  if (!requestId) {
-    return;
-  }
-  const pendingRequestIds = (list.pending ?? [])
-    .map((request) => normalizeOptionalString(request.requestId))
-    .filter((id): id is string => Boolean(id));
-  if (!pendingRequestIds.includes(requestId)) {
-    throw buildFallbackStateMismatchError(details, pendingRequestIds);
-  }
-}
-
 function redactLocalPairedDevice(device: InfraPairedDevice): PairedDevice {
   const { tokens, ...rest } = device;
   return {
@@ -302,73 +236,91 @@ async function approvePairingWithFallback(
       }
       throw error;
     }
-    const gatewayRequestId = normalizeOptionalString(fallback.details.requestId);
-    let replacement: PendingDevice | null = null;
-    if (gatewayRequestId && gatewayRequestId !== requestId) {
-      const local = await listDevicePairing();
-      const localList = {
-        pending: local.pending as PendingDevice[],
-        paired: local.paired.map((device) => redactLocalPairedDevice(device)),
-      };
-      context.pairingList = localList;
-      replacement = findSameDeviceReplacementRequest({
-        originalRequest,
-        originalRequestId: requestId,
-        gatewayRequestId,
-        pending: localList.pending,
-        paired: localList.paired,
-      });
-      if (!replacement) {
-        const hasOriginalPending = Boolean(findPendingRequestById(localList.pending, requestId));
-        const hasGatewayPending = Boolean(
-          findPendingRequestById(localList.pending, gatewayRequestId),
+    return await runWithLocalStateOwner({
+      method: "device.pair.approve",
+      params: { requestId },
+      target: requestId,
+      onForeignOwner: "refuse",
+      runLocal: async ({ env, assertCurrent }) => {
+        const gatewayRequestId = normalizeOptionalString(fallback.details.requestId);
+        let replacement: PendingDevice | null = null;
+        if (gatewayRequestId && gatewayRequestId !== requestId) {
+          const local = await listDevicePairing(env.OPENCLAW_STATE_DIR);
+          const localList = {
+            pending: local.pending as PendingDevice[],
+            paired: local.paired.map((device) => redactLocalPairedDevice(device)),
+          };
+          context.pairingList = localList;
+          replacement = findSameDeviceReplacementRequest({
+            originalRequest,
+            originalRequestId: requestId,
+            gatewayRequestId,
+            pending: localList.pending,
+            paired: localList.paired,
+          });
+          if (!replacement) {
+            const hasOriginalPending = Boolean(
+              findPendingRequestById(localList.pending, requestId),
+            );
+            const hasGatewayPending = Boolean(
+              findPendingRequestById(localList.pending, gatewayRequestId),
+            );
+            if (!hasOriginalPending && !hasGatewayPending) {
+              return null;
+            }
+            // Fail-closed replacement validation refused to substitute; do not point
+            // at the incompatible pending id as a recovery step.
+            throw buildFallbackStateMismatchError(fallback.details, []);
+          }
+        }
+        const approvedRequestId = replacement?.requestId ?? requestId;
+        const approved = await approveDevicePairing(
+          approvedRequestId,
+          {
+            // Local CLI fallback already assumes direct machine access; treat it as an
+            // explicit admin approval path instead of relying on missing caller scopes.
+            callerScopes: ["operator.admin"],
+            isApprovalCurrent: () => {
+              assertCurrent();
+              return true;
+            },
+          },
+          env.OPENCLAW_STATE_DIR,
         );
-        if (!hasOriginalPending && !hasGatewayPending) {
+        if (!approved) {
+          if (!replacement && gatewayRequestId && gatewayRequestId === requestId) {
+            throw buildFallbackStateMismatchError(fallback.details, []);
+          }
           return null;
         }
-        // Fail-closed replacement validation refused to substitute; do not point
-        // at the incompatible pending id as a recovery step.
-        throw buildFallbackStateMismatchError(fallback.details, []);
-      }
-    }
-    const approvedRequestId = replacement?.requestId ?? requestId;
-    const approved = await approveDevicePairing(approvedRequestId, {
-      // Local CLI fallback already assumes direct machine access; treat it as an
-      // explicit admin approval path instead of relying on missing caller scopes.
-      callerScopes: ["operator.admin"],
-    });
-    if (!approved) {
-      if (!replacement && gatewayRequestId && gatewayRequestId === requestId) {
-        throw buildFallbackStateMismatchError(fallback.details, []);
-      }
-      return null;
-    }
-    if (approved.status === "forbidden") {
-      throw new Error(formatDevicePairingForbiddenMessage(approved), { cause: error });
-    }
-    if (opts.json !== true) {
-      if (replacement) {
-        defaultRuntime.log(
-          theme.warn(
-            `Pending request ${sanitizeForLog(requestId)} was replaced by same-device repair ${sanitizeForLog(replacement.requestId)}; approving latest compatible request.`,
-          ),
-        );
-      }
-      defaultRuntime.log(theme.warn(FALLBACK_NOTICE));
-    }
-    return {
-      requestId: approvedRequestId,
-      ...(replacement
-        ? {
-            resolved: {
-              kind: "same-device-replacement",
-              requestedRequestId: requestId,
-              approvedRequestId,
-            },
+        if (approved.status === "forbidden") {
+          throw new Error(formatDevicePairingForbiddenMessage(approved), { cause: error });
+        }
+        if (opts.json !== true) {
+          if (replacement) {
+            defaultRuntime.log(
+              theme.warn(
+                `Pending request ${sanitizeForLog(requestId)} was replaced by same-device repair ${sanitizeForLog(replacement.requestId)}; approving latest compatible request.`,
+              ),
+            );
           }
-        : {}),
-      device: redactLocalPairedDevice(approved.device),
-    };
+          defaultRuntime.log(theme.warn(FALLBACK_NOTICE));
+        }
+        return {
+          requestId: approvedRequestId,
+          ...(replacement
+            ? {
+                resolved: {
+                  kind: "same-device-replacement",
+                  requestedRequestId: requestId,
+                  approvedRequestId,
+                },
+              }
+            : {}),
+          device: redactLocalPairedDevice(approved.device),
+        };
+      },
+    });
   }
 }
 

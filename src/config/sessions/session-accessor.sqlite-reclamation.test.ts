@@ -52,7 +52,7 @@ import { runExclusiveSqliteSessionWrite } from "./session-accessor.sqlite-scope.
 import {
   appendTranscriptEventSync,
   replaceTranscriptEventsSync,
-} from "./session-accessor.sqlite-transcript-write.js";
+} from "./session-accessor.sqlite-transcript-write.test-support.js";
 import type { SqliteWorkerWriteAdmission } from "./session-accessor.sqlite-worker-request.js";
 import { reclaimSqliteFreePages } from "./session-history-archive-pruning.js";
 

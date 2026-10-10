@@ -1,6 +1,9 @@
 /** HTTP path for the Control UI bootstrap config payload. */
 export const CONTROL_UI_BOOTSTRAP_CONFIG_PATH = "/control-ui-config.json";
 
+/** Authenticated document copy of the canonical bootstrap payload. */
+export const CONTROL_UI_BOOTSTRAP_CONFIG_ATTRIBUTE = "data-openclaw-bootstrap-config";
+
 /** Fragment marker selecting the host-authorized browser-owner bootstrap profile. */
 export const CONTROL_UI_BOOTSTRAP_PROFILE_FRAGMENT_PARAM = "bootstrapProfile";
 export const CONTROL_UI_OWNER_BOOTSTRAP_PROFILE_HINT = "owner";

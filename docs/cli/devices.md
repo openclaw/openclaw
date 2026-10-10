@@ -195,7 +195,7 @@ A non-admin paired-device caller can revoke only its **own** device token. Revok
 - For operator tokens, the CLI first reads the pairing list, then requests pairing plus the target token's scopes (or explicit rotate scopes). If the target is not visible, it requests admin access for cross-device management. A narrowed token does not inherit a broader device approval baseline; the caller must already be authorized for the requested scopes.
 - For paired-device token sessions, cross-device management (`remove`, `rename`, `rotate`, `revoke`) is self-only unless the caller has `operator.admin`.
 - Token rotation returns a new token (sensitive) — treat it like a secret.
-- If pairing scope is unavailable on local loopback and no explicit `--url` is passed, `list`/`approve` can fall back to local pairing state.
+- If pairing scope is unavailable on local loopback and no explicit `--url` is passed, `list` can read local pairing state. Approval never writes around a running Gateway: use an authorized device or shared Gateway credentials, or stop the Gateway through its service owner and rerun the exact approval command. When the local Gateway is stopped, `list` reads the existing state and `approve` holds exclusive offline ownership through the write and cleanup. Explicit URLs and uncertain request outcomes never replay locally.
 
 ## Token drift recovery checklist
 
