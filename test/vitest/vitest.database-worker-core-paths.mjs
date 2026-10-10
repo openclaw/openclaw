@@ -199,6 +199,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/cli/update-cli/update-command-admission.test.ts",
   "src/cli/update-cli/update-command-database-rollback.test.ts",
   "src/cli/update-cli/update-command-doctor-canonical-delegation.test.ts",
+  "src/cli/update-cli/update-command-doctor-child.test.ts",
   "src/cli/update-cli/update-command-doctor-requester.test.ts",
   "src/cli/update-cli/update-command-execution.test.ts",
   "src/cli/update-cli/update-command-run.test.ts",

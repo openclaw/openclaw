@@ -269,8 +269,9 @@ Node identity and command authorization remain checked throughout preparation.
 
 If no host is eligible, the error explains whether no session hosts are paired,
 hosts are disconnected or at capacity, a host needs an update, or the selected
-runtime is unsupported. The dispatch response identifies the device that was
-selected.
+runtime is unsupported. Current pairing, connection, and command errors take
+precedence over previously advertised worker slots. The dispatch response
+identifies the device that was selected.
 
 When a known session host disconnects, its paired-device record preserves only
 the last accepted current-v6 hosting consent. The offline row remains visible

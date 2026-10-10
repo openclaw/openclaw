@@ -5107,7 +5107,6 @@
 ["src/cli/update-cli-mocks.test-support.ts","../infra/update-repair-agent.js","3e5c79ded07eba9abb99ae70d09d06bb97ebe5bbb45f932b0ac48407aeed7a35",1]
 ["src/cli/update-cli-mocks.test-support.ts","../infra/update-retained-runtime.js","88bd02dd4769ace0d545e52f08c94ec93d078053cbed18ef30eaa4a07d78f559",1]
 ["src/cli/update-cli-mocks.test-support.ts","../infra/update-runner-git.js","34993f66725256a6bf5395551560856c5506670468de199d8ac2d68a8d23ac79",1]
-["src/cli/update-cli-mocks.test-support.ts","../process/exec.js","97b835cba2615e2c423b962507256199ab525b3830e4007a92a2914c44f39096",1]
 ["src/cli/update-cli-mocks.test-support.ts","../state/openclaw-database-preflight.js","83880dc6e03f162ecaa42b1e13f1babebbc9dc572bfdc9fbb5e15336baf25a82",1]
 ["src/cli/update-cli-mocks.test-support.ts","../utils.js","1105007201bab80a30a7cae8dd960e8dfe761f5760ccb2ab6646fa55e2456a71",1]
 ["src/cli/update-cli-mocks.test-support.ts","./daemon-cli.js","321cfb085776a4a5ad4b59dc5c951e894bf5e76851fbbd6a8d13a295aa7cf9b8",1]
