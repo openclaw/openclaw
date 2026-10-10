@@ -1082,7 +1082,6 @@
 ["extensions/memory-core/src/cli.memory-slot.test.ts","./memory/index.js","ac3e6b8e43e7508e6a4435382878c047264ea00616ba8223ae8d325a8523939f",1]
 ["extensions/memory-core/src/cli.test.ts","./memory-forget.js","cdadbed546ed6e9e4864b97e6a6159f106c0de2ac6f99c3e5c4303056e7803ee",1]
 ["extensions/memory-core/src/cli.test.ts","./memory/index.js","ac3e6b8e43e7508e6a4435382878c047264ea00616ba8223ae8d325a8523939f",1]
-["extensions/memory-core/src/dreaming.test.ts","./dreaming-phases.js","8fe2fd479f071f148422d75139833cdb0de19ca6c632e63edc3d6b597fb78b2a",1]
 ["extensions/memory-core/src/memory-search-tool-query.test.ts","./session-search-visibility.js","69043b22bcdac8ba9f34a7950bd4811835ed853b27c7d2c02b3e3895703d3fed",1]
 ["extensions/memory-core/src/memory-tool-manager.test-mocks.ts","./tools.runtime.js","2da9c55b891d38b2f9aee8a066fdbfd61b78b543ede9d5a875f2571d45cd479b",1]
 ["extensions/memory-core/src/memory-workspace-lock.cas.test.ts","./dreaming-state.js","f20ed71534a970e301435288ceeb18d5d0cf6822d21ef85a6807063d9f2af277",1]
