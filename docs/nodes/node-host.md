@@ -144,15 +144,18 @@ For `npx openclaw node install` or `npx openclaw connect <join-url> --service`,
 OpenClaw installs the selected release into `<state-dir>/npm` before writing
 the service. The state directory respects `OPENCLAW_STATE_DIR` and profiles.
 Both launchd and systemd run the durable package after npm clears its `_npx`
-cache. Installation prints the package version, exact service command, and
-the durable CLI's `Update:` command.
+cache. Installation prints the package version, chosen runtime, service command,
+and a node update command:
 
-To update this package, run the printed update command on the node machine,
-with the same profile and state-directory settings. Restart the node using
-the same durable CLI followed by `node restart`. The managed npm prefix stays
-the same across updates; it does not accumulate a directory per release.
-The automatic node-runtime updates below remain independent of this CLI
-package.
+```bash
+npx -y openclaw@latest node install --force
+```
+
+Use the same profile and state-directory settings. Replace `latest` with `beta`
+or an exact version when needed. This installs into the same managed prefix,
+rewrites the service, and reuses the saved pairing. Reinstalling the same version
+repairs missing package files. It does not accumulate a directory per release.
+The automatic node-runtime updates below remain independent of this CLI package.
 
 Node shutdown waits for plugin availability watchers and active computer executions
 to finish cleanup, and reports failures from those cleanup operations. If a command

@@ -50,6 +50,7 @@ export async function resolveDurableNodeEntrypoint(
     const result = await runGlobalPackageUpdateSteps({
       installTarget: { ...target, globalRoot: layout.globalRoot, packageRoot },
       installSpec: `openclaw@${version}`,
+      requirePackageReplacement: true,
       packageName: "openclaw",
       packageRoot,
       runCommand: runCommandWithTimeout,

@@ -1,4 +1,5 @@
 /** Managed node-host install plan builder. */
+import { formatCliCommand } from "../cli/command-format.js";
 import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import { resolveDurableNodeEntrypoint } from "../daemon/npx-service-install.js";
 import { OPENCLAW_WRAPPER_ENV_KEY, resolveNodeProgramArguments } from "../daemon/program-args.js";
@@ -114,11 +115,7 @@ export async function buildNodeInstallPlan(params: {
       `OpenClaw ${VERSION}`,
       `Runtime: ${runtime} (${programArguments[0]})`,
       `Service command: ${programArguments.map(quoteCliArg).join(" ")}`,
-      ...(cliEntrypoint
-        ? [
-            `Update: ${[runtimePath ?? process.execPath, cliEntrypoint, "update", "--no-restart"].map(quoteCliArg).join(" ")}`,
-          ]
-        : []),
+      `Update this node: ${formatCliCommand("openclaw node install --force", params.env).replace("openclaw", "npx -y openclaw@latest")}`,
     ].join("\n"),
     workingDirectory,
     environment,

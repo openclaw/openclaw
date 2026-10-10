@@ -7,8 +7,6 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { stageLaunchAgent } from "../daemon/launchd-install.js";
 import { readLaunchAgentProgramArgumentsFromFile } from "../daemon/launchd-plist.js";
 import { buildSystemdUnit, parseSystemdExecStart } from "../daemon/systemd-unit.js";
-import { resolveGlobalInstallTarget } from "../infra/update-global.js";
-import { runCommandWithTimeout } from "../process/exec.js";
 import { buildNodeInstallPlan } from "./node-daemon-install-helpers.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -56,7 +54,7 @@ it.skipIf(process.platform === "win32")(
     );
     expect(plan.programArguments[1]).toBe(expectedEntrypoint);
     expect(plan.installationMessage).toContain(
-      path.join(state, "npm", "lib", "node_modules", "openclaw", "openclaw.mjs"),
+      "npx -y openclaw@latest --profile npx-test node install --force",
     );
     const launchd = await stageLaunchAgent({ env, stdout: new PassThrough(), ...plan });
     const launchdCommand = await readLaunchAgentProgramArgumentsFromFile(launchd.plistPath);
@@ -75,14 +73,5 @@ it.skipIf(process.platform === "win32")(
       expect(result.status, result.stderr).toBe(0);
       expect(result.stdout.trim()).toBe("node service fixture");
     }
-    const updateTarget = await resolveGlobalInstallTarget({
-      manager: "npm",
-      pkgRoot: path.dirname(path.dirname(expectedEntrypoint)),
-      honorPackageRoot: true,
-      runCommand: runCommandWithTimeout,
-      timeoutMs: 1000,
-    });
-    expect(updateTarget.packageRoot).toBe(path.dirname(path.dirname(expectedEntrypoint)));
-    expect(updateTarget.globalRoot).toBe(path.join(state, "npm", "lib", "node_modules"));
   },
 );
