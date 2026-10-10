@@ -13,7 +13,7 @@ import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.
 import * as agentExecution from "../../state/openclaw-agent-execution.js";
 import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.js";
+import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { captureSessionStoreReadCandidate } from "./session-store-read-candidates.js";
 import * as projectionWriter from "./session-transcript-projection-writer.js";
 import {

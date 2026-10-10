@@ -130,7 +130,8 @@ Claude stream-json backends also emit live line-count progress while `write`,
 `edit`, and `apply_patch` arguments stream. Progress contains only the tool id,
 name, and added/removed line counts, with at most four updates per second per
 call. The execution-start event still waits for complete arguments; input
-progress does not mean the tool has begun executing.
+progress does not mean the tool has begun executing. If input generation is
+interrupted, a later text block does not mark the abandoned tool as started.
 
 Direct agent calls and child-completion updates share the same session reply policy.
 A completion turn's delivery override does not by itself start a fresh CLI session;
