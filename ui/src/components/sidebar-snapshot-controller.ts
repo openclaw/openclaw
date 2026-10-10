@@ -144,6 +144,12 @@ export class SidebarSnapshotController {
         this.replaceScope(next);
       }
     }
+    if (this.host.sidebarSnapshot && this.host.sidebarSnapshotSettled()) {
+      // Release before rendering so a failed refresh cannot leave cached controls painted.
+      this.host.releaseSidebarSnapshot();
+      this.saved = false;
+      this.serialized = null;
+    }
   }
 
   capture(): void {
@@ -151,16 +157,9 @@ export class SidebarSnapshotController {
       !this.cleanup.length ||
       this.pending ||
       !this.scope ||
+      this.host.sidebarSnapshot ||
       !this.host.sidebarSnapshotSettled()
     ) {
-      return;
-    }
-    if (this.host.sidebarSnapshot) {
-      // Capture only after the live renderer has replaced the saved projection.
-      this.host.releaseSidebarSnapshot();
-      this.saved = false;
-      this.serialized = null;
-      this.notify();
       return;
     }
     const model = this.host.captureSidebarSnapshot();

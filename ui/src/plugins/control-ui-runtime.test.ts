@@ -137,7 +137,10 @@ it.each(["empty", "catalog-failed", "activation-failed", "activated"] as const)(
         subscribe: () => () => undefined,
         subscribeEvents: () => () => undefined,
       },
-      config: { refresh: async () => ({ pluginAssetsRequireAuth: false, pluginFrameGrants: [] }) },
+      config: {
+        ...createApplicationConfigCapability({ resourceBasePath: "" }),
+        refresh: async () => ({ pluginAssetsRequireAuth: false, pluginFrameGrants: [] }),
+      },
     } as unknown as ApplicationContext;
     vi.mocked(initializeControlUiPlugin).mockImplementation(async (getContext, runtime, owner) => {
       activationStarted.resolve();
@@ -344,7 +347,7 @@ describe("native plugin asset admission", () => {
         expect(initializeControlUiPlugin).toHaveBeenCalledTimes(loads ? 1 : 0);
         expect(runtime.registrations("pages")).toEqual([]);
         expect(runtime.isLoading("review")).toBe(false);
-        expect(runtime.registryStatus).toBe("complete");
+        expect(runtime.registryStatus).toBe(catalogError ? "failed" : "complete");
       } finally {
         runtime.dispose();
         vi.unstubAllGlobals();

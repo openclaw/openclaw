@@ -303,7 +303,9 @@ export function buildReconciledSidebarZone(input: {
 }) {
   if (input.snapshot) {
     const { model, selectedKey } = input.snapshot;
-    const restoredRows = model.sessions.map((row) => restoreSnapshotSession(row, selectedKey));
+    const restoredRows = [...model.sessions, ...model.pinnedSessions].map((row) =>
+      restoreSnapshotSession(row, selectedKey),
+    );
     return {
       entries: model.entries.flatMap((entry) => {
         const parsed = parseSidebarEntry(entry);
@@ -312,7 +314,6 @@ export function buildReconciledSidebarZone(input: {
       sidebarEntries: model.entries,
       sessionRows: new Map(restoredRows.map((row) => [row.key, row])),
       pluginTabs: new Map(model.plugins.map(({ key, ...tab }) => [key, tab])),
-      defaultPluginNavigationKeys: new Set(model.plugins.map((tab) => tab.key)),
     };
   }
   const navigation = input.pluginNavigation;
@@ -353,7 +354,6 @@ export function buildReconciledSidebarZone(input: {
         continue;
       }
       live.pluginTabs.set(entry.key, tab);
-      live.defaultPluginNavigationKeys.add(entry.key);
       const following = retained.entries
         .slice(index + 1)
         .find((candidate) => visible.has(candidate));

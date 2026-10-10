@@ -32,6 +32,11 @@ const model: SidebarSnapshotModel = {
   routingDefaults: { mainKey: "main", scope: "per-sender" },
   roster: null,
   mode: "roster",
+  navigationView: "sessions",
+  navigationScope: "all",
+  scopesEquivalent: false,
+  pages: [],
+  pinnedSessions: [],
   entries: ["online", "sessions"],
   sessions: [],
   sections: [],
@@ -314,7 +319,7 @@ describe("sidebar snapshot lifecycle", () => {
     expect(test.host.sidebarSnapshot).toEqual(model);
     const live = { ...model, brand: { ...model.brand, name: "Updated workspace" } };
     const saved = test.settle(live);
-    test.controller.capture();
+    test.controller.synchronize();
     expect(test.host.sidebarSnapshot).toBeNull();
     expect(test.capture).not.toHaveBeenCalled();
     test.controller.capture();
@@ -358,7 +363,7 @@ describe("sidebar snapshot lifecycle", () => {
     });
     test.publish();
     void test.settle({ ...model, onlineExpanded: false });
-    test.controller.capture();
+    test.controller.synchronize();
     test.controller.capture();
     await issued.promise;
     const saved = test.settle(model);

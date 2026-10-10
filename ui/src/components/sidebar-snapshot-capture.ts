@@ -1,4 +1,5 @@
-import { serializeSidebarEntry } from "../app-navigation.ts";
+import { isIncognitoSessionKey } from "../../../src/shared/incognito-session-key.js";
+import { parseSidebarEntry } from "../app-navigation.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { loadSettings } from "../app/settings.ts";
 import type { AuthenticatedUser } from "../app/user-profile.ts";
@@ -64,7 +65,6 @@ export function captureSidebarSnapshotModel(
     snapshotSubtitle: resolveSidebarSessionRowSubtitle(host, row),
   });
   const sessions = snapshotSessions(rows, presentation);
-  const sessionKeys = new Set(sessions.map((row) => row.key));
   return parseSidebarSnapshot({
     routingDefaults: {
       mainKey: agents.mainKey,
@@ -72,9 +72,27 @@ export function captureSidebarSnapshotModel(
     },
     roster: bootRoster,
     mode: host.sidebarAgentsMode,
-    entries: zone.entries
-      .filter((entry) => entry.type !== "session" || sessionKeys.has(entry.key))
-      .map(serializeSidebarEntry),
+    navigationView: host.navigationView,
+    navigationScope: host.navigationScope,
+    scopesEquivalent: host.navigationCatalog.scopesEquivalent,
+    pages: snapshotSessions(
+      (host.navigationCatalog.dashboards?.result?.sessions ?? []).map((row) =>
+        host.getSessionNavigationState().toSidebarSession(row),
+      ),
+      presentation,
+    ),
+    pinnedSessions: snapshotSessions(
+      zone.sidebarEntries.flatMap((value) => {
+        const entry = parseSidebarEntry(value);
+        const row = entry?.type === "session" ? zone.sessionRows.get(entry.key) : undefined;
+        return row ? [row] : [];
+      }),
+      presentation,
+    ),
+    entries: zone.sidebarEntries.filter((value) => {
+      const entry = parseSidebarEntry(value);
+      return entry?.type !== "session" || !isIncognitoSessionKey(entry.key);
+    }),
     sessions,
     ...snapshotSections(sections, host.collapsedSessionSections, presentation),
     cards: roster.cards,

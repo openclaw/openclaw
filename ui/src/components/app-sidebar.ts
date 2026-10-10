@@ -84,6 +84,8 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
 
   restoreSidebarSnapshot(model: SidebarSnapshotModel): void {
     this.sidebarSnapshot = model;
+    this.navigationView = model.navigationView;
+    this.navigationScope = model.navigationScope;
     this.sessionOrganizer.collapsedSessionSections = new Set(model.collapsedSections);
     const rows = [...model.sessions, ...model.sections.flatMap((section) => section.rows)];
     for (const row of rows) {
@@ -120,6 +122,12 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
   sidebarSnapshotSettled(): boolean {
     const context = this.context;
     if (!this.connected || !context) {
+      return false;
+    }
+    if (context.gateway.snapshot.selfUser?.id && !this.navigationCatalog.scopesReady) {
+      return false;
+    }
+    if (this.navigationView === "pages" && this.navigationCatalog.dashboards?.loading !== false) {
       return false;
     }
     const people = sidebarOnlineOrder(this).users;

@@ -195,13 +195,19 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
   }
 
   get sessionOwnerFilterId(): string | null {
-    return this.sidebarSnapshot?.ownerId ?? (this.effectiveNavigationScope === "mine"
-      ? (this.context?.gateway.snapshot.selfUser?.id ?? null)
-      : this.sessionOwnerFilter.ownerId);
+    return (
+      this.sidebarSnapshot?.ownerId ??
+      (this.effectiveNavigationScope === "mine"
+        ? (this.context?.gateway.snapshot.selfUser?.id ?? null)
+        : this.sessionOwnerFilter.ownerId)
+    );
   }
 
   get sessionInvolvingMeFilterActive(): boolean {
-    return this.sidebarSnapshot?.involvingMe ?? (this.effectiveNavigationScope !== "mine" && this.sessionOwnerFilter.involvingMe);
+    return (
+      this.sidebarSnapshot?.involvingMe ??
+      (this.effectiveNavigationScope !== "mine" && this.sessionOwnerFilter.involvingMe)
+    );
   }
 
   sessionOwnerOptions: readonly SessionOwnerOption[] = [];

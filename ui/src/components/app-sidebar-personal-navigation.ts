@@ -7,8 +7,8 @@ import { showToast } from "../lib/toast.ts";
 import { buildReconciledSidebarZone } from "./app-sidebar-session-navigation-logic.ts";
 import type { SidebarSessionNavigationState } from "./app-sidebar-session-navigation-logic.ts";
 import { applySidebarSessionOwnerFilter } from "./app-sidebar-session-ownership.ts";
-import type { SidebarSnapshotModel } from "./sidebar-snapshot-model.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
+import type { SidebarSnapshotModel } from "./sidebar-snapshot-model.ts";
 
 type PersonalNavigationHost = {
   readonly isConnected: boolean;
@@ -20,7 +20,9 @@ type PersonalNavigationHost = {
   readonly sidebarPluginSnapshot: Pick<SidebarSnapshotModel, "entries" | "plugins"> | null;
   readonly sidebarEntries: readonly string[];
   readonly sessionOwnerFilterId: string | null;
-  readonly sessionDataContext: Pick<ApplicationContext, "sessions" | "gateway" | "plugins"> | undefined;
+  readonly sessionDataContext:
+    | Pick<ApplicationContext, "sessions" | "gateway" | "plugins">
+    | undefined;
   readonly navigationCatalog: { readonly dashboards: SessionListSnapshot | null };
   getRouteSessionKey(): string;
   getSessionNavigationState(): SidebarSessionNavigationState;
@@ -95,7 +97,9 @@ export function personalSidebarZone(host: PersonalNavigationHost, rows: SidebarR
       ? { model: host.sidebarSnapshot, selectedKey: host.getRouteSessionKey() }
       : undefined,
     pendingPlugins:
-      host.sessionDataContext?.plugins.registryStatus !== "complete" ? host.sidebarPluginSnapshot : null,
+      host.sessionDataContext?.plugins.registryStatus !== "complete"
+        ? host.sidebarPluginSnapshot
+        : null,
   });
 }
 

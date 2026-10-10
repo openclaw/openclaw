@@ -155,7 +155,7 @@ export function renderAppSidebarOnline(host: AppSidebarRenderHost) {
                   const tag = activity ? literal`a` : literal`button`;
                   return staticHtml`<div
                   class="sidebar-online__row"
-                  draggable=${user.identity?.type === "profile" ? "true" : "false"}
+                  draggable=${!snapshot && user.identity?.type === "profile" ? "true" : "false"}
                   @dragstart=${(event: DragEvent) => {
                     if (user.identity?.type === "profile") {
                       host.sessionOrganizer.startSidebarEntryDrag(event, {
@@ -220,6 +220,7 @@ export function renderAppSidebarOnline(host: AppSidebarRenderHost) {
                       ? html`<button
                           type="button"
                           class="sidebar-pages__pin"
+                          ?disabled=${Boolean(snapshot)}
                           aria-label=${t("nav.pin")}
                           @click=${() => {
                             if (user.identity?.type === "profile") {

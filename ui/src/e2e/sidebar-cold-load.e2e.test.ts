@@ -22,6 +22,7 @@ import {
 const suite = createSessionManagementE2eSuite();
 const baselineMode = process.env.OPENCLAW_SIDEBAR_BASELINE === "1";
 const selectedKey = "agent:main:dashboard:00000000-0000-4000-8000-000000000006";
+const railPins = ["route:agents-home", `session:${selectedKey}`, "plugin:reports/overview"];
 const pluginPath = "/__openclaw__/plugins/control-ui/reports/one/index.js";
 const avatarUrl =
   "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAIElEQVR4nGN4nhWCFTEQkPj64w8ag5AEPqPgiDgdmAgA9YRzYZfFh50AAAAASUVORK5CYII=";
@@ -30,6 +31,9 @@ async function observeShape(sidebar: Locator) {
   return sidebar.evaluateHandle((element, key) => {
     const samples: Array<{
       navigation: Array<string | null>;
+      rail: Array<string | null>;
+      sessions: Array<string | null>;
+      view: string | null;
       agents: Array<string | null>;
       agentNames: string[];
       avatarText: string[];
@@ -39,12 +43,22 @@ async function observeShape(sidebar: Locator) {
       selectedBounds: { x: number; y: number; width: number; height: number } | null;
     }> = [];
     const sample = () => {
-      const selected = element.querySelector(`[data-sidebar-entry="session:${key}"]`);
+      const selected = element.querySelector(`.sidebar-rail [data-sidebar-entry="session:${key}"]`);
       const bounds = selected?.getBoundingClientRect();
       const next = {
         navigation: [...element.querySelectorAll("[data-sidebar-entry]")].map((row) =>
           row.getAttribute("data-sidebar-entry"),
         ),
+        sessions: [...element.querySelectorAll(".sidebar-session-content [data-session-key]")].map(
+          (row) => row.getAttribute("data-session-key"),
+        ),
+        rail: [...element.querySelectorAll(".sidebar-rail [data-sidebar-entry]")].map((row) =>
+          row.getAttribute("data-sidebar-entry"),
+        ),
+        view:
+          element
+            .querySelector('[data-navigation-view][aria-pressed="true"]')
+            ?.getAttribute("data-navigation-view") ?? null,
         agents: [...element.querySelectorAll("[data-agent-group]")].map((row) =>
           row.getAttribute("data-agent-group"),
         ),
@@ -103,44 +117,6 @@ async function capture(page: Page, sidebar: Locator, filename: string) {
   await writeFile(path.join(suite.artifactDir, filename), frame.png);
 }
 
-async function waitForExpandedSnapshot(sidebar: Locator) {
-  await sidebar.evaluate(
-    (element) =>
-      new Promise<void>((resolve, reject) => {
-        const check = () => {
-          const opened = indexedDB.open("openclaw-chat-snapshots");
-          opened.addEventListener("error", () =>
-            reject(new Error("Snapshot open failed", { cause: opened.error })),
-          );
-          opened.addEventListener("success", () => {
-            const database = opened.result;
-            const transaction = database.transaction("sidebarSnapshots", "readonly");
-            const rows = transaction.objectStore("sidebarSnapshots").getAll();
-            transaction.addEventListener("error", () => {
-              database.close();
-              reject(new Error("Snapshot read failed", { cause: transaction.error }));
-            });
-            transaction.addEventListener("complete", () => {
-              database.close();
-              const records = rows.result as Array<{
-                model: { onlineExpanded: boolean; footer: { id: string } | null };
-              }>;
-              if (
-                records.some(({ model }) => model.footer?.id === "riley" && model.onlineExpanded)
-              ) {
-                observer.disconnect();
-                resolve();
-              }
-            });
-          });
-        };
-        const observer = new MutationObserver(check);
-        observer.observe(element, { attributes: true, attributeFilter: ["data-snapshot-saved"] });
-        check();
-      }),
-  );
-}
-
 async function waitForSavedSidebar(page: Page) {
   try {
     await page
@@ -169,7 +145,7 @@ async function waitForSavedSidebar(page: Page) {
 }
 
 suite.define(() => {
-  it("restores the settled sidebar before hello and preserves its shape through late counts and plugins", async () => {
+  it("restores the Sessions view and pinned rail before hello through late counts and plugins", async () => {
     const agents: AgentsListResult = {
       defaultId: "main",
       mainKey: "main",
@@ -202,14 +178,24 @@ suite.define(() => {
       { locale: "en-US", serviceWorkers: "block", viewport: { width: 1280, height: 1100 } },
       async ({ page }) => {
         await page.addInitScript(
-          ({ settingsKey, ownerKey }) => {
+          ({ settingsKey, ownerKey, pins }) => {
             if (!localStorage.getItem(settingsKey)) {
-              localStorage.setItem(settingsKey, JSON.stringify({ sidebarAgentsMode: "roster" }));
+              localStorage.setItem(
+                settingsKey,
+                JSON.stringify({
+                  sidebarAgentsMode: "roster",
+                  sidebarEntries: pins,
+                  navigationByProfile: {
+                    riley: { sidebarEntries: pins, navigationScope: "all" },
+                  },
+                }),
+              );
               localStorage.setItem(ownerKey, "involving-me");
             }
           },
           {
             settingsKey: controlUiBundledSettingsStorageKey(suite.server.baseUrl),
+            pins: railPins,
             ownerKey: `openclaw.control.sidebarSessionOwnerFilter.v1:${controlUiBundledGatewayUrl(suite.server.baseUrl)}:riley`,
           },
         );
@@ -231,6 +217,8 @@ suite.define(() => {
             ...defaultControlUiFeatureMethods,
             "plugins.controlUi.list",
             "plugins.controlUi.report",
+            "users.prefs.get",
+            "users.prefs.set",
           ],
           sessionKey: selectedKey,
           sessions,
@@ -262,6 +250,7 @@ suite.define(() => {
             },
           ],
           methodResponses: {
+            "users.prefs.get": { status: "ok", entries: { "ui.sidebarEntries": railPins } },
             "agents.list": agents,
             "agent.identity.get": {
               cases: agents.agents.map((agent) => ({
@@ -299,23 +288,23 @@ suite.define(() => {
         await sidebar.waitFor({ state: "visible" });
         await page.evaluate(() => document.fonts.ready.then(() => undefined));
         await sidebar.locator('[data-sidebar-entry="plugin:reports/overview"]').waitFor();
-        await sidebar.locator(`[data-sidebar-entry="session:${sessions.at(-1)!.key}"]`).waitFor();
+        await sidebar.locator(`[data-session-key="${sessions[9]!.key}"]`).waitFor();
         await sidebar.locator('[data-agent-group="scout"]').waitFor();
         if (!baselineMode) {
           await waitForSavedSidebar(page);
         }
-        const onlineToggle = sidebar.locator(".sidebar-online .sidebar-session-group-toggle");
-        await onlineToggle.waitFor();
-        if ((await onlineToggle.getAttribute("aria-expanded")) === "false") {
-          await onlineToggle.click();
-        }
-        await sidebar.locator(".sidebar-online__person-name").first().waitFor();
+        expect(
+          await sidebar.locator('[data-navigation-view="sessions"]').getAttribute("aria-pressed"),
+        ).toBe("true");
         await expect
-          .poll(() => sidebar.locator(".sidebar-online__person-name").allTextContents())
-          .toEqual(["Zoe", "Ada", "Riley"]);
+          .poll(() =>
+            sidebar
+              .locator(".sidebar-rail [data-sidebar-entry]")
+              .evaluateAll((rows) => rows.map((row) => row.getAttribute("data-sidebar-entry"))),
+          )
+          .toEqual(railPins);
         if (!baselineMode) {
           await waitForSavedSidebar(page);
-          await waitForExpandedSnapshot(sidebar);
         }
         await page.evaluate(
           () =>
@@ -327,13 +316,16 @@ suite.define(() => {
         const settled = await reference.evaluate((observer) => observer.current());
         await reference.evaluate((observer) => observer.stop());
         await reference.dispose();
-        expect(settled.navigation.filter((key) => key?.startsWith("session:"))).toHaveLength(11);
+        expect(settled.navigation.filter((key) => key?.startsWith("session:"))).toHaveLength(1);
+        expect(settled.sessions).toEqual(sessions.slice(0, 10).map((row) => row.key));
+        expect(settled.rail).toEqual(railPins);
+        expect(settled.view).toBe("sessions");
         expect(settled.agents).toEqual(["main", "forge", "scout"]);
         expect(settled.agentNames).toEqual(["Harbor", "Forge", "Scout"]);
         expect(settled.avatarText).toEqual(["⚓", "🔧", "🔭"]);
         expect(settled.brand).toBe("OpenClaw");
         expect(settled.footer).toBe("Riley");
-        expect(settled.online).toEqual(["Zoe", "Ada", "Riley"]);
+        expect(settled.online).toEqual([]);
         expect(settled.selectedBounds).not.toBeNull();
 
         if (baselineMode) {
@@ -345,7 +337,7 @@ suite.define(() => {
           await capture(page, sidebar, "sidebar-old-before-hello.png");
           await gateway.resolveDeferred("connect");
           await sidebar.locator('[data-sidebar-entry="plugin:reports/overview"]').waitFor();
-          await sidebar.locator(`[data-sidebar-entry="session:${sessions.at(-1)!.key}"]`).waitFor();
+          await sidebar.locator(`[data-session-key="${sessions[9]!.key}"]`).waitFor();
           await expect
             .poll(() =>
               sidebar.locator("[data-agent-group] .sidebar-agent-roster__copy").allTextContents(),
@@ -360,7 +352,9 @@ suite.define(() => {
           const reloaded = await baseline.evaluate((observer) => observer.current());
           const baselineSamples = await baseline.evaluate((observer) => observer.stop());
           await baseline.dispose();
-          expect(reloaded.navigation.filter((key) => key?.startsWith("session:"))).toHaveLength(11);
+          expect(reloaded.navigation.filter((key) => key?.startsWith("session:"))).toHaveLength(1);
+          expect(reloaded.sessions).toEqual(settled.sessions);
+          expect(reloaded.rail).toEqual(railPins);
           expect(reloaded.avatarText).toEqual(["⚓", "🔧", "🔭"]);
           await capture(page, sidebar, "sidebar-old-settled.png");
           await writeFile(
@@ -387,6 +381,7 @@ suite.define(() => {
         expect(await restored.evaluate((observer) => observer.current())).toEqual(settled);
         expect(await gateway.getRequests()).toHaveLength(1);
         expect(await sidebar.locator('[draggable="true"]').count()).toBe(0);
+        expect(await sidebar.getByRole("button", { name: /^Reorder /u }).count()).toBe(0);
         expect(
           await sidebar
             .locator("[data-sidebar-session-pin]:enabled, [data-sidebar-session-archive]:enabled")
@@ -439,14 +434,10 @@ suite.define(() => {
         });
         await page.locator('aside.sidebar[data-snapshot-state="live"]').waitFor();
         await sidebar.locator(".sidebar-brand__new-thread:enabled").waitFor();
-        expect(
-          await sidebar.locator("[data-sidebar-session-archive]:enabled").count(),
-        ).toBeGreaterThan(0);
-        const navigationKeys = () =>
-          sidebar
-            .locator("[data-sidebar-entry]")
-            .evaluateAll((rows) => rows.map((row) => row.getAttribute("data-sidebar-entry")));
-        expect(await navigationKeys()).toEqual(settled.navigation);
+        const pluginPin = sidebar.locator(
+          '.sidebar-rail [data-sidebar-entry="plugin:reports/overview"]',
+        );
+        expect(await pluginPin.count()).toBe(1);
 
         await gateway.setMethodResponse("plugins.controlUi.list", {
           revision: "empty",
@@ -463,52 +454,23 @@ suite.define(() => {
           }
           await context.plugins.refresh();
         });
-        await sidebar
-          .locator('[data-sidebar-entry="plugin:reports/overview"]')
-          .waitFor({ state: "detached" });
-        expect(await navigationKeys()).toEqual(
-          settled.navigation.filter((key) => key !== "plugin:reports/overview"),
-        );
-
-        const failSidebarLoad = async () => {
-          await page.reload();
-          await page.locator('aside.sidebar[data-snapshot-state="cached"]').waitFor();
-          await gateway.waitForRequest("connect");
-          await gateway.setMethodResponse("sessions.list", {
-            __mockError: {
-              code: "UNAVAILABLE",
-              message: "Synthetic session catalog temporarily unavailable",
-            },
-          });
-          await gateway.resolveDeferred("connect");
-          await sidebar.locator(".sidebar-online__retry").waitFor();
-          await page.locator('aside.sidebar[data-snapshot-state="live"]').waitFor();
-          await sidebar
-            .locator('.sidebar-brand__new-thread:not(:disabled):not([aria-disabled="true"])')
-            .waitFor();
-          expect(await sidebar.locator(".sidebar-online__counts").count()).toBe(0);
-          expect(await sidebar.getAttribute("data-snapshot-saved")).toBe("false");
-        };
+        await pluginPin.locator("button:disabled").waitFor();
+        expect(await pluginPin.count()).toBe(1);
         await waitForSavedSidebar(page);
-        await failSidebarLoad();
 
-        await page.evaluate((settingsKey) => {
-          const settings = JSON.parse(localStorage.getItem(settingsKey) ?? "{}");
-          localStorage.setItem(
-            settingsKey,
-            JSON.stringify({ ...settings, sidebarAgentsMode: "chip" }),
-          );
-        }, controlUiBundledSettingsStorageKey(suite.server.baseUrl));
         await page.reload();
+        await page.locator('aside.sidebar[data-snapshot-state="cached"]').waitFor();
         await gateway.waitForRequest("connect");
         await gateway.setMethodResponse("sessions.list", {
-          ...sessionsListResponse(sessions),
-          ownerSessionCounts,
+          __mockError: {
+            code: "UNAVAILABLE",
+            message: "Synthetic session catalog temporarily unavailable",
+          },
         });
         await gateway.resolveDeferred("connect");
-        await sidebar.locator(".sidebar-agent-card__name").waitFor();
-        await waitForSavedSidebar(page);
-        await failSidebarLoad();
+        await page.locator('aside.sidebar[data-snapshot-state="live"]').waitFor();
+        await sidebar.locator(".sidebar-brand__new-thread:enabled").waitFor();
+        expect(await sidebar.getAttribute("data-snapshot-saved")).toBe("false");
       },
     );
   });

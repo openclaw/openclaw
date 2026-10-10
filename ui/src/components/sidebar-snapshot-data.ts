@@ -45,6 +45,11 @@ export const sidebarSnapshotSchema = z.object({
   routingDefaults: z.object({ mainKey: z.string(), scope: z.enum(["per-sender", "global"]) }),
   roster: bootRosterSchema.nullable(),
   mode: z.enum(["chip", "roster"]),
+  navigationView: z.enum(["pages", "sessions", "online"]),
+  navigationScope: z.enum(["mine", "all"]),
+  scopesEquivalent: z.boolean(),
+  pages: session.array(),
+  pinnedSessions: session.array(),
   entries: text
     .refine(
       (entry) =>
