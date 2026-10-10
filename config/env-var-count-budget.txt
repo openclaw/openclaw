@@ -10,4 +10,5 @@
 # Cleanup since the last restore (OAuth sidecar retirement #163186, browser deslop #163709) removed names net of additions.
 # OPENCLAW_NODE_EXEC_FALLBACK was removed by the core subsystem cleanup (#164153).
 # Codex computer-use derives the same environment keys from option names instead of repeating literals.
-455
+# The owner-approved proxy child transport adds its ephemeral CAPTURE_PARENT marker and CAPTURE_TOKEN.
+457

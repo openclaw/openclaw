@@ -85,7 +85,10 @@ export function registerWorkboardCli(params: {
     method: string,
     input: Record<string, unknown>,
     action: (store: WorkboardStore, assertCurrent: () => void) => Promise<T>,
-    options?: { scopes: string[]; timeoutMs: number; expectFinal?: boolean },
+    options?: Pick<
+      Parameters<typeof runWithLocalStateOwner>[0],
+      "scopes" | "timeoutMs" | "expectFinal"
+    >,
   ) =>
     runWithLocalStateOwner<T>({
       method: `${method}.owner`,
@@ -253,7 +256,7 @@ export function registerWorkboardCli(params: {
       boardId: options.board,
       ...(options.maxStarts !== undefined ? { maxStarts: options.maxStarts } : {}),
     };
-    const scopes = options.admin
+    const scopes: NonNullable<Parameters<typeof callGatewayFromCli>[3]>["scopes"] = options.admin
       ? ["operator.admin", "operator.write", "operator.read"]
       : ["operator.write", "operator.read"];
     const result = await (!options.token?.trim() &&

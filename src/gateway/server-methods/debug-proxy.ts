@@ -37,7 +37,8 @@ export const debugProxyHandlers: GatewayRequestHandlers = {
     try {
       const result = await runOpenClawStateWorkerOperation(
         captureOpenClawStateWorkerContext(),
-        (scope) => scope.execute(parsed.data.command),
+        (scope) =>
+          scope.execute({ type: parsed.data.command.type, input: parsed.data.command.input }),
         { assertCurrent, signal: options.signal },
       );
       options.respond(true, result ?? null);
