@@ -121,6 +121,22 @@ it("counts SQL-looking static text and conflict methods while ignoring prose and
   expect(inventory(root)).toEqual(rows);
 });
 
+it("preserves SQL quotation state across substitutions and reports the original span", () => {
+  const { root, write } = fixture();
+  write("src/quoted.ts", 'sql`SELECT "prefix${sql.raw(suffix)}rowid" FROM t`;');
+  expect(inventory(root)).toEqual([]);
+  write(
+    "src/quoted.ts",
+    "sql`SELECT '\"prefix${sql.raw(suffix)}closed',\n  ${sql.raw(other)}rowid FROM t`;",
+  );
+  expect(inventory(root)).toMatchObject([
+    {
+      file: "src/quoted.ts",
+      matches: [{ construct: "rowid", line: 2, column: 19, index: 0 }],
+    },
+  ]);
+});
+
 it("compares base to working tree or index using only changed files, and permits shrinkage and moves", () => {
   const { root, write, git } = fixture();
   write(

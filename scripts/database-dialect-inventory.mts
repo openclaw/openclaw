@@ -73,10 +73,23 @@ function findSites(file: string, source: ts.SourceFile): DialectSite[] {
     if (!tagged && !SQL_STATEMENT.test(head.text)) {
       return;
     }
-    literal(head, owner);
-    if (ts.isTemplateExpression(node)) {
-      for (const span of node.templateSpans) {
-        literal(span.literal, owner);
+    let text = "";
+    const spans = (
+      ts.isTemplateExpression(node)
+        ? [head, ...node.templateSpans.map((span) => span.literal)]
+        : [head]
+    ).map((part) => {
+      const start = text.length;
+      // A barrier preserves quotation state without joining tokens across substitutions.
+      text += part.text + "\0";
+      return { part, start };
+    });
+    const matches = matchDialect(text, owner);
+    for (const { part, start } of spans) {
+      for (const match of matches) {
+        if (match.index >= start && match.index < start + part.text.length) {
+          add({ ...match, index: match.index - start }, part.getStart(source));
+        }
       }
     }
   };
