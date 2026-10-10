@@ -70,6 +70,15 @@ export function applyXaiOAuthConfig(
     providers: {
       xai: {
         ...provider,
+        // Account discovery owns effort support; do not freeze it as an operator override.
+        models: provider.models.map(({ thinkingLevelMap: _thinkingLevelMap, compat, ...model }) => {
+          if (!compat) {
+            return model;
+          }
+          const { supportedReasoningEfforts: _supportedReasoningEfforts, ...configuredCompat } =
+            compat;
+          return { ...model, compat: configuredCompat };
+        }),
         apiKey: undefined,
         authHeader: undefined,
         headers: undefined,
