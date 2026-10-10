@@ -1,10 +1,45 @@
-/**
- * Normalizes embedded-agent conversation turn ordering for provider contracts.
- */
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { AgentMessage } from "../runtime/index.js";
 import { isThinkingLikeBlock } from "../thinking-block.js";
 import { extractToolCallsFromAssistant, extractToolResultId } from "../tool-call-id.js";
+import type { TranscriptPolicy } from "../transcript-policy.types.js";
+import { isAnthropicApi } from "./anthropic-api.js";
+
+const SIGNED_THINKING_PROVIDERS = new Set(["anthropic", "amazon-bedrock", "anthropic-vertex"]);
+
+export function providerRequiresSignedThinking(provider?: string | null): boolean {
+  return SIGNED_THINKING_PROVIDERS.has(normalizeProviderId(provider ?? ""));
+}
+
+export function shouldAllowProviderOwnedThinkingReplay(params: {
+  modelApi?: string | null;
+  provider?: string | null;
+  policy: Pick<
+    TranscriptPolicy,
+    "validateAnthropicTurns" | "preserveSignatures" | "dropThinkingBlocks"
+  >;
+}): boolean {
+  const hasProviderOwnedSignedThinking =
+    params.policy.preserveSignatures || providerRequiresSignedThinking(params.provider);
+  return (
+    isAnthropicApi(params.modelApi) &&
+    params.policy.validateAnthropicTurns &&
+    hasProviderOwnedSignedThinking &&
+    !params.policy.dropThinkingBlocks
+  );
+}
+
+/**
+ * Bedrock Converse still requires strict role alternation, so only the direct
+ * Messages API keeps consecutive user turns separate under append-only replay.
+ */
+export function shouldMergeConsecutiveUserTurns(
+  policy: Pick<TranscriptPolicy, "appendOnlyRuntimeContext">,
+  modelApi?: string | null,
+): boolean {
+  return !(policy.appendOnlyRuntimeContext && modelApi === "anthropic-messages");
+}
 
 type AnthropicContentBlock = {
   type: "text" | "toolUse" | "toolCall" | "functionCall" | "toolResult" | "tool";
@@ -21,11 +56,6 @@ type UserContentBlock = Extract<
 
 function isToolCallBlock(block: AnthropicContentBlock): boolean {
   return block.type === "toolUse" || block.type === "toolCall" || block.type === "functionCall";
-}
-
-function isAbortedAssistantTurn(message: AgentMessage): boolean {
-  const stopReason = (message as { stopReason?: unknown }).stopReason;
-  return stopReason === "aborted" || stopReason === "error";
 }
 
 function extractToolResultMatchIds(record: object): Set<string> {
@@ -46,123 +76,61 @@ function extractToolResultMatchIds(record: object): Set<string> {
   return ids;
 }
 
-function extractToolResultMatchName(record: object): string | null {
-  return (
-    normalizeOptionalString(Reflect.get(record, "toolName")) ??
-    normalizeOptionalString(Reflect.get(record, "name")) ??
-    null
-  );
-}
-
-function collectAnyToolResultIds(message: AgentMessage): Set<string> {
+function collectFutureToolResults(
+  messages: AgentMessage[],
+  startIndex: number,
+): { ids: Set<string>; matches: Map<string, Set<string>> } {
   const ids = new Set<string>();
-  const role = (message as { role?: unknown }).role;
-  if (role === "toolResult") {
-    const toolResultId = extractToolResultId(
-      message as Extract<AgentMessage, { role: "toolResult" }>,
-    );
-    if (toolResultId) {
-      ids.add(toolResultId);
-    }
-  } else if (role === "tool") {
-    for (const id of extractToolResultMatchIds(message)) {
-      ids.add(id);
-    }
-  }
-
-  const content = (message as { content?: unknown }).content;
-  if (!Array.isArray(content)) {
-    return ids;
-  }
-
-  for (const block of content) {
-    if (!block || typeof block !== "object") {
-      continue;
-    }
-    const record = block as Record<string, unknown>;
-    if (record.type !== "toolResult" && record.type !== "tool") {
-      continue;
-    }
-    for (const id of extractToolResultMatchIds(record)) {
-      ids.add(id);
-    }
-  }
-
-  return ids;
-}
-
-function collectTrustedToolResultMatches(message: AgentMessage): Map<string, Set<string>> {
   const matches = new Map<string, Set<string>>();
-  const role = (message as { role?: unknown }).role;
-  const addMatch = (ids: Iterable<string>, toolName: string | null) => {
-    for (const id of ids) {
+  for (let index = startIndex + 1; index < messages.length; index += 1) {
+    const candidate = messages[index];
+    if (!candidate || typeof candidate !== "object") {
+      continue;
+    }
+    const role = (candidate as { role?: unknown }).role;
+    if (role === "assistant") {
+      break;
+    }
+    const content = (candidate as { content?: unknown }).content;
+    for (const block of Array.isArray(content) ? content : []) {
+      if (
+        block &&
+        typeof block === "object" &&
+        (block.type === "toolResult" || block.type === "tool")
+      ) {
+        for (const id of extractToolResultMatchIds(block)) {
+          ids.add(id);
+        }
+      }
+    }
+    // Signed thinking requires a real result turn; embedded user content is not proof.
+    if (role !== "toolResult" && role !== "tool") {
+      continue;
+    }
+    const matchIds = extractToolResultMatchIds(candidate);
+    if (role === "toolResult") {
+      const canonicalId = extractToolResultId(
+        candidate as Extract<AgentMessage, { role: "toolResult" }>,
+      );
+      if (canonicalId) {
+        ids.add(canonicalId);
+      }
+    }
+    const toolName =
+      normalizeOptionalString(Reflect.get(candidate, "toolName")) ??
+      normalizeOptionalString(Reflect.get(candidate, "name"));
+    for (const id of matchIds) {
+      if (role === "tool") {
+        ids.add(id);
+      }
       const bucket = matches.get(id) ?? new Set<string>();
       if (toolName) {
         bucket.add(toolName);
       }
       matches.set(id, bucket);
     }
-  };
-
-  if (role === "toolResult") {
-    addMatch(
-      [
-        ...extractToolResultMatchIds(message),
-        ...(() => {
-          const canonicalId = extractToolResultId(
-            message as Extract<AgentMessage, { role: "toolResult" }>,
-          );
-          return canonicalId ? [canonicalId] : [];
-        })(),
-      ],
-      extractToolResultMatchName(message),
-    );
-  } else if (role === "tool") {
-    addMatch(extractToolResultMatchIds(message), extractToolResultMatchName(message));
   }
-
-  return matches;
-}
-
-function collectFutureToolResultMatches(
-  messages: AgentMessage[],
-  startIndex: number,
-): Map<string, Set<string>> {
-  const matches = new Map<string, Set<string>>();
-  for (let index = startIndex + 1; index < messages.length; index += 1) {
-    const candidate = messages[index];
-    if (!candidate || typeof candidate !== "object") {
-      continue;
-    }
-    if ((candidate as { role?: unknown }).role === "assistant") {
-      break;
-    }
-    for (const [id, toolNames] of collectTrustedToolResultMatches(candidate)) {
-      const bucket = matches.get(id) ?? new Set<string>();
-      for (const toolName of toolNames) {
-        bucket.add(toolName);
-      }
-      matches.set(id, bucket);
-    }
-  }
-  return matches;
-}
-
-function collectFutureToolResultIds(messages: AgentMessage[], startIndex: number): Set<string> {
-  const ids = new Set<string>();
-  for (let index = startIndex + 1; index < messages.length; index += 1) {
-    const candidate = messages[index];
-    if (!candidate || typeof candidate !== "object") {
-      continue;
-    }
-    if ((candidate as { role?: unknown }).role === "assistant") {
-      break;
-    }
-    for (const id of collectAnyToolResultIds(candidate)) {
-      ids.add(id);
-    }
-  }
-  return ids;
+  return { ids, matches };
 }
 
 /**
@@ -177,13 +145,7 @@ function stripDanglingAnthropicToolUses(messages: AgentMessage[]): AgentMessage[
     if (!msg) {
       continue;
     }
-    if (typeof msg !== "object") {
-      result.push(msg);
-      continue;
-    }
-
-    const msgRole = (msg as { role?: unknown }).role as string | undefined;
-    if (msgRole !== "assistant") {
+    if (typeof msg !== "object" || msg.role !== "assistant") {
       result.push(msg);
       continue;
     }
@@ -192,21 +154,22 @@ function stripDanglingAnthropicToolUses(messages: AgentMessage[]): AgentMessage[
       content?: AnthropicContentBlock[];
     };
     const originalContent = Array.isArray(assistantMsg.content) ? assistantMsg.content : [];
-    if (originalContent.length === 0) {
-      result.push(msg);
-      continue;
-    }
-    if (
-      extractToolCallsFromAssistant(msg as Extract<AgentMessage, { role: "assistant" }>).length ===
-      0
-    ) {
+    if (originalContent.length === 0 || extractToolCallsFromAssistant(msg).length === 0) {
       result.push(msg);
       continue;
     }
     const hasThinking = originalContent.some((block) => isThinkingLikeBlock(block));
-    const validToolResultMatches = collectFutureToolResultMatches(messages, i);
-    const validToolUseIds = collectFutureToolResultIds(messages, i);
+    const { matches: validToolResultMatches, ids: validToolUseIds } = collectFutureToolResults(
+      messages,
+      i,
+    );
+    const stopReason = msg.stopReason;
+    const omittedContent: AnthropicContentBlock[] =
+      stopReason === "aborted" || stopReason === "error"
+        ? []
+        : [{ type: "text", text: "[tool calls omitted]" }];
 
+    let nextContent = originalContent;
     if (hasThinking) {
       const allToolCallsResolvable = originalContent.every((block) => {
         if (!block || !isToolCallBlock(block)) {
@@ -223,48 +186,30 @@ function stripDanglingAnthropicToolUses(messages: AgentMessage[]): AgentMessage[
         }
         return matchingToolNames.size === 0 || matchingToolNames.has(blockName);
       });
-      if (allToolCallsResolvable) {
-        result.push(msg);
-      } else {
-        result.push({
-          ...assistantMsg,
-          content: isAbortedAssistantTurn(msg)
-            ? []
-            : ([{ type: "text", text: "[tool calls omitted]" }] as AnthropicContentBlock[]),
-        } as AgentMessage);
+      if (!allToolCallsResolvable) {
+        nextContent = omittedContent;
       }
-      continue;
-    }
-
-    const filteredContent = originalContent.filter((block) => {
-      if (!block) {
-        return false;
-      }
-      if (!isToolCallBlock(block)) {
-        return true;
-      }
-      const blockId = normalizeOptionalString(block.id);
-      return blockId ? validToolUseIds.has(blockId) : false;
-    });
-
-    if (filteredContent.length === originalContent.length) {
-      result.push(msg);
-      continue;
-    }
-
-    if (originalContent.length > 0 && filteredContent.length === 0) {
-      result.push({
-        ...assistantMsg,
-        content: isAbortedAssistantTurn(msg)
-          ? []
-          : ([{ type: "text", text: "[tool calls omitted]" }] as AnthropicContentBlock[]),
-      } as AgentMessage);
     } else {
-      result.push({
-        ...assistantMsg,
-        content: filteredContent,
-      } as AgentMessage);
+      const filteredContent = originalContent.filter((block) => {
+        if (!block) {
+          return false;
+        }
+        if (!isToolCallBlock(block)) {
+          return true;
+        }
+        const blockId = normalizeOptionalString(block.id);
+        return blockId ? validToolUseIds.has(blockId) : false;
+      });
+
+      if (filteredContent.length !== originalContent.length) {
+        nextContent = filteredContent.length === 0 ? omittedContent : filteredContent;
+      }
     }
+    result.push(
+      nextContent === originalContent
+        ? msg
+        : ({ ...assistantMsg, content: nextContent } as AgentMessage),
+    );
   }
 
   return result;
@@ -287,30 +232,20 @@ function validateTurnsWithConsecutiveMerge<TRole extends "assistant" | "user">(p
   let lastRole: string | undefined;
 
   for (const msg of messages) {
-    if (!msg || typeof msg !== "object") {
-      result.push(msg);
-      continue;
-    }
-
-    const msgRole = (msg as { role?: unknown }).role as string | undefined;
-    if (!msgRole) {
-      result.push(msg);
-      continue;
-    }
-
-    if (msgRole === lastRole && lastRole === role) {
-      const lastMsg = result[result.length - 1];
-      const currentMsg = msg as Extract<AgentMessage, { role: TRole }>;
-
-      if (lastMsg && typeof lastMsg === "object") {
-        const lastTyped = lastMsg as Extract<AgentMessage, { role: TRole }>;
-        result[result.length - 1] = merge(lastTyped, currentMsg);
-        continue;
+    const msgRole = msg && typeof msg === "object" ? msg.role : undefined;
+    if (msgRole) {
+      if (msgRole === lastRole && lastRole === role) {
+        const lastMsg = result[result.length - 1];
+        const currentMsg = msg as Extract<AgentMessage, { role: TRole }>;
+        if (lastMsg && typeof lastMsg === "object") {
+          const lastTyped = lastMsg as Extract<AgentMessage, { role: TRole }>;
+          result[result.length - 1] = merge(lastTyped, currentMsg);
+          continue;
+        }
       }
+      lastRole = msgRole;
     }
-
     result.push(msg);
-    lastRole = msgRole;
   }
 
   return result.length === messages.length ? messages : result;
@@ -335,11 +270,7 @@ function mergeConsecutiveAssistantTurns(
   };
 }
 
-/**
- * Validates and fixes conversation turn sequences for Gemini API.
- * Gemini requires strict alternating user→assistant→tool→user pattern.
- * Merges consecutive assistant messages together.
- */
+/** Merge consecutive assistant turns for Gemini's provider turn-order contract. */
 export function validateGeminiTurns(messages: AgentMessage[]): AgentMessage[] {
   return validateTurnsWithConsecutiveMerge({
     messages,
@@ -348,7 +279,6 @@ export function validateGeminiTurns(messages: AgentMessage[]): AgentMessage[] {
   });
 }
 
-/** Merge adjacent user turns into a single provider-compatible user message. */
 function mergeConsecutiveUserTurns(
   previous: Extract<AgentMessage, { role: "user" }>,
   current: Extract<AgentMessage, { role: "user" }>,
@@ -379,10 +309,8 @@ export const mergeConsecutiveUserMessages = (messages: AgentMessage[]): AgentMes
   validateTurnsWithConsecutiveMerge({ messages, role: "user", merge: mergeConsecutiveUserTurns });
 
 /**
- * Validates and fixes conversation turn sequences for Anthropic API.
- * Anthropic requires strict alternating user→assistant pattern.
- * Merges consecutive user messages together.
- * Also strips dangling tool_use blocks that lack corresponding tool_result blocks.
+ * Repair Anthropic tool-use/result pairing; user-turn merging stays optional
+ * because prefix-bound signed replay must preserve the original turn bytes.
  */
 export function validateAnthropicTurns(
   messages: AgentMessage[],

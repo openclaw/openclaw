@@ -10,8 +10,7 @@ import {
   setPwToolsCoreCurrentRefLocator,
   setPwToolsCoreDownloadCapture,
 } from "../pw-tools-core.test-harness.js";
-import type { BrowserRouteContext, ProfileContext } from "../server-context.js";
-import { makeBrowserProfile, makeBrowserServerState } from "../server-context.test-harness.js";
+import { createDashboardRouteContext } from "./dashboard-ownership.test-support.js";
 import { createBrowserRouteApp, createBrowserRouteResponse } from "./test-helpers.js";
 
 const browser = vi.hoisted(() => ({
@@ -42,8 +41,10 @@ vi.mock("../paths.js", async (importOriginal) => ({
     paths: requestedPaths,
   }),
 }));
+vi.mock("../output-directories.js", () => ({
+  ensureOutputDirectory: async () => await preparation.output(),
+}));
 vi.mock("./output-paths.js", () => ({
-  ensureOutputRootDir: async () => await preparation.output(),
   resolveWritableOutputPathOrRespond: async ({ requestedPath }: { requestedPath: string }) =>
     requestedPath,
 }));
@@ -59,7 +60,6 @@ vi.mock("../pw-ai-module.js", () => ({
 
 import {
   assertBrowserDashboardTargetCurrent,
-  reconcileBrowserDashboards,
   requestBrowserDashboard,
   stopBrowserDashboard,
 } from "../../browser-dashboard.js";
@@ -71,33 +71,7 @@ const sessionKey = "agent:main:dashboard-transfer-proof";
 const request = { sessionKey, agentId: "main", name: "service" };
 
 function transferRoutes(tab: BrowserTab) {
-  const profile = makeBrowserProfile();
-  const unused = async (): Promise<never> => {
-    throw new Error("Unexpected profile operation");
-  };
-  const profileCtx: ProfileContext = {
-    profile,
-    ensureBrowserAvailable: async () => {},
-    ensureTabAvailable: async () => tab,
-    isHttpReachable: async () => true,
-    isTransportAvailable: async () => true,
-    isReachable: async () => true,
-    listTabs: async () => [tab],
-    openTab: unused,
-    labelTab: unused,
-    focusTab: unused,
-    closeTab: unused,
-    stopRunningBrowser: unused,
-    resetProfile: unused,
-  };
-  const state = makeBrowserServerState({ profile, resolvedOverrides: { ssrfPolicy: undefined } });
-  const context: BrowserRouteContext = {
-    ...profileCtx,
-    state: () => state,
-    forProfile: () => profileCtx,
-    listProfiles: unused,
-    mapTabError: () => null,
-  };
+  const context = createDashboardRouteContext(tab);
   const { app, postHandlers } = createBrowserRouteApp();
   registerBrowserAgentActHookRoutes(app, context);
   registerBrowserAgentActDownloadRoutes(app, context);
@@ -142,7 +116,7 @@ describe("dashboard transfer authority", () => {
   const fixture = useBrowserDashboardTestHarness(browser, sessionKey);
   it.each(
     cases.flatMap((entry) =>
-      ["Stop", "replacement", "current", "absent"].map((authority) =>
+      (entry.kind === "upload" ? ["Stop", "absent"] : ["Stop", "current"]).map((authority) =>
         Object.assign({}, entry, { authority }),
       ),
     ),
@@ -215,13 +189,8 @@ describe("dashboard transfer authority", () => {
             );
           }),
         ]);
-        if (authority === "Stop" || authority === "replacement") {
-          if (authority === "replacement") {
-            fixture.widgets[0]!.instanceId = "instance-two";
-            retirement = reconcileBrowserDashboards();
-          } else {
-            retirement = stopBrowserDashboard(request);
-          }
+        if (authority === "Stop") {
+          retirement = stopBrowserDashboard(request);
           await Promise.race([
             closeEntered.promise,
             retirement.then(() => {
@@ -232,7 +201,7 @@ describe("dashboard transfer authority", () => {
         expect(fixture.tabs.map((entry) => entry.targetId)).toContain(targetId);
         release.resolve();
         await operation;
-        if (authority === "Stop" || authority === "replacement") {
+        if (authority === "Stop") {
           expect(nativeEffect).not.toHaveBeenCalled();
           expect(waitForEvent).not.toHaveBeenCalled();
           expect(response.statusCode).toBeGreaterThanOrEqual(400);

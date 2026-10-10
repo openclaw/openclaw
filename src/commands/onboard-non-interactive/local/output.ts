@@ -1,16 +1,9 @@
-/**
- * Output helpers for non-interactive onboarding.
- *
- * JSON success/failure payloads and human-readable gateway health diagnostics
- * are kept here so local and remote setup report failures consistently.
- */
 import { formatCliCommand } from "../../../cli/command-format.js";
 import type { GatewayServiceLoadState } from "../../../daemon/service-types.js";
 import { redactSecrets } from "../../../logging/redact.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../../../runtime.js";
 import type { OnboardOptions } from "../../onboard-types.js";
 
-/** Structured daemon/service details attached to gateway health failures. */
 export type GatewayHealthFailureDiagnostics = {
   service?: {
     label: string;
@@ -27,7 +20,6 @@ export type GatewayHealthFailureDiagnostics = {
   inspectError?: string;
 };
 
-/** Coarse recovery category for gateway health failures. */
 type GatewayHealthFailureClassification =
   | "not-listening"
   | "auth-mismatch"
@@ -36,7 +28,6 @@ type GatewayHealthFailureClassification =
   | "startup-blocked"
   | "module-missing";
 
-/** Emits the JSON success payload for non-interactive onboarding when requested. */
 export function logNonInteractiveOnboardingJson(params: {
   opts: OnboardOptions;
   runtime: RuntimeEnv;
@@ -100,15 +91,12 @@ function formatGatewayRuntimeSummary(
   return parts.join(", ");
 }
 
-function hasConnectionRefusedDetail(detail: string): boolean {
-  return /\b(?:econnrefused|connection refused|connect refused)\b/i.test(detail);
-}
-
 export function classifyGatewayHealthFailure(params: {
   detail?: string;
   diagnostics?: GatewayHealthFailureDiagnostics;
 }): GatewayHealthFailureClassification | undefined {
   const detail = params.detail ?? "";
+  const connectionRefused = /\b(?:econnrefused|connection refused|connect refused)\b/i.test(detail);
   const lastGatewayError = params.diagnostics?.lastGatewayError ?? "";
   const combined = `${detail}\n${lastGatewayError}`;
   // Classify from both the active probe and the daemon's last error so a fast
@@ -125,10 +113,7 @@ export function classifyGatewayHealthFailure(params: {
   ) {
     return "module-missing";
   }
-  if (
-    params.diagnostics?.service?.loadState.status === "not-loaded" &&
-    hasConnectionRefusedDetail(detail)
-  ) {
+  if (params.diagnostics?.service?.loadState.status === "not-loaded" && connectionRefused) {
     return "service-missing";
   }
   const runtimeStatus = params.diagnostics?.service?.runtimeStatus;
@@ -136,14 +121,14 @@ export function classifyGatewayHealthFailure(params: {
     runtimeStatus &&
     runtimeStatus !== "running" &&
     runtimeStatus !== "active" &&
-    hasConnectionRefusedDetail(detail)
+    connectionRefused
   ) {
     return "service-stopped";
   }
   if (lastGatewayError.trim()) {
     return "startup-blocked";
   }
-  if (hasConnectionRefusedDetail(detail)) {
+  if (connectionRefused) {
     return "not-listening";
   }
   return undefined;
@@ -169,7 +154,6 @@ function recoveryHintForGatewayHealthFailure(
   }
 }
 
-/** Emits JSON or human-readable failure output for non-interactive onboarding. */
 export function logNonInteractiveOnboardingFailure(params: {
   opts: OnboardOptions;
   runtime: RuntimeEnv;
@@ -240,11 +224,11 @@ export function logNonInteractiveOnboardingFailure(params: {
   const lines = [
     output.message,
     classification ? `Classification: ${classification}` : undefined,
-    output.detail ? `Last probe: ${output.detail}` : undefined,
+    output.detail ? `Last check: ${output.detail}` : undefined,
     service ? `Service: ${service.label} (${serviceLoadText})` : undefined,
     gatewayRuntime ? `Runtime: ${gatewayRuntime}` : undefined,
     output.diagnostics?.lastGatewayError
-      ? `Last gateway error: ${output.diagnostics.lastGatewayError}`
+      ? `Recent Gateway log error (may be from an earlier run): ${output.diagnostics.lastGatewayError}`
       : undefined,
     output.diagnostics?.inspectError
       ? `Diagnostics warning: ${output.diagnostics.inspectError}`

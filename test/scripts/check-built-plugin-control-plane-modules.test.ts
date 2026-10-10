@@ -10,7 +10,12 @@ import {
   probeBuiltPluginControlPlaneModules,
   verifyBuiltPluginControlPlaneModules,
 } from "../../scripts/check-built-plugin-control-plane-modules.mts";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../src/infra/runtime-worker-url.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
+import { toolingMtsEntrypoints } from "./tooling-mts-runtime.test-support.mts";
 
 const roots: string[] = [];
 const testNodeExecPath = resolveTestNodeExecPath();
@@ -51,30 +56,41 @@ afterEach(() => {
 });
 
 describe("built plugin control-plane module loads", () => {
-  it("keeps TypeScript unloaded for checker imports and runtime inventory checks", () => {
+  it("keeps the native compiler unstarted for checker imports and runtime inventory checks", () => {
     const rootDir = makeRoot();
+    const checkerUrl = resolveRuntimeWorkerUrl(toolingMtsEntrypoints.controlPlane);
     const result = spawnSync(
       testNodeExecPath,
       [
-        "--import",
-        "./scripts/tsx.mjs",
+        ...resolveRuntimeWorkerArgv(checkerUrl, testNodeExecPath).slice(0, -1),
         "--input-type=module",
         "--eval",
         `import assert from "node:assert/strict";
-import { createRequire } from "node:module";
-const require = createRequire(import.meta.url);
-const compilerPath = require.resolve("typescript");
-const compilerLoaded = () => Boolean(require.cache[compilerPath]);
-assert.equal(compilerLoaded(), false, "TypeScript loaded before the checker");
-await import("./scripts/check-built-plugin-control-plane-modules.mts");
-assert.equal(compilerLoaded(), false, "TypeScript loaded by the checker import");
-const { listCoreRuntimePostBuildOutputs } = await import("./scripts/runtime-postbuild.mts");
+import childProcess from "node:child_process";
+import { syncBuiltinESMExports } from "node:module";
+const spawn = childProcess.spawn;
+let compilerStarts = 0;
+childProcess.spawn = function(executable, args, ...rest) {
+  if (args?.includes("--api")) compilerStarts++;
+  return Reflect.apply(spawn, this, [executable, args, ...rest]);
+};
+syncBuiltinESMExports();
+assert.equal(compilerStarts, 0, "native compiler started before the checker");
+await import(${JSON.stringify(checkerUrl.href)});
+assert.equal(compilerStarts, 0, "native compiler started by the checker import");
+const { listCoreRuntimePostBuildOutputs } = await import(${JSON.stringify(resolveRuntimeWorkerUrl(toolingMtsEntrypoints.runtimePostbuild).href)});
 listCoreRuntimePostBuildOutputs({ rootDir: ${JSON.stringify(rootDir)} });
-assert.equal(compilerLoaded(), false, "TypeScript loaded by runtime postbuild inventory checks");
-await import("./scripts/run-node.mts");
-assert.equal(compilerLoaded(), false, "TypeScript loaded by the development runner import");
-require("typescript");
-assert.equal(compilerLoaded(), true, "the compiler cache observation must detect an actual load");
+assert.equal(compilerStarts, 0, "native compiler started by runtime postbuild inventory checks");
+await import(${JSON.stringify(resolveRuntimeWorkerUrl(toolingMtsEntrypoints.runNode).href)});
+assert.equal(compilerStarts, 0, "native compiler started by the development runner import");
+const { API } = await import("typescript/unstable/sync");
+const api = new API();
+try {
+  api.parseConfigFile("tsconfig.json");
+  assert.equal(compilerStarts, 1, "the compiler process observation must detect an actual start");
+} finally {
+  api.close();
+}
 `,
       ],
       {
@@ -183,7 +199,7 @@ assert.equal(compilerLoaded(), true, "the compiler cache observation must detect
 
 describe("built doctor contract closures", () => {
   it.each([".js", ".cjs"])(
-    "follows %s chunk edges to a forbidden runtime dependency",
+    "checks shared and cyclic %s chunks once while reporting each doctor contract",
     (extension) => {
       const rootDir = makeRoot(extension);
       write(
@@ -202,18 +218,26 @@ describe("built doctor contract closures", () => {
       );
       write(
         rootDir,
+        `dist/extensions/other/doctor-contract-api${extension}`,
+        extension === ".cjs"
+          ? 'module.exports = require("../../token-chunk.cjs");'
+          : 'export * from "../../token-chunk.js";',
+      );
+      write(
+        rootDir,
         `dist/exec-chunk${extension}`,
         extension === ".cjs"
-          ? 'const exec = require("execa"); exports.rule = exec;'
-          : 'import "execa"; export const rule = 1;',
+          ? 'require("./token-chunk.cjs"); const exec = require("execa"); exports.rule = exec;'
+          : 'import "./token-chunk.js"; import "execa"; export const rule = 1;',
       );
-
-      expect(
-        collectBuiltDoctorContractClosureViolations(
-          listBuiltPluginControlPlaneModules({ rootDir }),
-          { rootDir },
-        ),
-      ).toEqual([
+      // Both formats use the same closure check; select the synthetic second plugin explicitly.
+      const modules = ["demo", "other"].map((pluginId) => ({
+        pluginId,
+        kind: "doctor-contract",
+        relativePath: `dist/extensions/${pluginId}/doctor-contract-api${extension}`,
+      }));
+      const readFile = vi.spyOn(fs, "readFileSync");
+      expect(collectBuiltDoctorContractClosureViolations(modules, { rootDir })).toEqual([
         {
           pluginId: "demo",
           kind: "doctor-contract",
@@ -221,7 +245,23 @@ describe("built doctor contract closures", () => {
           dependency: "execa",
           importerPath: `dist/exec-chunk${extension}`,
         },
+        {
+          pluginId: "other",
+          kind: "doctor-contract",
+          relativePath: `dist/extensions/other/doctor-contract-api${extension}`,
+          dependency: "execa",
+          importerPath: `dist/exec-chunk${extension}`,
+        },
       ]);
+      for (const chunk of ["token-chunk", "exec-chunk"]) {
+        expect(
+          readFile.mock.calls.filter(
+            ([file]) => file === path.join(rootDir, `dist/${chunk}${extension}`),
+          ),
+        ).toHaveLength(1);
+      }
+      write(rootDir, `dist/exec-chunk${extension}`, "");
+      expect(collectBuiltDoctorContractClosureViolations(modules, { rootDir })).toEqual([]);
     },
   );
 

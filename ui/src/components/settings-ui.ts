@@ -7,6 +7,7 @@ import "@awesome.me/webawesome/dist/components/radio-group/radio-group.js";
 import "@awesome.me/webawesome/dist/components/switch/switch.js";
 import { html, nothing, type TemplateResult } from "lit";
 import { live } from "lit/directives/live.js";
+import { shellLayoutTraits } from "../app/shell-layout-traits.ts";
 import { t } from "../i18n/index.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link.ts";
 import { icons } from "./icons.ts";
@@ -43,9 +44,7 @@ export type SettingsSectionProps = {
   actions?: TemplateResult;
   /** Section notice above the group, keeping bordered callouts outside the card. */
   notice?: TemplateResult | typeof nothing;
-  /** Extra count shown next to the heading. */
   count?: number;
-  /** Marks the group surface as a danger zone. */
   danger?: boolean;
   /** Opts this section into the shared Carapace settings contract. */
   carapace?: boolean;
@@ -76,7 +75,12 @@ export function renderSettingsPage(
   ]
     .filter(Boolean)
     .join(" ");
-  return html`<div class=${className}>${children}</div>`;
+  return html`<div
+    class=${className}
+    ${shellLayoutTraits({ settingsPage: true, settingsWide: options.wide })}
+  >
+    ${children}
+  </div>`;
 }
 
 export function renderDocsLink(url: string, label: unknown): TemplateResult {
@@ -115,9 +119,12 @@ export function renderLearnMoreLink(url: string): TemplateResult {
 
 export function renderSettingsPageHeader(props: SettingsPageHeaderProps): TemplateResult {
   return html`
-    <section class="content-header content-header--settings">
+    <section
+      class="content-header content-header--settings"
+      ${shellLayoutTraits({ toolbarHeader: true })}
+    >
       <div>
-        <div class="page-title">${props.title}</div>
+        <h1 class="page-title">${props.title}</h1>
         ${props.subtitle ? html`<div class="page-subtitle">${props.subtitle}</div>` : nothing}
       </div>
       ${
@@ -129,7 +136,6 @@ export function renderSettingsPageHeader(props: SettingsPageHeaderProps): Templa
   `;
 }
 
-/** Section = plain text heading + one group surface containing rows. */
 export function renderSettingsSection(props: SettingsSectionProps, rows: unknown): TemplateResult {
   const description = props.description
     ? html`<p class="settings-section__desc">${props.description}</p>`
@@ -176,17 +182,9 @@ export function renderSettingsSection(props: SettingsSectionProps, rows: unknown
           </div>
         `
       : nothing;
-  const groupClass = [
-    "settings-group",
-    props.danger ? "settings-group--danger" : "",
-    props.carapace ? "oc-settings-group" : "",
-  ]
-    .filter(Boolean)
-    .join(" ");
   return html`
     <section class="settings-section ${props.carapace ? "oc-settings-section" : ""}">
-      ${header} ${props.notice ?? nothing}
-      <div class=${groupClass}>${rows}</div>
+      ${header} ${props.notice ?? nothing} ${renderSettingsGroup(rows, props)}
     </section>
   `;
 }
@@ -217,7 +215,24 @@ export function renderSettingsGroup(
   return html`<div class=${groupClass}>${rows}</div>`;
 }
 
-export function renderSettingsRow(props: SettingsRowProps): TemplateResult {
+function renderSettingsRowText(title: unknown, description: unknown, carapace = false) {
+  return html`
+    <div class="settings-row__text ${carapace ? "oc-settings-row-content" : ""}">
+      <span class="settings-row__title ${carapace ? "oc-settings-row-title" : ""}">${title}</span>
+      ${
+        description
+          ? html`<span class="settings-row__desc ${carapace ? "oc-settings-row-description" : ""}"
+              >${description}</span
+            >`
+          : nothing
+      }
+    </div>
+  `;
+}
+
+export function renderSettingsRow(
+  props: SettingsRowProps & { role?: "alert" | "status" },
+): TemplateResult {
   const className = [
     "settings-row",
     props.stacked ? "settings-row--stacked" : "",
@@ -227,20 +242,8 @@ export function renderSettingsRow(props: SettingsRowProps): TemplateResult {
     .filter(Boolean)
     .join(" ");
   return html`
-    <div class=${className}>
-      <div class="settings-row__text ${props.carapace ? "oc-settings-row-content" : ""}">
-        <span class="settings-row__title ${props.carapace ? "oc-settings-row-title" : ""}"
-          >${props.title}</span
-        >
-        ${
-          props.description
-            ? html`<span
-                class="settings-row__desc ${props.carapace ? "oc-settings-row-description" : ""}"
-                >${props.description}</span
-              >`
-            : nothing
-        }
-      </div>
+    <div class=${className} role=${props.role ?? nothing}>
+      ${renderSettingsRowText(props.title, props.description, props.carapace)}
       ${
         props.control !== undefined && props.control !== nothing
           ? html`<div
@@ -254,20 +257,12 @@ export function renderSettingsRow(props: SettingsRowProps): TemplateResult {
   `;
 }
 
-/** Clickable drill-in row with a trailing chevron. */
 export function renderSettingsNavRow(
   props: Omit<SettingsRowProps, "stacked" | "stackedOnNarrow"> & { onClick: () => void },
 ): TemplateResult {
   return html`
     <button type="button" class="settings-row settings-row--nav" @click=${props.onClick}>
-      <div class="settings-row__text">
-        <span class="settings-row__title">${props.title}</span>
-        ${
-          props.description
-            ? html`<span class="settings-row__desc">${props.description}</span>`
-            : nothing
-        }
-      </div>
+      ${renderSettingsRowText(props.title, props.description)}
       <div class="settings-row__control">
         ${props.control ?? nothing}
         <span class="settings-row__chevron">${icons.chevronRight}</span>
@@ -282,7 +277,6 @@ export function renderSettingsToggle(props: {
   checked: boolean;
   onChange: (checked: boolean) => boolean | void;
   disabled?: boolean;
-  ariaDisabled?: boolean;
   ariaLabel: string;
 }): TemplateResult {
   return html`
@@ -291,7 +285,7 @@ export function renderSettingsToggle(props: {
       size="s"
       .checked=${live(props.checked)}
       ?disabled=${props.disabled ?? false}
-      aria-disabled=${props.ariaDisabled ? "true" : "false"}
+      aria-disabled="false"
       @change=${(event: Event) => {
         const target = event.currentTarget as HTMLElement & { checked: boolean };
         if (props.onChange(target.checked) === false) {
@@ -304,8 +298,7 @@ export function renderSettingsToggle(props: {
   `;
 }
 
-/** Toggle row: one <label> wraps title, description, and switch, so the whole
- * row is clickable and the checkbox gets its accessible name from the title. */
+/** The whole row activates the switch, whose accessible name follows the title. */
 export function renderSettingsToggleRow(props: {
   icon?: unknown;
   title: unknown;
@@ -343,15 +336,7 @@ export function renderSettingsToggleRow(props: {
         props.onChange(checked);
       }}
     >
-      ${props.icon ?? nothing}
-      <div class="settings-row__text">
-        <span class="settings-row__title">${props.title}</span>
-        ${
-          props.description
-            ? html`<span class="settings-row__desc">${props.description}</span>`
-            : nothing
-        }
-      </div>
+      ${props.icon ?? nothing} ${renderSettingsRowText(props.title, props.description)}
       <div class="settings-row__control">
         <wa-switch
           class="settings-toggle"
@@ -374,8 +359,9 @@ export function renderSettingsToggleRow(props: {
   `;
 }
 
+// Controls already show inherited values; reserve default references for overrides.
 export function renderSettingsDefaultDescription(value: string, overridden: boolean) {
-  return html`${t(overridden ? "configForm.defaultValue" : "configForm.usingDefault", { value })}`;
+  return overridden ? html`${t("configForm.defaultValue", { value })}` : undefined;
 }
 
 export function renderSettingsSegmented<T extends string>(
@@ -392,8 +378,8 @@ export function renderSettingsSegmented<T extends string>(
     }>;
     disabled?: boolean;
     ariaLabel?: string;
+    descriptionId?: string;
     className?: string;
-    carapace?: boolean;
   } & (
     | {
         mode?: undefined;
@@ -446,8 +432,9 @@ export function renderSettingsSegmented<T extends string>(
   }
   return html`
     <wa-radio-group
-      class="settings-segmented ${props.carapace ? "oc-segmented" : ""} ${props.className ?? ""}"
+      class="settings-segmented  ${props.className ?? ""}"
       size="s"
+      aria-describedby=${props.descriptionId ?? nothing}
       orientation="horizontal"
       .value=${live(props.value)}
       ?disabled=${live(props.disabled ?? false)}
@@ -472,9 +459,7 @@ export function renderSettingsSegmented<T extends string>(
       ${props.options.map(
         (option) => html`
           <wa-radio
-            class="settings-segmented__btn ${
-              props.carapace ? "oc-segmented-item" : ""
-            } ${option.value === props.value ? "settings-segmented__btn--active" : ""}"
+            class="settings-segmented__btn  ${option.value === props.value ? "settings-segmented__btn--active" : ""}"
             appearance="button"
             value=${option.value}
             .checked=${live(option.value === props.value)}
@@ -495,7 +480,6 @@ export function renderSettingsSegmented<T extends string>(
   `;
 }
 
-/** Status = dot + plain text. Replaces status pills across settings. */
 export function renderSettingsStatus(props: {
   kind: SettingsStatusKind;
   label: unknown;
@@ -521,7 +505,6 @@ export function renderSettingsStatus(props: {
   `;
 }
 
-/** Right-aligned plain text value inside a row control. */
 export function renderSettingsValue(value: unknown, options: { mono?: boolean } = {}) {
   const className = options.mono
     ? "settings-row__value settings-row__value--mono"
@@ -540,7 +523,6 @@ export function renderSettingsEmpty(
     : html`<div class="settings-empty">${message}</div>`;
 }
 
-/** Shape-matched placeholder for settings rows whose content has not loaded yet. */
 export function renderSettingsLoadingSkeleton(
   options: { label?: unknown; rows?: number; carapace?: boolean } = {},
 ): TemplateResult {

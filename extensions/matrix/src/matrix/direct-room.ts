@@ -1,15 +1,8 @@
-// Matrix plugin module implements direct room behavior.
-import { normalizeNullableString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  normalizeNullableString,
+  normalizeTrimmedStringList,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { MatrixClient } from "./sdk.js";
-
-function normalizeJoinedMatrixMembers(joinedMembers: unknown): string[] {
-  if (!Array.isArray(joinedMembers)) {
-    return [];
-  }
-  return joinedMembers
-    .map((entry) => normalizeNullableString(entry))
-    .filter((entry): entry is string => Boolean(entry));
-}
 
 export function isStrictDirectMembership(params: {
   selfUserId?: string | null;
@@ -33,7 +26,7 @@ export async function readJoinedMatrixMembers(
   roomId: string,
 ): Promise<string[] | null> {
   try {
-    return normalizeJoinedMatrixMembers(await client.getJoinedRoomMembers(roomId));
+    return normalizeTrimmedStringList(await client.getJoinedRoomMembers(roomId));
   } catch {
     return null;
   }
@@ -50,15 +43,7 @@ export async function hasDirectMatrixMemberFlag(
   }
   try {
     const state = await client.getRoomStateEvent(roomId, "m.room.member", normalizedUserId);
-    // Return true if is_direct is explicitly true, false if explicitly false, null if absent
-    if (state?.is_direct === true) {
-      return true;
-    }
-    if (state?.is_direct === false) {
-      return false;
-    }
-    // is_direct field is absent from the membership event
-    return null;
+    return typeof state?.is_direct === "boolean" ? state.is_direct : null;
   } catch {
     // API/network error - treat as unavailable
     return null;
@@ -111,12 +96,5 @@ export async function isStrictDirectRoom(params: {
   remoteUserId: string;
   selfUserId?: string | null;
 }): Promise<boolean> {
-  return (
-    await inspectMatrixDirectRoomEvidence({
-      client: params.client,
-      roomId: params.roomId,
-      remoteUserId: params.remoteUserId,
-      selfUserId: params.selfUserId,
-    })
-  ).strict;
+  return (await inspectMatrixDirectRoomEvidence(params)).strict;
 }

@@ -5,6 +5,7 @@ import {
 } from "@openclaw/mermaid-renderer";
 import { css, html, nothing, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
+import { pruneMapToMaxSize } from "../../../src/infra/map-size.ts";
 import { t } from "../i18n/index.ts";
 import { copyToClipboard } from "../lib/clipboard.ts";
 import { resolveThemeColor } from "../lib/theme-color.ts";
@@ -44,9 +45,7 @@ function cachedDiagram(key: string, source: string, theme: MermaidTheme): Promis
     });
   }
   diagrams.set(key, result);
-  if (diagrams.size > CACHE_LIMIT) {
-    diagrams.delete(diagrams.keys().next().value!);
-  }
+  pruneMapToMaxSize(diagrams, CACHE_LIMIT);
   return result;
 }
 
@@ -364,7 +363,10 @@ if (!customElements.get("openclaw-mermaid")) {
 
 export function mountMermaidBlocks(root: Element): boolean {
   let mounted = false;
-  for (const block of root.querySelectorAll(".markdown-mermaid")) {
+  const blocks = root.matches(".markdown-mermaid")
+    ? [root]
+    : root.querySelectorAll(".markdown-mermaid");
+  for (const block of blocks) {
     const code = block.querySelector("pre code");
     if (!code) {
       continue;

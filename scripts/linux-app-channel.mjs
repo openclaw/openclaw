@@ -25,7 +25,6 @@ import {
   parseReleaseVersion,
 } from "./lib/release-version.mjs";
 import {
-  resolveReleaseToolingIdentity,
   verifyReleaseToolingIdentity,
   verifyReleaseWorkflowRun,
 } from "./release-tooling-identity.mjs";
@@ -37,6 +36,8 @@ const METADATA_LIMIT = 1024 * 1024;
 const BUNDLE_LIMIT = 2 * 1024 * 1024 * 1024;
 const SHA = /^[0-9a-f]{40}$/u;
 const DIGEST = /^[0-9a-f]{64}$/u;
+let commandOverride;
+let reportOverride;
 
 function digest(bytes) {
   return createHash("sha256").update(bytes).digest("hex");
@@ -57,6 +58,9 @@ function fileDigest(path) {
 }
 
 function command(binary, args, timeout = 60_000) {
+  if (commandOverride) {
+    return commandOverride(binary, args, timeout);
+  }
   return execFileSync(binary, args, {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
@@ -72,29 +76,21 @@ function command(binary, args, timeout = 60_000) {
   });
 }
 
+function report(message) {
+  (reportOverride ?? console.error)(message);
+}
+
 function authorizeWrite(mode, options) {
-  const alphaBranch =
-    mode === "finalize-core" && options["workflow-ref"].startsWith("tideclaw/alpha/");
-  if (alphaBranch) {
-    assert(
-      options.latest === "false" && parseReleaseVersion(options.tag.slice(1))?.channel === "alpha",
-      "Tideclaw branch finalization requires an alpha tag and explicit non-latest intent",
-    );
-    // Reuse the release owner's exact direct-branch grammar before allowing
-    // the validator's live branch/SHA and publisher-attempt checks.
-    resolveReleaseToolingIdentity({
-      workflowContract: "2",
-      workflowRef: options["workflow-ref"],
-      workflowFullRef: options["workflow-full-ref"],
-      workflowSha: options["tooling-sha"],
-    });
+  const runGh = commandOverride ? (args) => command("gh", args) : undefined;
+  if (options.tag.includes("-alpha.") || options["workflow-ref"].includes("tideclaw/alpha/")) {
+    throw new Error("Alpha releases are retired; use a beta prerelease instead.");
   }
   verifyReleaseToolingIdentity({
-    allowPrevalidatedRef: alphaBranch,
     repository: REPOSITORY,
     workflowRef: options["workflow-ref"],
     workflowFullRef: options["workflow-full-ref"],
     workflowSha: options["tooling-sha"],
+    ...(runGh ? { runGh } : {}),
     ...(mode === "publish"
       ? {}
       : {
@@ -153,6 +149,7 @@ function authorizeWrite(mode, options) {
         : ".github/workflows/linux-app-release.yml",
     workflowEvent: mode === "publish" ? "workflow_run" : "workflow_dispatch",
     runStatePolicy: "active",
+    ...(runGh ? { runGh } : {}),
   });
 }
 
@@ -301,6 +298,9 @@ class GitHub {
         "--disable",
         "--fail",
         "--location",
+        // Revalidate cached redirects and bytes after replacing mutable manifests.
+        "--header",
+        "Cache-Control: no-cache",
         "--silent",
         "--show-error",
         "--proto",
@@ -717,13 +717,19 @@ function mirror(github, publicKey, target) {
 function finalizeCore(github, options) {
   const version = options.tag.slice(1);
   const parsed = parseReleaseVersion(version);
+  if (parsed?.channel === "alpha") {
+    throw new Error("Alpha releases are retired; use a beta prerelease instead.");
+  }
+  const train = parsed && classifyReleaseTrain(parsed);
   assert(
-    parsed &&
-      parsed.version === version &&
-      ["stable", "alpha", "beta"].includes(classifyReleaseTrain(parsed)),
+    parsed && parsed.version === version && ["stable", "beta", "extended-stable"].includes(train),
     "Unsupported core GitHub release train",
   );
   assert(["true", "false"].includes(options.latest), "Expected explicit core latest intent");
+  assert(
+    train !== "extended-stable" || options.latest === "false",
+    "Extended-stable releases cannot become core latest",
+  );
   const prerelease = parsed.channel !== "stable";
   assert(!prerelease || options.latest === "false", "Prereleases cannot become core latest");
   github.authorize();
@@ -979,14 +985,9 @@ function publish(github, options, publicKey) {
   const publicKeyPath = github.temp("updater.pub");
   writeFileSync(signaturePath, Buffer.from(signature, "base64"), { flag: "wx" });
   writeFileSync(publicKeyPath, Buffer.from(publicKey, "base64"), { flag: "wx" });
-  command("minisign", [
-    "-Vm",
-    join(directory, names.appimage),
-    "-x",
-    signaturePath,
-    "-p",
-    publicKeyPath,
-  ]);
+  const verifySignature = (name) =>
+    command("minisign", ["-Vm", join(directory, name), "-x", signaturePath, "-p", publicKeyPath]);
+  verifySignature(names.appimage);
 
   // Detect every immutable conflict before uploading any missing file.
   for (const entry of inputs) {
@@ -1074,14 +1075,7 @@ function publish(github, options, publicKey) {
       signaturePath,
       Buffer.from(retained.platforms["linux-x86_64"].signature, "base64"),
     );
-    command("minisign", [
-      "-Vm",
-      join(directory, names.appimage),
-      "-x",
-      signaturePath,
-      "-p",
-      publicKeyPath,
-    ]);
+    verifySignature(names.appimage);
   } else {
     assert(
       typeof published.published_at === "string" &&
@@ -1101,14 +1095,7 @@ function publish(github, options, publicKey) {
             signaturePath,
             Buffer.from(legacy.platforms["linux-x86_64"].signature, "base64"),
           );
-          command("minisign", [
-            "-Vm",
-            join(directory, names.appimage),
-            "-x",
-            signaturePath,
-            "-p",
-            publicKeyPath,
-          ]);
+          verifySignature(names.appimage);
         }
       }
     }
@@ -1153,7 +1140,7 @@ function publish(github, options, publicKey) {
   if (comparison >= 0) {
     const path = github.temp("canonical-linux.json");
     writeFileSync(path, bytes, { flag: "wx" });
-    console.error(
+    report(
       JSON.stringify({
         state: "canonical-publication-intent",
         version,
@@ -1202,14 +1189,7 @@ function publish(github, options, publicKey) {
           "Invalid retained desktop signature",
         );
         writeFileSync(signaturePath, Buffer.from(previousSignature, "base64"));
-        command("minisign", [
-          "-Vm",
-          join(directory, name),
-          "-x",
-          signaturePath,
-          "-p",
-          publicKeyPath,
-        ]);
+        verifySignature(name);
       }
       // Keep the previously published date/notes on an identical bundle replay.
       writeFileSync(desktopPath, previous);
@@ -1232,8 +1212,9 @@ function publish(github, options, publicKey) {
   };
 }
 
-function main() {
+function main(args = process.argv.slice(2)) {
   const { values, positionals } = parseArgs({
+    args,
     allowPositionals: true,
     options: Object.fromEntries(
       [
@@ -1323,15 +1304,31 @@ function main() {
         : mode === "publish"
           ? publish(github, values, publicKey)
           : mirror(github, publicKey, { tag: values.tag, source: values["source-sha"] });
-    process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+    return result;
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
 }
 
+export function runLinuxAppChannel(args, options = {}) {
+  // The workflow uses the default process boundaries. Tests inject synchronous
+  // command/report adapters so fault-heavy cases do not launch hundreds of
+  // short-lived Node processes.
+  const previousCommandOverride = commandOverride;
+  const previousReportOverride = reportOverride;
+  commandOverride = options.runCommand;
+  reportOverride = options.report;
+  try {
+    return main(args);
+  } finally {
+    commandOverride = previousCommandOverride;
+    reportOverride = previousReportOverride;
+  }
+}
+
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   try {
-    main();
+    process.stdout.write(`${JSON.stringify(runLinuxAppChannel(process.argv.slice(2)), null, 2)}\n`);
   } catch (error) {
     console.error(`Release publication incomplete; reconcile before retry: ${error.message}`);
     process.exitCode = 1;

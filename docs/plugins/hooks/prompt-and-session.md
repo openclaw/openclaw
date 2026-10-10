@@ -33,7 +33,19 @@ Use the phase-specific hooks for new plugins:
 - `agent_turn_prepare`: receives the current prompt, prepared session
   messages, and queued injections consumed for this session.
   Return `prependContext` or `appendContext`.
-- `before_prompt_build`: receives the current prompt and session messages.
+- `before_prompt_build`: receives the prepared prompt and session messages.
+  Harnesses may also supply `currentUserMessage`, the current request before
+  history/context projection, and `currentUserMessageId`, its native admission
+  identity. The ID stays stable across rebuilds and retries of one admitted
+  request and differs between admissions. Use the explicit request for intent
+  detection when available; `prompt` may contain reconstructed history. Do not
+  parse envelope markers to recover request boundaries. An explicit empty string
+  means no textual request, including image-only input or a continuation without
+  a retained request. It must not fall back to history. Codex runtime refresh
+  retains the original recorder's text and identity. Without a recorder, Codex
+  supplies current text but no admission ID; equal text and a correlation run ID
+  alone do not identify an admission. Omitted fields preserve existing harness
+  behavior.
   Return `prependContext`, `appendContext`, `systemPrompt`,
   `prependSystemContext`, `appendSystemContext`, or `toolsAllow`. `toolsAllow`
   can only narrow the host-resolved tool surface for the current turn; `[]`
@@ -318,6 +330,11 @@ next turn but should not become permanent system prompt text.
 Pass `agentId` with an unscoped `sessionKey`, such as `global`, when multiple
 agents are configured. Enqueueing, consumption, and plugin session state stay in
 that agent's store; the owner selector is not part of the persisted injection.
+
+Consumption stays bound to the selected stored session. A reset or a conflicting
+legacy and qualified identity prevents the drain from consuming another
+conversation's queue. Reading or consuming a legacy alias does not rename its
+stored session key.
 
 Cleanup semantics are part of the contract. Session extension cleanup and
 runtime lifecycle cleanup callbacks receive `reset`, `delete`, `disable`, or

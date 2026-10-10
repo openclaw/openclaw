@@ -6,18 +6,27 @@ import {
   loadTranscriptEventsSync,
   replaceSessionEntrySync,
 } from "../../../config/sessions/session-accessor.js";
+import { projectionLane } from "../../../config/sessions/session-transcript-worker-resources.js";
+import { captureSessionTranscriptTargetBinding } from "../../../config/sessions/transcript-target-binding.js";
 import {
   SessionTranscriptWriterClaimReboundError,
   runWithoutOwnedSessionTranscriptWrites,
 } from "../../../config/sessions/transcript-write-context.js";
 import type { InternalSessionEntry } from "../../../config/sessions/types.js";
 import { getAgentRunLifecycleGeneration } from "../../../infra/agent-run-registry.js";
+import { requireNodeSqlite } from "../../../infra/node-sqlite.js";
+import {
+  isSessionWorkAdmissionActive,
+  runExclusiveSessionLifecycleMutation,
+} from "../../../sessions/session-lifecycle-admission.js";
 import { onSessionIdentityMutation } from "../../../sessions/session-lifecycle-events.js";
 import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
+import { createDeferredCore } from "../../../shared/deferred.js";
 import { runOpenClawAgentWriteTransaction } from "../../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import {
   prepareSystemAgentRunAdmission,
+  resolveAdmittedRunActiveAssertion,
   type PreparedAgentRunAdmission,
 } from "../../admitted-run-context.js";
 import { createAssistantErrorTranscript } from "../../assistant-error-transcript.js";
@@ -27,26 +36,40 @@ import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixt
 import { rewriteTranscriptEntriesInSessionManager } from "../transcript-rewrite.js";
 import { prepareEmbeddedAttemptTranscriptLifecycle } from "./attempt-transcript-lifecycle-prepare.js";
 import type { PreparedEmbeddedRunInput } from "./execution-context.js";
+import type { EmbeddedRunAttemptInternalParams } from "./internal-params.js";
 import { preparePersistedCurrentUserTurn } from "./pre-persisted-user-turn.js";
-import { claimAgentSessionWriter } from "./session-bootstrap.js";
+import { claimAgentSessionWriter, prepareInitialSessionWriter } from "./session-bootstrap.js";
 import { createEmbeddedRunSessionPromptState } from "./session-prompt-state.js";
 
 const userMessage = { role: "user" as const, content: "First user turn", timestamp: 1 };
+const initialWriteKinds = ["message", "model", "thinking"] as const;
+async function appendInitial(
+  kind: (typeof initialWriteKinds)[number],
+  manager: SessionManager,
+): Promise<string> {
+  return kind === "model"
+    ? manager.appendModelChange("test-provider", "test-model")
+    : kind === "thinking"
+      ? manager.appendThinkingLevelChange("high")
+      : manager.appendMessage(userMessage);
+}
 
 type InitialWriterFixture = {
   admission: PreparedAgentRunAdmission;
   controller: AbortController;
   manager: SessionManager;
   openManager: () => SessionManager;
-  promptState: ReturnType<typeof createEmbeddedRunSessionPromptState>;
+  promptState: Awaited<ReturnType<typeof createEmbeddedRunSessionPromptState>>;
+  preparedSessionTarget: NonNullable<EmbeddedRunAttemptInternalParams["preparedSessionTarget"]>;
   replaceAdmission: () => Promise<void>;
   runParams: PreparedEmbeddedRunInput["runParams"];
   target: { agentId: string; sessionId: string; sessionKey: string; storePath: string };
+  transcript: Awaited<ReturnType<typeof prepareEmbeddedAttemptTranscriptLifecycle>>;
 };
 
 async function withInitialWriter(
   run: (fixture: InitialWriterFixture) => Promise<void | (() => Promise<void>)>,
-  options: { existing?: boolean } = {},
+  options: { existing?: boolean; outsideTranscriptWrite?: boolean } = {},
 ) {
   await withOpenClawTestState({ label: "initial-session-writer" }, async (state) => {
     const sessionId = randomUUID();
@@ -62,8 +85,9 @@ async function withInitialWriter(
     const admissions = [admission];
     let prepared: Awaited<ReturnType<typeof prepareEmbeddedAttemptTranscriptLifecycle>> | undefined;
     try {
+      const admittedRunContext = await admission.admit("embedded");
       const runParams: PreparedEmbeddedRunInput["runParams"] = {
-        admittedRunContext: await admission.admit("embedded"),
+        admittedRunContext,
         abortSignal: controller.signal,
         agentId: target.agentId,
         sessionId,
@@ -85,30 +109,47 @@ async function withInitialWriter(
         expect(claim?.expectedWriterRunId).toBe(runId);
         runParams.sessionTarget = { ...target, ...claim };
       }
-      const promptState = createEmbeddedRunSessionPromptState({
+      await using promptState = await createEmbeddedRunSessionPromptState({
         runParams,
         sessionAgentId: target.agentId,
         resolvedSessionKey: target.sessionKey,
         lifecycleGeneration: getAgentRunLifecycleGeneration(),
+        onInterrupt: (reason) => controller.abort(reason),
       });
       const externalAbortController = {
         arm: vi.fn(),
         throwIfFiredAfterPrepCleanup: async () => controller.signal.throwIfAborted(),
       };
+      const assertCurrent = resolveAdmittedRunActiveAssertion(
+        admittedRunContext,
+        controller.signal,
+      );
+      if (!assertCurrent) {
+        throw new Error("Expected active fixture admission");
+      }
+      const preparedSessionTarget = {
+        target: captureSessionTranscriptTargetBinding({
+          ...target,
+          ...promptState.sessionWriterFence,
+        }),
+        assertCurrent,
+      };
       const afterAttempt = await promptState.withSessionWriterContext(async () => {
-        prepared = await prepareEmbeddedAttemptTranscriptLifecycle({
-          attempt: runParams,
+        const transcript = await prepareEmbeddedAttemptTranscriptLifecycle({
+          attempt: { ...runParams, preparedSessionTarget },
           externalAbortController,
         });
+        prepared = transcript;
         const openManager = () =>
           SessionManager.open({ ...target, ...promptState.sessionWriterFence }, state.workspaceDir);
-        return prepared.withOwnedTranscriptWrite(() =>
+        const runFixture = () =>
           run({
             admission,
             controller,
             manager: openManager(),
             openManager,
             promptState,
+            preparedSessionTarget,
             replaceAdmission: async () => {
               const replacement = prepareSystemAgentRunAdmission(
                 {},
@@ -121,8 +162,11 @@ async function withInitialWriter(
             },
             runParams,
             target,
-          }),
-        );
+            transcript,
+          });
+        return options.outsideTranscriptWrite
+          ? runFixture()
+          : transcript.withOwnedTranscriptWrite(runFixture);
       });
       await prepared?.transcriptLifecycle.dispose();
       await afterAttempt?.();
@@ -130,6 +174,7 @@ async function withInitialWriter(
     } finally {
       try {
         await prepared?.transcriptLifecycle.dispose();
+        expect(isSessionWorkAdmissionActive(target.storePath, [target.sessionKey])).toBe(false);
       } finally {
         for (const owner of admissions) {
           owner.close();
@@ -140,11 +185,169 @@ async function withInitialWriter(
 }
 
 describe("admitted lazy session writer", () => {
+  it("refuses a prepared target whose owner closes during lifecycle preparation", async () => {
+    await withInitialWriter(
+      async ({ admission, preparedSessionTarget, runParams }) => {
+        const arm = vi.fn();
+        await expect(
+          prepareEmbeddedAttemptTranscriptLifecycle({
+            attempt: { ...runParams, preparedSessionTarget },
+            externalAbortController: {
+              arm,
+              throwIfFiredAfterPrepCleanup: async () => admission.close(),
+            },
+          }),
+        ).rejects.toThrow("admitted run authority is no longer active");
+        expect(arm).not.toHaveBeenCalled();
+      },
+      { existing: true },
+    );
+  });
+
+  it("retains its prepared target after a foreign window rebind and refuses redirected writes", async () => {
+    await withInitialWriter(
+      async ({ manager, preparedSessionTarget, runParams, target }) => {
+        await manager.appendMessageAsync(userMessage);
+        const redirect = {
+          ...target,
+          sessionKey: "agent:main:foreign-target",
+          sessionId: "foreign",
+        };
+        runWithoutOwnedSessionTranscriptWrites(() =>
+          replaceSessionEntrySync(redirect, { sessionId: redirect.sessionId, updatedAt: 2 }),
+        );
+        const { DatabaseSync } = requireNodeSqlite();
+        const foreign = new DatabaseSync(target.storePath);
+        const runRequest = projectionLane.pool.run.bind(projectionLane.pool);
+        let runtimeTargets = 0;
+        const requests = vi
+          .spyOn(projectionLane.pool, "run")
+          .mockImplementation(async (...args) => {
+            const reply = await runRequest(...args);
+            if (
+              reply.ok &&
+              typeof reply.value === "object" &&
+              reply.value !== null &&
+              "kind" in reply.value &&
+              reply.value.kind === "session-runtime-target"
+            ) {
+              runtimeTargets++;
+            }
+            return reply;
+          });
+        let rebound:
+          | Awaited<ReturnType<typeof prepareEmbeddedAttemptTranscriptLifecycle>>
+          | undefined;
+        try {
+          // A foreign connection emits no owner publication; the selected target must stay fixed.
+          foreign
+            .prepare("UPDATE session_windows SET session_key = ? WHERE session_id = ?")
+            .run(redirect.sessionKey, target.sessionId);
+          const before = foreign
+            .prepare("SELECT COUNT(*) AS count FROM transcript_events WHERE session_id = ?")
+            .get(target.sessionId);
+          rebound = await prepareEmbeddedAttemptTranscriptLifecycle({
+            attempt: { ...runParams, preparedSessionTarget },
+            externalAbortController: {
+              arm: () => {},
+              throwIfFiredAfterPrepCleanup: async () => {},
+            },
+          });
+          expect(rebound.ownedTranscriptWriteContext.sessionTarget).toMatchObject(target);
+          expect(runtimeTargets).toBe(0);
+          await expect(
+            rebound.withOwnedTranscriptWrite(() => manager.appendMessageAsync(userMessage)),
+          ).rejects.toThrow();
+          expect(
+            foreign
+              .prepare("SELECT COUNT(*) AS count FROM transcript_events WHERE session_id = ?")
+              .get(target.sessionId),
+          ).toEqual(before);
+        } finally {
+          await rebound?.transcriptLifecycle.dispose();
+          requests.mockRestore();
+          foreign.close();
+        }
+      },
+      { existing: true },
+    );
+  });
+
+  it("retains uncommitted custody beyond bounded teardown without aborting accepted writes", async () => {
+    await withInitialWriter(
+      async ({ promptState, transcript, manager, target }) => {
+        const entered = createDeferredCore();
+        const gate = createDeferredCore();
+        const write = transcript.withOwnedTranscriptWrite(async () => {
+          entered.resolve();
+          await gate.promise;
+          manager.appendMessage(userMessage);
+        });
+        await entered.promise;
+        vi.useFakeTimers();
+        let closing: Promise<void | undefined> | undefined;
+        try {
+          const dispose = transcript.transcriptLifecycle.dispose();
+          await vi.advanceTimersByTimeAsync(30_000);
+          await dispose;
+          let closed = false;
+          closing = promptState[Symbol.asyncDispose]().then(() => {
+            closed = true;
+          });
+          await Promise.resolve();
+          expect(closed).toBe(false);
+          expect(isSessionWorkAdmissionActive(target.storePath, [target.sessionKey])).toBe(true);
+          expect(loadSessionEntry(target)).toBeUndefined();
+          gate.resolve();
+          await write;
+          await closing;
+          expect(isSessionWorkAdmissionActive(target.storePath, [target.sessionKey])).toBe(false);
+          expect(loadSessionEntry(target)?.sessionId).toBe(target.sessionId);
+        } finally {
+          gate.resolve();
+          await Promise.allSettled([write, closing]);
+          vi.useRealTimers();
+        }
+      },
+      { outsideTranscriptWrite: true },
+    );
+  });
+
+  it("keeps its uncommitted creator visible inside a same-key lifecycle mutation", async () => {
+    await withInitialWriter(async ({ target }) => {
+      await runExclusiveSessionLifecycleMutation("create", {
+        scope: target.storePath,
+        identities: [target.sessionKey],
+        prepare: async () => {
+          expect(isSessionWorkAdmissionActive(target.storePath, [target.sessionKey])).toBe(true);
+        },
+        run: async () => {
+          expect(loadSessionEntry(target)).toBeUndefined();
+        },
+      });
+    });
+  });
+
+  it("rejects an existing row before reacquiring its enclosing lifecycle mutation", async () => {
+    await withInitialWriter(async ({ manager, runParams, target }) => {
+      manager.appendMessage(userMessage);
+      await runExclusiveSessionLifecycleMutation("create", {
+        scope: target.storePath,
+        identities: [target.sessionKey],
+        run: async () => {
+          await expect(
+            prepareInitialSessionWriter({ runParams, target, onInterrupt: () => {} }),
+          ).rejects.toThrow(SessionTranscriptWriterClaimReboundError);
+        },
+      });
+    });
+  });
+
   it.each([false, true])(
     "settles one terminal error after attempt teardown (existing=%s)",
     async (existing) => {
       await withInitialWriter(
-        async ({ manager, runParams, target }) => {
+        async ({ manager, promptState, runParams, target }) => {
           manager.appendMessage(userMessage);
           const owner = createAssistantErrorTranscript({ runId: runParams.runId });
           installSessionToolResultGuard(manager, { assistantErrorTranscript: owner });
@@ -155,6 +358,7 @@ describe("admitted lazy session writer", () => {
               .filter((entry) => entry.type === "message"),
           ).toHaveLength(1);
           return async () => {
+            await promptState[Symbol.asyncDispose]();
             await owner.settle(true);
             expect(
               SessionManager.open(target)
@@ -180,7 +384,7 @@ describe("admitted lazy session writer", () => {
           });
           expect(Boolean(loadSessionEntry(target))).toBe(existing);
           expect(
-            preparePersistedCurrentUserTurn({
+            await preparePersistedCurrentUserTurn({
               sessionManager: manager,
               message,
               recorder,
@@ -203,13 +407,18 @@ describe("admitted lazy session writer", () => {
     },
   );
 
-  it.each([false, true])(
-    "retains the exact committed writer for later mutations (existing=%s)",
-    async (existing) => {
+  it.each(
+    [false, true].flatMap((existing) => initialWriteKinds.map((kind) => ({ existing, kind }))),
+  )(
+    "retains the exact committed writer for later mutations (existing=$existing initial=$kind)",
+    async ({ existing, kind }) => {
       await withInitialWriter(
         async ({ manager, promptState, runParams, target }) => {
           expect(Boolean(promptState.sessionWriterFence)).toBe(existing);
-          manager.appendMessage(userMessage);
+          expect(isSessionWorkAdmissionActive(target.storePath, [target.sessionKey])).toBe(
+            !existing,
+          );
+          await appendInitial(kind, manager);
           const entry = loadSessionEntry({ ...target, readConsistency: "latest" });
           expect(entry).toMatchObject({
             sessionId: target.sessionId,
@@ -220,14 +429,15 @@ describe("admitted lazy session writer", () => {
             expectedWriterRunId: runParams.runId,
           };
           expect(promptState.sessionWriterFence).toEqual(expectedFence);
+          expect(isSessionWorkAdmissionActive(target.storePath, [target.sessionKey])).toBe(false);
           expect(manager.getSessionTarget()).toMatchObject(expectedFence);
           manager.appendMessage(userMessage);
           expect(loadTranscriptEventsSync(target)).toHaveLength(3);
           await claimAgentSessionWriter({ ...runParams, runId: "new-writer" });
           const before = loadTranscriptEventsSync(target);
-          expect(() =>
-            runWithoutOwnedSessionTranscriptWrites(() => manager.appendMessage(userMessage)),
-          ).toThrow(SessionTranscriptWriterClaimReboundError);
+          await expect(
+            runWithoutOwnedSessionTranscriptWrites(() => appendInitial(kind, manager)),
+          ).rejects.toThrow(SessionTranscriptWriterClaimReboundError);
           expect(loadTranscriptEventsSync(target)).toEqual(before);
           expect(loadSessionEntry(target)).toMatchObject({ activeWriterRunId: "new-writer" });
         },
@@ -266,9 +476,13 @@ describe("admitted lazy session writer", () => {
     },
   );
 
-  it.each(["same-session", "copied-writer", "other-session"] as const)(
-    "rejects a competing first row without adopting its %s identity",
-    async (kind) => {
+  it.each(
+    (["same-session", "copied-writer", "other-session"] as const).flatMap((kind) =>
+      initialWriteKinds.map((initial) => ({ kind, initial })),
+    ),
+  )(
+    "rejects a competing first row without adopting its $kind identity (initial=$initial)",
+    async ({ kind, initial }) => {
       await withInitialWriter(async ({ manager, promptState, runParams, target }) => {
         const competing: InternalSessionEntry = {
           sessionId: kind === "other-session" ? "competing-session" : target.sessionId,
@@ -277,10 +491,11 @@ describe("admitted lazy session writer", () => {
         };
         runWithoutOwnedSessionTranscriptWrites(() => replaceSessionEntrySync(target, competing));
         const before = loadSessionEntry(target);
-        expect(() => manager.appendMessage(userMessage)).toThrow(
+        await expect(appendInitial(initial, manager)).rejects.toThrow(
           SessionTranscriptWriterClaimReboundError,
         );
         expect(promptState.sessionWriterFence).toBeUndefined();
+        expect(isSessionWorkAdmissionActive(target.storePath, [target.sessionKey])).toBe(true);
         expect(loadSessionEntry(target)).toEqual(before);
         expect(loadTranscriptEventsSync(target)).toEqual([]);
       });
@@ -311,6 +526,7 @@ describe("admitted lazy session writer", () => {
         expect(loadSessionEntry(target)).toBeUndefined();
         expect(loadTranscriptEventsSync(target)).toEqual([]);
         expect(identities).toEqual([]);
+        expect(isSessionWorkAdmissionActive(target.storePath, [target.sessionKey])).toBe(true);
 
         openManager().appendMessage(userMessage);
         expect(promptState.sessionWriterFence?.expectedWriterRunId).toBe(runParams.runId);
@@ -322,34 +538,37 @@ describe("admitted lazy session writer", () => {
     });
   });
 
-  it("captures the committed claim before identity-observer cancellation stops the first transcript append", async () => {
-    await withInitialWriter(async ({ controller, manager, promptState, runParams, target }) => {
-      const callerError = new Error("caller cancelled from committed identity observer");
-      let observedFence: typeof promptState.sessionWriterFence;
-      const unsubscribe = onSessionIdentityMutation((event) => {
-        if (event.kind !== "create" || event.current.sessionId !== target.sessionId) {
-          return;
+  it.each(initialWriteKinds)(
+    "captures the committed claim before identity-observer cancellation stops the first %s append",
+    async (kind) => {
+      await withInitialWriter(async ({ controller, manager, promptState, runParams, target }) => {
+        const callerError = new Error("caller cancelled from committed identity observer");
+        let observedFence: typeof promptState.sessionWriterFence;
+        const unsubscribe = onSessionIdentityMutation((event) => {
+          if (event.kind !== "create" || event.current.sessionId !== target.sessionId) {
+            return;
+          }
+          observedFence = promptState.sessionWriterFence;
+          controller.abort(callerError);
+        });
+        try {
+          await expect(appendInitial(kind, manager)).rejects.toThrow(callerError);
+          expect(observedFence).toEqual({
+            expectedLifecycleRevision: undefined,
+            expectedWriterRunId: runParams.runId,
+          });
+          expect(promptState.sessionWriterFence).toEqual(observedFence);
+          expect(loadSessionEntry(target)).toMatchObject({
+            sessionId: target.sessionId,
+            activeWriterRunId: runParams.runId,
+          });
+          expect(loadTranscriptEventsSync(target)).toEqual([]);
+        } finally {
+          unsubscribe();
         }
-        observedFence = promptState.sessionWriterFence;
-        controller.abort(callerError);
       });
-      try {
-        expect(() => manager.appendMessage(userMessage)).toThrow(callerError);
-        expect(observedFence).toEqual({
-          expectedLifecycleRevision: undefined,
-          expectedWriterRunId: runParams.runId,
-        });
-        expect(promptState.sessionWriterFence).toEqual(observedFence);
-        expect(loadSessionEntry(target)).toMatchObject({
-          sessionId: target.sessionId,
-          activeWriterRunId: runParams.runId,
-        });
-        expect(loadTranscriptEventsSync(target)).toEqual([]);
-      } finally {
-        unsubscribe();
-      }
-    });
-  });
+    },
+  );
 
   it.each(["active", "closed", "replaced"] as const)(
     "uses the original manager admission for transcript rewrites (%s)",
@@ -372,12 +591,12 @@ describe("admitted lazy session writer", () => {
             }),
           );
         if (state === "active") {
-          expect(rewrite().changed).toBe(true);
+          expect((await rewrite()).changed).toBe(true);
           expect(SessionManager.open(target).getBranch()).toMatchObject([
             { type: "message", message: { content: "Rewritten user turn" } },
           ]);
         } else {
-          expect(rewrite).toThrow();
+          await expect(rewrite()).rejects.toThrow();
           expect(loadTranscriptEventsSync(target)).toEqual(before);
           expect(manager.getBranch()).toMatchObject([{ type: "message", message: userMessage }]);
         }

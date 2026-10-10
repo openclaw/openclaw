@@ -1,10 +1,18 @@
+import { consumeResponseBytes } from "@openclaw/normalization-core";
+
 export async function readResponseBytesWithinLimit(
   response: Response,
   maxBytes: number,
+  options: { truncate?: boolean } = {},
 ): Promise<ArrayBuffer | null> {
   const contentLengthHeader = response.headers.get("Content-Length");
   const contentLength = contentLengthHeader === null ? undefined : Number(contentLengthHeader);
-  if (contentLength !== undefined && Number.isFinite(contentLength) && contentLength > maxBytes) {
+  if (
+    !options.truncate &&
+    contentLength !== undefined &&
+    Number.isFinite(contentLength) &&
+    contentLength > maxBytes
+  ) {
     await response.body?.cancel().catch(() => undefined);
     return null;
   }
@@ -15,17 +23,19 @@ export async function readResponseBytesWithinLimit(
   const chunks: Uint8Array[] = [];
   let totalBytes = 0;
   try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) {
-        break;
-      }
-      totalBytes += value.byteLength;
-      if (totalBytes > maxBytes) {
-        await reader.cancel().catch(() => undefined);
-        return null;
-      }
-      chunks.push(value);
+    const result = await consumeResponseBytes({
+      maxBytes,
+      stopAtLimit: options.truncate,
+      skipEmptyChunks: false,
+      read: () => reader.read(),
+      onChunk: (chunk) => {
+        chunks.push(chunk);
+        totalBytes += chunk.byteLength;
+      },
+      onLimit: () => reader.cancel().catch(() => undefined),
+    });
+    if (result.truncated && !options.truncate) {
+      return null;
     }
   } finally {
     reader.releaseLock();

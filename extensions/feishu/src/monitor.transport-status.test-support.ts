@@ -3,20 +3,12 @@
 // See PROPOSAL.md for the incident background.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { FeishuStatusSink } from "./monitor.js";
+import { getGatewayPort } from "./monitor.webhook.test-helpers.js";
 
-type StatusPatch = {
-  connected?: boolean;
-  lifecycle?: "ready" | "recovering" | "blocked";
-  terminalDisconnect?: boolean;
-  lastConnectedAt?: number | null;
-  lastEventAt?: number | null;
-  lastTransportActivityAt?: number | null;
-  lastError?: string | null;
-};
+type StatusPatch = Parameters<FeishuStatusSink>[0];
 
-type StatusSink = (patch: StatusPatch) => void;
-
-function createRecordingSink(): { sink: StatusSink; calls: StatusPatch[] } {
+function createRecordingSink(): { sink: FeishuStatusSink; calls: StatusPatch[] } {
   const calls: StatusPatch[] = [];
   return {
     sink: (patch) => {
@@ -224,7 +216,8 @@ describe("monitorWebhook status publishing", () => {
     vi.restoreAllMocks();
   });
 
-  it("publishes connected on listen success", async () => {
+  it("publishes connected after Gateway route registration", async () => {
+    await getGatewayPort();
     const recorder = createRecordingSink();
     const { monitorWebhook } = await loadTransportModule();
 
@@ -237,9 +230,7 @@ describe("monitorWebhook status publishing", () => {
       verificationToken: "vt",
       config: {
         connectionMode: "webhook" as const,
-        webhookPort: 0,
         webhookPath: "/feishu/events",
-        webhookHost: "127.0.0.1",
       },
     } as never;
 
@@ -253,11 +244,6 @@ describe("monitorWebhook status publishing", () => {
       statusSink: recorder.sink,
     });
 
-    // Give the server time to listen.
-    await new Promise<void>((resolve) => {
-      setTimeout(() => resolve(), 50);
-    });
-
     const connected = recorder.calls.find((c) => c.connected === true);
     expect(connected).toBeDefined();
     expect(connected?.lifecycle).toBe("ready");
@@ -267,16 +253,5 @@ describe("monitorWebhook status publishing", () => {
 
     abortController.abort();
     await monitorPromise;
-  });
-});
-
-describe("FeishuStatusSink type contract", () => {
-  it("accepts a partial patch with only lastEventAt", async () => {
-    // Verifies the type signature allows the patterns we use. A compile-time
-    // check via tsserver; the runtime assertion is the call must not throw.
-    const recorder = createRecordingSink();
-    const sink: StatusSink = recorder.sink;
-    sink({ lastEventAt: 12345 });
-    expect(recorder.calls).toEqual([{ lastEventAt: 12345 }]);
   });
 });

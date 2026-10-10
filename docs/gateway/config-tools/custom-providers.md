@@ -93,7 +93,7 @@ Configuring a custom/local provider `baseUrl` is also the narrow network trust d
 
   </Accordion>
   <Accordion title="Model catalog entries">
-    - `models.providers.*.models`: explicit provider model catalog entries.
+    - `models.providers.*.models`: explicit provider model catalog entries and metadata overrides. In merge mode, these rows do not restrict eligible provider discovery. Use `agents.defaults.modelPolicy.allow` (or a per-agent policy) to restrict selection, or `models.mode: "replace"` to use only configured inventory without discovery.
     - `models.providers.*.models.*.input`: model input modalities. Use `["text"]` for text-only models and `["text", "image"]` for native image/vision models. Image attachments are only injected into agent turns when the selected model is marked image-capable.
     - `models.providers.*.models.*.contextWindow`: native context-window metadata for that model.
     - `models.providers.*.models.*.contextTokens`: optional active-input cap for that model; use it when you want an effective budget distinct from the model's native `contextWindow`; `openclaw models list` shows both when they differ.
@@ -114,7 +114,7 @@ Configuring a custom/local provider `baseUrl` is also the narrow network trust d
     | `supportsUsageInStreaming` | Emits usage metadata in streaming responses. |
     | `supportsInstructions` | Responses API only: accepts the system prompt via top-level `instructions` instead of embedded in `input`. Defaults to `true` only for native OpenAI and xAI's main route — the two routes with confirmed contract evidence. Every other route, bundled or custom, defaults to `false`; set explicitly once verified against that endpoint. |
     | `supportsTools` | Supports structured tool/function calling. Set `false` to disable tools. |
-    | `supportsStrictMode` | Accepts strict tool schemas. |
+    | `supportsStrictMode` | Accepts the `strict` tool field. On compatible Completions and Responses routes, `true` permits explicit `strict: false` so optional tool arguments remain optional. |
     | `requiresStringContent` | Requires plain-string Chat Completions message content. |
     | `strictMessageKeys` | Requires outgoing messages to contain only accepted keys. |
     | `visibleReasoningDetailTypes` | Names reasoning detail block types safe to show in transcripts. |
@@ -130,6 +130,10 @@ Configuring a custom/local provider `baseUrl` is also the narrow network trust d
     | `unsupportedToolSchemaKeywords` | Removes named JSON Schema keywords rejected by the endpoint before tool schemas are sent. Use this for endpoint-specific gaps beyond a profile's targeted transformations. |
     | `toolCallArgumentsEncoding` | Selects the endpoint's tool-call argument encoding. |
     | `requiresOpenAiAnthropicToolPayload` | Converts OpenAI-shaped tool calls to Anthropic-family payloads. |
+
+    Unknown remote `openai-completions` endpoints default to `supportsUsageInStreaming: false`, so OpenClaw does not request `stream_options.include_usage`. Loopback endpoints and the bundled llama.cpp, LM Studio, Ollama, and vLLM providers already request or collect usage. For a custom remote server that supports this option, set `compat.supportsUsageInStreaming: true` on each model entry. Ollama `/v1` and LM Studio return streamed usage when this option is enabled.
+
+    When a successful stream returns no usage, OpenClaw marks provider context usage unavailable so compaction uses content estimates instead of treating missing counts as zero. Estimates are approximate; token and cost accounting cannot be recovered from a missing usage record. Custom remote endpoints with streaming usage disabled also log `<provider>/<model> returned no token usage` once per model, with the config hint above.
 
   </Accordion>
   <Accordion title="Amazon Bedrock discovery">

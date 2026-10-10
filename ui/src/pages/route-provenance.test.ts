@@ -78,6 +78,7 @@ describe("route preload gateway provenance", () => {
     const agentsGateway = mutableGateway(snapshot(null, false));
     const agentsData = await loadRoute<AgentsRouteData>(agentsPage, {
       gateway: agentsGateway.gateway,
+      settingsAgentSelection: { state: { selectedId: null, scopeId: null }, intentRevision: 0 },
       agents: {
         state: { agentsList: null, agentsError: null },
         ensureList: vi.fn(async () => null),
@@ -133,7 +134,8 @@ describe("route preload gateway provenance", () => {
           agents: [{ id: "main" }],
         })),
       },
-      agentSelection: { state: { selectedId: "main", scopeId: "main" } },
+      agentSelection: { state: { selectedId: "research", scopeId: "research" }, intentRevision: 0 },
+      settingsAgentSelection: { state: { selectedId: "main", scopeId: "main" }, intentRevision: 0 },
     } as unknown as ApplicationContext);
 
     mutable.replaceSnapshot(snapshot(replacementClient, true));
@@ -162,19 +164,24 @@ describe("route preload gateway provenance", () => {
     const agents = {
       ensureList: vi.fn(() => agentsReady.promise),
     } as unknown as ApplicationContext["agents"];
+    const selection = {
+      state: { selectedId: "research", scopeId: "research" },
+      intentRevision: 7,
+    };
     const request = loadRoute<SkillsRouteData>(skillsPage, {
       gateway,
       agents,
-      agentSelection: { state: { selectedId: "research", scopeId: "research" } },
+      agentSelection: selection,
     } as unknown as ApplicationContext);
 
     mutable.replaceSnapshot(snapshot(client, false));
+    selection.intentRevision += 1;
     agentsReady.resolve(agentsList);
     const data = await request;
 
     expect(requestMethod).toHaveBeenCalledWith("skills.status", { agentId: "research" });
     expect(data.selectedAgentId).toBe("research");
-    expect(data.selection.selectedId).toBe("research");
+    expect(data.selectionIntentRevision).toBe(7);
     expect(data.gateway).toBe(gateway);
     expect(data.gatewaySnapshot).toBe(originalSnapshot);
     expect(data.agents).toBe(agents);

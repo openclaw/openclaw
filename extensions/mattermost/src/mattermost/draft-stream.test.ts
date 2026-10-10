@@ -1,13 +1,14 @@
 // Mattermost tests cover draft stream plugin behavior.
 import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
-import { createChannelProgressDraftCompositor } from "openclaw/plugin-sdk/channel-outbound";
+import {
+  createChannelProgressDraftCompositor,
+  createLivePreviewLifecycle,
+} from "openclaw/plugin-sdk/channel-outbound";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { describe, expect, it, vi } from "vitest";
 import type { MattermostClient } from "./client.js";
-import {
-  createMattermostDraftPreviewBoundaryController,
-  createMattermostDraftStream,
-} from "./draft-stream.js";
+import { createMattermostDraftStream } from "./draft-stream.js";
 import { deliverMattermostReplyWithDraftPreview } from "./monitor-draft-delivery.js";
 
 type RequestRecord = {
@@ -90,7 +91,7 @@ function createProviderPostFixture(
       posts.set(id, message);
       return { id, message } as T;
     }
-    const id = path.slice("/posts/".length);
+    const id = path.slice("/posts/".length).replace(/\/patch$/, "");
     if (init?.method === "DELETE") {
       await options.beforeDelete?.(id);
       posts.delete(id);
@@ -127,17 +128,6 @@ describe("createMattermostDraftStream", () => {
       message: "Running `read`…",
     });
     expect(stream.postId()).toBe("post-1");
-  });
-
-  it("does not resend identical updates", async () => {
-    const { calls, stream } = createDraftStreamFixture();
-
-    stream.update("Working...");
-    await stream.flush();
-    stream.update("Working...");
-    await stream.flush();
-
-    expect(calls).toHaveLength(1);
   });
 
   it("clears the preview post when no final reply is delivered", async () => {
@@ -291,9 +281,10 @@ describe("createMattermostDraftStream", () => {
           info: { kind: "final" },
           kind: "direct",
           client,
-          draftStream: stream,
+          previewLifecycle: createLivePreviewLifecycle<ReplyPayload, string>({
+            draft: { ...stream, id: stream.postId },
+          }),
           resolvePreviewFinalText: (text) => ({ editText: text, alreadyDelivered: false }),
-          previewState: { finalizedViaPreviewPost: false },
           logVerboseMessage: vi.fn(),
           deliverPayload,
         });
@@ -391,7 +382,7 @@ describe("createMattermostDraftStream", () => {
 
     expect(calls).toHaveLength(2);
     expect(calls[0]?.path).toBe("/posts");
-    expect(calls[1]?.path).toBe("/posts/post-1");
+    expect(calls[1]?.path).toBe("/posts/post-1/patch");
     expect(parseRequestJson(calls[1]?.init)).toEqual({
       id: "post-1",
       message: "Stale partial",
@@ -480,7 +471,7 @@ describe("createMattermostDraftStream", () => {
       if (path === "/posts") {
         return { id: "post-1" } as T;
       }
-      if (path === "/posts/post-1") {
+      if (path === "/posts/post-1/patch") {
         if (failNextPatch) {
           failNextPatch = false;
           throw new Error("patch failed");
@@ -500,7 +491,7 @@ describe("createMattermostDraftStream", () => {
     expect(warn).toHaveBeenCalledWith("mattermost stream preview failed: patch failed");
     expect(calls).toHaveLength(2);
     expect(calls[0]?.path).toBe("/posts");
-    expect(calls[1]?.path).toBe("/posts/post-1");
+    expect(calls[1]?.path).toBe("/posts/post-1/patch");
   });
 });
 
@@ -614,7 +605,12 @@ describe("createMattermostDraftStream forceNewMessage", () => {
     configuredStream.update("tool");
     await configuredStream.flush();
 
-    expect(calls.map((call) => call.path)).toEqual(["/posts", "/posts/post-1", "/posts", "/posts"]);
+    expect(calls.map((call) => call.path)).toEqual([
+      "/posts",
+      "/posts/post-1/patch",
+      "/posts",
+      "/posts",
+    ]);
     expect(calls.map((call) => call.init?.method)).toEqual(["POST", "PUT", "POST", "POST"]);
     const finalizedChunks = [
       parseRequestJson(calls[1]?.init)?.message,
@@ -676,16 +672,16 @@ describe("createMattermostDraftStream forceNewMessage", () => {
     releaseFirstCreate?.();
 
     await vi.waitFor(() => {
-      expect(calls.map((c) => c.path)).toEqual(["/posts", "/posts/post-1"]);
+      expect(calls.map((c) => c.path)).toEqual(["/posts", "/posts/post-1/patch"]);
     });
     releaseBoundaryPatch?.();
     await vi.waitFor(() => {
-      expect(calls.map((c) => c.path)).toEqual(["/posts", "/posts/post-1", "/posts"]);
+      expect(calls.map((c) => c.path)).toEqual(["/posts", "/posts/post-1/patch", "/posts"]);
     });
     releaseSecondCreate?.();
     await Promise.all([firstBoundary, secondBoundary, flush]);
 
-    expect(calls.map((c) => c.path)).toEqual(["/posts", "/posts/post-1", "/posts", "/posts"]);
+    expect(calls.map((c) => c.path)).toEqual(["/posts", "/posts/post-1/patch", "/posts", "/posts"]);
     expect(parseRequestJson(calls[0]?.init)?.message).toBe("tool start");
     expect(parseRequestJson(calls[1]?.init)?.message).toBe("tool complete");
     expect(parseRequestJson(calls[2]?.init)?.message).toBe("assistant progress");
@@ -726,7 +722,7 @@ describe("createMattermostDraftStream forceNewMessage", () => {
     releaseFirstCreate?.();
     await boundary;
 
-    expect(calls.map((c) => c.path)).toEqual(["/posts", "/posts/post-1"]);
+    expect(calls.map((c) => c.path)).toEqual(["/posts", "/posts/post-1/patch"]);
     expect(parseRequestJson(calls[0]?.init)?.message).toBe("Looking into the logs");
     expect(parseRequestJson(calls[1]?.init)?.message).toBe("Looking into the logs now");
     expect(stream.postId()).toBeUndefined();
@@ -922,7 +918,7 @@ describe("createMattermostDraftStream forceNewMessage", () => {
       })),
     ).toEqual([
       { path: "/posts", method: "POST", message: "First Second Third" },
-      { path: "/posts/post-1", method: "PUT", message: "First" },
+      { path: "/posts/post-1/patch", method: "PUT", message: "First" },
       { path: "/posts", method: "POST", message: "Second" },
       { path: "/posts", method: "POST", message: "Third" },
     ]);
@@ -972,110 +968,9 @@ describe("createMattermostDraftStream forceNewMessage", () => {
       })),
     ).toEqual([
       { path: "/posts", method: "POST", message: "First Second Third" },
-      { path: "/posts/post-1", method: "PUT", message: "First" },
+      { path: "/posts/post-1/patch", method: "PUT", message: "First" },
       { path: "/posts", method: "POST", message: "Second" },
       { path: "/posts", method: "POST", message: "Third" },
     ]);
-  });
-});
-
-describe("createMattermostDraftPreviewBoundaryController", () => {
-  it("calls forceNewMessage on boundary when enabled and content was streamed", async () => {
-    const forceNewMessage = vi.fn();
-    const controller = createMattermostDraftPreviewBoundaryController({
-      enabled: true,
-      forceNewMessage,
-    });
-
-    controller.noteUpdate();
-    await controller.noteBoundary();
-
-    expect(forceNewMessage).toHaveBeenCalledTimes(1);
-  });
-
-  it("skips forceNewMessage when no content was streamed since the last boundary", async () => {
-    const forceNewMessage = vi.fn();
-    const controller = createMattermostDraftPreviewBoundaryController({
-      enabled: true,
-      forceNewMessage,
-    });
-
-    await controller.noteBoundary();
-    await controller.noteBoundary();
-    controller.noteUpdate();
-    await controller.noteBoundary();
-    await controller.noteBoundary();
-
-    expect(forceNewMessage).toHaveBeenCalledTimes(1);
-  });
-
-  it("never calls forceNewMessage when disabled", async () => {
-    const forceNewMessage = vi.fn();
-    const controller = createMattermostDraftPreviewBoundaryController({
-      enabled: false,
-      forceNewMessage,
-    });
-
-    controller.noteUpdate();
-    await controller.noteBoundary();
-    controller.noteUpdate();
-    await controller.noteBoundary();
-
-    expect(forceNewMessage).not.toHaveBeenCalled();
-  });
-
-  it("awaits the forceNewMessage promise before resolving the boundary", async () => {
-    let releaseForce: (() => void) | undefined;
-    const forcePending = new Promise<void>((resolve) => {
-      releaseForce = resolve;
-    });
-    const forceNewMessage = vi.fn(async () => {
-      await forcePending;
-    });
-    const controller = createMattermostDraftPreviewBoundaryController({
-      enabled: true,
-      forceNewMessage,
-    });
-
-    controller.noteUpdate();
-    let resolved = false;
-    const boundary = controller.noteBoundary().then(() => {
-      resolved = true;
-    });
-
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(resolved).toBe(false);
-
-    releaseForce?.();
-    await boundary;
-    expect(resolved).toBe(true);
-    expect(forceNewMessage).toHaveBeenCalledTimes(1);
-  });
-
-  it("splits the next boundary when a noteUpdate arrives while the prior boundary is pending", async () => {
-    const releases: Array<() => void> = [];
-    const forceNewMessage = vi.fn(
-      () =>
-        new Promise<void>((resolve) => {
-          releases.push(resolve);
-        }),
-    );
-    const controller = createMattermostDraftPreviewBoundaryController({
-      enabled: true,
-      forceNewMessage,
-    });
-
-    controller.noteUpdate();
-    const firstBoundary = controller.noteBoundary();
-    controller.noteUpdate();
-    releases[0]?.();
-    await firstBoundary;
-
-    const secondBoundary = controller.noteBoundary();
-    releases[1]?.();
-    await secondBoundary;
-
-    expect(forceNewMessage).toHaveBeenCalledTimes(2);
   });
 });

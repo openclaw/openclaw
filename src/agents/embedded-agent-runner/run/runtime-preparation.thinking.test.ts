@@ -1,5 +1,3 @@
-import { mkdtemp, realpath, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
@@ -12,10 +10,18 @@ import {
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "../../../plugins/runtime.js";
+import { withPluginRuntimeGenerationScope } from "../../../plugins/runtime/generation-scope.js";
 import type { ProviderPlugin } from "../../../plugins/types.js";
 import { loadBundledPluginFacade } from "../../../test-utils/bundled-plugin-public-surface.js";
+import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../../../test-utils/openclaw-test-state.js";
 import { createTestAdmittedRunContext } from "../../admitted-run-context.test-support.js";
-import type { AuthProfileStore } from "../../auth-profiles.js";
+import {
+  clearRuntimeAuthProfileStoreSnapshots,
+  type AuthProfileStore,
+} from "../../auth-profiles.js";
 import type { ResolvedProviderAuth } from "../../model-auth.js";
 import { prepareModelRunCapabilities } from "../../model-catalog-lookup.js";
 import type { ModelCatalogEntry } from "../../model-catalog.types.js";
@@ -24,16 +30,10 @@ import { createEmptyAgentDiscoveryStores } from "../model.js";
 import { resolveBundledStaticCatalogModel } from "../model.static-catalog.js";
 import { prepareEmbeddedRunRuntime } from "./runtime-preparation.js";
 
-const fixtures = vi.hoisted((): { authStore: AuthProfileStore } => ({
-  authStore: { version: 1, profiles: {} },
-}));
-
 // Credential acquisition and native process installation are outside this network-free
 // composition. Route planning, model resolution, auth commit, and the overlay remain real.
 vi.mock("../../model-auth.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../model-auth.js")>()),
-  ensureAuthProfileStore: () => fixtures.authStore,
-  ensureAuthProfileStoreWithoutExternalProfiles: () => fixtures.authStore,
   getApiKeyForModelCore: async ({
     profileId,
   }: {
@@ -44,10 +44,6 @@ vi.mock("../../model-auth.js", async (importOriginal) => ({
     source: "fixture",
     profileId,
   }),
-}));
-vi.mock("../../auth-profiles.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../auth-profiles.js")>()),
-  ensureAuthProfileStore: () => fixtures.authStore,
 }));
 vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
   resolveApiKeyForProvider: async () => ({ mode: "token", apiKey: "fixture-token" }),
@@ -84,17 +80,19 @@ const PLATFORM = "https://api.openai.com/v1";
 const SUBSCRIPTION = "https://chatgpt.com/backend-api/codex";
 
 describe("selected route thinking metadata at runtime preparation", () => {
+  let state: OpenClawTestState;
   let root: string;
   let preparedModelRuntime: PreparedModelRuntimeSnapshot;
   let platformModel: NonNullable<ReturnType<typeof resolveBundledStaticCatalogModel>>;
   let provider: ProviderPlugin;
 
   beforeEach(async () => {
+    state = await createOpenClawTestState({ label: "effort-route", scenario: "minimal" });
+    root = state.workspaceDir;
     const { buildOpenAIProvider } = await loadBundledPluginFacade<{
       buildOpenAIProvider: () => ProviderPlugin;
     }>({ pluginId: "openai", artifactBasename: "api.js" });
     provider = buildOpenAIProvider();
-    root = await realpath(await mkdtemp(path.join(tmpdir(), "openclaw-effort-route-")));
     const pluginDir = path.resolve("extensions/openai");
     const loaded = loadPluginManifest(pluginDir);
     if (!loaded.ok) {
@@ -122,7 +120,7 @@ describe("selected route thinking metadata at runtime preparation", () => {
     platformModel = model;
     preparedModelRuntime = {
       catalogOwner: undefined,
-      agentDir: path.join(root, "agent"),
+      agentDir: state.agentDir(),
       workspaceDir: root,
       activeProjectKeys: [],
       config,
@@ -134,16 +132,17 @@ describe("selected route thinking metadata at runtime preparation", () => {
       allowGatewaySubagentBinding: false,
       modelCatalog: { entries: [], routeVariants: [] },
       configuredRuntimeModels: [],
+      findConfiguredRuntimeModel: () => undefined,
       inlineProviderModels: [],
       createStores: createEmptyAgentDiscoveryStores,
     };
-    fixtures.authStore = {
+    await state.writeAuthProfiles({
       version: 1,
       profiles: {
         "openai:platform": { type: "api_key", provider: "openai", key: "fixture-key" },
         "openai:subscription": { type: "token", provider: "openai", token: "fixture-token" },
       },
-    };
+    } satisfies AuthProfileStore);
   });
 
   afterEach(async () => {
@@ -152,7 +151,8 @@ describe("selected route thinking metadata at runtime preparation", () => {
     clearPluginMetadataLifecycleCaches();
     vi.unstubAllEnvs();
     vi.unstubAllGlobals();
-    await rm(root, { recursive: true, force: true });
+    clearRuntimeAuthProfileStoreSnapshots();
+    await state.cleanup();
   });
 
   it.each([
@@ -199,34 +199,37 @@ describe("selected route thinking metadata at runtime preparation", () => {
         : prepareModelRunCapabilities([[capabilityEntry], []], ["openai", MODEL_ID, "codex"])
             .modelThinkingCapability;
     const runId = `effort-${route}-${capability}`;
-    const runtime = await prepareEmbeddedRunRuntime({
-      runParams: {
-        runId,
-        admittedRunContext: createTestAdmittedRunContext(runId),
-        sessionId: "effort-session",
-        sessionKey: "agent:main:effort-session",
-        agentId: "main",
-        prompt: "Reply briefly.",
+    const runtime = await withPluginRuntimeGenerationScope(preparedModelRuntime, () =>
+      prepareEmbeddedRunRuntime({
+        assertCurrent: () => {},
+        runParams: {
+          runId,
+          admittedRunContext: createTestAdmittedRunContext(runId),
+          sessionId: "effort-session",
+          sessionKey: "agent:main:effort-session",
+          agentId: "main",
+          prompt: "Reply briefly.",
+          workspaceDir: root,
+          timeoutMs: 5_000,
+          config: preparedModelRuntime.config,
+          authProfileId: `openai:${route}`,
+          authProfileIdSource: "user",
+          thinkLevel: "off",
+          modelThinkingCapability,
+        },
+        provider: "openai",
+        modelId: MODEL_ID,
+        agentDir: preparedModelRuntime.agentDir,
         workspaceDir: root,
-        timeoutMs: 5_000,
-        config: preparedModelRuntime.config,
-        authProfileId: `openai:${route}`,
-        authProfileIdSource: "user",
-        thinkLevel: "off",
-        modelThinkingCapability,
-      },
-      provider: "openai",
-      modelId: MODEL_ID,
-      agentDir: preparedModelRuntime.agentDir,
-      workspaceDir: root,
-      globalLane: "test",
-      hookRunner: undefined,
-      hookContext: { sessionId: "effort-session", workspaceDir: root },
-      markStartupStage: () => {},
-      notifyExecutionPhase: () => {},
-      fallbackConfigured: false,
-      preparedModelRuntime,
-    });
+        globalLane: "test",
+        hookRunner: undefined,
+        hookContext: { sessionId: "effort-session", workspaceDir: root },
+        markStartupStage: () => {},
+        notifyExecutionPhase: () => {},
+        fallbackConfigured: false,
+        preparedModelRuntime,
+      }),
+    );
     try {
       const { effectiveModel, activePreparedAuthPlan } = runtime.snapshot();
       expect(activePreparedAuthPlan.modelRoute?.authRequirement).toBe(

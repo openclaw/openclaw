@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import {
@@ -18,12 +19,14 @@ import {
 } from "../../packages/gateway-protocol/src/schema/transcripts.js";
 import { executeSqliteQueryTakeFirstSync, iterateSqliteQuerySync } from "../infra/kysely-sync.js";
 import type { TranscriptSessionDescriptor } from "./provider-types.js";
+import { projectTranscriptSession } from "./read.js";
 import {
   meetingTranscriptDb,
   type meetingTranscriptSessionQuery,
   meetingTranscriptUtteranceQuery,
   sessionFromRow,
 } from "./store-sqlite.js";
+import type { TranscriptReadEntry, TranscriptReadNotes } from "./store-types.js";
 import type { TranscriptsSummary } from "./summary.js";
 
 export class TranscriptLibraryError extends Error {
@@ -187,11 +190,8 @@ function readQuery(
       s.fn<string>("json_group_array", [s.ref("speakers.speaker_label")]).as("participants"),
     )
     .$asScalar();
-  const lastAt = eb
-    .selectFrom("meeting_transcript_utterances as u")
+  const lastAt = utterances
     .select((u) => u.fn.coalesce("u.ended_at", "u.started_at").as("at"))
-    .whereRef("u.session_id", "=", "meeting_transcript_sessions.session_id")
-    .whereRef("u.session_started_at", "=", "meeting_transcript_sessions.started_at")
     .orderBy("u.sequence", "desc")
     .limit(1)
     .$asScalar();
@@ -230,15 +230,7 @@ function readQuery(
         .$asScalar()
         .as("utterance_count"),
       "updated_at_ms",
-      eb
-        .exists(
-          eb
-            .selectFrom("meeting_transcript_summaries as summary")
-            .select("summary.session_id")
-            .whereRef("summary.session_id", "=", "meeting_transcript_sessions.session_id")
-            .whereRef("summary.session_started_at", "=", "meeting_transcript_sessions.started_at"),
-        )
-        .as("has_summary"),
+      eb.exists(notes.select("notes.session_id")).as("has_summary"),
     ] as const;
   if (maxBytes === undefined) {
     return query.select(columns(bytes));
@@ -270,7 +262,7 @@ type TranscriptReadRow = Awaited<
 function transcriptReadEntryFromRow(
   row: TranscriptReadRow,
   purpose: TranscriptReadPurpose = "page",
-) {
+): TranscriptReadEntry {
   assertReadBytes(row.payload_bytes, purpose);
   const session = sessionFromRow(row);
   const summarySource: TranscriptsSummary["source"] | undefined =
@@ -292,7 +284,6 @@ function transcriptReadEntryFromRow(
   };
 }
 
-export type TranscriptReadEntry = ReturnType<typeof transcriptReadEntryFromRow>;
 export type TranscriptReadOptions = Omit<TranscriptsListParams, "cursor"> & {
   after?: { startedAt: string; sessionId: string };
   offset?: number;
@@ -300,6 +291,11 @@ export type TranscriptReadOptions = Omit<TranscriptsListParams, "cursor"> & {
 };
 
 const dateReaders = new WeakSet<DatabaseSync>();
+const dateParser = new AsyncLocalStorage<typeof parseDateStringTimestampMs>();
+
+function parseTranscriptDate(value: unknown): number | undefined {
+  return (dateParser.getStore() ?? parseDateStringTimestampMs)(value);
+}
 
 function registerTranscriptDateReader(database: DatabaseSync): void {
   if (dateReaders.has(database)) {
@@ -307,10 +303,7 @@ function registerTranscriptDateReader(database: DatabaseSync): void {
   }
   // Canonical database reopen creates a new handle. Date parsing is not
   // deterministic because timezone-free strings depend on the process timezone.
-  database.function(
-    "openclaw_transcript_date_ms",
-    (value) => parseDateStringTimestampMs(value) ?? null,
-  );
+  database.function("openclaw_transcript_date_ms", (value) => parseTranscriptDate(value) ?? null);
   dateReaders.add(database);
 }
 
@@ -325,10 +318,11 @@ function transcriptStartTime(startedAt: Expression<string>) {
 }
 
 /** Chronological key selection scans candidates; filters never turn into ownership. */
-export function* iterateTranscriptReadEntries(
+function readTranscriptPage<Entry>(
   database: DatabaseSync,
   options: TranscriptReadOptions,
-): Generator<TranscriptReadEntry, boolean> {
+  project: (entry: TranscriptReadEntry) => Entry,
+): TranscriptReadPage<Entry> {
   const limit = transcriptPageLimit(options.limit, TRANSCRIPTS_LIST_MAX);
   registerTranscriptDateReader(database);
   let query = meetingTranscriptDb(database).selectFrom("meeting_transcript_sessions");
@@ -364,16 +358,16 @@ export function* iterateTranscriptReadEntries(
     );
   }
   if (options.startedAfter) {
-    const startedAfter = parseDateStringTimestampMs(options.startedAfter) ?? null;
+    const startedAfter = parseTranscriptDate(options.startedAfter) ?? null;
     query = query.where((eb) => eb(transcriptStartTime(eb.ref("started_at")), ">=", startedAfter));
   }
   if (options.startedBefore) {
-    const startedBefore = parseDateStringTimestampMs(options.startedBefore) ?? null;
+    const startedBefore = parseTranscriptDate(options.startedBefore) ?? null;
     query = query.where((eb) => eb(transcriptStartTime(eb.ref("started_at")), "<", startedBefore));
   }
   if (options.after) {
     const after = options.after;
-    const afterTime = parseDateStringTimestampMs(after.startedAt);
+    const afterTime = parseTranscriptDate(after.startedAt);
     query = query.where((eb) => {
       const time = transcriptStartTime(eb.ref("started_at"));
       const afterIdentity = eb(
@@ -469,15 +463,19 @@ export function* iterateTranscriptReadEntries(
       .orderBy("meeting_transcript_sessions.session_id", "asc")
       .orderBy("meeting_transcript_sessions.started_at", "asc"),
   );
-  let count = 0;
+  const entries: Entry[] = [];
+  let bytes = 0;
   for (const row of rows) {
     // Lookahead establishes presence only, even when its payload exceeds the cap.
-    if (count++ === limit) {
-      return true;
+    if (entries.length === limit) {
+      return { entries, hasMore: true };
     }
-    yield transcriptReadEntryFromRow(row);
+    const entry = project(transcriptReadEntryFromRow(row));
+    bytes += Buffer.byteLength(JSON.stringify(entry), "utf8");
+    assertTranscriptByteCount(bytes);
+    entries.push(entry);
   }
-  return false;
+  return { entries, hasMore: false };
 }
 
 /** Selectors are unique; identity and payload bounds remain in the same SQLite statement. */
@@ -520,18 +518,24 @@ export function readLatestTranscriptEntry(database: DatabaseSync) {
   return row ? transcriptReadEntryFromRow(row) : undefined;
 }
 
-export function queryTranscriptReadEntries(database: DatabaseSync, options: TranscriptReadOptions) {
-  const entries: TranscriptReadEntry[] = [];
-  let bytes = 0;
-  for (const entry of iterateTranscriptReadEntries(database, options)) {
-    // Reads need attribution, while provider authorization uses the unchanged source.
-    const agentId = entry.session.metadata?.agentId;
-    entry.session.metadata = typeof agentId === "string" ? { agentId } : undefined;
-    bytes += Buffer.byteLength(JSON.stringify(entry), "utf8");
-    assertTranscriptByteCount(bytes);
-    entries.push(entry);
-  }
-  return entries;
+export type TranscriptReadPage<Entry> = { entries: Entry[]; hasMore: boolean };
+export type TranscriptLibraryPage = TranscriptReadPage<ReturnType<typeof projectTranscriptSession>>;
+
+export function queryTranscriptReadEntries(
+  database: DatabaseSync,
+  options: TranscriptReadOptions & { projection?: "public" },
+  parseDate = parseDateStringTimestampMs,
+) {
+  return dateParser.run(parseDate, () =>
+    options.projection === "public"
+      ? readTranscriptPage(database, options, projectTranscriptSession)
+      : readTranscriptPage(database, options, (entry) => {
+          // Reads need attribution, while provider authorization uses the unchanged source.
+          const agentId = entry.session.metadata?.agentId;
+          entry.session.metadata = typeof agentId === "string" ? { agentId } : undefined;
+          return entry;
+        }),
+  );
 }
 
 function utteranceQuery(
@@ -624,9 +628,9 @@ function readTranscriptUtterancePage(
 /** Omit the duplicated transcript inside SQLite before materializing the stored summary. */
 export function readStoredTranscriptNotes(
   database: DatabaseSync,
-  session: TranscriptSessionDescriptor,
+  session: Pick<TranscriptSessionDescriptor, "sessionId" | "startedAt">,
   purpose: TranscriptReadPurpose = "page",
-): { summary?: Omit<TranscriptsSummary, "transcript">; markdown?: string } {
+): TranscriptReadNotes {
   const row = executeSqliteQueryTakeFirstSync(
     database,
     meetingTranscriptDb(database)
@@ -659,20 +663,6 @@ export function readStoredTranscriptNotes(
     summary,
     markdown: row.markdown ?? undefined,
   };
-}
-
-/** Iterate canonical rows for downloads without materializing export files or an unbounded array. */
-function* iterateTranscriptUtterances(
-  database: DatabaseSync,
-  session: TranscriptSessionDescriptor,
-): Generator<TranscriptUtterance> {
-  for (const row of iterateSqliteQuerySync(
-    database,
-    utteranceQuery(database, session, "export").orderBy("sequence", "asc"),
-  )) {
-    assertTranscriptByteCount(row.payload_bytes, TRANSCRIPTS_EXPORT_MAX_BYTES, true);
-    yield transcriptReadUtteranceFromRow(row);
-  }
 }
 
 function requireTranscriptReadEntry(
@@ -722,13 +712,20 @@ export type TranscriptExportRead = {
   notes: ReturnType<typeof readStoredTranscriptNotes> | undefined;
 };
 
+/** Stream canonical rows and notes in the caller's read snapshot without materializing files. */
 export function* iterateTranscriptExport(
   database: DatabaseSync,
   selector: string,
   includeNotes: boolean,
 ): Generator<TranscriptUtterance, TranscriptExportRead> {
   const entry = requireTranscriptReadEntry(database, selector, "export");
-  yield* iterateTranscriptUtterances(database, entry.session);
+  for (const row of iterateSqliteQuerySync(
+    database,
+    utteranceQuery(database, entry.session, "export").orderBy("sequence", "asc"),
+  )) {
+    assertTranscriptByteCount(row.payload_bytes, TRANSCRIPTS_EXPORT_MAX_BYTES, true);
+    yield transcriptReadUtteranceFromRow(row);
+  }
   const notes = includeNotes
     ? readStoredTranscriptNotes(database, entry.session, "export")
     : undefined;

@@ -25,6 +25,11 @@ import {
 import type { InstalledPluginIndex, InstalledPluginIndexRecord } from "./installed-plugin-index.js";
 import { extractPluginInstallRecordsFromInstalledPluginIndex } from "./installed-plugin-index.js";
 import {
+  normalizeManifestObjectList,
+  omitUndefinedManifestFields,
+  optionalManifestFields,
+} from "./manifest-capability-normalizers.js";
+import {
   loadPluginManifestRegistryCore,
   type PluginManifestRecord,
   type PluginManifestRegistry,
@@ -45,12 +50,11 @@ import {
   readPluginCacheFile,
 } from "./plugin-cache-files.js";
 import { tracePluginLifecyclePhase } from "./plugin-lifecycle-trace.js";
-import {
-  normalizePluginDependencySpecs,
-  type PluginDependencySpecMap,
-} from "./status-dependencies-core.js";
+import { normalizePluginDependencySpecs } from "./status-dependencies-core.js";
+import type { PluginDependencySpecMap } from "./status-dependencies.types.js";
 
 type InstalledPackageMetadata = {
+  packageDescription?: string;
   packageManifest?: OpenClawPackageManifest;
   packageDependencies?: PluginDependencySpecMap;
   packageOptionalDependencies?: PluginDependencySpecMap;
@@ -74,9 +78,14 @@ export function resolveInstalledManifestRegistryIndexFingerprint(
     policyHash: index.policyHash,
     installRecords: index.installRecords,
     diagnostics: index.diagnostics,
-    // Only bundledDist changes runtime selection; legacy absence and build stamps hash alike.
+    // Admission receipts and build stamps do not change selection or registration identity.
     plugins: index.plugins.map(
-      ({ doctorContractFile: _doctorContractFile, packageBuild, ...plugin }) => ({
+      ({
+        doctorContractFile: _doctorContractFile,
+        sourceAdmissions: _sourceAdmissions,
+        packageBuild,
+        ...plugin
+      }) => ({
         ...plugin,
         ...(packageBuild?.bundledDist === undefined
           ? {}
@@ -126,20 +135,16 @@ function normalizePackageChannelConfiguredState(
   if (!isRecord(configuredState)) {
     return undefined;
   }
-  const rawEnv = isRecord(configuredState.env) ? configuredState.env : undefined;
-  const allOf = rawEnv ? normalizeOptionalTrimmedStringList(rawEnv.allOf) : undefined;
-  const anyOf = rawEnv ? normalizeOptionalTrimmedStringList(rawEnv.anyOf) : undefined;
-  const env =
-    allOf || anyOf ? { ...(allOf ? { allOf } : {}), ...(anyOf ? { anyOf } : {}) } : undefined;
-  const specifier = normalizeOptionalString(configuredState.specifier);
-  const exportName = normalizeOptionalString(configuredState.exportName);
-  return specifier || exportName || env
-    ? {
-        ...(specifier ? { specifier } : {}),
-        ...(exportName ? { exportName } : {}),
-        ...(env ? { env } : {}),
-      }
-    : undefined;
+  return optionalManifestFields({
+    specifier: normalizeOptionalString(configuredState.specifier),
+    exportName: normalizeOptionalString(configuredState.exportName),
+    env: isRecord(configuredState.env)
+      ? optionalManifestFields({
+          allOf: normalizeOptionalTrimmedStringList(configuredState.env.allOf),
+          anyOf: normalizeOptionalTrimmedStringList(configuredState.env.anyOf),
+        })
+      : undefined,
+  });
 }
 
 function normalizePackageChannelPersistedAuthState(
@@ -151,10 +156,14 @@ function normalizePackageChannelPersistedAuthState(
   const specifier = normalizeOptionalString(persistedAuthState.specifier);
   const exportName = normalizeOptionalString(persistedAuthState.exportName);
   return specifier || exportName
-    ? {
-        ...(specifier ? { specifier } : {}),
-        ...(exportName ? { exportName } : {}),
-      }
+    ? omitUndefinedManifestFields({
+        specifier,
+        exportName,
+        backingStore:
+          persistedAuthState.backingStore === "plugin-state"
+            ? ("plugin-state" as const)
+            : undefined,
+      })
     : undefined;
 }
 
@@ -191,34 +200,24 @@ function normalizePackageChannelDoctorCapabilities(
 function normalizePackageChannelCliOptions(
   cliAddOptions: unknown,
 ): PluginPackageChannel["cliAddOptions"] | undefined {
-  if (!Array.isArray(cliAddOptions)) {
-    return undefined;
-  }
-  const normalized = cliAddOptions.flatMap<PluginPackageChannelCliOption>((option) => {
-    if (!isRecord(option)) {
-      return [];
-    }
+  return normalizeManifestObjectList<PluginPackageChannelCliOption>(cliAddOptions, (option) => {
     const flags = normalizeOptionalString(option.flags);
     const description = normalizeOptionalString(option.description);
     if (!flags || !description) {
-      return [];
+      return undefined;
     }
-    const defaultValue =
-      typeof option.defaultValue === "boolean" || typeof option.defaultValue === "string"
-        ? option.defaultValue
-        : undefined;
     const valueType =
       option.valueType === "int" || option.valueType === "list" ? option.valueType : undefined;
-    return [
-      {
-        flags,
-        description,
-        ...(defaultValue !== undefined ? { defaultValue } : {}),
-        ...(valueType ? { valueType } : {}),
-      },
-    ];
+    return omitUndefinedManifestFields<PluginPackageChannelCliOption>({
+      flags,
+      description,
+      defaultValue:
+        typeof option.defaultValue === "boolean" || typeof option.defaultValue === "string"
+          ? option.defaultValue
+          : undefined,
+      valueType,
+    });
   });
-  return normalized.length > 0 ? normalized : undefined;
 }
 
 function normalizePackageChannelSetup(setup: unknown): PluginPackageChannel["setup"] | undefined {
@@ -403,7 +402,12 @@ function resolveInstalledPackageMetadata(
   const fallbackPackageManifest = recordPackageChannel
     ? { channel: recordPackageChannel }
     : undefined;
-  const fallback = fallbackPackageManifest ? { packageManifest: fallbackPackageManifest } : {};
+  // Discovery normalizes absent package metadata to empty dependency maps.
+  const fallback = {
+    packageDependencies: {},
+    packageOptionalDependencies: {},
+    ...(fallbackPackageManifest ? { packageManifest: fallbackPackageManifest } : {}),
+  };
   if (!record.packageJson?.path) {
     return fallback;
   }
@@ -418,6 +422,7 @@ function resolveInstalledPackageMetadata(
     return fallback;
   }
   const packageJson = parsed.value;
+  const packageDescription = normalizeOptionalString(packageJson.description);
   const packageManifest = getPackageManifestMetadata(packageJson);
   const dependencies = normalizePluginDependencySpecs({
     dependencies: packageJson.dependencies,
@@ -426,6 +431,7 @@ function resolveInstalledPackageMetadata(
   if (!packageManifest) {
     return {
       ...fallback,
+      packageDescription,
       packageDependencies: dependencies.dependencies,
       packageOptionalDependencies: dependencies.optionalDependencies,
     };
@@ -437,6 +443,7 @@ function resolveInstalledPackageMetadata(
       : undefined;
   const { channel: _ignoredChannel, ...packageManifestWithoutChannel } = packageManifest;
   return {
+    packageDescription,
     packageManifest: {
       ...packageManifestWithoutChannel,
       ...(channel ? { channel } : {}),
@@ -453,28 +460,23 @@ function toPluginCandidate(
   const rootDir = resolveInstalledPluginRootDir(record);
   const packageMetadata = resolveInstalledPackageMetadata(record, env);
   return recordPluginCandidateInstallOwner(
-    {
+    omitUndefinedManifestFields({
       idHint: record.pluginId,
       effectivePluginId: record.pluginId,
       source: record.source ?? resolveFallbackPluginSource(record),
-      ...(record.setupSource ? { setupSource: record.setupSource } : {}),
+      setupSource: record.setupSource || undefined,
       rootDir,
       origin: record.origin,
-      ...(record.format ? { format: record.format } : {}),
-      ...(record.bundleFormat ? { bundleFormat: record.bundleFormat } : {}),
-      ...(record.packageName ? { packageName: record.packageName } : {}),
-      ...(record.packageVersion ? { packageVersion: record.packageVersion } : {}),
-      ...(packageMetadata.packageManifest
-        ? { packageManifest: packageMetadata.packageManifest }
-        : {}),
-      ...(packageMetadata.packageDependencies
-        ? { packageDependencies: packageMetadata.packageDependencies }
-        : {}),
-      ...(packageMetadata.packageOptionalDependencies
-        ? { packageOptionalDependencies: packageMetadata.packageOptionalDependencies }
-        : {}),
+      format: record.format || undefined,
+      bundleFormat: record.bundleFormat || undefined,
+      packageName: record.packageName || undefined,
+      packageVersion: record.packageVersion || undefined,
+      packageDescription: packageMetadata.packageDescription || undefined,
+      packageManifest: packageMetadata.packageManifest || undefined,
+      packageDependencies: packageMetadata.packageDependencies || undefined,
+      packageOptionalDependencies: packageMetadata.packageOptionalDependencies || undefined,
       packageDir: rootDir,
-    },
+    }),
     resolveInstalledPluginIndexInstallOwner(record),
     isInstalledPluginIndexInstallOwnerAmbiguous(record),
   );
@@ -524,6 +526,15 @@ export function prepareInstalledPluginCandidateResolver(params: {
   );
   return (plugin) => {
     const candidate = toPluginCandidate(plugin, env);
+    // Explicit managed paths carry the requested workspace during discovery;
+    // restore that same provenance when hydrating the persisted inventory.
+    if (
+      candidate.origin === "global" &&
+      (resolveInstalledPluginIndexInstallOwner(plugin) ||
+        isInstalledPluginIndexInstallOwnerAmbiguous(plugin))
+    ) {
+      candidate.workspaceDir = normalizeOptionalString(params.workspaceDir);
+    }
     if (
       candidate.origin === "bundled" &&
       ((sourceRoots.size > 0 &&

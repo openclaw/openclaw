@@ -7,7 +7,7 @@ const LIVE_EDIT_DIFF_MIN_INTERVAL_MS = 250;
 const LIVE_EDIT_DIFF_MAX_PARTIAL_JSON_CHARS = 1024 * 1024;
 const LIVE_EDIT_DIFF_MAX_TRACKED_CALLS = 64;
 
-type LiveEditDiffProgressState = {
+export type LiveEditDiffProgressState = {
   added: number;
   removed: number;
   emittedAdded: number;

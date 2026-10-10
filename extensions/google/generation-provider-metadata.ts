@@ -1,6 +1,9 @@
 import type { ImageGenerationProvider } from "openclaw/plugin-sdk/image-generation";
 import type { MediaUnderstandingProvider } from "openclaw/plugin-sdk/media-understanding";
-import type { MusicGenerationProvider } from "openclaw/plugin-sdk/music-generation";
+import type {
+  MusicGenerationModeCapabilities,
+  MusicGenerationProvider,
+} from "openclaw/plugin-sdk/music-generation";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import type {
   VideoGenerationModeCapabilities,
@@ -95,6 +98,17 @@ export function createGoogleMusicGenerationProviderMetadata(): Omit<
   MusicGenerationProvider,
   "generateMusic"
 > {
+  const createModeCapabilities = (maxInputImages?: number): MusicGenerationModeCapabilities => ({
+    maxTracks: 1,
+    ...(maxInputImages === undefined ? {} : { maxInputImages }),
+    supportsLyrics: true,
+    supportsInstrumental: true,
+    supportsFormat: true,
+    supportedFormatsByModel: {
+      [DEFAULT_GOOGLE_MUSIC_MODEL]: ["mp3"],
+      [GOOGLE_PRO_MUSIC_MODEL]: ["mp3", "wav"],
+    },
+  });
   return {
     id: "google",
     label: "Google",
@@ -102,27 +116,10 @@ export function createGoogleMusicGenerationProviderMetadata(): Omit<
     models: [DEFAULT_GOOGLE_MUSIC_MODEL, GOOGLE_PRO_MUSIC_MODEL],
     isConfigured: isGoogleProviderConfigured,
     capabilities: {
-      generate: {
-        maxTracks: 1,
-        supportsLyrics: true,
-        supportsInstrumental: true,
-        supportsFormat: true,
-        supportedFormatsByModel: {
-          [DEFAULT_GOOGLE_MUSIC_MODEL]: ["mp3"],
-          [GOOGLE_PRO_MUSIC_MODEL]: ["mp3", "wav"],
-        },
-      },
+      generate: createModeCapabilities(),
       edit: {
         enabled: true,
-        maxTracks: 1,
-        maxInputImages: GOOGLE_MAX_INPUT_IMAGES,
-        supportsLyrics: true,
-        supportsInstrumental: true,
-        supportsFormat: true,
-        supportedFormatsByModel: {
-          [DEFAULT_GOOGLE_MUSIC_MODEL]: ["mp3"],
-          [GOOGLE_PRO_MUSIC_MODEL]: ["mp3", "wav"],
-        },
+        ...createModeCapabilities(GOOGLE_MAX_INPUT_IMAGES),
       },
     },
   };

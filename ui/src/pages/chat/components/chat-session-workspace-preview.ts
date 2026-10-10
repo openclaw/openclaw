@@ -5,7 +5,6 @@ import {
   setSessionWorkspaceError,
   isCurrentSessionWorkspace,
   openSessionWorkspacePreview,
-  requestWorkspaceUpdate,
 } from "./chat-session-workspace-state.ts";
 import type {
   SessionWorkspaceHost,
@@ -31,6 +30,7 @@ export function openWorkspaceItem<T>(
     label: string;
     resolveLabel?: (result: T) => string | undefined;
     resolveKey?: (result: T) => string | undefined;
+    resolveError?: (error: unknown) => string | undefined;
   },
 ) {
   if (!state.client || !state.connected) {
@@ -44,7 +44,8 @@ export function openWorkspaceItem<T>(
     },
   } as const;
   const preview = openSessionWorkspacePreview(state, itemId, request.fileTab.label, request);
-  workspace.activeId = itemId;
+  const selectionId = preview.canonicalKey ?? itemId;
+  workspace.activeId = selectionId;
   if (options.line != null) {
     preview.navigation = { line: options.line };
     workspace.navigationOrder = (workspace.navigationOrder ?? 0) + 1;
@@ -91,8 +92,7 @@ export function openWorkspaceItem<T>(
       return;
     }
     setSessionWorkspaceError(workspace, message, read);
-    const unavailable = { kind: "unavailable" as const, message };
-    preview.content = unavailable;
+    preview.content = { kind: "unavailable", message };
     read.published = capturePreview(preview);
     workspace.previews = [...workspace.previews];
   };
@@ -108,6 +108,9 @@ export function openWorkspaceItem<T>(
         return;
       }
       if (isCurrent()) {
+        if (workspace.activeId === selectionId && canonicalKey) {
+          workspace.activeId = canonicalKey;
+        }
         const canonical = canonicalKey
           ? workspace.previews.find(
               (entry) => entry !== preview && entry.canonicalKey === canonicalKey,
@@ -162,9 +165,9 @@ export function openWorkspaceItem<T>(
         workspace.previews = [...workspace.previews];
       }
     } catch (error) {
-      fail(formatUiError(error));
+      fail(options.resolveError?.(error) ?? formatUiError(error));
     } finally {
-      requestWorkspaceUpdate(state);
+      state.requestUpdate?.();
     }
   })();
 }

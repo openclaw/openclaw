@@ -17,6 +17,56 @@ Targets one real private Slack channel with two distinct bots: a driver bot
 controlled by the harness and a SUT bot started by the child OpenClaw gateway
 through the bundled Slack plugin.
 
+Once the Slack QA adapter loads, it requires async proxy capture support so write
+evidence can be read without running SQLite on the Gateway thread. If that
+capability is missing, adapter creation asks you to upgrade before acquiring
+credentials or contacting Slack. This does not guarantee that the current QA CLI
+loads on older hosts: use a matching current source checkout and see the
+[older-host import limitation](/concepts/qa-e2e-automation/operator-flow#operator-flow).
+
+### Agent E2E recipes
+
+Use `.agents/skills/slack-e2e/SKILL.md` from the checkout under test for reusable
+native fixtures, Gateway replies, and runtime/config experiments. With an
+existing authenticated Convex CLI that can access the QA broker:
+
+```bash
+pnpm openclaw qa slack --doctor
+pnpm openclaw qa slack \
+  --scenario-file qa/scenarios/channels/slack-e2e-lifecycle.yaml
+```
+
+These opt-in modes discover credentials in memory and default to Convex, the CI
+role, and `mock-openai`. Explicit flags or credential environment settings take
+precedence; ordinary `qa slack` defaults remain unchanged. Repeat
+`--scenario-file` for complete custom YAML flows declaring
+`execution.channel: slack` and `execution.config.agentE2e: true`. Native writes
+run once; positive `retryCount` values are rejected.
+
+Readiness checks the actual lease's identities, shared workspace, channel access,
+Gateway connection, and advertised scopes. The full lifecycle additionally needs
+driver `reactions:read`, `reactions:write`, `files:read`, and `files:write`.
+The driver manifest below includes those capabilities. Existing installations
+need the app owner to add missing scopes and reinstall the app before rerunning
+the lifecycle. A missing scope blocks its operation and full lifecycle proof,
+not basic text flows. The runner does not grant permissions or rotate credentials
+to find a passing result. Bot OAuth scopes, not workspace-admin privileges,
+authorize these fixture operations.
+
+The driver uses Web API calls; the SUT alone owns Socket Mode. Stored
+message/file/reaction readback proves native state, while a correlated SUT reply
+proves Gateway ingress and delivery. Neither proves client rendering, human slash
+commands, button clicks, Agent View, or human typing. Use the
+[manual client workflow](/concepts/qa-e2e-automation/operator-flow#mantis-slack-desktop-and-visual-task-runners)
+for those claims.
+
+Cleanup captures final Gateway write receipts after process shutdown and before
+temporary capture state is removed, then removes only owned fixtures before
+releasing the lease. Private `<scenario-id>-slack-e2e.json` receipts distinguish
+accepted writes, stored state, and incomplete cleanup.
+
+### Direct credential setup
+
 Required env when `--credential-source env`:
 
 - `OPENCLAW_QA_SLACK_CHANNEL_ID`
@@ -45,17 +95,17 @@ Slack YAML module scenarios (`qa/scenarios/channels/slack-*.yaml`):
   exactly one SUT reply after message/app-mention twin delivery, confirms a
   native threaded follow-up can recall that bot reply, then closes the MPIM.
 - `slack-allowlist-block`
-- `slack-channel-disabled-warning` - opt-in real-Slack probe that confirms a
+- `slack-channel-disabled-warning` - opt-in real-Slack check that confirms a
   configured disabled channel emits a structured warning without replying.
 - `slack-top-level-reply-shape`
 - `slack-restart-resume`
 - `slack-progress-commentary-true`, `slack-progress-commentary-false`,
   `slack-progress-commentary-omitted`, and
-  `slack-progress-commentary-verbose-dedupe` / `slack-progress-commentary-verbose-full` - opt-in real-Slack probes for
+  `slack-progress-commentary-verbose-dedupe` / `slack-progress-commentary-verbose-full` - opt-in real-Slack checks for
   independent commentary/tool-progress controls, the omitted-key legacy
   default, and single-delivery behavior for durable verbose progress. The `on`
-  probe requires a safe Exec summary without command text or output; the `full`
-  probe requires the exact stdout marker in a separate tool-output message.
+  check requires a safe Exec summary without command text or output; the `full`
+  check requires the exact stdout marker in a separate tool-output message.
   Both use the same command and require one commentary identity separate from
   the final answer. Full verbosity allows the runtime's command metadata and
   one separate start summary, while requiring a unique completed-output identity.
@@ -157,7 +207,16 @@ then _Install to Workspace_:
   },
   "oauth_config": {
     "scopes": {
-      "bot": ["chat:write", "channels:history", "groups:history", "users:read"]
+      "bot": [
+        "channels:history",
+        "chat:write",
+        "files:read",
+        "files:write",
+        "groups:history",
+        "reactions:read",
+        "reactions:write",
+        "users:read"
+      ]
     }
   },
   "settings": {
@@ -167,8 +226,8 @@ then _Install to Workspace_:
 ```
 
 Copy the _Bot User OAuth Token_ (`xoxb-...`) - that becomes
-`driverBotToken`. The driver only needs to post messages and identify
-itself; no events, no Socket Mode.
+`driverBotToken`. The driver can read/write fixture messages, reactions, and files;
+it needs neither event subscriptions nor Socket Mode.
 
 **2. Create the SUT app**
 

@@ -11,6 +11,7 @@ import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runt
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { stateMigrations } from "./doctor-contract-api.js";
+import { crabboxState } from "./src/crabbox-state.test-support.js";
 import { crabboxLegacyWarmImageCaptureSelector } from "./src/crabbox-worker-warm-image-records.js";
 import {
   listCrabboxLegacyWarmLeases,
@@ -89,7 +90,9 @@ describe("Crabbox warm-profile Doctor migration", () => {
     "preserves $name across SQLite reopen without fabricating an allocation",
     async ({ record }) => {
       await legacyImages().register("profile", record);
-      expect(() => openCrabboxWarmImageStore(env).lookup("profile")).toThrow("doctor --fix");
+      await expect(openCrabboxWarmImageStore(crabboxState, env).lookup("profile")).rejects.toThrow(
+        "doctor --fix",
+      );
       const before = await legacyImages().lookup("profile");
       expect(await migration.detectLegacyState(input())).not.toBeNull();
       expect(await legacyImages().lookup("profile")).toEqual(before);
@@ -99,7 +102,7 @@ describe("Crabbox warm-profile Doctor migration", () => {
       await closeOpenClawStateDatabaseAsync();
       resetPluginStateStoreForTests();
       const { operation, lastUsedAtMs: _lastUsedAtMs, ...metadata } = record;
-      expect(openCrabboxWarmImageStore(env).lookup("profile")).toEqual({
+      expect(await openCrabboxWarmImageStore(crabboxState, env).lookup("profile")).toEqual({
         version: 3,
         image: {
           ...metadata,
@@ -155,7 +158,7 @@ describe("Crabbox warm-profile Doctor migration", () => {
       expect((await migration.migrateLegacyState(input())).warnings).toEqual([]);
       await closeOpenClawStateDatabaseAsync();
       resetPluginStateStoreForTests();
-      const migrated = openCrabboxWarmImageStore(env).lookup("profile");
+      const migrated = await openCrabboxWarmImageStore(crabboxState, env).lookup("profile");
       expect(migrated).toEqual({
         version: 3,
         projectKey: "project-v2",
@@ -195,7 +198,7 @@ describe("Crabbox warm-profile Doctor migration", () => {
     await closeOpenClawStateDatabaseAsync();
     resetPluginStateStoreForTests();
 
-    expect(openCrabboxWarmImageStore(env).lookup("reserved")).toEqual({
+    expect(await openCrabboxWarmImageStore(crabboxState, env).lookup("reserved")).toEqual({
       version: 3,
       allocations: {},
       operation: {
@@ -214,7 +217,7 @@ describe("Crabbox warm-profile Doctor migration", () => {
       overflowPolicy: "evict-oldest",
     });
     await store.register("cbx_legacy", { machineClass: "tiny" });
-    const [lease] = listCrabboxLegacyWarmLeases(env);
+    const [lease] = await listCrabboxLegacyWarmLeases(crabboxState, env);
     const command = `openclaw crabbox warm-images --recover ${lease!.selector} --acknowledge-provider-cleanup`;
 
     expect((await migration.detectLegacyState(input()))?.preview.join("\n")).toContain(command);

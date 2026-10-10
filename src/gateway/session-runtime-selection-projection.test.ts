@@ -1,14 +1,13 @@
 import { describe, expect, it } from "vitest";
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { readAcpSessionMetaForEntries } from "../acp/runtime/session-meta-readonly.js";
 import { upsertAcpSessionMeta } from "../acp/runtime/session-meta.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { projectChatSessionMetadata } from "./server-methods/chat-metadata-session-projection.js";
-import {
-  buildGatewaySessionEventFields,
-  buildGatewaySessionSnapshot,
-} from "./session-event-payload.js";
+import { createChatMetadataHarness } from "./server-methods/chat-metadata-runtime.test-support.js";
+import { buildGatewaySessionSnapshot } from "./session-event-payload.js";
 import { projectSessionPatchResult } from "./session-utils-model.js";
 import { buildGatewaySessionRow } from "./session-utils-row.js";
 import { projectSessionsPatchEntry } from "./sessions-patch.js";
@@ -21,10 +20,11 @@ const catalog = [
 describe("session runtime selection ownership projection", () => {
   it.each([
     { kind: "acp", key: "agent:main:main", locked: true },
-    { kind: "native-lock", key: "agent:main:locked", locked: true },
+    { kind: "locked-harness", key: "agent:main:locked-harness", locked: true },
+    { kind: "locked-override", key: "agent:main:locked-override", locked: true },
+    { kind: "historical-harness", key: "agent:main:historical-harness", locked: false },
+    { kind: "acp-locked-harness", key: "agent:main:acp:locked-harness", locked: true },
     { kind: "runtime-pin", key: "agent:main:pinned", locked: false },
-    { kind: "key-only", key: "agent:main:acp:no-owner", locked: false },
-    { kind: "replaced-acp", key: "agent:main:replaced", locked: false },
   ])(
     "projects $kind from the authoritative row through all client surfaces",
     async ({ kind, key, locked }) => {
@@ -43,16 +43,25 @@ describe("session runtime selection ownership projection", () => {
               },
             },
           };
-          let entry: SessionEntry = {
+          const modelLocked = ["locked-harness", "locked-override", "acp-locked-harness"].includes(
+            kind,
+          );
+          const entry: SessionEntry = {
             sessionId: "current-session",
             lifecycleRevision: "current-revision",
             updatedAt: 1,
-            ...(kind === "native-lock" ? { modelSelectionLocked: true } : {}),
-            ...(kind === "runtime-pin" ? { agentRuntimeOverride: "codex" } : {}),
+            ...(modelLocked ? { modelSelectionLocked: true } : {}),
+            ...(["locked-harness", "historical-harness", "acp-locked-harness"].includes(kind)
+              ? { agentHarnessId: "codex" }
+              : {}),
+            ...(kind === "runtime-pin" || kind === "locked-override"
+              ? { agentRuntimeOverride: "codex" }
+              : {}),
+            thinkingLevel: "high",
           };
           const scope = { agentId: "main", sessionKey: key, env: state.env };
           await upsertSessionEntryCore(scope, entry);
-          if (kind === "acp" || kind === "replaced-acp") {
+          if (kind === "acp" || kind === "acp-locked-harness") {
             await upsertAcpSessionMeta({
               cfg,
               agentId: "main",
@@ -68,15 +77,16 @@ describe("session runtime selection ownership projection", () => {
               }),
             });
           }
-          if (kind === "replaced-acp") {
-            entry = { ...entry, lifecycleRevision: "replacement-revision" };
-            await upsertSessionEntryCore(scope, entry);
-          }
+          const [acpMeta] = await readAcpSessionMetaForEntries({
+            cfg,
+            entries: [{ agentId: "main", sessionKey: key, entry }],
+          });
           const row = buildGatewaySessionRow({
             cfg,
             agentId: "main",
             key,
             entry,
+            preparedAcpMeta: acpMeta ?? null,
             store: { [key]: entry },
             storePath: state.statePath("agents", "main", "sessions", "sessions.json"),
             modelCatalog: catalog,
@@ -84,26 +94,52 @@ describe("session runtime selection ownership projection", () => {
             skipTranscriptUsageFallback: true,
           });
           expect(row.runtimeSelectionLocked).toBe(locked);
-          expect(row.modelSelectionLocked).toBe(kind === "native-lock" ? true : undefined);
+          expect(row.modelSelectionLocked).toBe(modelLocked ? true : undefined);
           if (kind === "runtime-pin") {
             expect(row.agentRuntime?.source).toBe("session-key");
           }
-          const metadata = projectChatSessionMetadata(
-            { agentId: "main", sessionKey: key, sessionEntry: entry },
-            { models: [], swarmEnabled: false },
-            cfg,
-          );
-          expect(metadata.runtimeSelectionLocked).toBe(locked);
+          const metadata = createChatMetadataHarness(cfg);
+          await metadata.runtime.refresh();
+          const hostSql = observeHostDataSql();
+          try {
+            const params = { agentId: "main", sessionKey: key, sessionEntry: entry };
+            expect((await metadata.runtime.read(params)).runtimeSelectionLocked).toBe(locked);
+            expect(
+              (await metadata.runtime.readStartup(params))?.metadata?.runtimeSelectionLocked,
+            ).toBe(locked);
+            expect(
+              await metadata.runtime.readStartup({ ...params, readPolicy: "ready" }),
+            ).not.toHaveProperty("metadata");
+            expect(hostSql.queries.filter((sql) => /\bacp_sessions\b/i.test(sql))).toEqual([]);
+          } finally {
+            hostSql.restore();
+            await metadata.runtime.stop();
+          }
           const patched = projectSessionPatchResult({
             cfg,
             canonicalKey: key,
             entry,
+            preparedAcpMeta: acpMeta ?? null,
             targetAgentId: "main",
             storePath: state.statePath("agents", "main", "sessions", "sessions.json"),
             modelCatalog: catalog,
           });
           expect(patched.resolved?.runtimeSelectionLocked).toBe(locked);
-          expect(buildGatewaySessionEventFields({ sessionRow: row }).runtimeSelectionLocked).toBe(
+          const expectedRuntime =
+            kind === "locked-harness" || kind === "locked-override"
+              ? { id: "codex", source: "session" }
+              : kind === "acp-locked-harness"
+                ? { id: "acpx", source: "session-key" }
+                : kind === "historical-harness"
+                  ? { id: "openclaw", source: "model" }
+                  : undefined;
+          if (expectedRuntime) {
+            expect(row.agentRuntime).toMatchObject(expectedRuntime);
+            expect(patched.resolved?.agentRuntime).toEqual(expectedRuntime);
+          }
+          expect(row.thinkingLevel).toBe("high");
+          expect(patched.resolved?.thinkingLevel).toBe("high");
+          expect(buildGatewaySessionSnapshot({ sessionRow: row }).runtimeSelectionLocked).toBe(
             locked,
           );
           const lifecycle = buildGatewaySessionSnapshot({

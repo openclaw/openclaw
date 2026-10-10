@@ -16,5 +16,27 @@ describe("ClawHub catalog icon registry", () => {
     );
     expect(resolveClawHubCatalogIconUrl("https://cdn.example.com/other.svg")).toBeUndefined();
     expect(resolveClawHubCatalogIconUrl("http://cdn.example.com/insecure.svg")).toBeUndefined();
+    for (const invalid of [
+      "https://[invalid/icon.svg",
+      "https://user:password@cdn.example.com/icon.svg",
+      "https://cdn.example.com/icon.svg#fragment",
+      `${" ".repeat(2048)}https://cdn.example.com/icon.svg`,
+    ]) {
+      registerClawHubCatalogIconUrls([invalid]);
+      expect(resolveClawHubCatalogIconUrl(invalid)).toBeUndefined();
+    }
+  });
+
+  it("retains the latest 1024 registered URLs without promoting reads", () => {
+    const iconUrl = (index: number) => `https://cdn.example.com/retained-icon-${index}.svg`;
+    registerClawHubCatalogIconUrls(Array.from({ length: 1024 }, (_, index) => iconUrl(index)));
+    registerClawHubCatalogIconUrls([iconUrl(0)]);
+    expect(resolveClawHubCatalogIconUrl(iconUrl(1))).toBe(iconUrl(1));
+
+    registerClawHubCatalogIconUrls([iconUrl(1024)]);
+
+    expect(resolveClawHubCatalogIconUrl(iconUrl(1))).toBeUndefined();
+    expect(resolveClawHubCatalogIconUrl(iconUrl(0))).toBe(iconUrl(0));
+    expect(resolveClawHubCatalogIconUrl(iconUrl(2))).toBe(iconUrl(2));
   });
 });

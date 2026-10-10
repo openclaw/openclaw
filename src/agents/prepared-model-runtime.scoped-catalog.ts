@@ -5,7 +5,7 @@ import { modelCatalogRowToEntry } from "./model-catalog-entry.js";
 import { createPreparedModelCatalogProviderNormalizer } from "./model-catalog-provider-normalizer.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 import { ensureOpenClawModelsJson, planOpenClawModelsJsonSource } from "./models-config.js";
-import { loadPersistedPluginModelCatalogsReadOnly } from "./plugin-model-catalog.js";
+import { loadPersistedPluginModelCatalogs } from "./plugin-model-catalog-execution.js";
 import type {
   PreparedModelRuntimeAgentFacts,
   PreparedModelRuntimeCatalogSource,
@@ -18,19 +18,20 @@ import {
   materializePreparedModelCatalog,
   prepareFullCatalogFacts,
 } from "./prepared-model-runtime.full-catalog.js";
+import { discardPreparedPluginGeneration } from "./prepared-model-runtime.plugin-lifetime.js";
 import type {
   PreparedModelRuntimeCatalogMode,
   PreparedModelRuntimeInput,
   PreparedModelRuntimePluginGeneration,
 } from "./prepared-model-runtime.types.js";
-import type { ProviderCatalogInventoryCapture } from "./provider-model-membership.js";
 
 const MODEL_RUNTIME_PROVIDER_DISCOVERY_TIMEOUT_MS = 5_000;
 
-async function prepareScopedReadOnlyModelCatalogWithMode(
+/** Builds a request-scoped read-only catalog; live discovery requires an explicit mode. */
+export async function prepareScopedReadOnlyModelCatalog(
   input: PreparedModelRuntimeInput,
   providerDiscoveryProviderIds: readonly string[],
-  catalogMode: PreparedModelRuntimeCatalogMode,
+  catalogMode: PreparedModelRuntimeCatalogMode = "static",
 ): Promise<ModelCatalogSnapshot> {
   const scopedInput = input.readOnly ? input : { ...input, readOnly: true };
   const { agentFacts, pluginGeneration } = await prepareWorkspaceBuildGroup(
@@ -38,6 +39,9 @@ async function prepareScopedReadOnlyModelCatalogWithMode(
     catalogMode,
     { providerDiscoveryProviderIds },
   );
+  await using _ = {
+    [Symbol.asyncDispose]: () => discardPreparedPluginGeneration(pluginGeneration),
+  };
   const agentFactsForInput = agentFacts[0];
   if (!agentFactsForInput) {
     throw new Error("scoped prepared model catalog facts are missing");
@@ -64,24 +68,8 @@ async function prepareScopedReadOnlyModelCatalogWithMode(
   );
 }
 
-/** Builds a request-scoped read-only catalog without executing live provider discovery. */
-export function prepareScopedReadOnlyModelCatalog(
-  input: PreparedModelRuntimeInput,
-  providerDiscoveryProviderIds: readonly string[],
-): Promise<ModelCatalogSnapshot> {
-  return prepareScopedReadOnlyModelCatalogWithMode(input, providerDiscoveryProviderIds, "static");
-}
-
-/** Builds a request-scoped read-only catalog with live discovery for selected providers. */
-export function prepareScopedReadOnlyLiveModelCatalog(
-  input: PreparedModelRuntimeInput,
-  providerDiscoveryProviderIds: readonly string[],
-): Promise<ModelCatalogSnapshot> {
-  return prepareScopedReadOnlyModelCatalogWithMode(input, providerDiscoveryProviderIds, "live");
-}
-
 export async function prepareAgentCatalogSource(
-  agentFacts: PreparedModelRuntimeAgentFacts,
+  agentFacts: Pick<PreparedModelRuntimeAgentFacts, "input" | "env" | "providerIds">,
   pluginGeneration: PreparedModelRuntimePluginGeneration,
   catalogMode: PreparedModelRuntimeCatalogMode,
   persist = true,
@@ -89,7 +77,6 @@ export async function prepareAgentCatalogSource(
     authStore?: AuthProfileStore;
     providerDiscoveryProviderIds?: readonly string[];
     providerDiscoveryTimeoutMs?: number;
-    providerCatalogInventory?: ProviderCatalogInventoryCapture;
   } = {},
 ): Promise<PreparedModelRuntimeCatalogSource> {
   const { env, input, providerIds } = agentFacts;
@@ -119,6 +106,7 @@ export async function prepareAgentCatalogSource(
       : {}),
     ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
     ...(input.env ? { env } : {}),
+    ...(catalogMode === "live" ? { onProviderCatalogOutcome: recordProviderOutcome } : {}),
     ...(catalogMode === "static"
       ? {
           providerDiscoveryEntriesOnly: true as const,
@@ -132,9 +120,7 @@ export async function prepareAgentCatalogSource(
     if (!persist) {
       const source = await planOpenClawModelsJsonSource(input.config, input.agentDir, {
         ...options,
-        providerCatalogInventory: sourceOptions.providerCatalogInventory,
         ...(sourceOptions.authStore ? { authStore: sourceOptions.authStore } : {}),
-        ...(catalogMode === "live" ? { onProviderCatalogOutcome: recordProviderOutcome } : {}),
       });
       return {
         modelsJsonContents: source.modelsJsonContents,
@@ -143,16 +129,13 @@ export async function prepareAgentCatalogSource(
       };
     }
     if (!input.readOnly) {
-      await ensureOpenClawModelsJson(input.config, input.agentDir, {
-        ...options,
-        ...(catalogMode === "live" ? { onProviderCatalogOutcome: recordProviderOutcome } : {}),
-      });
+      await ensureOpenClawModelsJson(input.config, input.agentDir, options);
     }
     // Capture immediately after the serialized write. Another owner may share this directory and
     // publish a different workspace generation before full-catalog parsing begins.
     return {
       modelsJsonContents: captureModelsJsonContents(input.agentDir),
-      pluginCatalogs: loadPersistedPluginModelCatalogsReadOnly(input.agentDir),
+      pluginCatalogs: await loadPersistedPluginModelCatalogs(input.agentDir, undefined, env),
       providerOutcomes: resultOutcomes(),
     };
   };

@@ -59,65 +59,41 @@ describe("ensure-cli-startup-build", () => {
     expect(result).toEqual({ built: false });
   });
 
-  it("runs the cliStartup build profile when startup metadata is missing", () => {
-    const root = makeTempRoot();
-    mkdirSync(path.join(root, "dist"), { recursive: true });
-    writeFileSync(path.join(root, "dist", "entry.js"), "export {};\n", "utf8");
-    const calls: unknown[] = [];
+  it.each(["startup metadata", "dist entry output"])(
+    "runs the cliStartup build profile when %s is missing",
+    (missing) => {
+      const root = makeTempRoot();
+      if (missing === "startup metadata") {
+        mkdirSync(path.join(root, "dist"), { recursive: true });
+        writeFileSync(path.join(root, "dist", "entry.js"), "export {};\n", "utf8");
+      }
+      const calls: unknown[] = [];
 
-    const result = ensureCliStartupBuild({
-      rootDir: root,
-      nodeExecPath: "/node",
-      spawnSync: (command, args, options) => {
-        calls.push({ command, args, options });
-        return { status: 0 };
-      },
-      stdio: "pipe",
-    });
+      const result = ensureCliStartupBuild({
+        rootDir: root,
+        nodeExecPath: "/node",
+        spawnSync: (command, args, options) => {
+          calls.push({ command, args, options });
+          return { status: 0 };
+        },
+        stdio: "pipe",
+      });
 
-    expect(result).toEqual({ built: true });
-    expect(calls).toEqual([
-      {
-        command: "/node",
-        args: ["--import", "tsx", path.join(root, "scripts", "build-all.mts"), "cliStartup"],
-        options: expect.objectContaining({
-          cwd: root,
-          killSignal: "SIGKILL",
-          stdio: "pipe",
-          timeout: 10 * 60 * 1000,
-        }),
-      },
-    ]);
-  });
-
-  it("runs the cliStartup build profile when dist entry output is missing", () => {
-    const root = makeTempRoot();
-    const calls: unknown[] = [];
-
-    const result = ensureCliStartupBuild({
-      rootDir: root,
-      nodeExecPath: "/node",
-      spawnSync: (command, args, options) => {
-        calls.push({ command, args, options });
-        return { status: 0 };
-      },
-      stdio: "pipe",
-    });
-
-    expect(result).toEqual({ built: true });
-    expect(calls).toEqual([
-      {
-        command: "/node",
-        args: ["--import", "tsx", path.join(root, "scripts", "build-all.mts"), "cliStartup"],
-        options: expect.objectContaining({
-          cwd: root,
-          killSignal: "SIGKILL",
-          stdio: "pipe",
-          timeout: 10 * 60 * 1000,
-        }),
-      },
-    ]);
-  });
+      expect(result).toEqual({ built: true });
+      expect(calls).toEqual([
+        {
+          command: "/node",
+          args: ["--import", "tsx", path.join(root, "scripts", "build-all.mts"), "cliStartup"],
+          options: expect.objectContaining({
+            cwd: root,
+            killSignal: "SIGKILL",
+            stdio: "pipe",
+            timeout: 10 * 60 * 1000,
+          }),
+        },
+      ]);
+    },
+  );
 
   it("uses the configured cliStartup build timeout", () => {
     const root = makeTempRoot();

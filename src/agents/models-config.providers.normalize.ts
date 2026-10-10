@@ -1,12 +1,13 @@
-/** Normalizes provider settings and resolves current credential sources. */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
-import { ensureAuthProfileStore } from "./auth-profiles/store-runtime.js";
 import {
-  normalizeProviderSpecificConfig,
-  resolveProviderConfigApiKeyResolver,
-} from "./models-config.providers.policy.js";
+  normalizeProviderConfigWithPlugin,
+  resolveProviderConfigApiKeyWithPlugin,
+} from "../plugins/provider-runtime.js";
+import { appendConfigPathSegment } from "../shared/dot-path.js";
+import { ensureAuthProfileStore } from "./auth-profiles/store-runtime.js";
+import { resolveProviderPluginLookupKey } from "./models-config.providers.policy.lookup.js";
 import type { ProviderConfig, SecretDefaults } from "./models-config.providers.secret-helpers.js";
 import {
   normalizeConfiguredProviderApiKey,
@@ -83,7 +84,7 @@ export function normalizeProviders(params: {
       sourceProvider?.providerConfig.apiKey !== undefined
         ? {
             config: params.sourceConfigForSecrets,
-            path: `models.providers.${sourceProvider.providerKey}.apiKey`,
+            path: `${appendConfigPathSegment("models.providers", sourceProvider.providerKey)}.apiKey`,
             value: sourceProvider.providerConfig.apiKey,
             defaults: params.sourceConfigForSecrets?.secrets?.defaults,
           }
@@ -93,7 +94,6 @@ export function normalizeProviders(params: {
       sourceInput,
       provider: normalizedProvider,
       secretDefaults: params.secretDefaults,
-      profileApiKey: undefined,
       secretRefManagedProviders: params.secretRefManagedProviders,
     });
 
@@ -111,13 +111,10 @@ export function normalizeProviders(params: {
     const needsProfileApiKey =
       Array.isArray(normalizedProvider.models) &&
       normalizedProvider.models.length > 0 &&
-      !(
-        (typeof normalizedProvider.apiKey === "string" && normalizedProvider.apiKey.trim()) ||
-        normalizedProvider.apiKey
-      );
+      !normalizedProvider.apiKey;
     const profileApiKey = needsProfileApiKey ? resolveProfileApiKey(normalizedKey) : undefined;
-    const providerApiKeyResolver = needsProfileApiKey
-      ? resolveProviderConfigApiKeyResolver(normalizedKey, undefined, params.manifestRegistry)
+    const runtimeProviderKey = needsProfileApiKey
+      ? resolveProviderPluginLookupKey(normalizedKey).trim()
       : undefined;
     normalizedProvider = resolveMissingProviderApiKey({
       providerKey: normalizedKey,
@@ -125,14 +122,23 @@ export function normalizeProviders(params: {
       env,
       profileApiKey,
       secretRefManagedProviders: params.secretRefManagedProviders,
-      providerApiKeyResolver,
+      providerApiKeyResolver:
+        runtimeProviderKey !== undefined
+          ? (providerEnv) =>
+              resolveProviderConfigApiKeyWithPlugin({
+                provider: runtimeProviderKey,
+                ...(params.manifestRegistry ? { manifestRegistry: params.manifestRegistry } : {}),
+                context: { provider: normalizedKey, env: providerEnv },
+              })
+          : undefined,
     });
 
-    normalizedProvider = normalizeProviderSpecificConfig(
-      normalizedKey,
-      normalizedProvider,
-      params.manifestRegistry,
-    );
+    normalizedProvider =
+      normalizeProviderConfigWithPlugin({
+        provider: resolveProviderPluginLookupKey(normalizedKey, normalizedProvider),
+        ...(params.manifestRegistry ? { manifestRegistry: params.manifestRegistry } : {}),
+        context: { provider: normalizedKey, providerConfig: normalizedProvider },
+      }) ?? normalizedProvider;
 
     mutated ||= normalizedProvider !== provider;
 

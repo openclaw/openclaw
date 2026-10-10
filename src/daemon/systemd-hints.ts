@@ -1,4 +1,3 @@
-/** Renders Linux systemd availability hints for gateway service commands. */
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveDaemonContainerContext } from "./container-context.js";
 import {
@@ -12,16 +11,8 @@ type SystemdUnavailableHintOptions = {
   env?: Record<string, string | undefined>;
 };
 
-/** Detects details that should get systemd availability repair hints. */
 export function isSystemdUnavailableDetail(detail?: string): boolean {
   return classifySystemdUnavailableDetail(detail) !== null;
-}
-
-function renderSystemdHeadlessServerHints(): string[] {
-  return [
-    "On a headless server (SSH/no desktop session): run `sudo loginctl enable-linger $(whoami)` to persist your systemd user session across logins.",
-    "Also ensure XDG_RUNTIME_DIR is set: `export XDG_RUNTIME_DIR=/run/user/$(id -u)`, then retry.",
-  ];
 }
 
 export function renderSystemdUnavailableHints(
@@ -39,7 +30,10 @@ export function renderSystemdUnavailableHints(
     "systemd user services are unavailable; install/enable systemd or run the gateway under your supervisor.",
     ...(resolveDaemonContainerContext(options.env) || options.kind !== "user_bus_unavailable"
       ? []
-      : renderSystemdHeadlessServerHints()),
+      : [
+          "On a headless server (SSH/no desktop session): run `sudo loginctl enable-linger $(whoami)` to persist your systemd user session across logins.",
+          "Also ensure XDG_RUNTIME_DIR is set: `export XDG_RUNTIME_DIR=/run/user/$(id -u)`, then retry.",
+        ]),
     `If you're in a container, run the gateway in the foreground instead of \`${formatCliCommand("openclaw gateway", options.env)}\`.`,
   ];
 }

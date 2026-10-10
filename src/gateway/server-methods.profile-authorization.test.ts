@@ -1,19 +1,21 @@
 import { describe, expect, it, vi } from "vitest";
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { loadSessionEntry, upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import {
-  ensureProfileForEmail,
-  getUserProfileListItem,
-  linkEmail,
-} from "../state/user-profiles.js";
+import { getUserProfileListItem } from "../state/user-profile-list-item.test-support.js";
+import { linkEmail } from "../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createGatewayMethodRegistry } from "./methods/registry.js";
+import { READ_SCOPE, SESSION_READ_SCOPE } from "./operator-scopes.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import { createLazyCoreHandlers } from "./server-methods/lazy-core-handlers.js";
+import { readGatewayRequestMutationAuthority } from "./server-methods/session-mutation-guards.js";
 import { sessionMutationHandlers } from "./server-methods/sessions-mutations.js";
-import { talkModeHandlers } from "./server-methods/talk-mode.js";
 import type { GatewayRequestHandler } from "./server-methods/types.js";
+import * as sessionGroupCatalog from "./session-group-catalog.js";
+import { talkModeHandlers } from "./talk/handlers/mode.js";
 
 function createPendingProfileClient() {
   return {
@@ -65,6 +67,106 @@ async function dispatchPendingProfileMethod(params: {
 }
 
 describe("Gateway pending-profile authorization", () => {
+  it.each([
+    ["models.list", SESSION_READ_SCOPE, SESSION_READ_SCOPE],
+    ["models.list", READ_SCOPE, READ_SCOPE],
+    ["models.list", READ_SCOPE, SESSION_READ_SCOPE],
+    ["models.list", SESSION_READ_SCOPE, READ_SCOPE],
+    ["sessions.groups.list", SESSION_READ_SCOPE, SESSION_READ_SCOPE],
+    ["sessions.groups.list", READ_SCOPE, READ_SCOPE],
+    ["sessions.groups.list", READ_SCOPE, SESSION_READ_SCOPE],
+    ["sessions.groups.list", SESSION_READ_SCOPE, READ_SCOPE],
+  ])(
+    "retains %s admission through awaited preparation (%s -> %s)",
+    async (method, initial, current) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        const profile = ensureProfileForEmail("catalog-reader@example.test");
+        const client = createPendingProfileClient();
+        client.connect.scopes = [initial];
+        const entered = createDeferredCore();
+        const release = createDeferredCore();
+        const admittedScopes: Array<string | undefined> = [];
+        const handler = vi.fn<GatewayRequestHandler>((options) => {
+          admittedScopes.push(readGatewayRequestMutationAuthority(options).sessionScope);
+          options.respond(true, { ok: true });
+        });
+        const identity = {
+          profileId: profile.id,
+          displayName: null,
+          hasAvatar: false,
+          updatedAt: profile.updatedAt,
+        };
+        const groupRead = method === "sessions.groups.list";
+        const ensureCatalog = sessionGroupCatalog.ensureSessionGroupCatalog;
+        using catalogPreparation = groupRead
+          ? vi
+              .spyOn(sessionGroupCatalog, "ensureSessionGroupCatalog")
+              .mockImplementation(async (env) => {
+                await ensureCatalog(env);
+                entered.resolve();
+                await release.promise;
+              })
+          : undefined;
+        if (groupRead) {
+          client.authenticatedUserProfile = identity;
+        }
+        client.authenticatedGitHubIdentitySync = vi.fn(async () => {
+          entered.resolve();
+          await release.promise;
+          client.authenticatedUserProfile = identity;
+          return { profileId: profile.id, updatedAt: profile.updatedAt };
+        });
+        const pending = dispatchPendingProfileMethod({ client, method, handler });
+        try {
+          await Promise.race([entered.promise, pending]);
+          expect(client.authenticatedGitHubIdentitySync).toHaveBeenCalledTimes(groupRead ? 0 : 1);
+          if (groupRead) {
+            expect(catalogPreparation).toHaveBeenCalledOnce();
+          }
+          expect(handler).not.toHaveBeenCalled();
+          client.connect.scopes = [current];
+        } finally {
+          release.resolve();
+        }
+        const response = await pending;
+        if (initial === current) {
+          expect(response).toHaveBeenCalledExactlyOnceWith(true, { ok: true });
+          expect(admittedScopes).toEqual([
+            initial === SESSION_READ_SCOPE ? SESSION_READ_SCOPE : undefined,
+          ]);
+        } else {
+          expect(handler).not.toHaveBeenCalled();
+          expect(response).toHaveBeenCalledExactlyOnceWith(
+            false,
+            undefined,
+            expect.objectContaining({
+              code: "FORBIDDEN",
+              message: "Gateway requester authority changed",
+            }),
+          );
+        }
+      });
+    },
+  );
+
+  it("requires a verified person only when the request uses narrow session admission", async () => {
+    const client = createPendingProfileClient();
+    const handler = vi.fn<GatewayRequestHandler>(({ respond }) => respond(true, { sessions: [] }));
+    client.connect.scopes = ["operator.sessions.read"];
+    const denied = await dispatchPendingProfileMethod({ client, method: "sessions.list", handler });
+    expect(denied).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ code: "FORBIDDEN" }),
+    );
+    expect(handler).not.toHaveBeenCalled();
+
+    client.connect.scopes = ["operator.read"];
+    const broad = await dispatchPendingProfileMethod({ client, method: "sessions.list", handler });
+    expect(broad).toHaveBeenCalledWith(true, { sessions: [] });
+    expect(handler).toHaveBeenCalledOnce();
+  });
+
   it.each([false, true])(
     "rechecks bound webchat talk.mode after node discovery (profile merged: %s)",
     async (merge) => {
@@ -338,38 +440,32 @@ describe("Gateway pending-profile authorization", () => {
     },
   );
 
-  it.each(["chat.send", "models.list"])(
-    "waits for immutable profile attachment before %s dispatch",
-    async (method) => {
-      const deferred = createDeferredCore<{ profileId: string; updatedAt: number }>();
-      const client = createPendingProfileClient();
-      client.authenticatedGitHubIdentitySync = vi.fn(async () => await deferred.promise);
-      const handler = vi.fn<GatewayRequestHandler>(({ respond }) => respond(true, { ok: true }));
+  it("waits for immutable profile attachment before chat.send dispatch", async () => {
+    const deferred = createDeferredCore<{ profileId: string; updatedAt: number }>();
+    const client = createPendingProfileClient();
+    client.authenticatedGitHubIdentitySync = vi.fn(async () => await deferred.promise);
+    const handler = vi.fn<GatewayRequestHandler>(({ respond }) => respond(true, { ok: true }));
 
-      const request = dispatchPendingProfileMethod({
-        client,
-        handler,
-        method,
-        // chat.send requires a session target at the protocol level; the mutation
-        // pipeline rejects targetless frames before profile-dependent dispatch.
-        requestParams:
-          method === "chat.send" ? { sessionKey: "agent:main:main" } : { agentId: "main" },
-      });
-      await Promise.resolve();
-      expect(handler).not.toHaveBeenCalled();
+    const request = dispatchPendingProfileMethod({
+      client,
+      handler,
+      method: "chat.send",
+      requestParams: { sessionKey: "agent:main:main" },
+    });
+    await Promise.resolve();
+    expect(handler).not.toHaveBeenCalled();
 
-      client.authenticatedUserProfile = {
-        profileId: "profile-canonical",
-        displayName: "Canonical",
-        hasAvatar: false,
-        updatedAt: 1,
-      };
-      deferred.resolve({ profileId: "profile-canonical", updatedAt: 1 });
+    client.authenticatedUserProfile = {
+      profileId: "profile-canonical",
+      displayName: "Canonical",
+      hasAvatar: false,
+      updatedAt: 1,
+    };
+    deferred.resolve({ profileId: "profile-canonical", updatedAt: 1 });
 
-      await expect(request).resolves.toHaveBeenCalledWith(true, { ok: true });
-      expect(handler).toHaveBeenCalledOnce();
-    },
-  );
+    await expect(request).resolves.toHaveBeenCalledWith(true, { ok: true });
+    expect(handler).toHaveBeenCalledOnce();
+  });
 
   it("returns retryable unavailability without dispatch and retries on the next request", async () => {
     const client = createPendingProfileClient();
@@ -435,7 +531,6 @@ describe("Gateway pending-profile authorization", () => {
       "skills.library.import",
       "skills.library.upload",
       "taskSuggestions.list",
-      "tasks.list",
       "users.github.status",
       "users.github.authorize.start",
       "users.github.authorize.poll",
@@ -533,36 +628,6 @@ describe("Gateway pending-profile authorization", () => {
     expect(allowed).toHaveBeenCalledWith(true, { ok: true });
     expect(client.authenticatedGitHubIdentitySync).toHaveBeenCalledOnce();
   });
-
-  it("keeps profile bootstrap and identity-independent status available while sync is pending", async () => {
-    for (const method of ["users.self", "status"]) {
-      const client = createPendingProfileClient();
-      client.authenticatedGitHubIdentitySync = vi.fn(
-        () => new Promise<{ profileId: string; updatedAt: number }>(() => {}),
-      );
-      const handler = vi.fn<GatewayRequestHandler>(({ respond }) => respond(true, { ok: true }));
-      const methodRegistry = createGatewayMethodRegistry([
-        {
-          name: method,
-          handler,
-          owner: { kind: "core", area: "gateway" },
-          profileAccess: "independent",
-          scope: "operator.admin",
-        },
-      ]);
-
-      const respond = await dispatchPendingProfileMethod({
-        client,
-        handler,
-        method,
-        methodRegistry,
-      });
-
-      expect(handler, method).toHaveBeenCalledOnce();
-      expect(respond, method).toHaveBeenCalledWith(true, { ok: true });
-      expect(client.authenticatedGitHubIdentitySync, method).not.toHaveBeenCalled();
-    }
-  });
 });
 
 describe("Gateway self-profile scope", () => {
@@ -574,7 +639,16 @@ describe("Gateway self-profile scope", () => {
       const reader = createPendingProfileClient();
       reader.authenticatedUserId = email;
       reader.connect.scopes = ["operator.read"];
-      const self = await dispatchPendingProfileMethod({ client: reader, method: "users.self" });
+      const sql = observeHostDataSql();
+      const self = await dispatchPendingProfileMethod({
+        client: reader,
+        method: "users.self",
+      }).finally(sql.restore);
+      expect(
+        sql.queries.filter((statement) =>
+          /\buser_profile(?:s|_emails|_identities)\b/u.test(statement),
+        ),
+      ).toEqual([]);
 
       const anonymous = createPendingProfileClient();
       delete anonymous.authenticatedUserId;

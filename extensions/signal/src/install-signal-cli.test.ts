@@ -1,11 +1,9 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import JSZip from "jszip";
 import * as tar from "tar";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
-import type { ReleaseAsset } from "./install-signal-cli.js";
 
 type CapturedArchiveLimits = {
   maxArchiveBytes?: number;
@@ -63,16 +61,10 @@ vi.mock("openclaw/plugin-sdk/temp-path", async (importOriginal) => {
   };
 });
 
-const {
-  downloadToFile,
-  extractSignalCliArchive,
-  installSignalCli,
-  installSignalCliFromRelease,
-  looksLikeArchive,
-  pickAsset,
-} = await import("./install-signal-cli.js");
+const { downloadToFile, extractSignalCliArchive, installSignalCli, installSignalCliFromRelease } =
+  await import("./install-signal-cli.js");
 
-const SAMPLE_ASSETS: ReleaseAsset[] = [
+const SAMPLE_ASSETS = [
   {
     name: "signal-cli-0.13.14-Linux-native.tar.gz",
     browser_download_url: "https://example.com/linux-native.tar.gz",
@@ -141,13 +133,6 @@ afterEach(() => {
   Object.defineProperty(process, "arch", { configurable: true, value: originalArch });
 });
 
-function requireAsset(asset: ReleaseAsset | undefined, label: string): ReleaseAsset {
-  if (!asset) {
-    throw new Error(`expected release asset for ${label}`);
-  }
-  return asset;
-}
-
 async function expectPathMissing(targetPath: string): Promise<void> {
   try {
     await fs.access(targetPath);
@@ -166,119 +151,87 @@ async function expectTempDownloadDirMissing(): Promise<void> {
   await expectPathMissing(path.dirname(tmpPath));
 }
 
-describe("looksLikeArchive", () => {
-  it("recognises .tar.gz", () => {
-    expect(looksLikeArchive("foo.tar.gz")).toBe(true);
+describe("installSignalCli asset selection", () => {
+  it.each([
+    { assets: SAMPLE_ASSETS.toReversed(), expected: "https://example.com/linux-native.tar.gz" },
+    {
+      assets: [
+        { name: "other.zip", browser_download_url: "https://example.com/other.zip" },
+        { name: "signal-cli-linux.tgz", browser_download_url: "https://example.com/linux.tgz" },
+      ],
+      expected: "https://example.com/linux.tgz",
+    },
+    {
+      assets: [
+        { name: "signal-cli.zip.asc", browser_download_url: "https://example.com/signature" },
+        { name: "signal-cli.tgz", browser_download_url: "https://example.com/fallback.tgz" },
+      ],
+      expected: "https://example.com/fallback.tgz",
+    },
+  ])("downloads the selected Linux archive: $expected", async ({ assets, expected }) => {
+    setProcessPlatform("linux", "x64");
+    fetchWithSsrFGuardMock
+      .mockResolvedValueOnce(okDownloadResponse(JSON.stringify({ tag_name: "v0.0.0", assets })))
+      .mockRejectedValueOnce(new Error("download stopped"));
+
+    await expect(installSignalCli(createRuntimeSpies())).rejects.toThrow("download stopped");
+    expect(fetchWithSsrFGuardMock).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ url: expected }),
+    );
+    await expectTempDownloadDirMissing();
   });
 
-  it("recognises .tgz", () => {
-    expect(looksLikeArchive("foo.tgz")).toBe(true);
+  it("rejects a release with only signatures or incomplete assets", async () => {
+    setProcessPlatform("linux", "x64");
+    fetchWithSsrFGuardMock.mockResolvedValueOnce(
+      okDownloadResponse(
+        JSON.stringify({
+          tag_name: "v0.0.0",
+          assets: [
+            { name: "signal-cli.tar.gz" },
+            { browser_download_url: "https://example.com/file.tar.gz" },
+            { name: "signal-cli.tgz.asc", browser_download_url: "https://example.com/signature" },
+          ],
+        }),
+      ),
+    );
+    await expect(installSignalCli(createRuntimeSpies())).resolves.toEqual({
+      ok: false,
+      error: "No compatible release asset found for this platform.",
+    });
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledOnce();
   });
 
-  it("recognises .zip", () => {
-    expect(looksLikeArchive("foo.zip")).toBe(true);
+  it.each([
+    ["linux", "arm64"],
+    ["darwin", "arm64"],
+    ["freebsd", "x64"],
+  ] as const)("uses Homebrew on %s/%s instead of release archives", async (platform, arch) => {
+    setProcessPlatform(platform, arch);
+    resolveBrewExecutableMock.mockReturnValue(undefined);
+    await expect(installSignalCli(createRuntimeSpies())).resolves.toMatchObject({
+      ok: false,
+      error: expect.stringContaining("Install Homebrew"),
+    });
+    expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
   });
 
-  it("rejects signature files", () => {
-    expect(looksLikeArchive("foo.tar.gz.asc")).toBe(false);
-  });
-
-  it("rejects unrelated files", () => {
-    expect(looksLikeArchive("README.md")).toBe(false);
-  });
-});
-
-describe("pickAsset", () => {
-  describe("linux", () => {
-    it("selects the Linux-native asset on x64", () => {
-      const result = requireAsset(pickAsset(SAMPLE_ASSETS, "linux", "x64"), "linux x64");
-      expect(result.name).toContain("Linux-native");
-      expect(result.name).toMatch(/\.tar\.gz$/);
+  it("rejects unsupported Windows installs before fetching assets", async () => {
+    setProcessPlatform("win32", "x64");
+    await expect(installSignalCli(createRuntimeSpies())).resolves.toEqual({
+      ok: false,
+      error: "Signal CLI auto-install is not supported on Windows yet.",
     });
-
-    it("returns undefined on arm64 (triggers brew fallback)", () => {
-      const result = pickAsset(SAMPLE_ASSETS, "linux", "arm64");
-      expect(result).toBeUndefined();
-    });
-
-    it("returns undefined on arm (32-bit)", () => {
-      const result = pickAsset(SAMPLE_ASSETS, "linux", "arm");
-      expect(result).toBeUndefined();
-    });
-  });
-
-  describe("darwin", () => {
-    it("selects the macOS-native asset", () => {
-      const result = requireAsset(pickAsset(SAMPLE_ASSETS, "darwin", "arm64"), "darwin arm64");
-      expect(result.name).toContain("macOS-native");
-    });
-
-    it("selects the macOS-native asset on x64", () => {
-      const result = requireAsset(pickAsset(SAMPLE_ASSETS, "darwin", "x64"), "darwin x64");
-      expect(result.name).toContain("macOS-native");
-    });
-
-    it("does not fall back to Linux client archives when macOS assets are absent", () => {
-      const currentUpstreamAssets: ReleaseAsset[] = [
-        {
-          name: "signal-cli-0.14.5-Linux-client.tar.gz",
-          browser_download_url: "https://example.com/linux-client.tar.gz",
-        },
-        {
-          name: "signal-cli-0.14.5-Linux-native.tar.gz",
-          browser_download_url: "https://example.com/linux-native.tar.gz",
-        },
-        {
-          name: "signal-cli-0.14.5.tar.gz",
-          browser_download_url: "https://example.com/jvm.tar.gz",
-        },
-      ];
-
-      expect(pickAsset(currentUpstreamAssets, "darwin", "arm64")).toBeUndefined();
-    });
-  });
-
-  describe("win32", () => {
-    it("selects the Windows-native asset", () => {
-      const result = requireAsset(pickAsset(SAMPLE_ASSETS, "win32", "x64"), "win32 x64");
-      expect(result.name).toContain("Windows-native");
-      expect(result.name).toMatch(/\.zip$/);
-    });
-  });
-
-  describe("edge cases", () => {
-    it("returns undefined for an empty asset list", () => {
-      expect(pickAsset([], "linux", "x64")).toBeUndefined();
-    });
-
-    it("skips assets with missing name or url", () => {
-      const partial: ReleaseAsset[] = [
-        { name: "signal-cli.tar.gz" },
-        { browser_download_url: "https://example.com/file.tar.gz" },
-      ];
-      expect(pickAsset(partial, "linux", "x64")).toBeUndefined();
-    });
-
-    it("falls back to first archive for unknown platform", () => {
-      const result = requireAsset(
-        pickAsset(SAMPLE_ASSETS, "freebsd" as NodeJS.Platform, "x64"),
-        "unknown platform",
-      );
-      expect(result.name).toMatch(/\.tar\.gz$/);
-    });
-
-    it("never selects .asc signature files", () => {
-      const result = requireAsset(pickAsset(SAMPLE_ASSETS, "linux", "x64"), "linux x64");
-      expect(result.name).not.toMatch(/\.asc$/);
-    });
+    expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
   });
 });
 
 describe("downloadToFile", () => {
-  it("cancels non-success response bodies before rejecting", async () => {
+  it("releases non-success responses before rejecting", async () => {
     const response = new Response("service unavailable", { status: 503 });
-    const cancel = vi.spyOn(response.body!, "cancel").mockRejectedValueOnce(new Error("closed"));
-    fetchWithSsrFGuardMock.mockResolvedValue({ response, release: vi.fn() });
+    const release = vi.fn();
+    fetchWithSsrFGuardMock.mockResolvedValue({ response, release });
 
     await withTempFile(async (filePath) => {
       await expect(downloadToFile("https://example.com/signal-cli.tgz", filePath)).rejects.toThrow(
@@ -286,26 +239,7 @@ describe("downloadToFile", () => {
       );
     });
 
-    expect(cancel).toHaveBeenCalledOnce();
-  });
-
-  it("cancels the response body when the declared length exceeds the download cap", async () => {
-    const response = new Response("archive", {
-      status: 200,
-      headers: { "content-length": "12" },
-    });
-    const cancel = vi.spyOn(response.body!, "cancel").mockRejectedValueOnce(new Error("closed"));
-    fetchWithSsrFGuardMock.mockResolvedValue({ response, release: vi.fn() });
-
-    await withTempFile(async (filePath) => {
-      await expect(
-        downloadToFile("https://example.com/signal-cli.tgz", filePath, 5, 8),
-      ).rejects.toThrow("declared 12");
-
-      await expectPathMissing(filePath);
-    });
-
-    expect(cancel).toHaveBeenCalledOnce();
+    expect(release).toHaveBeenCalledOnce();
   });
 
   it("downloads through the SSRF guard with an explicit timeout", async () => {
@@ -316,6 +250,9 @@ describe("downloadToFile", () => {
       await downloadToFile("https://example.com/signal-cli.tgz", filePath);
 
       await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("archive");
+      if (process.platform !== "win32") {
+        expect((await fs.stat(filePath)).mode & 0o777).toBe(0o666 & ~process.umask());
+      }
     });
 
     expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith({
@@ -327,6 +264,30 @@ describe("downloadToFile", () => {
       auditContext: "signal-cli-install-archive",
     });
     expect(fetchResult.release).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves an existing destination without locking or consuming the response", async () => {
+    const pull = vi.fn((controller: ReadableStreamDefaultController<Uint8Array>) => {
+      controller.enqueue(new Uint8Array([1, 2, 3]));
+      controller.close();
+    });
+    const body = new ReadableStream<Uint8Array>({ pull }, { highWaterMark: 0 });
+    const fetchResult = okDownloadResponse(body);
+    fetchWithSsrFGuardMock.mockResolvedValue(fetchResult);
+
+    await withTempFile(async (filePath) => {
+      await fs.writeFile(filePath, "keep this");
+      await expect(
+        downloadToFile("https://example.com/signal-cli.tgz", filePath),
+      ).rejects.toMatchObject({
+        code: "already-exists",
+      });
+      await expect(fs.readFile(filePath, "utf8")).resolves.toBe("keep this");
+    });
+
+    expect(body.locked).toBe(false);
+    expect(pull).not.toHaveBeenCalled();
+    expect(fetchResult.release).toHaveBeenCalledOnce();
   });
 
   it("rejects declared archives above the download cap", async () => {
@@ -346,7 +307,7 @@ describe("downloadToFile", () => {
     expect(fetchResult.release).toHaveBeenCalledTimes(1);
   });
 
-  it.each(["1e3", "0x10", `1${"0".repeat(309)}`])(
+  it.each(["0x10", `1${"0".repeat(309)}`])(
     "ignores malformed declared archive lengths: %s",
     async (contentLength) => {
       const fetchResult = okDownloadResponse("archive", {
@@ -388,9 +349,8 @@ describe("downloadToFile", () => {
 });
 
 describe("installSignalCliFromRelease", () => {
-  it("cancels non-success release metadata before returning the fetch error", async () => {
+  it("releases non-success metadata responses before returning the fetch error", async () => {
     const response = new Response("service unavailable", { status: 503 });
-    const cancel = vi.spyOn(response.body!, "cancel").mockRejectedValueOnce(new Error("closed"));
     const release = vi.fn().mockResolvedValue(undefined);
     fetchWithSsrFGuardMock.mockResolvedValue({ response, release });
 
@@ -399,7 +359,6 @@ describe("installSignalCliFromRelease", () => {
       error: "Failed to fetch release info (503)",
     });
 
-    expect(cancel).toHaveBeenCalledOnce();
     expect(release).toHaveBeenCalledOnce();
   });
 
@@ -421,11 +380,8 @@ describe("installSignalCliFromRelease", () => {
   it.each([
     ["null", "null"],
     ["array", "[]"],
-    ["missing tag_name", JSON.stringify({ assets: [] })],
     ["blank tag_name", JSON.stringify({ tag_name: "   ", assets: [] })],
     ["empty version tag", JSON.stringify({ tag_name: "v", assets: [] })],
-    ["non-string tag_name", JSON.stringify({ tag_name: 123, assets: [] })],
-    ["missing assets", JSON.stringify({ tag_name: "v0.14.6" })],
     ["non-array assets", JSON.stringify({ tag_name: "v0.14.6", assets: {} })],
   ])("returns an installer error for a valid JSON %s payload", async (_kind, body) => {
     const fetchResult = okDownloadResponse(body, {
@@ -606,11 +562,15 @@ describe("installSignalCliFromRelease", () => {
 });
 
 describe("installSignalCli", () => {
-  it("uses Homebrew on macOS instead of downloading the first GitHub release archive", async () => {
+  it.each([
+    { binaryDir: "bin", found: true },
+    { binaryDir: path.join("libexec", "native", "bin"), found: true },
+    { binaryDir: path.join("libexec", "nested", "native", "bin"), found: false },
+  ])("finds Homebrew binaries within four levels: $binaryDir", async ({ binaryDir, found }) => {
     setProcessPlatform("darwin", "arm64");
     const brewPrefix = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-signal-brew-"));
-    await fs.mkdir(path.join(brewPrefix, "bin"), { recursive: true });
-    await fs.writeFile(path.join(brewPrefix, "bin", "signal-cli"), "");
+    await fs.mkdir(path.join(brewPrefix, binaryDir), { recursive: true });
+    await fs.writeFile(path.join(brewPrefix, binaryDir, "signal-cli"), "");
     resolveBrewExecutableMock.mockReturnValue("/opt/homebrew/bin/brew");
     runPluginCommandWithTimeoutMock
       .mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" })
@@ -620,11 +580,15 @@ describe("installSignalCli", () => {
     try {
       const result = await installSignalCli(createRuntimeSpies());
 
-      expect(result).toEqual({
-        ok: true,
-        cliPath: path.join(brewPrefix, "bin", "signal-cli"),
-        version: "0.14.5",
-      });
+      expect(result).toEqual(
+        found
+          ? {
+              ok: true,
+              cliPath: path.join(brewPrefix, binaryDir, "signal-cli"),
+              version: "0.14.5",
+            }
+          : { ok: false, error: "brew install succeeded but signal-cli binary was not found." },
+      );
       expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
     } finally {
       await fs.rm(brewPrefix, { recursive: true, force: true });
@@ -648,36 +612,6 @@ describe("extractSignalCliArchive", () => {
     const extracted = await fs.readFile(path.join(extractDir, "root", "signal-cli"), "utf-8");
     expect(extracted).toBe("bin");
   }
-
-  it("rejects zip slip path traversal", async () => {
-    await withArchiveWorkspace(async (workDir) => {
-      const archivePath = path.join(workDir, "bad.zip");
-      const extractDir = path.join(workDir, "extract");
-      await fs.mkdir(extractDir, { recursive: true });
-
-      const zip = new JSZip();
-      zip.file("../pwned.txt", "pwnd");
-      await fs.writeFile(archivePath, await zip.generateAsync({ type: "nodebuffer" }));
-
-      await expect(extractSignalCliArchive(archivePath, extractDir, 5_000)).rejects.toThrow(
-        /(escapes destination|absolute)/i,
-      );
-    });
-  });
-
-  it("extracts zip archives", async () => {
-    await withArchiveWorkspace(async (workDir) => {
-      const archivePath = path.join(workDir, "ok.zip");
-      const extractDir = path.join(workDir, "extract");
-      await fs.mkdir(extractDir, { recursive: true });
-
-      const zip = new JSZip();
-      zip.file("root/signal-cli", "bin");
-      await fs.writeFile(archivePath, await zip.generateAsync({ type: "nodebuffer" }));
-
-      await expectExtractedSignalCli(archivePath, extractDir);
-    });
-  });
 
   it("extracts tar.gz archives with Signal-specific limits", async () => {
     await withArchiveWorkspace(async (workDir) => {

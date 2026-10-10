@@ -9,18 +9,23 @@ sidebarTitle: "Image generation"
 ---
 
 The `image_generate` tool creates and edits images through your configured
-providers. In chat sessions it runs asynchronously: OpenClaw records a
-background task, returns the task id immediately, and wakes the agent when
-the provider finishes. The task record stays silent, while the completion
-agent follows the session's current visible-reply contract with a short
+providers. In chat sessions it runs asynchronously: the native media-generation
+owner tracks the operation, returns the task id immediately, and wakes the agent
+when the provider finishes. The completion agent follows the session's current
+visible-reply contract with a short
 user-facing caption and every structured generated attachment. If generation
 fails, the agent returns a concise visible failure instead. If the requester
 session is inactive or its active wake fails, OpenClaw sends an idempotent
 direct fallback with the generated images so the result is not lost.
 
+You can send a follow-up while the completion agent is still working. The new
+turn waits for the completion and its delivery to settle before starting.
+
 In WebChat and the macOS app, generated attachments stay on the completion
-reply instead of appearing again in a separate image-only message. Replaying
-a completed delivery keeps the same message and attachment identities.
+reply instead of appearing again in a separate image-only message. An interactive
+WebChat request keeps its completion in that session even when a previous channel
+conversation left an external delivery route there. Replaying a completed delivery
+keeps the same message and attachment identities.
 
 <Note>
 The tool only appears when at least one image-generation provider is
@@ -136,6 +141,10 @@ current session:
 /tool image_generate action=status
 ```
 
+Task status and duplicate detection are scoped to the requesting chat, even
+when direct chats share the main session transcript. Completion returns to
+the peer who requested the image.
+
 ## Provider capabilities
 
 | Capability            | ComfyUI            | DeepInfra | fal                                                         | Google         | Microsoft Foundry | MiniMax               | OpenAI         | Vydra | xAI            |
@@ -249,6 +258,8 @@ For `image_generate`, OpenClaw tries providers in this order:
 If a provider fails (auth error, rate limit, etc.), the next configured
 candidate is tried automatically. If all fail, the error includes details
 from each attempt.
+For reference-image requests, candidates that cannot edit images or accept
+the supplied reference count are skipped.
 
 <AccordionGroup>
   <Accordion title="Per-call model overrides are exact">

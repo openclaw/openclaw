@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import {
   buildPluginControlUi,
   writePluginBuildManifest,
@@ -7,9 +8,14 @@ import {
 import { controlUiSource } from "../src/plugins/package-manifest.js";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 
-const rootDir = process.cwd();
+const packageDir = process.argv[2];
+if (!packageDir) {
+  throw new Error("Pass the plugin package directory to build its Control UI assets.");
+}
+const rootDir = path.resolve(packageDir);
 const packageManifest = JSON.parse(await fs.readFile(path.join(rootDir, "package.json"), "utf8"));
-const manifest = JSON.parse(await fs.readFile(path.join(rootDir, "openclaw.plugin.json"), "utf8"));
+const manifestPath = path.join(rootDir, "openclaw.plugin.json");
+const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
 if (process.argv.includes("--copy")) {
   const repoRoot = resolveRepoRoot(import.meta.url);
   const pluginDir = path.relative(path.join(repoRoot, "extensions"), rootDir);
@@ -30,6 +36,14 @@ if (process.argv.includes("--copy")) {
   if (!source) {
     throw new Error("Missing package.json openclaw.controlUi browser entrypoint.");
   }
-  manifest.controlUi = await buildPluginControlUi({ rootDir, source });
-  await writePluginBuildManifest(rootDir, manifest);
+  const controlUi = await buildPluginControlUi({ rootDir, source });
+  // Rebuilding deleted assets must preserve unchanged manifest input identity.
+  // Nonregular destinations still go through the atomic writer's safety checks.
+  if (
+    !isDeepStrictEqual(manifest.controlUi, controlUi) ||
+    !(await fs.lstat(manifestPath)).isFile()
+  ) {
+    manifest.controlUi = controlUi;
+    await writePluginBuildManifest(rootDir, manifest);
+  }
 }

@@ -13,7 +13,6 @@ describe("question callback data", () => {
     const data = buildTelegramQuestionCallbackData({ questionId, optionIndex: 3 });
 
     expect(data).toBe(`tgq1:${questionId}:3`);
-    expect(Buffer.byteLength(data ?? "", "utf8")).toBe(43);
     expect(Buffer.byteLength(data ?? "", "utf8")).toBeLessThanOrEqual(64);
     expect(parseTelegramQuestionCallbackData(data)).toEqual({
       questionId,

@@ -11,6 +11,8 @@ import {
   memoryWorkspaceJournal,
   startConnectedTunnel,
 } from "./tunnel.test-support.js";
+import { verifyReconciledWorkspaceFinal } from "./workspace-finalize.js";
+import { workerWorkspaceResultRef } from "./workspace-result-staging.js";
 
 it("materializes a large dirty git workspace as a credential-free commit-capable clone", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-worker-git-sync-"));
@@ -72,7 +74,22 @@ it("materializes a large dirty git workspace as a credential-free commit-capable
   const privateInput = `${inputDirectory}/input-cache.pyc`;
   await ensureStagedInputDirectory(localPath, inputDirectory);
   await fs.writeFile(path.join(localPath, privateInput), "raw input bytes");
-  const fake = localWorkspaceRunner(remoteHome);
+  let checkedPartialManifest = false;
+  const fake = localWorkspaceRunner(remoteHome, async (argv, localArgv, options) => {
+    if (checkedPartialManifest || !argv.at(-2)?.includes(":.openclaw-worker/manifests/")) {
+      return undefined;
+    }
+    checkedPartialManifest = true;
+    const destination = localArgv.at(-1)!;
+    await fs.writeFile(destination, "partial manifest");
+    const partial = await fs.stat(destination);
+    const transferred = await runCommandWithTimeout(localArgv, options);
+    expect(
+      (await fs.stat(destination)).ino,
+      "inbound manifest filenames stay stable while the quota scan observes them",
+    ).toBe(partial.ino);
+    return transferred;
+  });
   const { handle } = await startConnectedTunnel(fake, "worker:real-git-sync", 11);
 
   try {
@@ -154,12 +171,20 @@ it("materializes a large dirty git workspace as a credential-free commit-capable
     const journal = memoryWorkspaceJournal((manifestRef) => {
       acceptedManifestRef = manifestRef;
     });
+    const quiescence = { assertActive: async () => {}, resume: async () => {} };
     const reconciled = await handle.reconcileWorkspace({
-      source: { kind: "local", path: localPath, journal },
+      source: {
+        kind: "local",
+        path: localPath,
+        journal,
+        stagedResult: { ref: workerWorkspaceResultRef("git-changed"), record: () => {} },
+      },
       remoteWorkspaceDir: result.remoteWorkspaceDir,
       baseManifestRef: result.manifestRef,
     });
+    await verifyReconciledWorkspaceFinal(reconciled, quiescence);
     expect(reconciled).toMatchObject({ changed: true });
+    expect(checkedPartialManifest).toBe(true);
     for (const relative of ownership.unownedFiles) {
       await expect(fs.readFile(path.join(localPath, relative), "utf8")).resolves.toBe(
         `fixture bytes: ${relative}\n`,
@@ -197,10 +222,16 @@ it("materializes a large dirty git workspace as a credential-free commit-capable
     ).rejects.toThrow();
     expect(await git(localPath, "rev-parse", "HEAD")).toBe(baseCommit);
     const unchanged = await handle.reconcileWorkspace({
-      source: { kind: "local", path: localPath, journal },
+      source: {
+        kind: "local",
+        path: localPath,
+        journal,
+        stagedResult: { ref: workerWorkspaceResultRef("git-unchanged"), record: () => {} },
+      },
       remoteWorkspaceDir: result.remoteWorkspaceDir,
       baseManifestRef: acceptedManifestRef,
     });
+    await verifyReconciledWorkspaceFinal(unchanged, quiescence);
     expect(unchanged).toMatchObject({ manifestRef: acceptedManifestRef, changed: false });
     await unchanged.verifyStable();
     await unchanged.verifyLocalStable();
@@ -231,13 +262,24 @@ it("materializes a large dirty git workspace as a credential-free commit-capable
         fs.writeFile(path.join(manifestPath, `${index}.txt`), ""),
       ),
     );
+    // GNU rsync skips the directory; OpenRsync can leave an empty directory.
+    // Neither outcome may satisfy regular-file manifest admission.
     await expect(
       handle.reconcileWorkspace({
-        source: { kind: "local", path: localPath, journal: memoryWorkspaceJournal() },
+        source: {
+          kind: "local",
+          path: localPath,
+          journal: memoryWorkspaceJournal(),
+          stagedResult: { ref: workerWorkspaceResultRef("git-invalid"), record: () => {} },
+        },
         remoteWorkspaceDir: result.remoteWorkspaceDir,
         baseManifestRef: result.manifestRef,
       }),
-    ).rejects.toThrow("manifest transfer is not a bounded regular file");
+    ).rejects.toThrow(
+      new RegExp(
+        `^(?:File not found: .*${result.manifestRef.slice("sha256:".length)}\\.json|path must be a regular file)$`,
+      ),
+    );
   } finally {
     await handle.stop();
     await fs.rm(root, { recursive: true });

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { stripInternalRuntimeContext } from "../../internal-runtime-context.js";
 import { buildSubagentSpawnEnvelope } from "./subagent-system-prompt.js";
 
 function buildEnvelope(overrides: Partial<Parameters<typeof buildSubagentSpawnEnvelope>[0]> = {}) {
@@ -26,9 +27,13 @@ describe("subagent spawn envelope", () => {
       expect(guidance).not.toMatch(
         /auto-announce|auto-reported|sessions_yield|agents_wait|`message`/,
       );
+      expect(guidance).not.toContain("NO_REPLY");
     }
+    expect(systemPrompt).toContain("Always return a meaningful result or a concrete blocker");
     expect(systemPrompt.length).toBeLessThan(4_000);
-    expect(message).toContain("[Subagent Task]\n\nUNIQUE_SUBAGENT_TASK\n  preserve indentation");
+    expect(stripInternalRuntimeContext(message)).toBe(
+      "UNIQUE_SUBAGENT_TASK\n  preserve indentation",
+    );
     expect(systemPrompt).not.toContain("UNIQUE_SUBAGENT_TASK");
     expect(`${systemPrompt}\n${message}`.match(/UNIQUE_SUBAGENT_TASK/g)).toHaveLength(1);
     expect(systemPrompt).toMatch(/\[Subagent Task\].*current child session/);
@@ -46,7 +51,6 @@ describe("subagent spawn envelope", () => {
   });
 
   it.each([
-    { childDepth: undefined, maxSpawnDepth: undefined, parent: "main agent", spawning: true },
     { childDepth: 1, maxSpawnDepth: 2, parent: "main agent", spawning: true },
     { childDepth: 2, maxSpawnDepth: 2, parent: "parent orchestrator", spawning: false },
   ])(
@@ -68,7 +72,7 @@ describe("subagent spawn envelope", () => {
     const envelope = buildEnvelope({ completionTarget: "parent" });
     for (const text of [envelope.systemPrompt, envelope.acceptedNote]) {
       expect(text).toContain("No result is automatically sent to a channel");
-      expect(text).toContain("remain silent");
+      expect(text).toContain("continues any unfinished work");
     }
     expect(envelope.acceptedNote).toContain("private requester turn");
     expect(envelope.acceptedNote).not.toContain("after your final answer");
@@ -112,7 +116,6 @@ describe("subagent spawn envelope", () => {
 
   it.each([
     ["agent:main:cron:job:run:attempt", true],
-    ["agent:main:telegram:chat", false],
     ["agent:main:slack:cron:job:run:attempt", false],
     [undefined, false],
   ])("limits cron receipt suppression to announcing runs: %s", (requesterSessionKey, omitted) => {

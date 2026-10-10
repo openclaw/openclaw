@@ -13,6 +13,7 @@ import {
   resolveEffectiveMediaEntryCapabilities,
 } from "../media-understanding/entry-capabilities.js";
 import { buildMediaUnderstandingCapabilityRegistry } from "../media-understanding/provider-capability-registry.js";
+import { appendConfigPathSegment } from "../shared/dot-path.js";
 import { resolveVoiceModelRefs } from "../tts/voice-models.js";
 import { getPath } from "./path-utils.js";
 import { PROVIDER_REQUEST_SECRET_FIELD_GROUPS } from "./provider-request-secret-fields.js";
@@ -25,8 +26,8 @@ import {
   runtimeMediaRequestSecretOwnerId,
 } from "./runtime-media-secret-owner.js";
 import {
-  collectSecretInputAssignment,
-  collectRuntimeSecretInputAssignment,
+  collectCanonicalSecretInputAssignment as collectSecretInputAssignment,
+  createConfigSecretInputCollector,
   type SecretAssignmentOwner,
   type ResolverContext,
   type SecretDefaults,
@@ -40,16 +41,12 @@ type ProviderLike = {
   enabled?: unknown;
 };
 
-type SkillEntryLike = {
-  apiKey?: unknown;
-  enabled?: unknown;
-};
+type SkillEntryLike = Pick<ProviderLike, "apiKey" | "enabled">;
 
-type ProviderRequestLike = {
-  headers?: unknown;
-  auth?: unknown;
-  proxy?: unknown;
-  tls?: unknown;
+type ConfigCollectorParams = {
+  config: OpenClawConfig;
+  defaults: SecretDefaults | undefined;
+  context: ResolverContext;
 };
 
 function collectModelProviderAssignments(params: {
@@ -57,8 +54,10 @@ function collectModelProviderAssignments(params: {
   defaults: SecretDefaults | undefined;
   context: ResolverContext;
 }): void {
+  const collect = createConfigSecretInputCollector(params);
   for (const [providerId, provider] of Object.entries(params.providers)) {
     const providerIsActive = provider.enabled !== false;
+    const providerPath = appendConfigPathSegment("models.providers", providerId);
     const owner = {
       ownerKind: "provider",
       ownerId: normalizeOptionalLowercaseString(providerId) ?? providerId,
@@ -66,35 +65,21 @@ function collectModelProviderAssignments(params: {
       disposition: "isolate",
       contract: provider,
     } satisfies SecretAssignmentOwner;
-    collectRuntimeSecretInputAssignment({
-      value: provider.apiKey,
-      path: `models.providers.${providerId}.apiKey`,
-      expected: "string",
-      defaults: params.defaults,
-      context: params.context,
+    const activity = {
       active: providerIsActive,
       inactiveReason: "provider is disabled.",
       owner,
-      apply: (value) => {
-        provider.apiKey = value;
-      },
-    });
+    };
+    collect(provider, "apiKey", `${providerPath}.apiKey`, activity);
     const headers = isRecord(provider.headers) ? provider.headers : undefined;
     if (headers) {
-      for (const [headerKey, headerValue] of Object.entries(headers)) {
-        collectRuntimeSecretInputAssignment({
-          value: headerValue,
-          path: `models.providers.${providerId}.headers.${headerKey}`,
-          expected: "string",
-          defaults: params.defaults,
-          context: params.context,
-          active: providerIsActive,
-          inactiveReason: "provider is disabled.",
-          owner,
-          apply: (value) => {
-            headers[headerKey] = value;
-          },
-        });
+      for (const headerKey of Object.keys(headers)) {
+        collect(
+          headers,
+          headerKey,
+          appendConfigPathSegment(`${providerPath}.headers`, headerKey),
+          activity,
+        );
       }
     }
 
@@ -102,12 +87,10 @@ function collectModelProviderAssignments(params: {
     if (request) {
       collectProviderRequestAssignments({
         request,
-        pathPrefix: `models.providers.${providerId}.request`,
+        pathPrefix: `${providerPath}.request`,
         defaults: params.defaults,
         context: params.context,
-        active: providerIsActive,
-        inactiveReason: "provider is disabled.",
-        owner,
+        ...activity,
       });
     }
   }
@@ -118,13 +101,9 @@ function collectSkillAssignments(params: {
   defaults: SecretDefaults | undefined;
   context: ResolverContext;
 }): void {
+  const collect = createConfigSecretInputCollector(params);
   for (const [skillKey, entry] of Object.entries(params.entries)) {
-    collectRuntimeSecretInputAssignment({
-      value: entry.apiKey,
-      path: `skills.entries.${skillKey}.apiKey`,
-      expected: "string",
-      defaults: params.defaults,
-      context: params.context,
+    collect(entry, "apiKey", `${appendConfigPathSegment("skills.entries", skillKey)}.apiKey`, {
       active: entry.enabled !== false,
       inactiveReason: "skill entry is disabled.",
       // Keep this id aligned with isSkillSecretOwnerUnavailable so a failed key
@@ -135,9 +114,6 @@ function collectSkillAssignments(params: {
         requiredForGateway: false,
         disposition: "isolate",
         contract: entry,
-      },
-      apply: (value) => {
-        entry.apiKey = value;
       },
     });
   }
@@ -152,11 +128,7 @@ function findTalkProviderConfig(providers: unknown, providerId: string) {
   return id && isRecord(config) ? { id, config } : undefined;
 }
 
-function collectTalkAssignments(params: {
-  config: OpenClawConfig;
-  defaults: SecretDefaults | undefined;
-  context: ResolverContext;
-}): void {
+function collectTalkAssignments(params: ConfigCollectorParams): void {
   const talk = params.config.talk as Record<string, unknown> | undefined;
   if (!isRecord(talk)) {
     return;
@@ -253,11 +225,11 @@ function collectTalkAssignments(params: {
       const isInherited = config === inheritedKey?.config;
       const destination = isInherited && selected ? selected.config : config;
       const normalized = normalizeOptionalLowercaseString(id);
-      collectRuntimeSecretInputAssignment({
+      collectSecretInputAssignment({
         value: config.apiKey,
         path: isInherited
-          ? `tts.providers.${id}.apiKey`
-          : `talk.${surface === "realtime" ? "realtime." : ""}providers.${id}.apiKey`,
+          ? `${appendConfigPathSegment("tts.providers", id)}.apiKey`
+          : `${appendConfigPathSegment(`talk.${surface === "realtime" ? "realtime." : ""}providers`, id)}.apiKey`,
         expected: "string",
         defaults: params.defaults,
         context: params.context,
@@ -277,92 +249,45 @@ function collectTalkAssignments(params: {
   }
 }
 
-function collectGatewayAssignments(params: {
-  config: OpenClawConfig;
-  defaults: SecretDefaults | undefined;
-  context: ResolverContext;
-}): void {
+function collectGatewayAssignments(params: ConfigCollectorParams): void {
   const gateway = params.config.gateway as Record<string, unknown> | undefined;
   if (!isRecord(gateway)) {
     return;
   }
-  const auth = isRecord(gateway.auth) ? gateway.auth : undefined;
-  const remote = isRecord(gateway.remote) ? gateway.remote : undefined;
+  const collect = createConfigSecretInputCollector(params);
   const controlUi = isRecord(gateway.controlUi) ? gateway.controlUi : undefined;
   const gatewaySurfaceStates = evaluateGatewayAuthSurfaceStates({
     config: params.config,
     env: params.context.env,
     defaults: params.defaults,
   });
-  if (auth) {
-    const ingressAuthOwner = {
-      ownerKind: "gateway",
-      ownerId: "ingress-auth",
-      requiredForGateway: true,
-      disposition: "fail-closed",
-      contract: auth,
-    } satisfies SecretAssignmentOwner;
-    collectRuntimeSecretInputAssignment({
-      value: auth.token,
-      path: "gateway.auth.token",
-      expected: "string",
-      defaults: params.defaults,
-      context: params.context,
-      active: gatewaySurfaceStates["gateway.auth.token"].active,
-      inactiveReason: gatewaySurfaceStates["gateway.auth.token"].reason,
-      owner: ingressAuthOwner,
-      apply: (value) => {
-        auth.token = value;
-      },
-    });
-    collectRuntimeSecretInputAssignment({
-      value: auth.password,
-      path: "gateway.auth.password",
-      expected: "string",
-      defaults: params.defaults,
-      context: params.context,
-      active: gatewaySurfaceStates["gateway.auth.password"].active,
-      inactiveReason: gatewaySurfaceStates["gateway.auth.password"].reason,
-      owner: ingressAuthOwner,
-      apply: (value) => {
-        auth.password = value;
-      },
-    });
-  }
-  if (remote) {
-    collectSecretInputAssignment({
-      value: remote.token,
-      path: "gateway.remote.token",
-      expected: "string",
-      defaults: params.defaults,
-      context: params.context,
-      active: gatewaySurfaceStates["gateway.remote.token"].active,
-      inactiveReason: gatewaySurfaceStates["gateway.remote.token"].reason,
-      apply: (value) => {
-        remote.token = value;
-      },
-    });
-    collectSecretInputAssignment({
-      value: remote.password,
-      path: "gateway.remote.password",
-      expected: "string",
-      defaults: params.defaults,
-      context: params.context,
-      active: gatewaySurfaceStates["gateway.remote.password"].active,
-      inactiveReason: gatewaySurfaceStates["gateway.remote.password"].reason,
-      apply: (value) => {
-        remote.password = value;
-      },
-    });
+  for (const surface of ["auth", "remote"] as const) {
+    const target = gateway[surface];
+    if (!isRecord(target)) {
+      continue;
+    }
+    const owner =
+      surface === "auth"
+        ? ({
+            ownerKind: "gateway",
+            ownerId: "ingress-auth",
+            requiredForGateway: true,
+            disposition: "fail-closed",
+            contract: target,
+          } satisfies SecretAssignmentOwner)
+        : undefined;
+    for (const key of ["token", "password"] as const) {
+      const path = `gateway.${surface}.${key}` as const;
+      collect(target, key, path, {
+        active: gatewaySurfaceStates[path].active,
+        inactiveReason: gatewaySurfaceStates[path].reason,
+        owner,
+      });
+    }
   }
   const controlUiGitHub = controlUi && isRecord(controlUi.github) ? controlUi.github : undefined;
   if (controlUiGitHub) {
-    collectRuntimeSecretInputAssignment({
-      value: controlUiGitHub.token,
-      path: "gateway.controlUi.github.token",
-      expected: "string",
-      defaults: params.defaults,
-      context: params.context,
+    collect(controlUiGitHub, "token", "gateway.controlUi.github.token", {
       owner: {
         ownerKind: "capability",
         ownerId: "control-ui-github",
@@ -370,15 +295,12 @@ function collectGatewayAssignments(params: {
         disposition: "isolate",
         contract: controlUiGitHub,
       },
-      apply: (value) => {
-        controlUiGitHub.token = value;
-      },
     });
   }
 }
 
 function collectProviderRequestAssignments(params: {
-  request: ProviderRequestLike;
+  request: Record<string, unknown>;
   pathPrefix: string;
   defaults: SecretDefaults | undefined;
   context: ResolverContext;
@@ -386,44 +308,24 @@ function collectProviderRequestAssignments(params: {
   inactiveReason?: string;
   owner?: SecretAssignmentOwner;
 }): void {
+  const collect = createConfigSecretInputCollector(params);
   for (const { path, fields } of PROVIDER_REQUEST_SECRET_FIELD_GROUPS) {
     const target = getPath(params.request, [...path]);
     if (!isRecord(target)) {
       continue;
     }
     const pathPrefix = `${params.pathPrefix}.${path.join(".")}`;
-    const collect = (key: string, value: unknown) => {
-      collectRuntimeSecretInputAssignment({
-        value,
-        path: `${pathPrefix}.${key}`,
-        expected: "string",
-        defaults: params.defaults,
-        context: params.context,
+    for (const key of fields === "*" ? Object.keys(target) : fields) {
+      collect(target, key, appendConfigPathSegment(pathPrefix, key), {
         active: params.active,
         inactiveReason: params.inactiveReason,
         owner: params.owner,
-        apply: (resolved) => {
-          target[key] = resolved;
-        },
       });
-    };
-    if (fields === "*") {
-      for (const [key, value] of Object.entries(target)) {
-        collect(key, value);
-      }
-    } else {
-      for (const key of fields) {
-        collect(key, target[key]);
-      }
     }
   }
 }
 
-function collectMediaRequestAssignments(params: {
-  config: OpenClawConfig;
-  defaults: SecretDefaults | undefined;
-  context: ResolverContext;
-}): void {
+function collectMediaRequestAssignments(params: ConfigCollectorParams): void {
   const tools = isRecord(params.config.tools) ? params.config.tools : undefined;
   const media = isRecord(tools?.media) ? tools.media : undefined;
   if (!media) {
@@ -462,7 +364,7 @@ function collectMediaRequestAssignments(params: {
           : "shared media model does not declare capabilities and none could be inferred from its provider.";
       collectProviderRequestAssignments({
         request: rawModel.request,
-        pathPrefix: `tools.media.models.${index}.request`,
+        pathPrefix: `tools.media.models[${index}].request`,
         defaults: params.defaults,
         context: params.context,
         active,
@@ -502,11 +404,7 @@ function collectMediaRequestAssignments(params: {
   }
 }
 
-function collectMessagesTtsAssignments(params: {
-  config: OpenClawConfig;
-  defaults: SecretDefaults | undefined;
-  context: ResolverContext;
-}): void {
+function collectMessagesTtsAssignments(params: ConfigCollectorParams): void {
   const tts = params.config.tts as Record<string, unknown> | undefined;
   if (!isRecord(tts)) {
     return;
@@ -519,11 +417,7 @@ function collectMessagesTtsAssignments(params: {
   });
 }
 
-function collectAgentTtsAssignments(params: {
-  config: OpenClawConfig;
-  defaults: SecretDefaults | undefined;
-  context: ResolverContext;
-}): void {
+function collectAgentTtsAssignments(params: ConfigCollectorParams): void {
   for (const { entry, source } of listAgentEntriesWithSource(params.config)) {
     if (!isRecord(entry.tts)) {
       continue;
@@ -532,38 +426,27 @@ function collectAgentTtsAssignments(params: {
       tts: entry.tts,
       pathPrefix:
         source.kind === "entries"
-          ? `agents.entries.${source.key}.tts`
-          : `agents.list.${source.index}.tts`,
+          ? `${appendConfigPathSegment("agents.entries", source.key)}.tts`
+          : `agents.list[${source.index}].tts`,
       defaults: params.defaults,
       context: params.context,
     });
   }
 }
 
-function collectCronAssignments(params: {
-  config: OpenClawConfig;
-  defaults: SecretDefaults | undefined;
-  context: ResolverContext;
-}): void {
+function collectCronAssignments(params: ConfigCollectorParams): void {
   const cron = params.config.cron as Record<string, unknown> | undefined;
   if (!isRecord(cron)) {
     return;
   }
-  collectRuntimeSecretInputAssignment({
-    value: cron.webhookToken,
-    path: "cron.webhookToken",
-    expected: "string",
-    defaults: params.defaults,
-    context: params.context,
+  const collect = createConfigSecretInputCollector(params);
+  collect(cron, "webhookToken", "cron.webhookToken", {
     owner: {
       ownerKind: "capability",
       ownerId: "cron-webhook",
       requiredForGateway: false,
       disposition: "isolate",
       contract: cron,
-    },
-    apply: (value) => {
-      cron.webhookToken = value;
     },
   });
 }

@@ -160,7 +160,7 @@ suite.define(() => {
       await sidebar.getByRole("button", { name: /Switch agent/ }).click();
       await sidebar
         .locator("wa-dropdown.sidebar-agent-menu")
-        .getByRole("menuitemradio", { name: "OpenClaw" })
+        .getByRole("menuitem", { name: "OpenClaw" })
         .click();
       await waitForControlUiRoute(firstPage, { pathname: "/chat/openclaw", routeId: "chat" });
       await expect.poll(() => selectedAgentName(firstPage)).toBe("OpenClaw");

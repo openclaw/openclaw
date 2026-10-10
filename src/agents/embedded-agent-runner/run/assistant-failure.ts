@@ -1,13 +1,11 @@
 import { sanitizeForLog } from "../../../../packages/terminal-core/src/ansi.js";
 import type { ThinkLevel } from "../../../auto-reply/thinking.js";
 import { classifyGatewayStorageFailure } from "../../../infra/sqlite-error-diagnostics.js";
-import type { AssistantMessage } from "../../../llm/types.js";
 import { isTerminalAssistantError } from "../../../llm/utils/retry.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
-import type { AuthProfileFailureReason, AuthProfileStore } from "../../auth-profiles.js";
+import type { AuthProfileFailureReason } from "../../auth-profiles.js";
 import {
   classifyAssistantFailoverReason,
-  type FailoverReason,
   formatBillingErrorMessage,
   formatUserFacingAssistantErrorText,
   GENERIC_ASSISTANT_ERROR_TEXT,
@@ -22,24 +20,25 @@ import {
 import { buildAssistantFailoverSignal } from "../../embedded-agent-helpers/assistant-message-failures.js";
 import { FailoverError, resolveFailoverStatus } from "../../failover-error.js";
 import type { PreparedProviderFailoverOwner } from "../../failover/provider-patterns.js";
-import { classifyRateLimitWindow } from "../../failover/retry-evidence.js";
 import {
-  resolveSessionSuspensionReason,
-  type SessionSuspensionParams,
-} from "../../session-suspension.js";
+  classifyRateLimitWindow,
+  isRetryableProviderHttpStatus,
+  shouldRetryFailoverSignal,
+} from "../../failover/retry-evidence.js";
+import type { FailoverReason } from "../../failover/signal.js";
+import { resolveSessionSuspensionReason } from "../../session-suspension.js";
+import { isSessionTranscriptTurnMismatchErrorMessage } from "../../sessions/transcript-turn-error.js";
 import { log } from "../logger.js";
 import type { TraceAttempt } from "../types.js";
+import type { NormalizedEmbeddedRunAttempt } from "./attempt-normalization.js";
 import { isCurrentAttemptReplaySafe } from "./attempt-terminal-evidence.js";
+import type { PreparedEmbeddedRunInput } from "./execution-context.js";
 import { createFailoverDecisionLogger } from "./failover-observation.js";
 import { mergeRetryFailoverReason, resolveRunFailoverDecision } from "./failover-policy.js";
 import type { EmbeddedRunFailoverRetryController } from "./failover-retry-controller.js";
 import { shouldRetrySilentErrorAssistantTurn } from "./incomplete-turn-recovery.js";
-import type { RunEmbeddedAgentParams } from "./params.js";
-import {
-  isEmbeddedRunTerminalInterrupted,
-  type EmbeddedRunTerminalState,
-} from "./terminal-outcome.js";
-import type { EmbeddedRunAttemptResult } from "./types.js";
+import type { prepareEmbeddedRunRuntime } from "./runtime-preparation.js";
+import { isEmbeddedRunTerminalInterrupted } from "./terminal-outcome.js";
 
 const MAX_EMPTY_ERROR_RETRIES = 3;
 
@@ -53,33 +52,42 @@ type EmbeddedRunAssistantFailureOutcome = {
   assistantProfileFailureReason: AuthProfileFailureReason | null;
 };
 
+type PreparedRuntime = Awaited<ReturnType<typeof prepareEmbeddedRunRuntime>>;
+
 export async function handleEmbeddedAssistantFailure(input: {
-  runParams: RunEmbeddedAgentParams;
-  attempt: EmbeddedRunAttemptResult;
-  attemptAssistant?: AssistantMessage;
-  currentAttemptAssistant?: AssistantMessage;
-  terminalState: EmbeddedRunTerminalState;
-  activeErrorContext: { provider: string; model: string };
-  provider: string;
+  runInput: Pick<
+    PreparedEmbeddedRunInput,
+    "runParams" | "fallbackConfigured" | "suspendForFailure" | "agentDir" | "isProbeSession"
+  >;
+  preparedRuntime: Pick<
+    PreparedRuntime,
+    | "provider"
+    | "modelId"
+    | "attemptedThinking"
+    | "attemptAuthProfileStore"
+    | "maybeRefreshRuntimeAuthForAuthError"
+  > & { model: Pick<PreparedRuntime["model"], "id"> };
+  normalizedAttempt: Pick<
+    NormalizedEmbeddedRunAttempt,
+    | "attempt"
+    | "attemptAssistant"
+    | "currentAttemptAssistant"
+    | "terminalState"
+    | "activeErrorContext"
+  >;
+  runtime: Pick<
+    ReturnType<PreparedRuntime["snapshot"]>,
+    "thinkLevel" | "lastProfileId" | "pluginHarnessOwnsTransport"
+  >;
   providerOwner: PreparedProviderFailoverOwner | undefined;
-  modelId: string;
-  model: string;
-  thinkLevel: ThinkLevel;
   // Profile rotation resets thinking inside the runtime; read it after advancing.
   getThinkLevel: () => ThinkLevel;
-  attemptedThinking: Set<ThinkLevel>;
-  fallbackConfigured: boolean;
-  pluginHarnessOwnsTransport: boolean;
-  authProfileId?: string;
-  authProfileStore: AuthProfileStore;
   runtimeAuthRetry: boolean;
-  maybeRefreshRuntimeAuthForAuthError: (errorText: string, retry: boolean) => Promise<boolean>;
   failover: Pick<
     EmbeddedRunFailoverRetryController,
     | "resolveAuthProfileFailureReason"
     | "maybeMarkAuthProfileFailure"
     | "advanceAuthProfile"
-    | "advanceRateLimitAuthProfile"
     | "transientRetryCount"
     | "overloadProfileRotationLimit"
   >;
@@ -87,15 +95,19 @@ export async function handleEmbeddedAssistantFailure(input: {
   overloadProfileRotations: number;
   previousRetryFailoverReason: FailoverReason | null;
   traceAttempts: TraceAttempt[];
-  suspendForFailure: (params: SessionSuspensionParams) => void;
   suspensionSessionId: string;
-  agentDir: string;
-  isProbeSession: boolean;
 }): Promise<EmbeddedRunAssistantFailureOutcome> {
+  const { runInput, preparedRuntime, normalizedAttempt, runtime } = input;
+  const { attempt, terminalState, activeErrorContext } = normalizedAttempt;
+  const { attemptAssistant, currentAttemptAssistant } = normalizedAttempt;
+  const { provider, modelId, model } = preparedRuntime;
   // Successful responses can retain stale error fields. Only current failures
   // may drive retries, profile health, or failure copy.
-  const failedAssistant =
-    input.attemptAssistant?.stopReason === "error" ? input.attemptAssistant : undefined;
+  const failedAssistant = attemptAssistant?.stopReason === "error" ? attemptAssistant : undefined;
+  const transcriptError = failedAssistant?.errorMessage;
+  if (isSessionTranscriptTurnMismatchErrorMessage(transcriptError)) {
+    throw new Error(transcriptError);
+  }
   if (classifyGatewayStorageFailure(failedAssistant)) {
     return buildOutcome(input, { action: "proceed", assistantProfileFailureReason: null });
   }
@@ -105,12 +117,12 @@ export async function handleEmbeddedAssistantFailure(input: {
     idleTimedOut,
     promptError,
     timedOut,
-  } = projectAgentRunAttemptTerminal(input.attempt.terminal);
-  const terminalInterrupted = isEmbeddedRunTerminalInterrupted(input.terminalState.outcome);
-  const { signalOwnedInterruption } = input.terminalState;
+  } = projectAgentRunAttemptTerminal(attempt.terminal);
+  const terminalInterrupted = isEmbeddedRunTerminalInterrupted(terminalState.outcome);
+  const { signalOwnedInterruption } = terminalState;
   const fallbackThinking = pickFallbackThinkingLevel({
     message: failedAssistant?.errorMessage,
-    attempted: input.attemptedThinking,
+    attempted: preparedRuntime.attemptedThinking,
   });
   const authFailure = isAuthAssistantError(failedAssistant);
   const rateLimitFailure = isRateLimitAssistantError(failedAssistant);
@@ -120,8 +132,7 @@ export async function handleEmbeddedAssistantFailure(input: {
     providerOwner: input.providerOwner,
   });
   const assistantProviderStarted =
-    Boolean(input.currentAttemptAssistant?.provider) ||
-    input.terminalState.outcome.providerStarted === true;
+    Boolean(currentAttemptAssistant?.provider) || terminalState.outcome.providerStarted === true;
   const assistantProfileFailoverReason =
     assistantFailoverReason ??
     (assistantProviderStarted && (timedOut || idleTimedOut) ? "timeout" : null);
@@ -134,8 +145,8 @@ export async function handleEmbeddedAssistantFailure(input: {
         classifyRateLimitWindow(failedAssistant?.errorMessage).kind === "short",
     },
   );
-  const terminalAssistantError = isTerminalAssistantError(input.attemptAssistant);
-  if (terminalAssistantError || !isCurrentAttemptReplaySafe(input.attempt)) {
+  const terminalAssistantError = isTerminalAssistantError(attemptAssistant);
+  if (terminalAssistantError || !isCurrentAttemptReplaySafe(attempt)) {
     return buildOutcome(input, {
       action: "proceed",
       assistantProfileFailureReason: terminalAssistantError ? null : assistantProfileFailureReason,
@@ -143,7 +154,7 @@ export async function handleEmbeddedAssistantFailure(input: {
   }
   if (fallbackThinking && !terminalInterrupted) {
     log.warn(
-      `unsupported thinking level for ${input.provider}/${input.modelId}; retrying with ${fallbackThinking}`,
+      `unsupported thinking level for ${provider}/${modelId}; retrying with ${fallbackThinking}`,
     );
     return buildOutcome(input, {
       action: "retry",
@@ -151,7 +162,7 @@ export async function handleEmbeddedAssistantFailure(input: {
       assistantProfileFailureReason,
     });
   }
-  const cloudCodeAssistFormatError = input.attempt.cloudCodeAssistFormatError;
+  const cloudCodeAssistFormatError = attempt.cloudCodeAssistFormatError;
   const imageDimensionError = parseImageDimensionError(failedAssistant?.errorMessage ?? "");
   // Transient failures already consumed their recovery budget. Only unclassified
   // empty errors use this separate response-repair limit.
@@ -160,6 +171,17 @@ export async function handleEmbeddedAssistantFailure(input: {
     assistantFailoverReason === "no_error_details" ||
     assistantFailoverReason === "unclassified" ||
     assistantFailoverReason === "unknown";
+  const assistantSignal = failedAssistant
+    ? buildAssistantFailoverSignal(failedAssistant)
+    : undefined;
+  const assistantStatus = assistantSignal?.status;
+  const nonRetryableClientError =
+    assistantSignal !== undefined &&
+    assistantStatus !== undefined &&
+    assistantStatus >= 400 &&
+    assistantStatus < 500 &&
+    !isRetryableProviderHttpStatus(assistantStatus) &&
+    !shouldRetryFailoverSignal({ classification: null, signal: assistantSignal });
   const replaySafeSilentErrorFailure =
     !authFailure &&
     !rateLimitFailure &&
@@ -168,8 +190,9 @@ export async function handleEmbeddedAssistantFailure(input: {
     !imageDimensionError &&
     !terminalInterrupted &&
     !promptError &&
+    !nonRetryableClientError &&
     shouldRetrySilentErrorAssistantTurn({
-      attempt: input.attempt,
+      attempt,
       assistant: failedAssistant,
     });
   if (
@@ -181,9 +204,9 @@ export async function handleEmbeddedAssistantFailure(input: {
     log.warn(
       `[empty-error-retry] stopReason=error non-visible-output; resubmitting ` +
         `attempt=${emptyErrorRetries}/${MAX_EMPTY_ERROR_RETRIES} ` +
-        `provider=${failedAssistant?.provider ?? input.provider} ` +
-        `model=${failedAssistant?.model ?? input.model} ` +
-        `sessionKey=${input.runParams.sessionKey ?? input.runParams.sessionId}`,
+        `provider=${failedAssistant?.provider ?? provider} ` +
+        `model=${failedAssistant?.model ?? model.id} ` +
+        `sessionKey=${runInput.runParams.sessionKey ?? runInput.runParams.sessionId}`,
     );
     return buildOutcome(input, {
       action: "retry",
@@ -192,11 +215,10 @@ export async function handleEmbeddedAssistantFailure(input: {
     });
   }
 
-  // The bounded same-model retry already proved this attempt had no visible output
-  // or replay-unsafe effects. Once those retries are exhausted, skip profile
-  // rotation and let the configured model fallback recover the invisible failure.
+  // After replay-safe, invisible failures exhaust same-model retries, skip
+  // profile rotation and let the configured model fallback recover.
   const exhaustedUnclassifiedSilentError =
-    input.fallbackConfigured &&
+    runInput.fallbackConfigured &&
     assistantFailoverReason === null &&
     replaySafeSilentErrorFailure &&
     input.emptyErrorRetries >= MAX_EMPTY_ERROR_RETRIES;
@@ -206,16 +228,16 @@ export async function handleEmbeddedAssistantFailure(input: {
 
   const logFailoverDecision = createFailoverDecisionLogger({
     stage: "assistant",
-    runId: input.runParams.runId,
+    runId: runInput.runParams.runId,
     rawError: failedAssistant?.errorMessage?.trim(),
     failoverReason: effectiveFailoverReason,
     profileFailureReason: assistantProfileFailureReason,
-    provider: input.activeErrorContext.provider,
-    model: input.activeErrorContext.model,
-    sourceProvider: failedAssistant?.provider ?? input.provider,
-    sourceModel: failedAssistant?.model ?? input.modelId,
-    profileId: input.authProfileId,
-    fallbackConfigured: input.fallbackConfigured,
+    provider: activeErrorContext.provider,
+    model: activeErrorContext.model,
+    sourceProvider: failedAssistant?.provider ?? provider,
+    sourceModel: failedAssistant?.model ?? modelId,
+    profileId: runtime.lastProfileId,
+    fallbackConfigured: runInput.fallbackConfigured,
     timedOut,
     aborted,
     retryCount: input.failover.transientRetryCount,
@@ -225,7 +247,7 @@ export async function handleEmbeddedAssistantFailure(input: {
   if (
     !signalOwnedInterruption &&
     authFailure &&
-    (await input.maybeRefreshRuntimeAuthForAuthError(
+    (await preparedRuntime.maybeRefreshRuntimeAuthForAuthError(
       failedAssistant?.errorMessage ?? "",
       input.runtimeAuthRetry,
     ))
@@ -236,7 +258,7 @@ export async function handleEmbeddedAssistantFailure(input: {
       assistantProfileFailureReason,
     });
   }
-  if (imageDimensionError && input.authProfileId) {
+  if (imageDimensionError && runtime.lastProfileId) {
     const details = [
       imageDimensionError.messageIndex !== undefined
         ? `message=${imageDimensionError.messageIndex}`
@@ -251,32 +273,29 @@ export async function handleEmbeddedAssistantFailure(input: {
       .filter(Boolean)
       .join(" ");
     log.warn(
-      `Profile ${input.authProfileId} rejected image payload${details ? ` (${details})` : ""}.`,
+      `Profile ${runtime.lastProfileId} rejected image payload${details ? ` (${details})` : ""}.`,
     );
   }
 
+  const resolveDecision = (profileRotated: boolean) =>
+    resolveRunFailoverDecision({
+      stage: "assistant",
+      allowFormatRetry: cloudCodeAssistFormatError,
+      terminal: attempt.terminal,
+      signalOwnedInterruption,
+      fallbackConfigured: runInput.fallbackConfigured,
+      failoverFailure,
+      failoverReason: assistantFailoverReason,
+      harnessOwnsTransport: runtime.pluginHarnessOwnsTransport,
+      profileRotated,
+    });
   const initialDecision = exhaustedUnclassifiedSilentError
     ? ({ action: "fallback_model", reason: "unknown" } as const)
-    : resolveRunFailoverDecision({
-        stage: "assistant",
-        allowFormatRetry: cloudCodeAssistFormatError,
-        terminal: input.attempt.terminal,
-        signalOwnedInterruption,
-        fallbackConfigured: input.fallbackConfigured,
-        failoverFailure,
-        failoverReason: assistantFailoverReason,
-        harnessOwnsTransport: input.pluginHarnessOwnsTransport,
-        profileRotated: false,
-      });
-  const authMode = input.authProfileId
-    ? input.authProfileStore.profiles?.[input.authProfileId]?.type
+    : resolveDecision(false);
+  const authMode = runtime.lastProfileId
+    ? preparedRuntime.attemptAuthProfileStore.profiles?.[runtime.lastProfileId]?.type
     : undefined;
-  const terminalOutcome = input.terminalState.outcome;
-  // Routing reasons group several HTTP failures; retain the provider's status
-  // when constructing the error so fallback summaries do not invent a timeout.
-  const assistantStatus = failedAssistant
-    ? buildAssistantFailoverSignal(failedAssistant).status
-    : undefined;
+  const terminalOutcome = terminalState.outcome;
   const externalAbort = projectedExternalAbort || signalOwnedInterruption;
   let overloadProfileRotations = input.overloadProfileRotations;
   let decision = initialDecision;
@@ -289,45 +308,45 @@ export async function handleEmbeddedAssistantFailure(input: {
       retryCount: input.failover.transientRetryCount,
       profileRotationCount: overloadProfileRotations,
     });
-  const throwFailure = (error: FailoverError): never => {
+  const recordTrace = (result: TraceAttempt["result"], status?: number) => {
     input.traceAttempts.push({
-      provider: input.activeErrorContext.provider,
-      model: input.activeErrorContext.model,
-      result:
-        effectiveFailoverReason === "timeout"
-          ? "timeout"
-          : initialDecision.action === "fallback_model"
-            ? "fallback_model"
-            : "error",
+      provider: activeErrorContext.provider,
+      model: activeErrorContext.model,
+      result: effectiveFailoverReason === "timeout" ? "timeout" : result,
       ...(effectiveFailoverReason ? { reason: effectiveFailoverReason } : {}),
       stage: "assistant",
-      ...(typeof error.status === "number" ? { status: error.status } : {}),
+      ...(typeof status === "number" ? { status } : {}),
     });
+  };
+  const throwFailure = (error: FailoverError): never => {
+    recordTrace(
+      initialDecision.action === "fallback_model" ? "fallback_model" : "error",
+      error.status,
+    );
     if (error.suspend) {
-      input.suspendForFailure({
-        cfg: input.runParams.config,
-        agentDir: input.agentDir,
+      runInput.suspendForFailure({
+        cfg: runInput.runParams.config,
+        agentDir: runInput.agentDir,
         sessionId: input.suspensionSessionId,
         reason: resolveSessionSuspensionReason(error.reason),
-        failedProvider: error.provider ?? input.provider,
-        failedModel: error.model ?? input.modelId,
+        failedProvider: error.provider ?? provider,
+        failedModel: error.model ?? modelId,
       });
     }
     throw error;
   };
 
   if (decision.action === "rotate_profile") {
-    const failedProfileId = input.authProfileId;
-    const failureReason = assistantProfileFailureReason;
+    const failedProfileId = runtime.lastProfileId;
     const markFailedProfile = async () => {
-      if (!failureReason) {
+      if (!assistantProfileFailureReason) {
         return;
       }
       try {
         await input.failover.maybeMarkAuthProfileFailure({
           profileId: failedProfileId,
-          reason: failureReason,
-          modelId: input.modelId,
+          reason: assistantProfileFailureReason,
+          modelId,
         });
       } catch (err) {
         log.warn(`profile failure mark failed: ${String(err)}`);
@@ -338,11 +357,11 @@ export async function handleEmbeddedAssistantFailure(input: {
       overloadProfileRotations += 1;
       if (
         overloadProfileRotations > input.failover.overloadProfileRotationLimit &&
-        input.fallbackConfigured
+        runInput.fallbackConfigured
       ) {
         const status = assistantStatus ?? resolveFailoverStatus("overloaded");
         log.warn(
-          `overload profile rotation cap reached for ${sanitizeForLog(input.provider)}/${sanitizeForLog(input.modelId)} after ${overloadProfileRotations} rotations; escalating to model fallback`,
+          `overload profile rotation cap reached for ${sanitizeForLog(provider)}/${sanitizeForLog(modelId)} after ${overloadProfileRotations} rotations; escalating to model fallback`,
         );
         await markFailedProfile();
         logDecision("fallback_model", { status });
@@ -351,9 +370,9 @@ export async function handleEmbeddedAssistantFailure(input: {
             "The AI service is temporarily overloaded. Please try again in a moment.",
             {
               reason: "overloaded",
-              provider: input.activeErrorContext.provider,
-              model: input.activeErrorContext.model,
-              profileId: input.authProfileId,
+              provider: activeErrorContext.provider,
+              model: activeErrorContext.model,
+              profileId: runtime.lastProfileId,
               status,
               rawError: failedAssistant?.errorMessage?.trim(),
             },
@@ -362,23 +381,16 @@ export async function handleEmbeddedAssistantFailure(input: {
       }
     }
 
-    let rotated: boolean;
-    if (assistantFailoverReason === "rate_limit") {
-      rotated = await input.failover.advanceRateLimitAuthProfile({
-        failoverProvider: input.activeErrorContext.provider,
-        failoverModel: input.activeErrorContext.model,
-        logFallbackDecision: logFailoverDecision,
-      });
-    } else {
-      rotated = await input.failover.advanceAuthProfile();
-    }
+    const rotated = await input.failover.advanceAuthProfile(assistantFailoverReason, {
+      failoverProvider: activeErrorContext.provider,
+      failoverModel: activeErrorContext.model,
+      logFallbackDecision: logFailoverDecision,
+    });
 
     const markFailedProfilePromise = markFailedProfile();
-    if (timedOut && !input.isProbeSession && failedProfileId) {
+    if (timedOut && !runInput.isProbeSession && failedProfileId) {
       const timeoutLabel = idleTimedOut ? "idle timeout (model silent)" : "timed out";
-      // Only promise a next account when one was actually selected. Credentials
-      // that config does not authorize are not rotation targets, so this can end
-      // with no further account even when one exists in the environment.
+      // Existing credentials are rotation targets only when config authorizes them.
       log.warn(
         rotated
           ? `Profile ${failedProfileId} ${timeoutLabel}. Trying next account...`
@@ -391,16 +403,9 @@ export async function handleEmbeddedAssistantFailure(input: {
       );
     }
     if (rotated) {
-      // Marking the failed profile is non-blocking after rotation succeeds; the
-      // retry can proceed with the next profile while the failure record settles.
+      // The selected replacement can retry while the failed profile's record settles.
       logDecision("rotate_profile");
-      input.traceAttempts.push({
-        provider: input.activeErrorContext.provider,
-        model: input.activeErrorContext.model,
-        result: effectiveFailoverReason === "timeout" ? "timeout" : "rotate_profile",
-        ...(effectiveFailoverReason ? { reason: effectiveFailoverReason } : {}),
-        stage: "assistant",
-      });
+      recordTrace("rotate_profile");
       return buildOutcome(input, {
         action: "retry",
         thinkLevel: input.getThinkLevel(),
@@ -414,17 +419,7 @@ export async function handleEmbeddedAssistantFailure(input: {
       });
     }
     await markFailedProfilePromise;
-    decision = resolveRunFailoverDecision({
-      stage: "assistant",
-      allowFormatRetry: cloudCodeAssistFormatError,
-      terminal: input.attempt.terminal,
-      signalOwnedInterruption,
-      fallbackConfigured: input.fallbackConfigured,
-      failoverFailure,
-      failoverReason: assistantFailoverReason,
-      harnessOwnsTransport: input.pluginHarnessOwnsTransport,
-      profileRotated: true,
-    });
+    decision = resolveDecision(true);
   }
 
   if (decision.action === "surface_error") {
@@ -439,12 +434,12 @@ export async function handleEmbeddedAssistantFailure(input: {
     const message =
       (failedAssistant
         ? formatUserFacingAssistantErrorText(failedAssistant, {
-            cfg: input.runParams.config,
-            sessionKey: input.runParams.sessionKey ?? input.runParams.sessionId,
-            agentId: input.runParams.agentId,
-            provider: input.activeErrorContext.provider,
+            cfg: runInput.runParams.config,
+            sessionKey: runInput.runParams.sessionKey ?? runInput.runParams.sessionId,
+            agentId: runInput.runParams.agentId,
+            provider: activeErrorContext.provider,
             providerOwner: input.providerOwner,
-            model: input.activeErrorContext.model,
+            model: activeErrorContext.model,
             authMode,
           })
         : undefined) ||
@@ -455,8 +450,8 @@ export async function handleEmbeddedAssistantFailure(input: {
           ? "LLM request rate limited."
           : billingFailure
             ? formatBillingErrorMessage(
-                input.activeErrorContext.provider,
-                input.activeErrorContext.model,
+                activeErrorContext.provider,
+                activeErrorContext.model,
                 authMode,
               )
             : authFailure
@@ -481,11 +476,12 @@ export async function handleEmbeddedAssistantFailure(input: {
     throwFailure(
       new FailoverError(message, {
         reason,
-        provider: input.activeErrorContext.provider,
-        model: input.activeErrorContext.model,
-        profileId: input.authProfileId,
+        provider: activeErrorContext.provider,
+        model: activeErrorContext.model,
+        profileId: runtime.lastProfileId,
         authMode,
         status,
+        code: failedAssistant?.errorCode,
         rawError: failedAssistant?.errorMessage?.trim(),
         // Retry reason "timeout" also includes 5xx; only the terminal owner records a deadline.
         timeout:
@@ -496,7 +492,7 @@ export async function handleEmbeddedAssistantFailure(input: {
               }
             : undefined,
         suspend:
-          Boolean(input.runParams.sessionKey ?? input.runParams.sessionId) &&
+          Boolean(runInput.runParams.sessionKey ?? runInput.runParams.sessionId) &&
           (reason === "rate_limit" || reason === "billing"),
       }),
     );
@@ -517,7 +513,7 @@ function buildOutcome(
 ): EmbeddedRunAssistantFailureOutcome {
   return {
     action: override.action,
-    thinkLevel: override.thinkLevel ?? input.thinkLevel,
+    thinkLevel: override.thinkLevel ?? input.runtime.thinkLevel,
     authRetryPending: override.authRetryPending ?? false,
     emptyErrorRetries: override.emptyErrorRetries ?? input.emptyErrorRetries,
     overloadProfileRotations: override.overloadProfileRotations ?? input.overloadProfileRotations,

@@ -1,8 +1,9 @@
 import { randomUUID } from "node:crypto";
+import { writeSync } from "node:fs";
 import { createServer, type ServerResponse } from "node:http";
 import { setTimeout as sleep } from "node:timers/promises";
-import { afterEach, describe, expect, it } from "vitest";
-import { createQaGatewayChild } from "../../../../extensions/qa-lab/api.js";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { createQaGatewayChild, type QaGatewayChild } from "../../../../extensions/qa-lab/api.js";
 import { writeOpenAiResponsesSse } from "../../../helpers/openai-responses-sse.js";
 import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 
@@ -45,24 +46,10 @@ type ProviderProof = {
   responseReleasedAt?: number;
 };
 
-const cleanups: Array<() => Promise<void>> = [];
-
-afterEach(async () => {
-  const errors: unknown[] = [];
-  for (const cleanup of cleanups.splice(0).toReversed()) {
-    try {
-      await cleanup();
-    } catch (error) {
-      errors.push(error);
-    }
-  }
-  if (errors.length === 1) {
-    throw errors[0];
-  }
-  if (errors.length > 1) {
-    throw new AggregateError(errors, "provider-timeout recovery proof cleanup failed");
-  }
-});
+function writeProgress(phase: string, details: Record<string, unknown> = {}): void {
+  // E2E runs suppress console output. The worker fd reaches the runner's silence watchdog.
+  writeSync(2, `${JSON.stringify({ phase, ...details })}\n`);
+}
 
 function writeAssistantResponse(response: ServerResponse): void {
   const message = {
@@ -170,62 +157,97 @@ function messageText(message: GatewayChatMessage): string {
 describe.runIf(process.env.OPENCLAW_PROVIDER_TIMEOUT_RECOVERY_PROOF === "1")(
   "Gateway provider-timeout recovery product proof",
   () => {
+    let provider: Awaited<ReturnType<typeof startControlledProvider>>;
+    let gateway: QaGatewayChild;
+    const cleanups: Array<() => Promise<void>> = [];
+
+    afterAll(async () => {
+      const startedAt = Date.now();
+      writeProgress("fixture-cleanup-started");
+      const errors: unknown[] = [];
+      for (const cleanup of cleanups.splice(0).toReversed()) {
+        try {
+          await cleanup();
+        } catch (error) {
+          errors.push(error);
+        }
+      }
+      writeProgress("fixture-cleanup-complete", {
+        elapsedMs: Date.now() - startedAt,
+        errors: errors.length,
+      });
+      if (errors.length === 1) {
+        throw errors[0];
+      }
+      if (errors.length > 1) {
+        throw new AggregateError(errors, "provider-timeout recovery proof cleanup failed");
+      }
+    });
+
+    // Vitest gives fixture hooks their own bounded budget; the unchanged test
+    // deadline starts only after Gateway bootstrap has completed.
+    beforeAll(async () => {
+      const startedAt = Date.now();
+      writeProgress("fixture-bootstrap-started");
+      provider = await startControlledProvider();
+      cleanups.push(() => provider.stop());
+      const gatewayOwner = createQaGatewayChild();
+      cleanups.push(() => stopQaGatewayFixture(gatewayOwner));
+      gateway = await gatewayOwner.start({
+        repoRoot: process.cwd(),
+        command: {
+          executablePath: process.execPath,
+          argsPrefix: ["--import", "tsx", "src/entry.ts"],
+          cwd: process.cwd(),
+          usePackagedPlugins: true,
+        },
+        providerBaseUrl: `${provider.baseUrl}/v1`,
+        providerMode: "mock-openai",
+        primaryModel: MODEL_REF,
+        alternateModel: MODEL_REF,
+        transportBaseUrl: "http://127.0.0.1",
+        controlUiEnabled: false,
+        runtimeEnvPatch: {
+          OPENCLAW_SKIP_CHANNELS: "1",
+          OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
+        },
+        mutateConfig: (config) => {
+          const providerConfig = config.models?.providers?.["mock-openai"];
+          if (!providerConfig) {
+            throw new Error("mock-openai provider is missing from QA gateway config");
+          }
+          return {
+            ...config,
+            plugins: { enabled: false },
+            diagnostics: { enabled: true },
+            agents: {
+              ...config.agents,
+              defaults: {
+                ...config.agents?.defaults,
+                timeoutSeconds: TEST_TIMEOUT_MS / 1_000,
+              },
+            },
+            models: {
+              ...config.models,
+              providers: {
+                ...config.models?.providers,
+                "mock-openai": {
+                  ...providerConfig,
+                  timeoutSeconds: PROVIDER_ALLOWANCE_MS / 1_000,
+                },
+              },
+            },
+          };
+        },
+      });
+
+      writeProgress("fixture-bootstrap-complete", { elapsedMs: Date.now() - startedAt });
+    });
+
     it(
       "keeps a quiet provider request alive past recovery and completes within its allowance",
       { timeout: TEST_TIMEOUT_MS },
-      async () => {
-        const provider = await startControlledProvider();
-        cleanups.push(() => provider.stop());
-        const gatewayOwner = createQaGatewayChild();
-        cleanups.push(() => stopQaGatewayFixture(gatewayOwner));
-        const gateway = await gatewayOwner.start({
-          repoRoot: process.cwd(),
-          command: {
-            executablePath: process.execPath,
-            argsPrefix: ["--import", "tsx", "src/entry.ts"],
-            cwd: process.cwd(),
-            usePackagedPlugins: true,
-          },
-          providerBaseUrl: `${provider.baseUrl}/v1`,
-          providerMode: "mock-openai",
-          primaryModel: MODEL_REF,
-          alternateModel: MODEL_REF,
-          transportBaseUrl: "http://127.0.0.1",
-          controlUiEnabled: false,
-          runtimeEnvPatch: {
-            OPENCLAW_SKIP_CHANNELS: "1",
-            OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
-          },
-          mutateConfig: (config) => {
-            const providerConfig = config.models?.providers?.["mock-openai"];
-            if (!providerConfig) {
-              throw new Error("mock-openai provider is missing from QA gateway config");
-            }
-            return {
-              ...config,
-              plugins: { enabled: false },
-              diagnostics: { enabled: true },
-              agents: {
-                ...config.agents,
-                defaults: {
-                  ...config.agents?.defaults,
-                  timeoutSeconds: TEST_TIMEOUT_MS / 1_000,
-                },
-              },
-              models: {
-                ...config.models,
-                providers: {
-                  ...config.models?.providers,
-                  "mock-openai": {
-                    ...providerConfig,
-                    timeoutSeconds: PROVIDER_ALLOWANCE_MS / 1_000,
-                  },
-                },
-              },
-            };
-          },
-        });
-
+      async ({ signal }) => {
         const baseline = (await gateway.call(
           "diagnostics.stability",
           { limit: 1000 },
@@ -246,21 +268,28 @@ describe.runIf(process.env.OPENCLAW_PROVIDER_TIMEOUT_RECOVERY_PROOF === "1")(
         expect(started).toMatchObject({ status: "started" });
         expect(typeof started.runId).toBe("string");
 
+        const admissionStartedAt = Date.now();
+        let nextAdmissionProgressAt = admissionStartedAt;
         while (provider.proof.requestStartedAt === undefined) {
-          await sleep(100);
+          if (Date.now() >= nextAdmissionProgressAt) {
+            writeProgress("provider-request-pending", {
+              elapsedMs: Date.now() - admissionStartedAt,
+            });
+            nextAdmissionProgressAt = Date.now() + 60_000;
+          }
+          await sleep(100, undefined, { signal });
         }
         while (Date.now() - provider.proof.requestStartedAt < CHECKPOINT_AFTER_FLOOR_MS) {
           const elapsedMs = Date.now() - provider.proof.requestStartedAt;
-          console.log(
-            JSON.stringify({
-              phase: "provider-request-active",
-              elapsedMs,
-              globalRecoveryFloorMs: GLOBAL_RECOVERY_FLOOR_MS,
-              providerAllowanceMs: PROVIDER_ALLOWANCE_MS,
-              clientClosed: provider.proof.clientClosedAt !== undefined,
-            }),
-          );
-          await sleep(Math.min(60_000, CHECKPOINT_AFTER_FLOOR_MS - elapsedMs));
+          writeProgress("provider-request-active", {
+            elapsedMs,
+            globalRecoveryFloorMs: GLOBAL_RECOVERY_FLOOR_MS,
+            providerAllowanceMs: PROVIDER_ALLOWANCE_MS,
+            clientClosed: provider.proof.clientClosedAt !== undefined,
+          });
+          await sleep(Math.min(60_000, CHECKPOINT_AFTER_FLOOR_MS - elapsedMs), undefined, {
+            signal,
+          });
         }
 
         const checkpointElapsedMs = Date.now() - provider.proof.requestStartedAt;
@@ -279,6 +308,7 @@ describe.runIf(process.env.OPENCLAW_PROVIDER_TIMEOUT_RECOVERY_PROOF === "1")(
         expect(provider.proof.clientClosedAt).toBeUndefined();
         expect(recoveryEvents).toEqual([]);
 
+        writeProgress("provider-checkpoint-complete", { checkpointElapsedMs });
         provider.release();
         const terminal = (await gateway.call(
           "agent.wait",
@@ -297,19 +327,16 @@ describe.runIf(process.env.OPENCLAW_PROVIDER_TIMEOUT_RECOVERY_PROOF === "1")(
           ),
         ).toBe(true);
 
-        console.log(
-          JSON.stringify({
-            phase: "provider-timeout-recovery-proof-complete",
-            head: process.env.OPENCLAW_PROOF_HEAD_SHA ?? process.env.GITHUB_SHA ?? "local-checkout",
-            checkpointElapsedMs,
-            globalRecoveryFloorMs: GLOBAL_RECOVERY_FLOOR_MS,
-            providerAllowanceMs: PROVIDER_ALLOWANCE_MS,
-            recoveryEventsBeforeRelease: recoveryEvents.length,
-            providerClientStayedConnected: provider.proof.clientClosedAt === undefined,
-            terminalStatus: terminal.status,
-            marker: RESPONSE_MARKER,
-          }),
-        );
+        writeProgress("provider-timeout-recovery-proof-complete", {
+          head: process.env.OPENCLAW_PROOF_HEAD_SHA ?? process.env.GITHUB_SHA ?? "local-checkout",
+          checkpointElapsedMs,
+          globalRecoveryFloorMs: GLOBAL_RECOVERY_FLOOR_MS,
+          providerAllowanceMs: PROVIDER_ALLOWANCE_MS,
+          recoveryEventsBeforeRelease: recoveryEvents.length,
+          providerClientStayedConnected: provider.proof.clientClosedAt === undefined,
+          terminalStatus: terminal.status,
+          marker: RESPONSE_MARKER,
+        });
       },
     );
   },

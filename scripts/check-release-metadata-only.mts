@@ -16,7 +16,6 @@ const VERSION_ONLY_TEXT_PATHS = new Set([
   "apps/android/Config/Version.properties",
   "apps/android/version.json",
   "apps/macos/Sources/OpenClaw/Resources/Info.plist",
-  "apps/mobile/version.json",
 ]);
 
 function normalizePath(input: string) {
@@ -52,9 +51,8 @@ export function parseArgs(argv: string[]) {
   const explicitPaths =
     separatorIndex === -1 ? [] : argv.slice(separatorIndex + 1).map(normalizePath);
   const paths: string[] = [];
-  const args = {
+  const args: { staged: boolean; base?: string; head: string; paths: string[] } = {
     staged: false,
-    base: "origin/main",
     head: "HEAD",
     paths,
   };
@@ -109,8 +107,8 @@ function listChangedPaths(args: ReturnType<typeof parseArgs>) {
     );
   }
   const diffArgs = args.staged
-    ? ["diff", "--cached", "--name-only", "--diff-filter=ACMR"]
-    : ["diff", "--name-only", "--diff-filter=ACMR", `${args.base}...${args.head}`];
+    ? ["diff", "--cached", "--name-only", "--diff-filter=ACMR", ...(args.base ? [args.base] : [])]
+    : ["diff", "--name-only", "--diff-filter=ACMR", `${args.base ?? "origin/main"}...${args.head}`];
   return git(diffArgs)
     .split("\n")
     .map(normalizePath)
@@ -125,21 +123,13 @@ function readBlob(ref: string, filePath: string) {
   return git(["show", `${ref}:${filePath}`]);
 }
 
-function refsFor(args: ReturnType<typeof parseArgs>) {
-  return args.staged ? { before: "HEAD", after: "" } : { before: args.base, after: args.head };
-}
-
 function readBeforeAfter(args: ReturnType<typeof parseArgs>, filePath: string) {
-  const refs = refsFor(args);
-  const before = readBlob(refs.before, filePath);
-  let after = readBlob(refs.after, filePath);
+  const before = readBlob(args.base ?? (args.staged ? "HEAD" : "origin/main"), filePath);
+  let after = readBlob(args.staged ? "" : args.head, filePath);
   // The worktree overlay covers uncommitted edits; an explicit --head SHA is
   // a request for SHA-exact comparison and must not read the checkout.
   if (!args.staged && args.head === "HEAD" && existsSync(filePath)) {
-    const worktree = readBlob("WORKTREE", filePath);
-    if (worktree !== after) {
-      after = worktree;
-    }
+    after = readBlob("WORKTREE", filePath);
   }
   return {
     before,

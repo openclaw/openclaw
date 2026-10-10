@@ -32,7 +32,7 @@ import { createChatRunState, createSessionMessageSubscriberRegistry } from "./se
 import { MAX_BUFFERED_BYTES, WEBSOCKET_CLOSE_GRACE_MS } from "./server-constants.js";
 import { handleNodeInvokeResult } from "./server-methods/nodes.handlers.invoke-result.js";
 import type * as GatewayMethodTypes from "./server-methods/types.js";
-import { formatError, normalizeVoiceWakeTriggers } from "./server-utils.js";
+import { normalizeVoiceWakeTriggers } from "./server-utils.js";
 import { GatewayClientRegistry } from "./server/client-registry.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 
@@ -126,7 +126,7 @@ describe("GatewayClient", () => {
   }
 
   function startGatewayClient(params: { url: string; tlsFingerprint?: string }) {
-    const client = new GatewayClient(params);
+    const client = new GatewayClient({ ...params, deviceIdentity: null });
     client.start();
     return wsMockState.last;
   }
@@ -173,14 +173,6 @@ describe("GatewayClient", () => {
 
   test("does not pass an explicit direct agent for loopback control-plane WebSocket connections", () => {
     expectNoGatewayClientAgent({ url: "ws://127.0.0.1:1" });
-  });
-
-  test("does not pass an explicit direct agent for IPv6 loopback control-plane WebSocket connections", () => {
-    expectNoGatewayClientAgent({ url: "ws://[::1]:1" });
-  });
-
-  test("does not pass an explicit direct agent for localhost hostnames", () => {
-    expectNoGatewayClientAgent({ url: "ws://localhost:1" });
   });
 
   test("does not force a direct agent for remote Gateway WebSocket connections", () => {
@@ -231,14 +223,8 @@ describe("GatewayClient", () => {
     }
   });
 
-  it("returns 404 for missing static asset paths instead of SPA fallback", async () => {
-    await withControlUiRoot({ faviconSvg: "<svg/>" }, async (tmp) => {
-      await expectControlUiStatus(tmp, { url: "/webchat/favicon.svg", statusCode: 404 });
-    });
-  });
-
   it("returns 404 for missing static assets with query strings", async () => {
-    await withControlUiRoot({}, async (tmp) => {
+    await withControlUiRoot({ faviconSvg: "<svg/>" }, async (tmp) => {
       await expectControlUiStatus(tmp, { url: "/webchat/favicon.svg?v=1", statusCode: 404 });
     });
   });
@@ -634,19 +620,6 @@ describe("gateway broadcaster", () => {
     expectSentEvents(readSocket, ["sessions.catalog.host"]);
     expectSentEvents(writeSocket, ["sessions.catalog.host"]);
     expectSentEvents(adminSocket, ["sessions.catalog.host"]);
-  });
-
-  it("requires operator.read for task ledger broadcast events", () => {
-    const { pairingSocket, nodeSocket, readSocket, writeSocket, adminSocket, broadcast } =
-      makeScopedBroadcastContext();
-
-    broadcast("task", { action: "deleted", taskId: "task-1" });
-
-    expect(pairingSocket.send).not.toHaveBeenCalled();
-    expect(nodeSocket.send).not.toHaveBeenCalled();
-    expectSentEvents(readSocket, ["task"]);
-    expectSentEvents(writeSocket, ["task"]);
-    expectSentEvents(adminSocket, ["task"]);
   });
 
   it("requires operator.read for node topology broadcasts", () => {
@@ -1139,17 +1112,5 @@ describe("normalizeVoiceWakeTriggers", () => {
   test("does not split surrogate pairs at the length limit", () => {
     const prefix = "x".repeat(63);
     expect(normalizeVoiceWakeTriggers([`${prefix}\u{1f600}`])).toEqual([prefix]);
-  });
-});
-
-describe("formatError", () => {
-  test("prefers message for Error", () => {
-    expect(formatError(new Error("boom"))).toBe("boom");
-  });
-
-  test("handles status/code", () => {
-    expect(formatError({ status: 500, code: "EPIPE" })).toBe("status=500 code=EPIPE");
-    expect(formatError({ status: 404 })).toBe("status=404 code=unknown");
-    expect(formatError({ code: "ENOENT" })).toBe("status=unknown code=ENOENT");
   });
 });

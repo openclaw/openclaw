@@ -1,14 +1,12 @@
-// ACP Core tests cover session behavior.
 import { beforeEach, describe, expect, it } from "vitest";
 import { createInMemorySessionStore } from "./session.js";
 
 describe("acp session manager", () => {
   let nowMs = 0;
   const now = () => nowMs;
-  const advance = (ms: number) => {
-    nowMs += ms;
-  };
   let store = createInMemorySessionStore({ now });
+  const createSession = (sessionId: string, target = store) =>
+    target.createSession({ sessionId, sessionKey: `acp:${sessionId}`, cwd: "/tmp" });
 
   beforeEach(() => {
     nowMs = 1_000;
@@ -56,11 +54,7 @@ describe("acp session manager", () => {
   );
 
   it("deletes sessions and aborts active runs on close", () => {
-    const session = store.createSession({
-      sessionId: "close-me",
-      sessionKey: "acp:close",
-      cwd: "/tmp",
-    });
+    const session = createSession("close-me");
     const controller = new AbortController();
     store.setActiveRun(session.sessionId, "run-close", controller);
 
@@ -80,7 +74,7 @@ describe("acp session manager", () => {
       sessionKey: "acp:one",
       cwd: "/tmp/one",
     });
-    advance(500);
+    nowMs += 500;
 
     const refreshed = store.createSession({
       sessionId: "existing",
@@ -102,17 +96,9 @@ describe("acp session manager", () => {
       idleTtlMs: Number.NaN,
       now,
     });
-    boundedStore.createSession({
-      sessionId: "first",
-      sessionKey: "acp:first",
-      cwd: "/tmp",
-    });
-    advance(1);
-    boundedStore.createSession({
-      sessionId: "second",
-      sessionKey: "acp:second",
-      cwd: "/tmp",
-    });
+    createSession("first", boundedStore);
+    nowMs += 1;
+    createSession("second", boundedStore);
 
     expect(boundedStore.hasSession("first")).toBe(true);
     expect(boundedStore.hasSession("second")).toBe(true);
@@ -125,44 +111,11 @@ describe("acp session manager", () => {
       now,
     });
     for (let index = 0; index < 5_000; index += 1) {
-      const session = boundedStore.createSession({
-        sessionId: `session-${index}`,
-        sessionKey: `acp:${index}`,
-        cwd: "/tmp",
-      });
+      const session = createSession(`session-${index}`, boundedStore);
       boundedStore.setActiveRun(session.sessionId, `run-${index}`, new AbortController());
     }
 
-    expect(() =>
-      boundedStore.createSession({
-        sessionId: "overflow",
-        sessionKey: "acp:overflow",
-        cwd: "/tmp",
-      }),
-    ).toThrow(/session limit reached/i);
-  });
-
-  it("reaps idle sessions before enforcing the max session cap", () => {
-    const boundedStore = createInMemorySessionStore({
-      maxSessions: 1,
-      idleTtlMs: 1_000,
-      now,
-    });
-    boundedStore.createSession({
-      sessionId: "old",
-      sessionKey: "acp:old",
-      cwd: "/tmp",
-    });
-    advance(2_000);
-    const fresh = boundedStore.createSession({
-      sessionId: "fresh",
-      sessionKey: "acp:fresh",
-      cwd: "/tmp",
-    });
-
-    expect(fresh.sessionId).toBe("fresh");
-    expect(boundedStore.getSession("old")).toBeUndefined();
-    expect(boundedStore.hasSession("old")).toBe(false);
+    expect(() => createSession("overflow", boundedStore)).toThrow(/session limit reached/i);
   });
 
   it("uses soft-cap eviction for the oldest idle session when full", () => {
@@ -171,26 +124,14 @@ describe("acp session manager", () => {
       idleTtlMs: 24 * 60 * 60 * 1_000,
       now,
     });
-    const first = boundedStore.createSession({
-      sessionId: "first",
-      sessionKey: "acp:first",
-      cwd: "/tmp",
-    });
-    advance(100);
-    const second = boundedStore.createSession({
-      sessionId: "second",
-      sessionKey: "acp:second",
-      cwd: "/tmp",
-    });
+    const first = createSession("first", boundedStore);
+    nowMs += 100;
+    const second = createSession("second", boundedStore);
     const controller = new AbortController();
     boundedStore.setActiveRun(second.sessionId, "run-2", controller);
-    advance(100);
+    nowMs += 100;
 
-    const third = boundedStore.createSession({
-      sessionId: "third",
-      sessionKey: "acp:third",
-      cwd: "/tmp",
-    });
+    const third = createSession("third", boundedStore);
 
     expect(third.sessionId).toBe("third");
     expect(boundedStore.getSession(first.sessionId)).toBeUndefined();
@@ -204,19 +145,38 @@ describe("acp session manager", () => {
       idleTtlMs: 24 * 60 * 60 * 1_000,
       now,
     });
-    const only = boundedStore.createSession({
-      sessionId: "only",
-      sessionKey: "acp:only",
-      cwd: "/tmp",
-    });
+    const only = createSession("only", boundedStore);
     boundedStore.setActiveRun(only.sessionId, "run-only", new AbortController());
 
-    expect(() =>
-      boundedStore.createSession({
-        sessionId: "next",
-        sessionKey: "acp:next",
-        cwd: "/tmp",
-      }),
-    ).toThrow(/session limit reached/i);
+    expect(() => createSession("next", boundedStore)).toThrow(/session limit reached/i);
+  });
+
+  it("reports every removal path through onSessionRemoved", () => {
+    const removed: string[] = [];
+    const reportingStore = createInMemorySessionStore({
+      now,
+      maxSessions: 2,
+      idleTtlMs: 1_000,
+      onSessionRemoved: (sessionId) => removed.push(sessionId),
+    });
+
+    createSession("deleted", reportingStore);
+    expect(reportingStore.deleteSession("deleted")).toBe(true);
+    expect(removed).toEqual(["deleted"]);
+
+    // Idle reaping: the session ages past the TTL and is swept on the next create.
+    createSession("stale", reportingStore);
+    nowMs += 5_000;
+    createSession("fresh", reportingStore);
+    expect(removed).toEqual(["deleted", "stale"]);
+
+    // Capacity eviction: at maxSessions the oldest idle session makes room.
+    createSession("second", reportingStore);
+    createSession("third", reportingStore);
+    expect(removed).toEqual(["deleted", "stale", "fresh"]);
+
+    // Dispose reports whatever was still held.
+    reportingStore.dispose();
+    expect(removed).toEqual(["deleted", "stale", "fresh", "second", "third"]);
   });
 });

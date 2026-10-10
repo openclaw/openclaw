@@ -1,4 +1,3 @@
-// Main interactive configure/update wizard implementation.
 import fsPromises from "node:fs/promises";
 import nodePath from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -10,19 +9,17 @@ import {
 } from "../agents/agent-scope-config.js";
 import { describeCodexNativeWebSearch } from "../agents/codex-native-web-search.shared.js";
 import { formatCliCommand } from "../cli/command-format.js";
-import { formatPortRangeHint } from "../cli/error-format.js";
-import { parsePort } from "../cli/shared/parse-port.js";
 import { readConfigFileSnapshotForWrite, resolveGatewayPort } from "../config/config.js";
-import { inheritLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import { logConfigUpdated } from "../config/logging.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { createChannelSetupHooks } from "../flows/channel-setup.js";
+import { createChannelSetupHooks, setupChannels } from "../flows/channel-setup.js";
+import { validateGatewayPortInput } from "../gateway/gateway-config-prompts.shared.js";
 import { resolveGatewayProbeAuthSafeWithSecretInputs } from "../gateway/probe-auth.js";
+import { parseTcpPort } from "../infra/tcp-port.js";
 import { formatWindowsGatewayFirewallGuidance } from "../infra/windows-gateway-firewall-diagnostics.js";
 import { resolvePluginContributionOwners } from "../plugins/plugin-registry.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { defaultRuntime, ExitError } from "../runtime.js";
-import { createLazyPromise } from "../shared/lazy-promise.js";
+import { defaultRuntime } from "../runtime.js";
 import { resolveUserPath } from "../utils.js";
 import { createClackPrompter } from "../wizard/clack-prompter.js";
 import { WizardCancelledError } from "../wizard/prompts.js";
@@ -30,33 +27,23 @@ import { writeWizardConfigFile } from "../wizard/setup.shared.js";
 import { removeChannelConfigWizard } from "./configure.channels.js";
 import { maybeInstallDaemon, type DaemonSetupOutcome } from "./configure.daemon.js";
 import { promptAuthConfig } from "./configure.gateway-auth.js";
-import { promptGatewayConfig } from "./configure.gateway.js";
-import type {
-  ChannelsWizardMode,
-  ConfigureWizardParams,
-  WizardSection,
-} from "./configure.shared.js";
 import {
-  CONFIGURE_SECTION_OPTIONS,
-  confirm,
-  intro,
-  outro,
-  select,
-  text,
-} from "./configure.shared.js";
+  runGatewayHealthCheck,
+  type GatewayHealthCheckOutcome,
+} from "./configure.gateway-health.js";
+import { promptGatewayConfig } from "./configure.gateway.js";
+import { createConfigurePrompts } from "./configure.prompts.js";
+import type { WizardSection } from "./configure.shared.js";
+import { CONFIGURE_SECTION_OPTIONS, intro, outro } from "./configure.shared.js";
 import { resolveGatewayStartupTiming } from "./gateway-startup-timing.js";
-import { formatHealthCheckFailure } from "./health-format.js";
-import { healthCommandNonExiting } from "./health.js";
 import {
   applyOnboardingWorkspace,
   ensureOnboardingAgentWorkspace,
   resolveOnboardingAgentTarget,
 } from "./onboard-agent-target.js";
-import { setupChannels } from "./onboard-channels.js";
 import {
   applyWizardMetadata,
   DEFAULT_WORKSPACE,
-  guardCancel,
   probeGatewayReachable,
   resolveAdvertisedControlUiLinks,
   resolveLocalControlUiProbeLinks,
@@ -68,188 +55,15 @@ import { setupSkills } from "./onboard-skills.js";
 import type { OnboardMode } from "./onboard-types.js";
 
 type ConfigureSectionChoice = WizardSection | "__continue";
-type GatewayHealthCheckOutcome = "succeeded" | "failed" | "skipped";
 
 const GATEWAY_HINT_PROBE_TIMEOUT_MS = 300;
-
-const loadSetupPluginConfigModule = createLazyPromise(
-  () => import("../wizard/setup.plugin-config.js"),
-);
-
-function validateGatewayPortInput(value: unknown): string | undefined {
-  if (parsePort(value) === null) {
-    return formatPortRangeHint();
-  }
-  return undefined;
-}
-
-async function runGatewayHealthCheck(params: {
-  cfg: OpenClawConfig;
-  runtime: RuntimeEnv;
-  port: number;
-  daemonSetupOutcome?: DaemonSetupOutcome;
-}): Promise<GatewayHealthCheckOutcome> {
-  const localLinks = resolveLocalControlUiProbeLinks({
-    bind: params.cfg.gateway?.bind ?? "loopback",
-    port: params.port,
-    customBindHost: params.cfg.gateway?.customBindHost,
-    basePath: undefined,
-    tlsEnabled: params.cfg.gateway?.tls?.enabled === true,
-  });
-  const remoteUrl = params.cfg.gateway?.remote?.url?.trim();
-  const remoteWsUrl = params.cfg.gateway?.mode === "remote" ? remoteUrl : undefined;
-  const probeMode = remoteWsUrl ? "remote" : "local";
-  const wsUrl = remoteWsUrl ?? localLinks.wsUrl;
-  let token: string | undefined;
-  let password: string | undefined;
-  // Remote and local probe credentials belong to different trust surfaces.
-  // Keep their resolution separate so one target never receives the other's secrets.
-  if (probeMode === "remote") {
-    const remoteProbeAuth = await resolveGatewayProbeAuthSafeWithSecretInputs({
-      cfg: params.cfg,
-      env: process.env,
-      mode: "remote",
-    });
-    if (remoteProbeAuth.warning) {
-      const hasResolvedRemoteAuth = Boolean(
-        remoteProbeAuth.auth.token || remoteProbeAuth.auth.password,
-      );
-      note(
-        [
-          "Could not resolve remote gateway SecretRef for health check.",
-          remoteProbeAuth.warning,
-          ...(hasResolvedRemoteAuth
-            ? ["Continuing with the other configured remote credential."]
-            : [
-                "Health check skipped to avoid falling back to ambient credentials.",
-                `Fix the SecretRef, then run \`${formatCliCommand("openclaw health")}\` again.`,
-              ]),
-        ].join("\n"),
-        "Gateway auth",
-      );
-      // A failed ref does not invalidate a resolved sibling config credential.
-      // Skip only when generic health auth could otherwise recover ambient auth.
-      if (!hasResolvedRemoteAuth) {
-        return "skipped";
-      }
-    }
-    ({ token, password } = remoteProbeAuth.auth);
-  } else {
-    const localProbeAuth = await resolveGatewayProbeAuthSafeWithSecretInputs({
-      cfg: params.cfg,
-      env: process.env,
-      mode: "local",
-      localPrecedence: "env-first",
-    });
-    if (localProbeAuth.warning) {
-      note(
-        [
-          "Could not resolve local gateway SecretRef for health check.",
-          localProbeAuth.warning,
-          "Health check skipped to avoid falling back to ambient credentials.",
-          `Fix the SecretRef, then run \`${formatCliCommand("openclaw health")}\` again.`,
-        ].join("\n"),
-        "Gateway auth",
-      );
-      return "skipped";
-    }
-    ({ token, password } = localProbeAuth.auth);
-  }
-
-  try {
-    const gatewayProbe = await waitForGatewayReachable({
-      url: wsUrl,
-      ...(probeMode === "remote" ? { config: params.cfg, originScopedDeviceAuth: true } : {}),
-      token,
-      password,
-      ...(params.daemonSetupOutcome === "succeeded"
-        ? resolveGatewayStartupTiming()
-        : { deadlineMs: 15_000 }),
-    });
-    if (!gatewayProbe.ok) {
-      throw new Error(gatewayProbe.detail ?? `gateway did not become reachable at ${wsUrl}`);
-    }
-    await healthCommandNonExiting(
-      {
-        json: false,
-        timeoutMs: 10_000,
-        config: params.cfg,
-        token,
-        password,
-        ...(probeMode === "local"
-          ? { localPortOverride: params.port }
-          : { ignoreEnvUrlOverride: true }),
-      },
-      params.runtime,
-    );
-  } catch (err) {
-    // A trapped ExitError means healthCommand already printed its own
-    // reachable-gateway diagnostic; re-formatting it would only add noise.
-    if (!(err instanceof ExitError)) {
-      params.runtime.error(formatHealthCheckFailure(err));
-    }
-    note(
-      [
-        "Docs:",
-        "https://docs.openclaw.ai/gateway/health",
-        "https://docs.openclaw.ai/gateway/troubleshooting",
-      ].join("\n"),
-      "Health check help",
-    );
-    return "failed";
-  }
-  return "succeeded";
-}
-
-async function promptConfigureSection(
-  runtime: RuntimeEnv,
-  hasSelection: boolean,
-): Promise<ConfigureSectionChoice> {
-  return guardCancel(
-    await select<ConfigureSectionChoice>({
-      message: "What do you want to configure?",
-      options: [
-        ...CONFIGURE_SECTION_OPTIONS,
-        {
-          value: "__continue",
-          label: hasSelection ? "Done" : "Skip for now",
-        },
-      ],
-      initialValue: CONFIGURE_SECTION_OPTIONS[0]?.value,
-    }),
-    runtime,
-    1,
-  );
-}
-
-async function promptChannelMode(runtime: RuntimeEnv): Promise<ChannelsWizardMode> {
-  return guardCancel(
-    await select({
-      message: "Channel setup",
-      options: [
-        {
-          value: "configure",
-          label: "Add or update channels",
-          hint: "Configure accounts and disable unselected accounts",
-        },
-        {
-          value: "remove",
-          label: "Remove channel config",
-          hint: "Delete channel tokens/settings from openclaw.json",
-        },
-      ],
-      initialValue: "configure",
-    }),
-    runtime,
-    1,
-  ) as ChannelsWizardMode;
-}
 
 async function promptWebToolsConfig(
   nextConfig: OpenClawConfig,
   runtime: RuntimeEnv,
   prompter: ReturnType<typeof createClackPrompter>,
 ): Promise<OpenClawConfig> {
+  const prompts = createConfigurePrompts(runtime);
   type WebSearchConfig = NonNullable<NonNullable<OpenClawConfig["tools"]>["web"]>["search"];
   const existingSearch = nextConfig.tools?.web?.search;
   const existingFetch = nextConfig.tools?.web?.fetch;
@@ -271,14 +85,10 @@ async function promptWebToolsConfig(
     "Web search",
   );
 
-  const enableSearch = guardCancel(
-    await confirm({
-      message: "Enable the web_search tool?",
-      initialValue: existingSearch?.enabled ?? hasManagedSearchProviders,
-    }),
-    runtime,
-    1,
-  );
+  const enableSearch = await prompts.confirm({
+    message: "Enable the web_search tool?",
+    initialValue: existingSearch?.enabled ?? hasManagedSearchProviders,
+  });
 
   let nextSearch: WebSearchConfig = {
     ...existingSearch,
@@ -303,18 +113,13 @@ async function promptWebToolsConfig(
         "Codex native search",
       );
 
-      const enableCodexNative = guardCancel(
-        await confirm({
-          message: "Enable native Codex web search for Codex-capable models?",
-          initialValue: existingSearch?.openaiCodex?.enabled === true,
-        }),
-        runtime,
-        1,
-      );
+      const enableCodexNative = await prompts.confirm({
+        message: "Enable native Codex web search for Codex-capable models?",
+        initialValue: existingSearch?.openaiCodex?.enabled === true,
+      });
 
-      if (enableCodexNative) {
-        const codexMode = guardCancel(
-          await select({
+      const codexMode = enableCodexNative
+        ? await prompts.select({
             message: "Native Codex web search mode",
             options: [
               {
@@ -329,36 +134,23 @@ async function promptWebToolsConfig(
               },
             ],
             initialValue: existingSearch?.openaiCodex?.mode ?? "cached",
-          }),
-          runtime,
-          1,
-        );
-        nextSearch = {
-          ...nextSearch,
-          openaiCodex: {
-            ...existingSearch?.openaiCodex,
-            enabled: true,
-            mode: codexMode,
-          },
-        };
-        configureManagedProvider = guardCancel(
-          await confirm({
-            message: existingSearch?.provider
-              ? `Change the separate web search provider (currently ${existingSearch.provider})?`
-              : "Also configure a separate web search provider for other models?",
-            initialValue: Boolean(existingSearch?.provider),
-          }),
-          runtime,
-          1,
-        );
-      } else {
-        nextSearch = {
-          ...nextSearch,
-          openaiCodex: {
-            ...existingSearch?.openaiCodex,
-            enabled: false,
-          },
-        };
+          })
+        : undefined;
+      nextSearch = {
+        ...nextSearch,
+        openaiCodex: {
+          ...existingSearch?.openaiCodex,
+          enabled: enableCodexNative,
+          ...(enableCodexNative ? { mode: codexMode } : {}),
+        },
+      };
+      if (enableCodexNative) {
+        configureManagedProvider = await prompts.confirm({
+          message: existingSearch?.provider
+            ? `Change the separate web search provider (currently ${existingSearch.provider})?`
+            : "Also configure a separate web search provider for other models?",
+          initialValue: Boolean(existingSearch?.provider),
+        });
       }
     }
 
@@ -408,14 +200,10 @@ async function promptWebToolsConfig(
     "Web fetch",
   );
 
-  const enableFetch = guardCancel(
-    await confirm({
-      message: "Enable the web_fetch tool?",
-      initialValue: existingFetch?.enabled ?? true,
-    }),
-    runtime,
-    1,
-  );
+  const enableFetch = await prompts.confirm({
+    message: "Enable the web_fetch tool?",
+    initialValue: existingFetch?.enabled ?? true,
+  });
 
   const nextFetch = {
     ...workingConfig.tools?.web?.fetch,
@@ -435,13 +223,14 @@ async function promptWebToolsConfig(
   };
 }
 
-/** Run the configure/update wizard, optionally limited to selected sections. */
+/** Run the configure wizard, optionally limited to selected sections. */
 export async function runConfigureWizard(
-  opts: ConfigureWizardParams,
+  opts: { sections?: WizardSection[] },
   runtime: RuntimeEnv = defaultRuntime,
 ) {
+  const prompts = createConfigurePrompts(runtime);
   try {
-    intro(opts.command === "update" ? "OpenClaw update wizard" : "OpenClaw configure");
+    intro("OpenClaw configure");
     const prompter = createClackPrompter();
 
     const prepared = await readConfigFileSnapshotForWrite();
@@ -475,7 +264,7 @@ export async function runConfigureWizard(
       }
       if (!snapshot.valid) {
         outro(
-          `Config invalid. Run \`${formatCliCommand("openclaw doctor")}\` to repair it, then re-run configure.`,
+          `Config invalid. Run \`${formatCliCommand("openclaw doctor --fix")}\` to apply supported repairs, then re-run configure.`,
         );
         runtime.exit(1);
         return;
@@ -519,6 +308,7 @@ export async function runConfigureWizard(
               url: remoteUrl,
               config: baseConfig,
               originScopedDeviceAuth: true,
+              configuredRemote: true,
               token: remoteProbeAuth.auth.token,
               ...(remoteProbeAuth.auth.password ? { password: remoteProbeAuth.auth.password } : {}),
               timeoutMs: GATEWAY_HINT_PROBE_TIMEOUT_MS,
@@ -526,33 +316,29 @@ export async function runConfigureWizard(
           })()
         : Promise.resolve(null);
       const [localProbe, remoteProbe] = await Promise.all([localProbePromise, remoteProbePromise]);
-      return guardCancel(
-        await select({
-          message: "Where will the Gateway run?",
-          options: [
-            {
-              value: "local",
-              label: "Local (this machine)",
-              hint: localProbe.ok
-                ? `Gateway reachable (${localUrl})`
-                : "authUnavailable" in localProbe
-                  ? `Gateway auth unavailable; probe skipped (${localUrl})`
-                  : `No gateway detected (${localUrl})`,
-            },
-            {
-              value: "remote",
-              label: "Remote (info-only)",
-              hint: !remoteUrl
-                ? "No remote URL configured yet"
-                : remoteProbe?.ok
-                  ? `Gateway reachable (${remoteUrl})`
-                  : `Configured but unreachable (${remoteUrl})`,
-            },
-          ],
-        }),
-        runtime,
-        1,
-      );
+      return await prompts.select({
+        message: "Where will the Gateway run?",
+        options: [
+          {
+            value: "local",
+            label: "Local (this machine)",
+            hint: localProbe.ok
+              ? `Gateway reachable (${localUrl})`
+              : "authUnavailable" in localProbe
+                ? `Gateway auth unavailable; check skipped (${localUrl})`
+                : `No gateway detected (${localUrl})`,
+          },
+          {
+            value: "remote",
+            label: "Remote (info-only)",
+            hint: !remoteUrl
+              ? "No remote URL configured yet"
+              : remoteProbe?.ok
+                ? `Gateway reachable (${remoteUrl})`
+                : `Configured but unreachable (${remoteUrl})`,
+          },
+        ],
+      });
     };
 
     const mode = shouldPromptGatewayRunMode ? await promptGatewayRunMode() : "local";
@@ -563,7 +349,7 @@ export async function runConfigureWizard(
     if (shouldPromptGatewayRunMode && mode === "remote") {
       let remoteConfig = await promptRemoteGatewayConfig(baseConfig, prompter);
       remoteConfig = applyWizardMetadata(remoteConfig, {
-        command: opts.command,
+        command: "configure",
         mode: metadataMode,
       });
       const committed = await writeWizardConfigFile(remoteConfig, {
@@ -607,23 +393,16 @@ export async function runConfigureWizard(
     let setupAgentId: string | undefined;
     const resolveSetupTarget = async () => {
       // Only agent-scoped steps choose an owner; keep that choice across sections.
-      if (nextConfig.agents?.ownership !== "explicit") {
-        inheritLegacyDefaultAgentId(baseConfig, nextConfig);
-      }
       setupAgentId ??=
         nextConfig.agents?.ownership === "explicit"
           ? tryResolveAmbientOwnerAgentId(nextConfig)
           : tryResolveLegacyCompatibilityAgentId(nextConfig);
       const agentIds = listAgentIds(nextConfig);
       if (!setupAgentId && agentIds.length > 1) {
-        setupAgentId = guardCancel(
-          await select({
-            message: "Which agent do you want to configure?",
-            options: agentIds.map((id) => ({ value: id, label: id })),
-          }),
-          runtime,
-          1,
-        );
+        setupAgentId = await prompts.select({
+          message: "Which agent do you want to configure?",
+          options: agentIds.map((id) => ({ value: id, label: id })),
+        });
       }
       return resolveOnboardingAgentTarget(nextConfig, setupAgentId);
     };
@@ -638,7 +417,7 @@ export async function runConfigureWizard(
         return;
       }
       nextConfig = applyWizardMetadata(nextConfig, {
-        command: opts.command,
+        command: "configure",
         mode: metadataMode,
       });
 
@@ -656,14 +435,10 @@ export async function runConfigureWizard(
 
     const configureWorkspace = async () => {
       const target = await resolveSetupTarget();
-      const workspaceInput = guardCancel(
-        await text({
-          message: "Workspace directory",
-          initialValue: target.workspaceDir,
-        }),
-        runtime,
-        1,
-      );
+      const workspaceInput = await prompts.text({
+        message: "Workspace directory",
+        initialValue: target.workspaceDir,
+      });
       const workspaceDir = resolveUserPath(
         normalizeOptionalString(workspaceInput ?? "") || DEFAULT_WORKSPACE,
       );
@@ -701,7 +476,22 @@ export async function runConfigureWizard(
     };
 
     const configureChannelsSection = async () => {
-      const channelMode = await promptChannelMode(runtime);
+      const channelMode = await prompts.select({
+        message: "Channel setup",
+        options: [
+          {
+            value: "configure",
+            label: "Add or update channels",
+            hint: "Configure accounts and disable unselected accounts",
+          },
+          {
+            value: "remove",
+            label: "Remove channel config",
+            hint: "Delete channel tokens/settings from openclaw.json",
+          },
+        ],
+        initialValue: "configure",
+      });
       if (channelMode === "configure") {
         const target = await resolveSetupTarget();
         nextConfig = await setupChannels(nextConfig, runtime, prompter, {
@@ -717,19 +507,6 @@ export async function runConfigureWizard(
       } else {
         nextConfig = await removeChannelConfigWizard(nextConfig, runtime);
       }
-    };
-
-    const promptDaemonPort = async () => {
-      const portInput = guardCancel(
-        await text({
-          message: "Gateway port for service install",
-          initialValue: String(gatewayPort),
-          validate: validateGatewayPortInput,
-        }),
-        runtime,
-        1,
-      );
-      gatewayPort = parsePort(portInput) ?? gatewayPort;
     };
 
     let didConfigureGateway = false;
@@ -754,7 +531,7 @@ export async function runConfigureWizard(
       },
       channels: configureChannelsSection,
       plugins: async () => {
-        const { configurePluginConfig } = await loadSetupPluginConfigModule();
+        const { configurePluginConfig } = await import("../wizard/setup.plugin-config.js");
         nextConfig = await configurePluginConfig({
           config: nextConfig,
           prompter,
@@ -771,7 +548,12 @@ export async function runConfigureWizard(
       },
       daemon: async () => {
         if (!didConfigureGateway) {
-          await promptDaemonPort();
+          const portInput = await prompts.text({
+            message: "Gateway port for service install",
+            initialValue: String(gatewayPort),
+            validate: validateGatewayPortInput,
+          });
+          gatewayPort = parseTcpPort(portInput) ?? gatewayPort;
         }
         daemonSetupOutcome = await maybeInstallDaemon({ runtime, port: gatewayPort });
       },
@@ -819,7 +601,17 @@ export async function runConfigureWizard(
       let ranSection = false;
 
       while (true) {
-        const choice = await promptConfigureSection(runtime, ranSection);
+        const choice = await prompts.select<ConfigureSectionChoice>({
+          message: "What do you want to configure?",
+          options: [
+            ...CONFIGURE_SECTION_OPTIONS,
+            {
+              value: "__continue",
+              label: ranSection ? "Done" : "Skip for now",
+            },
+          ],
+          initialValue: CONFIGURE_SECTION_OPTIONS[0]?.value,
+        });
         if (choice === "__continue") {
           break;
         }
@@ -876,20 +668,15 @@ export async function runConfigureWizard(
     }
 
     const bind = nextConfig.gateway?.bind ?? "loopback";
-    const displayLinks = await resolveAdvertisedControlUiLinks({
+    const linkParams = {
       bind,
       port: gatewayPort,
       customBindHost: nextConfig.gateway?.customBindHost,
       basePath: nextConfig.gateway?.controlUi?.basePath,
       tlsEnabled: nextConfig.gateway?.tls?.enabled === true,
-    });
-    const probeLinks = resolveLocalControlUiProbeLinks({
-      bind,
-      port: gatewayPort,
-      customBindHost: nextConfig.gateway?.customBindHost,
-      basePath: nextConfig.gateway?.controlUi?.basePath,
-      tlsEnabled: nextConfig.gateway?.tls?.enabled === true,
-    });
+    };
+    const displayLinks = await resolveAdvertisedControlUiLinks(linkParams);
+    const probeLinks = resolveLocalControlUiProbeLinks(linkParams);
     const probeAuth = await resolveGatewayProbeAuthSafeWithSecretInputs({
       cfg: nextConfig,
       env: process.env,
@@ -901,7 +688,7 @@ export async function runConfigureWizard(
     const probe =
       daemonSetupOutcome === "succeeded" ? waitForGatewayReachable : probeGatewayReachable;
     let gatewayProbe = probeAuth.warning
-      ? { ok: false, detail: "auth unavailable; probe skipped" }
+      ? { ok: false, detail: "auth unavailable; check skipped" }
       : await probe({
           ...(daemonSetupOutcome === "succeeded" ? resolveGatewayStartupTiming() : {}),
           url: probeLinks.wsUrl,
@@ -928,7 +715,7 @@ export async function runConfigureWizard(
       }
     }
     const gatewayStatusLine = probeAuth.warning
-      ? "Gateway: auth unavailable (probe skipped)"
+      ? "Gateway: auth unavailable (check skipped)"
       : gatewayProbe.ok
         ? "Gateway: reachable"
         : `Gateway: not detected${gatewayProbe.detail ? ` (${gatewayProbe.detail})` : ""}`;
@@ -954,4 +741,3 @@ export async function runConfigureWizard(
     throw err;
   }
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -10,13 +10,18 @@ internal class OutboxReadCountingDriver(
   private val delegate: SQLiteDriver = AndroidSQLiteDriver(),
 ) : SQLiteDriver by delegate {
   private val reads = AtomicInteger()
+  private val commandRows = AtomicInteger()
   private val outboxTable = Regex("\\b(?:FROM|JOIN)\\s+[`\"]?outbox_", RegexOption.IGNORE_CASE)
+  private val commandTable = Regex("\\b(?:FROM|JOIN)\\s+[`\"]?outbox_commands\\b", RegexOption.IGNORE_CASE)
 
   fun resetReads() {
     reads.set(0)
+    commandRows.set(0)
   }
 
   fun readCount(): Int = reads.get()
+
+  fun commandRowCount(): Int = commandRows.get()
 
   override fun open(fileName: String): SQLiteConnection {
     val connection = delegate.open(fileName)
@@ -26,6 +31,7 @@ internal class OutboxReadCountingDriver(
         if (!sql.trimStart().startsWith("SELECT", ignoreCase = true) || !outboxTable.containsMatchIn(sql)) {
           return statement
         }
+        val countsCommandRows = commandTable.containsMatchIn(sql)
         return object : SQLiteStatement by statement {
           private var started = false
 
@@ -35,7 +41,11 @@ internal class OutboxReadCountingDriver(
               started = true
               reads.incrementAndGet()
             }
-            return statement.step()
+            val hasRow = statement.step()
+            if (hasRow && countsCommandRows) {
+              commandRows.incrementAndGet()
+            }
+            return hasRow
           }
 
           override fun reset() {

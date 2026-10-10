@@ -1,10 +1,13 @@
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
+import { createStructuredOutboundPayloadPlan } from "../../infra/outbound/payloads.js";
+import { buildCaptionedFinalTextFallback } from "../../tts/captioned-final.js";
+import type { BlockReplyContext } from "../get-reply-options.types.js";
 import {
   copyReplyPayloadMetadata,
   getReplyPayloadMetadata,
   isReplyPayloadStatusNotice,
 } from "../reply-payload.js";
-import type { GetReplyOptions } from "../types.js";
+import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { createBlockReplySource, setBlockReplyDelivery } from "./block-reply-delivery.js";
 import type { BlockReplySource } from "./block-reply-source.types.js";
 import {
@@ -12,15 +15,12 @@ import {
   shouldDeliverDespiteSourceReplySuppression,
 } from "./dispatch-from-config.payloads.js";
 import type { PrepareDispatchExecutionReadyState } from "./dispatch-from-config.prepare-execution.js";
+import type { ReplyDispatchOperation } from "./reply-dispatcher.types.js";
 
-export function createDispatchBlockReplyHandler(
-  state: PrepareDispatchExecutionReadyState,
-): NonNullable<GetReplyOptions["onBlockReply"]> {
+export function createDispatchBlockReplyHandler(state: PrepareDispatchExecutionReadyState) {
   const {
     cleanBlockTtsDirectiveText,
     commentaryPayloadsEnabled,
-    cfg,
-    deliveryChannel,
     deferFinalTtsText,
     dispatcher,
     flushPendingCommentaryProgress,
@@ -31,15 +31,13 @@ export function createDispatchBlockReplyHandler(
     normalizeReplyMediaPayload,
     params,
     reasoningPayloadsEnabled,
-    replyRoute,
-    sendPayloadAsync,
-    sessionAgentId,
-    sessionTtsAuto,
     shouldRouteToOriginating,
     trackDispatchLifecycleWork,
   } = state;
   let pendingBlockSource: BlockReplySource | undefined;
-  return (inputPayload, context) => {
+  let drain: ((text: string) => Promise<void>) | undefined;
+  const dispatchBlockReply = (operation: ReplyDispatchOperation, context?: BlockReplyContext) => {
+    const inputPayload = operation.kind === "prepared" ? operation.plan.payload : operation.payload;
     setBlockReplyDelivery(Promise.resolve({ outcome: "cancelled" }));
     // A monitor decides notify only after its structured final result.
     if (state.replyOperationRunState.heartbeat) {
@@ -62,14 +60,11 @@ export function createDispatchBlockReplyHandler(
       ) {
         return;
       }
-      // Durable reasoning is a channel-owned lane; generic channels
-      // keep the historical suppression unless they explicitly opt in.
-      if (inputPayload.isReasoning === true && !reasoningPayloadsEnabled) {
-        return;
-      }
-      // Durable commentary is a channel-owned lane; generic channels keep the
-      // historical suppression unless they explicitly opt in.
-      if (inputPayload.isCommentary === true && !commentaryPayloadsEnabled) {
+      // Channels opt in to durable reasoning and commentary independently.
+      if (
+        (inputPayload.isReasoning === true && !reasoningPayloadsEnabled) ||
+        (inputPayload.isCommentary === true && !commentaryPayloadsEnabled)
+      ) {
         return;
       }
       const payload = preparePayload(
@@ -82,10 +77,7 @@ export function createDispatchBlockReplyHandler(
       if (!payload) {
         return;
       }
-      // Accumulate block text for TTS generation after streaming.
-      // Exclude status notices — they are informational UI signals
-      // and must not be synthesised into the spoken reply. Display
-      // lanes stay out too: they are presentation, never final text.
+      // Notices and display lanes are not part of the final spoken answer.
       const isStatusNotice = isReplyPayloadStatusNotice(payload);
       const contributesToFinalReply =
         !isStatusNotice &&
@@ -106,43 +98,46 @@ export function createDispatchBlockReplyHandler(
         state.progressState.blockCount++;
       }
       let source: BlockReplySource | undefined;
-      let visiblePayload =
-        payload.text && cleanBlockTtsDirectiveText && contributesToFinalReply
-          ? (() => {
-              if (!deferFinalTtsText) {
-                source = pendingBlockSource ?? createBlockReplySource();
-              }
-              const text = cleanBlockTtsDirectiveText.push(payload.text);
-              const buffered = cleanBlockTtsDirectiveText.hasBufferedDirectiveText();
-              source?.setComplete(!buffered);
-              pendingBlockSource = buffered ? source : undefined;
-              return copyReplyPayloadMetadata(payload, {
-                ...payload,
-                text: text.trim() ? text : undefined,
-              });
-            })()
-          : payload;
-      const deferThisBlock = deferFinalTtsText && contributesToFinalReply;
-      if (deferThisBlock) {
-        const hasNonTextContent = Boolean(
-          visiblePayload.mediaUrl ||
-          visiblePayload.mediaUrls?.length ||
-          visiblePayload.presentation ||
-          visiblePayload.interactive ||
-          visiblePayload.channelData,
-        );
-        if (!hasNonTextContent) {
-          return;
+      let cleanedPayload = payload;
+      if (payload.text && cleanBlockTtsDirectiveText && contributesToFinalReply) {
+        if (!deferFinalTtsText) {
+          source = pendingBlockSource ?? createBlockReplySource();
         }
-        visiblePayload = copyReplyPayloadMetadata(visiblePayload, {
-          ...visiblePayload,
-          text: undefined,
+        const text = cleanBlockTtsDirectiveText.push(payload.text);
+        const buffered = cleanBlockTtsDirectiveText.hasBufferedDirectiveText();
+        source?.setComplete(!buffered);
+        pendingBlockSource = buffered ? source : undefined;
+        cleanedPayload = copyReplyPayloadMetadata(payload, {
+          ...payload,
+          text: text.trim() ? text : undefined,
         });
       }
-      if (!hasOutboundReplyContent(visiblePayload, { trimText: true })) {
-        return;
-      }
-      const sendPrepared = async () => {
+      const sendPrepared = async (preparedPayload: ReplyPayload, terminal = false) => {
+        let visiblePayload = preparedPayload;
+        if (terminal) {
+          setBlockReplyDelivery(Promise.resolve({ outcome: "cancelled" }), visiblePayload);
+        }
+        const deferThisBlock = deferFinalTtsText && contributesToFinalReply;
+        if (deferThisBlock) {
+          const hasNonTextContent = Boolean(
+            visiblePayload.mediaUrl ||
+            visiblePayload.mediaUrls?.length ||
+            visiblePayload.presentation ||
+            visiblePayload.interactive ||
+            visiblePayload.channelData,
+          );
+          if (!hasNonTextContent) {
+            return;
+          }
+          visiblePayload = copyReplyPayloadMetadata(visiblePayload, {
+            ...visiblePayload,
+            text: undefined,
+          });
+        }
+        if (!hasOutboundReplyContent(visiblePayload, { trimText: true })) {
+          return;
+        }
+
         // Channels that keep a live draft preview may need to rotate their
         // preview state at the logical block boundary before queued block
         // delivery drains asynchronously through the dispatcher.
@@ -158,18 +153,18 @@ export function createDispatchBlockReplyHandler(
           return;
         }
         const ttsPayload =
-          payload.isReasoning === true || payload.isCommentary === true
+          terminal || payload.isReasoning === true || payload.isCommentary === true
             ? visiblePayload
-            : await maybeApplyTtsWithFinalizationLease({
-                payload: visiblePayload,
-                cfg,
-                channel: deliveryChannel,
-                kind: "block",
-                ttsAuto: sessionTtsAuto,
-                agentId: sessionAgentId,
-                accountId: replyRoute.accountId,
-              });
+            : await maybeApplyTtsWithFinalizationLease(visiblePayload, "block");
         const normalizedPayload = await normalizeReplyMediaPayload(ttsPayload);
+        let deliveryOperation: ReplyDispatchOperation = { kind: "raw", payload: normalizedPayload };
+        if (operation.kind === "prepared") {
+          const plan = createStructuredOutboundPayloadPlan([normalizedPayload])[0];
+          if (!plan) {
+            return;
+          }
+          deliveryOperation = { kind: "prepared", plan };
+        }
         if (isDispatchOperationAborted()) {
           return;
         }
@@ -177,10 +172,9 @@ export function createDispatchBlockReplyHandler(
           shouldRouteToOriginating ||
           (independentDurableBlock && state.canRouteDurableBlockReply)
         ) {
-          const result = await sendPayloadAsync(
-            normalizedPayload,
+          const result = await state.sendReplyOperationAsync(
+            deliveryOperation,
             context?.abortSignal,
-            false,
             "block",
             context?.deliveryIntentId,
           );
@@ -190,7 +184,7 @@ export function createDispatchBlockReplyHandler(
           }
         } else {
           markInboundDedupeReplayUnsafe();
-          const delivery = state.sendTrackedBlockReply(normalizedPayload);
+          const delivery = state.sendTrackedBlockReply(deliveryOperation);
           if (delivery.queued) {
             // This block's receipt owns its settlement. A turn-wide no-send
             // verdict is premature while a recovery final can still arrive.
@@ -217,12 +211,47 @@ export function createDispatchBlockReplyHandler(
           }
         }
       };
-      if (source) {
-        await source.run(sendPrepared);
-      } else {
-        await sendPrepared();
+      const sendWithSource = (sourcePayload: ReplyPayload, terminal = false) => {
+        const send = () => sendPrepared(sourcePayload, terminal);
+        return source ? source.run(send) : send();
+      };
+      if (cleanBlockTtsDirectiveText && contributesToFinalReply && payload.text) {
+        drain = async (text) => {
+          if (!text || deferFinalTtsText) {
+            source?.setComplete(true);
+            return;
+          }
+          if (isDispatchOperationAborted()) {
+            return;
+          }
+          const tail = buildCaptionedFinalTextFallback(payload);
+          tail.text = text;
+          source?.setComplete(true);
+          await sendWithSource(tail, true);
+        };
       }
+      await sendWithSource(cleanedPayload);
     };
     return run();
+  };
+  const onBlockReply: NonNullable<GetReplyOptions["onBlockReply"]> = (payload, context) =>
+    dispatchBlockReply({ kind: "raw", payload }, context);
+  const onPreparedBlockReply: NonNullable<GetReplyOptions["onPreparedBlockReply"]> = (
+    plan,
+    context,
+  ) => dispatchBlockReply({ kind: "prepared", plan }, context);
+  return {
+    onBlockReply,
+    onPreparedBlockReply,
+    flush: async () => {
+      if (!cleanBlockTtsDirectiveText?.hasBufferedDirectiveText()) {
+        return;
+      }
+      const text = cleanBlockTtsDirectiveText.flush();
+      const finish = drain;
+      drain = undefined;
+      pendingBlockSource = undefined;
+      await finish?.(text);
+    },
   };
 }

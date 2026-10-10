@@ -299,6 +299,8 @@ describe("Microsoft Teams native approval capability", () => {
     });
 
     expect(guidance).toContain("`channels.msteams.allowFrom`");
+    expect(guidance).toContain("Approve it from the Web UI for now.");
+    expect(guidance).not.toMatch(/terminal UI|\bTUI\b/i);
     expect(guidance).toContain("`channels.msteams.defaultTo`");
   });
 });

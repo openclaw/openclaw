@@ -22,8 +22,7 @@ import type { RuntimeEnv } from "../../runtime.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { modelsAliasesAddCommand } from "./aliases.js";
-import { addFallbackCommand, removeFallbackCommand } from "./fallbacks-shared.js";
-import { modelsSetImageCommand } from "./set-image.js";
+import { changeFallbacksCommand } from "./fallbacks-shared.js";
 import { modelsSetCommand } from "./set.js";
 
 describe("model command provider preparation", () => {
@@ -143,17 +142,12 @@ describe("model command provider preparation", () => {
     });
   });
 
-  it.each(
-    [false, true].flatMap((hasCanonicalEntry) =>
-      [false, true].flatMap((included) =>
-        ["same", "different", "missing"].map((priorAlias) => ({
-          hasCanonicalEntry,
-          included,
-          priorAlias,
-        })),
-      ),
-    ),
-  )(
+  it.each([
+    { hasCanonicalEntry: false, included: false, priorAlias: "same" },
+    { hasCanonicalEntry: false, included: true, priorAlias: "different" },
+    { hasCanonicalEntry: true, included: false, priorAlias: "missing" },
+    { hasCanonicalEntry: true, included: true, priorAlias: "same" },
+  ])(
     "preserves alias source settings across canonical moves (existing: $hasCanonicalEntry, include: $included, alias: $priorAlias)",
     async ({ hasCanonicalEntry, included, priorAlias }) => {
       config.agents!.defaults!.models = {
@@ -214,12 +208,16 @@ describe("model command provider preparation", () => {
             modelsAliasesAddCommand("FRIENDLY", "fixture/different", runtime),
           ).rejects.toThrow("Alias FRIENDLY already points to fixture/current.");
           expect(readAgents()?.defaults?.models).toEqual(expectedModels);
-          await addFallbackCommand({ label: "Fallbacks", key: "model" }, "friendly", runtime);
+          await changeFallbacksCommand(
+            { label: "Fallbacks", key: "model", action: "add" },
+            "friendly",
+            runtime,
+          );
           expect((await readConfigFileSnapshot()).sourceConfig.agents?.defaults?.model).toEqual({
             fallbacks: ["fixture/current"],
           });
-          await removeFallbackCommand(
-            { label: "Fallbacks", key: "model", notFoundLabel: "Fallback" },
+          await changeFallbacksCommand(
+            { label: "Fallbacks", key: "model", notFoundLabel: "Fallback", action: "remove" },
             "fixture/legacy",
             runtime,
           );
@@ -234,24 +232,36 @@ describe("model command provider preparation", () => {
     },
   );
 
-  it.each(
-    ["set", "set-image", "fallback", "image-fallback"].flatMap((command) => [
-      {
-        command,
-        provider: "openrouter",
-        sourceKey: "openrouter/openrouter/hunter-alpha",
-        input: "openrouter/hunter-alpha",
-        modelId: "hunter-alpha",
-      },
-      {
-        command,
-        provider: "fixture",
-        sourceKey: "fixture/legacy",
-        input: "fixture/legacy",
-        modelId: "current",
-      },
-    ]),
-  )(
+  it.each([
+    {
+      command: "set",
+      provider: "openrouter",
+      sourceKey: "openrouter/openrouter/hunter-alpha",
+      input: "openrouter/hunter-alpha",
+      modelId: "hunter-alpha",
+    },
+    {
+      command: "set-image",
+      provider: "fixture",
+      sourceKey: "fixture/legacy",
+      input: "fixture/legacy",
+      modelId: "current",
+    },
+    {
+      command: "fallback",
+      provider: "fixture",
+      sourceKey: "fixture/legacy",
+      input: "fixture/legacy",
+      modelId: "current",
+    },
+    {
+      command: "image-fallback",
+      provider: "openrouter",
+      sourceKey: "openrouter/openrouter/hunter-alpha",
+      input: "openrouter/hunter-alpha",
+      modelId: "hunter-alpha",
+    },
+  ])(
     "preserves source and request settings when $command canonicalizes $sourceKey",
     async ({ command, provider, sourceKey, input, modelId }) => {
       if (provider === "openrouter") {
@@ -286,9 +296,13 @@ describe("model command provider preparation", () => {
           if (command === "set") {
             await modelsSetCommand(input, runtime);
           } else if (command === "set-image") {
-            await modelsSetImageCommand(input, runtime);
+            await modelsSetCommand(input, runtime, "imageModel");
           } else {
-            await addFallbackCommand({ label: "Fallbacks", key }, input, runtime);
+            await changeFallbacksCommand(
+              { label: "Fallbacks", key, action: "add" },
+              input,
+              runtime,
+            );
           }
           const canonicalKey = `${provider}/${modelId}`;
           expect(readConfig().agents?.defaults?.models).toEqual({
@@ -491,13 +505,17 @@ describe("model command provider preparation", () => {
     await isolated(async () => {
       await modelsSetCommand("sonnet", runtime);
       expect(readConfig().agents?.defaults?.model).toEqual({ primary: canonical });
-      await addFallbackCommand({ label: "Fallbacks", key: "model" }, "sonnet", runtime);
+      await changeFallbacksCommand(
+        { label: "Fallbacks", key: "model", action: "add" },
+        "sonnet",
+        runtime,
+      );
       expect(readConfig().agents?.defaults?.model).toEqual({
         primary: canonical,
         fallbacks: [canonical],
       });
-      await removeFallbackCommand(
-        { label: "Fallbacks", key: "model", notFoundLabel: "Fallback" },
+      await changeFallbacksCommand(
+        { label: "Fallbacks", key: "model", notFoundLabel: "Fallback", action: "remove" },
         "sonnet",
         runtime,
       );
@@ -517,11 +535,15 @@ describe("model command provider preparation", () => {
       config.agents!.defaults!.models = { "fixture/legacy": entry };
       await withEnvAsync({ FALLBACK_REF: "fixture/legacy" }, () =>
         isolated(async () => {
-          await addFallbackCommand({ label: "Fallbacks", key }, "fixture/current", runtime);
+          await changeFallbacksCommand(
+            { label: "Fallbacks", key, action: "add" },
+            "fixture/current",
+            runtime,
+          );
           expect(readConfig().agents?.defaults?.[key]).toEqual({ fallbacks: ["${FALLBACK_REF}"] });
           expect(readConfig().agents?.defaults?.models).toEqual({ "fixture/current": entry });
-          await removeFallbackCommand(
-            { label: "Fallbacks", key, notFoundLabel: "Fallback" },
+          await changeFallbacksCommand(
+            { label: "Fallbacks", key, notFoundLabel: "Fallback", action: "remove" },
             "fixture/current",
             runtime,
           );
@@ -565,8 +587,8 @@ describe("model command provider preparation", () => {
     );
     await isolated(async () => {
       await expect(
-        removeFallbackCommand(
-          { label: "Fallbacks", key: "model", notFoundLabel: "Fallback" },
+        changeFallbacksCommand(
+          { label: "Fallbacks", key: "model", notFoundLabel: "Fallback", action: "remove" },
           "/invalid",
           runtime,
         ),

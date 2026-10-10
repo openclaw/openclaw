@@ -9,13 +9,13 @@ import type {
   ChannelMessageActionContext,
   ChannelMessageActionName,
   ChannelPlugin,
-} from "../src/channels/plugins/types.js";
+} from "../src/channels/plugins/types.public.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
   type OpenClawConfig,
 } from "../src/config/config.js";
-import { createAgentRuntimeApprovalAuthorityValidator } from "../src/gateway/agent-runtime-identity-token.js";
+import { createAgentRuntimeApprovalAuthorityValidator } from "../src/gateway/agent-runtime-approval-authority.js";
 import {
   mintMessageActionTurnCapability,
   revokeMessageActionTurnCapability,
@@ -54,6 +54,8 @@ const CHAT_PATH = `/open-apis/im/v1/chats/${ALLOWED}`;
 const MEMBERS_PATH = `${CHAT_PATH}/members`;
 const PINS_PATH = "/open-apis/im/v1/pins";
 const USER_PATH = `/open-apis/contact/v3/users/${MEMBER}`;
+const PEERS_PATH = "/open-apis/contact/v3/users";
+const PEERS_PAGE_TOKEN = "peers/next+%2F=";
 type ActionResult = NonNullable<Awaited<ReturnType<typeof dispatchChannelMessageAction>>>;
 type ProviderRequest = { method: string; path: string; query: URLSearchParams };
 
@@ -256,12 +258,12 @@ beforeAll(async () => {
           chat_mode: url.pathname.endsWith(DIRECT) ? "p2p" : "group",
           chat_type: "private",
         };
-      } else if (url.pathname === "/open-apis/contact/v3/users") {
+      } else if (url.pathname === PEERS_PATH) {
+        const next = url.searchParams.get("page_token") === PEERS_PAGE_TOKEN;
         data = {
-          items: [
-            { open_id: SELF, name: "Current sender" },
-            { open_id: OTHER, name: "Other" },
-          ],
+          items: [{ open_id: next ? OTHER : SELF, name: next ? "Other" : "Current sender" }],
+          has_more: !next,
+          ...(next ? {} : { page_token: PEERS_PAGE_TOKEN }),
         };
       } else if (url.pathname.startsWith("/open-apis/contact/v3/users/")) {
         const id = url.pathname.split("/").at(-1);
@@ -314,9 +316,7 @@ afterAll(async () => {
 function createFixture(
   options: {
     bundled?: boolean;
-    trusted?: boolean;
     currentChat?: string;
-    actions?: readonly ChannelMessageActionName[];
   } = {},
 ) {
   vi.stubEnv("OPENCLAW_PROXY_ACTIVE", "0");
@@ -350,13 +350,12 @@ function createFixture(
   const record = createPluginRecord({
     id: "feishu",
     origin: options.bundled ? "bundled" : "global",
-    trustedOfficialInstall: !options.bundled && options.trusted !== false,
+    trustedOfficialInstall: !options.bundled,
   });
   const plugin: ChannelPlugin = {
     ...feishuPlugin,
     actions: {
       ...feishuPlugin.actions!,
-      readAuthorityActions: options.actions ?? feishuPlugin.actions?.readAuthorityActions,
       handleAction: async (ctx) => {
         const result = await feishuPlugin.actions!.handleAction!(ctx);
         // Revoke at the registered handler's return boundary after a real local consumer.
@@ -443,8 +442,8 @@ const readCases: Array<{
   },
 ];
 
-describe.each([false, true])("Feishu provider read parity (bundled: %s)", (bundled) => {
-  it.each(readCases)(
+describe.each([false, true])("Feishu provider reads (bundled: %s)", (bundled) => {
+  it.each(bundled ? readCases.filter(({ action }) => action === "read") : readCases)(
     "runs $action through its real consumer",
     async ({ action, params, details, paths }) => {
       const fixture = createFixture({ bundled });
@@ -469,6 +468,61 @@ it("filters live directory pages before applying the limit", async () => {
   });
   expect(contentRequests().filter((path) => path === "/open-apis/im/v1/chats")).toHaveLength(2);
   expect(contentRequests()).toContain("/open-apis/contact/v3/users");
+});
+
+it("finds a live peer on later pages through the registered channel-list action", async () => {
+  const fixture = createFixture();
+  fixture.settings.allowFrom = ["*"];
+
+  expectResult(
+    await fixture.dispatch("channel-list", { scope: "peers", query: "Other", limit: 1 }),
+    { peers: [{ kind: "user", id: OTHER, name: "Other" }] },
+  );
+  const pages = requests.filter((request) => request.path === PEERS_PATH);
+  expect(pages).toHaveLength(2);
+  expect(pages[0]?.query.get("page_token")).toBeNull();
+  expect(pages[1]?.query.get("page_token")).toBe(PEERS_PAGE_TOKEN);
+  expect(contentRequests()).toEqual([PEERS_PATH, PEERS_PATH]);
+});
+
+it("stops live peer pagination when the plugin retires between pages", async () => {
+  const fixture = createFixture();
+  fixture.settings.allowFrom = ["*"];
+  beforeReply = (request) => {
+    if (request.path !== PEERS_PATH) {
+      return;
+    }
+    fixture.record.enabled = false;
+  };
+
+  await expect(
+    fixture.dispatch("channel-list", { scope: "peers", query: "Other", limit: 1 }),
+  ).rejects.toThrow("no longer active");
+  expect(contentRequests()).toEqual([PEERS_PATH]);
+});
+
+it("cancels live peer pagination through the local message tool", async () => {
+  const fixture = createFixture();
+  fixture.settings.allowFrom = ["*"];
+  setRuntimeConfigSnapshot(fixture.cfg, fixture.cfg);
+  const tool = fixture.run.createTool(fixture.cfg);
+  const controller = new AbortController();
+  beforeReply = (request) => {
+    if (request.path === PEERS_PATH) {
+      controller.abort();
+    }
+  };
+
+  await expect(
+    track(
+      tool.execute(
+        "feishu-peer-directory",
+        { action: "channel-list", channel: "feishu", scope: "peers", query: "Other", limit: 1 },
+        controller.signal,
+      ),
+    ),
+  ).rejects.toMatchObject({ name: "AbortError" });
+  expect(contentRequests()).toEqual([PEERS_PATH]);
 });
 
 it.each([SELF, OTHER])(
@@ -528,58 +582,31 @@ it.each(["account", "origin", "target", "reactions", "sticker", "catalog"] as co
   },
 );
 
-it("does not widen an older read list when the host classifies member-info", async () => {
-  const fixture = createFixture({ actions: ["read"] });
-  expectResult(await fixture.dispatch("read", { chatId: ALLOWED, messageId: MESSAGE }), {
-    message: { content: "allowed context" },
-  });
-  requests = [];
-  await expect(
-    fixture.dispatch("member-info", { chatId: ALLOWED, memberId: MEMBER }),
-  ).rejects.toThrow("exact current conversation");
-  expect(requests).toEqual([]);
-});
-
-it("does not grant cross-context write authority through an overbroad read declaration", async () => {
-  const fixture = createFixture({
-    actions: [...feishuPlugin.actions!.readAuthorityActions!, "pin"],
-  });
-  await expect(fixture.dispatch("pin", { chatId: ALLOWED, messageId: MESSAGE })).rejects.toThrow(
-    "exact current conversation",
+it.each([
+  ["plugin", "metadata"],
+  ["plugin", "result"],
+  ["turn", "result"],
+  ["claim", "result"],
+] as const)("rejects %s retirement at %s", async (owner, phase) => {
+  const fixture = createFixture();
+  beforeReply = (request) => {
+    if (request.path !== (phase === "metadata" ? CHAT_PATH : PINS_PATH)) {
+      return;
+    }
+    if (owner === "plugin") {
+      fixture.record.enabled = false;
+    }
+    if (owner === "turn") {
+      fixture.run.revokeTurn();
+    }
+    if (owner === "claim") {
+      fixture.run.releaseClaim();
+    }
+  };
+  await expect(fixture.dispatch("list-pins", { chatId: ALLOWED })).rejects.toThrow(
+    "no longer active",
   );
-  expect(requests).toEqual([]);
-});
-
-it("retains the exact-current restriction for an unverified external installation", async () => {
-  const fixture = createFixture({ trusted: false });
-  await expect(fixture.dispatch("read", { chatId: ALLOWED, messageId: MESSAGE })).rejects.toThrow(
-    "exact current conversation",
-  );
-  expect(requests).toEqual([]);
-});
-
-describe.each(["plugin", "turn", "claim"] as const)("Feishu %s lifetime", (owner) => {
-  it.each(["metadata", "result"] as const)("rejects retirement at %s", async (phase) => {
-    const fixture = createFixture();
-    beforeReply = (request) => {
-      if (request.path !== (phase === "metadata" ? CHAT_PATH : PINS_PATH)) {
-        return;
-      }
-      if (owner === "plugin") {
-        fixture.record.enabled = false;
-      }
-      if (owner === "turn") {
-        fixture.run.revokeTurn();
-      }
-      if (owner === "claim") {
-        fixture.run.releaseClaim();
-      }
-    };
-    await expect(fixture.dispatch("list-pins", { chatId: ALLOWED })).rejects.toThrow(
-      "no longer active",
-    );
-    expect(contentRequests()).toEqual(phase === "metadata" ? [CHAT_PATH] : [CHAT_PATH, PINS_PATH]);
-  });
+  expect(contentRequests()).toEqual(phase === "metadata" ? [CHAT_PATH] : [CHAT_PATH, PINS_PATH]);
 });
 
 it.each(["sticker-search", "channel-list", "member-info"] as const)(

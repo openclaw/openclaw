@@ -7,7 +7,7 @@ import {
   type Tool,
 } from "openclaw/plugin-sdk/llm";
 import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { isLiveTestEnabled } from "openclaw/plugin-sdk/test-live";
+import { extractNonEmptyAssistantText, isLiveTestEnabled } from "openclaw/plugin-sdk/test-live";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 import plugin from "./index.js";
@@ -130,33 +130,39 @@ describeLive("Kimi Code K3 reasoning live", () => {
       throw new Error("Missing Kimi stream wrapper");
     }
 
+    const sourcePath = "src/retry-delay.ts";
+    const source =
+      "export function retryDelayMs(attempt: number): number {\n" +
+      "  return Math.min(250 * 2 ** attempt, 4000);\n" +
+      "}\n";
     const tool: Tool = {
-      name: "noop",
-      description: "Return ok.",
-      parameters: Type.Object({}, { additionalProperties: false }),
+      name: "read_file",
+      description: "Read a source file by its relative path.",
+      parameters: Type.Object({ path: Type.String() }, { additionalProperties: false }),
     };
     const firstUser = {
       role: "user" as const,
-      content: "Call the noop tool with an empty object. Do not answer directly.",
+      content:
+        `Read ${sourcePath} with read_file and determine what retryDelayMs(3) returns. ` +
+        "Read the implementation before answering, then return only the numeric result.",
       timestamp: Date.now(),
     };
+    const model = resolveModel("k3");
+    const options = { apiKey: process.env.KIMI_API_KEY?.trim() ?? "", maxTokens: 4096 };
     const first = await collectDoneMessage(
-      wrapped(
-        resolveModel("k3"),
-        { messages: [firstUser], tools: [tool] },
-        { apiKey: process.env.KIMI_API_KEY?.trim() ?? "", maxTokens: 4096 },
-      ),
+      wrapped(model, { messages: [firstUser], tools: [tool] }, options),
     );
     expect(countContentChars(first, "thinking")).toBeGreaterThan(0);
     const toolCall = first.content.find((block) => block.type === "toolCall");
     if (!toolCall || toolCall.type !== "toolCall") {
-      throw new Error(`Kimi K3 did not call noop: ${first.stopReason}`);
+      throw new Error(`Kimi K3 did not read the source file: ${first.stopReason}`);
     }
-    expect(toolCall.name).toBe("noop");
+    expect(toolCall.name).toBe("read_file");
+    expect(toolCall.arguments).toEqual({ path: sourcePath });
 
     const second = await collectDoneMessage(
       wrapped(
-        resolveModel("k3"),
+        model,
         {
           messages: [
             firstUser,
@@ -165,21 +171,16 @@ describeLive("Kimi Code K3 reasoning live", () => {
               role: "toolResult",
               toolCallId: toolCall.id,
               toolName: toolCall.name,
-              content: [{ type: "text", text: "ok" }],
+              content: [{ type: "text", text: source }],
               isError: false,
-              timestamp: Date.now(),
-            },
-            {
-              role: "user",
-              content: "Reply with exactly LIVE_OK and no punctuation.",
               timestamp: Date.now(),
             },
           ],
           tools: [tool],
         },
-        { apiKey: process.env.KIMI_API_KEY?.trim() ?? "", maxTokens: 4096 },
+        options,
       ),
     );
-    expect(countContentChars(second, "text")).toBeGreaterThan(0);
+    expect(extractNonEmptyAssistantText(second.content)).toBe("2000");
   }, 180_000);
 });

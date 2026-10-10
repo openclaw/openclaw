@@ -1,4 +1,3 @@
-// Memory Core plugin module implements manager embedding policy behavior.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   estimateStructuredEmbeddingInputBytes,
@@ -34,10 +33,6 @@ export function buildMemoryEmbeddingBatches<T extends MemoryEmbeddingChunk>(
       current = [];
       currentTokens = 0;
     }
-    if (current.length === 0 && estimate > maxTokens) {
-      batches.push([chunk]);
-      continue;
-    }
     current.push(chunk);
     currentTokens += estimate;
   }
@@ -56,10 +51,11 @@ const RETRYABLE_MEMORY_EMBEDDING_SERVICE_ERROR_RE = /\b5\d\d\b|cloudflare/i;
 const RETRYABLE_MEMORY_EMBEDDING_TRANSPORT_ERROR_RE =
   /(fetch failed|other side closed|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE|UND_ERR_|socket hang up|socket terminated|network error|read ECONN|timed out|connection (?:reset|refused|aborted|timed out)|EHOSTUNREACH|ENETUNREACH|ECONNABORTED|EAI_AGAIN)/i;
 
-// Zhipu's item cap says `input array max 64`. Require the whole count and
+// Zhipu's item cap is reported as `input array max 64` (English) or
+// `input数组最大不得超过64条` (Chinese). Require the whole count and
 // message boundary so per-item and token limits remain terminal.
 const SPLITTABLE_MEMORY_EMBEDDING_BATCH_ERROR_RE =
-  /(request_headers_too_large|request header fields too large|other side closed|ECONNRESET|EPIPE|UND_ERR_SOCKET|socket hang up|socket terminated|read ECONN|connection (?:reset|aborted)|\bembeddings (?:api input limit exceeded:\s*max\s+\d+\s*,\s*got\s+\d+|max input length is\s+\d+)\b|\bbatch size is invalid,?\s+it should not be larger than\s+\d+\b|\binput array max\s+\d+(?=\s*(?:["'}]|$)))/i;
+  /(request_headers_too_large|request header fields too large|other side closed|ECONNRESET|EPIPE|UND_ERR_SOCKET|socket hang up|socket terminated|read ECONN|connection (?:reset|aborted)|\bembeddings (?:api input limit exceeded:\s*max\s+\d+\s*,\s*got\s+\d+|max input length is\s+\d+)\b|\bbatch size is invalid,?\s+it should not be larger than\s+\d+\b|\binput array max\s+\d+(?=\s*(?:["'}]|$))|input\s*数组最大不得超过\s*\d+\s*条)/i;
 
 const SHORT_MEMORY_EMBEDDING_RETRY_BUDGET = {
   attempts: 3,
@@ -88,12 +84,12 @@ type MemoryEmbeddingRetryBudget = {
 };
 
 const MEMORY_EMBEDDING_BATCH_ITEM_LIMIT_RE =
-  /\b(?:embeddings api input limit exceeded:\s*max\s+(\d+)\s*,\s*got\s+\d+|embeddings max input length is\s+(\d+)|batch size is invalid,?\s+it should not be larger than\s+(\d+)|input array max\s+(\d+)(?=\s*(?:["'}]|$)))/gi;
+  /\b(?:embeddings api input limit exceeded:\s*max\s+(\d+)\s*,\s*got\s+\d+|embeddings max input length is\s+(\d+(?:\.\d+)?)|batch size is invalid,?\s+it should not be larger than\s+(\d+(?:\.\d+)?)|input array max\s+(\d+)(?=\s*(?:["'}]|$))|input\s*数组最大不得超过\s*(\d+)\s*条)/gi;
 
 function parseMemoryEmbeddingBatchItemLimit(message: string): number | undefined {
   const limits = new Set<number>();
   for (const match of message.matchAll(MEMORY_EMBEDDING_BATCH_ITEM_LIMIT_RE)) {
-    const value = Number(match[1] ?? match[2] ?? match[3] ?? match[4]);
+    const value = Number(match[1] ?? match[2] ?? match[3] ?? match[4] ?? match[5]);
     if (!Number.isSafeInteger(value) || value <= 0) {
       return undefined;
     }
@@ -102,22 +98,30 @@ function parseMemoryEmbeddingBatchItemLimit(message: string): number | undefined
   return limits.size === 1 ? limits.values().next().value : undefined;
 }
 
-export function isSplittableMemoryEmbeddingBatchError(message: string): boolean {
-  return SPLITTABLE_MEMORY_EMBEDDING_BATCH_ERROR_RE.test(message);
+function isInvalidEmbeddingResponse(error: unknown): boolean {
+  // Diagnostic counts and model names must not be mistaken for HTTP status or input limits.
+  return asOptionalRecord(error)?.code === "INVALID_EMBEDDING_RESPONSE";
 }
 
-function readMemoryEmbeddingRetryAfterMs(error: unknown): number | undefined {
-  const value = asOptionalRecord(error)?.retryAfterMs;
-  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+function embeddingRetryMessage(error: unknown): string {
+  const message = asOptionalRecord(error)?.embeddingErrorMessage;
+  return typeof message === "string" ? message : formatErrorMessage(error);
 }
 
 function resolveMemoryEmbeddingRetryBudget(
   profile: (typeof MEMORY_EMBEDDING_RETRY_PROFILES)[MemoryEmbeddingRetryProfileName],
   error: unknown,
 ): MemoryEmbeddingRetryBudget | undefined {
+  if (isInvalidEmbeddingResponse(error)) {
+    return undefined;
+  }
   const fields = asOptionalRecord(error);
-  const message = formatErrorMessage(error);
-  const retryAfterMs = readMemoryEmbeddingRetryAfterMs(error);
+  const message = embeddingRetryMessage(error);
+  const cooldown = fields?.retryAfterMs;
+  const retryAfterMs =
+    typeof cooldown === "number" && Number.isSafeInteger(cooldown) && cooldown >= 0
+      ? cooldown
+      : undefined;
   const status = [fields?.status, fields?.statusCode].find(
     (value): value is number => typeof value === "number" && Number.isInteger(value),
   );
@@ -137,7 +141,7 @@ function resolveMemoryEmbeddingRetryBudget(
   if (RETRYABLE_MEMORY_EMBEDDING_TRANSPORT_ERROR_RE.test(message)) {
     return profile.transient;
   }
-  if (isSplittableMemoryEmbeddingBatchError(message)) {
+  if (SPLITTABLE_MEMORY_EMBEDDING_BATCH_ERROR_RE.test(message)) {
     return undefined;
   }
   if (RATE_LIMITED_MEMORY_EMBEDDING_ERROR_RE.test(message)) {
@@ -186,76 +190,46 @@ export async function runMemoryEmbeddingRetryLoop<T>(params: {
 }
 
 export async function runMemoryEmbeddingBatchRetryWithSplit<TInput, TOutput>(params: {
-  profile: MemoryEmbeddingRetryProfileName;
   items: TInput[];
   run: (items: TInput[]) => Promise<TOutput[]>;
   onSuccess?: (items: TInput[], outputs: TOutput[]) => void | Promise<void>;
-  isSplittable: (message: string) => boolean;
   waitForRetry: (delayMs: number) => Promise<void>;
-  onSplit?: (info: {
-    itemCount: number;
-    splitAt: number;
-    message: string;
-    strategy: "binary" | "item-limit";
-    chunkCount: number;
-  }) => void;
+  onSplit?: (info: { itemCount: number; splitAt: number; message: string }) => void;
 }): Promise<TOutput[]> {
   let outputs: TOutput[];
   try {
     outputs = await runMemoryEmbeddingRetryLoop({
-      profile: params.profile,
+      profile: "index",
       run: async () => await params.run(params.items),
       waitForRetry: params.waitForRetry,
     });
   } catch (err) {
-    const message = formatErrorMessage(err);
-    if (params.items.length <= 1 || !params.isSplittable(message)) {
+    const message = embeddingRetryMessage(err);
+    if (
+      isInvalidEmbeddingResponse(err) ||
+      params.items.length <= 1 ||
+      !SPLITTABLE_MEMORY_EMBEDDING_BATCH_ERROR_RE.test(message)
+    ) {
       throw err;
     }
 
     const itemLimit = parseMemoryEmbeddingBatchItemLimit(message);
-    if (itemLimit !== undefined && itemLimit < params.items.length) {
-      params.onSplit?.({
-        itemCount: params.items.length,
-        splitAt: itemLimit,
-        message,
-        strategy: "item-limit",
-        chunkCount: Math.ceil(params.items.length / itemLimit),
-      });
-      const results: TOutput[] = [];
-      for (let start = 0; start < params.items.length; start += itemLimit) {
-        results.push(
-          ...(await runMemoryEmbeddingBatchRetryWithSplit({
-            ...params,
-            items: params.items.slice(start, start + itemLimit),
-          })),
-        );
-      }
-      return results;
+    const splitAt =
+      itemLimit !== undefined && itemLimit < params.items.length
+        ? itemLimit
+        : Math.ceil(params.items.length / 2);
+    params.onSplit?.({ itemCount: params.items.length, splitAt, message });
+    const results: TOutput[] = [];
+    for (let start = 0; start < params.items.length; start += splitAt) {
+      results.push(
+        ...(await runMemoryEmbeddingBatchRetryWithSplit({
+          ...params,
+          items: params.items.slice(start, start + splitAt),
+        })),
+      );
     }
-
-    const splitAt = Math.ceil(params.items.length / 2);
-    params.onSplit?.({
-      itemCount: params.items.length,
-      splitAt,
-      message,
-      strategy: "binary",
-      chunkCount: 2,
-    });
-    const left = await runMemoryEmbeddingBatchRetryWithSplit({
-      ...params,
-      items: params.items.slice(0, splitAt),
-    });
-    const right = await runMemoryEmbeddingBatchRetryWithSplit({
-      ...params,
-      items: params.items.slice(splitAt),
-    });
-    return [...left, ...right];
+    return results;
   }
   await params.onSuccess?.(params.items, outputs);
   return outputs;
-}
-
-export function buildTextEmbeddingInputs(chunks: MemoryEmbeddingChunk[]): EmbeddingInput[] {
-  return chunks.map((chunk) => chunk.embeddingInput ?? { text: chunk.text });
 }

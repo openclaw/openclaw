@@ -1,56 +1,48 @@
-/** Client-scoped Codex auth and account observers. */
-import { createHash } from "node:crypto";
 import { embeddedAgentLog, formatErrorMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
-import { readCodexSessionMeta } from "../session-catalog-provenance.js";
-import { refreshCodexAppServerAuthTokens, type CodexAppServerAuthHandoff } from "./auth-bridge.js";
+import { defineCodexBuildState } from "../build-state.js";
+import { refreshCodexAppServerAuthTokens } from "./auth-bridge.js";
 import { fingerprintTokenAuthProfileCacheKey } from "./auth-cache-key.js";
-import type { CodexAppServerAuthProfileLookup } from "./auth-profile.js";
+import type { CodexAppServerAuthRuntimeContext as ClientRuntimeContext } from "./auth-profile.js";
+import type { CodexAppServerAuthHandoff } from "./auth-types.js";
+import {
+  createThreadOwnerToken,
+  releaseThreadProtection,
+  forgetThreadOwnership,
+  hasSiblingThreadWork,
+  hasThreadOwnership,
+  invalidateThreadOwnership,
+  revertRetainedThreadInstructions,
+  type RetainedLiveThread,
+  type CodexEphemeralThreadPolicy,
+  type CodexAppServerLiveThreadOwnership,
+  type ThreadOwnershipState,
+  type ThreadOwnerToken,
+  type ThreadReleaseTransition,
+} from "./client-thread-owner.js";
+import {
+  prepareCodexWorkspaceReferenceState,
+  readCodexWorkspaceSessionMeta,
+  type CodexClientWorkspaceState,
+} from "./client-workspace-state.js";
 import type { CodexAppServerClient } from "./client.js";
 import { isJsonObject, type CodexServiceTier, type JsonObject } from "./protocol.js";
 import { mergeCodexRateLimitsUpdate } from "./rate-limit-cache.js";
 import { withTimeout } from "./timeout.js";
 
-type ClientRuntimeContext = CodexAppServerAuthProfileLookup & {
-  authMode?: "prepared-api-key" | "profile";
-  onAuthRefreshFailure?: () => void;
-};
+type ThreadRelease = CodexAppServerLiveThreadOwnership["release"];
 
-type ClientRuntime = {
-  context: ClientRuntimeContext;
-  authHandoff?: CodexAppServerAuthHandoff;
-  closed: boolean;
-  retainedThreads: Map<string, RetainedLiveThread>;
-  claimedThreads: Map<string, symbol>;
-  releasingThreads: Map<string, ThreadReleaseTransition>;
-  protectedThreads: Map<string, number>;
-  sessionMetadata: Map<string, { sessionsRoot: string; rolloutPath: string; metadata: JsonObject }>;
-  workspaceReferences: Map<string, { digest?: string; needsReintroduction: boolean }>;
-  evictionTimer?: ReturnType<typeof setTimeout>;
-};
+function defaultThreadRelease(client: CodexAppServerClient): ThreadRelease {
+  return async (threadId, assertCurrent, withCurrent) => {
+    await unsubscribeCodexAppServerLiveThread(client, threadId, 5_000, assertCurrent, withCurrent);
+  };
+}
 
-type RetainedLiveThread = {
-  configFingerprint?: string;
-  ephemeralPolicy?: string;
-  serviceTier?: CodexServiceTier | null;
-  expiresAt: number;
-  release: (threadId: string, assertCurrent?: () => void) => Promise<void>;
-};
-
-type ThreadReleaseTransition = {
-  completion: Promise<void>;
-  physicalRelease?: Promise<void>;
-  invalidated?: boolean;
-};
-
-export type CodexAppServerLiveThreadOwnership = {
-  assertCurrent: () => void;
-  configFingerprint?: string;
-  /** Ephemeral configuration is creation-owned and cannot be refreshed or cold-resumed. */
-  ephemeralPolicy?: string;
-  serviceTier?: CodexServiceTier | null;
-  release: (threadId: string, assertCurrent?: () => void) => Promise<void>;
-};
+type ClientRuntime = ThreadOwnershipState &
+  CodexClientWorkspaceState & {
+    context: ClientRuntimeContext;
+    authHandoff?: CodexAppServerAuthHandoff;
+    evictionTimer?: ReturnType<typeof setTimeout>;
+  };
 
 /** Match Codex's native grace window without retaining inactive conversations indefinitely. */
 const CODEX_APP_SERVER_LIVE_THREAD_IDLE_TIMEOUT_MS = 30 * 60_000;
@@ -59,15 +51,14 @@ const CODEX_APP_SERVER_LIVE_THREAD_MAX_IDLE = 64;
 /** Return a deterministic error before Codex cancels its ten-second external-auth request. */
 const CODEX_EXTERNAL_AUTH_REFRESH_TIMEOUT_MS = 9_000;
 
-const configuredClients = new WeakMap<CodexAppServerClient, ClientRuntime>();
-const physicalThreadReleases = new WeakMap<
-  CodexAppServerLiveThreadOwnership["release"],
-  CodexAppServerLiveThreadOwnership["release"]
->();
-const claimedThreadReleaseTokens = new WeakMap<
-  CodexAppServerLiveThreadOwnership["release"],
-  symbol
->();
+// The shared app-server client is build-scoped. Its retained and claimed owners
+// must follow the same physical client across duplicate plugin module copies.
+const { configuredClients, physicalThreadReleases, claimedThreadReleaseTokens } =
+  defineCodexBuildState("openclaw.codexAppServerClientRuntime", () => ({
+    configuredClients: new WeakMap<CodexAppServerClient, ClientRuntime>(),
+    physicalThreadReleases: new WeakMap<ThreadRelease, ThreadRelease>(),
+    claimedThreadReleaseTokens: new WeakMap<ThreadRelease, ThreadOwnerToken>(),
+  }))();
 
 /** Only an initialized, still-open physical client can own retained native subscriptions. */
 export function isCodexAppServerClientRuntimeLive(client: CodexAppServerClient): boolean {
@@ -99,23 +90,7 @@ export function prepareCodexWorkspaceReferences(
   threadId: string,
   reference: string | undefined,
 ) {
-  const runtime = configuredClients.get(client);
-  const digest = createHash("sha256")
-    .update(reference ?? "")
-    .digest("hex");
-  const previous = runtime?.workspaceReferences.get(threadId) ?? { needsReintroduction: true };
-  if (runtime && !runtime.closed) {
-    runtime.workspaceReferences.set(threadId, previous);
-  }
-  return {
-    include: previous.needsReintroduction || previous.digest !== digest,
-    accepted: () => {
-      if (!runtime || runtime.closed || runtime.workspaceReferences.get(threadId) !== previous) {
-        return;
-      }
-      runtime.workspaceReferences.set(threadId, { digest, needsReintroduction: false });
-    },
-  };
+  return prepareCodexWorkspaceReferenceState(configuredClients.get(client), threadId, reference);
 }
 
 /** Immutable declarations are data owned by this physical client, never retained executors. */
@@ -125,36 +100,14 @@ export async function readCodexClientSessionMeta(
   boundRolloutPath: string | undefined,
   threadId: string,
 ): Promise<JsonObject> {
-  let rolloutPath = boundRolloutPath;
-  const runtime = configuredClients.get(client);
-  if (!runtime || runtime.closed) {
-    throw new Error("Codex native metadata requires a live selected client");
-  }
-  const cached = runtime.sessionMetadata.get(threadId);
-  if (
-    cached &&
-    cached.sessionsRoot === sessionsRoot &&
-    (!rolloutPath || cached.rolloutPath === rolloutPath)
-  ) {
-    return structuredClone(cached.metadata);
-  }
-  if (!rolloutPath) {
-    // The original imported-target materializer may bind before native storage
-    // assigns its path. Discover it once from the selected thread, not from disk scans.
-    const { thread } = await client.request("thread/read", { threadId, includeTurns: false });
-    if (thread.id !== threadId || !thread.path) {
-      throw new Error("Codex native metadata has no verified thread path");
-    }
-    rolloutPath = thread.path;
-  }
-  const metadata = await readCodexSessionMeta(sessionsRoot, rolloutPath, threadId);
-  if (runtime.closed || !metadata) {
-    throw new Error("Codex native metadata is unavailable on the selected client");
-  }
-  runtime.sessionMetadata.delete(threadId);
-  runtime.sessionMetadata.set(threadId, { sessionsRoot, rolloutPath, metadata });
-  pruneMapToMaxSize(runtime.sessionMetadata, CODEX_APP_SERVER_LIVE_THREAD_MAX_IDLE);
-  return structuredClone(metadata);
+  return readCodexWorkspaceSessionMeta(
+    client,
+    configuredClients.get(client),
+    sessionsRoot,
+    boundRolloutPath,
+    threadId,
+    CODEX_APP_SERVER_LIVE_THREAD_MAX_IDLE,
+  );
 }
 
 /** Installs one auth-refresh handler and one rate-limit observer per physical client. */
@@ -187,12 +140,15 @@ export function ensureCodexAppServerClientRuntime(
     // Pending releases may settle after close; their continuations must never
     // resurrect subscriptions or eviction timers on a dead physical client.
     runtime.closed = true;
-    if (runtime.evictionTimer) {
-      clearTimeout(runtime.evictionTimer);
-      runtime.evictionTimer = undefined;
+    clearTimeout(runtime.evictionTimer);
+    runtime.evictionTimer = undefined;
+    for (const threadId of new Set([
+      ...runtime.retainedThreads.keys(),
+      ...runtime.claimedThreads.keys(),
+      ...runtime.releasingThreads.keys(),
+    ])) {
+      invalidateThreadOwnership(runtime, threadId);
     }
-    runtime.retainedThreads.clear();
-    runtime.claimedThreads.clear();
     runtime.protectedThreads.clear();
     runtime.sessionMetadata.clear();
     runtime.workspaceReferences.clear();
@@ -227,11 +183,6 @@ export function ensureCodexAppServerClientRuntime(
         CODEX_EXTERNAL_AUTH_REFRESH_TIMEOUT_MS,
         "Codex app-server ChatGPT token refresh timed out before its external-auth deadline. Retry the request; if it persists, sign in again with OpenClaw.",
       );
-      if (previousAccountId && tokens.chatgptAccountId !== previousAccountId) {
-        throw new Error(
-          "ChatGPT workspace changed during Codex token refresh. Retry to start a client for the selected workspace.",
-        );
-      }
       if (runtime.closed) {
         throw new Error("Codex app-server client closed during ChatGPT token refresh.");
       }
@@ -275,12 +226,7 @@ export function ensureCodexAppServerClientRuntime(
       if (typeof threadId === "string") {
         // Codex already removed server-side ownership; unsubscribing again can
         // race a replacement, so only discard this exact local ownership.
-        const releasing = runtime.releasingThreads.get(threadId);
-        if (releasing) {
-          releasing.invalidated = true;
-        }
-        runtime.retainedThreads.delete(threadId);
-        runtime.claimedThreads.delete(threadId);
+        invalidateThreadOwnership(runtime, threadId);
         runtime.sessionMetadata.delete(threadId);
         runtime.workspaceReferences.delete(threadId);
         scheduleRetainedThreadEviction(client, runtime);
@@ -293,10 +239,8 @@ function scheduleRetainedThreadEviction(
   client: CodexAppServerClient,
   runtime: ClientRuntime,
 ): void {
-  if (runtime.evictionTimer) {
-    clearTimeout(runtime.evictionTimer);
-    runtime.evictionTimer = undefined;
-  }
+  clearTimeout(runtime.evictionTimer);
+  runtime.evictionTimer = undefined;
   if (runtime.closed) {
     return;
   }
@@ -330,6 +274,7 @@ async function releaseRetainedThread(
   runtime: ClientRuntime,
   threadId: string,
   assertCurrent?: () => void,
+  withCurrent?: (write: () => void) => Promise<void>,
 ): Promise<boolean> {
   const pendingRelease = runtime.releasingThreads.get(threadId);
   if (pendingRelease) {
@@ -353,15 +298,21 @@ async function releaseRetainedThread(
   // Keep release ownership addressable until unsubscribe settles. Unrelated
   // conversations must stay reusable while only this thread transitions.
   const transition: ThreadReleaseTransition = {
+    retainedOwnerToken: retained.ownerToken,
     completion: Promise.resolve().then(() => {
       assertCurrent?.();
-      return assertCurrent ? retained.release(threadId, assertCurrent) : retained.release(threadId);
+      return withCurrent
+        ? retained.release(threadId, assertCurrent, withCurrent)
+        : assertCurrent
+          ? retained.release(threadId, assertCurrent)
+          : retained.release(threadId);
     }),
   };
   runtime.releasingThreads.set(threadId, transition);
   try {
     await transition.completion;
     runtime.workspaceReferences.delete(threadId);
+    retained.ownerToken?.invalidate();
     return true;
   } catch (error) {
     if (
@@ -429,20 +380,18 @@ async function evictExcessIdleThreads(
 export async function retainCodexAppServerLiveThread(
   client: CodexAppServerClient,
   threadId: string,
-  releaseThread?: (threadId: string, assertCurrent?: () => void) => Promise<void>,
+  releaseThread?: ThreadRelease,
   configFingerprint?: string,
   serviceTier?: CodexServiceTier | null,
-  ephemeralPolicy?: string,
+  ephemeralPolicy?: CodexEphemeralThreadPolicy,
 ): Promise<boolean> {
   const runtime = configuredClients.get(client);
   if (!runtime || runtime.closed) {
     return false;
   }
   const claimed = runtime.claimedThreads.get(threadId);
-  if (
-    claimed !== undefined &&
-    (releaseThread === undefined || claimedThreadReleaseTokens.get(releaseThread) !== claimed)
-  ) {
+  const ownerToken = releaseThread ? claimedThreadReleaseTokens.get(releaseThread) : undefined;
+  if (claimed !== ownerToken || ownerToken?.invalidated) {
     // Only the active generation's branded ownership handle may republish it;
     // manual resume or another turn must never steal an in-flight subscription.
     return false;
@@ -454,8 +403,10 @@ export async function retainCodexAppServerLiveThread(
     // without a subsequent thread/resume would invent native ownership.
     return false;
   }
+  const previousOwner = runtime.retainedThreads.get(threadId)?.ownerToken;
   runtime.retainedThreads.delete(threadId);
   const retained: RetainedLiveThread = {
+    ownerToken,
     configFingerprint,
     ephemeralPolicy,
     serviceTier,
@@ -467,11 +418,12 @@ export async function retainCodexAppServerLiveThread(
         : Number.POSITIVE_INFINITY,
     release:
       (releaseThread ? (physicalThreadReleases.get(releaseThread) ?? releaseThread) : undefined) ??
-      (async (releasedThreadId, assertCurrent) => {
-        await unsubscribeCodexAppServerLiveThread(client, releasedThreadId, 5_000, assertCurrent);
-      }),
+      defaultThreadRelease(client),
   };
   runtime.retainedThreads.set(threadId, retained);
+  if (previousOwner !== ownerToken) {
+    previousOwner?.invalidate();
+  }
 
   // Map insertion order is the LRU. Active turns are claimed out of this map,
   // and detached native-child parents are pinned until their final child settles.
@@ -527,10 +479,11 @@ export async function consumeCodexAppServerLiveThread(
   return claimCodexAppServerThreadOwnership(client, runtime, threadId, retained);
 }
 
-/** Claims an observed Codex auto-subscription without exposing a temporarily idle owner. */
+/** Claims an auto-subscription; invalidation ends the handle after replacement or release. */
 export async function claimCodexAppServerLiveThread(
   client: CodexAppServerClient,
   threadId: string,
+  onInvalidated?: () => void,
 ): Promise<CodexAppServerLiveThreadOwnership | undefined> {
   const runtime = configuredClients.get(client);
   if (!runtime || runtime.closed || runtime.claimedThreads.has(threadId)) {
@@ -545,11 +498,9 @@ export async function claimCodexAppServerLiveThread(
   }
   const retained = runtime.retainedThreads.get(threadId) ?? {
     expiresAt: Date.now() + CODEX_APP_SERVER_LIVE_THREAD_IDLE_TIMEOUT_MS,
-    release: async (releasedThreadId: string, assertCurrent?: () => void) => {
-      await unsubscribeCodexAppServerLiveThread(client, releasedThreadId, 5_000, assertCurrent);
-    },
+    release: defaultThreadRelease(client),
   };
-  return claimCodexAppServerThreadOwnership(client, runtime, threadId, retained);
+  return claimCodexAppServerThreadOwnership(client, runtime, threadId, retained, onInvalidated);
 }
 
 function claimCodexAppServerThreadOwnership(
@@ -557,24 +508,50 @@ function claimCodexAppServerThreadOwnership(
   runtime: ClientRuntime,
   threadId: string,
   retained: RetainedLiveThread,
+  onInvalidated?: () => void,
 ): CodexAppServerLiveThreadOwnership {
+  const previousClaim = runtime.claimedThreads.get(threadId);
   runtime.retainedThreads.delete(threadId);
-  const claimed = Symbol(threadId);
+  const claimed = createThreadOwnerToken(threadId, onInvalidated);
   runtime.claimedThreads.set(threadId, claimed);
+  previousClaim?.invalidate();
+  retained.ownerToken?.invalidate();
   scheduleRetainedThreadEviction(client, runtime);
   const assertCurrent = () => {
-    if (runtime.closed || runtime.claimedThreads.get(threadId) !== claimed) {
+    if (claimed.invalidated || runtime.closed || runtime.claimedThreads.get(threadId) !== claimed) {
       throw new Error(`Codex thread subscription ownership changed: ${threadId}`);
     }
   };
   const release = async (
     releasedThreadId: string,
     assertReleaseCurrent?: () => void,
+    withCurrent?: (write: () => void) => Promise<void>,
   ): Promise<void> => {
     // Codex subscriptions have no generation identifier. An obsolete owner
     // must be rejected before it can unsubscribe a replacement's live turn.
-    if (releasedThreadId !== threadId || runtime.claimedThreads.get(threadId) !== claimed) {
+    if (releasedThreadId !== threadId || claimed.invalidated) {
       assertReleaseCurrent?.();
+      return;
+    }
+    if (runtime.claimedThreads.get(threadId) !== claimed) {
+      // A completed turn may release only the idle record it published. A new
+      // claim, replacement retention, or eviction ends that release authority.
+      if (runtime.retainedThreads.get(threadId)?.ownerToken === claimed) {
+        await releaseRetainedThread(client, runtime, threadId, assertReleaseCurrent, withCurrent);
+      } else {
+        const pendingRelease = runtime.releasingThreads.get(threadId);
+        if (pendingRelease?.retainedOwnerToken === claimed) {
+          await pendingRelease.completion;
+        }
+        assertReleaseCurrent?.();
+      }
+      return;
+    }
+    if (runtime.protectedThreads.has(threadId)) {
+      // Concrete native work still needs this connection's notifications. Keep
+      // exact cleanup custody, without publishing a reusable warm subscription.
+      claimed.releaseAfterProtection = () =>
+        release(releasedThreadId, assertReleaseCurrent, withCurrent);
       return;
     }
     const pendingRelease = runtime.releasingThreads.get(threadId);
@@ -591,9 +568,11 @@ function claimCodexAppServerThreadOwnership(
           return;
         }
         assertReleaseCurrent?.();
-        await (assertReleaseCurrent
-          ? retained.release(releasedThreadId, assertReleaseCurrent)
-          : retained.release(releasedThreadId));
+        await (withCurrent
+          ? retained.release(releasedThreadId, assertReleaseCurrent, withCurrent)
+          : assertReleaseCurrent
+            ? retained.release(releasedThreadId, assertReleaseCurrent)
+            : retained.release(releasedThreadId));
       }),
     };
     runtime.releasingThreads.set(threadId, transition);
@@ -602,6 +581,7 @@ function claimCodexAppServerThreadOwnership(
       if (runtime.claimedThreads.get(threadId) === claimed) {
         runtime.claimedThreads.delete(threadId);
         runtime.workspaceReferences.delete(threadId);
+        claimed.invalidate();
       }
     } finally {
       if (runtime.releasingThreads.get(threadId) === transition) {
@@ -619,7 +599,24 @@ function claimCodexAppServerThreadOwnership(
     ephemeralPolicy: retained.ephemeralPolicy,
     serviceTier: retained.serviceTier,
     release,
+    forget: () => {
+      if (forgetThreadOwnership(runtime, threadId, claimed)) {
+        runtime.workspaceReferences.delete(threadId);
+        scheduleRetainedThreadEviction(client, runtime);
+      }
+    },
   };
+}
+
+/** Standalone incognito compaction retains its separately owned subscription. */
+export function revertCodexAppServerLiveThreadInstructions(
+  client: CodexAppServerClient,
+  threadId: string,
+): void {
+  const runtime = configuredClients.get(client);
+  if (runtime && !runtime.closed) {
+    revertRetainedThreadInstructions(runtime, threadId);
+  }
 }
 
 /** Distinguish active claimed ownership from an already-evicted idle subscription. */
@@ -627,14 +624,7 @@ export function hasCodexAppServerLiveThread(
   client: CodexAppServerClient,
   threadId: string,
 ): boolean {
-  const runtime = configuredClients.get(client);
-  return (
-    runtime !== undefined &&
-    !runtime.closed &&
-    (runtime.retainedThreads.has(threadId) ||
-      runtime.releasingThreads.has(threadId) ||
-      runtime.claimedThreads.has(threadId))
-  );
+  return hasThreadOwnership(configuredClients.get(client), threadId);
 }
 
 export function isCodexAppServerLiveThreadClaimed(
@@ -645,12 +635,20 @@ export function isCodexAppServerLiveThreadClaimed(
   return runtime !== undefined && !runtime.closed && runtime.claimedThreads.has(threadId);
 }
 
+export function hasCodexAppServerSiblingThreadWork(
+  client: CodexAppServerClient,
+  threadId: string,
+): boolean {
+  return hasSiblingThreadWork(configuredClients.get(client), threadId);
+}
+
 /** Release the exact physical subscription and finish only its observed ownership generation. */
 export async function unsubscribeCodexAppServerLiveThread(
   client: CodexAppServerClient,
   threadId: string,
   timeoutMs: number,
   assertCurrent?: () => void,
+  withCurrent?: (write: () => void) => Promise<void>,
 ): Promise<void> {
   const runtime = configuredClients.get(client);
   const claimed = runtime?.claimedThreads.get(threadId);
@@ -670,7 +668,11 @@ export async function unsubscribeCodexAppServerLiveThread(
       return;
     }
     assertCurrent?.();
-    await client.request("thread/unsubscribe", { threadId }, { timeoutMs, assertCurrent });
+    await client.request(
+      "thread/unsubscribe",
+      { threadId },
+      { timeoutMs, assertCurrent, ...(withCurrent ? { withCurrent } : {}) },
+    );
     // Revalidate before successful release removes its own claim below.
     assertCurrent?.();
     runtime?.workspaceReferences.delete(threadId);
@@ -690,10 +692,12 @@ export async function unsubscribeCodexAppServerLiveThread(
     // retained or claimed generation observed before it began.
     if (retained !== undefined && runtime?.retainedThreads.get(threadId) === retained) {
       runtime.retainedThreads.delete(threadId);
+      retained.ownerToken?.invalidate();
       scheduleRetainedThreadEviction(client, runtime);
     }
     if (claimed !== undefined && runtime?.claimedThreads.get(threadId) === claimed) {
       runtime.claimedThreads.delete(threadId);
+      claimed.invalidate();
     }
   } finally {
     if (ownsTransition && runtime.releasingThreads.get(threadId) === transition) {
@@ -707,9 +711,12 @@ export async function releaseCodexAppServerLiveThread(
   client: CodexAppServerClient,
   threadId: string,
   assertCurrent?: () => void,
+  withCurrent?: (write: () => void) => Promise<void>,
 ): Promise<boolean> {
   const runtime = configuredClients.get(client);
-  return runtime ? await releaseRetainedThread(client, runtime, threadId, assertCurrent) : false;
+  return runtime
+    ? await releaseRetainedThread(client, runtime, threadId, assertCurrent, withCurrent)
+    : false;
 }
 
 /** Native child work pins its parent's subscription even after the foreground parent turn ends. */
@@ -732,9 +739,7 @@ export function protectCodexAppServerLiveThread(
     if (runtime.closed) {
       return;
     }
-    const count = runtime.protectedThreads.get(threadId) ?? 0;
-    if (count <= 1) {
-      runtime.protectedThreads.delete(threadId);
+    if (releaseThreadProtection(runtime, threadId)) {
       const retained = runtime.retainedThreads.get(threadId);
       if (retained) {
         // A detached child is live activity, not parent idleness. Its terminal
@@ -745,8 +750,6 @@ export function protectCodexAppServerLiveThread(
         runtime.retainedThreads.delete(threadId);
         runtime.retainedThreads.set(threadId, retained);
       }
-    } else {
-      runtime.protectedThreads.set(threadId, count - 1);
     }
     scheduleRetainedThreadEviction(client, runtime);
     void evictExcessIdleThreads(client, runtime).catch((error: unknown) => {

@@ -3,6 +3,7 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isInstalledPluginEnabled } from "./installed-plugin-index.js";
 import { resolvePluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
+import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";
 import { getActivePluginRegistryWorkspaceDirFromState } from "./runtime-state.js";
 
 type SetupCliBackendDescriptorEntry = {
@@ -17,11 +18,15 @@ type SetupCliBackendDescriptorLookupParams = {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  metadataSnapshot?: PluginMetadataSnapshot;
 };
 
 function resolveSetupCliBackendSnapshot(
   params: Omit<SetupCliBackendDescriptorLookupParams, "backend"> = {},
 ) {
+  if (params.metadataSnapshot) {
+    return params.metadataSnapshot;
+  }
   const env = params.env ?? process.env;
   const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDirFromState();
   return resolvePluginMetadataSnapshot({
@@ -40,7 +45,7 @@ export function resolvePluginSetupCliBackendDescriptor(
   // The immutable owner map preserves declaration order; only activation uses live policy.
   const pluginId = snapshot.owners.cliBackends
     .get(normalized)
-    ?.find((id) => isInstalledPluginEnabled(snapshot.index, id, params.config));
+    ?.find((id) => isInstalledPluginEnabled(snapshot.index, id, params.config, params.env));
   const plugin = pluginId ? snapshot.byPluginId.get(pluginId) : undefined;
   if (!plugin) {
     return undefined;
@@ -58,7 +63,8 @@ export function resolvePluginSetupCliBackendIds(
   const snapshot = resolveSetupCliBackendSnapshot(params);
   return snapshot.plugins.flatMap((plugin) => {
     const ids = plugin.cliBackends.concat(plugin.setup?.cliBackends ?? []);
-    return ids.length > 0 && isInstalledPluginEnabled(snapshot.index, plugin.id, params.config)
+    return ids.length > 0 &&
+      isInstalledPluginEnabled(snapshot.index, plugin.id, params.config, params.env)
       ? ids
       : [];
   });

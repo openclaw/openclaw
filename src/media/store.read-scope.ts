@@ -1,7 +1,13 @@
 import fsSync from "node:fs";
 import fs, { type FileHandle } from "node:fs/promises";
 import path from "node:path";
-import { buildRandomTempFilePath } from "../infra/fs-safe-advanced.js";
+import {
+  assertDirectoryIdentitySync,
+  buildRandomTempFilePath,
+  readDirectoryIdentity,
+  sameFileIdentity,
+} from "@openclaw/fs-safe/advanced";
+import { syncDirectoryBestEffort } from "../infra/directory-durability.js";
 import { FsSafeError, root } from "../infra/fs-safe.js";
 import { redactToolPayloadText } from "../logging/redact.js";
 import {
@@ -32,45 +38,38 @@ const exitCleanups = resolveGlobalSingleton(Symbol.for("openclaw.readMediaExitCl
 function isUnownedMediaPath(error: unknown): boolean {
   return (
     (error instanceof FsSafeError &&
-      ["not-found", "path-mismatch", "symlink", "hardlink"].includes(error.code)) ||
+      ["not-found", "not-file", "path-mismatch", "symlink", "hardlink"].includes(error.code)) ||
     (error instanceof Error && "code" in error && error.code === "ENOENT")
   );
 }
 
-function captureDirectoryGuard(dir: string): (handle?: FileHandle) => void {
-  const expected = fsSync.lstatSync(dir, { bigint: true });
-  const realPath = fsSync.realpathSync.native(dir);
-  const assertDirectory = (handle?: FileHandle) => {
-    const current = fsSync.lstatSync(dir, { bigint: true });
-    const opened = handle ? fsSync.fstatSync(handle.fd, { bigint: true }) : current;
-    if (
-      !current.isDirectory() ||
-      current.isSymbolicLink() ||
-      current.dev !== expected.dev ||
-      current.ino !== expected.ino ||
-      opened.dev !== expected.dev ||
-      opened.ino !== expected.ino ||
-      fsSync.realpathSync.native(dir) !== realPath ||
-      (process.platform === "win32" && (current.dev === 0n || current.ino === 0n))
-    ) {
+async function captureDirectoryGuard(dir: string): Promise<(handle?: FileHandle) => void> {
+  const expected = await readDirectoryIdentity(dir);
+  return (handle) => {
+    assertDirectoryIdentitySync(dir, expected);
+    if (handle && !sameFileIdentity(fsSync.fstatSync(handle.fd, { bigint: true }), expected)) {
       throw new FsSafeError("path-mismatch", "Media output directory identity changed");
     }
   };
-  assertDirectory();
-  return assertDirectory;
 }
 
-/** Keeps a read's original file descriptor until its enclosing host accepts the result. */
+/** Publishes guarded media; a read scope retains its descriptor until host acceptance. */
 export async function writeReadScopeMedia<T extends { id: string }>(params: {
   dir: string;
   tempPrefix: string;
-  scope: ReadScope;
+  scope?: ReadScope;
+  assertCommitAllowed?: () => void;
+  durable?: boolean;
   write: (handle: FileHandle) => Promise<T>;
 }): Promise<T> {
-  params.scope.assertCurrent();
-  const assertRequestedDirectory = captureDirectoryGuard(params.dir);
+  const assertCurrent = () => {
+    params.scope?.assertCurrent();
+    params.assertCommitAllowed?.();
+  };
+  assertCurrent();
+  const assertRequestedDirectory = await captureDirectoryGuard(params.dir);
   const mediaRoot = await root(params.dir);
-  const assertMediaDirectory = captureDirectoryGuard(mediaRoot.rootReal);
+  const assertMediaDirectory = await captureDirectoryGuard(mediaRoot.rootReal);
   if (process.platform !== "win32") {
     const directory = await fs.open(
       mediaRoot.rootReal,
@@ -80,7 +79,7 @@ export async function writeReadScopeMedia<T extends { id: string }>(params: {
         fsSync.constants.O_NONBLOCK,
     );
     try {
-      params.scope.assertCurrent();
+      assertCurrent();
       assertRequestedDirectory();
       assertMediaDirectory(directory);
       await directory.chmod(0o700).catch(() => undefined);
@@ -91,7 +90,7 @@ export async function writeReadScopeMedia<T extends { id: string }>(params: {
       );
     }
   }
-  params.scope.assertCurrent();
+  assertCurrent();
   // Own one sibling file; cleanup must never recurse into substituted staging contents.
   const temporaryPath = buildRandomTempFilePath({
     rootDir: mediaRoot.rootReal,
@@ -105,9 +104,21 @@ export async function writeReadScopeMedia<T extends { id: string }>(params: {
   let settlement: Promise<void> | undefined;
   let assertOwnedFile: ((filePath: string) => void) | undefined;
   let cleanupAtExit: (() => void) | undefined;
+  let assertCustody: (() => void) | undefined;
   const resource = {
     get key() {
       return finalId ? path.join(params.dir, finalId) : temporaryPath;
+    },
+    onDelegated: (assertDelegatedCustody?: () => void) => {
+      const previous = assertCustody;
+      assertCustody = () => {
+        previous?.();
+        assertDelegatedCustody?.();
+      };
+      // A native metadata commit may outlive the ordinary reply or process exit.
+      if (cleanupAtExit) {
+        exitCleanups.delete(cleanupAtExit);
+      }
     },
     assertCurrent: () => {
       if (settlement) {
@@ -137,6 +148,7 @@ export async function writeReadScopeMedia<T extends { id: string }>(params: {
               try {
                 await mediaRoot.remove(name, {
                   assertBeforeMutation: () => {
+                    assertCustody?.();
                     assertMediaDirectory();
                     assertOwnedFile?.(path.join(mediaRoot.rootReal, name));
                   },
@@ -167,11 +179,11 @@ export async function writeReadScopeMedia<T extends { id: string }>(params: {
       })()),
   };
   try {
-    params.scope.assertCurrent();
+    assertCurrent();
     handle = await fs.open(temporaryPath, "wx", MEDIA_FILE_MODE);
     const retained = handle;
     const expected = fsSync.fstatSync(retained.fd, { bigint: true });
-    assertOwnedFile = (filePath) => {
+    const assertCreatedFile = (filePath: string) => {
       const opened = fsSync.fstatSync(retained.fd, { bigint: true });
       const current = fsSync.lstatSync(filePath, { bigint: true });
       if (
@@ -188,6 +200,13 @@ export async function writeReadScopeMedia<T extends { id: string }>(params: {
       ) {
         throw new FsSafeError("path-mismatch", "Media output no longer names the created file");
       }
+    };
+    assertOwnedFile = assertCreatedFile;
+    const assertPublicationAllowed = () => {
+      assertCurrent();
+      assertRequestedDirectory();
+      assertMediaDirectory();
+      assertCreatedFile(temporaryPath);
     };
     cleanupAtExit = () => {
       for (const name of [finalId, temporaryName]) {
@@ -207,11 +226,9 @@ export async function writeReadScopeMedia<T extends { id: string }>(params: {
       }
     };
     exitCleanups.add(cleanupAtExit);
+    assertCurrent();
     const result = await params.write(retained);
-    params.scope.assertCurrent();
-    assertRequestedDirectory();
-    assertMediaDirectory();
-    assertOwnedFile(temporaryPath);
+    assertPublicationAllowed();
     // Match sibling publication's mode finalization, including restrictive caller umasks.
     try {
       await retained.chmod(MEDIA_FILE_MODE);
@@ -220,14 +237,16 @@ export async function writeReadScopeMedia<T extends { id: string }>(params: {
         throw error;
       }
     }
+    if (params.durable) {
+      assertPublicationAllowed();
+      await retained.sync();
+    }
+    assertPublicationAllowed();
     finalId = result.id;
     await mediaRoot.move(temporaryName, finalId, {
       overwrite: false,
       assertBeforeMutation: () => {
-        params.scope.assertCurrent();
-        assertRequestedDirectory();
-        assertMediaDirectory();
-        assertOwnedFile?.(temporaryPath);
+        assertPublicationAllowed();
         // Repeat the move owner's collision check after its awaited preparation.
         try {
           fsSync.lstatSync(path.join(mediaRoot.rootReal, result.id));
@@ -241,7 +260,18 @@ export async function writeReadScopeMedia<T extends { id: string }>(params: {
       },
     });
     resource.assertCurrent();
-    params.scope.registerResource(resource);
+    if (params.durable) {
+      assertCurrent();
+      await syncDirectoryBestEffort(mediaRoot.rootReal);
+      assertCurrent();
+      resource.assertCurrent();
+    }
+    assertCurrent();
+    if (params.scope) {
+      params.scope.registerResource(resource);
+    } else {
+      await settleChannelReadResource(resource, true);
+    }
     handedOff = true;
     return result;
   } catch (error) {

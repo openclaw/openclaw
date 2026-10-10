@@ -1,116 +1,126 @@
-/**
- * Subagent list builder.
- *
- * Combines live registry runs and persisted session metadata for sessions_list/subagents views.
- */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { resolveSubagentLabel } from "../../../auto-reply/reply/subagents-utils.js";
-import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
-import { listSessionEntriesReadOnly } from "../../../config/sessions/session-accessor.js";
+import { readSessionEntriesFromStoreInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { formatDurationCompact } from "../../../infra/format-time/format-duration.js";
-import { parseAgentSessionKey, type ParsedAgentSessionKey } from "../../../routing/session-key.js";
 import {
   formatTokenUsageDisplay,
   resolveTotalTokens,
   truncateLine,
 } from "../../../shared/subagents-format.js";
 import { resolveModelDisplayName, resolveModelDisplayRef } from "../../model-selection-display.js";
+import { resolveSubagentChildSessionOwner } from "./subagent-child-session-owner.js";
 import {
   observeSubagentExecution,
   type SubagentExecutionObservation,
 } from "./subagent-execution-observation.js";
-import { subagentRuns } from "./subagent-registry-memory.js";
-import { buildSubagentRunReadIndexFromRuns } from "./subagent-registry-queries.js";
+import type { SubagentRunReadIndex } from "./subagent-registry-queries.js";
+import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
+import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { shouldKeepSubagentRunChildLink } from "./subagent-run-liveness.js";
+import { buildSubagentRunView } from "./subagent-run-view.js";
 import {
   getSubagentSessionRuntimeMs,
   getSubagentSessionStartedAt,
-} from "./subagent-registry-read.js";
-import {
-  getSubagentRunsSnapshotForSession,
-  getSubagentSessionListRunsSnapshotForRead,
-} from "./subagent-registry-state.js";
-import type { SubagentRunReadRecord, SubagentRunRecord } from "./subagent-registry.types.js";
-import { shouldKeepSubagentRunChildLink } from "./subagent-run-liveness.js";
-import { buildSubagentRunView } from "./subagent-run-view.js";
-import { resolveSubagentDisplayStatus } from "./subagent-session-metrics.js";
+  resolveSubagentDisplayStatus,
+} from "./subagent-session-metrics.js";
 
-type SubagentListItem = {
-  index: number;
-  line: string;
-  runId: string;
-  sessionKey: string;
-  taskName?: string;
-  label: string;
-  task: string;
-  status: string;
-  pendingDescendants: number;
-  runtime: string;
-  runtimeMs: number;
-  childSessions?: string[];
-  model?: string;
-  totalTokens?: number;
-  startedAt?: number;
-  endedAt?: number;
-  execution: SubagentExecutionObservation;
-  deliveryStatus?: NonNullable<SubagentRunRecord["delivery"]>["status"];
-  resume?: { method: "sessions.send"; sessionKey: string };
+export type SubagentListReadContext = {
+  now: number;
+  recentMinutes: number;
+  view: ReturnType<typeof buildSubagentRunView>;
+  childSessionsByController: ReadonlyMap<string, string[]>;
+  pendingDescendants: ReadonlyMap<string, number>;
+  execution: ReadonlyMap<string, SubagentExecutionObservation>;
 };
 
-type BuiltSubagentList = {
-  total: number;
-  active: SubagentListItem[];
-  recent: SubagentListItem[];
-  text: string;
-};
-
-type SessionEntryResolution = {
-  storePath: string;
-  entry: SessionEntry | undefined;
-};
-
-function resolveStorePathForKey(cfg: OpenClawConfig, parsed?: ParsedAgentSessionKey | null) {
-  return resolveSessionStorePathCore(cfg.session?.store, {
-    agentId: parsed?.agentId,
+/** Capture live classification before the prepared registry view crosses a Promise boundary. */
+export function captureSubagentListReadContext(
+  runs: SubagentRunRecord[],
+  readIndex: SubagentRunReadIndex<SubagentRunReadRecord>,
+  fullRuns: ReadonlyMap<string, SubagentRunRecord>,
+  recentMinutes: number,
+): SubagentListReadContext {
+  const now = Date.now();
+  const childSessionsByController = buildChildSessionIndex(readIndex, now);
+  const pendingDescendants = new Map(
+    runs.map((entry) => [
+      entry.childSessionKey,
+      readIndex.countPendingDescendantRuns(entry.childSessionKey, {
+        excludeSuspendedDelivery: true,
+      }),
+    ]),
+  );
+  const view = buildSubagentRunView({
+    runs,
+    recentMinutes,
+    countPendingDescendantRuns: (key) => pendingDescendants.get(key) ?? 0,
+    now,
   });
-}
-
-/** Resolve persisted session metadata for a session key, caching per store path. */
-function resolveSessionEntryForKey(params: {
-  cfg: OpenClawConfig;
-  key: string;
-  cache: Map<string, Record<string, SessionEntry>>;
-}): SessionEntryResolution {
-  const parsed = parseAgentSessionKey(params.key);
-  const storePath = resolveStorePathForKey(params.cfg, parsed);
-  let store = params.cache.get(storePath);
-  if (!store) {
-    store = Object.fromEntries(
-      listSessionEntriesReadOnly({ storePath, clone: false, projection: "list" }).map(
-        ({ sessionKey, entry }) => [sessionKey, entry],
+  const execution = new Map(
+    [...view.active, ...view.recent].map((entry) => [
+      entry.runId,
+      observeSubagentExecution(
+        entry,
+        entry.pauseReason === "sessions_yield" ? fullRuns.values() : [],
       ),
-    );
-    params.cache.set(storePath, store);
-  }
+    ]),
+  );
   return {
-    storePath,
-    entry: store[params.key],
+    now,
+    recentMinutes,
+    view: structuredClone(view),
+    childSessionsByController,
+    pendingDescendants,
+    execution,
   };
 }
 
-/** Build child-session indexes from the latest run associated with each child key. */
-function buildLatestSubagentRunIndex(
-  runs: Map<string, SubagentRunReadRecord>,
-  options?: { now?: number },
-) {
-  const now = options?.now ?? Date.now();
-  const readIndex = buildSubagentRunReadIndexFromRuns({
-    runs,
-    inMemoryRuns: subagentRuns.values(),
-    now,
-  });
+export async function readSubagentListSessionEntries(
+  cfg: OpenClawConfig,
+  context: SubagentListReadContext,
+): Promise<Map<string, SessionEntry>> {
+  const runs = [...context.view.active, ...context.view.recent];
+  const batches = new Map<
+    string,
+    { agentId: string; storePath: string; runs: SubagentRunRecord[] }
+  >();
+  for (const run of runs) {
+    const owner = resolveSubagentChildSessionOwner(run, cfg);
+    const batch = batches.get(owner.agentId);
+    if (batch) {
+      batch.runs.push(run);
+    } else {
+      batches.set(owner.agentId, { ...owner, runs: [run] });
+    }
+  }
+  // Raw session keys can repeat across agents; keep each run's metadata separate.
+  const entries = new Map<string, SessionEntry>();
+  for (const { agentId, storePath, runs: batchRuns } of batches.values()) {
+    const selected = await readSessionEntriesFromStoreInWorker({
+      agentId,
+      storePath,
+      sessionKeys: batchRuns.map((run) => run.childSessionKey),
+      projection: "list",
+    });
+    const bySessionKey = new Map(
+      selected.entries.map(({ sessionKey, entry }) => [sessionKey, entry]),
+    );
+    for (const run of batchRuns) {
+      const entry = bySessionKey.get(run.childSessionKey);
+      if (entry) {
+        entries.set(run.runId, entry);
+      }
+    }
+  }
+  return entries;
+}
 
+function buildChildSessionIndex(
+  readIndex: SubagentRunReadIndex<SubagentRunReadRecord>,
+  now: number,
+) {
   const childSessionsByController = new Map<string, string[]>();
   for (const [childSessionKey, entry] of readIndex.latestRunsByChildSessionKey) {
     const controllerSessionKey =
@@ -128,101 +138,37 @@ function buildLatestSubagentRunIndex(
       // the controller relationship.
       continue;
     }
-    const existing = childSessionsByController.get(controllerSessionKey);
-    if (existing) {
-      existing.push(childSessionKey);
-      continue;
-    }
-    childSessionsByController.set(controllerSessionKey, [childSessionKey]);
+    const children = childSessionsByController.get(controllerSessionKey) ?? [];
+    children.push(childSessionKey);
+    childSessionsByController.set(controllerSessionKey, children);
   }
   for (const [controllerSessionKey, childSessions] of childSessionsByController) {
     childSessionsByController.set(controllerSessionKey, childSessions.toSorted());
   }
 
-  return {
-    childSessionsByController,
-    readIndex,
-  };
+  return childSessionsByController;
 }
 
-function resolveModelRef(entry?: SessionEntry, fallbackModel?: string) {
-  return resolveModelDisplayRef({
-    runtimeProvider: entry?.modelProvider,
-    runtimeModel: entry?.model,
-    overrideProvider: entry?.providerOverride,
-    overrideModel: entry?.modelOverride,
-    fallbackModel,
-  });
-}
-
-function resolveModelDisplay(entry?: SessionEntry, fallbackModel?: string) {
-  return resolveModelDisplayName({
-    runtimeProvider: entry?.modelProvider,
-    runtimeModel: entry?.model,
-    overrideProvider: entry?.providerOverride,
-    overrideModel: entry?.modelOverride,
-    fallbackModel,
-  });
-}
-
-function buildListText(params: {
-  active: Array<{ line: string }>;
-  recent: Array<{ line: string }>;
-  recentMinutes: number;
-}) {
-  const lines: string[] = [];
-  lines.push("active subagents:");
-  if (params.active.length === 0) {
-    lines.push("(none)");
-  } else {
-    lines.push(...params.active.map((entry) => entry.line));
-  }
-  lines.push("");
-  lines.push(`recent (last ${params.recentMinutes}m):`);
-  if (params.recent.length === 0) {
-    lines.push("(none)");
-  } else {
-    lines.push(...params.recent.map((entry) => entry.line));
-  }
-  return lines.join("\n");
-}
-
-/** Build structured and text views for active and recent subagent runs. */
 export function buildSubagentList(params: {
-  cfg: OpenClawConfig;
-  runs: SubagentRunRecord[];
-  recentMinutes: number;
+  context: SubagentListReadContext;
+  sessionEntries: ReadonlyMap<string, SessionEntry>;
   taskMaxChars?: number;
-  readSnapshot?: Map<string, SubagentRunReadRecord>;
-}): BuiltSubagentList {
-  const now = Date.now();
-  const cache = new Map<string, Record<string, SessionEntry>>();
-  const snapshot = params.readSnapshot ?? getSubagentSessionListRunsSnapshotForRead(subagentRuns);
-  const { childSessionsByController, readIndex } = buildLatestSubagentRunIndex(snapshot);
-  const pendingDescendantCount = (sessionKey: string) =>
-    readIndex.countPendingDescendantRuns(sessionKey);
-  const runView = buildSubagentRunView({
-    runs: params.runs,
-    recentMinutes: params.recentMinutes,
-    countPendingDescendantRuns: pendingDescendantCount,
-    now,
-  });
+}) {
+  const { now, view: runView, childSessionsByController } = params.context;
   let index = 1;
   const buildListEntry = (entry: SubagentRunRecord, runtimeMs: number) => {
-    const sessionEntry = resolveSessionEntryForKey({
-      cfg: params.cfg,
-      key: entry.childSessionKey,
-      cache,
-    }).entry;
+    const sessionEntry = params.sessionEntries.get(entry.runId);
+    const modelSelection = {
+      runtimeProvider: sessionEntry?.modelProvider,
+      runtimeModel: sessionEntry?.model,
+      overrideProvider: sessionEntry?.providerOverride,
+      overrideModel: sessionEntry?.modelOverride,
+      fallbackModel: entry.model,
+    };
     const totalTokens = resolveTotalTokens(sessionEntry);
     const usageText = formatTokenUsageDisplay(sessionEntry);
-    const pendingDescendants = pendingDescendantCount(entry.childSessionKey);
-    const execution = observeSubagentExecution(
-      entry,
-      entry.pauseReason === "sessions_yield"
-        ? getSubagentRunsSnapshotForSession(subagentRuns, entry.childSessionKey).values()
-        : [],
-    );
+    const pendingDescendants = params.context.pendingDescendants.get(entry.childSessionKey) ?? 0;
+    const execution = params.context.execution.get(entry.runId)!;
     const status = resolveSubagentDisplayStatus(
       entry,
       execution.state === "waiting" ? (execution.wait?.pendingCount ?? 0) : pendingDescendants,
@@ -233,8 +179,8 @@ export function buildSubagentList(params: {
     const task = truncateLine(entry.task.trim(), params.taskMaxChars ?? 72);
     const taskName = entry.taskName?.trim();
     const taskNamePrefix = taskName ? `${taskName}: ` : "";
-    const line = `${index}. ${taskNamePrefix}${label} (${resolveModelDisplay(sessionEntry, entry.model)}, ${runtime}${usageText ? `, ${usageText}` : ""}) ${status}${normalizeLowercaseStringOrEmpty(task) !== normalizeLowercaseStringOrEmpty(label) ? ` - ${task}` : ""}`;
-    const view: SubagentListItem = {
+    const line = `${index}. ${taskNamePrefix}${label} (${resolveModelDisplayName(modelSelection)}, ${runtime}${usageText ? `, ${usageText}` : ""}) ${status}${normalizeLowercaseStringOrEmpty(task) !== normalizeLowercaseStringOrEmpty(label) ? ` - ${task}` : ""}`;
+    const view = {
       index,
       line,
       runId: entry.runId,
@@ -244,15 +190,12 @@ export function buildSubagentList(params: {
       task,
       status,
       execution,
-      ...(execution.wait?.kind === "external"
-        ? { resume: { method: "sessions.send" as const, sessionKey: entry.childSessionKey } }
-        : {}),
       ...(entry.delivery ? { deliveryStatus: entry.delivery.status } : {}),
       pendingDescendants,
       runtime,
       runtimeMs,
       ...(childSessions.length > 0 ? { childSessions } : {}),
-      model: resolveModelRef(sessionEntry, entry.model),
+      model: resolveModelDisplayRef(modelSelection),
       totalTokens,
       startedAt: getSubagentSessionStartedAt(entry),
       ...(entry.execution.endedAt ? { endedAt: entry.execution.endedAt } : {}),
@@ -270,6 +213,12 @@ export function buildSubagentList(params: {
     total: runView.latest.length,
     active,
     recent,
-    text: buildListText({ active, recent, recentMinutes: params.recentMinutes }),
+    text: [
+      "active subagents:",
+      ...(active.length ? active.map((entry) => entry.line) : ["(none)"]),
+      "",
+      `recent (last ${params.context.recentMinutes}m):`,
+      ...(recent.length ? recent.map((entry) => entry.line) : ["(none)"]),
+    ].join("\n"),
   };
 }

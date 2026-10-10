@@ -65,6 +65,7 @@ describe("resolveCurrentUserIdentity", () => {
       profileAvatarUrl: "/avatars/alice.png",
     });
     expect(resolveCurrentUserIdentity(hello, "missing-browser")).toBeNull();
+    expect(resolveCurrentUserIdentity(hello, "this-browser", null)).toBeNull();
     expect(
       resolveCurrentUserIdentity(hello, "missing-browser", {
         id: "alice@example.com",

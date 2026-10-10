@@ -1,7 +1,9 @@
+import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import {
   createPluginStateKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { useAutoCleanupTempDirTracker, withServer } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -12,7 +14,7 @@ import {
 } from "./beam.test-support.js";
 import { createBeamRequestHandler } from "./http.js";
 import { beamMirrorId } from "./mirror.js";
-import type { BeamStore } from "./store.js";
+import { createBeamStore, type BeamStore } from "./store.js";
 import {
   BEAM_MAX_SESSIONS,
   BEAM_RETENTION_MS,
@@ -62,19 +64,15 @@ describe("Beam terminal retry policy", () => {
       now: () => clock,
     });
 
-    try {
-      await runner.tick();
-      active = false;
-      clock += 4 * 60 * 60_000;
-      await runner.tick();
-      clock = beamTestNow + BEAM_RETENTION_MS;
-      await runner.tick();
-      await runner.tick();
+    await runner.tick();
+    active = false;
+    clock += 4 * 60 * 60_000;
+    await runner.tick();
+    clock = beamTestNow + BEAM_RETENTION_MS;
+    await runner.tick();
+    await runner.tick();
 
-      expect(sent.map((request) => request.payload.completed)).toEqual([false, true]);
-    } finally {
-      await runner.stop();
-    }
+    expect(sent.map((request) => request.payload.completed)).toEqual([false, true]);
   });
 
   it("rotates failed terminal work behind later sessions", async () => {
@@ -88,26 +86,22 @@ describe("Beam terminal retry policy", () => {
       now: () => clock,
     });
 
-    try {
-      await runner.tick();
-      activeThreadIds = ["late"];
-      clock += 60_000;
-      await runner.tick();
-      activeThreadIds = [];
-      clock += 60_000;
-      const beforeLaterRetry = sent.length;
-      await runner.tick();
-      const laterRetries = sent.slice(beforeLaterRetry);
+    await runner.tick();
+    activeThreadIds = ["late"];
+    clock += 60_000;
+    await runner.tick();
+    activeThreadIds = [];
+    clock += 60_000;
+    const beforeLaterRetry = sent.length;
+    await runner.tick();
+    const laterRetries = sent.slice(beforeLaterRetry);
 
-      expect(laterRetries).toHaveLength(32);
-      expect(
-        laterRetries.some(
-          (request) => request.payload.beamId === beamMirrorId("claude", "gateway:local", "late"),
-        ),
-      ).toBe(true);
-    } finally {
-      await runner.stop();
-    }
+    expect(laterRetries).toHaveLength(32);
+    expect(
+      laterRetries.some(
+        (request) => request.payload.beamId === beamMirrorId("claude", "gateway:local", "late"),
+      ),
+    ).toBe(true);
   });
 
   it("does not retry a failed terminal upload for an active overflow session", async () => {
@@ -130,27 +124,23 @@ describe("Beam terminal retry policy", () => {
       now: () => beamTestNow,
     });
 
-    try {
-      await runner.tick();
-      activeSessions = [
-        ...Array.from({ length: 32 }, (_, index) => ({
-          threadId: `newer-${index}`,
-          recencyAt: beamTestNow + index + 1,
-        })),
-        { threadId: overflowThreadId, recencyAt: beamTestNow },
-      ];
-      await runner.tick();
-      await runner.tick();
+    await runner.tick();
+    activeSessions = [
+      ...Array.from({ length: 32 }, (_, index) => ({
+        threadId: `newer-${index}`,
+        recencyAt: beamTestNow + index + 1,
+      })),
+      { threadId: overflowThreadId, recencyAt: beamTestNow },
+    ];
+    await runner.tick();
+    await runner.tick();
 
-      expect(overflowTerminalAttempts).toBe(0);
-      expect(
-        sent
-          .filter((request) => request.payload.beamId === overflowBeamId)
-          .map((request) => request.payload.completed),
-      ).toEqual([false]);
-    } finally {
-      await runner.stop();
-    }
+    expect(overflowTerminalAttempts).toBe(0);
+    expect(
+      sent
+        .filter((request) => request.payload.beamId === overflowBeamId)
+        .map((request) => request.payload.completed),
+    ).toEqual([false]);
   });
 
   it("keeps receiver-retained retry state with independent clocks", async () => {
@@ -169,31 +159,28 @@ describe("Beam terminal retry policy", () => {
     const acceptedTargetStates: boolean[] = [];
     let phase: "build" | "final" = "build";
     let rejectedTargetWrites = 0;
+    const receiverStore = createBeamStore({
+      state: { openKeyedStore: () => keyedStore },
+    } as unknown as PluginRuntime);
     const store: BeamStore = {
-      update: async (beamId, updateValue) =>
-        await keyedStore.update!(beamId, (current) => {
-          const session = updateValue(current);
-          if (!session) {
-            return undefined;
-          }
-          if (session.completed && phase === "build") {
-            throw new Error("hold terminal state while filling capacity");
-          }
-          if (session.completed && session.beamId === targetBeamId && rejectedTargetWrites === 0) {
-            rejectedTargetWrites += 1;
-            throw new Error("temporary target terminal failure");
-          }
-          if (session.completed && phase === "final" && session.beamId !== targetBeamId) {
-            throw new Error("hold non-target terminal state");
-          }
-          if (session.beamId === targetBeamId) {
-            acceptedTargetStates.push(session.completed);
-          }
-          return session;
-        }),
-      get: (beamId) => keyedStore.lookup(beamId),
-      delete: (beamId) => keyedStore.delete(beamId),
-      list: async () => (await keyedStore.entries()).map((entry) => entry.value),
+      ...receiverStore,
+      upload: async (session, receipt) => {
+        if (session.completed && phase === "build") {
+          throw new Error("hold terminal state while filling capacity");
+        }
+        if (session.completed && session.beamId === targetBeamId && rejectedTargetWrites === 0) {
+          rejectedTargetWrites += 1;
+          throw new Error("temporary target terminal failure");
+        }
+        if (session.completed && phase === "final" && session.beamId !== targetBeamId) {
+          throw new Error("hold non-target terminal state");
+        }
+        const accepted = await receiverStore.upload(session, receipt);
+        if (accepted && session.beamId === targetBeamId) {
+          acceptedTargetStates.push(session.completed);
+        }
+        return accepted;
+      },
     };
     let requestNumber = 0;
     const handler = createBeamRequestHandler({
@@ -225,37 +212,34 @@ describe("Beam terminal retry policy", () => {
             endpoint: `${baseUrl}/api/v1/beam/sessions`,
             listCatalogs: () => [catalog],
           });
-          try {
-            let createdSessions = 0;
-            for (let batch = 0; createdSessions < BEAM_MAX_SESSIONS; batch += 1) {
-              const batchSize = Math.min(32, BEAM_MAX_SESSIONS - createdSessions);
-              activeSessions = Array.from({ length: batchSize }, (_, index) => ({
-                threadId: `session-${createdSessions + index}`,
-                recencyAt: beamTestNow + batch,
-              }));
-              createdSessions += batchSize;
-              await runner.tick();
-            }
-
-            activeSessions = [{ threadId: "session-500", recencyAt: beamTestNow + 101 }];
+          let createdSessions = 0;
+          for (let batch = 0; createdSessions < BEAM_MAX_SESSIONS; batch += 1) {
+            const batchSize = Math.min(32, BEAM_MAX_SESSIONS - createdSessions);
+            activeSessions = Array.from({ length: batchSize }, (_, index) => ({
+              threadId: `session-${createdSessions + index}`,
+              recencyAt: beamTestNow + batch,
+            }));
+            createdSessions += batchSize;
             await runner.tick();
-            await expect(store.get(targetBeamId)).resolves.toMatchObject({ completed: false });
-
-            activeSessions = [];
-            phase = "final";
-            for (let tick = 0; tick < 40; tick += 1) {
-              await runner.tick();
-            }
-
-            expect(rejectedTargetWrites).toBe(1);
-            expect(acceptedTargetStates).toEqual([false, true]);
-            await expect(store.get(targetBeamId)).resolves.toMatchObject({ completed: true });
-          } finally {
-            await runner.stop();
           }
+
+          activeSessions = [{ threadId: "session-500", recencyAt: beamTestNow + 101 }];
+          await runner.tick();
+          await expect(store.get(targetBeamId)).resolves.toMatchObject({ completed: false });
+
+          activeSessions = [];
+          phase = "final";
+          for (let tick = 0; tick < 40; tick += 1) {
+            await runner.tick();
+          }
+
+          expect(rejectedTargetWrites).toBe(1);
+          expect(acceptedTargetStates).toEqual([false, true]);
+          await expect(store.get(targetBeamId)).resolves.toMatchObject({ completed: true });
         },
       );
     } finally {
+      await closeOpenClawStateDatabaseAsync();
       resetPluginStateStoreForTests();
     }
   });

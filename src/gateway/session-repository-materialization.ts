@@ -1,5 +1,12 @@
 import os from "node:os";
+import { resolveConfiguredGitHubHost } from "../agents/github-host.js";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
+import { captureSessionEntrySourceAssertion } from "../config/sessions/session-entry-source-authority.js";
+import {
+  sessionEntryCommitGuardOptions,
+  composeSessionSourceAssertion,
+  type SessionSourceAssertion,
+} from "../config/sessions/session-source-authority.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { gitNullConfigPath } from "../infra/git-exec.js";
 import {
@@ -28,7 +35,7 @@ export async function materializeSessionRepositoryWorkspaceOnGateway(params: {
   sessionId: string;
   sessionKey: string;
   agentId: string;
-  assertCurrent: () => void;
+  assertCurrent: SessionSourceAssertion;
   signal?: AbortSignal;
 }): Promise<void> {
   const initial = loadGatewaySessionEntryReadOnly(params.sessionKey, { agentId: params.agentId });
@@ -40,7 +47,8 @@ export async function materializeSessionRepositoryWorkspaceOnGateway(params: {
     return;
   }
   const repositories = getSessionRepositoryWorkspaceStore();
-  const repository = repositories.get(workspaceId);
+  const preparedRepository = await repositories.prepare(workspaceId);
+  const repository = preparedRepository.workspace;
   if (
     !repository ||
     repository.agentId !== params.agentId ||
@@ -49,9 +57,12 @@ export async function materializeSessionRepositoryWorkspaceOnGateway(params: {
   ) {
     throw new Error("Repository workspace has no pinned source; retry its cloud preparation");
   }
-  const remote = parseGitHubRemoteUrl(repository.url);
+  const githubHost = resolveConfiguredGitHubHost(params.cfg);
+  const remote = parseGitHubRemoteUrl(repository.url, githubHost);
   if (!remote) {
-    throw new Error("Repository workspace has no GitHub source");
+    throw new Error(
+      `Repository workspace does not match the configured GitHub host (${githubHost}); restore its GitHub configuration before retrying the Gateway move`,
+    );
   }
   const branch = () =>
     readRepositoryGitHubPublicationBranch({
@@ -66,24 +77,58 @@ export async function materializeSessionRepositoryWorkspaceOnGateway(params: {
       "Repository publication is awaiting a GitHub effect observation; retry the Gateway move after publication settles",
     );
   }
-  const assertCurrent = () => {
+  const assertOtherOwners = () => {
     params.signal?.throwIfAborted();
-    params.assertCurrent();
     const currentBranch = branch();
-    const current = loadGatewaySessionEntryReadOnly(params.sessionKey, { agentId: params.agentId });
     if (
       currentBranch.unsettled ||
       currentBranch.head?.pushed_head_commit !== published?.pushed_head_commit ||
-      current.storePath !== initial.storePath ||
-      current.canonicalKey !== initial.canonicalKey ||
-      current.entry?.sessionId !== params.sessionId ||
-      current.entry.lifecycleRevision !== initial.entry?.lifecycleRevision ||
-      current.entry.repositoryWorkspaceId !== workspaceId ||
-      repositories.get(workspaceId)?.revision !== repository.revision
+      preparedRepository.current()?.revision !== repository.revision
     ) {
       throw new Error("Repository workspace changed during Gateway materialization; retry move");
     }
   };
+  const assertEntry = (current: typeof initial.entry) => {
+    if (
+      current?.sessionId !== params.sessionId ||
+      current.lifecycleRevision !== initial.entry?.lifecycleRevision ||
+      current.repositoryWorkspaceId !== workspaceId
+    ) {
+      throw new Error("Repository workspace changed during Gateway materialization; retry move");
+    }
+  };
+  const entrySource = captureSessionEntrySourceAssertion({
+    scope: {
+      agentId: params.agentId,
+      sessionKey: initial.canonicalKey,
+      storePath: initial.storePath,
+    },
+    readSource: initial.capturedReadSource,
+    fields: ["sessionId", "lifecycleRevision"],
+    expected: initial.entry,
+    assertCurrent: () => {
+      const current = loadGatewaySessionEntryReadOnly(params.sessionKey, {
+        agentId: params.agentId,
+      });
+      if (
+        current.storePath !== initial.storePath ||
+        current.canonicalKey !== initial.canonicalKey
+      ) {
+        throw new Error("Repository workspace changed during Gateway materialization; retry move");
+      }
+      assertEntry(current.entry);
+    },
+    refuse: () => {
+      throw new Error("Repository workspace changed during Gateway materialization; retry move");
+    },
+  });
+  const assertCurrent = composeSessionSourceAssertion(
+    [params.assertCurrent, entrySource],
+    (assertSources) => {
+      assertSources();
+      assertOtherOwners();
+    },
+  );
   assertCurrent();
   const github = await prepareWorkerGitHubBinding({
     sessionId: params.sessionId,
@@ -103,7 +148,7 @@ export async function materializeSessionRepositoryWorkspaceOnGateway(params: {
       gitUrl: repository.url,
       requiredCommit: published?.pushed_head_commit ?? repository.baseCommit,
     },
-    { signal: params.signal, token: github?.token },
+    { signal: params.signal, token: github?.token, assertCurrent },
   ).catch((error: unknown) => {
     if (error instanceof ProjectCloneError && error.failure === "auth_required") {
       throw new ProjectCloneError(
@@ -114,8 +159,12 @@ export async function materializeSessionRepositoryWorkspaceOnGateway(params: {
     throw error;
   });
   assertCurrent();
-  const { step, require: command, run } = createGitHubPublicationCommandRunner(assertCurrent);
-  const cloneOptions = { signal: params.signal, token: github?.token };
+  const {
+    step,
+    require: command,
+    run,
+  } = createGitHubPublicationCommandRunner(assertCurrent, "session.materialize");
+  const cloneOptions = { signal: params.signal, token: github?.token, assertCurrent };
   const source = { url: repository.url, target: project.repoRoot };
   const remoteHead = await step(() =>
     readProjectCheckoutRemoteHead({ ...source, branch: repository.branch }, cloneOptions),
@@ -162,6 +211,8 @@ export async function materializeSessionRepositoryWorkspaceOnGateway(params: {
       key: initial.canonicalKey,
       storePath: initial.storePath,
       entry: initial.entry,
+      projectId: project.id,
+      sandboxRequired: initial.entry.sandbox === "required",
     },
     workspace: project.repoRoot,
     name: repository.workspaceId,
@@ -216,10 +267,10 @@ export async function materializeSessionRepositoryWorkspaceOnGateway(params: {
             // The checkout is unbound until verification. Failed preparation rolls it
             // back; a crash leaves the immutable checkpoint available for a fresh retry.
             journal: {
-              load: () => undefined,
-              begin: assertCurrent,
-              commit: assertCurrent,
-              abort: () => {},
+              load: async () => undefined,
+              begin: async () => assertCurrent(),
+              commit: async () => assertCurrent(),
+              abort: async () => {},
             },
           });
           if (applied.conflictPaths.length || applied.manifestRef !== repository.manifestHash) {
@@ -244,29 +295,35 @@ export async function materializeSessionRepositoryWorkspaceOnGateway(params: {
     } else {
       await alignPublication();
     }
-    const entry = await patchSessionEntryCore(
-      { agentId: params.agentId, sessionKey: initial.canonicalKey, storePath: initial.storePath },
-      (current) => {
-        assertCurrent();
-        return {
-          ...current,
-          repositoryWorkspaceId: undefined,
-          projectId: project.id,
-          spawnedCwd: workspace.spawnedCwd,
-          sessionRoot: workspace.sessionRoot,
-          worktree: workspace.worktree,
-        };
-      },
-      {
-        replaceEntry: true,
-        assertCommitAllowed: assertCurrent,
-        requireWriteSuccess: true,
-        skipMaintenance: true,
-        onCommitted: () => {
-          bound = true;
+    const bind = async (assertSourceCurrent: SessionSourceAssertion) =>
+      await patchSessionEntryCore(
+        { agentId: params.agentId, sessionKey: initial.canonicalKey, storePath: initial.storePath },
+        (current) => {
+          assertCurrent();
+          assertSourceCurrent();
+          assertEntry(current);
+          return {
+            ...current,
+            repositoryWorkspaceId: undefined,
+            projectId: project.id,
+            spawnedCwd: workspace.spawnedCwd,
+            sessionRoot: workspace.sessionRoot,
+            worktree: workspace.worktree,
+          };
         },
-      },
-    );
+        {
+          replaceEntry: true,
+          ...sessionEntryCommitGuardOptions(
+            composeSessionSourceAssertion([assertCurrent, assertSourceCurrent]),
+          ),
+          requireWriteSuccess: true,
+          skipMaintenance: true,
+          onCommitted: () => {
+            bound = true;
+          },
+        },
+      );
+    const entry = workspace.withCommit ? await workspace.withCommit(bind) : await bind(() => {});
     if (!entry) {
       throw new Error("Session disappeared before repository materialization committed");
     }

@@ -9,8 +9,8 @@ import {
   runWithConcurrency,
   type MemorySource,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
-import { runSqliteImmediateTransaction } from "openclaw/plugin-sdk/sqlite-runtime";
-import { MemoryIndexRevisionConflictError } from "./manager-db.js";
+import { withMemoryWorkspaceLock } from "../memory-workspace-lock.js";
+import { MemoryIndexRevisionConflictError } from "./manager-db-kernel.js";
 import type { MemoryIndexEntry } from "./manager-index-preparation.js";
 import { MemoryManagerSessionSyncOps } from "./manager-session-sync-ops.js";
 import {
@@ -18,9 +18,7 @@ import {
   resolveMemorySessionSyncPlan,
 } from "./manager-session-sync-state.js";
 import {
-  loadMemorySourceFileState,
   resolveMemorySourceFileEntries,
-  resolveMemorySourceExistingHash,
   type MemorySourceFileStateRow,
 } from "./manager-source-state.js";
 import type {
@@ -66,23 +64,33 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
     source: MemorySource,
     expectedHash?: string,
   ): Promise<void> {
-    const capturedHash =
-      expectedHash ??
-      (await this.withDatabaseRead(() =>
-        resolveMemorySourceExistingHash({ db: this.db, path: pathname, source }),
-      ));
-    await runSqliteImmediateTransaction(
-      this.db,
-      async () => () => {
-        this.database.sourceIndex.deleteIfCurrent({
-          path: pathname,
-          source,
-          expectedHash: capturedHash,
-        });
-      },
-      undefined,
-      (write) => this.withDatabaseWrite(write),
-    );
+    // Recall and forget also write this database under the workspace lock.
+    // Keep their synchronous writes outside the Worker's native transaction.
+    await withMemoryWorkspaceLock(this.workspaceDir, async () => {
+      const database = this.database;
+      const assertCurrent = () => {
+        if (
+          this.closed ||
+          database.closed ||
+          database.readOnly ||
+          !database.db.isOpen ||
+          this.database !== database
+        ) {
+          throw new Error("Memory source owner changed before deletion");
+        }
+      };
+      const capturedHash =
+        expectedHash ??
+        (await database.read(
+          { type: "source.hash", input: { path: pathname, source } },
+          assertCurrent,
+        ));
+      assertCurrent();
+      await database.deleteSource(
+        { path: pathname, source, expectedHash: capturedHash },
+        assertCurrent,
+      );
+    });
   }
 
   private async deleteStaleSourceFiles(
@@ -109,11 +117,12 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
     needsFullReindex: boolean;
     progress?: MemorySyncProgressState;
     deferIndex?: boolean;
-  }): Promise<MemorySourceSyncPlan> {
+  }): Promise<MemorySourceSyncPlan | undefined> {
     // Consume this pass's dirtiness before awaits so later edits remain queued.
     this.clearMemoryRetryState();
 
     const fileEntries = await resolveMemorySourceFileEntries({
+      files: this.memoryFiles,
       workspaceDir: this.workspaceDir,
       settings: this.settings,
       concurrency: this.getIndexConcurrency(),
@@ -124,8 +133,7 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
       batch: this.batch.enabled,
       concurrency: this.getIndexConcurrency(),
     });
-    const existingRows = loadMemorySourceFileState({
-      db: this.db,
+    const existingRows = await this.database.readSourceState({
       source: "memory",
     });
     const existingHashes = new Map(existingRows.map((row) => [row.path, row.hash]));
@@ -142,18 +150,14 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
     const deleteStaleRows = () => this.deleteStaleSourceFiles("memory", existingRows, activePaths);
 
     if (this.batch.enabled) {
-      const dirtyEntries: MemoryIndexEntry[] = [];
+      const indexItems: MemoryIndexWorkItem[] = [];
       for (const entry of fileEntries) {
         if (!params.needsFullReindex && existingHashes.get(entry.path) === entry.hash) {
           this.advanceSyncProgress(params.progress);
           continue;
         }
-        dirtyEntries.push(entry);
+        indexItems.push({ entry, source: "memory" });
       }
-      const indexItems = dirtyEntries.map((entry): MemoryIndexWorkItem => ({
-        entry,
-        source: "memory",
-      }));
       if (params.deferIndex) {
         return { indexItems, finalize: deleteStaleRows };
       }
@@ -164,14 +168,14 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
           this.advanceSyncProgress(params.progress);
           return;
         }
-        await this.indexFile(entry, { source: "memory" });
+        await this.indexFile(entry, "memory");
         this.advanceSyncProgress(params.progress);
       });
       await runWithConcurrency(tasks, this.getIndexConcurrency());
     }
 
     await deleteStaleRows();
-    return this.emptySourceSyncPlan();
+    return undefined;
   }
 
   protected override async syncArchiveFiles(params: {
@@ -181,12 +185,7 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
     progress?: MemorySyncProgressState;
     deferIndex?: boolean;
     prefixIndexItems?: MemoryIndexWorkItem[];
-  }): Promise<MemorySourceSyncPlan> {
-    const updateUnchangedSessionSourceMetadata = this.db.prepare(
-      `UPDATE memory_index_sources
-       SET mtime = ?, size = ?
-       WHERE path = ? AND source = 'sessions' AND hash = ?`,
-    );
+  }): Promise<void> {
     const corpusEntries = params.corpusEntries ?? (await this.listSessionCorpusEntries());
     const targetArchiveFiles = params.needsFullReindex
       ? null
@@ -210,8 +209,7 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
       targetSessionFiles: targetArchiveFiles,
       existingRows: targetArchiveFiles
         ? null
-        : loadMemorySourceFileState({
-            db: this.db,
+        : await this.database.readSourceState({
             source: "sessions",
           }),
       sessionPathForFile: (file) => this.sessionPathForCorpusEntry(corpusEntryForPath(file)),
@@ -257,11 +255,12 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
         .filter((pathname) => !activeCorpusPaths.has(pathname));
       // Resolve membership after indexing, in one snapshot regardless of target count.
       const existingSessionHashes = new Map(
-        loadMemorySourceFileState({
-          db: this.db,
-          source: "sessions",
-          paths: staleLivePaths,
-        }).map((row) => [row.path, row.hash]),
+        (
+          await this.database.readSourceState({
+            source: "sessions",
+            paths: staleLivePaths,
+          })
+        ).map((row) => [row.path, row.hash]),
       );
       for (const staleLivePath of staleLivePaths) {
         if (!existingSessionHashes.has(staleLivePath)) {
@@ -294,27 +293,41 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
         this.advanceSyncProgress(params.progress);
         return null;
       }
-      const existingHash = resolveMemorySourceExistingHash({
-        db: this.db,
-        source: "sessions",
-        path: entry.path,
-        existingHashes,
-      });
-      if (!params.needsFullReindex && existingHash === entry.hash) {
+      const database = this.database;
+      const assertCurrent = () => {
+        if (this.closed || database.closed || !database.db.isOpen || this.database !== database) {
+          throw new Error("Memory source owner changed during hash lookup");
+        }
+      };
+      const existingHash = existingHashes
+        ? existingHashes.get(entry.path)
+        : await database.read(
+            { type: "source.hash", input: { source: "sessions", path: entry.path } },
+            assertCurrent,
+          );
+      assertCurrent();
+      const hash =
+        entry.revisionMs === undefined ? entry.hash : `sqlite:${entry.revisionMs}:${entry.hash}`;
+      const existingContentHash = existingHash?.startsWith("sqlite:")
+        ? existingHash.slice(existingHash.lastIndexOf(":") + 1)
+        : existingHash;
+      if (
+        !params.needsFullReindex &&
+        existingHash !== undefined &&
+        existingContentHash === entry.hash
+      ) {
         // Converge restored source fingerprints without replacing unchanged chunks.
         if (
-          this.sessionsDirtyFiles.has(absPath) &&
-          !(await runSqliteImmediateTransaction(
-            this.db,
-            async () => () =>
-              updateUnchangedSessionSourceMetadata.run(
-                entry.mtimeMs,
-                entry.size,
-                entry.path,
-                entry.hash,
-              ).changes === 1,
-            undefined,
-            (write) => this.withDatabaseWrite(write),
+          (this.sessionsDirtyFiles.has(absPath) || existingHash !== hash) &&
+          !(await database.refreshSourceState(
+            {
+              path: entry.path,
+              hash,
+              mtime: entry.mtimeMs,
+              size: entry.size,
+              expectedHash: existingHash,
+            },
+            assertCurrent,
           ))
         ) {
           throw new MemoryIndexRevisionConflictError(
@@ -325,8 +338,24 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
         return null;
       }
       // Keep the prepared entry's non-enumerable reset boundary.
-      return Object.assign(entry, { sessionId: corpusEntryForPath(absPath).sessionId });
+      return Object.assign(entry, { hash, sessionId: corpusEntryForPath(absPath).sessionId });
     };
+    const syncFiles = (batch: string[]) =>
+      runWithConcurrency(
+        batch.map((absPath) => async () => {
+          try {
+            const entry = await resolveSessionIndexEntry(absPath);
+            if (entry && !params.deferIndex) {
+              await this.indexFile(entry, "sessions");
+              this.advanceSyncProgress(params.progress);
+            }
+            return params.deferIndex ? entry : null;
+          } finally {
+            await yieldAfterSessionFile();
+          }
+        }),
+        this.getIndexConcurrency(),
+      );
 
     if (params.deferIndex) {
       const pendingIndexItems = [...(params.prefixIndexItems ?? [])];
@@ -347,18 +376,7 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
       // so source-wide batching cannot retain the whole dirty transcript corpus.
       for (let start = 0; start < files.length; start += SOURCE_WIDE_SESSION_INDEX_FLUSH_FILES) {
         const fileBatch = files.slice(start, start + SOURCE_WIDE_SESSION_INDEX_FLUSH_FILES);
-        const dirtyEntries = (
-          await runWithConcurrency(
-            fileBatch.map((absPath) => async (): Promise<MemoryIndexEntry | null> => {
-              try {
-                return await resolveSessionIndexEntry(absPath);
-              } finally {
-                await yieldAfterSessionFile();
-              }
-            }),
-            this.getIndexConcurrency(),
-          )
-        ).filter((entry): entry is MemoryIndexEntry => entry !== null);
+        const dirtyEntries = (await syncFiles(fileBatch)).filter((entry) => entry !== null);
         pendingIndexItems.push(
           ...dirtyEntries.map((entry): MemoryIndexWorkItem => ({
             entry,
@@ -371,30 +389,14 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
       }
 
       await flushPendingIndexItems();
-      await deleteTargetArchiveStaleLiveRows();
-      await deleteStaleRows();
-      return this.emptySourceSyncPlan();
-    }
-    if ((params.prefixIndexItems?.length ?? 0) > 0) {
-      throw new Error("Memory session sync prefix requires deferred source-wide indexing.");
-    }
-
-    const tasks = files.map((absPath) => async () => {
-      try {
-        const entry = await resolveSessionIndexEntry(absPath);
-        if (!entry) {
-          return;
-        }
-        await this.indexFile(entry, { source: "sessions", content: entry.content });
-        this.advanceSyncProgress(params.progress);
-      } finally {
-        await yieldAfterSessionFile();
+    } else {
+      if ((params.prefixIndexItems?.length ?? 0) > 0) {
+        throw new Error("Memory session sync prefix requires deferred source-wide indexing.");
       }
-    });
-    await runWithConcurrency(tasks, this.getIndexConcurrency());
+      await syncFiles(files);
+    }
 
     await deleteTargetArchiveStaleLiveRows();
     await deleteStaleRows();
-    return this.emptySourceSyncPlan();
   }
 }

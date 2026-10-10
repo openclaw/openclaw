@@ -1,14 +1,9 @@
+import path from "node:path";
 import type { Command } from "commander";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { defaultRuntime, writeRuntimeJson, writeRuntimeStdout } from "../../runtime.js";
-import { preflightOpenClawAgentDatabasePath } from "../../state/openclaw-agent-schema-inspection.js";
-import {
-  OPENCLAW_DATABASE_SCHEMA_DOCS_URL,
-  preflightOpenClawStateDatabasePath,
-} from "../../state/openclaw-database-preflight.js";
-import { resolveDatabasePath } from "../../state/openclaw-state-db-maintenance.js";
-import { claimOpenClawStateOwnership } from "../../state/openclaw-state-ownership-operations.js";
-import { inspectOpenClawStateOwnershipAtPath } from "../../state/openclaw-state-ownership.js";
+import { OPENCLAW_DATABASE_SCHEMA_DOCS_URL } from "../../state/openclaw-state-db-contract.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { applyParentDefaultHelpAction } from "./parent-default-help.js";
 
 type DatabaseOutputOptions = { json?: boolean };
@@ -29,8 +24,12 @@ async function runDatabasePreflight(
 ) {
   const result =
     options.agentId === undefined
-      ? await preflightOpenClawStateDatabasePath(databasePath)
-      : await preflightOpenClawAgentDatabasePath(databasePath, options.agentId);
+      ? await (
+          await import("../../state/openclaw-database-preflight.js")
+        ).preflightOpenClawStateDatabasePath(databasePath)
+      : await (
+          await import("../../state/openclaw-agent-schema-inspection.js")
+        ).preflightOpenClawAgentDatabasePath(databasePath, options.agentId);
   if (options.json) {
     writeRuntimeJson(defaultRuntime, result);
   } else {
@@ -45,16 +44,22 @@ async function runDatabasePreflight(
   }
 }
 
-function runDatabaseOwnership(options: DatabaseOutputOptions & { manager?: string }): void {
+async function runDatabaseOwnership(
+  options: DatabaseOutputOptions & { manager?: string },
+): Promise<void> {
   try {
-    const databasePath = resolveDatabasePath({ env: process.env });
+    const databasePath = path.resolve(resolveOpenClawStateSqlitePath(process.env));
     const ownership =
       options.manager !== undefined
-        ? claimOpenClawStateOwnership(options.manager, {
+        ? (
+            await import("../../state/openclaw-state-ownership-operations.js")
+          ).claimOpenClawStateOwnership(options.manager, {
             path: databasePath,
             env: process.env,
           })
-        : inspectOpenClawStateOwnershipAtPath(databasePath);
+        : (
+            await import("../../state/openclaw-state-ownership.js")
+          ).inspectOpenClawStateOwnershipAtPath(databasePath);
     const status = ownership
       ? { status: "external" as const, ownership }
       : { status: "unowned" as const };
@@ -83,9 +88,7 @@ export function registerDatabaseCommand(program: Command): void {
     .description("Compare one copied SQLite file with this release's state schema")
     .argument("<path>", "explicit copied SQLite database path")
     .option("--json", "emit machine-readable JSON", false)
-    .action(async (databasePath: string, options: DatabaseOutputOptions) => {
-      await runDatabasePreflight(databasePath, options);
-    });
+    .action(runDatabasePreflight);
 
   database
     .command("preflight-agent")
@@ -93,24 +96,20 @@ export function registerDatabaseCommand(program: Command): void {
     .argument("<path>", "explicit copied agent SQLite database path")
     .requiredOption("--agent-id <id>", "exact canonical agent owner ID")
     .option("--json", "emit machine-readable JSON", false)
-    .action(async (databasePath: string, options: DatabaseOutputOptions & { agentId: string }) => {
-      await runDatabasePreflight(databasePath, options);
-    });
+    .action(runDatabasePreflight);
 
   const ownership = database.command("ownership").description("Inspect or claim write ownership");
   ownership
     .command("status")
     .description("Show durable shared-state write ownership")
     .option("--json", "emit machine-readable JSON", false)
-    .action((options: DatabaseOutputOptions) => runDatabaseOwnership(options));
+    .action(runDatabaseOwnership);
   ownership
     .command("claim")
     .description("Claim shared-state writes for the active external supervisor")
     .requiredOption("--manager <id>", "stable external manager identifier")
     .option("--json", "emit machine-readable JSON", false)
-    .action((options: DatabaseOutputOptions & { manager: string }) =>
-      runDatabaseOwnership(options),
-    );
+    .action(runDatabaseOwnership);
   applyParentDefaultHelpAction(ownership);
   applyParentDefaultHelpAction(database);
 }

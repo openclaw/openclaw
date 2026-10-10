@@ -3,20 +3,28 @@ import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { ISyncData, IRooms, IStoredClientOpts } from "matrix-js-sdk/lib/matrix.js";
-import type {
-  PluginStateKeyedStore,
-  PluginStateSyncKeyedStore,
-} from "openclaw/plugin-sdk/plugin-state-runtime";
+import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
+import { asSafeIntegerInRange } from "openclaw/plugin-sdk/number-runtime";
+import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  chunkMatrixStateJson,
+  readMatrixStateChunks,
+  writeMatrixStateChunks,
+} from "../chunked-state.js";
 import { resolveMatrixSqliteStateEnv } from "../sqlite-state.js";
 
 export const MATRIX_SYNC_CACHE_VERSION = 1;
 const SYNC_CACHE_NAMESPACE = "sync-cache";
 const SYNC_CACHE_MAX_ENTRIES = 20_000;
 const SYNC_CACHE_MAX_CHUNKS = Math.floor((SYNC_CACHE_MAX_ENTRIES - 1) / 2);
-const SYNC_CACHE_STATE_KEY = "current";
+const SYNC_CACHE_META_KEY = "current:meta";
+const SYNC_CACHE_CHUNK_PREFIX = "current:sync:";
 // PluginState serializes this string inside a row object; 24KB leaves room for JSON escaping.
 const SYNC_CACHE_CHUNK_BYTES = 24_000;
+
+// A reader must finish its generation before another local writer retires its chunks.
+const syncCacheOperations = new KeyedAsyncQueue();
 
 export type PersistedMatrixSyncStore = {
   version: number;
@@ -82,22 +90,6 @@ function toPersistedSyncData(value: unknown): ISyncData | null {
     };
   }
 
-  // Older Matrix state files stored the raw /sync-shaped payload directly.
-  if (typeof value.next_batch === "string" && value.next_batch.trim()) {
-    const roomsData = normalizeRoomsData(value.rooms);
-    if (!roomsData) {
-      return null;
-    }
-    return {
-      nextBatch: value.next_batch,
-      accountData:
-        isRecord(value.account_data) && Array.isArray(value.account_data.events)
-          ? value.account_data.events
-          : [],
-      roomsData,
-    };
-  }
-
   return null;
 }
 
@@ -127,52 +119,33 @@ function normalizeLegacyPersistedStore(value: unknown): PersistedMatrixSyncStore
   };
 }
 
-export function readPersistedStoreFromSyncStore(
-  store: PluginStateSyncKeyedStore<MatrixSyncCacheRecord>,
-): PersistedMatrixSyncStore | null {
-  const stateKey = SYNC_CACHE_STATE_KEY;
-  const meta = store.lookup(metaKey(stateKey));
+export async function readPersistedStoreFromStore(params: {
+  storageRootDir: string;
+  store: Pick<PluginStateKeyedStore<MatrixSyncCacheRecord>, "lookup" | "lookupMany">;
+}): Promise<PersistedMatrixSyncStore | null> {
+  const { storageRootDir, store } = params;
+  return syncCacheOperations.enqueue(path.resolve(storageRootDir), () => readPersistedStore(store));
+}
+
+async function readPersistedStore(
+  store: Pick<PluginStateKeyedStore<MatrixSyncCacheRecord>, "lookup" | "lookupMany">,
+): Promise<PersistedMatrixSyncStore | null> {
+  const meta = await store.lookup(SYNC_CACHE_META_KEY);
   if (!isSyncCacheMeta(meta)) {
     return null;
   }
-  // Preserve the published host floor where lookupMany is not yet available.
-  const records = store.lookupMany?.(
-    Array.from({ length: meta.chunkCount }, (_, index) =>
-      chunkKey(stateKey, meta.generation, index),
-    ),
+  const chunks = await readMatrixStateChunks(
+    store,
+    Array.from({ length: meta.chunkCount }, (_, index) => chunkKey(meta.generation, index)),
+    "sync-chunk",
   );
-  const chunks: string[] = [];
-  for (let index = 0; index < meta.chunkCount; index += 1) {
-    const result = records?.[index];
-    if (result && !result.ok) {
-      throw result.error;
-    }
-    const chunk = records
-      ? result?.value
-      : store.lookup(chunkKey(stateKey, meta.generation, index));
-    if (!isSyncCacheChunk(chunk) || chunk.index !== index) {
-      return normalizePersistedStore({
-        version: MATRIX_SYNC_CACHE_VERSION,
-        savedSync: null,
-        clientOptions: meta.clientOptions,
-        cleanShutdown: false,
-      });
-    }
-    chunks.push(chunk.data);
-  }
-  let savedSync: ISyncData | null = null;
-  if (chunks.length > 0) {
-    const syncJson = chunks.join("");
-    if (meta.syncDigest !== digestText(syncJson)) {
-      return normalizePersistedStore({
-        version: MATRIX_SYNC_CACHE_VERSION,
-        savedSync: null,
-        clientOptions: meta.clientOptions,
-        cleanShutdown: false,
-      });
-    }
+  const syncJson = chunks?.join("") ?? "";
+  const intact =
+    chunks !== null && (chunks.length === 0 || meta.syncDigest === digestText(syncJson));
+  let savedSync: unknown = null;
+  if (intact && chunks.length > 0) {
     try {
-      savedSync = toPersistedSyncData(JSON.parse(syncJson));
+      savedSync = JSON.parse(syncJson);
     } catch {
       savedSync = null;
     }
@@ -181,20 +154,12 @@ export function readPersistedStoreFromSyncStore(
     version: MATRIX_SYNC_CACHE_VERSION,
     savedSync,
     clientOptions: meta.clientOptions,
-    cleanShutdown: meta.cleanShutdown,
+    cleanShutdown: intact && meta.cleanShutdown,
   });
 }
 
-function metaKey(stateKey: string): string {
-  return `${stateKey}:meta`;
-}
-
-function chunkKeyPrefix(stateKey: string): string {
-  return `${stateKey}:sync:`;
-}
-
-function chunkKey(stateKey: string, generation: string, index: number): string {
-  return `${chunkKeyPrefix(stateKey)}${generation}:${index}`;
+function chunkKey(generation: string, index: number): string {
+  return `${SYNC_CACHE_CHUNK_PREFIX}${generation}:${index}`;
 }
 
 function resolveLegacySyncCachePath(storageRootDir: string): string {
@@ -212,63 +177,24 @@ function isSyncCacheMeta(value: unknown): value is MatrixSyncCacheMeta {
     value.version === MATRIX_SYNC_CACHE_VERSION &&
     typeof value.generation === "string" &&
     value.generation.trim() !== "" &&
-    typeof value.chunkCount === "number" &&
-    Number.isSafeInteger(value.chunkCount) &&
-    value.chunkCount >= 0 &&
-    value.chunkCount <= SYNC_CACHE_MAX_CHUNKS
+    asSafeIntegerInRange(value.chunkCount, { min: 0, max: SYNC_CACHE_MAX_CHUNKS }) !== undefined
   );
 }
 
-function isSyncCacheChunk(value: unknown): value is MatrixSyncCacheChunk {
-  return (
-    isRecord(value) &&
-    value.kind === "sync-chunk" &&
-    typeof value.index === "number" &&
-    Number.isSafeInteger(value.index) &&
-    value.index >= 0 &&
-    typeof value.data === "string"
-  );
-}
-
-function chunkSyncCacheJson(value: string): string[] {
-  const chunks: string[] = [];
-  const pushChunk = (chunk: string) => {
-    if (chunks.length >= SYNC_CACHE_MAX_CHUNKS) {
-      throw new Error("Matrix sync cache exceeds SQLite chunk limit");
-    }
-    chunks.push(chunk);
-  };
-  let current = "";
-  let currentBytes = 0;
-  for (const char of value) {
-    const charBytes = Buffer.byteLength(char, "utf8");
-    if (current && currentBytes + charBytes > SYNC_CACHE_CHUNK_BYTES) {
-      pushChunk(current);
-      current = "";
-      currentBytes = 0;
-    }
-    current += char;
-    currentBytes += charBytes;
-  }
-  if (current) {
-    pushChunk(current);
-  }
-  return chunks;
-}
-
-function buildSyncCacheRows(
-  stateKey: string,
-  payload: PersistedMatrixSyncStore,
-): {
+function buildSyncCacheRows(payload: PersistedMatrixSyncStore): {
   meta: { key: string; value: MatrixSyncCacheMeta };
   chunks: { key: string; value: MatrixSyncCacheChunk }[];
-  nextChunkKeys: Set<string>;
 } {
   const generation = randomUUID().replaceAll("-", "");
   const syncJson = payload.savedSync ? JSON.stringify(payload.savedSync) : "";
-  const chunkValues = syncJson ? chunkSyncCacheJson(syncJson) : [];
+  const chunkValues = chunkMatrixStateJson(
+    syncJson,
+    SYNC_CACHE_CHUNK_BYTES,
+    SYNC_CACHE_MAX_CHUNKS,
+    "Matrix sync cache exceeds SQLite chunk limit",
+  );
   const chunks = chunkValues.map((data, index) => ({
-    key: chunkKey(stateKey, generation, index),
+    key: chunkKey(generation, index),
     value: {
       kind: "sync-chunk" as const,
       index,
@@ -277,9 +203,8 @@ function buildSyncCacheRows(
   }));
   return {
     chunks,
-    nextChunkKeys: new Set(chunks.map((chunk) => chunk.key)),
     meta: {
-      key: metaKey(stateKey),
+      key: SYNC_CACHE_META_KEY,
       value: {
         kind: "meta",
         version: MATRIX_SYNC_CACHE_VERSION,
@@ -312,39 +237,7 @@ export async function hasMatrixSyncCacheStateInStore(params: {
   storageRootDir: string;
   store: Pick<PluginStateKeyedStore<MatrixSyncCacheRecord>, "lookup" | "lookupMany">;
 }): Promise<boolean> {
-  const stateKey = SYNC_CACHE_STATE_KEY;
-  const meta = await params.store.lookup(metaKey(stateKey));
-  if (!isSyncCacheMeta(meta) || meta.chunkCount <= 0) {
-    return false;
-  }
-  const records = await params.store.lookupMany?.(
-    Array.from({ length: meta.chunkCount }, (_, index) =>
-      chunkKey(stateKey, meta.generation, index),
-    ),
-  );
-  const chunks: string[] = [];
-  for (let index = 0; index < meta.chunkCount; index += 1) {
-    const result = records?.[index];
-    if (result && !result.ok) {
-      throw result.error;
-    }
-    const chunk = records
-      ? result?.value
-      : await params.store.lookup(chunkKey(stateKey, meta.generation, index));
-    if (!isSyncCacheChunk(chunk) || chunk.index !== index) {
-      return false;
-    }
-    chunks.push(chunk.data);
-  }
-  const syncJson = chunks.join("");
-  if (meta.syncDigest !== digestText(syncJson)) {
-    return false;
-  }
-  try {
-    return toPersistedSyncData(JSON.parse(syncJson)) !== null;
-  } catch {
-    return false;
-  }
+  return Boolean((await readPersistedStoreFromStore(params))?.savedSync);
 }
 
 export async function writeMatrixSyncCacheStateToStore(params: {
@@ -352,17 +245,11 @@ export async function writeMatrixSyncCacheStateToStore(params: {
   payload: PersistedMatrixSyncStore;
   store: MatrixSyncCacheAsyncStore;
 }): Promise<void> {
-  const stateKey = SYNC_CACHE_STATE_KEY;
-  const rows = buildSyncCacheRows(stateKey, params.payload);
-  for (const row of rows.chunks) {
-    await params.store.register(row.key, row.value);
-  }
-  await params.store.register(rows.meta.key, rows.meta.value);
-  for (const row of await params.store.entries()) {
-    if (row.key.startsWith(chunkKeyPrefix(stateKey)) && !rows.nextChunkKeys.has(row.key)) {
-      await params.store.delete(row.key);
-    }
-  }
+  const { storageRootDir, store, payload } = params;
+  const rows = buildSyncCacheRows(payload);
+  return syncCacheOperations.enqueue(path.resolve(storageRootDir), () =>
+    writeMatrixStateChunks(store, rows, SYNC_CACHE_CHUNK_PREFIX),
+  );
 }
 
 export function openMatrixSyncCacheStoreOptions(storageRootDir: string) {
@@ -373,36 +260,18 @@ export function openMatrixSyncCacheStoreOptions(storageRootDir: string) {
   };
 }
 
-export function writeMatrixSyncCacheStateToSyncStore(params: {
-  payload: PersistedMatrixSyncStore;
-  store: PluginStateSyncKeyedStore<MatrixSyncCacheRecord>;
-}): void {
-  const rows = buildSyncCacheRows(SYNC_CACHE_STATE_KEY, params.payload);
-  for (const row of rows.chunks) {
-    params.store.register(row.key, row.value);
-  }
-  params.store.register(rows.meta.key, rows.meta.value);
-  for (const row of params.store.entries()) {
-    if (
-      row.key.startsWith(chunkKeyPrefix(SYNC_CACHE_STATE_KEY)) &&
-      !rows.nextChunkKeys.has(row.key)
-    ) {
-      params.store.delete(row.key);
-    }
-  }
-}
-
-export async function deleteMatrixSyncCacheStateFromSyncStore(params: {
+export async function deleteMatrixSyncCacheStateFromStore(params: {
   storageRootDir: string;
-  store: PluginStateSyncKeyedStore<MatrixSyncCacheRecord>;
+  store: MatrixSyncCacheAsyncStore;
 }): Promise<void> {
-  params.store.delete(metaKey(SYNC_CACHE_STATE_KEY));
-  for (const row of params.store.entries()) {
-    if (row.key.startsWith(chunkKeyPrefix(SYNC_CACHE_STATE_KEY))) {
-      params.store.delete(row.key);
+  const { storageRootDir, store } = params;
+  return syncCacheOperations.enqueue(path.resolve(storageRootDir), async () => {
+    await store.delete(SYNC_CACHE_META_KEY);
+    for (const row of await store.entries()) {
+      if (row.key.startsWith(SYNC_CACHE_CHUNK_PREFIX)) {
+        await store.delete(row.key);
+      }
     }
-  }
-  await fs
-    .rm(resolveLegacySyncCachePath(params.storageRootDir), { force: true })
-    .catch(() => undefined);
+    await fs.rm(resolveLegacySyncCachePath(storageRootDir), { force: true }).catch(() => undefined);
+  });
 }

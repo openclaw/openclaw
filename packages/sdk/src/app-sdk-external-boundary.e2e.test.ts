@@ -18,11 +18,6 @@ describe("external preview App SDK boundary", () => {
           GatewayArtifactSummary,
           SessionCreateParams,
           SessionSendParams,
-          TaskSummary,
-          TasksCancelResult,
-          TasksGetResult,
-          TasksListParams,
-          TasksListResult,
           ToolsEffectiveParams,
           ToolInvokeParams,
           ToolInvokeResult,
@@ -35,11 +30,6 @@ describe("external preview App SDK boundary", () => {
           AgentsDeleteParams as ProtocolAgentsDeleteParams,
           AgentsUpdateParams as ProtocolAgentsUpdateParams,
           ArtifactSummary as ProtocolArtifactSummary,
-          TaskSummary as ProtocolTaskSummary,
-          TasksCancelResult as ProtocolTasksCancelResult,
-          TasksGetResult as ProtocolTasksGetResult,
-          TasksListParams as ProtocolTasksListParams,
-          TasksListResult as ProtocolTasksListResult,
           ToolsEffectiveParams as ProtocolToolsEffectiveParams,
           WorkerEnvironmentMetadata as ProtocolWorkerEnvironmentMetadata,
           WorkerEnvironmentState as ProtocolWorkerEnvironmentState,
@@ -55,11 +45,6 @@ describe("external preview App SDK boundary", () => {
         type AgentDeleteIsCanonical = Assert<Equal<AgentsDeleteParams, ProtocolAgentsDeleteParams>>;
         type AgentUpdateIsCanonical = Assert<Equal<AgentsUpdateParams, ProtocolAgentsUpdateParams>>;
         type GatewayArtifactIsCanonical = Assert<Equal<GatewayArtifactSummary, ProtocolArtifactSummary>>;
-        type TaskIsCanonical = Assert<Equal<TaskSummary, ProtocolTaskSummary>>;
-        type TaskCancelIsCanonical = Assert<Equal<TasksCancelResult, ProtocolTasksCancelResult>>;
-        type TaskGetIsCanonical = Assert<Equal<TasksGetResult, ProtocolTasksGetResult>>;
-        type TaskListParamsAreCanonical = Assert<Equal<TasksListParams, ProtocolTasksListParams>>;
-        type TaskListIsCanonical = Assert<Equal<TasksListResult, ProtocolTasksListResult>>;
         type ToolsEffectiveIsCanonical = Assert<Equal<ToolsEffectiveParams, ProtocolToolsEffectiveParams>>;
         type WorkerMetadataIsCanonical = Assert<Equal<WorkerEnvironmentMetadata, ProtocolWorkerEnvironmentMetadata>>;
         type WorkerStateIsCanonical = Assert<Equal<WorkerEnvironmentState, ProtocolWorkerEnvironmentState>>;
@@ -100,16 +85,6 @@ describe("external preview App SDK boundary", () => {
           },
         };
         const environments: EnvironmentsListResult = { environments: [environment] };
-        const task: TaskSummary = {
-          id: "task-canonical",
-          status: "completed",
-          toolUseCount: 1,
-          lastToolName: "read",
-          deliveryStatus: "delivered",
-          terminalOutcome: "succeeded",
-          result: "done",
-          prompt: "prove the SDK contract",
-        };
         const createSession: SessionCreateParams = { attachments: [{ kind: "custom" }] };
         const sendSession: SessionSendParams = {
           key: "agent:main:external",
@@ -129,7 +104,6 @@ describe("external preview App SDK boundary", () => {
         void [
           artifactDownload,
           environments,
-          task,
           createSession,
           sendSession,
           toolParams,

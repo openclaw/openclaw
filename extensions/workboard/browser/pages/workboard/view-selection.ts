@@ -1,7 +1,8 @@
 import { html, nothing } from "lit";
+import { normalizeUniqueTrimmedStringList } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { renderDialog, renderSelectPicker } from "../../components/host-components.ts";
 import { icons } from "../../components/icons.ts";
-import { renderWorkboardToast } from "../../components/toast.ts";
+import { renderWorkboardErrorToast } from "../../components/toast.ts";
 import { workboardHost } from "../../host.ts";
 import { t } from "../../i18n/index.ts";
 import {
@@ -31,6 +32,7 @@ import {
   canMutate,
   formatPriorityLabel,
   workboardErrorMessage,
+  workboardMutationContext,
   renderPriorityIcon,
   formatStatusLabel,
   type WorkboardProps,
@@ -55,8 +57,7 @@ export function matchesWorkboardCardScope(props: WorkboardProps, card: Workboard
       props.agentsList?.defaultId ?? props.defaultAgentId,
       props.scopeAgentId,
     ) &&
-    (props.showAgentFilter === false ||
-      matchesAgentFilter(card, props.agentsList, state.agentFilter))
+    (props.showAgentFilter === false || matchesAgentFilter(card, state.agentFilter))
   );
 }
 
@@ -152,11 +153,9 @@ async function applySelection(
         break;
       }
       const common = {
-        host: props.host,
-        client: props.client,
+        ...workboardMutationContext(props),
         cardId,
         expectedUpdatedAt: observed.updatedAt,
-        requestUpdate: props.onRequestUpdate,
       };
       let applied = false;
       switch (action.kind) {
@@ -354,14 +353,7 @@ function editPatch(
   if (draft.agentId !== KEEP_AGENT) {
     patch.agentId = draft.agentId;
   }
-  const labels = [
-    ...new Set(
-      draft.labels
-        .split(",")
-        .map((value) => value.trim())
-        .filter(Boolean),
-    ),
-  ];
+  const labels = normalizeUniqueTrimmedStringList(draft.labels.split(","));
   switch (draft.labelMode) {
     case "keep":
       break;
@@ -550,12 +542,7 @@ export function renderSelectionDialog(props: WorkboardProps) {
           </button>
         </div>
       </form>
-      ${renderWorkboardToast({
-        owner: state,
-        message: visibleError ?? "",
-        key: visibleError,
-        tone: "error",
-      })}
+      ${renderWorkboardErrorToast(state, visibleError)}
     `,
   );
 }

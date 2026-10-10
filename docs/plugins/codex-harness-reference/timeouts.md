@@ -12,11 +12,16 @@ The timeout budgets around a Codex turn, and how OpenClaw settles a completed tu
 
 ## Timeouts
 
+Client startup and app-server control-request budgets measure elapsed time, so
+system-clock adjustments do not shorten or extend them.
+
 OpenClaw-owned dynamic tool calls are bounded independently from
 `appServer.requestTimeoutMs`. Ordinary Codex `item/tool/call` requests use the
 first available timeout in this order:
 
 - A positive per-call `timeoutMs` argument.
+- A positive integer per-call `timeoutSeconds` argument, plus 30000 ms for setup
+  and completion.
 - For `image_generate`, `agents.defaults.mediaModels.image.timeoutMs`.
 - For `image_generate` without a configured timeout, the 120 second
   image-generation default.
@@ -38,6 +43,17 @@ model-authored arguments cannot override it. The app-server request watchdog
 leaves another 30000 ms beyond the applicable tool budget for the result to reach
 Codex.
 
+Foreground `node_exec` uses the exec tool's resolved command and node transport
+budget instead of the ordinary 90 second default or 600 second cap. An omitted
+`timeoutSeconds` inherits the exec tool's runtime, per-agent, or global default
+(1800 seconds when unconfigured). A positive override controls the command
+budget. Per-call `timeoutSeconds: 0` disables the command timer while preserving
+the node transport's bounded wait based on the exec default. The dynamic-tool
+watchdog adds 30000 ms for setup and completion; the app-server watchdog receives
+that same resolved budget and adds another 30000 ms for response delivery.
+Stop, turn deadlines, lifecycle cancellation, and expired approval authority
+still end the affected work.
+
 On timeout, OpenClaw aborts the tool signal where supported and returns a failed
 dynamic-tool response to Codex so the turn can continue instead of leaving the
 session in `processing`. These wait budgets never preserve approval authority
@@ -50,6 +66,13 @@ request on the same open connection when the catalog source and query still
 match. The earlier caller stays failed; the new caller keeps its own request
 budget and current authorization checks. Cached stale pages remain available
 while a refresh is pending. A reply with no current waiter is discarded.
+
+After two consecutive local catalog source failures, new page attempts use
+bounded backoff before retrying. The delay starts at five seconds and doubles
+to at most sixty seconds; successful recovery or a configuration reload clears
+it. Existing pending page reads keep their result-sharing lifetime, and cached
+stale pages remain available. Backoff does not cancel native work or change the
+individual request budget.
 
 Connection closure fails current waiters, and a later independent poll can
 reconnect normally. Neither a local timeout nor a lost connection proves that

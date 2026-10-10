@@ -2,6 +2,12 @@ import { html, nothing, type TemplateResult } from "lit";
 import { t } from "../../i18n/index.ts";
 import type { BoardTab } from "../../lib/board/types.ts";
 
+export function orderedBoardTabs(tabs: readonly BoardTab[]): BoardTab[] {
+  return tabs.toSorted(
+    (left, right) => left.position - right.position || left.tabId.localeCompare(right.tabId),
+  );
+}
+
 function renderTab(tab: BoardTab, activeTabId: string, hoverTabId: string): TemplateResult {
   const active = tab.tabId === activeTabId;
   const dropTarget = tab.tabId === hoverTabId;
@@ -14,18 +20,6 @@ function renderTab(tab: BoardTab, activeTabId: string, hoverTabId: string): Temp
     >
       ${tab.title}
     </wa-tab>
-  `;
-}
-
-function renderOverflowTab(tab: BoardTab): TemplateResult {
-  return html`
-    <wa-dropdown-item
-      class="board-tabs__overflow-item"
-      value=${tab.tabId}
-      data-board-tab-id=${tab.tabId}
-    >
-      ${tab.title}
-    </wa-dropdown-item>
   `;
 }
 
@@ -75,7 +69,17 @@ export function renderBoardTabs(options: {
                 >
                   •••
                 </button>
-                ${overflow.map((tab) => renderOverflowTab(tab))}
+                ${overflow.map(
+                  (tab) => html`
+                    <wa-dropdown-item
+                      class="board-tabs__overflow-item"
+                      value=${tab.tabId}
+                      data-board-tab-id=${tab.tabId}
+                    >
+                      ${tab.title}
+                    </wa-dropdown-item>
+                  `,
+                )}
               </wa-dropdown>
             `
           : nothing

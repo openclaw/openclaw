@@ -10,7 +10,7 @@ function createCollectorTools(swarm?: false) {
     sessionKey: "agent:main:main",
     runId: "parent",
     config: {
-      agents: { entries: { main: { default: true } } },
+      agents: { entries: { main: {} } },
       tools: { profile: "coding", ...(swarm === false ? { swarm: false } : {}) },
     },
   }).filter((tool) => tool.name === "sessions_spawn" || tool.name === "agents_wait");

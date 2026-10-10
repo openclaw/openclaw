@@ -6,9 +6,23 @@ import {
 } from "../../../packages/gateway-protocol/src/session-agent-status.js";
 import { t } from "../i18n/index.ts";
 import { EDITOR_IDS, EDITOR_LABELS } from "../lib/editor-links.ts";
+import {
+  KEYBOARD_SHORTCUT_COMBOS,
+  type KeyboardShortcutCombo,
+} from "../lib/keyboard-shortcut-contract.ts";
 import { icons } from "./icons.ts";
 import { menuShortcutHint } from "./menu-shortcuts.ts";
 import { syncDropdownItemRadio } from "./web-awesome.ts";
+
+export function sessionArchiveShortcut(state: {
+  session: { archived: boolean };
+  selectionCount: number;
+  archiveShortcut?: boolean;
+}): KeyboardShortcutCombo | undefined {
+  return state.archiveShortcut && state.selectionCount === 1 && !state.session.archived
+    ? KEYBOARD_SHORTCUT_COMBOS.archiveSession
+    : undefined;
+}
 
 export function renderSessionEditorOptions(params: { inline: boolean; disabled: boolean }) {
   return html`

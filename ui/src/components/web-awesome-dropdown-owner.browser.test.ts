@@ -52,6 +52,9 @@ async function fixture(shadow = false) {
   ];
   await dropdown.updateComplete;
   await Promise.all(items.map((entry) => entry.updateComplete));
+  const { page } = await import("vitest/browser");
+  // An inherited pointer can hover a submenu as keyboard-opened popovers appear.
+  await page.elementLocator(trigger).hover();
   dropdown.open = true;
   await expect.poll(() => root.querySelector("wa-dropdown")?.open).toBe(true);
   await expect.poll(() => focused()).toBe(first);

@@ -14,7 +14,6 @@ type EmbeddingQueryRetryHarness = {
     text: string,
     signal?: AbortSignal,
     provider?: EmbeddingProvider,
-    markDegraded?: boolean,
     providerRuntime?: EmbeddingProviderRuntime,
     deadlineControl?: MemorySearchDeadlineControl,
   ) => Promise<number[]>;
@@ -80,7 +79,6 @@ describe("memory embedding query retry cancellation", () => {
       "search terms",
       undefined,
       undefined,
-      true,
       undefined,
       control,
     );
@@ -251,9 +249,7 @@ describe.each(["text", "structured"])("memory embedding batch retry boundary (%s
       await expect(manager.embedBatchWithRetry(batchInputs(items))).resolves.toEqual(
         items.map((_, index) => [index]),
       );
-      const payloadCounts = embedBatch.mock.calls.map(([texts]) => texts.length);
-      expect(payloadCounts).toEqual([33, 10, 10, 10, 3]);
-      expect(payloadCounts.reduce((total, count) => total + count, 0)).toBe(66);
+      expect(embedBatch.mock.calls.map(([texts]) => texts.length)).toEqual([33, 10, 10, 10, 3]);
       expect(manager.waitForEmbeddingRetry).not.toHaveBeenCalled();
       expect(manager.markLocalEmbeddingProviderDegraded).not.toHaveBeenCalled();
     },

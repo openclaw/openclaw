@@ -104,6 +104,6 @@ html.openclaw-native-desktop.openclaw-window-fullscreen {
   border-radius: 8px;
   background: var(--bg, #0e1015);
   color: var(--text, #f6f7fb);
-  box-shadow: 0 2px 12px #0004;
-  font: 13px system-ui, sans-serif;
+  box-shadow: var(--shadow-dialog, 0 2px 12px #0004);
+  font: 13px/1.5 var(--font-body, system-ui, sans-serif);
 }

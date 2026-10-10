@@ -5,8 +5,8 @@ import type { Page } from "playwright";
 import { beforeEach, expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { installSetupGateway, openModelSetup } from "./model-setup.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI Model Setup mocked Gateway E2E",
@@ -78,7 +78,7 @@ suite.define(() => {
           recommended: false,
           credentials: true,
         };
-        const gateway = await installMockGateway(page, {
+        const gateway = await installSetupGateway(page, {
           featureMethods: ["chat.metadata", "chat.startup", "openclaw.setup.detect"],
           methodResponses: {
             "openclaw.setup.detect": {
@@ -95,7 +95,7 @@ suite.define(() => {
           },
         });
 
-        await page.goto(`${suite.server.baseUrl}settings/model-setup`);
+        await openModelSetup(page, suite.server.baseUrl);
         const row = page.locator('[data-candidate-kind="codex-cli"]');
         await expect.poll(() => row.textContent()).toContain("ChatGPT account · alex@example.com");
         if (artifactDir) {
@@ -132,7 +132,7 @@ suite.define(() => {
         viewport: { height: 900, width: 1280 },
       },
       async ({ page }) => {
-        const gateway = await installMockGateway(page, {
+        const gateway = await installSetupGateway(page, {
           featureMethods: [
             "chat.metadata",
             "chat.startup",
@@ -237,117 +237,6 @@ suite.define(() => {
     );
   });
 
-  it("starts browser sign-in from two direct choices and opens a detached tab", async () => {
-    await suite.withPage(
-      {
-        locale: "en-US",
-        reducedMotion: "reduce",
-        serviceWorkers: "block",
-        viewport: { width: 1280, height: 900 },
-      },
-      async ({ page, context }) => {
-        const signInUrl = "https://provider.example/sign-in";
-        await context.route("https://provider.example/**", (route) =>
-          route.fulfill({
-            contentType: "text/html",
-            body: "<title>Provider sign-in</title>Provider sign-in",
-          }),
-        );
-        const gateway = await installMockGateway(page, {
-          featureMethods: [
-            "config.get",
-            "config.patch",
-            "models.authStatus",
-            "models.authLogin",
-            "wizard.next",
-            "wizard.cancel",
-          ],
-          methodResponses: {
-            "models.authStatus": {
-              ts: 1,
-              providers: [],
-              providerCapabilities: [
-                {
-                  provider: "example",
-                  apiKeySupported: false,
-                  quickApiKeySetup: false,
-                  loginOptions: [
-                    {
-                      id: "example-device",
-                      brandId: "example",
-                      label: "Device pairing",
-                      kind: "device-code",
-                      featured: true,
-                    },
-                    {
-                      id: "example-browser",
-                      brandId: "example",
-                      label: "Browser sign-in",
-                      kind: "oauth",
-                      featured: false,
-                    },
-                  ],
-                },
-              ],
-            },
-            "models.authLogin": { done: false, status: "running" },
-            "wizard.next": {
-              sequence: [
-                {
-                  done: false,
-                  status: "running",
-                  step: {
-                    id: "instructions",
-                    type: "note",
-                    executor: "client",
-                    message: "Remote environment",
-                    externalUrl: signInUrl,
-                  },
-                },
-                {
-                  done: false,
-                  status: "running",
-                  step: {
-                    id: "browser",
-                    type: "progress",
-                    executor: "gateway",
-                    externalUrl: signInUrl,
-                    message: "Complete sign-in",
-                  },
-                },
-                { done: true, status: "done" },
-              ],
-            },
-          },
-        });
-        await page.goto(suite.server.baseUrl + "settings/model-providers");
-        await page.locator("[data-models-connect]").click();
-        const dialog = page.locator(".model-setup-wizard");
-        await page.getByRole("button", { name: "Device pairing", exact: true }).waitFor();
-        expect(await dialog.locator("select").count()).toBe(0);
-        await captureSignIn(page, "choices");
-        await gateway.deferNext("wizard.next", { answer: { stepId: "instructions" } });
-        const popupReady = page.waitForEvent("popup");
-        await page.getByRole("button", { name: "Browser sign-in", exact: true }).click();
-        const popup = await popupReady;
-        await gateway.waitForRequest("wizard.next", {
-          match: { answer: { stepId: "instructions" } },
-        });
-        await gateway.deferNext("wizard.next");
-        await gateway.resolveDeferred("wizard.next");
-        await page.getByRole("link", { name: "Open sign-in", exact: true }).waitFor();
-        await expect.poll(() => popup.url()).toBe(signInUrl);
-        expect(await popup.evaluate(() => window.opener)).toBeNull();
-        await page.getByRole("button", { name: "Copy link", exact: true }).waitFor();
-        expect(await dialog.textContent()).not.toContain(signInUrl);
-        await captureSignIn(page, "browser");
-        await gateway.resolveDeferred("wizard.next");
-        await expect.poll(() => page.locator("openclaw-modal-dialog").count()).toBe(0);
-        await popup.close();
-      },
-    );
-  });
-
   it("completes device-code sign-in from its verified activation result", async () => {
     await suite.withPage(
       {
@@ -381,7 +270,7 @@ suite.define(() => {
           workspace: "/tmp/openclaw-e2e",
           setupComplete: false,
         };
-        const gateway = await installMockGateway(page, {
+        const gateway = await installSetupGateway(page, {
           featureMethods: [
             "chat.metadata",
             "chat.startup",
@@ -443,10 +332,13 @@ suite.define(() => {
           },
         });
 
-        const response = await page.goto(`${suite.server.baseUrl}settings/model-setup`);
+        const response = await openModelSetup(page, suite.server.baseUrl);
         expect(response?.status()).toBe(200);
         await gateway.deferNext("wizard.next", { answer: { stepId: "scope" } });
-        await page.getByRole("button", { name: "Pair" }).click();
+        await page
+          .locator('[data-auth-choice="provider-device-code"]')
+          .getByRole("button", { name: "Set up & verify", exact: true })
+          .click();
         const start = await gateway.waitForRequest("openclaw.setup.auth.start");
         expect(start.params).toMatchObject({ authChoice: "provider-device-code" });
         await gateway.waitForRequest("wizard.next", { match: { answer: { stepId: "scope" } } });
@@ -516,7 +408,7 @@ suite.define(() => {
           workspace: "/tmp/openclaw-e2e",
           setupComplete: false,
         };
-        const gateway = await installMockGateway(page, {
+        const gateway = await installSetupGateway(page, {
           featureMethods: [
             "chat.metadata",
             "chat.startup",
@@ -604,7 +496,7 @@ suite.define(() => {
           },
         });
 
-        const response = await page.goto(`${suite.server.baseUrl}settings/model-setup`);
+        const response = await openModelSetup(page, suite.server.baseUrl);
         expect(response?.status()).toBe(200);
         const localProviderIcons = page.locator(
           [
@@ -700,13 +592,10 @@ suite.define(() => {
           recommendedInstalls: [],
           setupComplete: true,
         });
-        await page.getByRole("button", { name: "Stay in settings" }).click();
-        const currentConnection = page.locator(".model-setup__current");
-        await currentConnection.getByText("Ollama", { exact: true }).waitFor();
-        await currentConnection.getByText("qwen3:0.6b", { exact: true }).waitFor();
-        await expect
-          .poll(() => currentConnection.locator('[data-provider-icon="ollama"]').count())
-          .toBe(1);
+        await page.getByRole("button", { name: "Return to Models" }).click();
+        await page.locator(".model-providers__defaults").waitFor();
+        await expect.poll(() => page.locator("openclaw-modal-dialog").count()).toBe(0);
+        expect(new URL(page.url()).pathname).toBe("/settings/model-providers");
         if (artifactDir) {
           await page.screenshot({
             animations: "disabled",
@@ -742,7 +631,7 @@ suite.define(() => {
         viewport: { height: 1000, width: 1440 },
       },
       async ({ page }) => {
-        const gateway = await installMockGateway(page, {
+        const gateway = await installSetupGateway(page, {
           featureMethods: [
             "chat.metadata",
             "chat.startup",
@@ -752,6 +641,27 @@ suite.define(() => {
             "wizard.next",
           ],
           methodResponses: {
+            "models.authStatus": {
+              ts: 1,
+              providers: [],
+              providerCapabilities: [
+                {
+                  provider: "qwen",
+                  apiKeySupported: true,
+                  quickApiKeySetup: false,
+                  loginOptions: [
+                    {
+                      id: "qwen-oauth",
+                      brandId: "qwen",
+                      groupLabel: "Qwen Cloud",
+                      label: "Qwen sign-in",
+                      kind: "oauth",
+                      featured: false,
+                    },
+                  ],
+                },
+              ],
+            },
             "openclaw.setup.detect": {
               candidates: [],
               unavailableCandidates: [],
@@ -801,11 +711,10 @@ suite.define(() => {
           },
         });
 
-        const response = await page.goto(`${suite.server.baseUrl}settings/model-setup`);
+        const response = await openModelSetup(page, suite.server.baseUrl);
         expect(response?.status()).toBe(200);
-        await page.getByRole("heading", { name: "Connect a verified AI model" }).waitFor();
+        await page.getByRole("heading", { name: "On this Gateway", exact: true }).waitFor();
         await expect.poll(() => page.getByText("Gemini CLI OAuth").count()).toBe(0);
-        await expect.poll(() => page.getByText("Found, but needs attention").count()).toBe(0);
 
         const providerPicker = page.locator(".model-setup-provider-select");
         const providerTrigger = providerPicker.locator(".model-setup-provider-select__trigger");
@@ -975,7 +884,7 @@ suite.define(() => {
               requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
             }),
         );
-        await page.getByRole("button", { name: "Connect & verify" }).click();
+        await page.getByRole("button", { name: "Connect & use for this agent" }).click();
         const activate = await gateway.waitForRequest("openclaw.setup.activate.start");
         expect(activate.params).toEqual({
           sessionId: expect.any(String),
@@ -1014,7 +923,9 @@ suite.define(() => {
 
         const detectCountBeforeDismiss = (await gateway.getRequests("openclaw.setup.detect"))
           .length;
-        await page.getByRole("button", { name: "Stay in settings" }).click();
+        await page.getByRole("button", { name: "Return to Models" }).click();
+        await page.locator("[data-models-connect]").click();
+        await page.locator("[data-models-login-discover]").click();
         await expect
           .poll(async () => (await gateway.getRequests("openclaw.setup.detect")).length)
           .toBe(detectCountBeforeDismiss + 1);
@@ -1027,5 +938,51 @@ suite.define(() => {
         await expect.poll(() => page.getByText("Gemini CLI OAuth").count()).toBe(0);
       },
     );
+  });
+  it("keeps the Close action inside a dense discovery panel before any scrolling", async () => {
+    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      await installSetupGateway(page, {
+        featureMethods: ["openclaw.setup.detect"],
+        methodResponses: {
+          "openclaw.setup.detect": {
+            candidates: Array.from({ length: 8 }, (_, index) => ({
+              kind: "saved-auth:fixture",
+              label: "Saved provider " + index,
+              detail: "An existing connection available for this agent",
+              modelRef: "fixture/model-" + index,
+              credentials: true,
+              recommended: false,
+            })),
+            manualProviders: [],
+            prepareOptions: localPrepareOptions,
+            workspace: "/workspace/demo",
+            setupComplete: false,
+          },
+        },
+      });
+      await openModelSetup(page, suite.server.baseUrl);
+      const panel = page.locator(".model-setup-discovery");
+      const close = panel.getByRole("button", { name: "Close", exact: true });
+      for (const width of [1280, 390]) {
+        await page.setViewportSize({ width, height: 900 });
+        await expect
+          .poll(async () => {
+            const panelBox = await panel.boundingBox();
+            const closeBox = await close.boundingBox();
+            return Boolean(
+              panelBox &&
+              closeBox &&
+              closeBox.y >= panelBox.y &&
+              closeBox.y + closeBox.height <= panelBox.y + panelBox.height,
+            );
+          })
+          .toBe(true);
+        const body = panel.locator(":scope > .model-setup-wizard__body");
+        expect(await body.evaluate((node) => node.scrollHeight > node.clientHeight)).toBe(true);
+        expect(await body.evaluate((node) => node.scrollWidth <= node.clientWidth)).toBe(true);
+      }
+      await close.click();
+      await expect.poll(() => page.locator("openclaw-modal-dialog").count()).toBe(0);
+    });
   });
 });

@@ -5,8 +5,6 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
-import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
-import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
 import {
   createSqliteAuditRecordKernel,
   prepareSqliteAuditRecord,
@@ -31,22 +29,6 @@ export function createSqliteAuditRecordStore<T>(
       const record = prepare({ key, value, createdAt });
       runOpenClawStateWriteTransaction(({ db }) => kernel(db).upsert(record), options);
     },
-    delete(key: string): void {
-      runOpenClawStateWriteTransaction(({ db }) => kernel(db).delete(key), options);
-    },
-    compareAndSet(
-      key: string,
-      expectedValue: T | null,
-      value: T | null,
-      createdAt = Date.now(),
-    ): boolean {
-      const expectedPayloadJson = expectedValue === null ? null : JSON.stringify(expectedValue);
-      const record = value === null ? null : prepare({ key, value, createdAt });
-      return runOpenClawStateWriteTransaction(
-        ({ db }) => kernel(db).compareAndSet(key, expectedPayloadJson, record),
-        options,
-      );
-    },
     registerLegacyMany(records: readonly SqliteAuditRecordEntry<T>[]): void {
       const prepared = records.map(prepare);
       if (prepared.length === 0) {
@@ -56,9 +38,6 @@ export function createSqliteAuditRecordStore<T>(
         ({ db }) => kernel(db).registerLegacyMany(prepared),
         options,
       );
-    },
-    size(): number {
-      return kernel(openOpenClawStateDatabase(options).db).size();
     },
     entries() {
       return kernel(openOpenClawStateDatabase(options).db).entries();
@@ -71,26 +50,4 @@ export function createSqliteAuditRecordStore<T>(
       return kernel(openOpenClawStateDatabase(options).db).latest({ ...params, limit });
     },
   };
-}
-
-/** Serialize the audit record and capture its store before yielding to the shared actor. */
-export async function registerSqliteAuditRecordAsync<T>(
-  options: Pick<OpenClawStateDatabaseOptions, "path" | "env"> & {
-    scope: string;
-    maxEntries: number;
-    assertCurrent?: () => void;
-  },
-  record: SqliteAuditRecordEntry<T>,
-): Promise<void> {
-  const input = {
-    scope: options.scope,
-    maxEntries: Math.max(1, Math.floor(options.maxEntries)),
-    record: prepareSqliteAuditRecord(options.scope, record),
-  };
-  const context = captureOpenClawStateWorkerContext(options);
-  await runOpenClawStateWorkerOperation(
-    context,
-    (store) => store.execute({ type: "diagnostic.register", input }),
-    { assertCurrent: options.assertCurrent },
-  );
 }

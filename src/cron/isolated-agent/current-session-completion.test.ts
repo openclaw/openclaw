@@ -1,10 +1,13 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
 import { setReplyPayloadMetadata, type ReplyPayload } from "../../auto-reply/reply-payload.js";
 import {
+  deleteSessionEntryLifecycle,
   loadTranscriptEvents,
   replaceSessionEntry,
+  resetSessionEntryLifecycle,
 } from "../../config/sessions/session-accessor.js";
 import {
   readTranscriptEventId,
@@ -15,6 +18,14 @@ import {
   resolveManagedOutgoingMediaArtifactDownload,
 } from "../../gateway/managed-image-attachments.js";
 import { listManagedImageRecordEntries } from "../../gateway/managed-image-record-store.js";
+import { managedImageRecordOperations } from "../../gateway/managed-image-record-store.kernel.js";
+import * as operationAdmission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
+import {
+  captureActivePluginRegistrySnapshot,
+  restoreActivePluginRegistrySnapshot,
+  setActivePluginRegistry,
+} from "../../plugins/runtime.js";
 import {
   beginSessionWorkAdmission,
   getActiveSessionLifecycleMutationCount,
@@ -23,21 +34,32 @@ import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { readAssistantDisplayContent } from "../../shared/assistant-display-content.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import {
+  createChannelTestPluginBase,
+  createTestRegistry,
+} from "../../test-utils/channel-plugins.js";
+import {
   withOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
+import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { resolveCronDeliveryPlan } from "../delivery-plan.js";
 import { makeCronJob } from "../delivery.test-helpers.js";
 import { createCliDeps } from "../isolated-agent.delivery.test-helpers.js";
+import type { CronStoredJob } from "../types.js";
 import { commitCurrentSessionCronCompletion } from "./current-session-completion.js";
 import type { DispatchCronDeliveryParams } from "./delivery-dispatch-types.js";
+import { dispatchCronDelivery } from "./delivery-dispatch.js";
+import { resolveDeliveryTarget } from "./delivery-target.js";
 
 const PNG = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZQmcAAAAASUVORK5CYII=",
   "base64",
 );
 
-async function createCompletionFixture(state: OpenClawTestState) {
+async function createCompletionFixture(
+  state: OpenClawTestState,
+  sessionTarget: "current" | "isolated" = "current",
+) {
   const sessionKey = "agent:main:webchat:direct:report";
   const sessionId = "report-session";
   const scope = {
@@ -56,9 +78,17 @@ async function createCompletionFixture(state: OpenClawTestState) {
     session: { store: scope.storePath },
   };
   const payload: ReplyPayload = { text: "Example report", mediaUrl: imagePath };
-  const job = makeCronJob({ id: "report-job", sessionTarget: "current", sessionKey });
+  const job: CronStoredJob = {
+    ...makeCronJob({ id: "report-job", sessionTarget, sessionKey }),
+    ...(sessionTarget === "isolated"
+      ? {
+          sourceConversation: { sessionKey, ...generation },
+          delivery: { mode: "announce", channel: "last" },
+        }
+      : {}),
+  };
   const params: DispatchCronDeliveryParams = {
-    cfg,
+    deliveryAttemptFence: null,
     cfgWithAgentDefaults: cfg,
     deps: createCliDeps(),
     job,
@@ -71,7 +101,6 @@ async function createCompletionFixture(state: OpenClawTestState) {
     lifecycleRevision: "run-generation",
     sessionUpdatedAt: 1000,
     runStartedAt: 1000,
-    runEndedAt: 2000,
     timeoutMs: 30000,
     resolvedDelivery: { ok: false, mode: "implicit", error: new Error("No external channel") },
     deliveryPlan: resolveCronDeliveryPlan(job),
@@ -89,35 +118,51 @@ async function createCompletionFixture(state: OpenClawTestState) {
     deliveryPayloads: [payload],
     isAborted: () => false,
     abortReason: () => "aborted",
-    withRunSession: (result) => ({ ...result, sessionId: "report-run" }),
   };
   const records = () => listManagedImageRecordEntries({ stateDir: state.stateDir, sessionKey });
+  const database = openOpenClawStateDatabase({ env: state.env });
   const downloads: Array<ReturnType<typeof resolveManagedOutgoingMediaArtifactDownload>> = [];
+  const readDownloads = async () =>
+    (await Promise.allSettled(downloads)).map((result) => {
+      if (result.status === "rejected") {
+        throw result.reason;
+      }
+      return result.value;
+    });
   let updates = 0;
   const unsubscribe = onSessionTranscriptUpdate((update) => {
     if (update.target.sessionId !== sessionId) {
       return;
     }
     updates += 1;
-    for (const { record } of records()) {
-      downloads.push(
-        resolveManagedOutgoingMediaArtifactDownload({
-          sessionKey,
-          agentId: "main",
-          stateDir: state.stateDir,
-          artifactId: `${MANAGED_OUTGOING_IMAGE_ARTIFACT_ID_PREFIX}${record.attachmentId}`,
-        }),
-      );
+    // Observe records at publication, before a wrongly late write could make the test pass.
+    const entries = managedImageRecordOperations["managedImages.entries"](
+      { sessionKey },
+      { open: () => database, stateOptions: () => ({ path: database.path, env: state.env }) },
+    );
+    for (const { record } of entries) {
+      const pending = resolveManagedOutgoingMediaArtifactDownload({
+        sessionKey,
+        agentId: "main",
+        stateDir: state.stateDir,
+        artifactId: `${MANAGED_OUTGOING_IMAGE_ARTIFACT_ID_PREFIX}${record.attachmentId}`,
+      });
+      void pending.catch(() => {});
+      downloads.push(pending);
     }
   });
   return {
     payload,
+    job,
     params,
     scope,
     records,
-    downloads,
+    downloads: readDownloads,
     updates: () => updates,
-    unsubscribe,
+    dispose: async () => {
+      unsubscribe();
+      await readDownloads();
+    },
     commit: () => commitCurrentSessionCronCompletion(params),
     messages: async () =>
       (await loadTranscriptEvents(scope)).filter(
@@ -127,6 +172,43 @@ async function createCompletionFixture(state: OpenClawTestState) {
 }
 
 describe("current-session completion delivery", () => {
+  it.each(["leading-token", "silent-media-caption"] as const)(
+    "normalizes %s output before committing the conversation",
+    async (mode) => {
+      await withOpenClawTestState({ layout: "state-only" }, async (state) => {
+        const fixture = await createCompletionFixture(state);
+        try {
+          const hasMedia = mode === "silent-media-caption";
+          const text = hasMedia ? "Report complete.\nNO_REPLY" : "NO_REPLY\nReport complete.";
+          fixture.params.deliveryPayloads = [
+            { text, ...(hasMedia ? { mediaUrl: fixture.payload.mediaUrl } : {}) },
+          ];
+          fixture.params.deliveryPayloadHasStructuredContent = hasMedia;
+          fixture.params.synthesizedText = text;
+          fixture.params.outputText = text;
+          fixture.params.summary = text;
+
+          const delivery = await dispatchCronDelivery(fixture.params);
+          expect(delivery.delivered).toBe(true);
+          const messages = await fixture.messages();
+          expect(messages).toHaveLength(1);
+          const message = readTranscriptEventMessage(messages[0]);
+          expect(message?.content).toEqual([
+            { type: "text", text: hasMedia ? "report.png" : "Report complete." },
+          ]);
+          if (hasMedia) {
+            expect(readAssistantDisplayContent(message)).toEqual([
+              expect.objectContaining({ type: "image" }),
+            ]);
+            expect(await fixture.records()).toHaveLength(1);
+          }
+        } finally {
+          await fixture.dispose();
+        }
+      });
+    },
+  );
+
   it.each([{ to: "recipient" }, { accountId: "work" }, { threadId: 0 }])(
     "preserves the committed report and reports unresolved explicit intent %j",
     async (coordinates) => {
@@ -148,7 +230,190 @@ describe("current-session completion delivery", () => {
             deliveryError: "No external channel",
           });
         } finally {
-          fixture.unsubscribe();
+          await fixture.dispose();
+        }
+      });
+    },
+  );
+});
+
+describe("isolated completion in the creating conversation", () => {
+  it.each(["unchanged", "reset"] as const)(
+    "fences implicit external delivery against the %s source generation after resolution",
+    async (sourceState) => {
+      await withOpenClawTestState({ layout: "state-only" }, async (state) => {
+        const fixture = await createCompletionFixture(state, "isolated");
+        const registry = captureActivePluginRegistrySnapshot();
+        const sendText = vi.fn(async () => ({ channel: "telegram", messageId: "report-message" }));
+        setActivePluginRegistry(
+          createTestRegistry([
+            {
+              pluginId: "telegram",
+              source: "test",
+              plugin: {
+                ...createChannelTestPluginBase({ id: "telegram" }),
+                outbound: { deliveryMode: "direct", sendText },
+              },
+            },
+          ]),
+        );
+        try {
+          await replaceSessionEntry(fixture.scope, {
+            sessionId: fixture.scope.sessionId,
+            lifecycleRevision: "report-generation",
+            updatedAt: 1,
+            delivery: normalizeSessionDeliveryState({
+              context: { channel: "telegram", to: "123" },
+            }),
+          });
+          fixture.params.deliveryPayloads = [{ text: "tick" }];
+          fixture.params.deliveryPayloadHasStructuredContent = false;
+          fixture.params.synthesizedText = "tick";
+          fixture.params.resolvedDelivery = await resolveDeliveryTarget(
+            fixture.params.cfgWithAgentDefaults,
+            "main",
+            { ...fixture.job, ...fixture.params.deliveryPlan },
+          );
+          expect(fixture.params.resolvedDelivery).toMatchObject({
+            ok: true,
+            channel: "telegram",
+            to: "123",
+          });
+          if (sourceState === "reset") {
+            await resetSessionEntryLifecycle({
+              storePath: fixture.scope.storePath,
+              target: {
+                canonicalKey: fixture.scope.sessionKey,
+                storeKeys: [fixture.scope.sessionKey],
+              },
+              buildNextEntry: () => ({
+                sessionId: "replacement-session",
+                lifecycleRevision: "replacement-generation",
+                updatedAt: 3000,
+              }),
+            });
+          }
+
+          const delivery = await dispatchCronDelivery(fixture.params);
+          if (sourceState === "reset") {
+            expect(delivery).toMatchObject({
+              delivered: false,
+              deliveryState: { status: "not-delivered" },
+              deliveryError: expect.stringContaining("original session generation"),
+            });
+            expect(sendText).not.toHaveBeenCalled();
+          } else {
+            expect(delivery).toMatchObject({ delivered: true });
+            await expect(dispatchCronDelivery(fixture.params)).resolves.toMatchObject({
+              delivered: true,
+            });
+            expect(sendText).toHaveBeenCalledOnce();
+          }
+        } finally {
+          restoreActivePluginRegistrySnapshot(registry);
+          await fixture.dispose();
+        }
+      });
+    },
+  );
+
+  it.each(["deleted", "reset"] as const)(
+    "records a delivery failure when the creating conversation is %s",
+    async (change) => {
+      await withOpenClawTestState({ layout: "state-only" }, async (state) => {
+        const fixture = await createCompletionFixture(state, "isolated");
+        try {
+          fixture.params.deliveryPayloads = [{ text: "tick" }];
+          fixture.params.deliveryPayloadHasStructuredContent = false;
+          fixture.params.synthesizedText = "tick";
+          if (change === "deleted") {
+            await deleteSessionEntryLifecycle({
+              archiveTranscript: false,
+              storePath: fixture.scope.storePath,
+              target: {
+                canonicalKey: fixture.scope.sessionKey,
+                storeKeys: [fixture.scope.sessionKey],
+              },
+            });
+          } else {
+            await resetSessionEntryLifecycle({
+              storePath: fixture.scope.storePath,
+              target: {
+                canonicalKey: fixture.scope.sessionKey,
+                storeKeys: [fixture.scope.sessionKey],
+              },
+              buildNextEntry: () => ({
+                sessionId: "replacement-session",
+                lifecycleRevision: "replacement-generation",
+                updatedAt: 3000,
+              }),
+            });
+          }
+
+          const delivery = await dispatchCronDelivery(fixture.params);
+          expect(delivery).toMatchObject({
+            delivered: false,
+            deliveryAttempted: true,
+            deliveryError: expect.stringContaining("session rebound"),
+            disposition: { kind: "error", errorKind: "delivery-target" },
+          });
+          expect(await fixture.messages()).toEqual([]);
+          expect(fixture.updates()).toBe(0);
+        } finally {
+          await fixture.dispose();
+        }
+      });
+    },
+  );
+
+  it("keeps a silent isolated result out of the creating conversation", async () => {
+    await withOpenClawTestState({ layout: "state-only" }, async (state) => {
+      const fixture = await createCompletionFixture(state, "isolated");
+      try {
+        fixture.params.deliveryPayloads = [{ text: "NO_REPLY" }];
+        fixture.params.deliveryPayloadHasStructuredContent = false;
+        fixture.params.synthesizedText = "NO_REPLY";
+        await expect(dispatchCronDelivery(fixture.params)).resolves.toMatchObject({
+          disposition: { kind: "suppressed" },
+          deliverySuppressionReason: "silent",
+        });
+        expect(await fixture.messages()).toEqual([]);
+        expect(fixture.updates()).toBe(0);
+      } finally {
+        await fixture.dispose();
+      }
+    });
+  });
+
+  it.each(["explicit", "remembered"] as const)(
+    "does not replace an unavailable %s external route with a conversation commit",
+    async (route) => {
+      await withOpenClawTestState({ layout: "state-only" }, async (state) => {
+        const fixture = await createCompletionFixture(state, "isolated");
+        try {
+          fixture.params.deliveryPayloads = [{ text: "tick" }];
+          fixture.params.synthesizedText = "tick";
+          if (route === "explicit") {
+            fixture.params.job.delivery = { mode: "announce", channel: "missing-channel" };
+            fixture.params.deliveryPlan = resolveCronDeliveryPlan(fixture.params.job);
+          } else {
+            fixture.params.resolvedDelivery = {
+              ok: false,
+              channel: "telegram",
+              mode: "implicit",
+              error: new Error("Remembered channel unavailable"),
+            };
+          }
+          await expect(dispatchCronDelivery(fixture.params)).resolves.toMatchObject({
+            delivered: false,
+            deliveryError:
+              route === "explicit" ? "No external channel" : "Remembered channel unavailable",
+            disposition: { kind: "error", errorKind: "delivery-target" },
+          });
+          expect(await fixture.messages()).toEqual([]);
+          expect(fixture.updates()).toBe(0);
+        } finally {
+          await fixture.dispose();
         }
       });
     },
@@ -156,31 +421,82 @@ describe("current-session completion delivery", () => {
 });
 
 describe("current-session completion media", () => {
+  it("refuses publication when occurrence authority ends during media preparation", async () => {
+    await withOpenClawTestState({ layout: "state-only" }, async (state) => {
+      const fixture = await createCompletionFixture(state);
+      let current = true;
+      const beforeAttempt = vi.fn(async () => {});
+      fixture.params.deliveryAttemptFence = {
+        beforeAttempt,
+        assertCurrent: () => {
+          if (!current) {
+            throw new Error("completion occurrence expired");
+          }
+        },
+      };
+      const spy = probe.admission(operationAdmission, (request, grant, admit) => {
+        if (
+          request.stage === "commit" &&
+          isRecord(request.facts) &&
+          request.facts.type === "managedImages.insert"
+        ) {
+          current = false;
+        }
+        admit(request, grant);
+      });
+      try {
+        const [completion] = await Promise.allSettled([fixture.commit()]);
+        expect(current).toBe(false);
+        expect(completion).toMatchObject({
+          status: "rejected",
+          reason: expect.objectContaining({ message: "completion occurrence expired" }),
+        });
+        expect(beforeAttempt).toHaveBeenCalledOnce();
+        expect(await fixture.messages()).toEqual([]);
+        expect(await fixture.records()).toEqual([]);
+        expect(fixture.updates()).toBe(0);
+      } finally {
+        spy.mockRestore();
+        await fixture.dispose();
+      }
+    });
+  });
+
   it.each(["ordinary", "promotion-failure"] as const)(
     "publishes downloadable media and replays the original message after %s",
     async (mode) => {
       await withOpenClawTestState({ layout: "state-only" }, async (state) => {
         const fixture = await createCompletionFixture(state);
-        const database = openOpenClawStateDatabase({ env: state.env });
+        let restorePromotionAdmission: (() => void) | undefined;
         try {
           if (mode === "promotion-failure") {
-            database.db.exec(`CREATE TEMP TRIGGER fail_report_promotion
-              BEFORE UPDATE OF message_id ON managed_outgoing_image_records
-              BEGIN SELECT RAISE(ABORT, 'report promotion failed'); END`);
+            const spy = probe.admission(operationAdmission, (request, grant, admit) => {
+              if (
+                request.stage === "commit" &&
+                isRecord(request.facts) &&
+                request.facts.type === "managedImages.attach"
+              ) {
+                throw new Error("report promotion failed");
+              }
+              admit(request, grant);
+            });
+            restorePromotionAdmission = () => spy.mockRestore();
             await expect(fixture.commit()).rejects.toThrow("report promotion failed");
             expect(fixture.updates()).toBe(0);
-            database.db.exec("DROP TRIGGER fail_report_promotion");
+            restorePromotionAdmission();
           } else {
             await expect(fixture.commit()).resolves.toMatchObject({ ok: true });
           }
           const original = await fixture.messages();
-          const originalIds = fixture.records().map(({ record }) => record.attachmentId);
+          const originalIds = (await fixture.records()).map(({ record }) => record.attachmentId);
           expect(original).toHaveLength(1);
           await expect(fixture.commit()).resolves.toMatchObject({ ok: true });
           expect(await fixture.messages()).toEqual(original);
-          expect(fixture.records().map(({ record }) => record.attachmentId)).toEqual(originalIds);
+          expect((await fixture.records()).map(({ record }) => record.attachmentId)).toEqual(
+            originalIds,
+          );
           expect(fixture.updates()).toBeGreaterThan(0);
-          for (const { record } of fixture.records()) {
+          for (const { record } of await fixture.records()) {
             expect(record).toMatchObject({
               messageId: readTranscriptEventId(original[0]),
               retentionClass: "history",
@@ -195,13 +511,14 @@ describe("current-session completion media", () => {
               ),
             ).resolves.toEqual(PNG);
           }
-          expect(fixture.downloads.length).toBeGreaterThan(0);
-          for (const download of await Promise.all(fixture.downloads)) {
+          const downloads = await fixture.downloads();
+          expect(downloads.length).toBeGreaterThan(0);
+          for (const download of downloads) {
             expect(download).toMatchObject({ type: "image" });
           }
         } finally {
-          database.db.exec("DROP TRIGGER IF EXISTS fail_report_promotion");
-          fixture.unsubscribe();
+          restorePromotionAdmission?.();
+          await fixture.dispose();
         }
       });
     },
@@ -234,7 +551,7 @@ describe("current-session completion media", () => {
           expect.objectContaining({ type: "image" }),
         ]);
       } finally {
-        fixture.unsubscribe();
+        await fixture.dispose();
       }
     });
   });
@@ -258,7 +575,7 @@ describe("current-session completion media", () => {
             expect(readAssistantDisplayContent(message)).toEqual([
               expect.objectContaining({ type: "image" }),
             ]);
-            expect(fixture.records()).toHaveLength(1);
+            expect(await fixture.records()).toHaveLength(1);
           } else {
             expect(message?.content).toEqual([
               {
@@ -280,10 +597,10 @@ describe("current-session completion media", () => {
             } else {
               expect(message).not.toHaveProperty("openclawDisplayContent");
             }
-            expect(fixture.records()).toEqual([]);
+            expect(await fixture.records()).toEqual([]);
           }
         } finally {
-          fixture.unsubscribe();
+          await fixture.dispose();
         }
       });
     },
@@ -321,7 +638,7 @@ describe("current-session completion media", () => {
           }),
         ]);
       } finally {
-        fixture.unsubscribe();
+        await fixture.dispose();
       }
     });
   });
@@ -344,9 +661,9 @@ describe("current-session completion media", () => {
             { type: "text", text: "Report" },
             expect.objectContaining({ type: workspaceOnly ? "attachment_error" : "image" }),
           ]);
-          expect(fixture.records()).toHaveLength(workspaceOnly ? 0 : 1);
+          expect(await fixture.records()).toHaveLength(workspaceOnly ? 0 : 1);
         } finally {
-          fixture.unsubscribe();
+          await fixture.dispose();
         }
       });
     },
@@ -363,7 +680,7 @@ describe("current-session completion media", () => {
       const commit = fixture.commit();
       try {
         await vi.waitFor(() => expect(getActiveSessionLifecycleMutationCount()).toBe(1));
-        expect(fixture.records()).toEqual([]);
+        expect(await fixture.records()).toEqual([]);
         await replaceSessionEntry(fixture.scope, {
           sessionId: "replacement-session",
           lifecycleRevision: "replacement-generation",
@@ -371,13 +688,13 @@ describe("current-session completion media", () => {
         });
         admission.release();
         await expect(commit).resolves.toMatchObject({ ok: false });
-        expect(fixture.records()).toEqual([]);
+        expect(await fixture.records()).toEqual([]);
         expect(await fixture.messages()).toEqual([]);
         expect(fixture.updates()).toBe(0);
       } finally {
         admission.release();
         await commit;
-        fixture.unsubscribe();
+        await fixture.dispose();
       }
     });
   });

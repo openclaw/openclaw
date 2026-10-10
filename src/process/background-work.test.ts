@@ -5,8 +5,11 @@ import {
   enqueueCommandInLane,
   getCommandLaneSnapshot,
   markGatewayDraining,
+  publishLaneConfiguration,
   resetAllLanes,
+  resetCommandLane,
 } from "./command-queue.js";
+import { getQueueState } from "./command-queue.state.js";
 import { resetCommandQueueStateForTest } from "./command-queue.test-support.js";
 import { getGatewayRestartDrainSignal } from "./gateway-work-admission.js";
 import { CommandLane } from "./lanes.js";
@@ -20,6 +23,343 @@ vi.mock("../logging/diagnostic-runtime.js", () => ({
 describe("background work admission", () => {
   beforeEach(resetCommandQueueStateForTest);
   afterEach(resetCommandQueueStateForTest);
+
+  it("does not scan sibling lanes while reading registered owner widths", () => {
+    const owners = Array.from({ length: 32 }, (_, index) =>
+      createBackgroundWorkOwner({ owner: `core:stable-${index}`, maxConcurrent: (index % 3) + 1 }),
+    );
+    const members = owners.map((owner) => owner.lane);
+    const state = getQueueState();
+    const { lanes } = state;
+    const group = state.laneGroups.get("background-work");
+    const before = [...lanes.values()].map((lane) => ({
+      lane,
+      width: lane.maxConcurrent,
+      queue: lane.queue,
+      activeTaskIds: [...lane.activeTaskIds],
+      generation: lane.generation,
+    }));
+    const memberships = [...state.laneGroupByLane];
+    const nextTaskId = state.nextTaskId;
+    const nextQueueSequence = state.nextQueueSequence;
+    const ownGet = Object.getOwnPropertyDescriptor(lanes, "get");
+    const originalGet = lanes.get.bind(lanes);
+    let reads = 0;
+    const observed: string[] = [];
+    Object.defineProperty(lanes, "get", {
+      configurable: true,
+      value: (lane: string) => {
+        reads += 1;
+        return originalGet(lane);
+      },
+    });
+    try {
+      for (let index = 0; index < 1_000; index += 1) {
+        observed.push(owners[index % owners.length]!.lane);
+      }
+    } finally {
+      if (ownGet) {
+        Object.defineProperty(lanes, "get", ownGet);
+      } else {
+        Reflect.deleteProperty(lanes, "get");
+      }
+    }
+    expect(observed).toEqual(
+      Array.from({ length: 1_000 }, (_, index) => members[index % members.length]),
+    );
+    expect(lanes.size).toBe(members.length);
+    for (const saved of before) {
+      expect(lanes.get(saved.lane.lane)).toBe(saved.lane);
+      expect(saved.lane.maxConcurrent).toBe(saved.width);
+      expect(saved.lane.queue).toBe(saved.queue);
+      expect(saved.lane.queue.length).toBe(0);
+      expect([...saved.lane.activeTaskIds]).toEqual(saved.activeTaskIds);
+      expect(saved.lane.generation).toBe(saved.generation);
+      expect(saved.lane.draining).toBe(false);
+    }
+    expect(state.laneGroups.get("background-work")).toBe(group);
+    expect([...group!.members]).toEqual(members);
+    expect([...state.laneGroupByLane]).toEqual(memberships);
+    expect(state.nextTaskId).toBe(nextTaskId);
+    expect(state.nextQueueSequence).toBe(nextQueueSequence);
+    expect(reads).toBeLessThanOrEqual(1_000);
+  });
+
+  it.each([
+    { groupOnly: false, maxConcurrent: 1 },
+    { groupOnly: true, maxConcurrent: 1 },
+    { groupOnly: true, maxConcurrent: 2 },
+  ])(
+    "registers lazily against current width $maxConcurrent (group-only=$groupOnly)",
+    ({ groupOnly, maxConcurrent }) => {
+      const lane = "background:core:current-width";
+      if (groupOnly) {
+        publishLaneConfiguration({ groups: { "background-work": { budget: 3, members: [lane] } } });
+      }
+      const state = getQueueState();
+      const owner = createBackgroundWorkOwner({ owner: "  core:current-width  ", maxConcurrent });
+      expect(state.lanes.size).toBe(0);
+      if (groupOnly) {
+        const group = state.laneGroups.get("background-work");
+        if (maxConcurrent === 1) {
+          expect(owner.lane).toBe(lane);
+        } else {
+          expect(() => owner.lane).toThrow("already registered with different concurrency");
+        }
+        expect(state.lanes.size).toBe(0);
+        expect(state.laneGroups.get("background-work")).toBe(group);
+        expect([...group!.members]).toEqual([lane]);
+        return;
+      }
+      expect(state.laneGroups.size).toBe(0);
+      expect(owner.lane).toBe(lane);
+      const registered = state.lanes.get(lane);
+      const group = state.laneGroups.get("background-work");
+      expect(registered?.maxConcurrent).toBe(1);
+      expect([...group!.members]).toEqual([lane]);
+      expect(
+        createBackgroundWorkOwner({ owner: "core:current-width", maxConcurrent: 1 }).lane,
+      ).toBe(lane);
+      for (const width of [0, 2]) {
+        publishLaneConfiguration({ lanes: { [lane]: width } });
+        expect(() => owner.lane).toThrow("already registered with different concurrency");
+        expect(state.lanes.get(lane)).toBe(registered);
+        expect(registered?.maxConcurrent).toBe(width);
+        expect(state.laneGroups.get("background-work")).toBe(group);
+      }
+      publishLaneConfiguration({ lanes: { [lane]: 1 } });
+      expect(owner.lane).toBe(lane);
+      expect(state.lanes.get(lane)).toBe(registered);
+      expect(state.laneGroups.get("background-work")).toBe(group);
+    },
+  );
+
+  it("reads absent and empty background groups without creating lanes", () => {
+    const expected = {
+      lane: CommandLane.Background,
+      activeCount: 0,
+      queuedCount: 0,
+      maxConcurrent: 3,
+      draining: false,
+      generation: 0,
+      blockedBy: null,
+    };
+    expect(getBackgroundWorkSnapshot()).toEqual(expected);
+    publishLaneConfiguration({ groups: { "background-work": { budget: 3, members: [] } } });
+    expect(getBackgroundWorkSnapshot()).toEqual(expected);
+    expect(getQueueState().lanes.size).toBe(0);
+  });
+
+  it("reads each background group member once while preserving queue state and block precedence", async () => {
+    const members = Array.from({ length: 1_000 }, (_, index) => `background:owner-${index}`);
+    const activeLanes = members.slice(0, 3);
+    publishLaneConfiguration({
+      lanes: Object.fromEntries(activeLanes.map((lane) => [lane, 1])),
+      groups: { "background-work": { budget: 3, members } },
+    });
+    const gates = activeLanes.map(() => createDeferred());
+    const active = activeLanes.map((lane, index) =>
+      enqueueCommandInLane(lane, async () => await gates[index]!.promise),
+    );
+    const order: number[] = [];
+    const queued = [1, 2].map((value) =>
+      enqueueCommandInLane(activeLanes[0]!, async () => {
+        order.push(value);
+      }),
+    );
+    try {
+      const queueState = getQueueState();
+      const { lanes } = queueState;
+      const group = queueState.laneGroups.get("background-work");
+      const before = [...lanes.values()].map((state) => ({
+        state,
+        activeTaskIds: [...state.activeTaskIds],
+        queue: state.queue,
+        head: state.queue.normal.head,
+        tail: state.queue.normal.tail,
+        queuedCount: state.queue.length,
+      }));
+      const nextTaskId = queueState.nextTaskId;
+      const nextQueueSequence = queueState.nextQueueSequence;
+      const ownGet = Object.getOwnPropertyDescriptor(lanes, "get");
+      const originalGet = lanes.get.bind(lanes);
+      let memberReads = 0;
+      let snapshot: ReturnType<typeof getBackgroundWorkSnapshot>;
+      // Count real native-map reads without retaining a million mock call records.
+      Object.defineProperty(lanes, "get", {
+        configurable: true,
+        value: (lane: string) => {
+          memberReads += 1;
+          return originalGet(lane);
+        },
+      });
+      try {
+        snapshot = getBackgroundWorkSnapshot();
+      } finally {
+        if (ownGet) {
+          Object.defineProperty(lanes, "get", ownGet);
+        } else {
+          Reflect.deleteProperty(lanes, "get");
+        }
+      }
+      expect(snapshot).toEqual({
+        lane: CommandLane.Background,
+        activeCount: 3,
+        queuedCount: 2,
+        maxConcurrent: 3,
+        draining: false,
+        generation: 0,
+        blockedBy: "group-budget",
+      });
+      expect(lanes.size).toBe(3);
+      for (const saved of before) {
+        expect(lanes.get(saved.state.lane)).toBe(saved.state);
+        expect([...saved.state.activeTaskIds]).toEqual(saved.activeTaskIds);
+        expect(saved.state.queue).toBe(saved.queue);
+        expect(saved.state.queue.normal.head).toBe(saved.head);
+        expect(saved.state.queue.normal.tail).toBe(saved.tail);
+        expect(saved.state.queue.length).toBe(saved.queuedCount);
+      }
+      expect(queueState.laneGroups.get("background-work")).toBe(group);
+      expect([...group!.members]).toEqual(members);
+      expect(queueState.nextTaskId).toBe(nextTaskId);
+      expect(queueState.nextQueueSequence).toBe(nextQueueSequence);
+
+      gates[1]!.resolve();
+      gates[2]!.resolve();
+      await Promise.all(active.slice(1));
+      expect(getBackgroundWorkSnapshot()).toEqual({
+        ...snapshot,
+        activeCount: 1,
+        blockedBy: "lane",
+      });
+      gates[0]!.resolve();
+      await Promise.all([...active, ...queued]);
+      expect(order).toEqual([1, 2]);
+      expect(getBackgroundWorkSnapshot()).toEqual({
+        ...snapshot,
+        activeCount: 0,
+        queuedCount: 0,
+        blockedBy: null,
+      });
+      expect(memberReads).toBe(members.length);
+    } finally {
+      gates.forEach((gate) => gate.resolve());
+      await Promise.allSettled([...active, ...queued]);
+    }
+  });
+
+  it.each(["paused", "reserved"] as const)(
+    "reports aggregate blocking with a %s lane",
+    async (mode) => {
+      const lane = "background:waiting";
+      const reserved = "background:reserved";
+      const members = [lane, reserved];
+      publishLaneConfiguration({
+        lanes: { [lane]: mode === "paused" ? 0 : 1 },
+        groups: {
+          "background-work": {
+            budget: 3,
+            members,
+            reservations: { [reserved]: mode === "reserved" ? 3 : 0 },
+          },
+        },
+      });
+      const queued = enqueueCommandInLane(lane, async () => "resumed");
+      try {
+        expect(getCommandLaneSnapshot(lane).blockedBy).toBe(
+          mode === "paused" ? "lane" : "sibling-reservation",
+        );
+        expect(getBackgroundWorkSnapshot()).toEqual({
+          lane: CommandLane.Background,
+          activeCount: 0,
+          queuedCount: 1,
+          maxConcurrent: 3,
+          draining: false,
+          generation: 0,
+          blockedBy: mode === "paused" ? "lane" : null,
+        });
+        expect(getQueueState().lanes.has(reserved)).toBe(false);
+      } finally {
+        publishLaneConfiguration({
+          lanes: { [lane]: 1 },
+          groups: { "background-work": { budget: 3, members } },
+        });
+        await queued;
+      }
+    },
+  );
+
+  it("preserves admission draining and the newest generation across real lane resets", async () => {
+    const lane = "background:reset";
+    const sibling = "background:reset-sibling";
+    publishLaneConfiguration({
+      lanes: { [lane]: 1, [sibling]: 1 },
+      groups: { "background-work": { budget: 3, members: [lane, sibling] } },
+    });
+    resetCommandLane(lane);
+    resetCommandLane(sibling);
+    resetCommandLane(sibling);
+    const started = createDeferred();
+    const oldGate = createDeferred();
+    const freshGate = createDeferred();
+    let duringAdmission: ReturnType<typeof getBackgroundWorkSnapshot> | undefined;
+    const old = enqueueCommandInLane(
+      lane,
+      async () => {
+        started.resolve();
+        await oldGate.promise;
+      },
+      {
+        warnAfterMs: 0,
+        onWait: () => {
+          duringAdmission = getBackgroundWorkSnapshot();
+        },
+      },
+    );
+    const runs = [old];
+    try {
+      expect(duringAdmission).toEqual({
+        lane: CommandLane.Background,
+        activeCount: 1,
+        queuedCount: 0,
+        maxConcurrent: 3,
+        draining: true,
+        generation: 2,
+        blockedBy: null,
+      });
+      await started.promise;
+      expect(getBackgroundWorkSnapshot()).toEqual({ ...duringAdmission, draining: false });
+      resetAllLanes();
+      expect(getBackgroundWorkSnapshot()).toEqual({
+        ...duringAdmission,
+        activeCount: 0,
+        draining: false,
+        generation: 3,
+      });
+      const fresh = enqueueCommandInLane(lane, async () => await freshGate.promise);
+      runs.push(fresh);
+      oldGate.resolve();
+      await old;
+      expect(getBackgroundWorkSnapshot()).toEqual({
+        ...duringAdmission,
+        draining: false,
+        generation: 3,
+      });
+      freshGate.resolve();
+      await fresh;
+      expect(getBackgroundWorkSnapshot()).toEqual({
+        ...duringAdmission,
+        activeCount: 0,
+        draining: false,
+        generation: 3,
+      });
+    } finally {
+      oldGate.resolve();
+      freshGate.resolve();
+      await Promise.allSettled(runs);
+    }
+  });
 
   it("shares three slots, preserves owner widths and FIFO, and leaves foreground capacity free", async () => {
     const parallel = createBackgroundWorkOwner({ owner: "plugin:parallel", maxConcurrent: 3 });
@@ -98,8 +438,12 @@ describe("background work admission", () => {
       const staleTask = vi.fn(async () => undefined);
       const stale = owner.enqueue(staleTask);
       const oldSignal = getGatewayRestartDrainSignal();
-      const activeRejected = expect(active).rejects.toThrow(/draining for restart|runtime reset/u);
-      const staleRejected = expect(stale).rejects.toThrow(/draining for restart|runtime reset/u);
+      const message =
+        restart === "drain"
+          ? "Gateway is restarting. Please try again shortly."
+          : "gateway runtime reset";
+      const activeRejected = expect(active).rejects.toThrow(message);
+      const staleRejected = expect(stale).rejects.toThrow(message);
       if (restart === "drain") {
         markGatewayDraining();
       } else {

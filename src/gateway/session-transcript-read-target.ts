@@ -1,6 +1,6 @@
 import { resolveConcreteSessionStorePath } from "../config/sessions/paths.js";
-import type { SessionTranscriptReadScope } from "../config/sessions/session-accessor.js";
 import { resolveSessionTranscriptReadTargetCore } from "../config/sessions/session-accessor.transcript-read-target.js";
+import type { SessionTranscriptReadScope } from "../config/sessions/session-accessor.types.js";
 
 export type ResolvedTranscriptReadTarget = {
   agentId?: string;

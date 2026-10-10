@@ -1,3 +1,4 @@
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 // Imessage tests cover approval reaction poller plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { pollPendingIMessageApprovalReactions } from "./approval-reaction-poller.js";
@@ -105,6 +106,28 @@ function buildApprovalMessage(
   };
 }
 
+function buildGroupApprovalMessage(
+  reactions: ReturnType<typeof buildReaction>[] = [
+    buildReaction({ id: 8, sender: "+15551230000", created_at: "2026-05-27T21:01:00.000Z" }),
+    buildReaction({
+      id: 9,
+      sender: "+15551230000",
+      type: "dislike",
+      emoji: "👎",
+      created_at: "2026-05-27T21:02:00.000Z",
+    }),
+  ],
+) {
+  return buildApprovalMessage({
+    chat_guid: "iMessage;+;chat-guid",
+    chat_identifier: undefined,
+    is_group: true,
+    sender: undefined,
+    text: "Exec approval required\nID: exec-1",
+    reactions,
+  });
+}
+
 describe("iMessage approval reaction poller", () => {
   let accountSequence = 0;
   let accountId = "";
@@ -154,25 +177,26 @@ describe("iMessage approval reaction poller", () => {
     resolverMocks.isApprovalNotFoundError.mockReturnValue(false);
   });
 
-  it("does not scan recent chats during fast polling with no pending targets", async () => {
-    const request = vi.fn();
-
-    await pollPendingIMessageApprovalReactions(
-      buildPollParams(request, { allowRecentChatDiscovery: true }),
-    );
-
-    expect(request).not.toHaveBeenCalled();
-  });
-
-  it("does not scan recent chats during fast polling for handle-only targets", async () => {
-    await registerTarget({
-      conversation: { handle: "+15551230000" },
+  it("does not resolve reactions from a history response after its account retires", async () => {
+    await registerTarget();
+    const history = createDeferred<{ messages: ReturnType<typeof buildGroupApprovalMessage>[] }>();
+    const requested = createDeferred<void>();
+    const request = vi.fn(() => {
+      requested.resolve();
+      return history.promise;
     });
-    const request = vi.fn();
-
-    await pollPendingIMessageApprovalReactions(buildPollParams(request));
-
-    expect(request).not.toHaveBeenCalled();
+    const controller = new AbortController();
+    const polling = pollPendingIMessageApprovalReactions(
+      buildPollParams(request, {
+        signal: controller.signal,
+      }),
+    );
+    await requested.promise;
+    controller.abort();
+    history.resolve({ messages: [buildGroupApprovalMessage()] });
+    await polling;
+    expect(resolverMocks.resolveApprovalOverGateway).not.toHaveBeenCalled();
+    expect(request).toHaveBeenCalledOnce();
   });
 
   it("discovers typed handle-only targets through recent chat history", async () => {
@@ -223,36 +247,20 @@ describe("iMessage approval reaction poller", () => {
   });
 
   it("continues scanning after an unauthorized reaction leaves the approval pending", async () => {
-    await registerIMessageApprovalReactionTarget({
-      accountId,
-      conversation: { chatId: 42, chatGuid: "iMessage;+;chat-guid" },
-      messageId: "msg-1",
-      approvalId: "exec-1",
-      allowedDecisions: ["allow-once", "deny"],
-    });
+    await registerTarget();
     const request = createRpcRequest([
-      buildApprovalMessage({
-        guid: "msg-1",
-        chat_id: 42,
-        chat_guid: "iMessage;+;chat-guid",
-        chat_identifier: undefined,
-        is_group: true,
-        is_from_me: true,
-        sender: undefined,
-        text: "Exec approval required\nID: exec-1",
-        reactions: [
-          buildReaction({
-            id: 8,
-            sender: "+15550000000",
-            created_at: "2026-05-27T21:01:00.000Z",
-          }),
-          buildReaction({
-            id: 9,
-            sender: "+15551230000",
-            created_at: "2026-05-27T21:02:00.000Z",
-          }),
-        ],
-      }),
+      buildGroupApprovalMessage([
+        buildReaction({
+          id: 8,
+          sender: "+15550000000",
+          created_at: "2026-05-27T21:01:00.000Z",
+        }),
+        buildReaction({
+          id: 9,
+          sender: "+15551230000",
+          created_at: "2026-05-27T21:02:00.000Z",
+        }),
+      ]),
     ]);
 
     await pollPendingIMessageApprovalReactions(
@@ -277,39 +285,8 @@ describe("iMessage approval reaction poller", () => {
       applied: false,
       approval: { status: "denied", decision: "deny", reason: "user" },
     });
-    await registerIMessageApprovalReactionTarget({
-      accountId,
-      conversation: { chatId: 42, chatGuid: "iMessage;+;chat-guid" },
-      messageId: "msg-1",
-      approvalId: "exec-1",
-      allowedDecisions: ["allow-once", "deny"],
-    });
-    const request = createRpcRequest([
-      buildApprovalMessage({
-        guid: "msg-1",
-        chat_id: 42,
-        chat_guid: "iMessage;+;chat-guid",
-        chat_identifier: undefined,
-        is_group: true,
-        is_from_me: true,
-        sender: undefined,
-        text: "Exec approval required\nID: exec-1",
-        reactions: [
-          buildReaction({
-            id: 8,
-            sender: "+15551230000",
-            created_at: "2026-05-27T21:01:00.000Z",
-          }),
-          buildReaction({
-            id: 9,
-            sender: "+15551230000",
-            type: "dislike",
-            emoji: "👎",
-            created_at: "2026-05-27T21:02:00.000Z",
-          }),
-        ],
-      }),
-    ]);
+    await registerTarget();
+    const request = createRpcRequest([buildGroupApprovalMessage()]);
     const logVerboseMessage = vi.fn();
     const pollParams = buildPollParams(request, {
       cfg: buildApprovalConfig(APPROVER),
@@ -329,39 +306,8 @@ describe("iMessage approval reaction poller", () => {
 
   it("propagates an authorized resolver failure and retries it on the next poll", async () => {
     resolverMocks.resolveApprovalOverGateway.mockRejectedValueOnce(new Error("gateway down"));
-    await registerIMessageApprovalReactionTarget({
-      accountId,
-      conversation: { chatId: 42, chatGuid: "iMessage;+;chat-guid" },
-      messageId: "msg-1",
-      approvalId: "exec-1",
-      allowedDecisions: ["allow-once", "deny"],
-    });
-    const request = createRpcRequest([
-      buildApprovalMessage({
-        guid: "msg-1",
-        chat_id: 42,
-        chat_guid: "iMessage;+;chat-guid",
-        chat_identifier: undefined,
-        is_group: true,
-        is_from_me: true,
-        sender: undefined,
-        text: "Exec approval required\nID: exec-1",
-        reactions: [
-          buildReaction({
-            id: 8,
-            sender: "+15551230000",
-            created_at: "2026-05-27T21:01:00.000Z",
-          }),
-          buildReaction({
-            id: 9,
-            sender: "+15551230000",
-            type: "dislike",
-            emoji: "👎",
-            created_at: "2026-05-27T21:02:00.000Z",
-          }),
-        ],
-      }),
-    ]);
+    await registerTarget();
+    const request = createRpcRequest([buildGroupApprovalMessage()]);
     const pollParams = buildPollParams(request, { cfg: buildApprovalConfig(APPROVER) });
 
     // The transient failure aborts the cycle before the later 👎 is resolved:

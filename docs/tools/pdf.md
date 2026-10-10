@@ -11,14 +11,17 @@ read_when:
 
 ## Availability
 
-The tool registers only when OpenClaw can resolve a PDF-capable model for the agent. Resolution order:
+The agent can register the tool before automatic model selection completes. On execution, model resolution follows this order:
 
 1. `agents.defaults.pdfModel` (explicit primary/fallbacks)
 2. `agents.defaults.imageModel` (explicit primary/fallbacks)
-3. The agent's resolved session/default model, if its provider supports native PDF input (Anthropic, Google) or already has a configured vision model
-4. Auto-detected image/vision-capable providers with usable auth, preferring native-PDF providers first
+3. A vision model from the default model's provider, if that provider supports native PDF input (Anthropic, Google)
+4. Automatic candidates with usable auth: native-PDF providers first, then image/vision-capable providers and providers declaring PDF text-extraction support. A default provider's declared text-extraction model takes precedence over generic image candidates.
+5. The active session model, if no earlier candidate resolves, it supports images, its provider has usable auth, and its provider does not disable PDF image extraction (`documentModels.pdf.image: false`). This includes vision-capable OpenRouter models without separate `pdfModel` or `imageModel` configuration.
 
-Every fallback candidate is auth-checked before use, so a configured `provider/model` only counts if OpenClaw can authenticate that provider for the agent. If no usable model resolves, the `pdf` tool is not exposed.
+Automatic candidates are auth-checked before selection. Explicit PDF/image settings retain their configured precedence and are authenticated at execution. If deferred resolution finds no usable model, the call fails with `No PDF model configured.` before opening the PDF.
+
+PDF analysis uses the selected model's configured provider credentials or connected account. It does not require a separate PDF API key.
 
 ## Input reference
 
@@ -53,7 +56,7 @@ Per-PDF size cap in MB. Defaults to `agents.defaults.pdfMaxMb`, or `10` if unset
 Notes:
 
 - `pdf` and `pdfs` are merged and deduplicated before loading; at least one is required.
-- `pages` is parsed as 1-based page numbers, deduped, sorted, and clamped to `agents.defaults.pdfMaxPages` (default `20`). A range that matches no in-bounds pages errors before the model call.
+- `pages` is parsed as 1-based page numbers, deduped, and sorted. `agents.defaults.pdfMaxPages` (default `20`) limits the number of selected pages, not their page numbers; if a larger selection is shortened, both the PDF model and the calling model receive a partial-document notice.
 
 ## Supported PDF references
 
@@ -63,6 +66,9 @@ Notes:
 - OpenClaw-managed inbound refs such as `media://inbound/<id>`
 
 Other URI schemes (for example `ftp://`) return `details.error = "unsupported_pdf_reference"`. Remote `http(s)` URLs are rejected when the tool runs sandboxed. With workspace-only file policy enabled, local paths outside allowed roots are rejected; managed inbound refs and replayed paths under OpenClaw's inbound media store are still allowed.
+
+`data:` URLs are unsupported. Files identified as other document types, such as
+plain text or JSON, are rejected before model dispatch.
 
 Relative paths resolve from the task's working directory, including selected Git
 worktrees. Local reads use the session's approved filesystem root; see
@@ -84,7 +90,7 @@ Limits:
 Used for every other provider.
 
 1. Extract text from the selected pages (up to `agents.defaults.pdfMaxPages`, default `20`) via the bundled `document-extract` plugin, which uses the `clawpdf` package (PDFium WebAssembly) for text and image extraction.
-2. If the extracted text is shorter than `200` characters, render the same pages to PNG images. The render budget is `4,000,000` pixels total, shared across all pages needing images (allocated proportionally per remaining page, not per page), so text pages that already have enough text skip rendering entirely.
+2. For each selected page with fewer than `200` characters of extracted text, render that page to a PNG image. A text-rich page does not suppress image fallback for other selected pages. The render budget is `4,000,000` pixels total, shared across all pages needing images (allocated proportionally per remaining page, not per page), so text pages that already have enough text skip rendering entirely.
 3. Send the extracted text (and any rendered images) plus the prompt to the selected model.
 
 Details:
@@ -94,6 +100,7 @@ Details:
 - If the model has no image input and there is no extractable text, the tool errors.
 - If image rendering fails, OpenClaw drops the images and continues with the extracted text.
 - If the target model is text-only and extraction produced images, OpenClaw drops the images and sends text only.
+- If page, text, or image limits make extraction partial, OpenClaw includes a short partial-document notice in the analysis context and tool result.
 
 ## Config
 

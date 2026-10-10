@@ -1,7 +1,10 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { describe, expect, it, vi } from "vitest";
+import { crabboxState, openWarmImageStore } from "./crabbox-state.test-support.js";
 import { operationLeaseId } from "./crabbox-worker-profile.js";
+import { commandResult } from "./crabbox-worker-provider.test-support.js";
 import {
   listCrabboxWarmImages,
   recoverCrabboxWarmImageCapture,
@@ -9,9 +12,7 @@ import {
 import {
   captureWarmImage,
   checkpointResult,
-  commandResult,
   createWarmProvider,
-  openWarmImageStore,
   provisionWarmProfile,
   CHECKPOINT_ID,
   LEASE_ID,
@@ -25,6 +26,7 @@ describe("Crabbox warm-image lifecycle ownership", () => {
     const lease = await provisionWarmProfile(initial.provider, PROFILE, "response-lost");
     await captureWarmImage(initial.provider, PROFILE, "first-template");
     await initial.provider.dispose();
+    await closeOpenClawStateDatabaseAsync();
     resetPluginStateStoreForTests();
 
     const restarted = createWarmProvider(undefined, initial.stateDir);
@@ -57,12 +59,13 @@ describe("Crabbox warm-image lifecycle ownership", () => {
     const now = Date.now();
     vi.spyOn(Date, "now").mockReturnValue(now + 86_400_000);
     await captureWarmImage(initial.provider, PROFILE, "refresh-template");
-    expect(listCrabboxWarmImages()[0]).toMatchObject({
+    expect((await listCrabboxWarmImages(crabboxState))[0]).toMatchObject({
       checkpointId: "chk_generation_2",
       retirement: { checkpointId: "chk_generation_1" },
     });
     expect(initial.calls.some(({ argv }) => argv[2] === "delete")).toBe(false);
     await initial.provider.dispose();
+    await closeOpenClawStateDatabaseAsync();
     resetPluginStateStoreForTests();
 
     const restarted = createWarmProvider(command, initial.stateDir);
@@ -74,7 +77,9 @@ describe("Crabbox warm-image lifecycle ownership", () => {
     await expect(
       restarted.provider.destroy({ leaseId: lease.leaseId, profile: PROFILE }),
     ).rejects.toThrow();
-    expect(listCrabboxWarmImages()[0]?.allocations[lease.leaseId]?.choice).toEqual({
+    expect(
+      (await listCrabboxWarmImages(crabboxState))[0]?.allocations[lease.leaseId]?.choice,
+    ).toEqual({
       kind: "checkpoint",
       checkpointId: "chk_generation_1",
     });
@@ -86,8 +91,10 @@ describe("Crabbox warm-image lifecycle ownership", () => {
     expect(restarted.calls.findIndex(({ argv }) => argv[1] === "stop")).toBeLessThan(
       restarted.calls.findIndex(({ argv }) => argv[2] === "delete"),
     );
-    expect(listCrabboxWarmImages()[0]?.allocations[lease.leaseId]).toBeUndefined();
-    expect(listCrabboxWarmImages()[0]?.retirement).toBeUndefined();
+    expect(
+      (await listCrabboxWarmImages(crabboxState))[0]?.allocations[lease.leaseId],
+    ).toBeUndefined();
+    expect((await listCrabboxWarmImages(crabboxState))[0]?.retirement).toBeUndefined();
   });
 
   it.each([
@@ -168,6 +175,7 @@ describe("Crabbox warm-image lifecycle ownership", () => {
 
       failOldDeletion = false;
       await provider.dispose();
+      await closeOpenClawStateDatabaseAsync();
       resetPluginStateStoreForTests();
       const restarted = createWarmProvider(command, stateDir);
       const restartedLease = await provisionWarmProfile(
@@ -180,21 +188,21 @@ describe("Crabbox warm-image lifecycle ownership", () => {
       expect(providerCheckpoints).toEqual(
         new Set(deleteFails ? [CHECKPOINT_ID, retainedId] : [retainedId]),
       );
-      expect(listCrabboxWarmImages()[0]?.retirement?.checkpointId).toBe(
+      expect((await listCrabboxWarmImages(crabboxState))[0]?.retirement?.checkpointId).toBe(
         deleteFails ? CHECKPOINT_ID : undefined,
       );
       expect(restarted.calls.some(({ argv }) => argv[2] === "delete")).toBe(false);
       expect(restarted.calls.some(({ argv }) => argv[1] === "warmup")).toBe(false);
       await restarted.provider.destroy({ leaseId: restartedLease.leaseId, profile: PROFILE });
       expect(providerCheckpoints).toEqual(new Set([retainedId]));
-      expect(listCrabboxWarmImages()[0]?.retirement).toBeUndefined();
+      expect((await listCrabboxWarmImages(crabboxState))[0]?.retirement).toBeUndefined();
       expect(
         restarted.calls.filter(({ argv }) => argv[2] === "delete").map(({ argv }) => argv[3]),
       ).toEqual(deleteFails ? [CHECKPOINT_ID] : []);
       expect(restarted.calls.at(-1)?.argv[1]).toBe("stop");
 
       clock.mockReturnValue(now + ageMs + 14 * 24 * 60 * 60 * 1_000 + 1);
-      // This lease was never enrolled, so teardown sweeps without capturing another image.
+      // An inspection-only lease owns no profile and must not sweep unrelated images.
       const inspectionOnlyLease = {
         leaseId: operationLeaseId(`provision:v2:${"3".repeat(64)}`),
         profile: PROFILE,
@@ -203,6 +211,14 @@ describe("Crabbox warm-image lifecycle ownership", () => {
         await restarted.provider.inspect(inspectionOnlyLease);
         await restarted.provider.destroy(inspectionOnlyLease);
         expect(restarted.calls.at(-1)?.argv[1]).toBe("stop");
+      }
+      expect(providerCheckpoints).toEqual(new Set([retainedId]));
+      for (let sweep = 0; sweep < 2; sweep++) {
+        await restarted.provider.maintain!({
+          profiles: [PROFILE],
+          signal: new AbortController().signal,
+          assertCurrent() {},
+        });
       }
       expect(restarted.calls.some(({ argv }) => argv[2] === "create")).toBe(false);
       expect(restarted.warn).not.toHaveBeenCalled();
@@ -236,7 +252,7 @@ describe("Crabbox warm-image lifecycle ownership", () => {
 
     expect(warn).toHaveBeenCalledOnce();
     expect(store.lookup(image.key)?.image).toEqual(existing.image);
-    expect(listCrabboxWarmImages()[0]?.capture?.phase).toBe(
+    expect((await listCrabboxWarmImages(crabboxState))[0]?.capture?.phase).toBe(
       action === "create" ? "uncertain" : undefined,
     );
     expect(calls.some(({ argv }) => argv[2] === "delete")).toBe(false);
@@ -345,7 +361,7 @@ describe("Crabbox warm-image lifecycle ownership", () => {
       if (trigger === "allocation") {
         await provisionWarmProfile(provider);
       } else {
-        expect(listCrabboxWarmImages()[0]?.allocations).toEqual({});
+        expect((await listCrabboxWarmImages(crabboxState))[0]?.allocations).toEqual({});
         await provider.maintain?.({
           profiles: [PROFILE],
           signal: new AbortController().signal,
@@ -419,10 +435,10 @@ describe("Crabbox warm-image lifecycle ownership", () => {
 
     expect(restarted.calls.filter(({ argv }) => argv[2] === "create")).toHaveLength(0);
     expect(restarted.calls.some(({ argv }) => argv[2] === "delete")).toBe(false);
-    const capture = listCrabboxWarmImages()[0]?.capture;
+    const capture = (await listCrabboxWarmImages(crabboxState))[0]?.capture;
     expect(capture?.stale).toBe(true);
     expect(capture?.leaseId).toBeUndefined();
-    recoverCrabboxWarmImageCapture(capture!.selector, true);
+    await recoverCrabboxWarmImageCapture(crabboxState, capture!.selector, true);
     await captureWarmImage(restarted.provider);
     expect(restarted.calls.filter(({ argv }) => argv[2] === "create")).toHaveLength(1);
     expect(store.lookup(image.key)?.image?.checkpointId).toBe(CHECKPOINT_ID);

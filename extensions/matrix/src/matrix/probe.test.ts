@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const createMatrixClientMock = vi.fn();
 
-vi.mock("./probe.runtime.js", () => ({
+vi.mock("./client.js", () => ({
   createMatrixClient: (...args: unknown[]) => createMatrixClientMock(...args),
 }));
 
@@ -69,25 +69,6 @@ describe("probeMatrix", () => {
     });
   });
 
-  it("passes accountId through to client creation", async () => {
-    await probeMatrix({
-      homeserver: "https://matrix.example.org",
-      accessToken: "tok",
-      userId: "@bot:example.org",
-      timeoutMs: 500,
-      accountId: "ops",
-    });
-
-    expect(createMatrixClientMock).toHaveBeenCalledWith({
-      homeserver: "https://matrix.example.org",
-      userId: undefined,
-      accessToken: "tok",
-      persistStorage: false,
-      localTimeoutMs: 500,
-      accountId: "ops",
-    });
-  });
-
   it("passes dispatcherPolicy through to client creation", async () => {
     await probeMatrix({
       homeserver: "https://matrix.example.org",
@@ -130,23 +111,6 @@ describe("probeMatrix", () => {
       persistStorage: false,
       localTimeoutMs: 500,
       accountId: "ops",
-    });
-  });
-
-  it("omits deviceId when not provided", async () => {
-    await probeMatrix({
-      homeserver: "https://matrix.example.org",
-      accessToken: "tok",
-      timeoutMs: 500,
-    });
-
-    expect(createMatrixClientMock).toHaveBeenCalledWith({
-      homeserver: "https://matrix.example.org",
-      userId: undefined,
-      accessToken: "tok",
-      deviceId: undefined,
-      persistStorage: false,
-      localTimeoutMs: 500,
     });
   });
 

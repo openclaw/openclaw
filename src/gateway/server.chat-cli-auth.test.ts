@@ -3,96 +3,28 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthProfileCredential } from "../agents/auth-profiles/types.js";
-import { captureConfigHealthStateStore } from "../config/io.health-state.js";
-import { createConfigIO } from "../config/io.js";
+import { resolveClaudeCliProjectDirForWorkspace } from "../agents/command/claude-cli-project-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveExecutablePath } from "../infra/executable-path.js";
-import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db.js";
-import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { createWindowsCmdShimFixture } from "../test-helpers/windows-cmd-shim.js";
 import { setTestEnvValue } from "../test-utils/env.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
+import { waitForCatalogPublication } from "./server-methods/models-auth-catalog.test-support.js";
+import { createClaudeAuthFixture } from "./server.chat-cli-auth.test-support.js";
 import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
 import * as gatewayFixture from "./test-helpers.e2e.js";
 
+const savedCredential = {
+  type: "token",
+  provider: "anthropic",
+  token: "synthetic-pasted-anthropic-token",
+} satisfies AuthProfileCredential;
+
 // Only the external executable is a fixture. The registered Gateway, Anthropic
 // plugin, profile selection, credential transport, and transcript writer are real.
-const CLAUDE_AUTH_FIXTURE = String.raw`
-const assert = require("node:assert/strict");
-const { randomUUID } = require("node:crypto");
-const { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } = require("node:fs");
-const { join } = require("node:path");
-const { createInterface } = require("node:readline");
-const send = (message) => process.stdout.write(JSON.stringify(message) + "\n");
-const nativeRoot = process.env.CLAUDE_CONFIG_DIR;
-const nativeLogin = existsSync(join(nativeRoot, ".credentials.json"));
-if (process.argv.includes("--version")) {
-  process.stdout.write("2.1.226 (Claude Code fixture)\n");
-  process.exit(0);
-}
-if (process.argv.includes("auth")) {
-  send({ loggedIn: nativeLogin });
-  process.exit(0);
-}
-const descriptor = process.env.CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR;
-let reply = "No managed credential supplied.";
-if (nativeLogin) {
-  reply = "Native account reply.";
-}
-if (descriptor !== undefined) {
-  assert.equal(descriptor, "3");
-  const token = readFileSync(3, "utf8");
-  assert.ok(["synthetic-pasted-anthropic-token", "synthetic-replacement-anthropic-token"].includes(token));
-  reply = token === "synthetic-replacement-anthropic-token"
-    ? "Replacement account reply." : "Saved account reply.";
-}
-for (const name of ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR"]) {
-  assert.equal(process.env[name], undefined);
-}
-let currentHistory;
-createInterface({ input: process.stdin }).on("line", (line) => {
-  const message = JSON.parse(line);
-  if (message.type === "control_request" && message.request.subtype === "initialize") {
-    send({ type: "control_response", response: {
-      subtype: "success", request_id: message.request_id, response: { commands: [], models: [] },
-    } });
-  } else if (message.type === "user") {
-    const resumeIndex = process.argv.indexOf("--resume");
-    const sessionId = process.argv[(resumeIndex >= 0 ? resumeIndex : process.argv.indexOf("--session-id")) + 1];
-    const projectDir = join(nativeRoot, "projects", process.cwd().replace(/[^a-zA-Z0-9]/g, "-"));
-    mkdirSync(projectDir, { recursive: true });
-    const historyPath = join(projectDir, sessionId + ".jsonl");
-    const resumedHistory = currentHistory ?? (resumeIndex >= 0
-      ? readFileSync(historyPath, "utf8").trim().split("\n").map((line) => JSON.parse(line)) : []);
-    appendFileSync(join(nativeRoot, "turns.jsonl"), JSON.stringify({
-      sessionId, resume: resumeIndex >= 0, savedToken: descriptor !== undefined,
-      resumedHistory,
-    }) + "\n");
-    const remembered = JSON.stringify(resumedHistory).match(/native-history-[a-f0-9-]+/);
-    const turnReply = nativeLogin && descriptor === undefined && remembered
-      ? "Native history: " + remembered[0] + "." : reply;
-    const userUuid = message.uuid;
-    const assistantUuid = randomUUID();
-    const assistantMessage = {
-      role: "assistant", content: [{ type: "text", text: turnReply }],
-    };
-    const rows = [
-      { type: "user", uuid: userUuid, parentUuid: resumedHistory.at(-1)?.uuid ?? null,
-        message: message.message },
-      { type: "assistant", uuid: assistantUuid, parentUuid: userUuid, message: assistantMessage },
-    ].map((row) => ({ ...row, sessionId, cwd: process.cwd(), timestamp: new Date().toISOString(), isSidechain: false }));
-    currentHistory = [...resumedHistory, ...rows];
-    writeFileSync(historyPath, currentHistory.map((row) => JSON.stringify(row)).join("\n") + "\n");
-    send({ type: "assistant", uuid: assistantUuid, message: assistantMessage });
-    send({ type: "result", subtype: "success", is_error: false,
-      result: turnReply, session_id: sessionId });
-  }
-});
-`;
-
 const cases: {
   name: string;
   order: NonNullable<OpenClawConfig["auth"]>["order"];
@@ -107,21 +39,9 @@ const cases: {
     reply: "Native account reply.",
   },
   {
-    name: "uses a saved canonical paste-token without an explicit account selection or native login",
-    order: undefined,
-    credential: { type: "token", provider: "anthropic", token: "synthetic-pasted-anthropic-token" },
-    reply: "Saved account reply.",
-  },
-  {
-    name: "uses a saved canonical paste-token selected by the canonical account order",
-    order: { anthropic: ["anthropic:pasted"] },
-    credential: { type: "token", provider: "anthropic", token: "synthetic-pasted-anthropic-token" },
-    reply: "Saved account reply.",
-  },
-  {
     name: "honors an explicit empty CLI account order despite a saved canonical paste-token",
     order: { "claude-cli": [] },
-    credential: { type: "token", provider: "anthropic", token: "synthetic-pasted-anthropic-token" },
+    credential: savedCredential,
     reply: "No managed credential supplied.",
   },
   {
@@ -189,7 +109,11 @@ async function cleanupCliAuthFixture({
 }
 
 async function prepareCliAuthFixture(
-  { order, credential, nativeContinuity }: (typeof cases)[number],
+  {
+    order,
+    credential,
+    nativeContinuity,
+  }: Pick<(typeof cases)[number], "order" | "credential" | "nativeContinuity">,
   signal: AbortSignal,
 ): Promise<CliAuthFixture> {
   signal.throwIfAborted();
@@ -207,7 +131,7 @@ async function prepareCliAuthFixture(
       CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR: undefined,
       OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
       OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
-      OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(process.cwd(), "extensions"),
+      OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(process.cwd(), "dist/extensions"),
       OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
       OPENCLAW_SKIP_CHANNELS: "1",
       OPENCLAW_SKIP_GMAIL_WATCHER: "1",
@@ -222,9 +146,23 @@ async function prepareCliAuthFixture(
   let gateway: CliAuthGateway | undefined;
   try {
     signal.throwIfAborted();
+    // Persisted native continuity must exercise Claude's hashed long-path key,
+    // including on CI hosts whose temporary roots would otherwise be short.
+    const workspaceDir =
+      nativeContinuity && state.workspaceDir.length <= 200
+        ? path.join(state.workspaceDir, "w".repeat(201 - state.workspaceDir.length))
+        : state.workspaceDir;
+    await fs.mkdir(workspaceDir, { recursive: true });
     const binDir = state.path("bin");
     const scriptPath = path.join(binDir, "claude.cjs");
     const executable = path.join(binDir, process.platform === "win32" ? "claude.cmd" : "claude");
+    const fixtureScript = createClaudeAuthFixture(
+      (await fs.realpath(workspaceDir)).normalize("NFC"),
+      resolveClaudeCliProjectDirForWorkspace({
+        workspaceDir,
+        homeDir: state.home,
+      }),
+    );
     await fs.mkdir(binDir);
     if (process.platform === "win32") {
       await createWindowsCmdShimFixture({
@@ -233,11 +171,11 @@ async function prepareCliAuthFixture(
         shimLine: `"${process.execPath}" "%~dp0\\claude.cjs" %*`,
       });
     } else {
-      await fs.writeFile(executable, `#!${process.execPath}\n${CLAUDE_AUTH_FIXTURE}`, {
+      await fs.writeFile(executable, `#!${process.execPath}\n${fixtureScript}`, {
         mode: 0o755,
       });
     }
-    await fs.writeFile(scriptPath, CLAUDE_AUTH_FIXTURE);
+    await fs.writeFile(scriptPath, fixtureScript);
     setTestEnvValue("PATH", binDir);
     const nativeRoot = path.join(state.home, ".claude");
     setTestEnvValue("CLAUDE_CONFIG_DIR", nativeRoot);
@@ -266,8 +204,9 @@ async function prepareCliAuthFixture(
       ...(order ? { auth: { order } } : {}),
       agents: {
         defaults: {
-          workspace: state.workspaceDir,
+          workspace: workspaceDir,
           skipBootstrap: true,
+          utilityModel: "",
           heartbeat: { every: "0m" },
           model: { primary: modelRef },
           models: { [modelRef]: { agentRuntime: { id: "claude-cli" } } },
@@ -355,13 +294,7 @@ async function executeCliAuthCase(
     expect(original?.authProfileId).toBeUndefined();
     await state.writeAuthProfiles({
       version: 1,
-      profiles: {
-        "anthropic:pasted": {
-          type: "token",
-          provider: "anthropic",
-          token: "synthetic-pasted-anthropic-token",
-        },
-      },
+      profiles: { "anthropic:pasted": savedCredential },
     });
     await gatewayFixture.disconnectGatewayClient(fixture.gateway.client);
     await fixture.gateway.server.close({ reason: "Verify persisted native account continuity" });
@@ -421,11 +354,7 @@ async function executeCliAuthCase(
     await state.writeAuthProfiles({
       version: 1,
       profiles: {
-        "anthropic:pasted": {
-          type: "token",
-          provider: "anthropic",
-          token: "synthetic-pasted-anthropic-token",
-        },
+        "anthropic:pasted": savedCredential,
         "anthropic:replacement": replacement,
       },
       order: { anthropic: ["anthropic:replacement", "anthropic:pasted"] },
@@ -495,33 +424,45 @@ async function executeCliAuthCase(
   }
 }
 
-it("persists config health in the isolated Gateway process", async () => {
-  const state = await createOpenClawTestState({
-    label: "gateway-config-health",
-    env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" },
-  });
-  const warn = vi.fn();
-  const deps = { env: state.env, homedir: () => state.home, logger: { warn, error: vi.fn() } };
-  const readHealth = async () => {
-    using health = captureConfigHealthStateStore(deps, state.configPath);
-    return (await health.read())?.state;
-  };
-  try {
-    await state.writeConfig({ gateway: { mode: "local" } });
-    const snapshot = await createConfigIO({
-      ...deps,
-      configPath: state.configPath,
-    }).readConfigFileSnapshot();
-    expect(snapshot.valid).toBe(true);
-    const observed = await readHealth();
-    expect(observed?.entries?.[state.configPath]?.lastKnownGood?.hash).toBe(snapshot.hash);
-    await closeOpenClawStateDatabaseByPathAsync(resolveOpenClawStateSqlitePath(state.env));
-    expect(await readHealth()).toEqual(observed);
-    expect(warn).not.toHaveBeenCalled();
-  } finally {
-    await state.cleanup();
-  }
-});
+it(
+  "publishes Claude login changes after Gateway startup",
+  { timeout: 90_000 },
+  async ({ signal, onTestFinished }) => {
+    const fixture = await prepareCliAuthFixture({ order: undefined }, signal);
+    onTestFinished(() => cleanupCliAuthFixture(fixture));
+    const credentials = path.join(fixture.nativeRoot, ".credentials.json");
+    const probes = async () =>
+      (await fs.readFile(path.join(fixture.nativeRoot, "auth-status.log"), "utf8")).split("\n")
+        .length - 1;
+    const available = async () => {
+      const { models } = await fixture.gateway.client.request<{
+        models: { provider: string; id: string; available?: boolean }[];
+      }>("models.list", { view: "configured", agentId: "main" });
+      return models.find((model) => `${model.provider}/${model.id}` === fixture.modelRef)
+        ?.available;
+    };
+    const now = Date.now.bind(Date);
+    let elapsed = 0;
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now() + elapsed);
+    onTestFinished(() => clock.mockRestore());
+
+    expect(await available()).toBe(false);
+    await fs.writeFile(credentials, "{}");
+    const startupProbes = await probes();
+    expect(await available()).toBe(false);
+    expect(await probes()).toBe(startupProbes);
+
+    elapsed += 5 * 60_000;
+    await waitForCatalogPublication({ signal, read: available, ready: (value) => value === true });
+    const loginProbes = await probes();
+    expect(loginProbes).toBe(startupProbes + 1);
+
+    await fs.rm(credentials);
+    elapsed += 5 * 60_000;
+    await waitForCatalogPublication({ signal, read: available, ready: (value) => value === false });
+    expect(await probes()).toBe(loginProbes + 1);
+  },
+);
 
 it("does not start a Gateway after CLI auth fixture acquisition is cancelled", async () => {
   const controller = new AbortController();

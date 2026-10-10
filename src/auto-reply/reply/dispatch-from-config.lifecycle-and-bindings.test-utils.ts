@@ -19,10 +19,10 @@ import {
 } from "../../test-utils/channel-plugins.js";
 import type { RuntimeMsgContext as MsgContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
+import { createPluginBindingRecord } from "./conversation-binding.test-fixtures.js";
 import { shouldBypassPluginOwnedBindingForCommand } from "./dispatch-from-config.plugin-binding.js";
 import {
   createDispatcher,
-  createPluginBindingRecord,
   diagnosticMocks,
   emptyConfig,
   hookMocks,
@@ -1083,7 +1083,7 @@ describe("dispatchReplyFromConfig", () => {
         }
         abort.abort(cancellation);
         mutation = externalLifecycleRequest.runInAsyncScope(async () =>
-          runExclusiveSessionLifecycleMutation({
+          runExclusiveSessionLifecycleMutation("patch", {
             scope: "/tmp/mock-sessions.json",
             identities: [sessionKey, sessionId],
             prepare: async () => {
@@ -1184,7 +1184,7 @@ describe("dispatchReplyFromConfig", () => {
     let mutationRan = false;
     const mutation = externalLifecycleRequest.runInAsyncScope(
       async () =>
-        await runExclusiveSessionLifecycleMutation({
+        await runExclusiveSessionLifecycleMutation("patch", {
           scope: "/tmp/mock-sessions.json",
           identities: [sessionKey, sessionId],
           prepare: async () => {
@@ -1218,7 +1218,59 @@ describe("dispatchReplyFromConfig", () => {
     externalLifecycleRequest.emitDestroy();
   });
 
-  it("holds a lifecycle lease for plugin claims behind an active reply operation", async () => {
+  it("releases an idle borrowed lifecycle lease when the queued successor is aborted", async () => {
+    const sessionKey = "agent:main:discord:channel:cancelled-successor";
+    const sessionId = "cancelled-successor-session";
+    const storePath = "/tmp/mock-sessions.json";
+    const entry = { sessionId, updatedAt: Date.now() };
+    sessionStoreMocks.currentEntry = entry;
+    const existingOperation = createReplyOperation({
+      sessionKey,
+      sessionId,
+      resetTriggered: false,
+    });
+    const abort = new AbortController();
+    const { createDispatchReplyOperationCoordinator } =
+      await import("./dispatch-from-config.lifecycle.js");
+    const coordinator = createDispatchReplyOperationCoordinator({
+      allowActiveQueueResolution: true,
+      agentId: "main",
+      cfg: emptyConfig,
+      ctx: finalizeInboundContextForSdk(
+        buildTestCtx({
+          Provider: "discord",
+          Surface: "discord",
+          SessionKey: sessionKey,
+          Body: "cancel this queued successor",
+        }),
+      ),
+      dispatcher: createDispatcher(),
+      dispatchOperationSessionKey: sessionKey,
+      operationSessionStoreEntry: { entry, storePath },
+      replyOptions: { abortSignal: abort.signal },
+      resolveOperationExpectedSessionId: () => sessionId,
+    });
+
+    try {
+      await expect(coordinator.ensureDispatchReplyOperation("pre_dispatch")).resolves.toEqual({
+        status: "ready",
+      });
+      expect(isSessionWorkAdmissionActive(storePath, [sessionKey, sessionId])).toBe(true);
+
+      abort.abort(new Error("queued successor cancelled"));
+
+      await vi.waitFor(() => {
+        expect(isSessionWorkAdmissionActive(storePath, [sessionKey, sessionId])).toBe(false);
+      });
+      expect(replyRunRegistry.get(sessionKey)).toBe(existingOperation);
+      expect(existingOperation.abortSignal.aborted).toBe(false);
+    } finally {
+      await coordinator.releasePreDispatchLifecycleAdmission();
+      existingOperation.complete();
+    }
+  });
+
+  it("holds a lifecycle lease for an aborted plugin claim behind an active reply operation", async () => {
     const resolveClaim = mockPendingPluginClaim({
       bindingId: "binding-active-lifecycle-race",
       targetSessionKey: "plugin-binding:test:active-race",
@@ -1233,6 +1285,7 @@ describe("dispatchReplyFromConfig", () => {
       resetTriggered: false,
     });
     const dispatcher = createDispatcher();
+    const abort = new AbortController();
     const externalLifecycleRequest = new AsyncResource("external-active-lifecycle-request");
     const ctx = buildTestCtx({
       Provider: "discord",
@@ -1243,7 +1296,13 @@ describe("dispatchReplyFromConfig", () => {
       Body: "hold this overlapping claim",
     });
     const replyResolver = vi.fn(async () => ({ text: "must not run" }) satisfies ReplyPayload);
-    const dispatch = dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
+    const dispatch = dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+      replyOptions: { abortSignal: abort.signal },
+    });
     await vi.waitFor(() => {
       expect(hookMocks.runner.runInboundClaimForPluginOutcome).toHaveBeenCalledOnce();
     });
@@ -1253,12 +1312,13 @@ describe("dispatchReplyFromConfig", () => {
 
     existingOperation.complete();
     expect(replyRunRegistry.get(sessionKey)).toBeUndefined();
+    abort.abort(new Error("queued successor cancelled"));
 
     let mutationPrepared = false;
     let mutationRan = false;
     const mutation = externalLifecycleRequest.runInAsyncScope(
       async () =>
-        await runExclusiveSessionLifecycleMutation({
+        await runExclusiveSessionLifecycleMutation("patch", {
           scope: "/tmp/mock-sessions.json",
           identities: [sessionKey, sessionId],
           prepare: async () => {
@@ -1275,6 +1335,9 @@ describe("dispatchReplyFromConfig", () => {
     );
     await vi.waitFor(() => {
       expect(mutationPrepared).toBe(true);
+    });
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
     });
     expect(mutationRan).toBe(false);
 
@@ -1336,7 +1399,7 @@ describe("dispatchReplyFromConfig", () => {
 
     let mutationRan = false;
     const mutation = runWithReplyOperationLifecycleAdmission(ownerOperation, async () =>
-      runExclusiveSessionLifecycleMutation({
+      runExclusiveSessionLifecycleMutation("patch", {
         scope: "/tmp/mock-sessions.json",
         identities: [sessionKey, sessionId],
         prepare: async () => {
@@ -1427,7 +1490,7 @@ describe("dispatchReplyFromConfig", () => {
     const externalLifecycleRequest = new AsyncResource("interrupted-fallback-lifecycle");
     const mutation = externalLifecycleRequest.runInAsyncScope(
       async () =>
-        await runExclusiveSessionLifecycleMutation({
+        await runExclusiveSessionLifecycleMutation("patch", {
           scope: "/tmp/mock-sessions.json",
           identities: [sessionKey, sessionId],
           prepare: async () => {
@@ -1453,7 +1516,7 @@ describe("dispatchReplyFromConfig", () => {
     expect(result.queuedFinal).toBe(false);
     expect(operation?.result).toMatchObject({
       kind: "aborted",
-      code: "aborted_for_restart",
+      code: "aborted_by_user",
     });
     expect(replyRunRegistry.isActive(sessionKey)).toBe(false);
     expect(mutationRan).toBe(true);

@@ -1,5 +1,6 @@
 import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "../../packages/gateway-client/src/timeouts.js";
 import type { AgentWaitParams } from "../../packages/gateway-protocol/src/index.js";
+import { withoutGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import { createOutboundSendDeps } from "../cli/outbound-send-deps.js";
 import {
   GATEWAY_NATIVE_APPROVAL_METHODS,
@@ -13,10 +14,17 @@ import type {
 import { createApprovalNativeRouteCoordinator } from "../infra/approval-native-route-coordinator.js";
 import type { ChannelApprovalKind } from "../infra/approval-types.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+// HTTP agent ingress can finish before the lazy agent.wait handler loads its recorder.
+import "./agent-turn/agent-job.js";
 import { createInternalAgentTurnFacade } from "./agent-turn/internal-facade.js";
-import type { InternalAgentTurnPrincipalOptions } from "./agent-turn/internal-facade.types.js";
+import type {
+  AgentTurnStartOwner,
+  InternalAgentTurnPrincipalOptions,
+} from "./agent-turn/internal-facade.types.js";
+import { retainInternalApprovalCommitGuard } from "./internal-approval-authority.js";
 import {
   resolveLeastPrivilegeOperatorScopesForMethod,
+  ADMIN_SCOPE,
   APPROVALS_SCOPE,
   WRITE_SCOPE,
 } from "./method-scopes.js";
@@ -45,6 +53,7 @@ const loadRecoveryTypingAdapter = createLazyRuntimeModule(
 const loadOutboundMessageRuntime = createLazyRuntimeModule(
   () => import("../infra/outbound/message.js"),
 );
+const loadOperatorRecovery = createLazyRuntimeModule(() => import("./operator-run-recovery.js"));
 
 const RECOVERY_NOTICE_COMPLETION_RETENTION = {
   idPrefix: "main-session-restart-recovery:",
@@ -57,6 +66,7 @@ type GatewayInstanceRuntimeOptions = {
   getMethodRegistry: () => GatewayMethodRegistry;
   isDispatchAvailable: () => boolean;
   logError?: (message: string) => void;
+  prepareRestartRecovery?: GatewayRecoveryRuntime["prepareRestartRecovery"];
 };
 
 /** Creates closed internal principals bound to one concrete Gateway lifecycle. */
@@ -115,15 +125,18 @@ export function createGatewayInstanceRuntime(
       params.assertCurrent?.();
     };
     assertCurrent();
-    const result = await dispatchGatewayRequestInProcess<T>(params.method, params.payload, {
-      client: params.client,
-      context,
-      methodRegistry: options.getMethodRegistry(),
-      requestIdPrefix: "gateway-internal",
-      timeoutMs: params.timeoutMs,
-      signal: params.signal,
-      sessionMutationCommitGuard: assertCurrent,
-    });
+    // These closed principals own accepted lifecycle/approval work independently of a turn.
+    const result = await withoutGatewayToolCallerIdentity(() =>
+      dispatchGatewayRequestInProcess<T>(params.method, params.payload, {
+        client: params.client,
+        context,
+        methodRegistry: options.getMethodRegistry(),
+        requestIdPrefix: "gateway-internal",
+        timeoutMs: params.timeoutMs,
+        signal: params.signal,
+        sessionMutationCommitGuard: retainInternalApprovalCommitGuard(assertCurrent),
+      }),
+    );
     assertCurrent();
     return result;
   };
@@ -152,12 +165,25 @@ export function createGatewayInstanceRuntime(
     "sessions.delete",
   ]);
   const recovery: GatewayRecoveryRuntime = {
+    prepareRestartRecovery: (signal) => {
+      signal?.throwIfAborted();
+      assertDispatchAvailable("restart recovery");
+      return options.prepareRestartRecovery?.(signal)?.then((pausedUntilMs) => {
+        signal?.throwIfAborted();
+        assertDispatchAvailable("restart recovery");
+        return pausedUntilMs;
+      });
+    },
     dispatchSessionMethod: (method, payload, requestOptions = {}) =>
       dispatch({
         allowedMethods: recoverySessionMethods,
         client: createSyntheticPluginRuntimeClient({
           operatorRoleActor: { kind: "system" },
-          scopes: resolveLeastPrivilegeOperatorScopesForMethod(method, payload),
+          // Lifecycle cleanup can outlive the client that owns the accepted run.
+          scopes:
+            method === "chat.abort"
+              ? [ADMIN_SCOPE]
+              : resolveLeastPrivilegeOperatorScopesForMethod(method, payload),
         }),
         method,
         payload,
@@ -170,41 +196,105 @@ export function createGatewayInstanceRuntime(
       dispatchOptions: GatewayInstanceAgentDispatchOptions = {},
     ) => {
       assertDispatchAvailable("agent");
-      const delegatedToolPolicyHandoffId = dispatchOptions.delegatedToolPolicyHandoff
-        ? registerSubagentCompletionToolHandoff(dispatchOptions.delegatedToolPolicyHandoff)
+      const recoveryTarget = dispatchOptions.restartRecoveryOperatorTarget
+        ? { ...dispatchOptions.restartRecoveryOperatorTarget }
         : undefined;
-      const needsDedicatedPrincipal = Boolean(
-        dispatchOptions.allowModelOverride === true ||
-        dispatchOptions.allowSyntheticModelOverride === true ||
-        dispatchOptions.allowSyntheticCronRunContinuation === true ||
-        dispatchOptions.internalDeliveryMediaUrls ||
-        dispatchOptions.runtimeContextFragments ||
-        dispatchOptions.internalDeliverySuppressText === true ||
-        delegatedToolPolicyHandoffId ||
-        dispatchOptions.scopes ||
-        dispatchOptions.syntheticScopes,
-      );
-      const agentTurns = needsDedicatedPrincipal
-        ? createAgentTurnFacade({
-            client: createSyntheticPluginRuntimeClient({
-              operatorRoleActor: { kind: "system" },
-              allowModelOverride:
-                dispatchOptions.allowModelOverride === true ||
-                dispatchOptions.allowSyntheticModelOverride === true,
-              cronRunContinuation: dispatchOptions.allowSyntheticCronRunContinuation === true,
-              internalDeliveryMediaUrls: dispatchOptions.internalDeliveryMediaUrls,
-              runtimeContextFragments: dispatchOptions.runtimeContextFragments,
-              internalDeliverySuppressText: dispatchOptions.internalDeliverySuppressText,
-              delegatedToolPolicyHandoffId,
-              scopes: dispatchOptions.scopes ?? dispatchOptions.syntheticScopes,
-            }),
+      // The source claim authorizes only its exact replacement turn, not any
+      // payload dispatched by the same internal runtime.
+      const assertRecoveryTarget = () => {
+        if (
+          recoveryTarget &&
+          (payload.agentId !== recoveryTarget.agentId ||
+            payload.sessionKey !== recoveryTarget.sessionKey ||
+            payload.expectedExistingSessionId !== recoveryTarget.sessionId ||
+            payload.idempotencyKey !== recoveryTarget.recoveryRunId)
+        ) {
+          throw new Error("Restart recovery dispatch does not match its operator claim.");
+        }
+      };
+      assertRecoveryTarget();
+      const context = options.getContext();
+      let startOwner: AgentTurnStartOwner | undefined;
+      let ownerLost = false;
+      const assertRecoveryCurrent = () => {
+        assertDispatchAvailable("agent");
+        assertRecoveryTarget();
+        dispatchOptions.assertAdmissionCurrent?.();
+        dispatchOptions.signal?.throwIfAborted();
+        // Capture the actual registration, not its reusable run id. Once lost,
+        // retained tools cannot acquire a successor registration's authority.
+        ownerLost ||=
+          options.getContext() !== context ||
+          (startOwner !== undefined && startOwner.observe() === undefined);
+        if (ownerLost) {
+          throw new Error("Restart recovery operator run is no longer active.");
+        }
+      };
+      const restoredOperator = recoveryTarget
+        ? await (
+            await loadOperatorRecovery()
+          ).restoreGatewayOperatorRecovery({
+            target: recoveryTarget,
+            context,
+            assertCurrent: assertRecoveryCurrent,
           })
-        : recoveryAgentTurns;
+        : undefined;
+      let delegatedToolPolicyHandoffId: string | undefined;
       try {
+        assertRecoveryCurrent();
+        delegatedToolPolicyHandoffId = dispatchOptions.delegatedToolPolicyHandoff
+          ? registerSubagentCompletionToolHandoff(dispatchOptions.delegatedToolPolicyHandoff)
+          : undefined;
+        const needsDedicatedPrincipal = Boolean(
+          dispatchOptions.allowModelOverride === true ||
+          dispatchOptions.allowSyntheticModelOverride === true ||
+          dispatchOptions.allowSyntheticCronRunContinuation === true ||
+          dispatchOptions.internalDeliveryMediaUrls ||
+          dispatchOptions.runtimeContextFragments ||
+          dispatchOptions.internalDeliverySuppressText === true ||
+          dispatchOptions.internalDeliverySuppressErrors === true ||
+          delegatedToolPolicyHandoffId ||
+          restoredOperator ||
+          dispatchOptions.scopes ||
+          dispatchOptions.syntheticScopes,
+        );
+        const agentTurns = needsDedicatedPrincipal
+          ? createAgentTurnFacade({
+              client: createSyntheticPluginRuntimeClient({
+                operatorRoleActor: restoredOperator
+                  ? { kind: "operator", profileId: restoredOperator.authority.profileId }
+                  : { kind: "system" },
+                operatorRunAuthority: restoredOperator?.authority,
+                allowModelOverride:
+                  dispatchOptions.allowModelOverride === true ||
+                  dispatchOptions.allowSyntheticModelOverride === true,
+                cronRunContinuation: dispatchOptions.allowSyntheticCronRunContinuation === true,
+                internalDeliveryMediaUrls: dispatchOptions.internalDeliveryMediaUrls,
+                runtimeContextFragments: dispatchOptions.runtimeContextFragments,
+                internalDeliverySuppressText: dispatchOptions.internalDeliverySuppressText,
+                internalDeliverySuppressErrors: dispatchOptions.internalDeliverySuppressErrors,
+                delegatedToolPolicyHandoffId,
+                scopes: restoredOperator
+                  ? [...restoredOperator.authority.scopes]
+                  : (dispatchOptions.scopes ?? dispatchOptions.syntheticScopes),
+              }),
+              // The start owner's observe closure calls this assertion. Keep it
+              // independent of assertRecoveryCurrent to avoid a recursive owner check.
+              assertContextCurrent: () => {
+                if (options.getContext() !== context) {
+                  throw new Error("Gateway recovery context changed.");
+                }
+              },
+            })
+          : recoveryAgentTurns;
         return await agentTurns.dispatch<T>(payload, {
+          assertAdmissionCurrent: assertRecoveryCurrent,
           expectFinal: dispatchOptions.expectFinal,
           onAccepted: dispatchOptions.onAccepted,
-          onStartOwner: dispatchOptions.onStartOwner,
+          onStartOwner: (owner) => {
+            startOwner ??= owner;
+            dispatchOptions.onStartOwner?.(owner);
+          },
           onExecutionStarted: dispatchOptions.onExecutionStarted,
           onSignalAbort: dispatchOptions.onSignalAbort,
           signal: dispatchOptions.signal,
@@ -212,6 +302,7 @@ export function createGatewayInstanceRuntime(
         });
       } finally {
         cancelSubagentCompletionToolHandoff(delegatedToolPolicyHandoffId);
+        restoredOperator?.release();
       }
     },
     waitForAgent: async <T>(payload: AgentWaitParams, timeoutMs?: number, signal?: AbortSignal) => {

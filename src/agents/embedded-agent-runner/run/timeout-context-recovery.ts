@@ -56,7 +56,7 @@ export async function recoverEmbeddedRunTimeout(
   // terminal abandonment gate for the duration of compaction so completions
   // arriving in this window are not discarded as requester_abandoned.
   const recoveryMarker = markEmbeddedRunRecoveringTimeout({
-    sessionId: input.runParams.sessionId,
+    sessionId: input.getActiveSession().id,
     runId: input.runParams.runId,
   });
   try {
@@ -108,6 +108,8 @@ export async function recoverEmbeddedRunTimeout(
         sessionKey: input.runParams.sessionKey,
         sessionId: activeSession.id,
         agentId: input.sessionAgentId,
+        memoryAudience: input.runInput?.hookContext.memoryAudience,
+        sandboxed: input.runInput?.hookContext.sandboxed,
         sessionFile: activeSession.file,
         assertActive: input.assertRecoveryActive,
       });

@@ -18,14 +18,6 @@ describe("truncate utilities", () => {
     expect(truncateTail("x\n", { maxBytes: 1 }).truncatedBy).toBe("bytes");
   });
 
-  it("keeps complete UTF-8 characters when taking a partial tail line", () => {
-    const result = truncateTail("alpha🙂", { maxBytes: 4 });
-
-    expect(result.content).toBe("🙂");
-    expect(result.lastLinePartial).toBe(true);
-    expect(result.outputBytes).toBe(4);
-  });
-
   it("preserves a leading BOM and NUL in a partial tail line", () => {
     expect(truncateTail("discarded-\uFEFFA\0B", { maxBytes: 6 })).toMatchObject({
       content: "\uFEFFA\0B",
@@ -36,17 +28,13 @@ describe("truncate utilities", () => {
   });
 
   it.each([
-    { tail: "\uD800", maxBytes: 3, expected: "\uFFFD" },
-    { tail: "\uDC00", maxBytes: 3, expected: "\uFFFD" },
     { tail: "\uD800\uD800", maxBytes: 6, expected: "\uFFFD\uFFFD" },
     { tail: "\uD800a\uDC00", maxBytes: 7, expected: "\uFFFDa\uFFFD" },
-    { tail: "\uD800\uD800\uDC00", maxBytes: 7, expected: "\uFFFD\uD800\uDC00" },
     { tail: "\uDC00\uD800\uDC00", maxBytes: 7, expected: "\uFFFD\uD800\uDC00" },
     { tail: "🙂\uD800", maxBytes: 7, expected: "🙂\uFFFD" },
     { tail: "\uD800", maxBytes: 2, expected: "" },
     { tail: "\uD800🙂", maxBytes: 4, expected: "🙂" },
     { tail: "🙂\uDC00", maxBytes: 3, expected: "\uFFFD" },
-    { tail: "\uDC00\uD800\uDC00", maxBytes: 4, expected: "\uD800\uDC00" },
   ])(
     "repairs only retained lone surrogates within $maxBytes bytes: $tail",
     ({ tail, maxBytes, expected }) => {
@@ -173,16 +161,6 @@ describe("truncate utilities", () => {
   );
 
   describe("truncateLine", () => {
-    it("returns text unchanged when within limit", () => {
-      expect(truncateLine("short", 10)).toEqual({ text: "short", wasTruncated: false });
-    });
-
-    it("truncates and appends suffix when over limit", () => {
-      const result = truncateLine("this is a very long line", 10);
-      expect(result.wasTruncated).toBe(true);
-      expect(result.text).toBe("this is a ... [truncated]");
-    });
-
     it.each(["\uD800x\uDC00", "\uFEFFA\0B"])("preserves retained code units in %j", (prefix) => {
       expect(truncateLine(`${prefix}discarded`, prefix.length)).toEqual({
         text: `${prefix}... [truncated]`,

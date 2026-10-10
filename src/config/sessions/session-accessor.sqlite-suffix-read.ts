@@ -6,15 +6,13 @@ import {
 import { coerceRequiredSqliteNumber as sqliteNumber } from "../../infra/sqlite-number.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
-import {
-  getActiveTranscriptKysely,
-  withCurrentProjectionSnapshot,
-} from "./session-accessor.sqlite-active-projection.js";
+import { withCurrentProjectionSnapshot } from "./session-accessor.sqlite-active-projection.js";
 import type {
   SessionTranscriptEventRow,
   SessionTranscriptReadScope,
   TranscriptEvent,
 } from "./session-accessor.sqlite-contract.js";
+import { getActiveTranscriptKysely } from "./session-accessor.sqlite-projection-read.js";
 import {
   getSessionKysely,
   resolveSqliteTranscriptReadScope,
@@ -25,16 +23,38 @@ import {
   resolveSqliteSessionTranscriptReadFence,
   SessionTranscriptReadFenceError,
 } from "./session-transcript-read-fence.js";
-import { projectTranscriptRetainedDataSql } from "./session-transcript-retained-data.js";
+import {
+  projectTranscriptRetainedDataSql,
+  transcriptRetainedDataBytesSql,
+} from "./session-transcript-retained-data.js";
+import { transcriptEventJsonSql } from "./transcript-payload.js";
 
 /** Loads one raw suffix only after SQL-side row and byte bounds are proven. */
 export function loadTranscriptSuffixEventsBoundedSync(
   scope: SessionTranscriptReadScope,
   startSeq: number,
+  limits: {
+    maxBytes: number;
+    maxEvents: number;
+    retainedCustomDataIds?: readonly string[];
+  },
+): TranscriptEvent[] {
+  const resolved = resolveSqliteTranscriptReadScope(scope);
+  return loadTranscriptSuffixEventsBoundedFromDatabase(
+    openOpenClawAgentDatabase(toDatabaseOptions(resolved)),
+    scope,
+    startSeq,
+    limits,
+  );
+}
+
+export function loadTranscriptSuffixEventsBoundedFromDatabase(
+  database: Pick<ReturnType<typeof openOpenClawAgentDatabase>, "db" | "path">,
+  scope: SessionTranscriptReadScope,
+  startSeq: number,
   limits: { maxBytes: number; maxEvents: number; retainedCustomDataIds?: readonly string[] },
 ): TranscriptEvent[] {
   const resolved = resolveSqliteTranscriptReadScope(scope);
-  const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
   return runSqliteDeferredTransactionSync(
     database.db,
     () => {
@@ -61,17 +81,13 @@ export function loadTranscriptSuffixEventsBoundedSync(
         database.db,
         db
           .selectFrom("transcript_events")
-          .select((eb) => {
-            const projected = projectTranscriptRetainedDataSql(
-              eb.ref("event_json"),
-              limits.retainedCustomDataIds ?? [],
-            );
-            return [
-              "seq",
-              /* kysely-allow-raw: reject oversized suffixes before acquiring their JSON payloads. */
-              sql<number>`OCTET_LENGTH(${projected}) + 1`.as("serialized_bytes"),
-            ];
-          })
+          .select([
+            "seq",
+            /* kysely-allow-raw: reject oversized suffixes before acquiring their JSON payloads. */
+            sql<number>`${transcriptRetainedDataBytesSql(limits.retainedCustomDataIds ?? [])} + 1`.as(
+              "serialized_bytes",
+            ),
+          ])
           .where("session_id", "=", resolved.sessionId)
           .where("seq", ">=", startSeq)
           .orderBy("seq", "asc")
@@ -98,9 +114,9 @@ export function loadTranscriptSuffixEventsBoundedSync(
         database.db,
         db
           .selectFrom("transcript_events")
-          .select((eb) => [
+          .select([
             projectTranscriptRetainedDataSql(
-              eb.ref("event_json"),
+              transcriptEventJsonSql(database.db),
               limits.retainedCustomDataIds ?? [],
             ).as("event_json"),
             "seq",
@@ -133,35 +149,43 @@ export function loadTranscriptSuffixEventsBoundedSync(
 export function readPreviousIndexedTranscriptEventSync(
   scope: SessionTranscriptReadScope,
   beforeSeq: number,
+  options: { readOnly?: boolean } = {},
 ): SessionTranscriptEventRow | undefined {
-  return withCurrentProjectionSnapshot(scope, (projection) => {
-    const db = getActiveTranscriptKysely(projection.database);
-    const row = executeSqliteQueryTakeFirstSync(
-      projection.database.db,
-      db
-        .selectFrom("transcript_event_identities as identity")
-        .innerJoin("session_transcript_active_events as active", (join) =>
-          join
-            .onRef("active.session_id", "=", "identity.session_id")
-            .onRef("active.event_seq", "=", "identity.seq"),
-        )
-        .innerJoin("transcript_events as event", (join) =>
-          join
-            .onRef("event.session_id", "=", "identity.session_id")
-            .onRef("event.seq", "=", "identity.seq"),
-        )
-        .select(["event.event_json", "identity.seq"])
-        .where("identity.session_id", "=", projection.resolved.sessionId)
-        .where("identity.seq", "<", beforeSeq)
-        .orderBy("active.active_position", "desc")
-        .limit(1),
-    );
-    return row
-      ? {
-          // SAFETY: Indexed transcript rows contain the persisted transcript event union.
-          event: JSON.parse(row.event_json) as TranscriptEvent,
-          seq: sqliteNumber(row.seq),
-        }
-      : undefined;
-  });
+  return withCurrentProjectionSnapshot(
+    scope,
+    (projection) => {
+      const db = getActiveTranscriptKysely(projection.database);
+      const row = executeSqliteQueryTakeFirstSync(
+        projection.database.db,
+        db
+          .selectFrom("transcript_event_identities as identity")
+          .innerJoin("session_transcript_active_events as active", (join) =>
+            join
+              .onRef("active.session_id", "=", "identity.session_id")
+              .onRef("active.event_seq", "=", "identity.seq"),
+          )
+          .innerJoin("transcript_events as event", (join) =>
+            join
+              .onRef("event.session_id", "=", "identity.session_id")
+              .onRef("event.seq", "=", "identity.seq"),
+          )
+          .select([
+            transcriptEventJsonSql(projection.database.db, "event").as("event_json"),
+            "identity.seq",
+          ])
+          .where("identity.session_id", "=", projection.resolved.sessionId)
+          .where("identity.seq", "<", beforeSeq)
+          .orderBy("active.active_position", "desc")
+          .limit(1),
+      );
+      return row
+        ? {
+            // SAFETY: Indexed transcript rows contain the persisted transcript event union.
+            event: JSON.parse(row.event_json) as TranscriptEvent,
+            seq: sqliteNumber(row.seq),
+          }
+        : undefined;
+    },
+    options,
+  );
 }

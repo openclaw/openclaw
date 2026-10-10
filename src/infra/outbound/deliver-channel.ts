@@ -12,7 +12,7 @@ import type {
   ChannelOutboundPayloadContext,
   ChannelOutboundTargetRef,
 } from "../../channels/plugins/types.adapters.js";
-import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
+import type { AnyChannelPlugin as ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { PluginRegistry } from "../../plugins/registry-types.js";
@@ -30,6 +30,7 @@ import type {
   OutboundDurableDeliverySupport,
   PlatformSendRoute,
 } from "./deliver-contracts.js";
+import { assertOutboundHandoffCurrent } from "./deliver-handoff.js";
 import { PlatformMessageNotDispatchedError, type OutboundDeliveryResult } from "./deliver-types.js";
 import {
   attachOutboundDeliveryCommitHook,
@@ -43,16 +44,6 @@ const loadChannelBootstrapRuntime = createLazyRuntimeModule(
   () => import("./channel-bootstrap.runtime.js"),
 );
 const loadChannelPluginFromRegistry = createChannelRegistryLoader((entry) => entry.plugin);
-export async function resolveChannelOutboundDirectiveOptions(params: {
-  cfg: OpenClawConfig;
-  agentId?: string;
-  channel: string;
-}): Promise<{ extractMarkdownImages?: boolean }> {
-  const { plugin } = await loadBootstrappedChannelPlugin(params);
-  return {
-    extractMarkdownImages: plugin?.outbound?.extractMarkdownImages === true ? true : undefined,
-  };
-}
 
 export async function createChannelHandler(params: ChannelHandlerParams): Promise<ChannelHandler> {
   const { plugin, pluginRegistry } = await loadBootstrappedChannelPlugin(params);
@@ -78,8 +69,8 @@ async function loadBootstrappedChannelPlugin(params: {
     // surface. A second lookup could attach another plugin's send lifecycle.
     return { plugin, pluginRegistry: scopedRegistry };
   }
-  const { bootstrapOutboundChannelPlugin } = await loadChannelBootstrapRuntime();
-  const pluginRegistry = bootstrapOutboundChannelPlugin({
+  const { bootstrapOutboundChannelPluginAsync } = await loadChannelBootstrapRuntime();
+  const pluginRegistry = await bootstrapOutboundChannelPluginAsync({
     channel: params.channel,
     cfg: params.cfg,
     agentId: params.agentId,
@@ -130,13 +121,11 @@ export async function resolveOutboundDurableFinalDeliverySupport(params: {
   for (const [capability, required] of Object.entries(params.requirements ?? {}) as Array<
     [DurableFinalDeliveryRequirement, boolean | undefined]
   >) {
-    if (required === true && durableFinal?.[capability] !== true) {
-      return { ok: false, reason: "capability_mismatch", capability };
-    }
     if (
       required === true &&
-      capability === "reconcileUnknownSend" &&
-      typeof messageDurableFinal?.reconcileUnknownSend !== "function"
+      (durableFinal?.[capability] !== true ||
+        (capability === "reconcileUnknownSend" &&
+          typeof messageDurableFinal?.reconcileUnknownSend !== "function"))
     ) {
       return { ok: false, reason: "capability_mismatch", capability };
     }
@@ -200,7 +189,33 @@ function createPluginHandler(
   if (!messageText && !outbound?.sendText) {
     return null;
   }
-  const baseCtx = createChannelOutboundContextBase(params);
+  const baseCtx = {
+    cfg: params.cfg,
+    to: params.to,
+    accountId: params.accountId,
+    replyToId: params.replyToId,
+    replyToIdSource: undefined,
+    replyToMode: params.replyToMode,
+    formatting: params.formatting,
+    threadId: params.threadId,
+    identity: params.identity,
+    gifPlayback: params.gifPlayback,
+    forceDocument: params.forceDocument,
+    deps: params.deps,
+    silent: params.silent,
+    signal: params.abortSignal,
+    abortSignal: params.abortSignal,
+    mediaAccess: params.mediaAccess,
+    mediaLocalRoots: params.mediaAccess?.localRoots,
+    mediaReadFile: params.mediaAccess?.readFile,
+    gatewayClientScopes: params.gatewayClientScopes,
+    conversationReadOrigin: params.conversationReadOrigin,
+    deliveryQueueId: params.deliveryQueueId,
+    preparedMessageId: params.preparedMessageId,
+    assertDirectAdapterHandoff: params.assertDirectAdapterHandoff,
+    onPlatformSendDispatch: params.onPlatformSendDispatch,
+    onDeliveryResult: params.onDeliveryResult,
+  };
   const sendText = outbound?.sendText;
   const sendMedia = outbound?.sendMedia;
   // Adapters may ignore the context callback; the core handoff must still fence
@@ -209,13 +224,23 @@ function createPluginHandler(
     route: PlatformSendRoute,
     send: () => Promise<T>,
   ): Promise<T> => {
-    await params.onPlatformSendStart?.(route);
-    await params.onDirectAdapterHandoff?.();
+    try {
+      await params.onPlatformSendStart?.(route);
+      await params.onDirectAdapterHandoff?.();
+    } catch (error) {
+      assertOutboundHandoffCurrent(params.assertDirectAdapterHandoff);
+      throw error;
+    }
     // Keep the final authority check and adapter invocation in one synchronous
     // call stack. An awaited callback leaves a microtask gap where custody can
     // change after validation but before recipient-visible transport code runs.
-    params.assertDirectAdapterHandoff?.();
-    return await send();
+    const initiate = () => {
+      assertOutboundHandoffCurrent(params.assertDirectAdapterHandoff);
+      return send();
+    };
+    return params.withDirectAdapterHandoff
+      ? await params.withDirectAdapterHandoff(initiate)
+      : await initiate();
   };
   // A prepared transport id identifies one atomic platform message. Splitting it
   // would either reuse the id or leave later chunks outside reply correlation.
@@ -240,7 +265,12 @@ function createPluginHandler(
     let result: ChannelMessageSendResult;
     let afterCommit: OutboundDeliveryCommitHook | undefined;
     try {
-      attemptToken = await messageLifecycle.beforeSendAttempt?.(ctx);
+      try {
+        attemptToken = await messageLifecycle.beforeSendAttempt?.(ctx);
+      } catch (error) {
+        assertOutboundHandoffCurrent(params.assertDirectAdapterHandoff);
+        throw error;
+      }
       result = await dispatchToAdapter(ctx, () => send(ctx));
       if (result.outcome !== "not_sent") {
         const successCtx = {
@@ -300,17 +330,12 @@ function createPluginHandler(
         ? { ...baseCtx.formatting, ...overrides.formatting }
         : baseCtx.formatting,
   });
-  const buildTargetRef = (overrides?: OutboundMessageSendOverrides): ChannelOutboundTargetRef => ({
-    channel: params.channel,
-    to: params.to,
-    accountId: params.accountId ?? undefined,
-    threadId: overrides?.threadId ?? baseCtx.threadId,
-  });
   return {
     chunker,
     chunkerMode,
     chunkedTextFormatting: outbound?.chunkedTextFormatting,
     textChunkLimit: outbound?.textChunkLimit,
+    extractMarkdownImages: outbound?.extractMarkdownImages === true ? true : undefined,
     preserveMarkdownDetails:
       outbound?.preserveMarkdownDetails?.({
         cfg: params.cfg,
@@ -391,31 +416,13 @@ function createPluginHandler(
         }
       : undefined,
     pinDeliveredMessage: outbound?.pinDeliveredMessage
-      ? async ({ target, messageId, pin, gatewayClientScopes }) =>
-          outbound.pinDeliveredMessage!({
-            cfg: params.cfg,
-            target,
-            messageId,
-            pin,
-            gatewayClientScopes,
-          })
+      ? async (delivery) => outbound.pinDeliveredMessage!({ cfg: params.cfg, ...delivery })
       : undefined,
     afterDeliverPayload: outbound?.afterDeliverPayload
-      ? async ({ target, payload, results }) =>
-          outbound.afterDeliverPayload!({
-            cfg: params.cfg,
-            target,
-            payload,
-            results,
-          })
+      ? async (delivery) => outbound.afterDeliverPayload!({ cfg: params.cfg, ...delivery })
       : undefined,
     adoptTargetFromDelivery: outbound?.adoptTargetFromDelivery
-      ? ({ target, result }) =>
-          outbound.adoptTargetFromDelivery!({
-            cfg: params.cfg,
-            target,
-            result,
-          })
+      ? (delivery) => outbound.adoptTargetFromDelivery!({ cfg: params.cfg, ...delivery })
       : undefined,
     shouldSkipPlainTextSanitization: outbound?.shouldSkipPlainTextSanitization
       ? (payload) => outbound.shouldSkipPlainTextSanitization!({ payload })
@@ -486,7 +493,12 @@ function createPluginHandler(
       }
       return dispatchToAdapter(textCtx, () => sendText!(textCtx));
     },
-    buildTargetRef,
+    buildTargetRef: (overrides?: OutboundMessageSendOverrides): ChannelOutboundTargetRef => ({
+      channel: params.channel,
+      to: params.to,
+      accountId: params.accountId ?? undefined,
+      threadId: overrides?.threadId ?? baseCtx.threadId,
+    }),
     sendMedia: async (caption, mediaUrl, overrides) => {
       const mediaCtx = {
         ...resolveCtx(overrides),
@@ -501,10 +513,8 @@ function createPluginHandler(
           messageMedia,
         );
       }
-      if (sendMedia) {
-        return dispatchToAdapter(mediaCtx, () => sendMedia(mediaCtx));
-      }
-      return dispatchToAdapter(mediaCtx, () => sendText!(mediaCtx));
+      const send = sendMedia ?? sendText!;
+      return dispatchToAdapter(mediaCtx, () => send(mediaCtx));
     },
   };
 }
@@ -513,43 +523,14 @@ function normalizeChannelMessageSendResult(
   channel: string,
   result: ChannelMessageSendResult,
 ): OutboundDeliveryResult {
-  const source = result as ChannelMessageSendResult & Partial<OutboundDeliveryResult>;
   return {
-    ...source,
+    ...result,
     channel,
     messageId:
-      source.messageId ??
-      source.receipt.primaryPlatformMessageId ??
-      source.receipt.platformMessageIds[0] ??
+      result.messageId ??
+      result.receipt.primaryPlatformMessageId ??
+      result.receipt.platformMessageIds[0] ??
       "",
-    receipt: source.receipt,
+    receipt: result.receipt,
   };
 }
-
-const createChannelOutboundContextBase = (params: ChannelHandlerParams) => ({
-  cfg: params.cfg,
-  to: params.to,
-  accountId: params.accountId,
-  replyToId: params.replyToId,
-  replyToIdSource: undefined,
-  replyToMode: params.replyToMode,
-  formatting: params.formatting,
-  threadId: params.threadId,
-  identity: params.identity,
-  gifPlayback: params.gifPlayback,
-  forceDocument: params.forceDocument,
-  deps: params.deps,
-  silent: params.silent,
-  signal: params.abortSignal,
-  abortSignal: params.abortSignal,
-  mediaAccess: params.mediaAccess,
-  mediaLocalRoots: params.mediaAccess?.localRoots,
-  mediaReadFile: params.mediaAccess?.readFile,
-  gatewayClientScopes: params.gatewayClientScopes,
-  conversationReadOrigin: params.conversationReadOrigin,
-  deliveryQueueId: params.deliveryQueueId,
-  preparedMessageId: params.preparedMessageId,
-  assertDirectAdapterHandoff: params.assertDirectAdapterHandoff,
-  onPlatformSendDispatch: params.onPlatformSendDispatch,
-  onDeliveryResult: params.onDeliveryResult,
-});

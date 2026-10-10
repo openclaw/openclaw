@@ -1,12 +1,11 @@
 import { embeddedAgentLog, formatErrorMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { PluginHookInboundClaimEvent } from "openclaw/plugin-sdk/plugin-entry";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
-import { resolveCodexAppServerForModelProvider } from "./app-server/app-server-policy.js";
 import {
   CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
   closeCodexStartupClientBestEffort,
   interruptCodexTurnAndWaitBestEffort,
-  isCodexAppServerUnsafeSubscriptionError,
+  CodexAppServerUnsafeSubscriptionError,
   retireUnsafeCodexTurnClientBestEffort,
   unsubscribeCodexThreadBestEffort,
 } from "./app-server/attempt-client-cleanup.js";
@@ -14,8 +13,8 @@ import { normalizeCodexAppServerBindingModelProvider } from "./app-server/auth-p
 import {
   consumeCodexAppServerLiveThread,
   isCodexAppServerClientRuntimeLive,
-  type CodexAppServerLiveThreadOwnership,
 } from "./app-server/client-runtime.js";
+import type { CodexAppServerLiveThreadOwnership } from "./app-server/client-thread-owner.js";
 import {
   isCodexAppServerIndeterminateRequestCancellationError,
   isCodexAppServerOverloadError,
@@ -42,7 +41,7 @@ import {
 import {
   CODEX_NATIVE_PERSONALITY_NONE,
   resolveCodexAppServerRequestModelSelection,
-} from "./app-server/thread-lifecycle.js";
+} from "./app-server/thread-model-selection.js";
 import {
   isSameCodexAppServerThreadOwner,
   releaseCodexAppServerBindingSubscription,
@@ -57,7 +56,6 @@ import {
 import type { CodexAppServerConversationBindingData } from "./conversation-binding-data.js";
 import {
   assertNativeConversationApprovalPolicySupported,
-  buildCodexConversationAgentLookup,
   buildConversationThreadRequestForClient,
   CODEX_CONVERSATION_THREAD_DEVELOPER_INSTRUCTIONS,
   prepareCodexConversationBinding,
@@ -65,7 +63,10 @@ import {
   resolveModelBackedReviewerPolicyProvider,
   type CodexConversationConfig,
 } from "./conversation-binding-preparation.js";
-import { trackCodexConversationActiveTurn } from "./conversation-control.js";
+import {
+  buildCodexConversationAgentLookup,
+  trackCodexConversationActiveTurn,
+} from "./conversation-control.js";
 import {
   CodexConversationTurnTimeoutError,
   createCodexConversationTurnCollector,
@@ -73,10 +74,6 @@ import {
 import { buildCodexConversationTurnInput } from "./conversation-turn-input.js";
 
 const DEFAULT_BOUND_TURN_TIMEOUT_MS = 20 * 60_000;
-
-type BoundTurnResult = {
-  reply: ReplyPayload;
-};
 
 async function runBoundTurn(params: {
   bindingStore: CodexAppServerBindingStore;
@@ -88,7 +85,7 @@ async function runBoundTurn(params: {
   sessionKey?: string;
   incognito: boolean;
   timeoutMs?: number;
-}): Promise<BoundTurnResult> {
+}): Promise<ReplyPayload> {
   const agentLookup = buildCodexConversationAgentLookup({
     agentDir: params.data.agentDir,
     config: params.config,
@@ -126,28 +123,15 @@ async function runBoundTurn(params: {
         model: binding.model,
         agentDir: params.data.agentDir,
       });
-      const modelScopedRuntime = resolveCodexAppServerForModelProvider({
-        appServer: runtime,
-        provider: reviewerModelProvider,
-        model: binding.model,
-        config: params.config,
-        env: process.env,
-        agentDir: params.data.agentDir,
-      });
-      const sessionRoot = modelScopedRuntime.sessionRoot;
-      const approvalPolicy = modelScopedRuntime.approvalPolicy;
-      const sandbox = modelScopedRuntime.sandbox;
-      const permissionProfile = modelScopedRuntime.networkProxy?.profileName;
-      const networkProxyConfigFingerprint = modelScopedRuntime.networkProxy?.configFingerprint;
+      const { sessionRoot, approvalPolicy, sandbox } = runtime;
+      const permissionProfile = runtime.networkProxy?.profileName;
+      const networkProxyConfigFingerprint = runtime.networkProxy?.configFingerprint;
       const networkProxyBindingChanged =
         binding.networkProxyProfileName !== permissionProfile ||
         binding.networkProxyConfigFingerprint !== networkProxyConfigFingerprint;
       const serviceTier = binding.serviceTier ?? runtime.serviceTier;
-      let useStickyNetworkProfile =
-        permissionProfile !== undefined &&
-        binding.networkProxyProfileName === permissionProfile &&
-        binding.networkProxyConfigFingerprint === networkProxyConfigFingerprint;
-      assertNativeConversationApprovalPolicySupported(modelScopedRuntime);
+      let useStickyNetworkProfile = permissionProfile !== undefined && !networkProxyBindingChanged;
+      assertNativeConversationApprovalPolicySupported(runtime);
       const modelSelection = binding.model
         ? resolveCodexAppServerRequestModelSelection({
             model: binding.model,
@@ -156,7 +140,7 @@ async function runBoundTurn(params: {
             ...agentLookup,
           })
         : undefined;
-      const threadRequestRuntime = { runtime: modelScopedRuntime, workspaceDir, ...modelSelection };
+      const threadRequestRuntime = { runtime, workspaceDir, ...modelSelection };
 
       const clientOptions = {
         startOptions: runtime.start,
@@ -200,18 +184,25 @@ async function runBoundTurn(params: {
             ownsNativeSubscription = true;
           }
         }
-        if (networkProxyBindingChanged) {
-          const response = assertCodexThreadStartResponse(
-            await withLeasedCodexAppServerClientStartSelectionRetry({
-              lease: clientLease,
-              options: clientOptions,
-              run: async (requestClient, requestOptions) => {
-                const threadRequest = await buildConversationThreadRequestForClient(
-                  requestClient,
-                  threadRequestRuntime,
-                  serviceTier,
-                  requestOptions,
-                );
+        if (
+          networkProxyBindingChanged ||
+          binding.clientId !== client.getInstanceId() ||
+          (isCodexAppServerClientRuntimeLive(client) && !params.incognito && !liveThreadOwnership)
+        ) {
+          if (!networkProxyBindingChanged && binding.clientId === client.getInstanceId()) {
+            await assertResumeInputAllowed();
+          }
+          const result = await withLeasedCodexAppServerClientStartSelectionRetry({
+            lease: clientLease,
+            options: clientOptions,
+            run: async (requestClient, requestOptions) => {
+              const threadRequest = await buildConversationThreadRequestForClient(
+                requestClient,
+                threadRequestRuntime,
+                serviceTier,
+                requestOptions,
+              );
+              if (networkProxyBindingChanged) {
                 return await requestClient.request(
                   "thread/start",
                   {
@@ -222,16 +213,33 @@ async function runBoundTurn(params: {
                   },
                   requestOptions(),
                 );
-              },
-              onClientChange: (nextClient) => {
-                client = nextClient;
-              },
-            }),
-          );
+              }
+              return await resumeCodexAppServerThread({
+                client: requestClient,
+                onSubscriptionReleased: () => {
+                  isolatedSubscriptionClient = requestClient;
+                },
+                abandonClient: async () => {
+                  await closeCodexStartupClientBestEffort(requestClient);
+                  isolatedSubscriptionClient = requestClient;
+                },
+                request: { threadId, ...threadRequest },
+                requestResume: (request) =>
+                  requestClient.request("thread/resume", request, requestOptions()),
+              });
+            },
+            onClientChange: (nextClient) => {
+              client = nextClient;
+            },
+          });
+          const response = networkProxyBindingChanged
+            ? assertCodexThreadStartResponse(result)
+            : result;
           threadId = response.thread.id;
           ownsNativeSubscription = true;
           assertCodexThreadAcceptsDirectInput(response.thread);
           if (
+            networkProxyBindingChanged &&
             liveThreadOwnership &&
             (liveThreadOwnership.threadId !== threadId || liveThreadOwnership.client !== client)
           ) {
@@ -255,103 +263,59 @@ async function runBoundTurn(params: {
               throw error;
             }
             liveThreadOwnership = undefined;
-          } else if (binding.threadId !== threadId) {
-            await releaseCodexAppServerBindingSubscription(binding);
-          }
-          const committed = await params.bindingStore.mutate(identity, {
-            kind: "set",
-            binding: {
-              threadId,
-              clientId: client.getInstanceId(),
-              cwd: response.thread.cwd ?? workspaceDir,
-              authProfileId: binding.authProfileId,
-              model: response.model ?? modelSelection?.model ?? binding.model,
-              modelProvider: normalizeCodexAppServerBindingModelProvider({
-                authProfileId: binding.authProfileId,
-                modelProvider:
-                  response.modelProvider ?? modelSelection?.modelProvider ?? binding.modelProvider,
-                ...agentLookup,
-              }),
-              serviceTier: serviceTier ?? undefined,
-              networkProxyProfileName: modelScopedRuntime.networkProxy?.profileName,
-              networkProxyConfigFingerprint: modelScopedRuntime.networkProxy?.configFingerprint,
-              conversationStartId: binding.conversationStartId,
-              conversationSourceTransferComplete: binding.conversationSourceTransferComplete,
-              historyCoveredThrough: binding.historyCoveredThrough,
-            },
-          });
-          if (!committed) {
-            throw new Error("Codex conversation binding changed while rotating its thread.");
-          }
-          useStickyNetworkProfile = modelScopedRuntime.networkProxy !== undefined;
-        } else if (
-          binding.clientId !== client.getInstanceId() ||
-          (isCodexAppServerClientRuntimeLive(client) && !params.incognito && !liveThreadOwnership)
-        ) {
-          if (binding.clientId === client.getInstanceId()) {
-            await assertResumeInputAllowed();
-          }
-          const response = await withLeasedCodexAppServerClientStartSelectionRetry({
-            lease: clientLease,
-            options: clientOptions,
-            run: async (requestClient, requestOptions) => {
-              const threadRequest = await buildConversationThreadRequestForClient(
-                requestClient,
-                threadRequestRuntime,
-                serviceTier,
-                requestOptions,
-              );
-              return await resumeCodexAppServerThread({
-                client: requestClient,
-                onSubscriptionReleased: () => {
-                  isolatedSubscriptionClient = requestClient;
-                },
-                abandonClient: async () => {
-                  await closeCodexStartupClientBestEffort(requestClient);
-                  isolatedSubscriptionClient = requestClient;
-                },
-                request: {
+          } else if (
+            networkProxyBindingChanged
+              ? binding.threadId !== threadId
+              : !isSameCodexAppServerThreadOwner(binding, {
                   threadId,
-                  ...threadRequest,
-                },
-                requestResume: (request) =>
-                  requestClient.request("thread/resume", request, requestOptions()),
-              });
-            },
-            onClientChange: (nextClient) => {
-              client = nextClient;
-            },
-          });
-          threadId = response.thread.id;
-          ownsNativeSubscription = true;
-          assertCodexThreadAcceptsDirectInput(response.thread);
-          if (
-            !isSameCodexAppServerThreadOwner(binding, {
-              threadId,
-              clientId: client.getInstanceId(),
-            })
+                  clientId: client.getInstanceId(),
+                })
           ) {
             // Keep the old physical owner authoritative until unsubscribe succeeds;
             // failed migration then rolls back only the newly resumed connection.
-            await releaseCodexAppServerBindingSubscription(binding);
+            await releaseCodexAppServerBindingSubscription(binding, {
+              retainedClientId: client.getInstanceId(),
+            });
           }
-          const committed = await params.bindingStore.mutate(identity, {
-            kind: "patch",
-            threadId: binding.threadId,
-            patch: {
-              clientId: client.getInstanceId(),
-              cwd: response.thread.cwd ?? binding.cwd,
-              model: response.model ?? modelSelection?.model ?? binding.model,
-              modelProvider: normalizeCodexAppServerBindingModelProvider({
-                authProfileId: binding.authProfileId,
-                modelProvider:
-                  response.modelProvider ?? modelSelection?.modelProvider ?? binding.modelProvider,
-                ...agentLookup,
-              }),
-            },
-          });
+          const patch = {
+            clientId: client.getInstanceId(),
+            cwd: response.thread.cwd ?? (networkProxyBindingChanged ? workspaceDir : binding.cwd),
+            model: response.model ?? modelSelection?.model ?? binding.model,
+            modelProvider: normalizeCodexAppServerBindingModelProvider({
+              authProfileId: binding.authProfileId,
+              modelProvider:
+                response.modelProvider ?? modelSelection?.modelProvider ?? binding.modelProvider,
+              ...agentLookup,
+            }),
+          };
+          const committed = await params.bindingStore.mutate(
+            identity,
+            networkProxyBindingChanged
+              ? {
+                  kind: "set",
+                  binding: {
+                    threadId,
+                    ...patch,
+                    authProfileId: binding.authProfileId,
+                    serviceTier: serviceTier ?? undefined,
+                    networkProxyProfileName: runtime.networkProxy?.profileName,
+                    networkProxyConfigFingerprint: runtime.networkProxy?.configFingerprint,
+                    conversationStartId: binding.conversationStartId,
+                    conversationSourceTransferComplete: binding.conversationSourceTransferComplete,
+                    historyCoveredThrough: binding.historyCoveredThrough,
+                  },
+                }
+              : { kind: "patch", threadId: binding.threadId, patch },
+          );
           if (!committed) {
-            throw new Error("Codex conversation binding changed while resuming on a new client.");
+            throw new Error(
+              networkProxyBindingChanged
+                ? "Codex conversation binding changed while rotating its thread."
+                : "Codex conversation binding changed while resuming on a new client.",
+            );
+          }
+          if (networkProxyBindingChanged) {
+            useStickyNetworkProfile = runtime.networkProxy !== undefined;
           }
         }
         const turnCollector = createCodexConversationTurnCollector(threadId);
@@ -373,7 +337,7 @@ async function runBoundTurn(params: {
             cwd: workspaceDir,
             ...(sessionRoot ? { runtimeWorkspaceRoots: [sessionRoot] } : {}),
             approvalPolicy,
-            approvalsReviewer: modelScopedRuntime.approvalsReviewer,
+            approvalsReviewer: runtime.approvalsReviewer,
             ...(useStickyNetworkProfile
               ? {}
               : {
@@ -389,6 +353,7 @@ async function runBoundTurn(params: {
         activeTurnCleanup = trackCodexConversationActiveTurn({
           identity,
           client,
+          requestTimeoutMs: runtime.requestTimeoutMs,
           threadId,
           turnId: activeTurnId,
         });
@@ -399,11 +364,7 @@ async function runBoundTurn(params: {
         });
         const replyText = completion.replyText.trim();
         turnSucceeded = true;
-        return {
-          reply: {
-            text: replyText || "Codex completed without a text reply.",
-          },
-        };
+        return { text: replyText || "Codex completed without a text reply." };
       } catch (error) {
         if (isCodexAppServerOverloadError(error) && error.method === "thread/resume") {
           throw error;
@@ -516,17 +477,9 @@ async function runBoundTurn(params: {
   });
 }
 
-export async function runBoundTurnWithMissingThreadRecovery(params: {
-  bindingStore: CodexAppServerBindingStore;
-  data: CodexAppServerConversationBindingData;
-  prompt: string;
-  event: PluginHookInboundClaimEvent;
-  pluginConfig?: unknown;
-  config?: CodexConversationConfig;
-  sessionKey?: string;
-  incognito: boolean;
-  timeoutMs?: number;
-}): Promise<BoundTurnResult> {
+export async function runBoundTurnWithMissingThreadRecovery(
+  params: Parameters<typeof runBoundTurn>[0],
+): Promise<ReplyPayload> {
   await prepareCodexConversationBinding(params);
   try {
     return await runBoundTurn(params);
@@ -540,7 +493,10 @@ export async function runBoundTurnWithMissingThreadRecovery(params: {
 }
 
 function isCodexThreadNotFoundError(error: unknown): boolean {
-  if (isCodexAppServerOverloadError(error) || isCodexAppServerUnsafeSubscriptionError(error)) {
+  if (
+    isCodexAppServerOverloadError(error) ||
+    error instanceof CodexAppServerUnsafeSubscriptionError
+  ) {
     return false;
   }
   const message = formatErrorMessage(error);

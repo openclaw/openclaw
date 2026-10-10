@@ -1,11 +1,8 @@
-// Voice Call plugin module implements timers behavior.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { TerminalStates, type CallId } from "../types.js";
+import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import { TerminalStates, type CallId, type CallRecord } from "../types.js";
 import type { CallEndResult, CallManagerContext } from "./context.js";
-import {
-  resolveVoiceCallSecondsTimerDelayMs,
-  resolveVoiceCallTimerDelayMs,
-} from "./timer-delays.js";
+import { resolveVoiceCallSecondsTimerDelayMs } from "./timer-delays.js";
 
 // Max-duration and transcript-waiter timers for active voice calls.
 
@@ -23,6 +20,17 @@ type MaxDurationTimerContext = Pick<
   "activeCalls" | "maxDurationTimers" | "config" | "trackCallWork" | "isStopping"
 >;
 type TranscriptWaiterContext = Pick<TimerContext, "transcriptWaiters">;
+
+/** Per-call limits can shorten a call, but never extend the configured cap. */
+export function resolveCallMaxDurationSeconds(
+  call: Pick<CallRecord, "metadata"> | undefined,
+  configuredCap: number,
+): number {
+  const requested = call?.metadata?.maxDurationSeconds;
+  return typeof requested === "number" && Number.isFinite(requested) && requested > 0
+    ? Math.min(requested, configuredCap)
+    : configuredCap;
+}
 
 /** Clear and forget the max-duration timer for a call. */
 export function clearMaxDurationTimer(
@@ -47,8 +55,13 @@ export function startMaxDurationTimer(params: {
 
   const maxDurationMs =
     params.timeoutMs === undefined
-      ? resolveVoiceCallSecondsTimerDelayMs(params.ctx.config.maxDurationSeconds)
-      : resolveVoiceCallTimerDelayMs(params.timeoutMs);
+      ? resolveVoiceCallSecondsTimerDelayMs(
+          resolveCallMaxDurationSeconds(
+            params.ctx.activeCalls.get(params.callId),
+            params.ctx.config.maxDurationSeconds,
+          ),
+        )
+      : resolveTimerTimeoutMs(params.timeoutMs, 1);
   console.log(
     `[voice-call] Starting max duration timer (${Math.ceil(maxDurationMs / 1000)}s) for call ${params.callId}`,
   );
@@ -134,7 +147,7 @@ export function waitForFinalTranscript(
     return Promise.reject(new Error("Already waiting for transcript"));
   }
 
-  const timeoutMs = resolveVoiceCallTimerDelayMs(ctx.config.transcriptTimeoutMs);
+  const timeoutMs = resolveTimerTimeoutMs(ctx.config.transcriptTimeoutMs, 1);
   return new Promise((resolve, reject) => {
     const timeout = setTimeout(() => {
       ctx.transcriptWaiters.delete(callId);
