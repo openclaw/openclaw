@@ -64,6 +64,12 @@ reusable after the snapshot ends. Autocommit caches use the owning writer's rece
 Closing a connection clears its prepared statements
 and row caches, while physical-database admission survives for the process lifetime.
 
+Worker dispatch carries snapshots prepared by the admission owner when it publishes
+facts or writer custody. Unchanged requests reuse the registry revision without
+scanning every database or rebuilding fact maps. Shared revocation cells still
+invalidate transferred facts immediately; retirement removes the published snapshot.
+This changes no schema, stored bytes, or update behavior.
+
 Shared-state content-version checks reuse the physical database's admitted version
 facts across handles and workers. Ordinary commits, transactions, and connection
 closure do not force another marker read. The migration owner publishes replacement
