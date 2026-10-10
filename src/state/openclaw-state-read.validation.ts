@@ -273,6 +273,7 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
           "list",
           "read",
           "seed",
+          "session",
           "change",
           "pins",
           "profile",

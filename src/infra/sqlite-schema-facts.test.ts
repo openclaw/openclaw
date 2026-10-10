@@ -476,15 +476,16 @@ describe("admitted SQLite schema facts", () => {
       expect(revision()).not.toBe(before);
       expect(reader.prepare("SELECT id FROM original").all()).toEqual([{ id: 1 }]);
       const tracking = {
-        kind: "generation",
-        table: "local_status",
-        triggers: [],
-        advance: false,
+        kind: "transcript-index",
+        statusTable: "local_status",
+        pendingTable: "local_pending",
+        pendingIndex: "local_pending_state",
+        observedTables: [],
       } as const;
       installSqliteTempTrackingSchema(writer, tracking);
       const committed = revision();
       writer.exec(
-        'BEGIN; INSERT OR REPLACE INTO temp.local_status VALUES (1,1); UPDATE "temp".local_status SET generation=2; COMMIT',
+        'BEGIN; INSERT OR REPLACE INTO temp.local_status VALUES (1,1,0,0,NULL,0); UPDATE "temp".local_status SET sibling_write_revision=2; COMMIT',
       );
       expect(revision()).toBe(committed);
       writer.exec("BEGIN; INSERT INTO original VALUES (2); ROLLBACK");
@@ -501,9 +502,11 @@ describe("admitted SQLite schema facts", () => {
       insertSuffix.run();
       expect(revision()).not.toBe(beforeSuffix);
       expect(reader.prepare("SELECT id FROM original").all()).toEqual([{ id: 1 }, { id: 8 }]);
-      const updateTracking = writer.prepare("UPDATE temp.local_status SET generation=3");
+      const updateTracking = writer.prepare(
+        "UPDATE temp.local_status SET sibling_write_revision=3",
+      );
       writer.exec(
-        "CREATE TEMP TRIGGER custom_tracking_write AFTER UPDATE ON local_status BEGIN INSERT INTO original VALUES (9); END",
+        "CREATE TEMP TRIGGER custom_tracking_write AFTER UPDATE ON local_status WHEN NEW.sibling_write_revision = 3 BEGIN INSERT INTO original VALUES (9); END",
       );
       installSqliteTempTrackingSchema(writer, tracking);
       const beforeTrigger = revision();
