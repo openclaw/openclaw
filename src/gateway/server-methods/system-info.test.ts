@@ -344,7 +344,7 @@ describe("system.info", () => {
       )({
         params: {},
         respond,
-        context: { getRuntimeConfig: () => ({}) },
+        context: createModelsListTestContext({ cfg: {}, catalog: [] }),
       } as unknown as GatewayRequestHandlerOptions);
 
       const [ok, payload] = respond.mock.calls[0] ?? [];
