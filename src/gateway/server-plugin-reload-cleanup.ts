@@ -1,4 +1,8 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import {
+  getPreparedModelRuntimeBorrowedSnapshot,
+  getPreparedModelRuntimePluginGeneration,
+} from "../agents/prepared-model-runtime-generation-scope.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -13,6 +17,7 @@ import type { PluginHostCleanupResult } from "../plugins/host-hook-cleanup.types
 import { withPluginHttpRouteRegistry } from "../plugins/http-registry.js";
 import { PluginInstanceDrainTimeoutError } from "../plugins/plugin-instance-error.js";
 import { getPluginInstance, type PluginInstanceHandle } from "../plugins/plugin-instance-scope.js";
+import { collectRegistryInvocationInstances } from "../plugins/plugin-invocation-scope.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import { disposePluginRegistryInstances } from "../plugins/runtime.js";
 import {
@@ -405,9 +410,25 @@ export function createPluginReloadCleanup({
         ? new AggregateError([pendingServiceCleanup.error, error], "Previous plugin cleanup failed")
         : error,
     assertResourceHandoff: (pluginIds: ReadonlySet<string>) => {
+      const generation = getPreparedModelRuntimePluginGeneration();
+      const heldInstances =
+        generation && getPreparedModelRuntimeBorrowedSnapshot(generation)
+          ? new Set(
+              [generation.pluginRegistry, generation.inboundPluginRegistry].flatMap((registry) =>
+                registry ? [...collectRegistryInvocationInstances(registry)] : [],
+              ),
+            )
+          : undefined;
       for (const record of previousRegistry.plugins) {
         if (pluginIds.has(record.id)) {
-          getPluginInstance(record)?.assertCanReplace();
+          const instance = getPluginInstance(record);
+          instance?.assertCanReplace();
+          // A turn retains its instances between callbacks; waiting here would wait on itself.
+          if (instance && heldInstances?.has(instance)) {
+            throw new Error(
+              `Plugin ${record.id} cannot replace itself from its own active turn; retry after the turn finishes.`,
+            );
+          }
         }
       }
     },
