@@ -12,12 +12,16 @@ import { updatePluginStateEntry } from "./plugin-state-store.mutations.js";
 import type { PluginStateRegisterEntryParams } from "./plugin-state-store.retention.js";
 import type {
   PluginStateCompareResult,
+  PluginStateComparisonCondition,
   PluginStateObservation,
   PluginStateStoreOperation,
 } from "./plugin-state-store.types.js";
 
 type Key = { pluginId: string; namespace: string; key: string };
-export type PluginStatePreparedComparison = Key & { comparison: string } & (
+export type PluginStatePreparedComparison = Key & {
+  comparison: string;
+  conditions?: readonly PluginStateComparisonCondition[];
+} & (
     | { operation: "update"; action: "set"; valueJson: string; ttlMs?: number }
     | { operation: "update" | "delete"; action: "keep" }
     | { operation: "delete"; action: "delete" }
@@ -139,6 +143,28 @@ export function compareAndApplyPluginStateEntry(
   );
   if (current.comparison !== params.comparison) {
     return { status: "conflict", current };
+  }
+  for (const condition of params.conditions ?? []) {
+    const conditionKey = { pluginId: params.pluginId, ...condition };
+    if (
+      validatePluginStateComparison(
+        condition.comparison,
+        params.operation === "update" ? "register" : "delete",
+      ) !== comparisonScope(storeIdentity, conditionKey)
+    ) {
+      throw createPluginStateError({
+        code: "PLUGIN_STATE_INVALID_INPUT",
+        operation: params.operation === "update" ? "register" : "delete",
+        path: store.path,
+        message: "Plugin state condition belongs to another database, namespace or key.",
+      });
+    }
+    if (
+      observePluginStateEntry(store, conditionKey, storeIdentity).comparison !==
+      condition.comparison
+    ) {
+      return { status: "conflict", current };
+    }
   }
   return applyComparedEntry(store, params, now, row);
 }

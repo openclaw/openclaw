@@ -4,7 +4,10 @@ import {
   recordPendingDiscussionOpen,
   reserveDiscussionBindingGeneration,
 } from "./binding-generation.js";
-import type { ClickClackDiscussionBinding } from "./binding-store.js";
+import {
+  getClickClackDiscussionBindingStore,
+  type ClickClackDiscussionBinding,
+} from "./binding-store.js";
 import { discussionCredentialFingerprint } from "./naming.js";
 import { markClickClackDiscussionChannelRevoked } from "./revoked-channel-store.js";
 import { assertChannelPatch } from "./service-open.js";
@@ -553,7 +556,7 @@ describe("ClickClack discussion service contracts", () => {
         credentialFingerprint: discussionCredentialFingerprint("test-token"),
       },
     });
-    markClickClackDiscussionChannelRevoked(harness.runtime, binding);
+    await markClickClackDiscussionChannelRevoked(harness.runtime, sessionKey, binding);
 
     await harness.service.reconcile(sessionKey);
 
@@ -602,10 +605,11 @@ describe("ClickClack discussion service contracts", () => {
     const harness = createHarness({ label: "Revoked binding" });
     const sessionKey = "agent:main:revoked-binding";
     await harness.service.open(sessionKey);
-    const binding = harness.store.lookup(sessionKey) as Parameters<
-      typeof markClickClackDiscussionChannelRevoked
-    >[1];
-    markClickClackDiscussionChannelRevoked(harness.runtime, binding);
+    const binding = getClickClackDiscussionBindingStore(harness.runtime).get(sessionKey);
+    if (!binding) {
+      throw new Error("Expected the original discussion binding");
+    }
+    await markClickClackDiscussionChannelRevoked(harness.runtime, sessionKey, binding);
 
     expect(await harness.service.info(sessionKey)).toEqual({ state: "available" });
     expect(harness.store.lookup(sessionKey)).toBeUndefined();

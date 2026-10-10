@@ -8,6 +8,7 @@ import {
   getCanonicalSqliteNamedIndexContracts,
   getCanonicalSqliteTableNames,
 } from "../infra/sqlite-schema-contract.js";
+import { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
 import {
   legacySqliteSchemaIssueMessages,
   SqliteSchemaMismatchError,
@@ -191,6 +192,12 @@ function repairAndAssertAgentSchemaGroup(
 
 /** Ensure the additive session-key contract table inside the caller's transaction. */
 export function ensureSessionKeyContractSchemaInTransaction(db: DatabaseSync): void {
+  if (
+    tableExists(db, "session_key_contract") &&
+    db.prepare("SELECT 1 FROM session_key_contract WHERE id = 1").get()
+  ) {
+    return;
+  }
   db.exec(
     extractSqliteTableSchema(OPENCLAW_AGENT_SCHEMA_SQL, "session_key_contract", {
       endMarker: "CREATE TABLE IF NOT EXISTS session_windows (",
@@ -201,6 +208,13 @@ export function ensureSessionKeyContractSchemaInTransaction(db: DatabaseSync): v
 }
 
 export function ensureSessionReactionsSchemaInTransaction(db: DatabaseSync): void {
+  const schema = getAdmittedSqliteSchemaFacts(db);
+  if (
+    schema?.tables.has("session_reactions") &&
+    schema.indexes.has("idx_agent_session_reactions_message")
+  ) {
+    return;
+  }
   db.exec(
     extractSqliteTableSchema(OPENCLAW_AGENT_SCHEMA_SQL, "session_reactions", {
       endMarker: "CREATE TABLE IF NOT EXISTS board_tabs (",

@@ -94,7 +94,7 @@ describe("Anthropic runtime-context cache lifecycle", () => {
     { implementation: "transport", marker: "legacy" },
     { implementation: "transport", marker: "canonical" },
   ] as const)(
-    "keeps mixed-media $marker carriers out of the prompt cache through $implementation replay",
+    "keeps mixed-media $marker carriers before steering out of the cache through $implementation replay",
     async ({ implementation, marker }) => {
       const carrier: Message = {
         role: "user",
@@ -112,7 +112,11 @@ describe("Anthropic runtime-context cache lifecycle", () => {
         cacheRetention: "short",
         context: {
           ...context,
-          messages: [{ role: "user", content: "Original question", timestamp: 1 }, carrier],
+          messages: [
+            { role: "user", content: "Original question", timestamp: 1 },
+            carrier,
+            { role: "user", content: "Steering correction", timestamp: 3 },
+          ],
         },
       });
       const wire = payload.messages as Array<{ content: unknown }>;
@@ -131,6 +135,7 @@ describe("Anthropic runtime-context cache lifecycle", () => {
           source: { type: "base64", media_type: "image/png", data: "aW1n" },
         },
       ]);
+      expect(wire[2]?.content).toBe("Steering correction");
     },
   );
 

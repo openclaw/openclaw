@@ -426,7 +426,14 @@
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/pages/new-session/cloud-target.ts",
-      "text": "openclaw connect --service --session-host"
+      "text": "openclaw config set nodeHost.workerRuns.enabled true"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/new-session/cloud-target.ts",
+      "text": "openclaw node install --force"
     },
     {
       "count": 1,
