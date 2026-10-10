@@ -1,10 +1,15 @@
 import path from "node:path";
+import { readProcessIdentity } from "@openclaw/proc-safe/identity";
 import { bindCurrentProcessLifetimeTo, PinnedProcess } from "@openclaw/proc-safe/windows-job";
 
 /** Bind the generated launch to its verified, still-live Task Scheduler process. */
 export function bindWindowsTaskLauncher(launcherKind: "wscript" | "cmd" = "wscript"): void {
-  const requireProcess = (pid: number, role: string): PinnedProcess => {
-    const owner = PinnedProcess.open(pid);
+  const requireProcess = (
+    pid: number,
+    role: string,
+    access: "observe" | "lifetime-owner",
+  ): PinnedProcess => {
+    const owner = PinnedProcess.open(pid, { access });
     if (!owner) {
       throw new Error(`Windows task ${role} is no longer present`);
     }
@@ -15,12 +20,18 @@ export function bindWindowsTaskLauncher(launcherKind: "wscript" | "cmd" = "wscri
       throw new Error(`Windows task ${role} is no longer live`);
     }
   };
-  const supervisor = requireProcess(process.pid, "supervisor");
+  const self = readProcessIdentity(process.pid);
+  if (!self) {
+    throw new Error("Windows task supervisor is no longer present");
+  }
   let cmd: PinnedProcess | undefined;
   let launcher: PinnedProcess | undefined;
   try {
-    const self = supervisor.identity;
-    cmd = requireProcess(self.parentPid, "CMD");
+    cmd = requireProcess(
+      self.parentPid,
+      "CMD",
+      launcherKind === "cmd" ? "lifetime-owner" : "observe",
+    );
     const command = cmd.identity;
     if (
       path.win32.basename(cmd.imagePath).toLowerCase() !== "cmd.exe" ||
@@ -33,7 +44,7 @@ export function bindWindowsTaskLauncher(launcherKind: "wscript" | "cmd" = "wscri
       bindCurrentProcessLifetimeTo(cmd);
       return;
     }
-    launcher = requireProcess(command.parentPid, "WScript");
+    launcher = requireProcess(command.parentPid, "WScript", "lifetime-owner");
     const host = launcher.identity;
     if (
       path.win32.basename(launcher.imagePath).toLowerCase() !== "wscript.exe" ||
@@ -48,6 +59,5 @@ export function bindWindowsTaskLauncher(launcherKind: "wscript" | "cmd" = "wscri
   } finally {
     launcher?.close();
     cmd?.close();
-    supervisor.close();
   }
 }

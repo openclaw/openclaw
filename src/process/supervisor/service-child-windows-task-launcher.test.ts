@@ -1,7 +1,10 @@
 import { beforeEach, expect, it, vi } from "vitest";
 import { bindWindowsTaskLauncher } from "./service-child-windows-task-launcher.js";
 
-const native = vi.hoisted(() => ({ open: vi.fn(), bind: vi.fn() }));
+const native = vi.hoisted(() => ({ open: vi.fn(), bind: vi.fn(), identity: vi.fn() }));
+vi.mock("@openclaw/proc-safe/identity", () => ({
+  readProcessIdentity: native.identity,
+}));
 vi.mock("@openclaw/proc-safe/windows-job", () => ({
   PinnedProcess: { open: native.open },
   bindCurrentProcessLifetimeTo: native.bind,
@@ -21,6 +24,7 @@ beforeEach(() => {
   processes.set(process.pid, processOwner(process.pid, 101, "node.exe", 30));
   processes.set(101, processOwner(101, 102, "cmd.exe", 20));
   processes.set(102, processOwner(102, 103, "wscript.exe", 10));
+  native.identity.mockImplementation((pid: number) => processes.get(pid)?.identity ?? null);
   native.open.mockImplementation((pid: number) => processes.get(pid) ?? null);
 });
 
@@ -31,7 +35,15 @@ it.each(["cmd", "wscript"] as const)(
     expect(native.bind).toHaveBeenCalledExactlyOnceWith(
       processes.get(launcher === "cmd" ? 101 : 102),
     );
-    expect(processes.get(process.pid)!.close).toHaveBeenCalledOnce();
+    expect(native.identity).toHaveBeenCalledExactlyOnceWith(process.pid);
+    expect(native.open.mock.calls).toEqual(
+      launcher === "cmd"
+        ? [[101, { access: "lifetime-owner" }]]
+        : [
+            [101, { access: "observe" }],
+            [102, { access: "lifetime-owner" }],
+          ],
+    );
     expect(processes.get(101)!.close).toHaveBeenCalledOnce();
     expect(processes.get(102)!.close).toHaveBeenCalledTimes(launcher === "cmd" ? 0 : 1);
   },
@@ -67,7 +79,6 @@ it.each(["wrong image", "recycled PID", "exited", "absent", "denied"])(
             : "lost its original CMD launcher",
     );
     expect(native.bind).not.toHaveBeenCalled();
-    expect(processes.get(process.pid)!.close).toHaveBeenCalledOnce();
     expect(cmd.close).toHaveBeenCalledTimes(failure === "absent" || failure === "denied" ? 0 : 1);
   },
 );
@@ -93,8 +104,7 @@ it.each(["wrong image", "recycled PID", "exited", "CMD exited"])(
           : "lost its original WScript launcher",
     );
     expect(native.bind).not.toHaveBeenCalled();
-    for (const owner of processes.values()) {
-      expect(owner.close).toHaveBeenCalledOnce();
-    }
+    expect(processes.get(101)!.close).toHaveBeenCalledOnce();
+    expect(host.close).toHaveBeenCalledOnce();
   },
 );
