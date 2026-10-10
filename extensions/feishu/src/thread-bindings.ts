@@ -4,7 +4,7 @@ import { isPluginOwnedSessionBindingRecord } from "openclaw/plugin-sdk/conversat
 import {
   resolveThreadBindingIdleTimeoutMsForChannel,
   resolveThreadBindingMaxAgeMsForChannel,
-  registerSessionBindingAdapter,
+  registerSessionBindingAdapterV2,
   unregisterSessionBindingAdapter,
   type BindingTargetKind,
   type SessionBindingRecord,
@@ -15,7 +15,7 @@ import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { AccountScopedConversationBindingRecord } from "openclaw/plugin-sdk/thread-bindings-session-runtime";
 import {
-  createAccountScopedBindingAdapter,
+  createAccountScopedBindingAdapterV2,
   projectThreadBindingRecord,
 } from "openclaw/plugin-sdk/thread-bindings-session-runtime";
 
@@ -247,7 +247,34 @@ export function createFeishuThreadBindingManager(params: {
     },
   };
 
-  const sessionBindingAdapter = createAccountScopedBindingAdapter({
+  const assertCurrent = () => {
+    if (managersByAccountId.get(accountId) !== manager) {
+      throw new Error("Feishu conversation binding owner is no longer active");
+    }
+  };
+  const sessionBindingAdapter = createAccountScopedBindingAdapterV2({
+    assertCurrent,
+    inspectByConversations: (refs) => {
+      const records = refs.map((ref) => manager.getByConversationId(ref.conversationId));
+      return {
+        records,
+        assertCurrent: () => {
+          assertCurrent();
+          if (
+            refs.some(
+              (ref, index) => manager.getByConversationId(ref.conversationId) !== records[index],
+            )
+          ) {
+            throw new Error("Feishu conversation binding changed during selection");
+          }
+        },
+      };
+    },
+    listBySessionKeyAsync: async (sessionKey) => manager.listBySessionKey(sessionKey),
+    getByConversationAsync: async (ref) => manager.getByConversationId(ref.conversationId),
+    inspectByConversationAsync: async (ref) => manager.getByConversationId(ref.conversationId),
+    touchConversationAsync: async (conversationId, at) =>
+      manager.touchConversation(conversationId, at),
     channel: "feishu",
     accountId,
     capabilities: {
@@ -257,6 +284,8 @@ export function createFeishuThreadBindingManager(params: {
       if (input.conversation.channel !== "feishu" || input.placement === "child") {
         return null;
       }
+      assertCurrent();
+      input.assertCurrent?.();
       const bound = manager.bindConversation({
         conversationId: input.conversation.conversationId,
         parentConversationId: input.conversation.parentConversationId,
@@ -274,7 +303,7 @@ export function createFeishuThreadBindingManager(params: {
     unbindBySessionKey: (sessionKey) => manager.unbindBySessionKey(sessionKey.trim()),
   });
 
-  registerSessionBindingAdapter(sessionBindingAdapter);
+  registerSessionBindingAdapterV2(sessionBindingAdapter);
 
   managersByAccountId.set(accountId, manager);
   return manager;

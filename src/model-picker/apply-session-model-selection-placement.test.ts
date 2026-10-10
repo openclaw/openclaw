@@ -53,10 +53,8 @@ vi.mock("../config/config.js", factories.config);
 vi.mock("../logging/subsystem.js", factories.logging);
 
 vi.mock("../gateway/session-worker-placement-context.js", factories.placementContext);
-vi.mock("../gateway/worker-environments/placement-session-runtime.js", async (importOriginal) => ({
-  ...(await importOriginal<
-    typeof import("../gateway/worker-environments/placement-session-runtime.js")
-  >()),
+// mock-isolation: The placement runtime is a hand-built fixture so capability resolution is observed without loading the worker runtime.
+vi.mock("../gateway/worker-environments/placement-session-runtime.js", () => ({
   ...factories.placementRuntime(),
   resolveWorkerPlacementSessionRuntimeCapabilitiesAsync: async (
     params: Parameters<

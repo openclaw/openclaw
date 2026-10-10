@@ -983,7 +983,7 @@ it.each([
     });
     const page = mountProfilePage(harness.context);
     await waitForFast(() => expect(page.querySelector(".settings-account")).not.toBeNull());
-    const toggle = page.querySelector<HTMLElement & { checked: boolean }>("wa-switch");
+    const toggle = page.querySelector<HTMLInputElement>("input.settings-toggle__input");
     await waitForFast(() => expect(toggle?.checked).toBe(enabled));
     expect(request.mock.calls.map(([method]) => method).toSorted()).toEqual(
       ["users.self", "users.listModelAccounts", "users.prefs.get"].toSorted(),
