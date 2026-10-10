@@ -27,6 +27,11 @@ openclaw-session-background {
   user-select: none;
 }
 
+/* Bleed only the decoration through the shell inset; draft geometry stays shared with Chat. */
+.new-session-page > openclaw-session-background {
+  inset-inline: calc(0px - var(--content-inline-padding));
+}
+
 openclaw-session-background[hidden] {
   display: none;
 }

@@ -398,7 +398,8 @@ class ChatPositionRailDirective extends AsyncDirective {
     const overflowing =
       measured.clientHeight > 0 && measured.scrollHeight - measured.clientHeight > 1;
     if (syncPositionRailVisibility(this.scrollElement, overflowing) && !overflowing) {
-      this.interaction = initialInteraction();
+      // Guarded marker callbacks retain this object while the rail is hidden.
+      Object.assign(this.interaction, initialInteraction());
       this.refreshWindow();
     }
     const { state, scheduleLayout } = resolvePositionRailReaderViewport(

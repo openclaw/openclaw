@@ -81,6 +81,7 @@ import {
   isCiProofTestFile,
   isPrExemptRuntimeTestFile,
   isReleaseOnlyRuntimeTestFile,
+  RELEASE_ONLY_UI_TEST_FILES,
 } from "./ci-proof-test-inventory.mts";
 import { rebalanceRuntimeTestJobs } from "./ci-runtime-test-placement.mts";
 import {
@@ -1562,22 +1563,6 @@ const KEEP_LARGE_NODE_TEST_RUNNER = new Set([
 ]);
 const RELEASE_ONLY_PLUGIN_SHARDS = new Set(["agentic-plugins"]);
 const RELEASE_ONLY_TOOLING_SHARDS = new Set(["core-tooling"]);
-const RELEASE_ONLY_UI_TEST_FILES = new Set([
-  "ui/src/e2e/activity-run-inspector.real-gateway.e2e.test.ts",
-  "ui/src/components/app-sidebar.stress.browser.test.ts",
-  "ui/src/e2e/cron-duration-save.real-gateway.e2e.test.ts",
-  "ui/src/e2e/desktop-resize.real-gateway.e2e.test.ts",
-  "extensions/qa-lab/src/control-ui-automation-management.real-gateway.e2e.test.ts",
-  "ui/src/e2e/quota-reset-status.real-gateway.e2e.test.ts",
-  "ui/src/e2e/session-pr-reader-lifetime.real-gateway.e2e.test.ts",
-  "ui/src/e2e/chat-collaborator-scroll.real-gateway.e2e.test.ts",
-  "ui/src/e2e/mcp-app-conformance.e2e.test.ts",
-  "ui/src/e2e/usage-sessions-owner-attribution.e2e.test.ts",
-  "extensions/qa-lab/src/control-ui-openclaw-delegation.real-gateway.e2e.test.ts",
-  "extensions/qa-lab/src/control-ui-media-transcript.real-gateway.e2e.test.ts",
-  "extensions/qa-lab/src/session-host-command-state.real-gateway.e2e.test.ts",
-]);
-
 const sharedUiE2eInputs = [
   "ui/{package.json,tsconfig.json,index.html,vite.config.ts}",
   "ui/config/control-ui-{boot-preloads,chunking,locales,hover-guard,web-awesome-page-rule}.ts",
@@ -1681,15 +1666,13 @@ export function createUiTestShardGroups(
 ) {
   const includeReleaseOnlyTests = options.includeReleaseOnlyTests ?? true;
   const changedPaths = new Set(options.changedPaths ?? []);
+  const includeUiTest = (file: string) =>
+    includeReleaseOnlyTests || !RELEASE_ONLY_UI_TEST_FILES.has(file) || changedPaths.has(file);
   const files =
     includeReleaseOnlyTests && options.includePrExemptRuntimeTests !== false
       ? undefined
       : listTrackedTestFiles(".").filter(
-          (file) =>
-            (includeReleaseOnlyTests ||
-              !RELEASE_ONLY_UI_TEST_FILES.has(file) ||
-              changedPaths.has(file)) &&
-            isRuntimeTestFileIncluded(file, options),
+          (file) => includeUiTest(file) && isRuntimeTestFileIncluded(file, options),
         );
   const group = (config: string, ownsFile: (file: string) => boolean) => [
     {
@@ -1710,7 +1693,7 @@ export function createUiTestShardGroups(
     );
     e2eGroups[0]!.includePatterns = [
       ...new Set([
-        ...options.uiE2eFiles,
+        ...options.uiE2eFiles.filter(includeUiTest),
         ...(options.includeReleaseOnlyE2eTests ? uiE2eRealGatewayTestFiles : retained),
       ]),
     ].toSorted();
