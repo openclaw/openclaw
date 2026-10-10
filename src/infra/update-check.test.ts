@@ -614,6 +614,34 @@ describe("resolveNpmChannelTag", () => {
 });
 
 describe("resolveExtendedStablePackage", () => {
+  it("does not query the selector after the channel request was aborted", async () => {
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(
+      resolveNpmChannelTag({ channel: "extended-stable", signal: controller.signal }),
+    ).rejects.toMatchObject({ name: "AbortError" });
+    expect(mockHttp.requests()).toHaveLength(0);
+  });
+
+  it("does not query the exact package after cancellation during selector lookup", async () => {
+    const controller = new AbortController();
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+      controller.abort();
+      return Response.json({ version: "2026.6.33" });
+    });
+
+    await expect(
+      checkUpdateStatus({
+        root: null,
+        includeRegistry: true,
+        registryChannel: "extended-stable",
+        signal: controller.signal,
+      }),
+    ).rejects.toMatchObject({ name: "AbortError" });
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
   it("resolves and verifies an exact public package without falling back", async () => {
     mockHttp.intercept({
       url: "https://registry.npmjs.org/openclaw/extended-stable",
