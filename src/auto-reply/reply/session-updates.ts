@@ -323,6 +323,7 @@ export async function incrementCompactionCount(params: {
   now?: number;
   amount?: number;
   tokensAfter?: number;
+  clearTranscriptByteCompactionLatch?: boolean;
   compactionKind?: EmbeddedAgentCompactResult["compactionKind"];
   expectedSession?: Pick<
     InternalSessionEntry,
@@ -358,6 +359,7 @@ export async function incrementCompactionCount(params: {
         expected,
         accounting: {
           amount: params.amount,
+          clearTranscriptByteCompactionLatch: params.clearTranscriptByteCompactionLatch,
           compactionKind: params.compactionKind,
           now: params.now,
           tokensAfter: params.tokensAfter,

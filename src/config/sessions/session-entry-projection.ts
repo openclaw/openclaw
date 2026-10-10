@@ -85,6 +85,7 @@ export function projectCompactionAccountingPatch(
   current: InternalSessionEntry,
   params: {
     amount?: number;
+    clearTranscriptByteCompactionLatch?: boolean;
     compactionKind?: "context-engine" | "native-harness" | "server-endpoint";
     now?: number;
     tokensAfter?: number;
@@ -102,7 +103,14 @@ export function projectCompactionAccountingPatch(
       : undefined;
   const patch: Partial<InternalSessionEntry> = {
     compactionCount: (current.compactionCount ?? 0) + incrementBy,
-    transcriptByteCompactionLatch: params.transcriptByteCompactionLatch,
+    // Latch intent is explicit: only a caller that manages the host byte fuse may set or clear it.
+    // Accounting that never touches the host transcript omits both fields and preserves the latch,
+    // so a native harness compaction cannot silently re-arm the byte-triggered preflight.
+    ...(params.clearTranscriptByteCompactionLatch
+      ? { transcriptByteCompactionLatch: undefined }
+      : params.transcriptByteCompactionLatch
+        ? { transcriptByteCompactionLatch: params.transcriptByteCompactionLatch }
+        : {}),
     updatedAt: params.now ?? Date.now(),
     ...(incrementBy > 0 || tokensAfter !== undefined ? COMPACTION_RUN_USAGE_CLEAR_PATCH : {}),
     ...(incrementBy > 0 ? { contextBudgetStatus: undefined } : {}),

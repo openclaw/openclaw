@@ -561,7 +561,7 @@ describe("completed compaction accounting", () => {
     });
   });
 
-  it("records and clears byte-compaction progress with authoritative accounting", async () => {
+  it("records byte-compaction progress and clears it only on explicit request", async () => {
     await withAccountingFixture(async (fixture) => {
       const latch = {
         activeBytes: 60_000,
@@ -577,7 +577,16 @@ describe("completed compaction accounting", () => {
       ).toBe(1);
       expect(fixture.read()?.transcriptByteCompactionLatch).toEqual(latch);
 
+      // Accounting that does not manage the host byte fuse must preserve the latch.
       expect(await incrementCompactionCount(fixture.params)).toBe(2);
+      expect(fixture.read()?.transcriptByteCompactionLatch).toEqual(latch);
+
+      expect(
+        await incrementCompactionCount({
+          ...fixture.params,
+          clearTranscriptByteCompactionLatch: true,
+        }),
+      ).toBe(3);
       expect(fixture.read()?.transcriptByteCompactionLatch).toBeUndefined();
     });
   });

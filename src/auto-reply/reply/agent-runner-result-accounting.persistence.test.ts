@@ -670,4 +670,27 @@ describe.each(["ordinary", "followup"] as const)("%s accounting replacement race
     await fixture.account(lane, { usage: { input: 120 } });
     expect(fixture.read()).toBeUndefined();
   });
+
+  it("preserves a host byte-fuse latch across native compaction accounting", async () => {
+    const fixture = await createFixture();
+    const latch = {
+      activeBytes: 60_000,
+      sessionId: fixture.sessionId,
+      maxBytes: 50_000,
+    };
+    await fixture.replace({
+      ...fixture.context.activeSessionEntry!,
+      transcriptByteCompactionLatch: latch,
+    });
+    // A native harness compaction is a durable fact with no latch and no compaction kind.
+    fixture.recordCompaction({ currentContextTokens: 40 });
+
+    await fixture.account(lane, {
+      compactionCount: 1,
+      usage: { input: 120 },
+      lastCallUsage: { input: 120 },
+    });
+
+    expect(fixture.read()?.transcriptByteCompactionLatch).toEqual(latch);
+  });
 });
