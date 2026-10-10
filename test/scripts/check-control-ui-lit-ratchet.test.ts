@@ -93,9 +93,12 @@ describe("Control UI Lit ratchet", () => {
     const sourcePath = path.join(root, "ui/src/view.ts");
     const commonjsPath = path.join(root, "ui/src/legacy.cts");
     const commonjs = 'const { html: markup } = require("lit");';
+    const namespacePath = path.join(root, "ui/src/namespace.ts");
+    const namespace = 'import { svg as html } from "lit"; import * as Lit from "lit";';
     fs.mkdirSync(path.dirname(sourcePath), { recursive: true });
     fs.writeFileSync(sourcePath, legacy);
     fs.writeFileSync(commonjsPath, commonjs);
+    fs.writeFileSync(namespacePath, namespace);
     for (const args of [["init"], ["add", "."], ["commit", "-m", "base"]]) git(root, args);
     const errors: string[] = [];
     vi.spyOn(console, "error").mockImplementation((...args) => errors.push(args.join(" ")));
@@ -105,6 +108,10 @@ describe("Control UI Lit ratchet", () => {
     expect(main(root, ["--base", "HEAD"])).toBe(1);
     expect(errors.join("\n")).toContain("ui/src/legacy.cts [htmlTemplates]: 1 > 0");
     fs.writeFileSync(commonjsPath, commonjs);
+    fs.writeFileSync(namespacePath, namespace + "\nconst view = Lit.html`<div />`;");
+    expect(main(root, ["--base", "HEAD"])).toBe(1);
+    expect(errors.join("\n")).toContain("ui/src/namespace.ts [htmlTemplates]: 1 > 0");
+    fs.writeFileSync(namespacePath, namespace);
     fs.writeFileSync(sourcePath, "export {};\n");
     expect(main(root, ["--base", "HEAD"])).toBe(0);
     for (const [addition, metric] of [

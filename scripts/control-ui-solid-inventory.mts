@@ -133,8 +133,9 @@ export function countMigrationSources(root: string, sources: ReadonlyMap<string,
       }
     }
     const canonicalName = (node: ts.Node) => {
-      const name = nameOf(node);
-      return name ? (aliases.get(name) ?? name) : undefined;
+      const expression = unwrap(node);
+      const name = nameOf(expression);
+      return ts.isIdentifier(expression) && name ? (aliases.get(name) ?? name) : name;
     };
     const isLitNamespace = (node: ts.Node): boolean => {
       const expression = unwrap(node);
