@@ -31,6 +31,7 @@ export const uiE2ePrivateServerTestFiles = [
   "ui/src/e2e/background-work.real-gateway.e2e.test.ts",
   "ui/src/e2e/boot-module-boundaries.e2e.test.ts",
   "ui/src/e2e/browser-auth-recovery.e2e.test.ts",
+  "ui/src/e2e/browser-capabilities.e2e.test.ts",
   "ui/src/e2e/build-info-unicode.e2e.test.ts",
   "ui/src/e2e/chat-agent-avatar.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-code-block-fences.e2e.test.ts",

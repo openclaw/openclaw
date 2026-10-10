@@ -530,8 +530,32 @@ it.each([
             ...args: Parameters<typeof original>
           ) => {
             const worker = await original<Operations>(...args);
+            const deliver = async <T>(type: keyof Operations, result: T): Promise<T> => {
+              if (
+                type ===
+                (mutation === "membership"
+                  ? "add"
+                  : mutation === "removal"
+                    ? "remove"
+                    : "category.apply")
+              ) {
+                committed.resolve();
+                await releaseReply.promise;
+                if (lostReply) {
+                  throw failure;
+                }
+              }
+              return result;
+            };
             return {
               ...worker,
+              async execute<Key extends keyof Operations>(
+                command: { type: Key; input: Operations[Key]["input"] },
+                assertCurrent: () => void,
+                options?: { signal?: AbortSignal },
+              ) {
+                return deliver(command.type, await worker.execute(command, assertCurrent, options));
+              },
               run<T>(
                 consume: (operation: Pick<SqliteWorkerStore<Operations>, "execute">) => Promise<T>,
                 assertCurrent: () => void,
@@ -541,21 +565,7 @@ it.each([
                     consume({
                       async execute(command, options) {
                         const result = await operation.execute(command, options);
-                        if (
-                          command.type ===
-                          (mutation === "membership"
-                            ? "add"
-                            : mutation === "removal"
-                              ? "remove"
-                              : "category.apply")
-                        ) {
-                          committed.resolve();
-                          await releaseReply.promise;
-                          if (lostReply) {
-                            throw failure;
-                          }
-                        }
-                        return result;
+                        return deliver(command.type, result);
                       },
                     }),
                   assertCurrent,
@@ -741,8 +751,31 @@ it.each([
             ...args: Parameters<typeof original>
           ) => {
             const worker = await original<Operations>(...args);
+            const intercept = async <T>(
+              type: keyof Operations,
+              run: () => Promise<T>,
+            ): Promise<T> => {
+              const selected = type === (mutation === "category" ? "category.apply" : "remove");
+              if (selected) {
+                mutations++;
+              }
+              const result = await run();
+              if (selected) {
+                throw failure;
+              }
+              return result;
+            };
             return {
               ...worker,
+              execute<Key extends keyof Operations>(
+                command: { type: Key; input: Operations[Key]["input"] },
+                assertCurrent: () => void,
+                options?: { signal?: AbortSignal },
+              ) {
+                return intercept(command.type, () =>
+                  worker.execute(command, assertCurrent, options),
+                );
+              },
               run<T>(
                 consume: (operation: Pick<SqliteWorkerStore<Operations>, "execute">) => Promise<T>,
                 assertCurrent: () => void,
@@ -750,19 +783,8 @@ it.each([
                 return worker.run(
                   (operation) =>
                     consume({
-                      async execute(command, options) {
-                        if (
-                          command.type === (mutation === "category" ? "category.apply" : "remove")
-                        ) {
-                          mutations++;
-                        }
-                        const result = await operation.execute(command, options);
-                        if (
-                          command.type === (mutation === "category" ? "category.apply" : "remove")
-                        ) {
-                          throw failure;
-                        }
-                        return result;
+                      execute(command, options) {
+                        return intercept(command.type, () => operation.execute(command, options));
                       },
                     }),
                   assertCurrent,

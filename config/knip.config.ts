@@ -418,7 +418,9 @@ const rootEntries = [
   // Deployed in the worker archive and launched by path, without a static host import.
   "src/worker/worker-deploy-entry.ts!",
   "src/worker/worker-deploy-file-tool-planning.ts!",
+  "src/worker/worker-deploy-file-tool-read.ts!",
   "src/worker/worker-deploy-image-processor.ts!",
+  "src/worker/worker-deploy-sqlite-source-revision.ts!",
   "src/worker/worker-deploy-sqlite-store.ts!",
   "src/worker/worker-deploy-state-read.ts!",
   "src/worker/workspace-rsync-receiver.ts!",
@@ -644,7 +646,7 @@ function compileNativeProtocolConsumer(source: string, filePath: string): string
 function bundledPluginWorkspace(extraEntries: readonly string[] = []) {
   return {
     entry: [...bundledPluginEntries, ...extraEntries],
-    project: ["**/*.{js,mjs,ts,tsx}!"],
+    project: ["**/*.{js,jsx,mjs,ts,tsx}!"],
     ignoreDependencies: bundledPluginIgnoredRuntimeDependencies,
   } as const;
 }
@@ -949,8 +951,8 @@ const config = {
       "scripts/pnpm-runner.mjs!",
       // Rolldown consumes this config and its browser bootstrap entry.
       "src/host/a2ui-app/rolldown.config.mjs!",
-      "src/host/a2ui-app/bootstrap.js!",
-      "src/host/a2ui-app/bootstrap-v0.9.js!",
+      "src/host/a2ui-app/bootstrap.jsx!",
+      "src/host/a2ui-app/bootstrap-v0.9.jsx!",
     ]),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/cloudflare-ai-gateway`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/chutes`]: bundledPluginWorkspace(),

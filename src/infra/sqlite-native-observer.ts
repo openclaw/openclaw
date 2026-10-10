@@ -103,7 +103,9 @@ function createIteratorLifetime(
 const bindingMutation: SqliteNativeMutation = {
   schemaChange: false,
   mainSchemaChange: false,
+  temporaryTableSchemaChange: false,
   dataChange: false,
+  temporaryWriteTables: undefined,
   control: undefined,
 };
 
