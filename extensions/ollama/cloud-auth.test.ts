@@ -36,7 +36,8 @@ function authContext(
       intro: vi.fn(async () => {}),
       outro: vi.fn(async () => {}),
       note: vi.fn(async () => {}),
-      select: async ({ options }) => expectDefined(options[0], "Expected a prompt option").value,
+      select: async ({ options: choices }) =>
+        expectDefined(choices[0], "Expected a prompt option").value,
       multiselect: async () => {
         throw new Error("Unexpected multiselect prompt");
       },
