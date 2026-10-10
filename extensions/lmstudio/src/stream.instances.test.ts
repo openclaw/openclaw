@@ -127,7 +127,10 @@ it.each([
           clock.mockReturnValue(now + 5_001);
           discoveryUnavailable = true;
         }
-        const events = await Array.fromAsync(await wrapped(model, { messages: [] }, { onPayload }));
+        const events = [];
+        for await (const event of await wrapped(model, { messages: [] }, { onPayload })) {
+          events.push(event);
+        }
         expect(events).toEqual([
           expect.objectContaining({
             type: "error",
