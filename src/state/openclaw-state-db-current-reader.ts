@@ -21,6 +21,7 @@ import { runWithSqliteWorkerStateContext } from "../infra/sqlite-worker-state-co
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { getStateRuntimeSchemaAdmission } from "./openclaw-state-db-admission.js";
 import {
   getOpenClawDatabaseMaintenanceResourceScope,
   getOpenClawDatabaseMaintenanceScope,
@@ -42,6 +43,7 @@ import {
   openOpenClawStateReadConnection,
   type OpenClawStateReadConnection,
 } from "./openclaw-state-db-read-connection.js";
+import { admitStateReadSchemaFacts } from "./openclaw-state-db-read-schema.js";
 import { canReadWarmNativeSourceIndependently } from "./openclaw-state-db-readonly-reuse.js";
 import {
   executeExistingOpenClawStateRead,
@@ -212,6 +214,12 @@ export async function prepareOpenClawStateCurrentReader(context: OpenClawStateWo
       },
       read<T>(operation: (database: OpenClawStateReadOnlyDatabase) => T): T {
         assertCurrent();
+        if (
+          context.existingSchemaPath !== undefined &&
+          !getStateRuntimeSchemaAdmission(retained.connection.database.db)
+        ) {
+          throw new Error("Shared-state reader requires current worker integrity proof");
+        }
         const read = () =>
           runWithSqliteWorkerStateContext(context, () =>
             runOpenClawStateCurrentReadConnection(
@@ -370,7 +378,6 @@ const currentReaderSchemaAdmissions = new WeakMap<
     facts: SqliteSchemaFacts;
     existingSchema: boolean;
     admission?: OpenClawStateSchemaReadAdmission;
-    legacyAdmission: boolean;
   }
 >();
 
@@ -386,22 +393,12 @@ function runOpenClawStateCurrentReadConnection<T>(
   const errors: unknown[] = [];
   let result!: T;
   try {
-    const previous = currentReaderSchemaAdmissions.get(db);
-    // The schema owner observes foreign commits. Ordinary lease heartbeats keep
-    // these facts; schema changes revoke them before this reader re-admits.
-    const facts =
-      previous && !previous.legacyAdmission
-        ? runSqliteReadOperationSync(db, () => getAdmittedSqliteSchemaFacts(db))
-        : undefined;
-    if (
-      !previous ||
-      previous.admission !== openStateSchemaReadAdmission ||
-      previous.legacyAdmission ||
-      previous.facts !== facts
-    ) {
-      closeAdmission = openStateSchemaReadAdmission?.(db);
-    }
+    // Explicit Doctor inspection retains its checks; ordinary runtime reads have no callback.
+    closeAdmission = openStateSchemaReadAdmission?.(db);
     const existingSchema = isExistingOpenClawStateSchema(pathname, db);
+    if (openStateSchemaReadAdmission) {
+      admitStateReadSchemaFacts(db, pathname);
+    }
     const admit = () => {
       const current = getAdmittedSqliteSchemaFacts(db);
       const accepted = currentReaderSchemaAdmissions.get(db);
@@ -421,7 +418,6 @@ function runOpenClawStateCurrentReadConnection<T>(
           facts: admitted,
           existingSchema,
           admission: openStateSchemaReadAdmission,
-          legacyAdmission: closeAdmission !== undefined,
         });
       }
     };
@@ -433,8 +429,7 @@ function runOpenClawStateCurrentReadConnection<T>(
       }
       return value;
     });
-    // A foreign schema publication can arrive between admission and the query's
-    // snapshot. Recheck its admitted facts before returning policy rows.
+    // Local migration publication can replace the admitted facts during the read.
     runSqliteReadOperationSync(db, admit);
   } catch (error) {
     errors.push(error);

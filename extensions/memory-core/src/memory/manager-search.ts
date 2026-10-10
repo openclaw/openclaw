@@ -115,7 +115,8 @@ function scoreFallbackKeywordResult(params: {
   const textLengthBoost = Math.min(params.text.length / 160, 0.18);
 
   const lexicalBoost = uniqueQueryOverlap * 0.45 + density * 0.2 + pathBoost + textLengthBoost;
-  return Math.min(1, params.ftsScore + lexicalBoost);
+  // Scale boosts into the remaining headroom so relevance survives recency weighting.
+  return (params.ftsScore + lexicalBoost) / (1 + lexicalBoost);
 }
 
 function escapeLikePattern(term: string): string {

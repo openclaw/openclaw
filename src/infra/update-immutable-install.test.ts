@@ -217,6 +217,7 @@ it.each([undefined, nextSha])(
     const before = await fs.readdir(root);
     const result = await prepareImmutableUpdate({ root, sha, dryRun: true });
     expect(result).toMatchObject({ status: "dry-run", targetSha: nextSha });
+    expect(result.coverage?.target).toEqual({ sha: nextSha, preparation: "unknown" });
     expect(await fs.readdir(root)).toEqual(before);
     expect(await pointer()).toBe(`releases/${currentSha}`);
     expect(mocks.preflight).not.toHaveBeenCalled();

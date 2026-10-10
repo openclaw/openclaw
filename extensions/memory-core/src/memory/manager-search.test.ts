@@ -3,6 +3,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { searchKeyword } from "./manager-search.js";
 import { createMemorySearchDb, insertKeywordFixture } from "./manager-search.test-support.js";
+import { applyTemporalDecayToHybridResults } from "./temporal-decay.js";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -329,6 +330,60 @@ describe("searchKeyword FTS MATCH fallback", () => {
       db.close();
     }
   });
+});
+
+describe("searchKeyword boosted relevance", () => {
+  it.each(["unicode61", "trigram"] as const)(
+    "preserves %s relevance differences before dated-note decay",
+    async (ftsTokenizer) => {
+      const { db } = createMemorySearchDb({ ftsTokenizer });
+      try {
+        const notes = [
+          "Quartz compass calibration: coefficient 17. Quartz compass calibration was completed, verified and approved. Record the quartz compass calibration coefficient 17 for future measurements.",
+          "We discussed quartz compass calibration in planning. The next meeting will schedule a demonstration; no coefficient or measurement was recorded.",
+          "The garden committee reviewed watering schedules, planted new herbs and replaced several flower pots. Volunteers will meet on Saturday to organize tools and prepare fresh soil for the spring beds.",
+          "Dinner planning covered a vegetable soup, fresh bread and a fruit dessert. We compared grocery prices and agreed to prepare the meal together after shopping on Friday afternoon.",
+          "The walking group selected a route through the forest and checked the weather forecast. Everyone will bring drinking water, comfortable boots and a jacket for the afternoon outing.",
+        ];
+        for (const [index, text] of notes.entries()) {
+          insertKeywordFixture(db, {
+            id: String(index),
+            path: `memory/2026-10-${index === 0 ? "05" : "06"}-note-${index}.md`,
+            text: `user: ${text}`,
+          });
+        }
+        const query = "quartz compass calibration";
+        const raw = await searchKeywordFixture(db, query, { ftsTokenizer });
+        const boosted = await searchKeywordFixture(db, query, {
+          ftsTokenizer,
+          boostFallbackRanking: true,
+        });
+        await expect(
+          searchKeywordFixture(db, `quartz quartz ${query}`, {
+            ftsTokenizer,
+            boostFallbackRanking: true,
+          }),
+        ).resolves.toEqual(boosted);
+        expect(boosted.map((row) => row.id)).toEqual(["0", "1"]);
+        expect(boosted.map((row) => row.textScore)).toEqual(raw.map((row) => row.textScore));
+        for (const row of boosted) {
+          expect(row.score).toBeGreaterThan(row.textScore);
+          expect(row.score).toBeLessThan(1);
+        }
+        expect(boosted[0]!.score).toBeGreaterThan(boosted[1]!.score);
+
+        const decayed = await applyTemporalDecayToHybridResults({
+          results: boosted,
+          temporalDecay: { enabled: true, halfLifeDays: 30 },
+          nowMs: Date.UTC(2026, 9, 6),
+        });
+        expect(decayed[0]!.score).toBeLessThan(boosted[0]!.score);
+        expect(decayed[0]!.score).toBeGreaterThan(decayed[1]!.score);
+      } finally {
+        db.close();
+      }
+    },
+  );
 });
 
 describe("searchKeyword ranked limits", () => {

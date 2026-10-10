@@ -268,6 +268,8 @@ export type ChatItem =
   | { kind: "question"; key: string; questionId: string; startedAt: number };
 
 export type ChatStreamSegment = {
+  /** Input observed when live commentary first arrived; omitted for history replay. */
+  afterUserSendId?: string;
   text: string;
   ts: number;
   runId?: string;

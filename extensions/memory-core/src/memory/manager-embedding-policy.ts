@@ -10,6 +10,30 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 
+// Retry attempts are host control state. Provider-thrown values stay opaque so
+// they cannot override the counter or break accounting when they are immutable.
+type MemoryBatchRetryResult =
+  | { kind: "success"; value: number[][] | null }
+  | { kind: "failure"; error: unknown; attempts: 1 | 2 };
+
+export async function runMemoryEmbeddingBatchTimeoutRetry(params: {
+  onRetry: () => void;
+  run: () => Promise<number[][] | null>;
+}): Promise<MemoryBatchRetryResult> {
+  let attempts: 1 | 2 = 1;
+  while (true) {
+    try {
+      return { kind: "success", value: await params.run() };
+    } catch (error) {
+      if (attempts === 2 || !/timed out|timeout/i.test(formatErrorMessage(error))) {
+        return { kind: "failure", error, attempts };
+      }
+    }
+    params.onRetry();
+    attempts = 2;
+  }
+}
+
 type MemoryEmbeddingChunk = {
   text: string;
   embeddingInput?: EmbeddingInput;
