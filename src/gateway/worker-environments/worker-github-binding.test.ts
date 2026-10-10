@@ -1,3 +1,5 @@
+import "../../test-utils/prepare-compiled-subprocesses.js";
+import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -8,8 +10,11 @@ import {
 } from "../../agents/github-tool-identity.js";
 import { clearRuntimeConfigSnapshot, writeConfigFile } from "../../config/config.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
+import { patchSessionEntryCore } from "../../config/sessions/session-accessor.sqlite-entry.js";
+import { withIncognitoSessionBinding } from "../../config/sessions/session-incognito-binding.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import {
   prepareWorkerGitHubBinding,
   prepareWorkerGitHubBindingGrant,
@@ -144,6 +149,113 @@ describe("worker GitHub launch binding", () => {
     vi.unstubAllEnvs();
     vi.unstubAllGlobals();
   });
+
+  it.each([
+    { workspace: "none", changed: "writer" },
+    { workspace: "none", changed: "lifecycle" },
+    { workspace: "none", changed: "actor" },
+    { workspace: "worktree", changed: "actor" },
+  ] as const)(
+    "retains its incognito $workspace source outside binding until $changed retirement",
+    async ({ workspace, changed }) => {
+      const profileDir = await installProfile();
+      const authority = { assertCurrent() {} };
+      const actor = await captureOpenClawAgentDatabaseExecution({
+        kind: "ephemeral",
+        agentId: "main",
+        env: process.env,
+        authority,
+      });
+      assert(actor);
+      const selected = { ...session, sessionKey: "agent:main:dashboard:incognito-worker-github" };
+      const entry = {
+        sessionId: selected.sessionId,
+        updatedAt: Date.now(),
+        lifecycleRevision: "lifecycle",
+        activeWriterRunId: "writer",
+        ...(workspace === "worktree"
+          ? { worktree: { id: worktree.id, branch: worktree.branch, repoRoot: worktree.repoRoot } }
+          : {}),
+      };
+      let successor: typeof actor | undefined;
+      let grant: Awaited<ReturnType<typeof prepareWorkerGitHubBindingGrant>>;
+      try {
+        await actor.sessions.create(authority, { sessionKey: selected.sessionKey, entry });
+        mocks.worktree.mockReturnValue({ ...worktree, ownerId: selected.sessionKey });
+        mocks.session.mockImplementation(() => {
+          throw new Error("Private grant read host session SQL");
+        });
+        grant = await withIncognitoSessionBinding({ actor }, () =>
+          prepareWorkerGitHubBindingGrant({
+            ...selected,
+            sessionTarget: {
+              ...selected,
+              storePath: actor.path,
+              expectedLifecycleRevision: "lifecycle",
+              expectedWriterRunId: "writer",
+            },
+          }),
+        );
+        assert(grant);
+        expect(grant.binding.token).toBe(token);
+        expect(() => grant!.assertCurrent!()).not.toThrow();
+        await withIncognitoSessionBinding({ actor }, () =>
+          patchSessionEntryCore({ ...selected, storePath: actor.path }, () => ({
+            label: "Renamed private session",
+          })),
+        );
+        await writeManagedGitHubProfileFiles(profileDir, {
+          login: verified.account.login,
+          token: "synthetic-private-rotation",
+        });
+        expect(grant.signal?.aborted).toBe(false);
+        expect(await grant.refresh?.()).toMatchObject({
+          generation: 1,
+          token: "synthetic-private-rotation",
+        });
+        await grant.refresh?.(1);
+        expect(grant.binding.token).toBe("synthetic-private-rotation");
+        expect(mocks.session).not.toHaveBeenCalled();
+        // A matching durable projection cannot lend authority to the retired private source.
+        mocks.session.mockReturnValue({
+          agentId: selected.agentId,
+          canonicalKey: selected.sessionKey,
+          storePath: actor.path,
+          entry,
+        });
+        if (changed === "actor") {
+          await actor.close();
+          successor = await captureOpenClawAgentDatabaseExecution({
+            kind: "ephemeral",
+            agentId: "main",
+            env: process.env,
+            authority,
+          });
+          assert(successor);
+          expect(successor.path).toBe(actor.path);
+          await successor.sessions.create(authority, { sessionKey: selected.sessionKey, entry });
+          withIncognitoSessionBinding({ actor: successor }, () => {
+            expect(() => grant!.assertCurrent!()).toThrow();
+          });
+        } else {
+          await withIncognitoSessionBinding({ actor }, () =>
+            patchSessionEntryCore({ ...selected, storePath: actor.path }, () =>
+              changed === "writer"
+                ? { activeWriterRunId: "replacement" }
+                : { lifecycleRevision: "replacement" },
+            ),
+          );
+          expect(() => grant!.assertCurrent!()).toThrow();
+        }
+        expect(grant.signal?.aborted).toBe(true);
+        expect(mocks.session).not.toHaveBeenCalled();
+      } finally {
+        await grant?.revoke();
+        await successor?.close();
+        await actor.close();
+      }
+    },
+  );
 
   it("rejects a missing admitted session instead of borrowing a routed session", async () => {
     await installProfile();
