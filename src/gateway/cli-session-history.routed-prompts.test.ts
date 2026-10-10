@@ -1,10 +1,7 @@
 import fs from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import { buildCliSessionDriftNote } from "../agents/cli-session.js";
-import {
-  buildInterSessionPromptContext,
-  type InputProvenance,
-} from "../sessions/input-provenance.js";
+import { buildInterSessionPromptContext, type InputProvenance } from "../sessions/input-provenance.js";
 import {
   claudeUser,
   cliMeta,
@@ -61,7 +58,7 @@ describe("routed CLI prompts in chat history", () => {
   it.each(["string", "text block"])(
     "matches literal routed %s content before removing generated-looking decorations",
     async (shape) => {
-      await withClaudeProjectsDir(async ({ filePath, readMessages }) => {
+      await withClaudeProjectsDir(async ({ filePath, readMessages, sessionId }) => {
         const provenance: InputProvenance = {
           kind: "inter_session",
           sourceSessionKey: "agent:ops:main",
@@ -81,7 +78,7 @@ describe("routed CLI prompts in chat history", () => {
           importedMessages: imported,
         });
 
-        expect(merged).toEqual([plain, { ...literal, __openclaw: imported[0]?.__openclaw }]);
+        expect(merged).toEqual([plain, { ...literal, __openclaw: cliMeta("routed-literal", sessionId) }]);
         expect(imported[0]?.content).toEqual(content);
       });
     },
