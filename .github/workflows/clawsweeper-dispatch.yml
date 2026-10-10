@@ -373,16 +373,23 @@ jobs:
               --get --data-urlencode "audience=$TARGET_DISPATCH_URL" \
               "$ACTIONS_ID_TOKEN_REQUEST_URL" | jq -er '.value | strings | select(length > 0)')"; then
             echo "::add-mask::$oidc_token"
-            if direct_response="$(jq -c '.client_payload' <<< "$payload" |
-              curl --fail --silent --show-error --connect-timeout 5 --max-time 20 \
+            direct_body="$RUNNER_TEMP/clawsweeper-direct-intake.json"
+            # Only a 2xx answer means the queue took the item; --fail would also
+            # accept a 3xx and drop the event without reaching the relay.
+            if direct_status="$(jq -c '.client_payload' <<< "$payload" |
+              curl --silent --show-error --connect-timeout 5 --max-time 20 \
                 --request POST \
                 --header "authorization: Bearer $oidc_token" \
                 --header "content-type: application/json" \
                 --data-binary @- \
-                "$TARGET_DISPATCH_URL")"; then
-              echo "Queued ClawSweeper review directly: $(jq -c . <<< "$direct_response" 2>/dev/null || echo '{}')"
+                --output "$direct_body" \
+                --write-out '%{http_code}' \
+                "$TARGET_DISPATCH_URL")" &&
+              [[ "$direct_status" == 2[0-9][0-9] ]]; then
+              echo "Queued ClawSweeper review directly: $(jq -c . "$direct_body" 2>/dev/null || echo '{}')"
               exit 0
             fi
+            echo "Direct ClawSweeper queue intake answered HTTP ${direct_status:-none}."
           fi
           echo "::notice::Direct ClawSweeper queue intake was unavailable; dispatching through repository_dispatch."
           if gh_api_with_retry repos/openclaw/clawsweeper/dispatches \
