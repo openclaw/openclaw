@@ -343,6 +343,7 @@ function unwrapXcrunInvocation(argv: string[]): string[] | null {
 type DispatchWrapperSpec = {
   name: string;
   unwrap?: (argv: string[], platform?: NodeJS.Platform) => string[] | null;
+  dashOptions?: Parameters<typeof unwrapDashOptionInvocation>[1];
   transparentUsage?: boolean | ((argv: string[], platform?: NodeJS.Platform) => boolean);
   changesExecutableLookup?: true;
 };
@@ -356,11 +357,10 @@ const DISPATCH_WRAPPER_SPECS: readonly DispatchWrapperSpec[] = [
   },
   {
     name: "caffeinate",
-    unwrap: (argv) =>
-      unwrapDashOptionInvocation(argv, {
-        flagOptions: CAFFEINATE_FLAG_OPTIONS,
-        optionsWithValue: CAFFEINATE_OPTIONS_WITH_VALUE,
-      }),
+    dashOptions: {
+      flagOptions: CAFFEINATE_FLAG_OPTIONS,
+      optionsWithValue: CAFFEINATE_OPTIONS_WITH_VALUE,
+    },
     transparentUsage: true,
   },
   { name: "bwrap" },
@@ -392,10 +392,7 @@ const DISPATCH_WRAPPER_SPECS: readonly DispatchWrapperSpec[] = [
   { name: "runuser" },
   {
     name: "sandbox-exec",
-    unwrap: (argv) =>
-      unwrapDashOptionInvocation(argv, {
-        optionsWithValue: SANDBOX_EXEC_OPTIONS_WITH_VALUE,
-      }),
+    dashOptions: { optionsWithValue: SANDBOX_EXEC_OPTIONS_WITH_VALUE },
     transparentUsage: true,
   },
   { name: "script", unwrap: unwrapScriptInvocation, transparentUsage: false },
@@ -404,10 +401,7 @@ const DISPATCH_WRAPPER_SPECS: readonly DispatchWrapperSpec[] = [
   { name: "setpriv" },
   {
     name: "stdbuf",
-    unwrap: (argv) =>
-      unwrapDashOptionInvocation(argv, {
-        optionsWithValue: STDBUF_OPTIONS_WITH_VALUE,
-      }),
+    dashOptions: { optionsWithValue: STDBUF_OPTIONS_WITH_VALUE },
     transparentUsage: true,
   },
   { name: "su" },
@@ -416,11 +410,10 @@ const DISPATCH_WRAPPER_SPECS: readonly DispatchWrapperSpec[] = [
   { name: "taskset" },
   {
     name: "time",
-    unwrap: (argv) =>
-      unwrapDashOptionInvocation(argv, {
-        flagOptions: TIME_FLAG_OPTIONS,
-        optionsWithValue: TIME_OPTIONS_WITH_VALUE,
-      }),
+    dashOptions: {
+      flagOptions: TIME_FLAG_OPTIONS,
+      optionsWithValue: TIME_OPTIONS_WITH_VALUE,
+    },
     transparentUsage: (argv) => !timeInvocationWritesOutputFile(argv),
   },
   { name: "timeout", unwrap: unwrapTimeoutInvocation, transparentUsage: true },
@@ -476,7 +469,9 @@ export function unwrapKnownDispatchWrapperInvocation(
   if (!spec) {
     return { kind: "not-wrapper" };
   }
-  const unwrapped = spec.unwrap?.(argv, platform);
+  const unwrapped = spec.dashOptions
+    ? unwrapDashOptionInvocation(argv, spec.dashOptions)
+    : spec.unwrap?.(argv, platform);
   return unwrapped ? { kind: "unwrapped", wrapper, argv: unwrapped } : { kind: "blocked", wrapper };
 }
 
@@ -495,7 +490,7 @@ function isSemanticDispatchWrapperUsage(
   platform: NodeJS.Platform = process.platform,
 ): boolean {
   const spec = DISPATCH_WRAPPER_SPEC_BY_NAME.get(wrapper);
-  if (!spec?.unwrap) {
+  if (!spec?.unwrap && !spec?.dashOptions) {
     return true;
   }
   const transparentUsage = spec.transparentUsage;

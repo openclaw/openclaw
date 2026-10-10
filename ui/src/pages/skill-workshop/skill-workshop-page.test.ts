@@ -210,6 +210,45 @@ describe("Skill Workshop page", () => {
     expect(button(page, "Undo")).toBeUndefined();
   });
 
+  it("compares a saved version's own metadata against today's", async () => {
+    const skillFile = (description: string) =>
+      `---\nname: ${SKILL}\ndescription: ${description}\n---\n\nSynthetic procedure`;
+    const workshopRequest = workshopGateway();
+    const request = vi.fn(async (method: string, params?: { versionId?: string }) =>
+      method === "skills.workshop.read"
+        ? {
+            name: SKILL,
+            filePath: "SKILL.md",
+            content: skillFile(
+              params?.versionId ? "Synthetic old summary" : list.skills[0]!.description,
+            ),
+            files: ["SKILL.md"],
+          }
+        : workshopRequest(method),
+    );
+    const page = await mount(createContext(request));
+    await vi.waitFor(() => expect(page.textContent).toContain("Synthetic procedure"));
+
+    page.querySelectorAll<HTMLButtonElement>(".sw-tab")[2]!.click();
+    await page.updateComplete;
+    button(page, "Compare")!.click();
+
+    await vi.waitFor(() =>
+      expect(page.querySelector(".sw-detail__desc")?.textContent).toBe("Synthetic old summary"),
+    );
+    const lines = Array.from(page.querySelectorAll(".sw-diff__line"), (line) => [
+      line.classList.contains("sw-diff__line--remove")
+        ? "-"
+        : line.classList.contains("sw-diff__line--add")
+          ? "+"
+          : " ",
+      line.querySelector(".sw-diff__text")?.textContent,
+    ]);
+    expect(lines).toContainEqual(["-", "description: Synthetic old summary"]);
+    expect(lines).toContainEqual(["+", `description: ${list.skills[0]!.description}`]);
+    expect(page.querySelector(".sw-diff__same")).toBeNull();
+  });
+
   it("switches the learning mode through the config key", async () => {
     const runtimeConfig = createRuntimeConfigStub({
       sourceConfig: { skills: { workshop: { autonomous: { mode: "auto" } } } },

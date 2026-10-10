@@ -574,6 +574,7 @@ describe("Telegram preview, presentation, and progress delivery through HTTP", (
         );
         const card = [...visibleMessages.values()][0] ?? "";
         expect(card.match(/Exec/gu)).toHaveLength(1);
+        expect(card).toContain("🛠️ Exec");
         expect(card).toContain("failed");
       },
       {

@@ -71,15 +71,12 @@ export async function resolveApnsAuthConfigFromEnv(
   const inlineKeyRaw =
     normalizeOptionalString(env.OPENCLAW_APNS_PRIVATE_KEY_P8) ??
     normalizeOptionalString(env.OPENCLAW_APNS_PRIVATE_KEY);
+  const resolved = (privateKey: string): ApnsAuthConfigResolution => ({
+    ok: true,
+    value: { teamId, keyId, privateKey },
+  });
   if (inlineKeyRaw) {
-    return {
-      ok: true,
-      value: {
-        teamId,
-        keyId,
-        privateKey: normalizePrivateKey(inlineKeyRaw),
-      },
-    };
+    return resolved(normalizePrivateKey(inlineKeyRaw));
   }
 
   const keyPath = normalizeOptionalString(env.OPENCLAW_APNS_PRIVATE_KEY_PATH);
@@ -92,14 +89,7 @@ export async function resolveApnsAuthConfigFromEnv(
   }
   try {
     const privateKey = normalizePrivateKey(await readSecretFile(keyPath, "APNs private key"));
-    return {
-      ok: true,
-      value: {
-        teamId,
-        keyId,
-        privateKey,
-      },
-    };
+    return resolved(privateKey);
   } catch (err) {
     return {
       ok: false,

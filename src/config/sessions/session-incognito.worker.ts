@@ -24,7 +24,10 @@ import { assertSessionCreationLabelAvailable } from "./session-accessor.sqlite-c
 import { readSessionIdentityEvidenceInDatabase } from "./session-accessor.sqlite-entry-availability.js";
 import { projectSessionSharingEntry } from "./session-accessor.sqlite-entry-cache.types.js";
 import { listSqliteSessionEntriesFromDatabase } from "./session-accessor.sqlite-entry-list.read.js";
-import { readExactSessionEntryRow } from "./session-accessor.sqlite-entry-read.js";
+import {
+  readExactSessionEntryRow,
+  readSessionEntryByIdInDatabase,
+} from "./session-accessor.sqlite-entry-read.js";
 import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import { resolveSqliteScope } from "./session-accessor.sqlite-scope.js";
 import { ensureTranscriptHeader } from "./session-accessor.sqlite-transcript-header.js";
@@ -364,6 +367,7 @@ export function createIncognitoSessionWorker(
         command.type !== "session.pendingInputs.interruptHistory" &&
         command.type !== "session.entry.create" &&
         command.type !== "session.entry.read" &&
+        command.type !== "session.entry.readById" &&
         command.type !== "session.entries.read" &&
         command.type !== "session.identities.read"
       ) {
@@ -371,6 +375,17 @@ export function createIncognitoSessionWorker(
       }
     },
     execute(command: SqliteWorkerCommand<IncognitoSessionOperations>) {
+      if (command.type === "session.entry.readById") {
+        return readOnly(() => {
+          const selected = readSessionEntryByIdInDatabase(database, command.input);
+          if (selected) {
+            assertKey(selected.sessionKey);
+          }
+          const facts = selected ? read(selected.sessionKey).facts : [];
+          admitRead(facts);
+          return { selected, facts };
+        });
+      }
       if (command.type === "session.identities.read") {
         return readOnly(() => {
           const evidence = readSessionIdentityEvidenceInDatabase(database, [
