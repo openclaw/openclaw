@@ -103,13 +103,13 @@ vi.mock("../../extensions/matrix/src/runtime.js", () => ({
 }));
 
 const { registerMatrixCliMetadata } = await loadBundledPluginFacade<{
-  registerMatrixCliMetadata(api: OpenClawPluginApi): void;
+  registerMatrixCliMetadata: (api: OpenClawPluginApi) => void;
 }>({ pluginId: "matrix", artifactBasename: "cli-metadata.js" });
 const { registerMatrixFullRuntime } = await loadBundledPluginFacade<{
-  registerMatrixFullRuntime(api: OpenClawPluginApi): void;
+  registerMatrixFullRuntime: (api: OpenClawPluginApi) => void;
 }>({ pluginId: "matrix", artifactBasename: "index.js" });
 const { registerMemoryCli } = await loadBundledPluginFacade<{
-  registerMemoryCli(program: Command): void;
+  registerMemoryCli: (program: Command) => void;
 }>({ pluginId: "memory-core", artifactBasename: "cli.js" });
 const { default: memoryCore } = await loadBundledPluginFacade<{
   default: { register(api: OpenClawPluginApi): void };
