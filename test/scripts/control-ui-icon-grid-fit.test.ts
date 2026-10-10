@@ -438,6 +438,32 @@ describe("JSX icon-grid fixtures", () => {
     }
   });
 
+  it("does not fabricate adjacent controls from per-item branches", () => {
+    const dom = new JSDOM();
+    try {
+      for (const children of [
+        '<For each={[true, false]}>{item => item ? <button class="icon"><svg /></button> : <span />}</For>',
+        '<For each={[true, false]}>{item => item && <button class="icon"><svg /></button>}</For>',
+        '<For each={[true, false]}>{item => <Show when={item}><button class="icon"><svg /></button></Show>}</For>',
+      ]) {
+        const fixtures = collectJsx(
+          `<header class="toolbar">${children}</header>`,
+          dom.window.document,
+        );
+        expect(
+          scanIconGridFit(
+            original.replace(".toolbar > button", ".toolbar > button + button"),
+            fixtures,
+            base,
+          ).findings,
+          children,
+        ).toEqual([]);
+      }
+    } finally {
+      dom.window.close();
+    }
+  });
+
   it("applies class-array overrides before splitting enabled class names", () => {
     const dom = new JSDOM();
     try {

@@ -262,7 +262,19 @@ function jsxHtml(node: ts.JsxChild, context: JsxFixtureContext): string {
       return dynamic;
     }
     if (component === "For") {
-      return count === undefined ? dynamic : children.repeat(count);
+      // One branch choice cannot establish the DOM of every callback invocation.
+      const repeatedChoice =
+        count !== undefined &&
+        count > 1 &&
+        [...context.choices.keys()].some(
+          (choice) =>
+            choice.pos > node.pos &&
+            choice.end < node.end &&
+            (!ts.isJsxExpression(choice) ||
+              !choice.expression ||
+              jsxBranches(choice.expression, true).length !== 1),
+        );
+      return count === undefined || repeatedChoice ? dynamic : children.repeat(count);
     }
     return count === 0 ? "" : children;
   }
