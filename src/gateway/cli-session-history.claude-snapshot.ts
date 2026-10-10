@@ -9,6 +9,7 @@ import {
   appendCoalescedClaudeCliToolMessage,
   createClaudeReseedImportState,
   decodeClaudeCliProjectEntry,
+  digestClaudeCliAssistantText,
   type ClaudeCliProjectEntry,
   parseClaudeCliHistoryEntry,
   redactClaudeCliHistoryMessage,
@@ -124,13 +125,16 @@ export async function resolveClaudeCliHistorySource(
 export async function visitClaudeCliSessionMessages(
   filePath: string,
   params: ClaudeCliHistoryParams,
-  visit: (message: Message) => void,
+  visit: (message: Message, sourceTextSha256?: string) => void,
   byteLength?: number,
 ): Promise<void> {
   if (byteLength === 0) {
     return;
   }
   const messages: Message[] = [];
+  const sourceTextDigests = new WeakMap<Message, string>();
+  const emit = (message: Message) =>
+    visit(redactClaudeCliHistoryMessage(message), sourceTextDigests.get(message));
   const toolNames = new Map<string, string>();
   const lines = readline.createInterface({
     input: fs.createReadStream(filePath, {
@@ -188,9 +192,16 @@ export async function visitClaudeCliSessionMessages(
         // Ignore malformed external history entries.
       }
       if (parsedMessage) {
+        // Oversized records contain a placeholder, not verifiable original text.
+        const sourceTextSha256 = oversized
+          ? undefined
+          : digestClaudeCliAssistantText(parsedMessage);
+        if (sourceTextSha256 !== undefined) {
+          sourceTextDigests.set(parsedMessage, sourceTextSha256);
+        }
         appendCoalescedClaudeCliToolMessage(messages, parsedMessage);
         if (messages.length > 1) {
-          visit(redactClaudeCliHistoryMessage(messages.shift()!));
+          emit(messages.shift()!);
         }
       }
     }
@@ -198,6 +209,6 @@ export async function visitClaudeCliSessionMessages(
     await worker?.terminate();
   }
   for (const message of messages) {
-    visit(redactClaudeCliHistoryMessage(message));
+    emit(message);
   }
 }

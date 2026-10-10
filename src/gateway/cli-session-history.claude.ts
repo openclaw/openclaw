@@ -3,11 +3,12 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import {
   asFiniteNumber,
   parseDateStringTimestampMs,
 } from "@openclaw/normalization-core/number-coercion";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   readCliImageTurnContext,
@@ -26,6 +27,26 @@ import { attachOpenClawTranscriptMeta } from "./session-transcript-readers.js";
 
 const CLAUDE_CLI_PROVIDER = "claude-cli";
 const CLAUDE_PROJECTS_RELATIVE_DIR = path.join(".claude", "projects");
+
+/** Digest the native assistant text before any display redaction. */
+export function digestClaudeCliAssistantText(message: unknown): string | undefined {
+  const record = asOptionalRecord(message);
+  if (record?.role !== "assistant") {
+    return undefined;
+  }
+  const text =
+    typeof record.content === "string"
+      ? record.content
+      : Array.isArray(record.content)
+        ? record.content
+            .map((block) => {
+              const value = asOptionalRecord(block);
+              return value?.type === "text" && typeof value.text === "string" ? value.text : "";
+            })
+            .join("")
+        : undefined;
+  return text === undefined ? undefined : sha256Hex(text);
+}
 
 export type ClaudeCliProjectEntry = {
   type?: unknown;

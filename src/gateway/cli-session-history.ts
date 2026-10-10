@@ -160,7 +160,7 @@ export async function prepareCliSessionHistoryReader(
         visitClaudeCliSessionMessages(
           source[0],
           native,
-          (message) => index.appendImported(message),
+          (message, sourceTextSha256) => index.appendImported(message, sourceTextSha256),
           source[2],
         ),
       );

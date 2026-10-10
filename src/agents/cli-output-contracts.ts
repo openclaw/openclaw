@@ -51,6 +51,12 @@ export type CliOutput = {
   sessionId?: string;
   /** Backend-owned assistant boundary that can safely anchor a later resumed fork. */
   resumeCheckpointId?: string;
+  /** Native assistant text identities covered by this aggregate, not tool/thought bodies. */
+  transcriptTextReceipt?: {
+    provider: "claude-cli";
+    cliSessionId: string;
+    messages: { externalId: string; textSha256: string }[];
+  };
   usage?: CliUsage;
   /** Terminal cumulative turn usage for diagnostics; reply accounting keeps using `usage`. */
   diagnosticUsage?: CliUsage;

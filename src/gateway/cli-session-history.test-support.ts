@@ -11,6 +11,7 @@ import {
   visitClaudeCliSessionMessages,
   type ClaudeCliHistoryParams,
 } from "./cli-session-history.claude-snapshot.js";
+import { digestClaudeCliAssistantText } from "./cli-session-history.claude.js";
 
 export async function readClaudeCliSessionMessagesAsync(
   params: ClaudeCliHistoryParams,
@@ -38,7 +39,7 @@ export function mergeImportedChatHistoryMessages(params: {
       params.localMessages.map((message, position) => ({ message, seq: position + 1 })),
     );
     for (const message of params.importedMessages) {
-      index.appendImported(message);
+      index.appendImported(message, digestClaudeCliAssistantText(message));
     }
     index.finish();
     const messages: unknown[] = [];

@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { describe, expect, it } from "vitest";
 import { createCliJsonlStreamingParser } from "./cli-output-stream.js";
 import { parseCliOutput } from "./cli-output.js";
@@ -68,6 +69,205 @@ function normalizedUsage(values: {
 }
 
 describe("parseCliJsonl", () => {
+  it("retains text-contributing Claude UUIDs without claiming discarded drafts or tool-only rows", () => {
+    const parse = (withTool: boolean) =>
+      parseCliJsonl(
+        joinJsonlFrames(
+          { type: "init", session_id: "session-receipt" },
+          claudeMessageStart("message-1"),
+          claudeTextDelta("Checking the result."),
+          ...(withTool
+            ? [
+                claudeStreamEvent({
+                  type: "content_block_start",
+                  content_block: { type: "tool_use", id: "tool-1", name: "lookup" },
+                }),
+              ]
+            : []),
+          {
+            type: "assistant",
+            uuid: "commentary-1",
+            message: {
+              id: "message-1",
+              role: "assistant",
+              content: [
+                { type: "text", text: "Checking the result." },
+                ...(withTool
+                  ? [{ type: "tool_use", id: "tool-1", name: "lookup", input: {} }]
+                  : []),
+              ],
+            },
+          },
+          claudeStreamEvent({ type: "message_stop" }),
+          ...(withTool
+            ? [
+                {
+                  type: "assistant",
+                  uuid: "tool-only",
+                  message: {
+                    id: "message-tool",
+                    role: "assistant",
+                    content: [{ type: "tool_use", id: "tool-2", name: "lookup", input: {} }],
+                  },
+                },
+              ]
+            : []),
+          claudeMessageStart("message-2"),
+          claudeTextDelta("Verified answer."),
+          {
+            type: "assistant",
+            uuid: "final-1",
+            message: {
+              id: "message-2",
+              role: "assistant",
+              content: [{ type: "text", text: "Verified answer." }],
+            },
+          },
+          { type: "result", session_id: "session-receipt", result: "Verified answer." },
+        ),
+      );
+    expect(parse(true)).toMatchObject({
+      text: "Checking the result.\n\nVerified answer.",
+      transcriptTextReceipt: {
+        provider: "claude-cli",
+        cliSessionId: "session-receipt",
+        messages: [
+          { externalId: "commentary-1", textSha256: sha256Hex("Checking the result.") },
+          { externalId: "final-1", textSha256: sha256Hex("Verified answer.") },
+        ],
+      },
+    });
+    expect(parse(false)).toMatchObject({
+      text: "Verified answer.",
+      transcriptTextReceipt: {
+        provider: "claude-cli",
+        cliSessionId: "session-receipt",
+        messages: [{ externalId: "final-1", textSha256: sha256Hex("Verified answer.") }],
+      },
+    });
+  });
+
+  it("receipts tool-connected text after discarding an earlier non-tool draft", () => {
+    const frames: unknown[] = [{ type: "init", session_id: "session-boundary" }];
+    for (const [id, text, withTool] of [
+      ["draft", "Discarded draft.", false],
+      ["commentary", "Checking the result.", true],
+      ["final", "Verified answer.", false],
+    ] as const) {
+      frames.push(claudeMessageStart(id), claudeTextDelta(text));
+      if (withTool) {
+        frames.push(
+          claudeStreamEvent({
+            type: "content_block_start",
+            content_block: { type: "tool_use", id: "boundary-tool", name: "lookup" },
+          }),
+        );
+      }
+      frames.push(
+        {
+          type: "assistant",
+          uuid: `${id}-uuid`,
+          message: { id, content: [{ type: "text", text }] },
+        },
+        claudeStreamEvent({ type: "message_stop" }),
+      );
+    }
+    frames.push({ type: "result", session_id: "session-boundary", result: "Verified answer." });
+    expect(parseCliJsonl(joinJsonlFrames(...frames))).toMatchObject({
+      text: "Checking the result.\n\nVerified answer.",
+      transcriptTextReceipt: {
+        provider: "claude-cli",
+        cliSessionId: "session-boundary",
+        messages: [
+          { externalId: "commentary-uuid", textSha256: sha256Hex("Checking the result.") },
+          { externalId: "final-uuid", textSha256: sha256Hex("Verified answer.") },
+        ],
+      },
+    });
+  });
+
+  it.each([
+    { source: "Streamed draft.", result: "Different terminal answer.", commentary: false },
+    {
+      source: "<think>Private reasoning.</think>Visible answer.",
+      result: "Visible answer.",
+      commentary: false,
+    },
+    { source: "Commentary.\nFinal answer.", result: "Final answer.", commentary: true },
+  ])(
+    "does not claim a partially covered native body: $source",
+    ({ source, result, commentary }) => {
+      const parser = createCliJsonlStreamingParser({
+        backend: { command: "claude", output: "jsonl", sessionIdFields: ["session_id"] },
+        providerId: "claude-cli",
+        onAssistantDelta: () => {},
+        ...(commentary ? { onCommentaryText: () => {} } : {}),
+      });
+      const split = source.indexOf("\n");
+      parser.push(
+        joinJsonlFrames(
+          { type: "init", session_id: "session-coverage" },
+          claudeMessageStart("coverage-message"),
+          claudeTextDelta(commentary ? source.slice(0, split) : source),
+          ...(commentary
+            ? [
+                claudeStreamEvent({
+                  type: "content_block_start",
+                  content_block: { type: "tool_use", id: "coverage-tool", name: "lookup" },
+                }),
+                claudeTextDelta(source.slice(split + 1)),
+              ]
+            : []),
+          {
+            type: "assistant",
+            uuid: "coverage-uuid",
+            message: { id: "coverage-message", content: [{ type: "text", text: source }] },
+          },
+          { type: "result", session_id: "session-coverage", result },
+        ),
+      );
+      parser.finish();
+      expect(parser.getOutput()?.text).toBe(result);
+      expect(parser.getOutput()?.transcriptTextReceipt).toBeUndefined();
+    },
+  );
+
+  it("does not relabel a committed receipt when the native CLI session changes", () => {
+    const output = parseCliJsonl(
+      joinJsonlFrames(
+        { type: "init", session_id: "session-old" },
+        claudeMessageStart("old-message"),
+        claudeTextDelta("Old answer."),
+        {
+          type: "assistant",
+          uuid: "old-uuid",
+          message: { id: "old-message", content: [{ type: "text", text: "Old answer." }] },
+        },
+        {
+          type: "result",
+          session_id: "session-old",
+          result: "Old answer.",
+          openclaw_interim_result: true,
+        },
+        { type: "init", session_id: "session-new" },
+        claudeMessageStart("new-message"),
+        claudeTextDelta("New answer."),
+        {
+          type: "assistant",
+          uuid: "new-uuid",
+          message: { id: "new-message", content: [{ type: "text", text: "New answer." }] },
+        },
+        { type: "result", session_id: "session-new", result: "New answer." },
+      ),
+    );
+    expect(JSON.stringify(output?.transcriptTextReceipt)).not.toContain("old-uuid");
+    expect(output?.transcriptTextReceipt).toEqual({
+      provider: "claude-cli",
+      cliSessionId: "session-new",
+      messages: [{ externalId: "new-uuid", textSha256: sha256Hex("New answer.") }],
+    });
+  });
+
   it("parses Claude stream-json result events for an explicit backend dialect", () => {
     const result = parseCliJsonl(
       joinJsonlFrames(

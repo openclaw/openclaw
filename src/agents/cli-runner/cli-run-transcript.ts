@@ -28,6 +28,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import type { StopReason } from "../../llm/types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
+import { extractAssistantTranscriptSourceText } from "../../shared/chat-message-content.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { isHeartbeatLifecycleRunKind } from "../bootstrap-mode.js";
 import type { CliOutput, CliUsage } from "../cli-output-contracts.js";
@@ -139,6 +140,7 @@ export async function persistCliAssistantTranscript(params: {
   usage?: CliUsage;
   stopReason: StopReason;
   yielded?: true;
+  transcriptTextReceipt?: CliOutput["transcriptTextReceipt"];
 }): Promise<{
   owned: boolean;
   idempotencyKey?: string;
@@ -181,6 +183,20 @@ export async function persistCliAssistantTranscript(params: {
           }),
           prepareAssistantTranscriptMessage: runParams.prepareAssistantTranscriptMessage,
         });
+        if (message?.role === "assistant" && params.transcriptTextReceipt) {
+          const metadata = Reflect.get(message, "__openclaw");
+          const validCoverage = extractAssistantTranscriptSourceText(message) === params.text;
+          const nextMetadata: Record<string, unknown> =
+            typeof metadata === "object" && metadata !== null ? { ...metadata } : {};
+          // Preparation may replace the object; correspondence belongs to the
+          // producer and survives only while the accepted text is unchanged.
+          if (validCoverage) {
+            nextMetadata.cliAssistantTextReceipt = params.transcriptTextReceipt;
+          } else {
+            delete nextMetadata.cliAssistantTextReceipt;
+          }
+          Object.assign(message, { __openclaw: nextMetadata });
+        }
         return message
           ? projectAgentHarnessTranscriptMessageForDisplay({
               hidden: false,
@@ -206,6 +222,9 @@ export async function persistCliAssistantTranscript(params: {
             totalTokens: params.usage?.total,
           }),
         }),
+        ...(params.transcriptTextReceipt
+          ? { __openclaw: { cliAssistantTextReceipt: params.transcriptTextReceipt } }
+          : {}),
         // A paused turn owns visible progress, not a final answer. Keep the
         // existing keyed-segment contract without hiding narration or media.
         ...(params.yielded && params.stopReason === "stop"

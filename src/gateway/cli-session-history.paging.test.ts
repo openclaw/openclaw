@@ -1,8 +1,11 @@
 import rawFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { expect, it, vi } from "vitest";
+import type { AgentMessage } from "../agents/runtime/index.js";
 import { captureTranscriptRedactionSnapshot } from "../agents/transcript-redact-text.js";
+import { redactTranscriptMessage } from "../agents/transcript-redact.js";
 import {
   appendTranscriptMessage,
   replaceSessionEntry,
@@ -18,6 +21,152 @@ import { readChatHistoryPageKernel } from "./server-methods/chat-history-page-ke
 import { createReadonlySessionHistoryReader } from "./session-history-readonly-reader.js";
 import { readChatHistoryMessageId } from "./session-history-tail.js";
 import { archiveSessionTranscriptPaths } from "./session-transcript-files.fs.js";
+
+it("reconciles pre-redaction assistant text receipts at the native history reader", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    await withClaudeProjectsDir(async ({ homeDir, sessionId: nativeId, filePath }) => {
+      const rawText = "Synthetic result sk-proj-FAKEKEYFORTESTINGONLY1234567890";
+      const scope = {
+        agentId: "main",
+        sessionKey: "agent:main:cli-redaction-receipt",
+        sessionId: "cli-redaction-receipt",
+        storePath: path.join(state.sessionsDir(), "sessions.json"),
+      };
+      const entry = {
+        sessionId: scope.sessionId,
+        updatedAt: 1,
+        cliSessionBindings: { "claude-cli": { sessionId: nativeId } },
+      };
+      await replaceSessionEntry(scope, entry);
+      const canonicalMessage: AgentMessage = {
+        role: "assistant",
+        content: [{ type: "text", text: rawText }],
+        api: "anthropic-messages",
+        provider: "claude-cli",
+        model: "synthetic-claude-cli",
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason: "stop",
+        timestamp: 1,
+      };
+      const canonical = async (textSha256 = sha256Hex(rawText)) => {
+        await replaceTranscriptEvents(scope, [
+          { type: "session", version: 3, id: scope.sessionId },
+          {
+            type: "message",
+            id: "canonical-redacted-final",
+            parentId: null,
+            message: {
+              ...redactTranscriptMessage(canonicalMessage),
+              __openclaw: {
+                cliAssistantTextReceipt: {
+                  provider: "claude-cli",
+                  cliSessionId: nativeId,
+                  messages: [{ externalId: "native-redacted-final", textSha256 }],
+                },
+              },
+            },
+          },
+        ]);
+        await waitForSessionTranscriptProjection(scope);
+      };
+      const native = (uuid: string, content: string | unknown[] = rawText) => ({
+        type: "assistant",
+        uuid,
+        message: { role: "assistant", content, stop_reason: "end_turn" },
+      });
+      const writeNative = (entries: unknown[]) =>
+        fs.writeFile(filePath, entries.map((row) => JSON.stringify(row)).join("\n"));
+      await canonical();
+      await writeNative([native("native-redacted-final")]);
+      const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
+      const target = {
+        transcript: { ...scope, sessionFile: scope.sessionKey },
+        database: { agentId: database.agentId, path: database.path },
+        entryValidationKey: scope.sessionKey,
+      };
+      const readers = createReadonlySessionHistoryReader(target);
+      let owner = new OpenClawAgentDatabaseReadOnlyScope();
+      const params = {
+        entry,
+        provider: "claude-cli",
+        sessionId: scope.sessionId,
+        storePath: scope.storePath,
+        sessionAgentId: scope.agentId,
+        canonicalKey: scope.sessionKey,
+        cliHistoryHomeDir: homeDir,
+        cliHistoryRedaction: captureTranscriptRedactionSnapshot(),
+        max: 10,
+        maxHistoryBytes: 64 * 1024,
+        effectiveMaxChars: 4096,
+        offset: undefined,
+        messageId: undefined,
+      };
+      const read = () =>
+        owner.run(target.database, async () => {
+          const cli = await prepareCliSessionHistoryReader(params, readers);
+          if (!cli) {
+            throw new Error("Expected native history reader");
+          }
+          try {
+            const page = await readChatHistoryPageKernel(params, {
+              readers: cli.readers,
+              readMessageSequence: cli.sequence,
+              deferProfileDisplay: true,
+            });
+            expect(JSON.stringify(page)).not.toContain("FAKEKEYFORTESTINGONLY");
+            return page.messages;
+          } finally {
+            cli.dispose();
+          }
+        });
+      try {
+        expect((await read()).map(readChatHistoryMessageId)).toEqual(["canonical-redacted-final"]);
+        expect((await read()).map(readChatHistoryMessageId)).toEqual(["canonical-redacted-final"]);
+        owner.close();
+        owner = new OpenClawAgentDatabaseReadOnlyScope();
+        expect((await read()).map(readChatHistoryMessageId)).toEqual(["canonical-redacted-final"]);
+
+        await writeNative([native("native-redacted-final"), native("distinct-redacted-final")]);
+        expect((await read()).map(readChatHistoryMessageId)).toEqual([
+          "canonical-redacted-final",
+          "distinct-redacted-final",
+        ]);
+
+        await writeNative([native("native-redacted-final")]);
+        await canonical("0".repeat(64));
+        expect((await read()).map(readChatHistoryMessageId)).toEqual([
+          "canonical-redacted-final",
+          "native-redacted-final",
+        ]);
+
+        await canonical();
+        const thought = { type: "thinking", thinking: "Diagnostic thought", signature: "sig" };
+        await writeNative([
+          native("native-redacted-final", [
+            { type: "text", text: rawText },
+            thought,
+            { type: "tool_use", id: "tool-1", name: "lookup", input: {} },
+          ]),
+        ]);
+        const mixed = await read();
+        expect(mixed).toHaveLength(2);
+        expect(mixed[1]).toMatchObject({
+          content: [thought, { type: "toolcall", id: "tool-1", name: "lookup", arguments: {} }],
+          __openclaw: { externalId: "native-redacted-final", cliSessionId: nativeId },
+        });
+      } finally {
+        owner.close();
+      }
+    });
+  });
+});
 
 it("serves a captured history prefix while both transcripts append and observes the next revision", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {

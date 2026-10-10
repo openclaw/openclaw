@@ -21,7 +21,9 @@ export function mergeCliHistoryWithLookupStats(
         expect(plan).toHaveLength(1);
         const index = sql.includes('"timestamp" is null') ? "undated" : "timed";
         expect(plan[0]?.detail).toContain(`INDEX match_${index}_text`);
-        expect(plan[0]?.detail).toContain("role=? AND text=? AND consumed=? AND id>?");
+        expect(plan[0]?.detail).toContain(
+          "role=? AND text=? AND consumed=? AND receipt_text=? AND id>?",
+        );
       }
       return prepare.call(this, sql);
     };

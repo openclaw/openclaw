@@ -23,6 +23,7 @@ import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { isImageMediaFact, readPersistedMediaFacts } from "../media/media-facts.js";
 import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
+import { createCliAssistantTextReceipts } from "./cli-session-history-receipts.worker.js";
 
 const INDEX_INSERT_BATCH_ROWS = 65;
 const INDEX_ORDINAL_BATCH_ROWS = 256;
@@ -143,10 +144,12 @@ type HistoryRow = {
   drift_text: string | null;
   timestamp: number | null;
   external_key: string | null;
+  source_text_sha256: string | null;
   image_key: string | null;
   image_mentions: number;
   metadata: string | null;
   consumed: number;
+  receipt_text: number;
   ordinal: number | null;
 };
 type HistoryDatabase = {
@@ -161,6 +164,7 @@ export class CliSessionHistoryIndex {
   private readonly db;
   private readonly insertMessage;
   private readonly insertImport;
+  private readonly assistantTextReceipts;
   private readonly assignOrdinal;
   private readonly readOrderFloor;
   private readonly advanceOrderFloor;
@@ -176,18 +180,19 @@ export class CliSessionHistoryIndex {
     this.db = getNodeSqliteKysely<HistoryDatabase>(this.database);
     // Only imported bodies live here; local rows retain their canonical sequence.
     const columns = `id INTEGER PRIMARY KEY, local_seq INTEGER, import_ref INTEGER, message_id TEXT, payload TEXT, bytes INTEGER NOT NULL, role TEXT,
-      text TEXT, drift_text TEXT, timestamp REAL, external_key TEXT, image_key TEXT,
-      image_mentions INTEGER NOT NULL, metadata TEXT, consumed INTEGER NOT NULL,
+      text TEXT, drift_text TEXT, timestamp REAL, external_key TEXT, source_text_sha256 TEXT, image_key TEXT,
+      image_mentions INTEGER NOT NULL, metadata TEXT, consumed INTEGER NOT NULL, receipt_text INTEGER NOT NULL,
       ordinal INTEGER`;
     // sqlite-allow-raw -- Reconstructible temporary schema; no canonical writes or durability.
     this.database
       .exec(`PRAGMA journal_mode = OFF; PRAGMA synchronous = OFF; PRAGMA cache_size = -2048;
       CREATE TABLE messages (${columns}); CREATE TABLE imports (${columns});
       CREATE TABLE floors (role TEXT NOT NULL, text TEXT NOT NULL, minimum_order INTEGER NOT NULL, PRIMARY KEY(role,text));
+      CREATE TABLE assistant_text_receipts (external_key TEXT PRIMARY KEY, text_sha256 TEXT NOT NULL);
       CREATE INDEX match_external ON messages(external_key, id);
-      CREATE INDEX match_text ON messages(role, text, consumed, id);
-      CREATE INDEX match_timed_text ON messages(role, text, consumed, id) WHERE timestamp IS NOT NULL;
-      CREATE INDEX match_undated_text ON messages(role, text, consumed, id) WHERE timestamp IS NULL;
+      CREATE INDEX match_text ON messages(role, text, consumed, receipt_text, id);
+      CREATE INDEX match_timed_text ON messages(role, text, consumed, receipt_text, id) WHERE timestamp IS NOT NULL;
+      CREATE INDEX match_undated_text ON messages(role, text, consumed, receipt_text, id) WHERE timestamp IS NULL;
       CREATE INDEX match_image ON messages(image_key, consumed, id);
       CREATE INDEX message_identity ON messages(message_id);
       CREATE INDEX local_sequence ON messages(local_seq);
@@ -195,6 +200,7 @@ export class CliSessionHistoryIndex {
     enableNodeSqliteKyselyStatementCache(this.database);
     this.insertMessage = this.createInserter("messages");
     this.insertImport = this.createInserter("imports");
+    this.assistantTextReceipts = createCliAssistantTextReceipts(this.database);
     this.readOrderFloor = prepareSqliteQueryTakeFirstSync<
       { role: string; text: string },
       { minimum_order: number }
@@ -262,10 +268,12 @@ export class CliSessionHistoryIndex {
         drift_text: parameter((row) => row.drift_text),
         timestamp: parameter((row) => row.timestamp),
         external_key: parameter((row) => row.external_key),
+        source_text_sha256: parameter((row) => row.source_text_sha256),
         image_key: parameter((row) => row.image_key),
         image_mentions: parameter((row) => row.image_mentions),
         metadata: parameter((row) => row.metadata),
         consumed: parameter((row) => row.consumed),
+        receipt_text: parameter((row) => row.receipt_text),
         ordinal: parameter((row) => row.ordinal),
       });
       return table === "messages"
@@ -302,6 +310,7 @@ export class CliSessionHistoryIndex {
         comparable.driftNoteText === undefined ? null : JSON.stringify(comparable.driftNoteText),
       timestamp: asFiniteNumber(record?.timestamp) ?? null,
       external_key: resolveImportedExternalIdentityKey(meta) ?? null,
+      source_text_sha256: null,
       image_key:
         localSeq === undefined
           ? (comparable.cliImageTurnKey ?? null)
@@ -311,29 +320,28 @@ export class CliSessionHistoryIndex {
       image_mentions: comparable.hasCliImageMentions ? 1 : 0,
       metadata: meta ? JSON.stringify(meta) : null,
       consumed: 0,
+      receipt_text: 0,
       ordinal: null,
     };
   }
 
   appendLocal(messages: readonly { message: unknown; seq: number }[]): void {
     for (let offset = 0; offset < messages.length; offset += INDEX_INSERT_BATCH_ROWS) {
-      const rows = messages
-        .slice(offset, offset + INDEX_INSERT_BATCH_ROWS)
-        .map(({ message, seq }) => {
+      runSqliteImmediateTransactionSync(this.database, () => {
+        for (const { message, seq } of messages.slice(offset, offset + INDEX_INSERT_BATCH_ROWS)) {
           const id = seq - 1;
           this.nextLocal = Math.max(this.nextLocal, id + 1);
-          return this.row(message, id, seq);
-        });
-      runSqliteImmediateTransactionSync(this.database, () => {
-        for (const row of rows) {
+          const row = this.row(message, id, seq);
+          row.receipt_text = this.assistantTextReceipts.capture(message) ? 1 : 0;
           this.insertMessage(row);
         }
       });
     }
   }
 
-  appendImported(message: unknown): void {
+  appendImported(message: unknown, sourceTextSha256?: string): void {
     const row = this.row(message, this.nextImport++);
+    row.source_text_sha256 = sourceTextSha256 ?? null;
     if (this.pendingImportBytes + row.bytes > INDEX_INSERT_BATCH_BYTES) {
       this.flushImports();
     }
@@ -424,6 +432,8 @@ export class CliSessionHistoryIndex {
               parameter((row) => row.text),
             )
             .where("consumed", "=", 0)
+            // Receipt-bearing canonical text admits only its scoped, verified identities.
+            .where("receipt_text", "=", 0)
             .where(
               "id",
               ">=",
@@ -502,6 +512,7 @@ export class CliSessionHistoryIndex {
             "drift_text",
             "timestamp",
             "external_key",
+            "source_text_sha256",
             "image_key",
             "image_mentions",
             "metadata",
@@ -513,7 +524,14 @@ export class CliSessionHistoryIndex {
           .limit(INDEX_INSERT_BATCH_ROWS),
       ).rows;
       runSqliteImmediateTransactionSync(this.database, () => {
-        for (const imported of batch) {
+        for (let imported of batch) {
+          const coveredText = this.assistantTextReceipts.project(imported);
+          if (coveredText && "omitted" in coveredText) {
+            continue;
+          }
+          if (coveredText && "message" in coveredText) {
+            imported = this.row(coveredText.message, imported.id);
+          }
           let duplicate = imported.external_key ? matchExternal(imported.external_key) : undefined;
           if (duplicate) {
             advance(imported, duplicate);
@@ -571,6 +589,7 @@ export class CliSessionHistoryIndex {
               payload: null,
               import_ref: imported.id,
               consumed: 1,
+              receipt_text: 0,
             });
             this.expanded = true;
           }
