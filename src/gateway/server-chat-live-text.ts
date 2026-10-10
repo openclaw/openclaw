@@ -144,7 +144,16 @@ export function mergeAgentTextPayload(previous: unknown, next: unknown): AgentEv
   // SAFETY: this callback only merges the same typed agent producer and stream/item key.
   const payload = next as AgentEventPayload;
   // SAFETY: the coalescing key prevents mixing agent payloads with other event shapes.
-  const delta = (previous as AgentEventPayload).data.delta;
+  const prior = previous as AgentEventPayload;
+  if (
+    payload.stream === "item" &&
+    payload.data.kind === "preamble" &&
+    payload.preamble?.retainedText === undefined &&
+    prior.preamble?.retainedText !== undefined
+  ) {
+    return { ...payload, preamble: prior.preamble };
+  }
+  const delta = prior.data.delta;
   const nextDelta = payload.data.delta;
   return payload.stream !== "item" && typeof delta === "string" && typeof nextDelta === "string"
     ? { ...payload, data: { ...payload.data, delta: `${delta}${nextDelta}` } }

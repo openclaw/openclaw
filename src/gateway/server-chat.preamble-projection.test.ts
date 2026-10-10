@@ -65,3 +65,50 @@ it.each(["", "First answer."])(
     }
   },
 );
+
+it("preserves the projection when paced preamble snapshots coalesce", async () => {
+  vi.useFakeTimers();
+  const h = createAgentEventTestHarness();
+  h.register("run", "main", "run");
+  try {
+    await h.emit("run", "item", {
+      kind: "preamble",
+      itemId: "previous",
+      phase: "update",
+      progressText: "Previous check.",
+    });
+    const event: AgentEventRuntimePayload = {
+      runId: "run",
+      seq: 2,
+      ts: Date.now(),
+      stream: "item",
+      data: { kind: "preamble", itemId: "current", phase: "update", progressText: "Checking" },
+    };
+    Object.defineProperty(event, "assistantProjection", {
+      value: { itemId: "message", text: "", replace: true },
+    });
+    await h.handler(event);
+    await h.emit("run", "item", { ...event.data, progressText: "Checking again." }, { seq: 3 });
+    await h.emit(
+      "run",
+      "item",
+      { ...event.data, phase: "end", progressText: "Checking again." },
+      { seq: 4 },
+    );
+    expect(
+      h
+        .agent()
+        .map(([, payload]) => payload)
+        .filter((payload) => payload.data.itemId === "current"),
+    ).toMatchObject([
+      {
+        data: { phase: "update", progressText: "Checking again." },
+        preamble: { retainedText: "" },
+      },
+      { data: { phase: "end", progressText: "Checking again." }, preamble: {} },
+    ]);
+  } finally {
+    await h.handler.dispose();
+    h.chatRunState.clear();
+  }
+});
