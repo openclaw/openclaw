@@ -102,7 +102,9 @@ async function openShadowBackend(
     try {
       closeMemorySqliteWalMaintenance(db);
     } finally {
-      if (db.isOpen) db.close();
+      if (db.isOpen) {
+        db.close();
+      }
     }
   };
   try {
@@ -111,9 +113,12 @@ async function openShadowBackend(
       fileIdentity: readMemoryShadowIdentity(databasePath),
       pragmas: readConnectionPragmas(db),
     };
-    return createPublicationBackend(connection, databasePath, db, close, (stage) =>
-      requestSqliteWorkerOperationAdmission({ stage, facts: undefined }),
-    );
+    return {
+      ...createPublicationBackend(connection, databasePath, db, true, (stage) =>
+        requestSqliteWorkerOperationAdmission({ stage, facts: undefined }),
+      ),
+      close,
+    };
   } catch (error) {
     await close();
     throw error;
@@ -129,20 +134,22 @@ export function bindSqliteWorkerBackend(
     admit(stage: "transaction" | "commit"): void;
   },
 ) {
+  const db = context.database;
   const connection =
     "kind" in input
       ? {
           fileIdentity: readMemoryShadowIdentity(context.databasePath),
-          pragmas: readConnectionPragmas(context.database),
+          pragmas: readConnectionPragmas(db),
         }
       : input;
-  return createPublicationBackend(
-    connection,
-    context.databasePath,
-    context.database,
-    undefined,
-    (stage) => context.admit(stage),
-  );
+  return {
+    ...createPublicationBackend(connection, context.databasePath, db, false, (stage) =>
+      context.admit(stage),
+    ),
+    close() {
+      db.exec("DROP TABLE temp.memory_publication_input");
+    },
+  };
 }
 
 function readConnectionPragmas(db: DatabaseSync): MemoryShadowConnection["pragmas"] {
@@ -163,11 +170,11 @@ function readConnectionPragmas(db: DatabaseSync): MemoryShadowConnection["pragma
   };
 }
 
-function createPublicationBackend<CloseConnection extends (() => Promise<void>) | undefined>(
+function createPublicationBackend(
   input: MemoryShadowConnection,
   databasePath: string,
   db: DatabaseSync,
-  closeConnection: CloseConnection,
+  ownsConnection: boolean,
   admit: (stage: "transaction" | "commit") => void,
 ) {
   const assertPath = () => assertMemoryShadowIdentity(databasePath, input.fileIdentity);
@@ -188,13 +195,13 @@ function createPublicationBackend<CloseConnection extends (() => Promise<void>) 
     if (!Number.isSafeInteger(value)) {
       throw new Error("Invalid memory publication connection policy");
     }
-    if (closeConnection) {
+    if (ownsConnection) {
       db.exec(`PRAGMA ${name} = ${value}`);
     }
   }
   // Connection-local scratch spills to SQLite's temporary storage instead of
   // retaining a second complete source in the Worker or its broker queue.
-  if (closeConnection) {
+  if (ownsConnection) {
     db.exec("PRAGMA temp_store = FILE");
   }
   db.exec(
@@ -287,7 +294,9 @@ function createPublicationBackend<CloseConnection extends (() => Promise<void>) 
     },
     execute(command) {
       assertPath();
-      if (command.type === "connection.inspect") return input;
+      if (command.type === "connection.inspect") {
+        return input;
+      }
       if (command.type === "schema.admit") {
         // Storage/STRICT migration must disable foreign keys before BEGIN.
         db.exec("PRAGMA foreign_keys = OFF");
@@ -500,12 +509,7 @@ function createPublicationBackend<CloseConnection extends (() => Promise<void>) 
       });
       return finish(outcome);
     },
-    close:
-      closeConnection ??
-      (() => {
-        db.exec("DROP TABLE temp.memory_publication_input");
-      }),
-  } satisfies SqliteWorkerBackend<MemoryPublicationOperations>;
+  } satisfies Omit<SqliteWorkerBackend<MemoryPublicationOperations>, "close">;
 }
 
 function* readStagedRows<Row extends MemorySourceIndexRow | MemoryEmbeddingCacheEntry>(

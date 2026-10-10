@@ -65,7 +65,9 @@ async function retryMemoryPublication<T>(
   const deadline = performance.now() + busyTimeoutMs;
   while (await prepare()) {
     const result = await run();
-    if (result.ok) return result.value;
+    if (result.ok) {
+      return result.value;
+    }
     const code = result.error.errcode === undefined ? undefined : result.error.errcode & 0xff;
     if (result.entered || (code !== 5 && code !== 6) || performance.now() >= deadline) {
       throw Object.assign(
@@ -96,7 +98,9 @@ async function initializePublishedMemory(
   );
   try {
     await worker.prepare();
-    if (!schema) return undefined;
+    if (!schema) {
+      return undefined;
+    }
     return await retryMemoryPublication(
       () => worker.execute({ type: "schema.admit", input: schema }, assertCurrent),
       5_000,
@@ -395,7 +399,9 @@ export class MemoryIndexDatabase {
             store,
             operation,
             () => {
-              if (this.closed || !this.db.isOpen) throw new Error("Memory shadow owner closed");
+              if (this.closed || !this.db.isOpen) {
+                throw new Error("Memory shadow owner closed");
+              }
               this.assertShadowPath();
               assertCurrent();
             },

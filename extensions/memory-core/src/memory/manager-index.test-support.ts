@@ -648,11 +648,11 @@ export function createManagerIndexFixture(deps: {
 
 /** Fixture writes use the native test owner; the manager retains only its reader. */
 export function memoryIndexFixtureWriter(manager: MemoryIndexManager): DatabaseSync {
-  const path = manager.status().dbPath;
-  if (!path) {
+  const databasePath = manager.status().dbPath;
+  if (!databasePath) {
     throw new Error("Memory index fixture has no database path");
   }
-  return openOpenClawAgentDatabase({ agentId: "main", path }).db;
+  return openOpenClawAgentDatabase({ agentId: "main", path: databasePath }).db;
 }
 
 export function readPublishedSessionIndex(

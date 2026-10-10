@@ -709,7 +709,7 @@ describe("memory manager reindex recovery", () => {
     await memoryManager.sync({ reason: "cli", force: true });
 
     expect(interceptedPaths.length).toBeGreaterThan(0);
-    expect(interceptedPaths.every((path) => path === harness.db.location())).toBe(true);
+    expect(interceptedPaths.every((filename) => filename === harness.db.location())).toBe(true);
     expect(
       harness.db.prepare("SELECT COUNT(*) AS count FROM memory_embedding_cache").get(),
     ).toEqual({ count: 2 });

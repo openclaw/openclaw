@@ -38,7 +38,7 @@ describe("memory index", () => {
     });
     const manager = requireManager(result);
     trackManager(manager);
-    resetManagerForTest(manager);
+    await resetManagerForTest(manager);
     if (!manager.status().fts?.available) {
       return;
     }
@@ -199,7 +199,7 @@ describe("memory index", () => {
     });
     const manager = requireManager(result);
     trackManager(manager);
-    resetManagerForTest(manager);
+    await resetManagerForTest(manager);
     if (!manager.status().fts?.available) {
       return;
     }
@@ -312,7 +312,7 @@ describe("memory index", () => {
     });
     const manager = requireManager(result);
     trackManager(manager);
-    resetManagerForTest(manager);
+    await resetManagerForTest(manager);
     if (!manager.status().fts?.available) {
       return;
     }
@@ -383,7 +383,7 @@ describe("memory index", () => {
     });
     const manager = requireManager(result);
     trackManager(manager);
-    resetManagerForTest(manager);
+    await resetManagerForTest(manager);
     if (!manager.status().fts?.available) {
       return;
     }
@@ -438,7 +438,7 @@ describe("memory index", () => {
     });
     const manager = requireManager(result);
     trackManager(manager);
-    resetManagerForTest(manager);
+    await resetManagerForTest(manager);
     if (!manager.status().fts?.available) {
       return;
     }
@@ -479,7 +479,7 @@ describe("memory index", () => {
     });
     const manager = requireManager(result);
     trackManager(manager);
-    resetManagerForTest(manager);
+    await resetManagerForTest(manager);
     if (!manager.status().fts?.available) {
       return;
     }
@@ -571,7 +571,7 @@ describe("memory index", () => {
     });
     const manager = requireManager(result);
     trackManager(manager);
-    resetManagerForTest(manager);
+    await resetManagerForTest(manager);
     if (!manager.status().fts?.available) {
       return;
     }
@@ -617,7 +617,7 @@ describe("memory index", () => {
     });
     const manager = requireManager(result);
     trackManager(manager);
-    resetManagerForTest(manager);
+    await resetManagerForTest(manager);
     if (!manager.status().fts?.available) {
       return;
     }
