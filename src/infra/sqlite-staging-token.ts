@@ -91,6 +91,7 @@ export function acquireSqliteStagingToken(
     return isRecord(row) ? row.user_version : undefined;
   };
   const beginRetirement = (): SqliteStagingToken => {
+    assertIdentity();
     if (!db.isTransaction || !exclusive) {
       if (db.isTransaction) {
         execute(sql`ROLLBACK`);
@@ -98,7 +99,6 @@ export function acquireSqliteStagingToken(
       execute(sql`BEGIN EXCLUSIVE`);
       exclusive = true;
     }
-    assertIdentity();
     return token;
   };
   const release = (retiring = false) => {
