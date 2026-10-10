@@ -19,13 +19,13 @@ import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime
 import { defaultRuntime } from "openclaw/plugin-sdk/runtime";
 import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { generateIdentity } from "../protocol/index.js";
 import { runReefChannelLifecycle } from "./channel-lifecycle.js";
 import { reefPlugin } from "./channel.js";
 import { handleReefCommand } from "./commands.js";
 import { resolveReefConfig } from "./config-schema.js";
-import { reefKeys } from "./flow.test-helpers.js";
+import { flowStores, reefKeys, resetFlowStoresForTests } from "./flow.test-helpers.js";
 import { ReefFriendManager } from "./friends.js";
 import { resolveReefInboundDispatchContent } from "./inbound.js";
 import { getActiveReef, setReefRuntime } from "./runtime.js";
@@ -686,9 +686,14 @@ describe("Reef channel lifecycle", () => {
       () => 1_752_300_000,
       1_000,
     );
+    onTestFinished(resetFlowStoresForTests);
+    const { runtime } = flowStores();
     const friends = new ReefFriendManager(
       transport,
-      {} as ConstructorParameters<typeof ReefFriendManager>[1],
+      openReefTrustStore(
+        runtime,
+        resolveReefConfig({ channels: { reef: { handle: "alice", relayUrl } } }),
+      ),
       { list: async () => [], remove: async () => false },
     );
     const lifecycle = runReefChannelLifecycle({
@@ -702,7 +707,8 @@ describe("Reef channel lifecycle", () => {
     });
 
     try {
-      await requestStarted.promise;
+      await Promise.race([requestStarted.promise, lifecycle]);
+      expect(requests).toBe(completedRequests + 1);
       const abortedAt = performance.now();
       parent.beginClose();
       await lifecycle;
