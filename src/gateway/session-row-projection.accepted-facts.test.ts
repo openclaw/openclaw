@@ -74,6 +74,11 @@ it("keeps Board and shared facts while transcript receipts advance summary fresh
       updatedAt: 1,
     };
     replaceSessionEntrySync(scope, entry);
+    // Cold transcript initialization may acquire row facts before warmed receipt reuse begins.
+    await persistSessionTranscriptTurn(scope, {
+      messages: [{ message: { role: "user", content: "Initial transcript" } }],
+      touchSessionEntry: false,
+    });
     const acp: SessionAcpMeta = {
       backend: "receipt-backend",
       agent: "main",
@@ -146,8 +151,8 @@ it("keeps Board and shared facts while transcript receipts advance summary fresh
           lifecycleRevision: entry.lifecycleRevision,
           ...watermark,
           leafEntryId: null,
-          coveredMessages: 1,
-          totalMessages: 1,
+          coveredMessages: 2,
+          totalMessages: 2,
           omittedContent: false,
         },
       });
