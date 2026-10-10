@@ -58,16 +58,16 @@ describe("Responses prompt role", () => {
       };
       const original = structuredClone(input);
       for (const streamFn of [streamOpenAIResponses, createOpenAIResponsesTransportStreamFn()]) {
-        let request: unknown;
+        let serializedRequest = "";
         const stream = await streamFn(model, input, {
           apiKey: "synthetic-capture-fixture",
           onPayload(payload) {
-            request = JSON.parse(JSON.stringify(payload));
+            serializedRequest = JSON.stringify(payload);
             throw new Error("stop before sending captured request");
           },
         });
         expect((await stream.result()).stopReason).toBe("error");
-        expect(request).toEqual(
+        expect(JSON.parse(serializedRequest)).toEqual(
           expect.objectContaining({
             input: [
               {
