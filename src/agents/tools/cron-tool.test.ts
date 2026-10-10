@@ -1168,7 +1168,13 @@ describe("cron tool", () => {
   });
 
   it("uses flat string scheduleKind without leaking it to cron update", async () => {
-    callGatewayMock.mockResolvedValueOnce({ ok: true });
+    callGatewayMock
+      .mockResolvedValueOnce({
+        id: "job-kind",
+        schedule: { kind: "every", everyMs: 60_000 },
+        payload: { kind: "systemEvent", text: "tick" },
+      })
+      .mockResolvedValueOnce({ ok: true });
 
     await executeCron({
       action: "update",
@@ -1177,9 +1183,56 @@ describe("cron tool", () => {
       scheduleKind: "cron",
     });
 
+    expect(callGatewayMock).toHaveBeenCalledTimes(2);
+    expect(readGatewayCall(1)).toEqual({
+      method: "cron.update",
+      params: {
+        id: "job-kind",
+        patch: { schedule: { expr: "0 8 * * *", kind: "cron" } },
+        expectedConfigRevision: "sha256:test",
+      },
+    });
+  });
+
+  it("keeps the stored cron timezone when an update changes only the expression", async () => {
+    callGatewayMock
+      .mockResolvedValueOnce({
+        id: "daily-brief",
+        schedule: { kind: "cron", expr: "0 8 * * *", tz: "Asia/Shanghai" },
+        payload: { kind: "agentTurn", message: "brief" },
+      })
+      .mockResolvedValueOnce({ ok: true });
+
+    await executeCron({
+      action: "update",
+      id: "daily-brief",
+      job: { schedule: { kind: "cron", expr: "0 9 * * *" } },
+    });
+
+    expect(readGatewayCall(0)).toEqual({ method: "cron.get", params: { id: "daily-brief" } });
+    expect(readGatewayCall(1)).toEqual({
+      method: "cron.update",
+      params: {
+        id: "daily-brief",
+        patch: { schedule: { kind: "cron", expr: "0 9 * * *", tz: "Asia/Shanghai" } },
+        expectedConfigRevision: "sha256:test",
+      },
+    });
+  });
+
+  it("sends an explicit cron timezone without reading the stored job", async () => {
+    callGatewayMock.mockResolvedValueOnce({ ok: true });
+
+    await executeCron({
+      action: "update",
+      id: "daily-brief",
+      job: { schedule: { kind: "cron", expr: "0 9 * * *", tz: "Europe/Berlin" } },
+    });
+
     const params = expectSingleGatewayCallMethod("cron.update");
-    expect(params).toHaveProperty("id", "job-kind");
-    expect(params).toHaveProperty("patch", { schedule: { expr: "0 8 * * *", kind: "cron" } });
+    expect(params).toHaveProperty("patch", {
+      schedule: { kind: "cron", expr: "0 9 * * *", tz: "Europe/Berlin" },
+    });
   });
 
   it("rejects malformed flattened fallback-only payload patch params for update action", async () => {
