@@ -1,5 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { GATEWAY_OWNER_PROFILE_ID } from "../../../packages/gateway-protocol/src/schema/user-profile-constants.js";
 import { getRuntimeConfig } from "../../config/config.js";
+import { ADMIN_SCOPE } from "../../gateway/operator-scopes.js";
 import type { PreparedSessionMutationFacts } from "../../gateway/session-sharing-policy.js";
 import {
   prepareSessionMutationFacts,
@@ -454,6 +456,21 @@ type RequesterCronAuthorityDispatch = {
 };
 const activeDispatch = new AsyncLocalStorage<RequesterCronAuthorityDispatch>();
 
+/**
+ * A later direct turn revokes pending yield authority (`revokeRequesterCronAuthority`). For the
+ * gateway owner with admin scope and no role or model policy, the captured authority restricts
+ * nothing the no-operator dispatch allows, so its accepted children still deliver like a
+ * channel requester's. Every narrower operator stays fail-closed.
+ */
+function isUnrestrictedOwnerAuthority(authority: AdmittedRunOperatorAuthority): boolean {
+  return (
+    authority.profileId === GATEWAY_OWNER_PROFILE_ID &&
+    authority.scopes.includes(ADMIN_SCOPE) &&
+    authority.rolePolicy === undefined &&
+    authority.modelPolicy === undefined
+  );
+}
+
 export async function withRequesterCronAuthority<T>(
   params: {
     requesterSessionKey: string;
@@ -506,7 +523,7 @@ export async function withRequesterCronAuthority<T>(
   };
   if (!current()) {
     discard(authority);
-    if (authority.operatorAuthority) {
+    if (authority.operatorAuthority && !isUnrestrictedOwnerAuthority(authority.operatorAuthority)) {
       throw new Error("Requester operator authority is no longer current");
     }
     return await run();

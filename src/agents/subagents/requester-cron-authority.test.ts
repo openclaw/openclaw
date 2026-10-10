@@ -523,6 +523,76 @@ describe("requester cron authority lifetime", () => {
     },
   );
 
+  it.each<[string, Partial<AdmittedRunOperatorAuthority>, boolean]>([
+    [
+      "unrestricted gateway owner",
+      { profileId: "gateway-owner", scopes: ["operator.admin"] },
+      true,
+    ],
+    [
+      "gateway owner without admin scope",
+      { profileId: "gateway-owner", scopes: ["operator.write"] },
+      false,
+    ],
+    [
+      "gateway owner with a role policy",
+      {
+        profileId: "gateway-owner",
+        scopes: ["operator.admin"],
+        rolePolicy: { sessionAccessCap: "none", sandboxRequired: true, agents: ["main"] },
+      },
+      false,
+    ],
+    [
+      "gateway owner with a model policy",
+      {
+        profileId: "gateway-owner",
+        scopes: ["operator.admin"],
+        modelPolicy: {} as NonNullable<AdmittedRunOperatorAuthority["modelPolicy"]>,
+      },
+      false,
+    ],
+    [
+      "named profile with admin scope",
+      { profileId: "requester-profile", scopes: ["operator.admin"] },
+      false,
+    ],
+  ])(
+    "after a later direct turn revokes the yield, delivers only an unrestricted owner's batch: %s",
+    async (_label, fields, delivers) => {
+      const source = createAdmittedRunOperatorAuthority({
+        profileId: "requester-profile",
+        scopes: ["operator.read"],
+        ...fields,
+        assertCurrent: () => {},
+        retain: () => () => {},
+      });
+      const batch = createBatch("owner-followup");
+      await inAdminRun(
+        "owner-followup",
+        async () => expect(await mark(batch)).toBe(1),
+        undefined,
+        undefined,
+        undefined,
+        source,
+        false,
+      );
+      expect(await settle(batch)).toBe(true);
+      // A new direct user turn in the requester session.
+      revokeRequesterCronAuthority(SESSION);
+      const work = vi.fn(async () => "delivered");
+      if (delivers) {
+        await expect(dispatch(batch, work)).resolves.toBe("delivered");
+        expect(work).toHaveBeenCalledOnce();
+      } else {
+        await expect(dispatch(batch, work)).rejects.toThrow(
+          "Requester operator authority is no longer current",
+        );
+        expect(work).not.toHaveBeenCalled();
+      }
+    },
+  );
+
   it.each([true, false])(
     "carries only explicitly admitted plugin ownership: %s",
     async (hasOwner) => {
