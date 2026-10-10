@@ -114,10 +114,12 @@ Gateway-rendered private HTML, API responses, or authorization tickets are
 added to this shell cache.
 
 Reloads reuse cached build-versioned fonts, themes, and the web manifest without
-contacting the Gateway. The service worker retains the current build and at most
-two previous builds, so open tabs can still load their original assets. Uploaded
-profile avatars use private browser caching only when the URL matches the image's
-content revision; unversioned URLs and external avatar fallbacks still revalidate.
+contacting the Gateway. The service worker keeps only the current build's assets.
+After an update, open tabs reload automatically unless unsaved-work protection
+blocks recovery; then save or discard the protected work and use the **Reload**
+banner. Uploaded profile avatars use private browser caching only when the URL
+matches the image's content revision; unversioned URLs and external avatar
+fallbacks still revalidate.
 Content-addressed plugin interface assets stay in the private browser HTTP cache
 across grant renewal; requests reaching the Gateway still require current plugin
 authorization, and plugin data remains subject to per-call RPC authorization.

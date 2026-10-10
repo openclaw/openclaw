@@ -24,7 +24,23 @@ const RETAINED_STEP_NAMES = [
   "warning:finalize:plugins:deadline",
   "global update",
   "global update (omit optional)",
+  // Phase timing that explains long validating and activation windows.
+  "candidate-state-snapshot",
+  "candidate-doctor",
   "candidate-doctor-lint",
+  "candidate-gateway-startup",
+  "candidate-state-cleanup",
+  "post-stop-checks",
+  "git-checkout",
+  "git-runtime-activation",
+  "openclaw doctor",
+  "pre-plugin doctor",
+  "post-plugin doctor",
+  // Doctor sections lead each Doctor's diagnostics; compaction may still drop their detail.
+  "diagnostic:candidate-doctor",
+  "diagnostic:openclaw doctor",
+  "diagnostic:pre-plugin doctor",
+  "diagnostic:post-plugin doctor",
   "notice:ack",
   "notice:activating",
   "notice:verifying",
@@ -92,6 +108,19 @@ function mapJsonText(
   return value;
 }
 
+function compactConfigWriteRefusal(value: unknown): unknown {
+  if (
+    !isRecord(value) ||
+    !Array.isArray(value.keys) ||
+    !value.keys.some((key) => typeof key === "string" && key.length > 0)
+  ) {
+    return undefined;
+  }
+  return mapJsonText(value, (text, key) =>
+    key === "keys" ? truncateUtf16Safe(text, Math.floor(text.length / 2)) : text,
+  );
+}
+
 export function isRetainedStep(item: unknown): boolean {
   return (
     isRecord(item) &&
@@ -125,7 +154,12 @@ function boundedJson(
           item.step !== "diagnostic:database migration writes" &&
           item.step !== "diagnostic:database rollback" &&
           !(typeof item.step === "string" && item.step.startsWith("finalize:doctor-lint:"))
-            ? { ...item, detail: undefined, failureFacts: undefined }
+            ? {
+                ...item,
+                detail: undefined,
+                failureFacts: undefined,
+                configWriteRefusal: compactConfigWriteRefusal(item.configWriteRefusal),
+              }
             : item,
         );
         if (JSON.stringify(compacted) === json) {

@@ -182,6 +182,9 @@ it("retires live watchers and starts successor indexing without a search or turn
     instances.push(memory.instance);
     const opened = await memory.runtime.getMemorySearchManager({ cfg: config, agentId: "main" });
     assert(opened.manager, opened.error ?? "Expected the initial memory manager");
+    // Close drains accepted syncs by contract; settle the dirty startup index first so the
+    // fixed retirement budget measures watcher retirement, not cold first-index latency.
+    await opened.manager.sync?.({ reason: "startup-settled" });
     const raw = getPluginOriginalValue(opened.manager, memory.instance) ?? opened.manager;
     const prototype = Object.getPrototypeOf(raw) as RegisteredMemorySearchManager;
     closeInitial = async () => {

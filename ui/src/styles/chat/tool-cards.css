@@ -938,8 +938,9 @@
 .chat-tool-card__preview[data-widget-actions-above] .chat-tool-card__preview-actions {
   top: auto;
   bottom: 100%;
-  left: auto;
-  right: 0;
+  /* Keep the top-right gutter clear for Details without moving the transcript. */
+  left: 0;
+  right: auto;
   flex-direction: row;
   padding: 0;
   opacity: 0.6;

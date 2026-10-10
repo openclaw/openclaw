@@ -201,7 +201,8 @@ URIs, and HTTPS GGUF URLs that publish a SHA-256 response digest. The default
 cache is `~/.openclaw/models/llama.cpp`. A configured `modelCacheDir` remains
 authoritative for managed setup.
 
-Setup keeps the selected authored model even when it is not cached. It shows
+Setup resolves model aliases and account-qualified references to the selected
+authored model, and keeps that model even when it is not cached. It shows
 the download size from the pinned recipe or source metadata when available and
 asks before downloading. Invalid sources produce a model-specific error instead
 of a different recommendation. Declining leaves the configured routes unchanged.
