@@ -114,7 +114,7 @@ export function createGitHubPublicationWorkerScope(context: OpenClawStateWorkerC
               ) {
                 throw new Error("GitHub publication source receipt differs from its command.");
               }
-              // The private worker response is checked against its exact dispatched operation.
+              // SAFETY: the private worker response is checked against its exact dispatched operation.
               receipt = facts as PublicationMutationReceipt;
               try {
                 assertSource();
@@ -133,11 +133,14 @@ export function createGitHubPublicationWorkerScope(context: OpenClawStateWorkerC
                 await settled;
                 uncertain = admission?.settlement?.kind === "unknown" && !admission.committed;
                 if (admission?.committed) {
-                  if (!receipt)
+                  if (!receipt) {
                     throw new Error("GitHub publication committed facts were not installed.");
+                  }
                   return receipt;
                 }
-                if (!outcome.ok) throw outcome.error;
+                if (!outcome.ok) {
+                  throw outcome.error;
+                }
                 throw new Error("GitHub publication mutation has no committed receipt.");
               },
               {

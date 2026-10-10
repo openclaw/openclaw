@@ -27,7 +27,9 @@ function assertRepositoryClaim(
   row: RepositoryGitHubPublicationRow,
   placement: GitHubPublicationSourceFacts["placement"],
 ): void {
-  if (row.claim_id === null) return;
+  if (row.claim_id === null) {
+    return;
+  }
   if (
     !placement ||
     placement.session_id !== row.session_id ||
@@ -42,8 +44,9 @@ function assertRepositoryClaim(
         placement.environment_id !== row.environment_id ||
         placement.active_owner_epoch !== row.owner_epoch ||
         placement.turn_claim_owner_epoch !== row.owner_epoch))
-  )
+  ) {
     throw new Error("GitHub publication requested turn claim changed.");
+  }
 }
 
 function assertRequestedSource(
@@ -134,8 +137,9 @@ export const publicationRequestOperations = {
         case "shared": {
           const claim = input.input.claim;
           if (claim) {
-            if (claim.sessionId !== input.input.sessionId)
+            if (claim.sessionId !== input.input.sessionId) {
               throw new Error("GitHub publication requested turn session changed.");
+            }
             assertSharedGitHubPublicationClaimInDatabase(database.db, {
               claim,
               sessionKey: input.input.request.sessionKey,
@@ -182,6 +186,7 @@ export const publicationRequestOperations = {
             rows: [insertRepositoryGitHubPublicationInDatabase(database, input.row, assertCurrent)],
           };
       }
+      throw new Error("Unknown GitHub publication request kind.");
     };
     const receipt = captureGitHubPublicationWorkerReceipt(database.db, () => {
       const { value, changes } = captureGitHubPublicationChanges(write);

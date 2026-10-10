@@ -131,7 +131,7 @@ export function readGitHubPublicationSourceFacts(
     facts.profile = {
       profileId: identity.profileId,
       role: identity.role,
-      aliases: [...identity.aliases].sort(),
+      aliases: [...identity.aliases].toSorted(),
       githubLogin: github?.primary?.login ?? null,
       githubAccountIds: github?.accounts.map((account) => account.accountId) ?? [],
       emailBindings,
@@ -200,8 +200,9 @@ export function assertGitHubPublicationWorktreeSource(
     entry?.worktree?.id !== worktree.id ||
     entry.worktree.branch !== current.branch ||
     entry.worktree.repoRoot !== current.repoRoot
-  )
+  ) {
     throw new Error("GitHub publication requested worktree changed.");
+  }
 }
 
 export function assertGitHubPublicationConnectionSource(
@@ -226,6 +227,7 @@ export function assertGitHubPublicationConnectionSource(
     row.identity_source !== "personal" ||
     selected.accountId !== row.identity_account_id ||
     selected.login.toLowerCase() !== row.identity_login.toLowerCase()
-  )
+  ) {
     throw new Error("GitHub publication requested connection changed.");
+  }
 }
