@@ -1,4 +1,4 @@
-import type { LitElement, PropertyValues } from "lit";
+import type { PropertyValues } from "lit";
 import { property, query, state } from "lit/decorators.js";
 import {
   formatDocumentTitle,
@@ -54,11 +54,7 @@ import { renderApplicationShell, type ShellViewHost } from "./app-shell-view.ts"
 import type { ApplicationRuntime } from "./bootstrap.ts";
 import type { ApplicationContext } from "./context.ts";
 import { syncControlUiSystemChrome } from "./control-ui-presentation.ts";
-import type {
-  ControlUiReadiness,
-  ControlUiCommittedPresentation,
-  ControlUiReadinessOutlet,
-} from "./control-ui-readiness.ts";
+import type { ControlUiReadiness, ControlUiCommittedPresentation } from "./control-ui-readiness.ts";
 import { createGatewayControlUiReloadOptions } from "./gateway-control-ui-reload.ts";
 import {
   APP_SIDEBAR_ELEMENT,
@@ -618,26 +614,8 @@ class OpenClawShell
   }
 
   async settleReadiness(): Promise<ControlUiCommittedPresentation> {
-    await this.updateComplete;
-    if (!this.querySelector(".shell")) {
-      return { kind: "loading", navigationVisible: false };
-    }
-    // The optional sidebar is not a Lit element until its registration has loaded.
-    const sidebar = this.navigationSidebar;
-    const navigationVisible = sidebar.isConnected && sidebar.navigationVisible !== false;
-    if (navigationVisible) {
-      if (!customElements.get(APP_SIDEBAR_ELEMENT.tagName)) {
-        return { kind: "loading", navigationVisible: true };
-      }
-      await sidebar.updateComplete;
-    }
-    const outlet = this.querySelector<ControlUiReadinessOutlet>("openclaw-router-outlet");
-    if (!outlet || !(await outlet.settlePresentation())) {
-      return { kind: "loading", navigationVisible };
-    }
-    await this.querySelector<LitElement>("openclaw-route-presentation")?.updateComplete;
-    await this.querySelector<LitElement>("openclaw-chat-page")?.updateComplete;
-    return { kind: "shell", navigationVisible, sessionKey: this.activeSessionKey };
+    const { settleLitShellReadiness } = await import("./control-ui-readiness-lit.ts");
+    return settleLitShellReadiness(this);
   }
 
   override updated(changed: PropertyValues<this>) {

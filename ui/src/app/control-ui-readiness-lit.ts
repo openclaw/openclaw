@@ -3,8 +3,41 @@ import type { ApplicationRuntime } from "./bootstrap.ts";
 import {
   ControlUiReadiness,
   type ControlUiCommittedPresentation,
+  type ControlUiReadinessOutlet,
   type ControlUiReadinessShell,
 } from "./control-ui-readiness.ts";
+import { APP_SIDEBAR_ELEMENT } from "./lazy-custom-element.ts";
+
+export async function settleLitShellReadiness(
+  shell: LitElement & {
+    readonly activeSessionKey: string;
+    readonly navigationSidebar: HTMLElement & {
+      readonly navigationVisible?: boolean;
+      readonly updateComplete?: Promise<unknown>;
+    };
+  },
+): Promise<ControlUiCommittedPresentation> {
+  await shell.updateComplete;
+  if (!shell.querySelector(".shell")) {
+    return { kind: "loading", navigationVisible: false };
+  }
+  // The optional sidebar is not a Lit element until its registration has loaded.
+  const sidebar = shell.navigationSidebar;
+  const navigationVisible = sidebar.isConnected && sidebar.navigationVisible !== false;
+  if (navigationVisible) {
+    if (!customElements.get(APP_SIDEBAR_ELEMENT.tagName)) {
+      return { kind: "loading", navigationVisible: true };
+    }
+    await sidebar.updateComplete;
+  }
+  const outlet = shell.querySelector<ControlUiReadinessOutlet>("openclaw-router-outlet");
+  if (!outlet || !(await outlet.settlePresentation())) {
+    return { kind: "loading", navigationVisible };
+  }
+  await shell.querySelector<LitElement>("openclaw-route-presentation")?.updateComplete;
+  await shell.querySelector<LitElement>("openclaw-chat-page")?.updateComplete;
+  return { kind: "shell", navigationVisible, sessionKey: shell.activeSessionKey };
+}
 
 export function createLitControlUiReadiness(root: LitElement, runtime: ApplicationRuntime) {
   const readiness = new ControlUiReadiness(root);
