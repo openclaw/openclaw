@@ -456,7 +456,16 @@ it.each([
         kind: "session-turn",
         result: { sessionEntry: committed.receipt.postimage.entry },
       });
-      expect(readTranscriptEventRows(f.database, sessionId)).toHaveLength(1);
+      expect(
+        readTranscriptEventRows(f.database, sessionId).map((row) => JSON.parse(row.eventJson)),
+      ).toEqual([
+        expect.objectContaining({ type: "session", id: sessionId }),
+        expect.objectContaining({
+          type: "message",
+          id: "accepted-message",
+          message: expect.objectContaining({ content: "accepted bytes" }),
+        }),
+      ]);
       expect(f.read(target).entry).toEqual(committed.receipt.postimage.entry);
     });
   },
