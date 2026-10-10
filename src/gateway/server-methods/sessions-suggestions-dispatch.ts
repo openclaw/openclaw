@@ -27,25 +27,6 @@ import type {
   SessionMutationAuthorization,
 } from "./types.js";
 
-function attributedSuggestionClient(
-  client: GatewayClient,
-  suggestion: StoredSessionSuggestion,
-): GatewayClient {
-  const label = suggestion.authorLabel ?? suggestion.authorId;
-  return {
-    ...client,
-    internal: {
-      ...client.internal,
-      syntheticClient: true,
-      senderAttribution: {
-        id: suggestion.authorId,
-        identity: { type: "profile", id: suggestion.authorId },
-        name: `Suggested by ${label}`,
-      },
-    },
-  };
-}
-
 export async function dispatchSuggestion(params: {
   context: GatewayRequestContext;
   client: GatewayClient;
@@ -65,15 +46,26 @@ export async function dispatchSuggestion(params: {
     agentId: params.target.agentId,
     sessionId: params.expectedSessionId,
     message: params.suggestion.text,
-    ...(params.resolution === "queue"
-      ? { queueMode: "followup" as const }
-      : { queueMode: "steer" as const }),
+    queueMode: params.resolution === "queue" ? ("followup" as const) : ("steer" as const),
     idempotencyKey: `session-suggestion:${params.suggestion.id}`,
   };
   const captureResponse: RespondFn = (...args) => {
     response = args;
   };
-  const chatClient = attributedSuggestionClient(params.client, params.suggestion);
+  const { client, suggestion } = params;
+  const label = suggestion.authorLabel ?? suggestion.authorId;
+  const chatClient: GatewayClient = {
+    ...client,
+    internal: {
+      ...client.internal,
+      syntheticClient: true,
+      senderAttribution: {
+        id: suggestion.authorId,
+        identity: { type: "profile", id: suggestion.authorId },
+        name: `Suggested by ${label}`,
+      },
+    },
+  };
   const assertRequestCurrent = () => {
     params.signal?.throwIfAborted();
     params.sessionMutationAuthorization?.assertCurrent();

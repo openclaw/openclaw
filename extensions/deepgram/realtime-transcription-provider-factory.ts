@@ -82,10 +82,8 @@ function normalizeDeepgramRealtimeBaseUrl(value?: string): string {
   if (!resolved) {
     return DEFAULT_DEEPGRAM_AUDIO_BASE_URL;
   }
-  let parsed: URL;
-  try {
-    parsed = new URL(resolved);
-  } catch {
+  const parsed = URL.parse(resolved);
+  if (!parsed) {
     throw new Error("Invalid Deepgram baseUrl: value is not a valid URL");
   }
   const { protocol } = parsed;

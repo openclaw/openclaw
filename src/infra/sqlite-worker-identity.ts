@@ -17,7 +17,7 @@ export function databaseFileIdentityKey(file: Pick<BigIntStats, "dev" | "ino">):
   return `${file.dev}:${file.ino}`;
 }
 
-export function readDatabaseIdentityBirthtime(file: BigIntStats): string {
+export function readDatabaseIdentityBirthtime(file: Pick<BigIntStats, "birthtimeNs">): string {
   // Node does not expose Linux STATX_BTIME availability and can substitute ctime.
   // Keep the unknown creation-time value stable across ordinary database writes.
   return useDatabaseBirthtime ? file.birthtimeNs.toString() : "0";
@@ -90,6 +90,18 @@ function existingIdentity(
   };
 }
 
+function missingAncestorParent(ancestor: string, missing: string[], error: unknown): string {
+  if (!hasErrnoCode(error, "ENOENT")) {
+    throw error;
+  }
+  missing.unshift(path.basename(ancestor));
+  const parent = path.dirname(ancestor);
+  if (parent === ancestor) {
+    throw error;
+  }
+  return parent;
+}
+
 /** Inspect a native-owner path without replacing its diagnostic for a non-file target. */
 export function inspectDatabasePathIdentitySync(
   databasePath: string,
@@ -119,15 +131,7 @@ export function inspectDatabasePathIdentitySync(
       );
       return { key: `path:${canonicalPath}`, canonicalPath };
     } catch (error) {
-      if (!hasErrnoCode(error, "ENOENT")) {
-        throw error;
-      }
-      missing.unshift(path.basename(ancestor));
-      const parent = path.dirname(ancestor);
-      if (parent === ancestor) {
-        throw error;
-      }
-      ancestor = parent;
+      ancestor = missingAncestorParent(ancestor, missing, error);
     }
   }
 }
@@ -180,16 +184,20 @@ export async function readDatabasePathIdentity(
       const canonicalPath = normalizeDatabasePath(path.join(await realpath(ancestor), ...missing));
       return { key: `path:${canonicalPath}`, canonicalPath };
     } catch (error) {
-      if (!hasErrnoCode(error, "ENOENT")) {
-        throw error;
-      }
-      missing.unshift(path.basename(ancestor));
-      const parent = path.dirname(ancestor);
-      if (parent === ancestor) {
-        throw error;
-      }
-      ancestor = parent;
+      ancestor = missingAncestorParent(ancestor, missing, error);
     }
+  }
+}
+
+/** Revalidate the captured file, or keep an observed absence from adopting a replacement. */
+export function assertDatabasePathIdentity(
+  databasePath: string,
+  expected: DatabasePathIdentity,
+): void {
+  if (expected.key.startsWith("file:")) {
+    assertExistingDatabaseIdentity(databasePath, expected.key, expected.birthtime);
+  } else if (readDatabasePathIdentitySync(databasePath).key !== expected.key) {
+    throw new Error(`SQLite database path identity changed: ${databasePath}`);
   }
 }
 

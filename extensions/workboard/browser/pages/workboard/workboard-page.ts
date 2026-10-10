@@ -28,6 +28,7 @@ import { createWorkboardSessionResolver } from "../../lib/workboard/session-reso
 import type { WorkboardBoardMetadata } from "../../lib/workboard/types.ts";
 import { matchesAgentScope } from "./agent-filter.ts";
 import { matchesBoardFilter, WORKBOARD_ALL_BOARDS_FILTER } from "./board-filter.ts";
+import { workboardPageTarget } from "./page-target.ts";
 import { createSessionsBoardController } from "./sessions-board-controller.ts";
 import { loadBoardAutomation, renderBoardAutomationHeading } from "./view-automation.ts";
 import {
@@ -44,13 +45,6 @@ import {
 } from "./view-helpers.ts";
 import { renderSessionsBoard } from "./view-sessions-board.ts";
 import { renderWorkboard } from "./view.ts";
-
-export function workboardPageTarget(boardId?: string) {
-  return {
-    id: "workboard",
-    path: boardId && boardId !== WORKBOARD_ALL_BOARDS_FILTER ? [boardId] : [],
-  };
-}
 
 function reconcileCardOverlays(state: WorkboardUiState, visible: (card: WorkboardCard) => boolean) {
   const remainsVisible = (id: string) =>
@@ -152,6 +146,10 @@ export function createWorkboardPage(
       if (connected) {
         void refreshMetadata();
       } else {
+        sessionsBoard.sync(
+          state.boards.find((board) => board.id === state.boardFilter),
+          false,
+        );
         stop();
       }
     };
@@ -181,6 +179,7 @@ export function createWorkboardPage(
         reconcileCardOverlays(state, (card) => matchesBoardFilter(card, boardId));
       }
       if (
+        context.presented &&
         boardId !== WORKBOARD_ALL_BOARDS_FILTER &&
         workboard.boardsReady &&
         !state.boards.some((board) => board.id === boardId)
@@ -466,7 +465,7 @@ export function createWorkboardPage(
     });
     const unsubscribeState = workboard.subscribe(requestUpdate);
     const unsubscribeEvents = host.onEvent(WORKBOARD_CHANGED_EVENT, (payload) => {
-      if (!disposed && connected && context.presented) {
+      if (!disposed && connected && context.presented && !sessionsBoard.hasCurrent(payload)) {
         handleWorkboardChanged(workboard, payload);
       }
     });

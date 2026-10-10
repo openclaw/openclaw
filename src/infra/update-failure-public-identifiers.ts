@@ -35,6 +35,8 @@ const NATIVE_CHECKS = new Set<string>([
   "gateway-recovery",
   "node-runtime",
   "managed-service",
+  "managed-service-runtime",
+  "managed-service-ownership",
   "managed-service-preflight",
   "package-install",
   "package-swap",

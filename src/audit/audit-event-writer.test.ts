@@ -380,7 +380,7 @@ describe("audit event writer", () => {
     expect(errors).toEqual(["audit event queue is full (3); dropping metadata"]);
     expect((await listAuditEvents({ database, limit: 10 })).events).toHaveLength(2);
     expect(
-      pageExecutionDecisionFactsForContextInDatabase(db, {
+      pageExecutionDecisionFactsForContextInDatabase(openOpenClawStateDatabase(database).db, {
         context: {
           contextId: "held-lock-context",
           executionId: "held-lock-execution",

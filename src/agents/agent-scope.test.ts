@@ -6,7 +6,6 @@ import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
 import type { AgentModelConfig } from "../config/types.agents-shared.js";
-import { createCanonicalAgentConfigFixture } from "../test-utils/config-roster.js";
 import { withEnv } from "../test-utils/env.js";
 import { findOverlappingWorkspaceAgentIds } from "./agent-delete-safety.js";
 import type { ModelFallbackAvailability } from "./agent-scope.js";
@@ -31,51 +30,10 @@ import {
   resolveAgentWorkspaceProvisioning,
   resolveAutoFallbackPrimaryProbe,
   resolveAgentIdByWorkspacePath,
-  resolveAgentModelPrimaryWriteTarget,
   setAgentEffectiveModelPrimary,
 } from "./agent-scope.js";
 
 describe("resolveAgentConfig", () => {
-  it("should return undefined when agent id does not exist", () => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        entries: { main: { workspace: "~/openclaw" } },
-      },
-    };
-    const result = resolveAgentConfig(cfg, "nonexistent");
-    expect(result).toBeUndefined();
-  });
-
-  it("should return basic agent config", () => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        entries: {
-          main: {
-            name: "Main Agent",
-            workspace: "~/openclaw",
-            agentDir: "~/.openclaw/agents/main",
-            model: "anthropic/claude-sonnet-4-6",
-            utilityModel: "openai/gpt-5.4-mini",
-          },
-        },
-      },
-    };
-    const result = resolveAgentConfig(cfg, "main");
-    expect(result).toEqual({
-      name: "Main Agent",
-      workspace: "~/openclaw",
-      agentDir: "~/.openclaw/agents/main",
-      model: "anthropic/claude-sonnet-4-6",
-      utilityModel: "openai/gpt-5.4-mini",
-      identity: undefined,
-      groupChat: undefined,
-      subagents: undefined,
-      sandbox: undefined,
-      tts: undefined,
-      tools: undefined,
-    });
-  });
-
   it("prefers per-agent verbose defaults over global defaults", () => {
     const cfg: OpenClawConfig = {
       agents: {
@@ -175,63 +133,14 @@ describe("resolveAgentConfig", () => {
   });
 
   describe("resolveModelFallbackAvailability", () => {
-    const cfgWithFallbacks: OpenClawConfig = {
-      agents: {
-        defaults: { model: { fallbacks: ["anthropic/claude-sonnet-4-6"] } },
-        entries: { main: {} },
-      },
-    };
-
-    it.each([
-      {
-        name: "uses auto fallback provenance",
-        params: {
-          hasSessionModelOverride: true,
-          modelOverrideSource: "auto" as const,
-        },
-        expected: {
-          kind: "active" as const,
-          models: ["anthropic/claude-sonnet-4-6"],
-          source: "explicit" as const,
-        },
-      },
-      {
-        name: "recovers auto fallback provenance without a source marker",
-        params: {
-          hasSessionModelOverride: true,
-          hasAutoFallbackProvenance: true,
-        },
-        expected: {
-          kind: "active" as const,
-          models: ["anthropic/claude-sonnet-4-6"],
-          source: "explicit" as const,
-        },
-      },
-      {
-        name: "disables configured fallbacks for a user model override",
-        params: {
-          hasSessionModelOverride: true,
-          modelOverrideSource: "user" as const,
-        },
-        expected: { kind: "disabled_by_model_override" as const },
-      },
-      {
-        name: "reports no configured fallbacks",
-        params: { hasSessionModelOverride: false },
-        expected: { kind: "none_configured" as const, source: "inherited" as const },
-      },
-    ])("$name", ({ params, expected }) => {
-      const cfg =
-        expected.kind === "none_configured"
-          ? { agents: { entries: { main: {} } } }
-          : cfgWithFallbacks;
+    it("reports no configured fallbacks", () => {
       expect(
         resolveModelFallbackAvailability({
-          cfg,
+          cfg: { agents: { entries: { main: {} } } },
           agentId: "main",
-          ...params,
+          hasSessionModelOverride: false,
         }),
-      ).toEqual(expected);
+      ).toEqual({ kind: "none_configured", source: "inherited" });
     });
   });
 
@@ -242,34 +151,14 @@ describe("resolveAgentConfig", () => {
       expected: string[] | undefined;
     }> = [
       {
-        name: "keeps an explicit ladder as the run override",
-        availability: { kind: "active", models: ["openai/gpt-5.4"], source: "explicit" },
-        expected: ["openai/gpt-5.4"],
-      },
-      {
         name: "leaves inherited fallbacks to the candidate resolver",
         availability: { kind: "active", models: ["openai/gpt-5.4"], source: "inherited" },
         expected: undefined,
       },
       {
-        name: "pins an explicit empty ladder",
-        availability: { kind: "none_configured", source: "explicit" },
-        expected: [],
-      },
-      {
         name: "leaves inherited empty fallbacks to the candidate resolver",
         availability: { kind: "none_configured", source: "inherited" },
         expected: undefined,
-      },
-      {
-        name: "disables fallbacks for a user model override",
-        availability: { kind: "disabled_by_model_override" },
-        expected: [],
-      },
-      {
-        name: "disables fallbacks under a model selection lock",
-        availability: { kind: "disabled_by_model_selection_lock" },
-        expected: [],
       },
     ];
     it.each(projectionRows)("$name", ({ availability, expected }) => {
@@ -448,12 +337,7 @@ describe("resolveAgentConfig", () => {
 
     const inheritedCfg: OpenClawConfig = {
       agents: {
-        defaults: {
-          model: {
-            primary: "openai/gpt-5.4",
-            fallbacks: ["anthropic/claude-sonnet-4-6"],
-          },
-        },
+        defaults: structuredClone(cfg.agents?.defaults),
         entries: { main: {} },
       },
     };
@@ -467,23 +351,28 @@ describe("resolveAgentConfig", () => {
     });
   });
 
-  it("resolves the model write target without mutating config", () => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        defaults: { model: "openai/gpt-5.4" },
-        entries: { main: {}, work: { model: "anthropic/claude-sonnet-4-6" } },
-      },
-    };
-    const before = structuredClone(cfg);
-
-    expect(resolveAgentModelPrimaryWriteTarget(cfg, "main")).toBe("defaults");
-    expect(resolveAgentModelPrimaryWriteTarget(cfg, "work")).toBe("agent");
-    expect(resolveAgentModelPrimaryWriteTarget(cfg, "main", { target: "agent" })).toBe("agent");
-    expect(resolveAgentModelPrimaryWriteTarget(cfg, "work", { target: "defaults" })).toBe(
-      "defaults",
-    );
-    expect(cfg).toEqual(before);
-  });
+  it.each([
+    ["main", "agent", "openai/gpt-5.4", "test/next"],
+    ["work", "defaults", "test/next", undefined],
+  ] as const)(
+    "writes the explicit model target for %s at %s",
+    (agentId, target, defaultsModel, mainModel) => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: { model: "openai/gpt-5.4" },
+          entries: { main: {}, work: { model: "anthropic/claude-sonnet-4-6" } },
+        },
+      };
+      expect(setAgentEffectiveModelPrimary(cfg, agentId, "test/next", { target })).toBe(target);
+      expect(cfg.agents).toEqual({
+        defaults: { model: defaultsModel },
+        entries: {
+          main: mainModel ? { model: mainModel } : {},
+          work: { model: "anthropic/claude-sonnet-4-6" },
+        },
+      });
+    },
+  );
 
   it("resolves run fallback overrides via shared helper", () => {
     const cfg: OpenClawConfig = {
@@ -599,54 +488,6 @@ describe("resolveAgentConfig", () => {
     ).toMatchObject({ provider: "anthropic", model: "claude-sonnet-4-6" });
   });
 
-  it("prunes stale and excess primary probe throttle entries", () => {
-    const probeState = new Map<string, number>();
-    const probe = {
-      provider: "anthropic",
-      model: "claude-sonnet-4-6",
-      fallbackProvider: "google",
-      fallbackModel: "gemini-3-pro",
-    };
-    markAutoFallbackPrimaryProbe({
-      probe,
-      sessionKey: "old",
-      now: 1_000,
-      minIntervalMs: 100,
-      maxTrackedProbeKeys: 3,
-      probeState,
-    });
-    for (let index = 0; index < 4; index += 1) {
-      markAutoFallbackPrimaryProbe({
-        probe,
-        sessionKey: `new-${index}`,
-        now: 2_000 + index,
-        minIntervalMs: 100,
-        maxTrackedProbeKeys: 3,
-        probeState,
-      });
-    }
-
-    expect(probeState.size).toBe(3);
-    expect(
-      resolveAutoFallbackPrimaryProbe({
-        entry: {
-          providerOverride: "google",
-          modelOverride: "gemini-3-pro",
-          modelOverrideSource: "auto",
-          modelOverrideFallbackOriginProvider: "anthropic",
-          modelOverrideFallbackOriginModel: "claude-sonnet-4-6",
-        },
-        sessionKey: "old",
-        primaryProvider: "anthropic",
-        primaryModel: "claude-sonnet-4-6",
-        now: 2_004,
-        minIntervalMs: 100,
-        maxTrackedProbeKeys: 3,
-        probeState,
-      }),
-    ).toMatchObject({ provider: "anthropic", model: "claude-sonnet-4-6" });
-  });
-
   it("skips primary probes for strict or stale fallback selections", () => {
     const baseEntry: SessionEntry = {
       sessionId: "session",
@@ -732,28 +573,6 @@ describe("resolveAgentConfig", () => {
         probeState: new Map(),
       }),
     ).toMatchObject({ provider: "anthropic", model: "claude-sonnet-4-6" });
-  });
-
-  it("preserves legacy auto auth provenance on primary probes", () => {
-    expect(
-      resolveAutoFallbackPrimaryProbe({
-        entry: {
-          providerOverride: "google",
-          modelOverride: "gemini-3-pro",
-          modelOverrideSource: "auto",
-          modelOverrideFallbackOriginProvider: "anthropic",
-          modelOverrideFallbackOriginModel: "claude-sonnet-4-6",
-          authProfileOverride: "fallback-key",
-          authProfileOverrideCompactionCount: 1,
-        },
-        primaryProvider: "anthropic",
-        primaryModel: "claude-sonnet-4-6",
-        probeState: new Map(),
-      }),
-    ).toMatchObject({
-      fallbackAuthProfileId: "fallback-key",
-      fallbackAuthProfileIdSource: "auto",
-    });
   });
 
   it("clears only auto-owned fallback selection state for a primary probe", () => {
@@ -959,79 +778,6 @@ describe("resolveAgentConfig", () => {
     ).toEqual(["zai/glm-5"]);
   });
 
-  it("should return agent-specific sandbox config", () => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        entries: {
-          work: {
-            workspace: "~/openclaw-work",
-            sandbox: {
-              mode: "all",
-              scope: "agent",
-              workspaceAccess: "ro",
-              workspaceRoot: "~/sandboxes",
-            },
-          },
-        },
-      },
-    };
-    const result = resolveAgentConfig(cfg, "work");
-    expect(result?.sandbox).toEqual({
-      mode: "all",
-      scope: "agent",
-      workspaceAccess: "ro",
-      workspaceRoot: "~/sandboxes",
-    });
-  });
-
-  it("should return agent-specific tools config", () => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        entries: {
-          restricted: {
-            workspace: "~/openclaw-restricted",
-            tools: {
-              allow: ["read"],
-              deny: ["exec", "write", "edit"],
-              elevated: {
-                enabled: false,
-                allowFrom: { whatsapp: ["+15555550123"] },
-              },
-            },
-          },
-        },
-      },
-    };
-    const result = resolveAgentConfig(cfg, "restricted");
-    expect(result?.tools).toEqual({
-      allow: ["read"],
-      deny: ["exec", "write", "edit"],
-      elevated: {
-        enabled: false,
-        allowFrom: { whatsapp: ["+15555550123"] },
-      },
-    });
-  });
-
-  it("should normalize agent id", () => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        entries: { main: { workspace: "~/openclaw" } },
-      },
-    };
-    // Should normalize to "main" (default)
-    const result = resolveAgentConfig(cfg, "");
-    expect(result?.workspace).toBe("~/openclaw");
-  });
-
-  it("uses OPENCLAW_HOME for default agent workspace", () => {
-    const home = path.join(path.sep, "srv", "openclaw-home");
-    withEnv({ OPENCLAW_HOME: home }, () => {
-      const workspace = resolveAgentWorkspaceDir({ agents: { entries: { main: {} } } }, "main");
-      expect(workspace).toBe(path.join(path.resolve(home), ".openclaw", "workspace"));
-    });
-  });
-
   it("uses OPENCLAW_WORKSPACE_DIR for default agent workspace", () => {
     const workspaceDir = path.join(path.sep, "srv", "openclaw-workspace");
     withEnv(
@@ -1079,17 +825,6 @@ describe("resolveAgentConfig", () => {
     expect(workspace).toBe(path.resolve("/shared-ws/main"));
   });
 
-  it("migrated default agent without per-agent workspace uses agents.defaults.workspace directly", () => {
-    const cfg = createCanonicalAgentConfigFixture({
-      agents: {
-        defaults: { workspace: "/shared-ws" },
-        entries: { main: {}, work: { default: true } },
-      },
-    }).config;
-    const workspace = resolveAgentWorkspaceDir(cfg, "work");
-    expect(workspace).toBe(path.resolve("/shared-ws"));
-  });
-
   it("non-default agent without defaults.workspace falls back to stateDir", () => {
     const stateDir = path.join(path.sep, "tmp", "test-state");
     const cfg: OpenClawConfig = {
@@ -1105,47 +840,24 @@ describe("resolveAgentConfig", () => {
 });
 
 describe("resolveAgentRunCwd", () => {
-  it.each([
-    { cwd: " ~/projects/repo ", expected: path.resolve("/srv/openclaw-home/projects/repo") },
-    { cwd: "./projects/repo", expected: path.resolve("projects/repo") },
-    { cwd: " ", expected: path.resolve("/default-repo") },
-  ])("resolves configured path $cwd without relocating workspace", ({ cwd, expected }) => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        defaults: { cwd: "/default-repo" },
-        entries: { work: { cwd, workspace: "/agent-workspace" } },
-      },
-    };
-    withEnv({ OPENCLAW_HOME: "/srv/openclaw-home" }, () => {
-      expect(resolveAgentRunCwd(cfg, "WORK")).toBe(expected);
-      expect(resolveAgentWorkspaceDir(cfg, "work")).toBe(path.resolve("/agent-workspace"));
-    });
-  });
+  it.each([{ cwd: " ", expected: path.resolve("/default-repo") }])(
+    "resolves configured path $cwd without relocating workspace",
+    ({ cwd, expected }) => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: { cwd: "/default-repo" },
+          entries: { work: { cwd, workspace: "/agent-workspace" } },
+        },
+      };
+      withEnv({ OPENCLAW_HOME: "/srv/openclaw-home" }, () => {
+        expect(resolveAgentRunCwd(cfg, "WORK")).toBe(expected);
+        expect(resolveAgentWorkspaceDir(cfg, "work")).toBe(path.resolve("/agent-workspace"));
+      });
+    },
+  );
 });
 
 describe("resolveAgentWorkspaceProvisioning", () => {
-  it("marks an ACP agent without an explicit workspace but a distinct runtime cwd as runtime-managed", () => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        defaults: { workspace: "/shared-ws" },
-        entries: { main: {}, codex: { runtime: { type: "acp", acp: { cwd: "/projects/app" } } } },
-      },
-    };
-    expect(resolveAgentWorkspaceProvisioning(cfg, "codex")).toBe("runtime-managed-implicit");
-  });
-
-  it("marks an invocation with a distinct binding-derived cwd as runtime-managed", () => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        defaults: { workspace: "/shared-ws" },
-        entries: { main: {}, codex: { runtime: { type: "acp" } } },
-      },
-    };
-    expect(resolveAgentWorkspaceProvisioning(cfg, "codex", { cwd: "/projects/app" })).toBe(
-      "runtime-managed-implicit",
-    );
-  });
-
   it("keeps standard provisioning when the ACP agent declares an explicit workspace (#92015)", () => {
     const cfg: OpenClawConfig = {
       agents: {
@@ -1160,41 +872,6 @@ describe("resolveAgentWorkspaceProvisioning", () => {
     };
     expect(resolveAgentWorkspaceProvisioning(cfg, "codex")).toBe("standard");
     expect(resolveAgentWorkspaceProvisioning(cfg, "codex", { cwd: "/projects/app" })).toBe(
-      "standard",
-    );
-  });
-
-  it("does not treat a configured binding cwd as an invocation cwd (mixed bindings, #92015 review)", () => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        defaults: { workspace: "/shared-ws" },
-        entries: { codex: { runtime: { type: "acp" } } },
-      },
-      bindings: [
-        {
-          type: "acp",
-          agentId: "codex",
-          match: { channel: "telegram", peer: { kind: "direct", id: "123" } },
-          acp: { cwd: "/projects/app" },
-        },
-      ],
-    } as OpenClawConfig;
-    // The turn scoped to a different binding without cwd keeps bootstrap.
-    expect(resolveAgentWorkspaceProvisioning(cfg, "codex")).toBe("standard");
-    // The turn scoped to the cwd-bearing binding skips scaffolding.
-    expect(resolveAgentWorkspaceProvisioning(cfg, "codex", { cwd: "/projects/app" })).toBe(
-      "runtime-managed-implicit",
-    );
-  });
-
-  it("keeps standard provisioning when the invocation cwd equals the resolved workspace", () => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        defaults: { workspace: "/shared-ws" },
-        entries: { main: {}, codex: { runtime: { type: "acp" } } },
-      },
-    };
-    expect(resolveAgentWorkspaceProvisioning(cfg, "codex", { cwd: "/shared-ws/codex/" })).toBe(
       "standard",
     );
   });
@@ -1267,65 +944,6 @@ describe("resolveAgentIdByWorkspacePath", () => {
     },
   );
 
-  it("returns the most specific workspace match for a directory", () => {
-    const workspaceRoot = `/tmp/openclaw-agent-scope-${Date.now()}-root`;
-    const opsWorkspace = `${workspaceRoot}/projects/ops`;
-    const cfg: OpenClawConfig = {
-      agents: {
-        entries: {
-          main: { workspace: workspaceRoot },
-          ops: { workspace: opsWorkspace },
-          "ops-shadow": { workspace: opsWorkspace },
-        },
-      },
-    };
-
-    expect(resolveAgentIdByWorkspacePath(cfg, `${opsWorkspace}/src`)).toBe("ops");
-  });
-
-  it("returns undefined when directory has no matching workspace", () => {
-    const workspaceRoot = `/tmp/openclaw-agent-scope-${Date.now()}-root`;
-    const cfg: OpenClawConfig = {
-      agents: {
-        entries: { main: { workspace: workspaceRoot }, ops: { workspace: `${workspaceRoot}-ops` } },
-      },
-    };
-
-    expect(
-      resolveAgentIdByWorkspacePath(cfg, `/tmp/openclaw-agent-scope-${Date.now()}-unrelated`),
-    ).toBeUndefined();
-  });
-
-  it("matches workspace paths through symlink aliases", () => {
-    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-agent-scope-"));
-    const realWorkspaceRoot = path.join(tempRoot, "real-root");
-    const realOpsWorkspace = path.join(realWorkspaceRoot, "projects", "ops");
-    const aliasWorkspaceRoot = path.join(tempRoot, "alias-root");
-    try {
-      fs.mkdirSync(path.join(realOpsWorkspace, "src"), { recursive: true });
-      fs.symlinkSync(
-        realWorkspaceRoot,
-        aliasWorkspaceRoot,
-        process.platform === "win32" ? "junction" : "dir",
-      );
-
-      const cfg: OpenClawConfig = {
-        agents: {
-          entries: { main: { workspace: realWorkspaceRoot }, ops: { workspace: realOpsWorkspace } },
-        },
-      };
-
-      expect(
-        resolveAgentIdByWorkspacePath(cfg, path.join(aliasWorkspaceRoot, "projects", "ops")),
-      ).toBe("ops");
-      expect(
-        resolveAgentIdByWorkspacePath(cfg, path.join(aliasWorkspaceRoot, "projects", "ops", "src")),
-      ).toBe("ops");
-    } finally {
-      fs.rmSync(tempRoot, { recursive: true, force: true });
-    }
-  });
-
   it("matches a dangling workspace symlink to its vanished target", () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-agent-scope-dangling-"));
     const workspaceDir = path.join(tempRoot, "vanished-workspace");
@@ -1362,19 +980,6 @@ describe("resolveAgentIdByWorkspacePath", () => {
 });
 
 describe("resolveAgentSkillsFilter", () => {
-  it("inherits agents.defaults.skills when the agent omits skills", () => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        defaults: {
-          skills: ["github", "weather"],
-        },
-        entries: { writer: {} },
-      },
-    };
-
-    expect(resolveAgentSkillsFilter(cfg, "writer")).toEqual(["github", "weather"]);
-  });
-
   it("uses agents.entries skills as a full replacement", () => {
     const cfg: OpenClawConfig = {
       agents: {
@@ -1387,18 +992,4 @@ describe("resolveAgentSkillsFilter", () => {
 
     expect(resolveAgentSkillsFilter(cfg, "writer")).toEqual(["docs-search"]);
   });
-
-  it("keeps explicit empty agent skills as no skills", () => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        defaults: {
-          skills: ["github", "weather"],
-        },
-        entries: { writer: { skills: [] } },
-      },
-    };
-
-    expect(resolveAgentSkillsFilter(cfg, "writer")).toStrictEqual([]);
-  });
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

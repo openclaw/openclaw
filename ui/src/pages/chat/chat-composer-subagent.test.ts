@@ -551,74 +551,66 @@ describe("subagent composer", () => {
   );
 
   it.each([
-    { spawnedBy: "agent:main:parent" },
-    { parentSessionKey: "agent:main:parent" },
-    { spawnedBy: "agent:main:controller", parentSessionKey: "agent:main:parent" },
+    { lineage: { spawnedBy: "agent:main:parent" }, parentLoaded: true },
+    { lineage: { parentSessionKey: "agent:main:parent" }, parentLoaded: true },
     {
-      key: "agent:main:worker",
-      classification: "subagent" as const,
-      spawnedBy: "agent:main:parent",
+      lineage: { spawnedBy: "agent:main:controller", parentSessionKey: "agent:main:parent" },
+      parentLoaded: true,
     },
-  ])("replaces input with parent navigation for %j", (lineage) => {
-    const { pane, state } = createRefreshChatPane();
-    const parent: GatewaySessionRow = {
-      key: "agent:main:parent",
-      kind: "direct",
-      label: "Investigation request",
-      updatedAt: 1,
-    };
-    const child: GatewaySessionRow = {
-      key: "agent:main:subagent:worker",
-      kind: "direct",
-      label: "Check onboarding",
-      updatedAt: 2,
-      ...lineage,
-    };
-    state.sessionKey = child.key;
-    state.sessionsResult = { ts: 2, path: "", count: 2, defaults, sessions: [parent, child] };
-    state.chatMessage = "Retained draft";
-    pane.onPaneSessionChange = vi.fn();
-    state.handleSendChat = vi.fn();
-    pane.render();
-    const props = pane.chatProps!;
-    const container = document.createElement("div");
-    const onAbort = vi.fn();
-    render(renderChatComposer({ ...props, canAbort: true, onAbort }), container);
-
-    expect(props.canSend).toBe(false);
-    void props.onSend();
-    expect(state.handleSendChat).not.toHaveBeenCalled();
-    expect(container.querySelector("textarea, input[type=file]")).toBeNull();
-    expect(container.querySelector(".agent-chat__composer-footer")).toBeNull();
-    const banner = container.querySelector(".agent-chat__disabled-banner");
-    expect(banner?.textContent).toContain("View-only subagent");
-    expect(banner?.textContent).toContain("Investigation request");
-    banner?.querySelector<HTMLButtonElement>("button")?.click();
-    expect(pane.onPaneSessionChange).toHaveBeenCalledWith(pane.paneId, parent.key);
-    expect(container.querySelector('[aria-label="Stop generating"]')).toBeNull();
-  });
-  it.each([false, true])("keeps an unresolved subagent view-only with metadata=%s", (hasRow) => {
-    const { pane, state } = createRefreshChatPane();
-    state.sessionKey = "agent:main:subagent:unresolved";
-    state.sessionsResult = {
-      ts: 0,
-      path: "",
-      count: 0,
-      defaults,
-      sessions: hasRow
-        ? [{ key: state.sessionKey, kind: "direct", updatedAt: 0, spawnedBy: "agent:main:missing" }]
-        : [],
-    };
-    pane.render();
-    const container = document.createElement("div");
-    render(renderChatComposer(pane.chatProps!), container);
-    expect(pane.chatProps?.canSend).toBe(false);
-    expect(container.querySelector("textarea")).toBeNull();
-    expect(
-      container.querySelector<HTMLButtonElement>(".agent-chat__disabled-banner button")?.disabled,
-    ).toBe(!hasRow);
-    expect(container.querySelector('[aria-label="Stop generating"]')).toBeNull();
-  });
+    {
+      lineage: {
+        key: "agent:main:worker",
+        classification: "subagent",
+        spawnedBy: "agent:main:parent",
+      },
+      parentLoaded: true,
+    },
+    { lineage: { spawnedBy: "agent:main:missing" }, parentLoaded: false },
+    { lineage: null, parentLoaded: false },
+  ] satisfies { lineage: Partial<GatewaySessionRow> | null; parentLoaded: boolean }[])(
+    "replaces subagent input with parent navigation for %j",
+    ({ lineage, parentLoaded }) => {
+      const { pane, state } = createRefreshChatPane();
+      const parent: GatewaySessionRow = {
+        key: "agent:main:parent",
+        kind: "direct",
+        label: "Investigation request",
+        updatedAt: 1,
+      };
+      const child: GatewaySessionRow = {
+        key: "agent:main:subagent:worker",
+        kind: "direct",
+        label: "Check onboarding",
+        updatedAt: 2,
+        ...lineage,
+      };
+      state.sessionKey = child.key;
+      const sessions = lineage ? (parentLoaded ? [parent, child] : [child]) : [];
+      state.sessionsResult = { ts: 2, path: "", count: sessions.length, defaults, sessions };
+      state.chatMessage = "Retained draft";
+      pane.onPaneSessionChange = vi.fn();
+      state.handleSendChat = vi.fn();
+      pane.render();
+      const props = pane.chatProps!;
+      const container = document.createElement("div");
+      render(renderChatComposer({ ...props, canAbort: true, onAbort: vi.fn() }), container);
+      expect(props.canSend).toBe(false);
+      void props.onSend();
+      expect(state.handleSendChat).not.toHaveBeenCalled();
+      expect(container.querySelector("textarea, input[type=file]")).toBeNull();
+      expect(container.querySelector(".agent-chat__composer-footer")).toBeNull();
+      expect(container.querySelector('[aria-label="Stop generating"]')).toBeNull();
+      const banner = container.querySelector(".agent-chat__disabled-banner");
+      expect(banner?.textContent).toContain("View-only subagent");
+      const navigate = banner?.querySelector<HTMLButtonElement>("button");
+      expect(navigate?.disabled).toBe(lineage === null);
+      if (parentLoaded) {
+        expect(banner?.textContent).toContain("Investigation request");
+        navigate?.click();
+        expect(pane.onPaneSessionChange).toHaveBeenCalledWith(pane.paneId, parent.key);
+      }
+    },
+  );
 
   it.each([true, false])(
     "keeps an ordinary nested session reply editable while connected=%s",

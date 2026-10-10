@@ -5,6 +5,7 @@ import { readConversationBindingRouteFacts } from "../../channels/conversation-b
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
+import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
@@ -40,16 +41,18 @@ export function shouldLetSlackRoutedThreadBypassBusyReplyOperation(params: {
   );
 }
 
-export function resolveSessionStoreLookup(
+export async function resolveSessionStoreLookup(
   ctx: FinalizedMsgContext,
   cfg: OpenClawConfig,
-): {
+  assertCurrent?: () => void,
+): Promise<{
   agentId?: string;
   sessionKey?: string;
   storePath?: string;
   entry?: SessionEntry;
   store?: Record<string, SessionEntry>;
-} {
+}> {
+  assertCurrent?.();
   const targetSessionKey = resolveCommandTurnTargetSessionKey(ctx);
   const sessionKey = normalizeOptionalString(targetSessionKey ?? ctx.SessionKey);
   if (!sessionKey) {
@@ -59,17 +62,18 @@ export function resolveSessionStoreLookup(
   const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
   const target = { agentId, sessionKey, storePath };
   try {
-    const entry = loadSessionEntryReadOnly({
-      ...target,
-      readConsistency: "latest",
-      clone: false,
-    });
+    const entry = await readSessionEntryReadOnlyInWorker(
+      { ...target, readConsistency: "latest", clone: false },
+      assertCurrent,
+    );
+    assertCurrent?.();
     return {
       ...target,
       entry,
       store: entry ? { [sessionKey]: entry } : undefined,
     };
   } catch {
+    assertCurrent?.();
     return target;
   }
 }
@@ -92,16 +96,11 @@ export async function resolveBoundAcpDispatchSessionKey(params: {
     return undefined;
   }
 
-  const binding = preparedRoute
-    ? await readPreparedConversationBindingRouteCurrent(params.ctx)
-    : await getSessionBindingService().resolveByConversationAsync({
-        channel: bindingContext.channel,
-        accountId: bindingContext.accountId,
-        conversationId: bindingContext.conversationId,
-        ...(bindingContext.parentConversationId
-          ? { parentConversationId: bindingContext.parentConversationId }
-          : {}),
-      });
+  const readCurrentBinding = () =>
+    preparedRoute
+      ? readPreparedConversationBindingRouteCurrent(params.ctx)
+      : getSessionBindingService().resolveByConversationAsync(bindingContext);
+  const binding = await readCurrentBinding();
   assertPreparedConversationBindingRoute(params.ctx, binding);
   const targetSessionKey = normalizeOptionalString(binding?.targetSessionKey);
   if (!binding || !targetSessionKey || !isAcpSessionKey(targetSessionKey)) {
@@ -113,9 +112,7 @@ export async function resolveBoundAcpDispatchSessionKey(params: {
   const { bindingId, boundAt, targetSessionKey: boundTargetSessionKey, targetKind } = binding;
   const scope = { ...binding.conversation };
   await getSessionBindingService().touchAsync(bindingId, undefined, scope);
-  const currentBinding = preparedRoute
-    ? await readPreparedConversationBindingRouteCurrent(params.ctx)
-    : await getSessionBindingService().resolveByConversationAsync(bindingContext);
+  const currentBinding = await readCurrentBinding();
   assertPreparedConversationBindingRoute(params.ctx, currentBinding);
   if (
     currentBinding &&
@@ -196,33 +193,28 @@ export function resolveDispatchResetAdmission(params: {
   }
   const allowRestartTombstoneParentFork =
     mayReplaceRestartTombstoneFromParent && hasParentForkSource;
+  let resetTriggered = false;
   if (
-    params.hasPluginOwnedBinding ||
-    entry?.pluginOwnerId !== undefined ||
-    ctx.InboundAccessAuthorized !== true ||
-    ctx.InboundEventKind === "room_event" ||
-    (nativeCommandTarget !== undefined && nativeCommandTarget !== params.sessionKey) ||
-    actorType !== "human"
+    !params.hasPluginOwnedBinding &&
+    entry?.pluginOwnerId === undefined &&
+    ctx.InboundAccessAuthorized === true &&
+    ctx.InboundEventKind !== "room_event" &&
+    (nativeCommandTarget === undefined || nativeCommandTarget === params.sessionKey) &&
+    actorType === "human"
   ) {
-    return {
-      allowRestartTombstoneParentFork,
-      allowRestartTombstoneReset: false,
-      resetTriggered: false,
-    };
+    const normalizedChatType = normalizeChatType(ctx.ChatType);
+    const isGroup =
+      (normalizedChatType != null && normalizedChatType !== "direct") ||
+      Boolean(resolveGroupSessionKey(ctx));
+    const { resetCommand } = resolveAuthorizedSessionResetCommand({
+      agentId: params.agentId,
+      cfg: params.cfg,
+      commandAuthorized: ctx.CommandAuthorized,
+      ctx,
+      isGroup,
+    });
+    resetTriggered = resetCommand.matchedResetTriggerLower !== undefined;
   }
-  const normalizedChatType = normalizeChatType(ctx.ChatType);
-  const isGroup =
-    normalizedChatType != null && normalizedChatType !== "direct"
-      ? true
-      : Boolean(resolveGroupSessionKey(ctx));
-  const { resetCommand } = resolveAuthorizedSessionResetCommand({
-    agentId: params.agentId,
-    cfg: params.cfg,
-    commandAuthorized: ctx.CommandAuthorized,
-    ctx,
-    isGroup,
-  });
-  const resetTriggered = resetCommand.matchedResetTriggerLower !== undefined;
   return {
     resetTriggered,
     allowRestartTombstoneParentFork,

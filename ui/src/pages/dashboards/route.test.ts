@@ -67,13 +67,16 @@ describe("dashboards route", () => {
       expect(refreshList).toHaveBeenCalledWith({
         limit: SIDEBAR_SESSION_ROSTER_LIMIT,
         rowMode: "compact",
+        source: "dashboard",
+        excludeDock: true,
         hasBoard: true,
         archivedFilter: "all",
-        force: true,
       });
       expect(listSnapshot).toHaveBeenLastCalledWith({
         limit: SIDEBAR_SESSION_ROSTER_LIMIT,
         rowMode: "compact",
+        source: "dashboard",
+        excludeDock: true,
         hasBoard: true,
         archivedFilter: "all",
       });

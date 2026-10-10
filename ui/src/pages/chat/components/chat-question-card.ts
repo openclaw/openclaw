@@ -56,6 +56,17 @@ export function createGatewayQuestionPanelProps(
   options: QuestionPanelOptions,
 ): QuestionPanelProps {
   const { onChange, onSubmit, onSkip } = options;
+  const checkedAction = <Args extends unknown[]>(
+    action: ((...args: Args) => void | Promise<void>) | undefined,
+  ) =>
+    action
+      ? async (...args: Args) => {
+          await action(...args);
+          if (prompt.status === "pending" && prompt.error) {
+            throw new Error(prompt.error);
+          }
+        }
+      : undefined;
   return {
     model: {
       requestKey: prompt.id,
@@ -76,22 +87,8 @@ export function createGatewayQuestionPanelProps(
       prompt.secretStoreAllowedHostsDraft = allowedHosts;
       onChange?.();
     },
-    onSubmit: onSubmit
-      ? async (answersById) => {
-          await onSubmit(answersById);
-          if (prompt.status === "pending" && prompt.error) {
-            throw new Error(prompt.error);
-          }
-        }
-      : undefined,
-    onSkip: onSkip
-      ? async () => {
-          await onSkip();
-          if (prompt.status === "pending" && prompt.error) {
-            throw new Error(prompt.error);
-          }
-        }
-      : undefined,
+    onSubmit: checkedAction(onSubmit),
+    onSkip: checkedAction(onSkip),
     onDismissError:
       prompt.error && onChange
         ? () => {
@@ -119,13 +116,10 @@ function terminalAnswer(prompt: QuestionPrompt, question: QuestionPanelQuestion)
     return t("chat.questions.answered");
   }
   const answer = prompt.answers?.answers[question.questionId]?.join(", ");
-  if (answer) {
-    return answer;
-  }
-  if (prompt.answeredElsewhere) {
-    return t("chat.questions.answeredElsewhere");
-  }
-  return t("chat.questions.answered");
+  return (
+    answer ||
+    t(prompt.answeredElsewhere ? "chat.questions.answeredElsewhere" : "chat.questions.answered")
+  );
 }
 
 export function renderChatQuestionSummary(prompt: QuestionPrompt) {

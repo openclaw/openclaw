@@ -1,3 +1,5 @@
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { isJsonObject, type JsonObject } from "./protocol.js";
 import type { CodexTrajectoryRecorder } from "./trajectory.js";
 
@@ -33,24 +35,7 @@ type CodexDynamicToolSearchLink = {
 };
 
 function readBoundedString(value: unknown, maxChars: number): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const normalized = value.trim();
-  if (!normalized) {
-    return undefined;
-  }
-  return normalized.slice(0, maxChars);
-}
-
-function trimOldest<K, V>(map: Map<K, V>, maxSize: number): void {
-  while (map.size > maxSize) {
-    const oldest = map.keys().next().value;
-    if (oldest === undefined) {
-      return;
-    }
-    map.delete(oldest);
-  }
+  return normalizeOptionalString(value)?.slice(0, maxChars);
 }
 
 function collectToolRefs(
@@ -117,7 +102,7 @@ export class CodexToolSearchEvidenceProjection {
         ...(execution ? { execution } : {}),
         ...(status ? { status } : {}),
       });
-      trimOldest(this.calls, MAX_RETAINED_SEARCHES);
+      pruneMapToMaxSize(this.calls, MAX_RETAINED_SEARCHES);
       return;
     }
     if (type !== "tool_search_output") {
@@ -138,7 +123,7 @@ export class CodexToolSearchEvidenceProjection {
       tools,
       truncated,
     });
-    trimOldest(this.outputs, MAX_RETAINED_SEARCHES);
+    pruneMapToMaxSize(this.outputs, MAX_RETAINED_SEARCHES);
   }
 
   recordDynamicToolCall(params: { callId: string; namespace?: string | null; tool: string }): void {
@@ -161,7 +146,7 @@ export class CodexToolSearchEvidenceProjection {
       namespace: requestedNamespace,
       tool,
     });
-    trimOldest(this.dynamicCalls, MAX_RETAINED_DYNAMIC_CALLS);
+    pruneMapToMaxSize(this.dynamicCalls, MAX_RETAINED_DYNAMIC_CALLS);
   }
 
   recordDynamicToolResult(params: { callId: string; tool: string; success: boolean }): void {

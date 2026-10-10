@@ -1,5 +1,5 @@
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
-import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
+import { sleepWithAbort } from "openclaw/plugin-sdk/retry-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/security-runtime";
 import type { SsrFPolicy } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -171,7 +171,7 @@ function takeCachedPlaywrightBrowserConnection(cdpUrl: string): ConnectedBrowser
   if (!cur) {
     return null;
   }
-  if (cur.onDisconnected && typeof cur.browser.off === "function") {
+  if (cur.onDisconnected) {
     cur.browser.off("disconnected", cur.onDisconnected);
   }
   return cur;
@@ -531,9 +531,7 @@ export async function connectBrowser(
         if (errMsg.includes("rate limit")) {
           break;
         }
-        await new Promise((r) => {
-          setTimeout(r, 250 + attempt * 250);
-        });
+        await sleepWithAbort(250 + attempt * 250);
       }
     }
     const message = lastErr ? formatErrorMessage(lastErr) : "CDP connect failed";
@@ -556,12 +554,11 @@ export async function getAllPages(browser: Browser): Promise<Page[]> {
   return browser.contexts().flatMap((context) => context.pages());
 }
 
-async function partitionAccessiblePages(opts: { cdpUrl: string; pages: Page[] }): Promise<{
-  accessible: Array<{ page: Page; targetId: string | null }>;
-  blockedCount: number;
-}> {
+async function getAccessiblePages(opts: {
+  cdpUrl: string;
+  pages: Page[];
+}): Promise<Array<{ page: Page; targetId: string | null }>> {
   const accessible: Array<{ page: Page; targetId: string | null }> = [];
-  let blockedCount = 0;
   const candidates = await Promise.all(
     opts.pages.map(async (page) => {
       if (isBlockedPageRef(opts.cdpUrl, page)) {
@@ -573,28 +570,18 @@ async function partitionAccessiblePages(opts: { cdpUrl: string; pages: Page[] })
     }),
   );
   for (const { page, targetId } of candidates) {
-    if (isBlockedPageRef(opts.cdpUrl, page)) {
-      blockedCount += 1;
-      continue;
-    }
     // Fail closed when we cannot resolve a target id while this session has
     // quarantined targets; otherwise a blocked tab can become selectable.
-    if (!targetId) {
-      if (hasBlockedTargetsForCdpUrl(opts.cdpUrl)) {
-        blockedCount += 1;
-        continue;
-      }
-      accessible.push({ page, targetId: null });
-      continue;
-    }
-    if (isBlockedTarget(opts.cdpUrl, targetId)) {
-      blockedCount += 1;
+    if (
+      isBlockedPageRef(opts.cdpUrl, page) ||
+      (targetId ? isBlockedTarget(opts.cdpUrl, targetId) : hasBlockedTargetsForCdpUrl(opts.cdpUrl))
+    ) {
       continue;
     }
     bindRoleRefsTarget(page, opts.cdpUrl, targetId);
     accessible.push({ page, targetId });
   }
-  return { accessible, blockedCount };
+  return accessible;
 }
 
 async function getPageForTargetIdOnce(opts: {
@@ -612,22 +599,16 @@ async function getPageForTargetIdOnce(opts: {
     throw new Error("No pages available in the connected browser.");
   }
 
-  const { accessible, blockedCount } = await partitionAccessiblePages({
+  const accessible = await getAccessiblePages({
     cdpUrl: opts.cdpUrl,
     pages,
   });
   if (!accessible.length) {
-    if (blockedCount > 0) {
-      throw new BlockedBrowserTargetError();
-    }
-    throw new Error("No pages available in the connected browser.");
+    throw new BlockedBrowserTargetError();
   }
-  const first = expectDefined(accessible.at(0), "non-empty accessible browser pages");
-  if (!opts.targetId) {
-    bindRoleRefsTarget(first.page, opts.cdpUrl, first.targetId);
-    return first.page;
-  }
-  const found = accessible.find((entry) => entry.targetId === opts.targetId);
+  const found = opts.targetId
+    ? accessible.find((entry) => entry.targetId === opts.targetId)
+    : accessible[0];
   if (found) {
     bindRoleRefsTarget(found.page, opts.cdpUrl, found.targetId);
     return found.page;

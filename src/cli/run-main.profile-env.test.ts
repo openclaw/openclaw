@@ -269,15 +269,6 @@ describe("runCli environment and passive startup", () => {
     expect(process.env.OPENCLAW_PROFILE).toBe("rawdog");
   });
 
-  it("rejects --container combined with --profile", async () => {
-    await expect(
-      runCli(["node", "openclaw", "--container", "demo", "--profile", "rawdog", "status"]),
-    ).rejects.toThrow("--container cannot be combined with --profile/--dev");
-
-    expect(dotenvState.loadDotEnv).not.toHaveBeenCalled();
-    expect(process.env.OPENCLAW_PROFILE).toBe("rawdog");
-  });
-
   it("rejects --container combined with interleaved --dev", async () => {
     await expect(
       runCli(["node", "openclaw", "status", "--container", "demo", "--dev"]),

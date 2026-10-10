@@ -77,6 +77,22 @@ describe("worker session tool topology", () => {
 
   afterEach(() => resetGlobalHookRunner());
 
+  it("rejects tool publication when the source run closes during preparation", async () => {
+    const started = createDeferred();
+    const prepared = createDeferred<AnyAgentTool[]>();
+    const runtime = getFixture().createToolRuntime({
+      prepareTools: () => {
+        started.resolve();
+        return prepared.promise;
+      },
+    });
+    const pending = runtime.getSurface(identity);
+    await started.promise;
+    getFixture().closeSourceRun();
+    prepared.resolve([]);
+    await expect(pending).rejects.toThrow(/source worker run ended|worker turn authority changed/);
+  });
+
   it.each(["active", "run-ended", "operator-revoked"] as const)(
     "reads presence as the original operator only while its authority is live (%s)",
     async (authorityState) => {
@@ -99,9 +115,9 @@ describe("worker session tool topology", () => {
         await release.promise;
         return snapshot;
       });
-      const tool = getFixture()
-        .createTools()
-        .find((candidate) => candidate.name === "presence")!;
+      const tool = (await getFixture().createTools()).find(
+        (candidate) => candidate.name === "presence",
+      )!;
       const pending = tool.execute("presence-read", {
         action: "person",
         person: "me",
@@ -143,9 +159,9 @@ describe("worker session tool topology", () => {
         },
       ]),
     );
-    const tool = getFixture()
-      .createTools()
-      .find((candidate) => candidate.name === "presence")!;
+    const tool = (await getFixture().createTools()).find(
+      (candidate) => candidate.name === "presence",
+    )!;
     const result = await tool.execute("blocked-presence", {});
     expect(result.details).toMatchObject({ reason: "presence is disabled here" });
     expect(gatewayRequest).not.toHaveBeenCalled();
@@ -231,7 +247,7 @@ describe("worker session tool topology", () => {
         return result;
       },
     );
-    const tools = getFixture().createTools({
+    const tools = await getFixture().createTools({
       name: "skill_workshop",
       label: "Workshop",
       description: "Library",
@@ -281,15 +297,15 @@ describe("worker session tool topology", () => {
         await placements.authorizeWorkerTurnTools(sourceClaim, []);
         return { content: [], details: {} };
       });
-      const tool = getFixture()
-        .createTools({
+      const tool = (
+        await getFixture().createTools({
           name: "skill_workshop",
           label: "Workshop",
           description: "Library",
           parameters: SkillLibraryWorkshopSchema,
           execute: executeWorkshop,
         })
-        .find((candidate) => candidate.name === "skill_workshop")!;
+      ).find((candidate) => candidate.name === "skill_workshop")!;
       await expect(tool.execute("revoked-call", { action: "list" })).rejects.toThrow(
         "tool authority changed",
       );
@@ -726,7 +742,7 @@ describe.each([
     const snapshot = { status: "ok", people: [{ name: "Ada" }] };
     gatewayRequest.mockResolvedValueOnce(snapshot);
 
-    const tool = createTools().find((candidate) => candidate.name === "presence")!;
+    const tool = (await createTools()).find((candidate) => candidate.name === "presence")!;
     const pending = tool.execute("source-presence", { include: ["network", "location"] });
 
     if (source.deniedReason) {
@@ -844,6 +860,30 @@ describe("worker spawn startup composition", () => {
       }
     },
   );
+});
+
+describe("sender-restricted worker session creation", () => {
+  const getFixture = installWorkerSessionToolTestFixture(fixtureMocks, {
+    inheritedToolPolicySource: "sender",
+  });
+
+  it("refuses forced visible creation before child effects and replays the refusal", async () => {
+    const { setEntry, spawn } = getFixture();
+    setEntry(SOURCE.sessionKey, SOURCE.sessionId);
+    const first = await spawn("restricted-worker-spawn");
+    const replay = await spawn("restricted-worker-spawn");
+
+    expect(replay.resultJson).toBe(first.resultJson);
+    expect(JSON.parse(first.resultJson)).toMatchObject({
+      details: {
+        status: "forbidden",
+        error: "This sender may only start hidden helpers of the same agent.",
+      },
+    });
+    expect(gatewayCreate).not.toHaveBeenCalled();
+    expect(dispatchChild).not.toHaveBeenCalled();
+    expect(gatewayRequest).not.toHaveBeenCalled();
+  });
 });
 
 describe.each([false, true])(

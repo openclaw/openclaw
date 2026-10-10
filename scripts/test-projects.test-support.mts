@@ -936,10 +936,6 @@ const SOURCE_TEST_TARGETS = new Map([
     "src/secrets/provider-env-vars.ts",
     ["src/secrets/provider-env-vars.dynamic.test.ts", "src/secrets/provider-env-vars.test.ts"],
   ],
-  [
-    "packages/memory-host-sdk/src/host/embedding-defaults.ts",
-    ["extensions/memory-core/src/memory/embeddings.test.ts"],
-  ],
   ["src/auto-reply/reply/dispatch-from-config.ts", GROUP_VISIBLE_REPLY_TEST_TARGETS],
   ["src/auto-reply/reply/source-reply-delivery-mode.ts", GROUP_VISIBLE_REPLY_TEST_TARGETS],
   [
@@ -3011,7 +3007,6 @@ const EXACT_TOOLING_TARGETS = new Map<string, string[]>([
   [
     "scripts/lib/release-version.mjs",
     [
-      "test/release-version.test.ts",
       "test/npm-publish-plan.test.ts",
       "test/openclaw-npm-release-check.test.ts",
       npmPostpublish,
@@ -4793,10 +4788,7 @@ function classifyTarget(arg: string, cwd: string, beforeDatabaseWorkerOwnership 
   if (relative.endsWith(".e2e.test.ts")) {
     return "e2e";
   }
-  if (
-    relative === "src/gateway/gateway.test.ts" ||
-    relative === "src/gateway/server.startup-matrix-migration.integration.test.ts"
-  ) {
+  if (relative === "src/gateway/gateway.test.ts") {
     return "e2e";
   }
   const channelContractKind = resolveChannelContractTargetKind(relative);

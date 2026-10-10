@@ -1,4 +1,3 @@
-// Prepares the trusted harness manifest for npm Telegram live E2E scenarios.
 import fs from "node:fs";
 import { isRecord as isPackageJsonRecord } from "../../../../packages/normalization-core/src/record-coerce.ts";
 import {

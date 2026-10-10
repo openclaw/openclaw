@@ -335,8 +335,8 @@ export function createHostedOutboundMediaStore(
   async function pruneForCapacity(
     incomingChunkCount: number,
     incomingByteLength: number,
-    nowMs = Date.now(),
   ): Promise<void> {
+    const nowMs = Date.now();
     if (options.maxTotalBytes !== undefined && incomingByteLength > options.maxTotalBytes) {
       throw new Error(
         `hosted outbound media payload exceeds aggregate byte capacity (${incomingByteLength}/${options.maxTotalBytes} bytes)`,

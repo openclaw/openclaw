@@ -88,19 +88,6 @@ export function flatMapRetainedOperation<T, U>(
   source: RetainedOperation<T>,
   next: (value: T) => RetainedOperation<U>,
 ): RetainedOperation<U> {
-  return flatMapRetainedOutcome(source, (outcome) => {
-    if (outcome.status === "rejected") {
-      throw outcome.error;
-    }
-    return next(outcome.value);
-  });
-}
-
-/** Final-only recovery joins the owner's successor rather than replaying the failed operation. */
-function flatMapRetainedOutcome<T, U>(
-  source: RetainedOperation<T>,
-  next: (outcome: Exclude<RetainedOutcome<T>, { status: "pending" }>) => RetainedOperation<U>,
-): RetainedOperation<U> {
   const inContext = AsyncLocalStorage.snapshot();
   let child: RetainedOperation<U> | undefined;
   let servicing = false;
@@ -113,17 +100,15 @@ function flatMapRetainedOutcome<T, U>(
     servicing = true;
     try {
       if (!child) {
-        let outcome: RetainedOutcome<T>;
-        try {
-          source.service();
-          outcome = source.read();
-        } catch (error) {
-          outcome = { status: "rejected", error };
-        }
+        source.service();
+        const outcome = source.read();
         if (outcome.status === "pending") {
           return;
         }
-        child = next(outcome);
+        if (outcome.status === "rejected") {
+          throw outcome.error;
+        }
+        child = next(outcome.value);
         void child.result.then(serviceInContext, serviceInContext);
       }
       child.service();

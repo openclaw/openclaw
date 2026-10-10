@@ -86,6 +86,13 @@ describe("approved executable runtime facts", () => {
         expect(
           await buildRuntimeFactsContext({ ...params, capabilityToolNames: new Set(["read"]) }),
         ).toEqual([]);
+        expect(
+          await buildRuntimeFactsContext({
+            ...params,
+            executionHost: false,
+            capabilityToolNames: new Set(["exec", "process"]),
+          }),
+        ).toEqual([]);
         expect(load).not.toHaveBeenCalled();
         const facts = (await buildRuntimeFactsContext(params)).at(0)?.text;
         if (platform === "win32") {
@@ -120,7 +127,14 @@ describe("media task runtime facts", () => {
     const mediaParams = {
       ...params,
       sessionKey: "agent:main:media",
-      capabilityToolNames: new Set(["video_generate", "image_generate", "music_generate"]),
+      executionHost: false,
+      capabilityToolNames: new Set([
+        "exec",
+        "process",
+        "video_generate",
+        "image_generate",
+        "music_generate",
+      ]),
     };
     read.mockReturnValue([
       createMediaTask({

@@ -812,6 +812,7 @@ jobs:
       - name: Fetch previous source performance baseline
         env:
           GH_TOKEN: ${{ github.token }}
+          QUALIFICATION_DISPATCH: ${{ startsWith(inputs.dispatch_id, 'full-release-validation-') }}
         shell: bash
         run: |
           set -euo pipefail
@@ -822,6 +823,12 @@ jobs:
           import subprocess
           from pathlib import Path
           from ci_git_owner import run_git, git_output, GitFailure, FetchTimeout, check_cancelled, checkout_environment, fetch, git_auth_environment
+
+          if os.environ.get("QUALIFICATION_DISPATCH") == "true":
+              # Historical report deltas are advisory; qualification gates use the pinned Kova fixture.
+              with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as output:
+                  output.write("Source report baseline: advisory-not-compared (frozen qualification does not read the moving reports branch).\n")
+              raise SystemExit(0)
 
           reports = ".artifacts/clawgrit-baseline"
           Path(reports).mkdir(parents=True, exist_ok=True)
@@ -1811,9 +1818,9 @@ jobs:
           set -euo pipefail
           pnpm_prefix="$RUNNER_TEMP/vitest-pair-pnpm"
           npm_config_cache="$RUNNER_TEMP/vitest-pair-npm-cache" \
-            npm install --global --prefix "$pnpm_prefix" pnpm@12.5.1
+            npm install --global --prefix "$pnpm_prefix" pnpm@12.7.0
           pnpm_bin="$pnpm_prefix/bin/pnpm"
-          [[ "$("$pnpm_bin" --version)" == "12.5.1" ]]
+          [[ "$("$pnpm_bin" --version)" == "12.7.0" ]]
           echo "VITEST_PAIR_PNPM_BIN=$pnpm_bin" >> "$GITHUB_ENV"
 
       - name: Run Vitest pair benchmark

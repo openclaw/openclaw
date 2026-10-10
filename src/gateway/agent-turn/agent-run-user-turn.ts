@@ -166,15 +166,17 @@ export async function prepareAgentRunUserTurn(params: {
   let claimedExecApprovalFollowupHandoffId: string | undefined;
   let durableMediaIds: string[] = [];
   try {
+    const claimFollowup = (sessionKey: string | undefined) =>
+      claimExecApprovalFollowupRuntimeHandoff({
+        handoffId: params.request.internalRuntimeHandoffId,
+        approvalId: params.execApprovalFollowupApprovalId,
+        idempotencyKey: params.runId,
+        sessionKey,
+        claimId: execApprovalFollowupHandoffClaimId,
+      });
     let execApprovalFollowupRuntimeHandoff =
       params.canUseInternalRuntimeHandoff && params.execApprovalFollowupApprovalId
-        ? claimExecApprovalFollowupRuntimeHandoff({
-            handoffId: params.request.internalRuntimeHandoffId,
-            approvalId: params.execApprovalFollowupApprovalId,
-            idempotencyKey: params.runId,
-            sessionKey: params.resolvedSessionKey,
-            claimId: execApprovalFollowupHandoffClaimId,
-          })
+        ? claimFollowup(params.resolvedSessionKey)
         : undefined;
     if (
       !execApprovalFollowupRuntimeHandoff &&
@@ -183,13 +185,7 @@ export async function prepareAgentRunUserTurn(params: {
       params.requestedSessionKeyRaw &&
       params.requestedSessionKeyRaw !== params.resolvedSessionKey
     ) {
-      execApprovalFollowupRuntimeHandoff = claimExecApprovalFollowupRuntimeHandoff({
-        handoffId: params.request.internalRuntimeHandoffId,
-        approvalId: params.execApprovalFollowupApprovalId,
-        idempotencyKey: params.runId,
-        sessionKey: params.requestedSessionKeyRaw,
-        claimId: execApprovalFollowupHandoffClaimId,
-      });
+      execApprovalFollowupRuntimeHandoff = claimFollowup(params.requestedSessionKeyRaw);
     }
     if (execApprovalFollowupRuntimeHandoff) {
       claimedExecApprovalFollowupHandoffId = params.request.internalRuntimeHandoffId;

@@ -18,12 +18,6 @@ function extractLastCapture(text: string, pattern: RegExp) {
   return lastMatch?.[1]?.trim() || null;
 }
 
-function extractCaptures(text: string, pattern: RegExp) {
-  const flags = pattern.flags.includes("g") ? pattern.flags : `${pattern.flags}g`;
-  const globalPattern = new RegExp(pattern.source, flags);
-  return Array.from(text.matchAll(globalPattern), (match) => match[1]?.trim()).filter(Boolean);
-}
-
 export function extractExactReplyDirective(text: string) {
   return (
     extractLastCapture(text, /reply(?: with)? exactly\s+`([^`]+)`/i) ??
@@ -177,7 +171,9 @@ export function extractBlockStreamingMarkerDirectives(text: string) {
     };
   }
 
-  const markers = extractCaptures(text, /exact marker\b[^:\n]{0,120}:\s*`([^`]+)`/i);
+  const markers = Array.from(text.matchAll(/exact marker\b[^:\n]{0,120}:\s*`([^`]+)`/gi), (match) =>
+    match[1]?.trim(),
+  ).filter(Boolean);
   if (markers.length < 2) {
     return null;
   }
@@ -310,21 +306,17 @@ export function extractSessionStatusSessionKey(
   toolOutput: string,
 ) {
   const details = toolJson?.details;
-  if (details && typeof details === "object") {
-    const sessionKey = (details as { sessionKey?: unknown }).sessionKey;
-    if (typeof sessionKey === "string" && sessionKey.trim()) {
-      return sessionKey.trim();
-    }
-  }
-  const topLevelSessionKey = toolJson?.sessionKey;
-  if (typeof topLevelSessionKey === "string" && topLevelSessionKey.trim()) {
-    return topLevelSessionKey.trim();
-  }
-  const statusLineSessionKey = /(?:^|\n)[^\n]*Session:\s*([^\s•\n]+)/u.exec(toolOutput)?.[1];
-  if (statusLineSessionKey?.trim()) {
-    return statusLineSessionKey.trim();
-  }
-  return /"sessionKey"\s*:\s*"([^"]+)"/.exec(toolOutput)?.[1]?.trim() ?? "";
+  return (
+    normalizeOptionalString(
+      details && typeof details === "object"
+        ? (details as { sessionKey?: unknown }).sessionKey
+        : undefined,
+    ) ??
+    normalizeOptionalString(toolJson?.sessionKey) ??
+    normalizeOptionalString(/(?:^|\n)[^\n]*Session:\s*([^\s•\n]+)/u.exec(toolOutput)?.[1]) ??
+    /"sessionKey"\s*:\s*"([^"]+)"/.exec(toolOutput)?.[1]?.trim() ??
+    ""
+  );
 }
 
 export function resolveHeartbeatPromptReply(text: string): "HEARTBEAT_OK" | "NO_REPLY" | undefined {

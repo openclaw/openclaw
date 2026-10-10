@@ -6,6 +6,7 @@ import { captureUpdateCommandExecutorAuthority } from "../cli/update-cli/update-
 import { withGatewayMaintenanceDrain } from "../cli/update-cli/update-command-service-drain.js";
 import { createConfigIO } from "../config/io.factory.js";
 import { withGatewayServiceOperationLock } from "../daemon/service-operation-lock.js";
+import { resolveBundledPluginsDir } from "../plugins/bundled-dir.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { parsePackageOpenClawSchemaVersions } from "../state/openclaw-schema-versions.js";
 import {
@@ -40,9 +41,8 @@ import {
 import {
   assertImmutableServiceStoppedCurrent,
   assertImmutableServiceProcessCurrent,
+  controlImmutableService,
   inspectImmutableActivationService,
-  startImmutableService,
-  stopImmutableService,
   type ImmutableServiceObservation,
 } from "./update-immutable-service.js";
 import {
@@ -119,6 +119,10 @@ async function rehearse(
   assertCurrent();
   const result = await validateUpdateCandidateCanary({
     root,
+    sourceBundledPlugins: {
+      packageRoot: record.descriptor.current.path,
+      directory: resolveBundledPluginsDir(env),
+    },
     config,
     stateDir: record.descriptor.service.stateDir,
     env,
@@ -142,7 +146,7 @@ async function rehearse(
 
 function activationOwner(
   initial: ImmutableInstallRecord,
-  assertOwner: () => void,
+  assertCurrent: () => void,
   options: Options,
 ) {
   let record = initial;
@@ -153,7 +157,6 @@ function activationOwner(
     }
     return value;
   };
-  const assertCurrent = assertOwner;
   const assertStopped = () => {
     assertCurrent();
     const stopped = operation().stoppedService;
@@ -191,18 +194,18 @@ function activationOwner(
       assertImmutableServiceProcessCurrent(service);
     }
   };
+  const protectionContext = (service: ImmutableServiceObservation) => ({
+    env: service.state.env,
+    assertCurrent,
+  });
   const verifyProtection = (service: ImmutableServiceObservation) => {
     assertService(service);
     if (service.phase !== "running" || service.pid === null) {
-      assertImmutableProtectionUnchanged(operation().protection, {
-        env: service.state.env,
-        assertCurrent,
-      });
+      assertImmutableProtectionUnchanged(operation().protection, protectionContext(service));
       return;
     }
     verifyImmutableProtection(operation().protection, {
-      env: service.state.env,
-      assertCurrent,
+      ...protectionContext(service),
       candidate: {
         pid: service.pid,
         generationPath: record.descriptor.current.path,
@@ -314,11 +317,10 @@ function activationOwner(
     verifyProtection(service);
     const protection = await captureImmutableProtection({
       ...record.descriptor.service,
-      env: service.state.env,
-      assertCurrent,
+      ...protectionContext(service),
     });
     verifyProtection(service);
-    assertImmutableProtectionUnchanged(protection, { env: service.state.env, assertCurrent });
+    assertImmutableProtectionUnchanged(protection, protectionContext(service));
     save({ protection });
     options.onReceipt?.("immutable:post-start-canary");
     try {
@@ -372,11 +374,8 @@ function activationOwner(
           },
         });
         const assertProtected = () =>
-          assertImmutableProtectionUnchanged(operation().protection, {
-            env: service.state.env,
-            assertCurrent,
-          });
-        await stopImmutableService({
+          assertImmutableProtectionUnchanged(operation().protection, protectionContext(service));
+        await controlImmutableService("stop", {
           descriptor: record.descriptor,
           expected: service,
           assertCurrent,
@@ -401,7 +400,7 @@ function activationOwner(
       servingStartedAtMs: Date.now(),
       ...(!rollback ? { candidateStartedAtMs: Date.now() } : {}),
     });
-    await startImmutableService({
+    await controlImmutableService("start", {
       descriptor: record.descriptor,
       expected: stopped,
       assertCurrent,
@@ -411,30 +410,33 @@ function activationOwner(
     });
     assertCurrent();
   };
+  const startAndVerifyPredecessor = async (
+    recovering: boolean,
+  ): Promise<ImmutableActivationResult> => {
+    await start(true);
+    const observed = await observe();
+    return observed.outcome === "verified" && observed.service
+      ? complete("rolled-back", observed, recovering)
+      : pending(`${recovering ? "recovery" : "rollback"}-verification-pending`);
+  };
   const rollback = async (): Promise<ImmutableActivationResult> => {
     const service = await inspect();
     verifyProtection(service);
     const protection = await captureImmutableProtection({
       ...record.descriptor.service,
-      env: service.state.env,
-      assertCurrent,
+      ...protectionContext(service),
     });
     verifyProtection(service);
     // The predecessor rehearses these exact accepted bytes. A write during its
     // awaited rehearsal cannot become a new trusted protection baseline.
     await rehearse(record, operation().previous.path, service, options, assertCurrent);
     verifyProtection(service);
-    assertImmutableProtectionUnchanged(protection, { env: service.state.env, assertCurrent });
+    assertImmutableProtectionUnchanged(protection, protectionContext(service));
     save({ protection, phase: "rollback-stopping" });
     await stop(service, "rollback-stopping");
     save({ phase: "rollback-publishing" });
     record = publishImmutablePointer(record, "previous", assertStopped);
-    await start(true);
-    const observed = await observe();
-    if (observed.outcome !== "verified" || !observed.service) {
-      return pending("rollback-verification-pending");
-    }
-    return complete("rolled-back", observed, false);
+    return startAndVerifyPredecessor(false);
   };
   const startAndVerifyCandidate = async (): Promise<ImmutableActivationResult> => {
     try {
@@ -476,10 +478,7 @@ function activationOwner(
         const service = await inspect();
         await stop(service, "stopping");
         save({ phase: "stopped" });
-        assertImmutableProtectionUnchanged(operation().protection, {
-          env: service.state.env,
-          assertCurrent,
-        });
+        assertImmutableProtectionUnchanged(operation().protection, protectionContext(service));
         save({ phase: "publishing" });
         record = publishImmutablePointer(record, "candidate", assertStopped);
         return startAndVerifyCandidate();
@@ -518,12 +517,7 @@ function activationOwner(
         if (record.descriptor.current.sha === op.candidate.sha) {
           return startAndVerifyCandidate();
         }
-        await start(true);
-        const after = await observe();
-        if (after.outcome === "verified" && after.service) {
-          return complete("rolled-back", after, true);
-        }
-        return pending("recovery-verification-pending");
+        return startAndVerifyPredecessor(true);
       }
       return record.descriptor.current.sha === op.candidate.sha
         ? rollback()
@@ -569,11 +563,13 @@ export async function activateImmutableUpdate(
         "Prepared immutable generation changed before activation; the serving generation was not stopped. Retry the requested update.",
       );
     }
-    const service = await inspectImmutableActivationService({
-      descriptor: record.descriptor,
-      generationPath: record.descriptor.current.path,
-      assertCurrent,
-    });
+    const inspectService = () =>
+      inspectImmutableActivationService({
+        descriptor: record.descriptor,
+        generationPath: record.descriptor.current.path,
+        assertCurrent,
+      });
+    const service = await inspectService();
     await verifyGeneration(record.descriptor.current, assertCurrent);
     await verifyGeneration(candidate, assertCurrent);
     const versions = await Promise.all(
@@ -596,11 +592,7 @@ export async function activateImmutableUpdate(
     }
     options.onReceipt?.("immutable:canary");
     await rehearse(record, candidate.path, service, options, assertCurrent);
-    const current = await inspectImmutableActivationService({
-      descriptor: record.descriptor,
-      generationPath: record.descriptor.current.path,
-      assertCurrent,
-    });
+    const current = await inspectService();
     if (
       current.pid !== service.pid ||
       current.processStartTicks !== service.processStartTicks ||

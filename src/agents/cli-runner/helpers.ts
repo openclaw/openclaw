@@ -7,10 +7,7 @@ import { fileStore } from "@openclaw/fs-safe/store";
 import { tempWorkspace } from "@openclaw/fs-safe/temp";
 import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
 import { extensionForMime } from "@openclaw/media-core/mime";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { isAcpRuntimeSpawnAvailable } from "../../acp/runtime/availability.js";
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import type { ChatType } from "../../channels/chat-type.js";
@@ -88,6 +85,7 @@ export function resolveCliRunQueueKey(params: {
 }
 
 export function buildCliAgentSystemPrompt(params: {
+  preparedTtsPreferences?: import("../../tts/tts-preferences.js").PreparedTtsPreferences;
   requesterProfileId?: string;
   workspaceDir: string;
   cwd?: string;
@@ -147,6 +145,7 @@ export function buildCliAgentSystemPrompt(params: {
   return buildConfiguredAgentSystemPrompt({
     config: params.config,
     preparedModelRuntime: params.preparedModelRuntime,
+    preparedTtsPreferences: params.preparedTtsPreferences,
     agentId: params.agentId,
     workspaceDir: params.workspaceDir,
     runtimeCwd,
@@ -181,9 +180,7 @@ export function normalizeCliModel(modelId: string, backend: CliBackendConfig): s
     return trimmed;
   }
   return (
-    backend.modelAliases?.[trimmed] ||
-    backend.modelAliases?.[normalizeLowercaseStringOrEmpty(trimmed)] ||
-    trimmed
+    backend.modelAliases?.[trimmed] || backend.modelAliases?.[trimmed.toLowerCase()] || trimmed
   );
 }
 
@@ -193,20 +190,14 @@ export function resolveSystemPromptUsage(params: {
   systemPrompt?: string;
 }): string | null {
   const systemPrompt = params.systemPrompt?.trim();
-  if (!systemPrompt) {
-    return null;
-  }
   const when = params.backend.systemPromptWhen ?? "first";
-  if (when === "never") {
-    return null;
-  }
-  if (when === "first" && !params.isNewSession) {
-    return null;
-  }
   if (
-    !params.backend.systemPromptArg?.trim() &&
-    !params.backend.systemPromptFileArg?.trim() &&
-    !params.backend.systemPromptFileConfigKey?.trim()
+    !systemPrompt ||
+    when === "never" ||
+    (when === "first" && !params.isNewSession) ||
+    (!params.backend.systemPromptArg?.trim() &&
+      !params.backend.systemPromptFileArg?.trim() &&
+      !params.backend.systemPromptFileConfigKey?.trim())
   ) {
     return null;
   }

@@ -56,29 +56,19 @@ async function waitForPreviousFence(
   }
   await new Promise<void>((resolve, reject) => {
     let timeout: ReturnType<typeof setTimeout> | undefined;
-    const cleanup = () => {
-      if (timeout) {
-        clearTimeout(timeout);
-        timeout = undefined;
-      }
+    const settle = (error?: Error) => {
+      clearTimeout(timeout);
+      timeout = undefined;
       options.signal?.removeEventListener("abort", onAbort);
-    };
-    const settle = (run: () => void) => {
-      cleanup();
-      run();
+      return error ? reject(error) : resolve();
     };
     const onAbort = () =>
-      settle(() => reject(new Error(options.abortMessage ?? "Codex native config fence aborted")));
-    void previous.then(() => settle(resolve));
-    if (options.signal) {
-      options.signal.addEventListener("abort", onAbort, { once: true });
-    }
+      settle(new Error(options.abortMessage ?? "Codex native config fence aborted"));
+    void previous.then(() => settle());
+    options.signal?.addEventListener("abort", onAbort, { once: true });
     if (options.timeoutMs !== undefined) {
       timeout = setTimeout(
-        () =>
-          settle(() =>
-            reject(new Error(options.timeoutMessage ?? "Codex native config fence timed out")),
-          ),
+        () => settle(new Error(options.timeoutMessage ?? "Codex native config fence timed out")),
         Math.max(1, options.timeoutMs),
       );
       timeout.unref?.();

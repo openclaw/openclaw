@@ -70,7 +70,7 @@ See [Configuration - agents](/gateway/config-agents) for:
 
 ## `worktreeRoot`
 
-Moved to [Configuration — runtime basics](/gateway/config-runtime).
+Worktree storage (`worktreeRoot`), filesystem acceleration (`worktreeAcceleration`), and the live-checkout cap (`worktreeMaxCount`) are documented in [Configuration — runtime basics](/gateway/config-runtime).
 
 ## Tools and custom providers
 

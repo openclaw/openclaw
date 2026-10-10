@@ -124,53 +124,6 @@ describe("DraftSubmissionFlow background completion", () => {
     });
   });
 
-  it("resumes a background create with its exact request and no navigation", async () => {
-    const { context, flow } = createDraftFixture();
-    let finishOriginal!: (value: { key: string; initialRun: { status: "idle" } }) => void;
-    const result = {
-      key: "agent:main:dashboard:resumed-background",
-      initialRun: { status: "idle" as const },
-    };
-    vi.mocked(context.sessions.createResult)
-      .mockImplementationOnce(
-        () =>
-          new Promise((resolve) => {
-            finishOriginal = resolve;
-          }),
-      )
-      .mockResolvedValueOnce(result);
-    flow.setMessage("Keep this task in the background through reconnect");
-    const first = flow.submit(undefined, true);
-    const original = vi.mocked(context.sessions.createResult).mock.calls[0]?.[0];
-    flow.invalidate("gateway-changed");
-    flow.resumeInterruptedSubmission();
-    await vi.waitFor(() => expect(context.sessions.createResult).toHaveBeenCalledTimes(2));
-    expect(vi.mocked(context.sessions.createResult).mock.calls[1]?.[0]).toEqual(original);
-    finishOriginal(result);
-    await first;
-    await vi.waitFor(() => expect(flow.submitting).toBe(false));
-    expect(context.navigateAndWait).not.toHaveBeenCalled();
-    expect(context.gateway.setSessionKey).not.toHaveBeenCalled();
-  });
-
-  it("delivers an accepted background completion before the first native status reply", async () => {
-    const { context, flow, postMessage, dispose } = nativeBackgroundFixture({
-      request: async (method) => (method === "agent.wait" ? { status: "ok", endedAt: 1 } : {}),
-    });
-    try {
-      await flow.submit(undefined, true);
-      await vi.waitFor(() => expect(postMessage).toHaveBeenCalledTimes(2));
-      expect(postMessage).toHaveBeenLastCalledWith({
-        type: "background-session-completed",
-        runId: "run-background",
-        path: "/chat/main/dashboard/background",
-      });
-      expect(context.navigateAndWait).not.toHaveBeenCalled();
-    } finally {
-      dispose();
-    }
-  });
-
   it.each(["selected session", "replaced Gateway", "changed credentials", "changed account"])(
     "suppresses a background completion for the %s",
     async (scenario) => {
@@ -216,11 +169,6 @@ describe("DraftSubmissionFlow background completion", () => {
       placement: failedPlacement("unconfirmed"),
     },
     {
-      scenario: "paused unconfirmed placement delivery",
-      observed: { status: "timeout" },
-      placement: failedPlacement("unconfirmed", "run-background", "Delivery remains unconfirmed"),
-    },
-    {
       scenario: "a newer placement retry failure",
       observed: { status: "timeout" },
       placement: failedPlacement("failed", "newer-run", "Newer retry rejected"),
@@ -230,16 +178,19 @@ describe("DraftSubmissionFlow background completion", () => {
       observed: { status: "timeout" },
       placement: { ...failedPlacement("failed"), initialTurn: undefined },
     },
+    {
+      scenario: "a confirmed placement failure for this run",
+      observed: { status: "timeout" },
+      placement: failedPlacement("failed", "run-background", "Placement rejected"),
+      terminal: true,
+    },
   ])(
     "waits for terminal background completion after $scenario",
-    async ({ observed, placement }) => {
+    async ({ observed, placement, terminal: alreadyTerminal = false }) => {
       vi.useFakeTimers();
       const showToast = vi.spyOn(toast, "showToast").mockReturnValue(true);
-      let finishRun!: (result: { status: "ok"; endedAt: number }) => void;
-      const terminal = new Promise<{ status: "ok"; endedAt: number }>((resolve) => {
-        finishRun = resolve;
-      });
-      const observations = [Promise.resolve(observed), terminal];
+      const terminal = createDeferred<{ status: "ok"; endedAt: number }>();
+      const observations = [Promise.resolve(observed), terminal.promise];
       const { context, flow, request, postMessage, dispose } = nativeBackgroundFixture({
         request: async (method) => (method === "agent.wait" ? observations.shift() : {}),
       });
@@ -248,13 +199,17 @@ describe("DraftSubmissionFlow background completion", () => {
 
       try {
         await flow.submit(undefined, true);
-        await vi.advanceTimersByTimeAsync(1_000);
-        expect(postMessage.mock.calls).toEqual([[{ type: "status" }]]);
-        expect(showToast).not.toHaveBeenCalled();
-        expect(request.mock.calls.filter(([method]) => method === "agent.wait")).toHaveLength(2);
-
-        finishRun({ status: "ok", endedAt: 1 });
+        if (!alreadyTerminal) {
+          await vi.advanceTimersByTimeAsync(1_000);
+          expect(postMessage.mock.calls).toEqual([[{ type: "status" }]]);
+          expect(showToast).not.toHaveBeenCalled();
+          expect(request.mock.calls.filter(([method]) => method === "agent.wait")).toHaveLength(2);
+          terminal.resolve({ status: "ok", endedAt: 1 });
+        }
         await vi.advanceTimersByTimeAsync(0);
+        expect(request.mock.calls.filter(([method]) => method === "agent.wait")).toHaveLength(
+          alreadyTerminal ? 1 : 2,
+        );
         expect(postMessage.mock.calls).toEqual([
           [{ type: "status" }],
           [
@@ -266,35 +221,13 @@ describe("DraftSubmissionFlow background completion", () => {
           ],
         ]);
         expect(showToast).toHaveBeenCalledOnce();
+        expect(context.navigateAndWait).not.toHaveBeenCalled();
       } finally {
         context.gateway.snapshot.client = null;
-        finishRun({ status: "ok", endedAt: 1 });
+        terminal.resolve({ status: "ok", endedAt: 1 });
         await vi.advanceTimersByTimeAsync(0);
         dispose();
       }
     },
   );
-
-  it("notifies a confirmed placement failure for the exact background run", async () => {
-    const showToast = vi.spyOn(toast, "showToast").mockReturnValue(true);
-    const { context, flow, request, postMessage, dispose } = nativeBackgroundFixture({
-      request: async (method) => (method === "agent.wait" ? { status: "timeout" } : {}),
-    });
-    Object.assign(context.placementStartup, {
-      get: () => failedPlacement("failed", "run-background", "Placement rejected"),
-    });
-    try {
-      await flow.submit(undefined, true);
-      await vi.waitFor(() => expect(postMessage).toHaveBeenCalledTimes(2));
-      expect(postMessage).toHaveBeenLastCalledWith({
-        type: "background-session-completed",
-        runId: "run-background",
-        path: "/chat/main/dashboard/background",
-      });
-      expect(showToast).toHaveBeenCalledOnce();
-      expect(request.mock.calls.filter(([method]) => method === "agent.wait")).toHaveLength(1);
-    } finally {
-      dispose();
-    }
-  });
 });

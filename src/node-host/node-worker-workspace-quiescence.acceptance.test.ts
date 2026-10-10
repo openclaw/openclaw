@@ -159,6 +159,7 @@ describe.runIf(process.platform === "linux")("native watchdog lifecycle", () => 
     await f.runtime.processes.stopEnvironment({
       gatewayNamespace: identity.gatewayNamespace,
       environmentId: identity.environmentId,
+      sessionId: identity.sessionId,
       ownerEpoch: 1,
     });
     expect(f.runtime.processes.hasActiveWork()).toBe(false);

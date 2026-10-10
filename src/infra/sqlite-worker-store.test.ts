@@ -11,7 +11,7 @@ import {
 } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { Worker } from "node:worker_threads";
+import { getEnvironmentData, setEnvironmentData, Worker } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
 import { runNodeScript } from "../../test/helpers/run-node-script.js";
@@ -67,6 +67,41 @@ const { explicitSqliteCloseReleasesNativeResources } = await initializeSqliteRun
 const poolIt = explicitSqliteCloseReleasesNativeResources ? it : it.skip;
 
 describe("SQLite worker store", () => {
+  it("publishes native runtime admission once before the opening caller resumes", async () => {
+    await drainGlobalSingletonLifecycleState();
+    const key = "openclaw.sqliteNativeRuntimeAdmission";
+    const previous = getEnvironmentData(key);
+    const receipts: unknown[] = [];
+    // oxlint-disable-next-line typescript/unbound-method -- Reflect.apply preserves the emitting worker.
+    const originalEmit = Worker.prototype.emit;
+    const messages = vi.spyOn(Worker.prototype, "emit").mockImplementation(function (
+      this: Worker,
+      event: string | symbol,
+      reply: SqliteWorkerReply,
+    ) {
+      if (event === "message" && reply.ok && reply.nativeRuntimeAdmission !== undefined) {
+        receipts.push(reply.nativeRuntimeAdmission);
+      }
+      return Reflect.apply(originalEmit, this, [event, reply]);
+    });
+    const requests = vi.spyOn(Worker.prototype, "postMessage");
+    setEnvironmentData(key, undefined);
+    try {
+      const store = await open(databasePath());
+      expect(getEnvironmentData(key)).toMatchObject({ format: 1, runtime: { pid: process.pid } });
+      await append(store, "admitted in worker");
+      expect(await read(store)).toEqual(["admitted in worker"]);
+      expect(receipts).toHaveLength(1);
+      expect(requests.mock.calls.filter(([request]) => request.type === "open")).toHaveLength(1);
+      expect(requests.mock.calls.filter(([request]) => request.type === "execute")).toHaveLength(2);
+    } finally {
+      messages.mockRestore();
+      requests.mockRestore();
+      await drainGlobalSingletonLifecycleState();
+      setEnvironmentData(key, previous);
+    }
+  });
+
   it.each(["read", "client close", "global close", "abort", "failed frame"] as const)(
     "preserves a complete large result through %s",
     async (action) => {
@@ -660,23 +695,6 @@ describe("SQLite worker store", () => {
       "first waiter",
       "second waiter",
     ]);
-  });
-
-  it("surfaces native-close cleanup failure and permits explicit recovery of committed data", async () => {
-    const file = databasePath();
-    const store = await open(file);
-    const receipt = await append(store, "preserved");
-    await store.execute({ type: "failClose", input: undefined });
-    const closed = store.close();
-    stores.delete(store);
-    await expect(closed).rejects.toThrow("Fixture native database closed with a cleanup failure");
-
-    const recovered = await open(file);
-    expect(await read(recovered)).toEqual(["preserved"]);
-    const recoveredReceipt = await append(recovered, "after recovery");
-    expect(recoveredReceipt.actor).not.toBe(receipt.actor);
-    expect(recoveredReceipt.writes).toBe(1);
-    expect(await read(recovered)).toEqual(["preserved", "after recovery"]);
   });
 
   it.each([

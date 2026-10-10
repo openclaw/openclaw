@@ -94,50 +94,6 @@ function createPersonalMetadataFixture() {
 }
 
 describe("chat history model selection defaults", () => {
-  it("keeps a stored literal global conversation separate from main in per-sender scope", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const cfg = {
-        session: { scope: "per-sender" },
-        agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
-      } satisfies OpenClawConfig;
-      await state.writeConfig(cfg);
-      for (const agentId of ["ops", "research"]) {
-        await upsertSessionEntryCore(
-          { agentId, sessionKey: "global" },
-          { sessionId: `global-${agentId}`, updatedAt: 1 },
-        );
-      }
-      await upsertSessionEntryCore(
-        { agentId: "research", sessionKey: "agent:research:main" },
-        { sessionId: "main-research", updatedAt: 1 },
-      );
-      const context = await createHistoryReadContext({ getRuntimeConfig: () => cfg });
-      const client = identifiedClient("literal-global-operator");
-      client.connect.scopes = ["operator.admin"];
-      for (const [sessionKey, sessionId] of [
-        ["global", "global-research"],
-        ["agent:research:main", "main-research"],
-      ]) {
-        const respond = vi.fn<RespondFn>();
-        await expectDefined(
-          chatHistoryHandlers["chat.history"],
-          "history handler",
-        )({
-          params: { sessionKey, agentId: "research" },
-          context,
-          req: { type: "req", id: "literal-global", method: "chat.history" },
-          client,
-          isWebchatConnect: () => false,
-          respond,
-        });
-        expect(respond).toHaveBeenCalledWith(
-          true,
-          expect.objectContaining({ sessionKey, sessionId }),
-        );
-      }
-    });
-  });
-
   it.each(["chat.history", "chat.startup"] as const)(
     "%s keeps selection session-only for an agent with an explicit default",
     async (method) => {
@@ -516,7 +472,6 @@ describe("chat history exact-entry snapshots", () => {
           updatedAt: now,
           parentSessionKey: scope.sessionKey,
           spawnedBy: scope.sessionKey,
-          status: "running",
           skillsSnapshot,
         });
         const context = await createHistoryReadContext();

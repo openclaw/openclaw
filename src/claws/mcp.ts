@@ -250,9 +250,10 @@ export async function installClawMcpServers(
   return refs;
 }
 
-export function readClawMcpServerRefs(
-  agentId: string,
-  options: OpenClawStateDatabaseOptions = {},
+function readMcpRefsByIdentity(
+  column: "agent_id" | "name",
+  value: string,
+  options: OpenClawStateDatabaseOptions,
 ): PersistedClawMcpServerRef[] {
   const { db } = openOpenClawStateDatabase(options);
   if (options.readOnly && !tableExists(db, "claw_mcp_server_refs")) {
@@ -261,43 +262,32 @@ export function readClawMcpServerRefs(
   const { compiled, bind } = compileSqliteQueryBindings<string>((parameter) =>
     selectMcpRefs(db)
       .where(
-        "agent_id",
+        column,
         "=",
-        parameter((value) => value),
+        parameter((identity) => identity),
       )
-      .orderBy("name"),
+      .orderBy(column === "agent_id" ? "name" : "agent_id"),
   );
   const rows =
     db /* sqlite-allow-raw: preserve native full-agent inventory errors without a write transaction. */
       .prepare(compiled.sql)
       // SAFETY: The canonical table and explicit projection provide this generated row shape.
-      .all(...bind(agentId)) as McpRefRow[];
+      .all(...bind(value)) as McpRefRow[];
   return rows.map(rowToRef);
+}
+
+export function readClawMcpServerRefs(
+  agentId: string,
+  options: OpenClawStateDatabaseOptions = {},
+): PersistedClawMcpServerRef[] {
+  return readMcpRefsByIdentity("agent_id", agentId, options);
 }
 
 export function readClawMcpServerRefsByName(
   name: string,
   options: OpenClawStateDatabaseOptions = {},
 ): PersistedClawMcpServerRef[] {
-  const { db } = openOpenClawStateDatabase(options);
-  if (options.readOnly && !tableExists(db, "claw_mcp_server_refs")) {
-    return [];
-  }
-  const { compiled, bind } = compileSqliteQueryBindings<string>((parameter) =>
-    selectMcpRefs(db)
-      .where(
-        "name",
-        "=",
-        parameter((value) => value),
-      )
-      .orderBy("agent_id"),
-  );
-  const rows =
-    db /* sqlite-allow-raw: preserve native sibling-inventory errors without a write transaction. */
-      .prepare(compiled.sql)
-      // SAFETY: The canonical table and explicit projection provide this generated row shape.
-      .all(...bind(name)) as McpRefRow[];
-  return rows.map(rowToRef);
+  return readMcpRefsByIdentity("name", name, options);
 }
 
 export function clawMcpRemovalSelector(ref: PersistedClawMcpServerRef): string {

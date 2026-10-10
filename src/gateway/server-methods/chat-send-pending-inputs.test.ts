@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto";
-import { StatementSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import { describe, expect, it, vi } from "vitest";
@@ -145,25 +144,34 @@ describe("ordinary chat input admission", () => {
       );
       expect(await fixture.read()).toEqual([]);
       const recorder = await fixture.dispatchedRecorder;
-      const reads = vi.spyOn(StatementSync.prototype, "all");
-      const gets = vi.spyOn(StatementSync.prototype, "get");
-      const writes = vi.spyOn(StatementSync.prototype, "run");
-      const committed = await recorder.persistApproved();
-      await fixture.read();
-      const mentionStatements = [
-        ...reads.mock.calls,
-        ...gets.mock.calls,
-        ...writes.mock.calls,
-      ].filter((args) =>
-        args.some(
-          (value) => typeof value === "string" && value.startsWith("notifications.mentions."),
-        ),
-      );
-      reads.mockRestore();
-      gets.mockRestore();
-      writes.mockRestore();
-      expect(mentionStatements).toEqual([]);
+      const sql = observeHostDataSql();
+      let committed: Awaited<ReturnType<typeof recorder.persistApproved>>;
+      try {
+        committed = await recorder.persistApproved();
+        await fixture.read();
+        expect(
+          sql.calls
+            .flatMap((call) => call.mock.calls)
+            .filter((args) =>
+              args.some(
+                (value) => typeof value === "string" && value.startsWith("notifications.mentions."),
+              ),
+            ),
+        ).toEqual([]);
+        expect(
+          sql.queries.filter((query) =>
+            /\b(?:insert\s+into|update|delete\s+from)\s+["`]?session_nodes\b/i.test(query),
+          ),
+        ).toEqual([]);
+      } finally {
+        sql.restore();
+      }
       expect(committed?.appended).toBe(true);
+      expect(
+        loadSessionEntry(fixture.scope)?.profileInvolvement?.profiles[
+          fixture.bobClient.authenticatedUserProfile.profileId
+        ],
+      ).toMatchObject({ hidden: false, lastMention: { sequence: expect.any(Number) } });
       expect(await fixture.read()).toMatchObject([
         {
           messageId: committed?.messageId,
@@ -441,6 +449,7 @@ describe("ordinary chat input admission", () => {
         });
       }
       const clone = vi.spyOn(globalThis, "structuredClone");
+      const sql = observeHostDataSql();
       const read = acpReads.readAcpSessionMetaForEntries;
       const restarting = restart
         ? vi
@@ -459,6 +468,9 @@ describe("ordinary chat input admission", () => {
       });
       try {
         await fixture.send(respond);
+        expect(sql.queries.filter((query) => /\bworker_session_placements\b/u.test(query))).toEqual(
+          [],
+        );
         if (restart) {
           expect(respond).toHaveBeenCalledOnce();
           expect(respond).not.toHaveBeenCalledWith(
@@ -499,6 +511,7 @@ describe("ordinary chat input admission", () => {
           ).length,
         ).toBeLessThanOrEqual(1);
       } finally {
+        sql.restore();
         restarting?.mockRestore();
         clone.mockRestore();
         await fixture.cleanup();
@@ -527,8 +540,12 @@ describe("ordinary chat input admission", () => {
         patch: { workerBundleHash: "a".repeat(64) },
       });
       fixture.context.workerSessionPlacementService = placements;
+      const sql = observeHostDataSql();
       try {
         const respond = await fixture.send();
+        expect(sql.queries.filter((query) => /\bworker_session_placements\b/u.test(query))).toEqual(
+          [],
+        );
         expect(respond).toHaveBeenCalledWith(
           true,
           expect.objectContaining({ status: "started" }),
@@ -542,6 +559,7 @@ describe("ordinary chat input admission", () => {
           items: [{ state: "queued", runId: fixture.params.idempotencyKey }],
         });
       } finally {
+        sql.restore();
         await fixture.cleanup();
       }
     },

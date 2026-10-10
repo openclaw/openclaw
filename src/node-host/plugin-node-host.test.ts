@@ -36,11 +36,9 @@ describe("plugin node-host registry", () => {
         return paramsJSON ?? "";
       });
       const registry = registerCommands({ command: "file.fetch", cap: "file", duplex, handle });
-      expect(
-        listRegisteredNodeHostCapsAndCommands(availabilityContext, { includeDuplex: false }),
-      ).toEqual({
-        caps: duplex === true ? [] : ["file"],
-        commands: duplex === true ? [] : ["file.fetch"],
+      expect(listRegisteredNodeHostCapsAndCommands(availabilityContext)).toEqual({
+        caps: ["file"],
+        commands: ["file.fetch"],
         nodePluginTools: [],
       });
       expect(isRegisteredNodeHostCommandDuplex("file.fetch")).toBe(duplex !== undefined);

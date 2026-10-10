@@ -207,6 +207,9 @@ describe("worktrees cli", () => {
           ]
         : [],
       issueCount: partial ? 1 : 0,
+      eligibleCount: partial ? 2 : 0,
+      deferredCount: 0,
+      failedCount: partial ? 1 : 0,
       protectedCount: 0,
       protectionReasons: {},
       orphansRetired: 0,
@@ -219,22 +222,24 @@ describe("worktrees cli", () => {
       .mockImplementation(() => undefined);
     const program = new Command().name("openclaw");
     registerWorktreesCli(program);
-    const pending = program.parseAsync(["worktrees", "gc", ...(partial ? ["--json"] : [])], {
-      from: "user",
-    });
+    const pending = program.parseAsync(
+      ["worktrees", "gc", ...(partial ? ["--json", "--retry-deferred"] : [])],
+      { from: "user" },
+    );
     if (partial) {
       await expect(pending).rejects.toThrow();
       expect(output).toHaveBeenCalledWith(result);
     } else {
       await pending;
+      expect(output).toHaveBeenCalledWith(expect.stringContaining("cleanup completed: removed 0"));
     }
-    expect(gc).toHaveBeenCalledWith({
-      limits: { maxCount: 100 },
-      signal: expect.any(AbortSignal),
-      commitGuard: expect.any(Function),
-      retryDeferred: true,
-      shouldProtectOwner: expect.any(Function),
-      shouldRemoveOwner: expect.any(Function),
-    });
+    expect(gc).toHaveBeenCalledWith(
+      expect.objectContaining({
+        signal: expect.any(AbortSignal),
+        commitGuard: expect.any(Function),
+        retryDeferred: partial,
+        readOwnerState: expect.any(Function),
+      }),
+    );
   });
 });

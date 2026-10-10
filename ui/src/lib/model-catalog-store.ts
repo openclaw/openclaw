@@ -57,18 +57,25 @@ export type ModelCatalogPresentation = ModelCatalogResult & {
 };
 
 /** Settings readers share the catalog's accepted display receipt and retirement boundary. */
-export function readAgentModelCatalog(
+export function readModelCatalog(
   client: ModelCatalogClient | null | undefined,
-  agentId: string | null | undefined,
+  scope: ModelCatalogReadScope | null | undefined,
 ): ModelCatalogPresentation {
   const catalog =
-    client && agentId ? peekModelCatalog(client, { agentId }, { allowStale: true }) : undefined;
+    client && scope ? peekModelCatalog(client, scope, { allowStale: true }) : undefined;
   return {
     ...catalog,
     models: catalog?.models ?? [],
     hasSnapshot: catalog !== undefined,
-    retired: client && agentId ? isModelCatalogRetired(client, { agentId }) : false,
+    retired: client && scope ? isModelCatalogRetired(client, scope) : false,
   };
+}
+
+export function readAgentModelCatalog(
+  client: ModelCatalogClient | null | undefined,
+  agentId: string | null | undefined,
+): ModelCatalogPresentation {
+  return readModelCatalog(client, agentId ? { agentId } : null);
 }
 
 export function subscribeModelCatalogCache(
@@ -167,27 +174,6 @@ export function settleModelCatalogRequests(
     modelCatalogCache.get(client)?.requests.get(key)?.values() ?? [],
   ).flatMap(({ active }) => (active ? [active.transportSettled] : []));
   return pending.length ? Promise.allSettled(pending).then(() => {}) : undefined;
-}
-
-/** Observe an eligible producer without joining its cancellation or publication ownership. */
-export function pendingModelCatalogResult(
-  client: ModelCatalogClient,
-  scope: ModelsListParams,
-  issuedBefore: ReadonlySet<ModelCatalogRead>,
-): Promise<ModelCatalogResult | undefined> | undefined {
-  const cache = modelCatalogCache.get(client);
-  const key = modelCatalogKey(modelCatalogParams(scope));
-  const pending = Array.from(cache?.requests.get(key)?.values() ?? []).find(
-    ({ active }) => active && cache?.reads.has(active.read) && !issuedBefore.has(active.read),
-  )?.active;
-  return pending?.promise.then(
-    () =>
-      modelCatalogCache.get(client) === cache &&
-      cache?.entries.get(key)?.publishedRead === pending.read.order
-        ? peekModelCatalog(client, scope)
-        : undefined,
-    () => undefined,
-  );
 }
 
 function createModelCatalogRequest(params: {

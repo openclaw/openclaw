@@ -45,6 +45,7 @@ type PersistedSubagentToolPolicyEnvelope = {
   completionOwnerSessionKey?: string;
   inheritedToolAllow: string[];
   inheritedToolDeny: string[];
+  inheritedToolPolicySource?: "sender";
 };
 
 function normalizeSubagentRole(value: unknown): SubagentSessionRole | undefined {
@@ -67,16 +68,6 @@ function shouldInspectStoredSubagentEnvelope(sessionKey: string): boolean {
 
 function isDashboardSessionKey(sessionKey: string): boolean {
   return parseAgentSessionKey(sessionKey)?.rest.startsWith("dashboard:") === true;
-}
-
-function canInspectStoredSubagentEnvelope(
-  sessionKey: string,
-  store?: SessionCapabilityStore,
-): boolean {
-  return (
-    shouldInspectStoredSubagentEnvelope(sessionKey) ||
-    (Boolean(store) && isDashboardSessionKey(sessionKey))
-  );
 }
 
 function isSameAgentSessionStore(leftSessionKey: string, rightSessionKey: string): boolean {
@@ -310,6 +301,9 @@ export function resolvePersistedSubagentToolPolicyEnvelope(
     ...(completionOwnerSessionKey ? { completionOwnerSessionKey } : {}),
     inheritedToolAllow: normalizeInheritedToolAllowlist(entry.inheritedToolAllow),
     inheritedToolDeny: normalizeInheritedToolDenylist(entry.inheritedToolDeny),
+    ...(entry.inheritedToolPolicySource === "sender"
+      ? { inheritedToolPolicySource: "sender" as const }
+      : {}),
   };
 }
 
@@ -363,7 +357,8 @@ function resolveStoredSubagentToolPolicy(
   const normalizedSessionKey = normalizeOptionalString(sessionKey);
   if (
     !normalizedSessionKey ||
-    !canInspectStoredSubagentEnvelope(normalizedSessionKey, opts?.store)
+    (!shouldInspectStoredSubagentEnvelope(normalizedSessionKey) &&
+      !(opts?.store && isDashboardSessionKey(normalizedSessionKey)))
   ) {
     return undefined;
   }

@@ -163,16 +163,7 @@ export class MatrixDecryptBridge<TRawEvent extends DecryptBridgeRawEvent> {
       return;
     }
     LogService.debug("MatrixClientLite", `Retrying pending decryptions due to ${reason}`);
-    for (const [retryKey, state] of pending) {
-      if (state.timer) {
-        clearTimeout(state.timer);
-        state.timer = null;
-      }
-      if (state.inFlight) {
-        continue;
-      }
-      this.runDecryptRetry(retryKey).catch(noop);
-    }
+    this.startPendingRetries(pending);
   }
 
   bindCryptoRetrySignals(crypto: MatrixCryptoRetrySignalSource | undefined): void {
@@ -181,22 +172,14 @@ export class MatrixDecryptBridge<TRawEvent extends DecryptBridgeRawEvent> {
     }
     this.cryptoRetrySignalsBound = true;
 
-    const trigger = (reason: string, options?: { includeExhausted?: boolean }): void => {
-      this.retryPendingNow(reason, options);
-    };
-
-    crypto.on(CryptoEvent.KeyBackupDecryptionKeyCached, () => {
-      trigger("crypto.keyBackupDecryptionKeyCached", { includeExhausted: true });
-    });
-    crypto.on(CryptoEvent.RehydrationCompleted, () => {
-      trigger("dehydration.RehydrationCompleted", { includeExhausted: true });
-    });
-    crypto.on(CryptoEvent.DevicesUpdated, () => {
-      trigger("crypto.devicesUpdated");
-    });
-    crypto.on(CryptoEvent.KeysChanged, () => {
-      trigger("crossSigning.keysChanged");
-    });
+    for (const [eventName, reason, includeExhausted] of [
+      [CryptoEvent.KeyBackupDecryptionKeyCached, "crypto.keyBackupDecryptionKeyCached", true],
+      [CryptoEvent.RehydrationCompleted, "dehydration.RehydrationCompleted", true],
+      [CryptoEvent.DevicesUpdated, "crypto.devicesUpdated", false],
+      [CryptoEvent.KeysChanged, "crossSigning.keysChanged", false],
+    ] as const) {
+      crypto.on(eventName, () => this.retryPendingNow(reason, { includeExhausted }));
+    }
   }
 
   stop(): void {
@@ -212,16 +195,7 @@ export class MatrixDecryptBridge<TRawEvent extends DecryptBridgeRawEvent> {
   async drainPendingDecryptions(_reason: string): Promise<void> {
     this.quiescing = true;
     const pendingSdkDecryptions = Array.from(this.pendingSdkDecryptions);
-    const pending = Array.from(this.decryptRetries.entries());
-    for (const [retryKey, state] of pending) {
-      if (state.timer) {
-        clearTimeout(state.timer);
-        state.timer = null;
-      }
-      if (!state.inFlight) {
-        this.runDecryptRetry(retryKey).catch(noop);
-      }
-    }
+    this.startPendingRetries(Array.from(this.decryptRetries.entries()));
     await raceWithTimeout(
       Promise.all([
         Promise.allSettled(pendingSdkDecryptions),
@@ -235,6 +209,18 @@ export class MatrixDecryptBridge<TRawEvent extends DecryptBridgeRawEvent> {
       },
       { ref: false },
     );
+  }
+
+  private startPendingRetries(pending: Iterable<[string, MatrixDecryptRetryState]>): void {
+    for (const [retryKey, state] of pending) {
+      if (state.timer) {
+        clearTimeout(state.timer);
+        state.timer = null;
+      }
+      if (!state.inFlight) {
+        this.runDecryptRetry(retryKey).catch(noop);
+      }
+    }
   }
 
   private handleEncryptedEventDecrypted(params: {

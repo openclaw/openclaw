@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -10,6 +11,7 @@ import * as transcript from "../../config/sessions/transcript.js";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import * as sessionDelivery from "../../infra/session-delivery-queue-storage.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -81,17 +83,13 @@ describe("undelivered generated media", () => {
               retaining = false;
             }
           });
-          const create = admission.createSqliteWorkerOperationAdmission;
-          vi.spyOn(admission, "createSqliteWorkerOperationAdmission").mockImplementation(
-            (callback, attachment) =>
-              create((request, grant) => {
-                if (retaining && request.stage === "commit") {
-                  revokedAtCommit = true;
-                  rotateAgentEventLifecycleGeneration();
-                }
-                callback(request, grant);
-              }, attachment),
-          );
+          probe.admission(admission, (request, grant, callback) => {
+            if (retaining && request.stage === "commit") {
+              revokedAtCommit = true;
+              rotateAgentEventLifecycleGeneration();
+            }
+            callback(request, grant);
+          });
         }
         if (requesterState === "retired-during-append") {
           appendSpy.mockImplementationOnce(async (params) => {
@@ -117,7 +115,7 @@ describe("undelivered generated media", () => {
         } finally {
           creationSql?.restore();
         }
-        expect(handle).not.toBeNull();
+        assert(handle);
         const scheduled: Array<() => Promise<void>> = [];
         const mediaPath = state.statePath("media", "synthetic-lighthouse.png");
         scheduleMediaGenerationTaskCompletion({

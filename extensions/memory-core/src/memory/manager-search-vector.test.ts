@@ -2,7 +2,6 @@ import nodePath from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import {
-  cosineSimilarity,
   decodeMemoryEmbedding,
   truncateUtf16Safe,
 } from "openclaw/plugin-sdk/memory-core-host-engine-knn";
@@ -19,6 +18,20 @@ import { createEmbeddingScorer } from "./manager-search-scorer.js";
 import { searchChunksByEmbedding, searchVector } from "./manager-search-vector.js";
 import { runMemorySearchWithDeadline } from "./search-deadline.js";
 import { vectorToBlob } from "./vector-blob.js";
+
+function referenceCosine(a: number[], b: number[]): number {
+  let dot = 0;
+  let normA = 0;
+  let normB = 0;
+  for (let i = 0; i < Math.min(a.length, b.length); i += 1) {
+    const av = expectDefined(a[i], `cosine vector a[${i}]`);
+    const bv = expectDefined(b[i], `cosine vector b[${i}]`);
+    dot += av * bv;
+    normA += av * av;
+    normB += bv * bv;
+  }
+  return normA === 0 || normB === 0 ? 0 : dot / (Math.sqrt(normA) * Math.sqrt(normB));
+}
 
 type VectorSearchOptions = Omit<Parameters<typeof searchVector>[0], "runFallback"> & {
   sourceFilterChunks: Parameters<typeof searchChunksByEmbedding>[0]["sourceFilter"];
@@ -269,56 +282,6 @@ describe("searchVector sqlite-vec KNN", () => {
     }
   });
 
-  it("preserves top-K ordering vs. a naive reference cosine implementation", async () => {
-    const db = createFallbackDb();
-    try {
-      const dim = 16;
-      // A full 256-row batch also exercises the final empty cursor read.
-      const N = 256;
-      const limit = 5;
-      // Deterministic vectors keep the independent cosine comparison repeatable.
-      const vectorFor = (i: number, j: number): number => {
-        const s = Math.sin(i * 31 + j * 17 + 3) * 1000;
-        return s - Math.floor(s) - 0.5;
-      };
-      const chunks: Array<{ id: string; vector: number[] }> = [];
-      for (let i = 0; i < N; i += 1) {
-        const vector = Array.from({ length: dim }, (_, j) => vectorFor(i, j));
-        chunks.push({ id: `chunk-${i}`, vector });
-        insertFallbackChunk(db, { id: `chunk-${i}`, model: "target-model", vector });
-      }
-      const queryVec = Array.from({ length: dim }, (_, j) => vectorFor(-1, j));
-
-      function refCosine(a: number[], b: number[]): number {
-        let dot = 0;
-        let normA = 0;
-        let normB = 0;
-        const len = Math.min(a.length, b.length);
-        for (let i = 0; i < len; i += 1) {
-          const aValue = expectDefined(a[i], `cosine vector a[${i}]`);
-          const bValue = expectDefined(b[i], `cosine vector b[${i}]`);
-          dot += aValue * bValue;
-          normA += aValue * aValue;
-          normB += bValue * bValue;
-        }
-        return dot / (Math.sqrt(normA) * Math.sqrt(normB));
-      }
-      const referenceTopIds = chunks
-        .map((c) => ({ id: c.id, score: refCosine(queryVec, c.vector) }))
-        .toSorted((a, b) => b.score - a.score)
-        .slice(0, limit)
-        .map((r) => r.id);
-
-      const results = await searchVectorFixture(db, {
-        queryVec,
-        limit,
-      });
-      expect(results.map((r) => r.id)).toEqual(referenceTopIds);
-    } finally {
-      db.close();
-    }
-  });
-
   function seededRandom(seed: number): () => number {
     let state = seed >>> 0;
     return () => {
@@ -330,12 +293,12 @@ describe("searchVector sqlite-vec KNN", () => {
     };
   }
 
-  it("scores blobs bit-identically to cosineSimilarity over the decoded vector", () => {
+  it("scores blobs bit-identically to reference cosine over the decoded vector", () => {
     const random = seededRandom(7);
     const queryDims = 24;
     const queryVec = Array.from({ length: queryDims }, () => random() * 2 - 1);
     const score = createEmbeddingScorer(queryVec);
-    const reference = (blob: Uint8Array) => cosineSimilarity(queryVec, decodeMemoryEmbedding(blob));
+    const reference = (blob: Uint8Array) => referenceCosine(queryVec, decodeMemoryEmbedding(blob));
     const blobs: Uint8Array[] = [];
     // Equal, shorter and longer than the query, plus an empty and an all-zero vector.
     for (const dims of [queryDims, queryDims, 5, 1, queryDims + 9, 0]) {
@@ -370,7 +333,7 @@ describe("searchVector sqlite-vec KNN", () => {
     }
   });
 
-  it("returns the same ranked ids and exact scores as decoding every row", async () => {
+  it("preserves exact ranking without normalizing the query again for every row", async () => {
     const db = createFallbackDb();
     try {
       const random = seededRandom(20251003);
@@ -378,8 +341,9 @@ describe("searchVector sqlite-vec KNN", () => {
       const limit = 7;
       const queryVec = Array.from({ length: queryDims }, () => random() * 2 - 1);
       const rows: Array<{ id: string; blob: Uint8Array }> = [];
-      // 700 rows span three batches; a few have mismatched dimensions or unusable bytes.
-      for (let index = 0; index < 700; index += 1) {
+      // Three full batches also exercise the final empty cursor read.
+      const rowCount = 768;
+      for (let index = 0; index < rowCount; index += 1) {
         const dims =
           index % 97 === 0 ? queryDims - 11 : index % 89 === 0 ? queryDims + 5 : queryDims;
         const vector = Array.from({ length: dims }, () => random() * 2 - 1);
@@ -395,15 +359,21 @@ describe("searchVector sqlite-vec KNN", () => {
       const expected = rows
         .map(({ id, blob }) => ({
           id,
-          score: cosineSimilarity(queryVec, decodeMemoryEmbedding(blob)),
+          score: referenceCosine(queryVec, decodeMemoryEmbedding(blob)),
         }))
         .filter((row) => Number.isFinite(row.score))
         .toSorted((a, b) => b.score - a.score)
         .slice(0, limit);
 
-      const results = await searchVectorFixture(db, { queryVec, limit });
-
-      expect(results.map(({ id, score }) => ({ id, score }))).toEqual(expected);
+      const sqrt = vi.spyOn(Math, "sqrt");
+      try {
+        const results = await searchVectorFixture(db, { queryVec, limit });
+        expect(results.map(({ id, score }) => ({ id, score }))).toEqual(expected);
+        // Allow one norm per stored vector and one per query prefix, without timing noise.
+        expect(sqrt.mock.calls.length).toBeLessThanOrEqual(rowCount + queryDims);
+      } finally {
+        sqrt.mockRestore();
+      }
     } finally {
       db.close();
     }

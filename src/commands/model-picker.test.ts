@@ -234,7 +234,6 @@ function createSelectAllMultiselect() {
 function promptDefaultPicker(params: Parameters<typeof promptDefaultModel>[0]) {
   return promptDefaultModel({
     allowKeep: false,
-    ignoreAllowlist: true,
     ...params,
   });
 }

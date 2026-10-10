@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { renameSync } from "node:fs";
-import { DatabaseSync } from "node:sqlite";
+import { DatabaseSync, StatementSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
 import {
@@ -8,19 +8,22 @@ import {
   resolveRuntimeWorkerUrl,
 } from "../../infra/runtime-worker-url.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { closeOpenClawAgentDatabases } from "../../state/openclaw-agent-db-lifecycle.js";
 import {
   hasOpenClawAgentCanonicalValidation,
   invalidateOpenClawAgentDatabaseValidation,
 } from "../../state/openclaw-agent-db-validation-cache.js";
-import {
-  closeOpenClawAgentDatabases,
-  openOpenClawAgentDatabase,
-} from "../../state/openclaw-agent-db.js";
+import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { sessionNativeProcessEntrypoints } from "./native-process-runtime.test-support.js";
 import * as archiveWorker from "./session-accessor.sqlite-archive.js";
 import { withSqliteCanonicalValidationWorker } from "./session-accessor.sqlite-reclamation-worker.js";
+import {
+  markCanonicalSessionValidationPending,
+  assertCanonicalSqliteSessionKeysCurrent,
+} from "./session-canonical-key.js";
+import { withCanonicalSessionValidationDeferral } from "./session-canonical-validation-deferral.js";
 import { certifySessionCanonicalValidationPending } from "./session-canonical-validation-readiness.js";
 import { hasPendingCanonicalSessionValidation } from "./session-canonical-validation.js";
 
@@ -43,7 +46,9 @@ function seedPendingRows(count: number, textBytes = 0, agentId = "main") {
         JSON.stringify({ sessionId, updatedAt: 1, lastRunError: "x".repeat(textBytes) }),
       );
     }
-    database.db.exec("UPDATE session_nodes SET entry_valid = 1");
+    database.db.exec(
+      "INSERT INTO session_canonical_validation_pending SELECT session_key FROM session_nodes",
+    );
     database.db.exec("COMMIT");
   } catch (error) {
     database.db.exec("ROLLBACK");
@@ -51,6 +56,77 @@ function seedPendingRows(count: number, textBytes = 0, agentId = "main") {
   }
   return { options, database };
 }
+
+it.each(["pending rows", "revoked receipt"] as const)(
+  "certifies captured runtime work without caller-thread SQL (%s)",
+  async (scenario) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const { database } = seedPendingRows(1);
+      const deferred = withCanonicalSessionValidationDeferral(() =>
+        assertCanonicalSqliteSessionKeysCurrent(database),
+      );
+      expect(deferred.kind).toBe("pending");
+      if (deferred.kind !== "pending") {
+        throw new Error("Fixture did not discover canonical work");
+      }
+      if (scenario === "revoked receipt") {
+        database.db.exec(`
+          UPDATE session_nodes SET parent_session_key = 'agent:main:changed';
+          DELETE FROM session_canonical_validation_pending;
+        `);
+        invalidateOpenClawAgentDatabaseValidation(database.path);
+      }
+      const executed: string[] = [];
+      const exec = vi.spyOn(DatabaseSync.prototype, "exec");
+      const statements = (["get", "all", "run", "iterate"] as const).map((method) => {
+        const original = StatementSync.prototype[method];
+        return vi.spyOn(StatementSync.prototype, method).mockImplementation(
+          new Proxy(original, {
+            apply(target, receiver: StatementSync, args) {
+              executed.push(receiver.sourceSQL);
+              return Reflect.apply(target, receiver, args);
+            },
+          }),
+        );
+      });
+      try {
+        const certification = certifySessionCanonicalValidationPending(deferred.database);
+        if (scenario === "revoked receipt") {
+          await expect(certification).rejects.toThrow("invalid persisted session row");
+        } else {
+          await certification;
+        }
+        expect(executed).toEqual([]);
+        expect(exec).not.toHaveBeenCalled();
+      } finally {
+        exec.mockRestore();
+        statements.forEach((statement) => statement.mockRestore());
+      }
+      expect(hasPendingCanonicalSessionValidation(database)).toBe(scenario === "revoked receipt");
+    });
+  },
+);
+
+it("refuses drifted triggers at a new canonical admission", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const { options, database } = seedPendingRows(0);
+    expect(hasOpenClawAgentCanonicalValidation(database)).toBe(true);
+    expect(hasPendingCanonicalSessionValidation(database)).toBe(false);
+    await certifySessionCanonicalValidationPending(options);
+    const peer = new DatabaseSync(database.path);
+    try {
+      peer.exec(
+        "CREATE TRIGGER unexpected_session_trigger AFTER INSERT ON session_nodes BEGIN SELECT 1; END",
+      );
+    } finally {
+      peer.close();
+    }
+    invalidateOpenClawAgentDatabaseValidation(database.path);
+    await expect(certifySessionCanonicalValidationPending(options)).rejects.toThrow(
+      /unexpected trigger unexpected_session_trigger.*openclaw doctor --fix/u,
+    );
+  });
+});
 
 it.each(["unchanged", "pending edit", "replacement", "revoked", "unregistered"] as const)(
   "admits only changed or revoked populated stores after a process restart (%s)",
@@ -68,6 +144,8 @@ it.each(["unchanged", "pending edit", "replacement", "revoked", "unregistered"] 
       if (change === "replacement") {
         database.db.prepare("VACUUM INTO ?").run(copiedPath);
       } else if (change === "pending edit") {
+        markCanonicalSessionValidationPending(database);
+        markCanonicalSessionValidationPending(database);
         database.db.exec("UPDATE session_nodes SET parent_session_key = 'agent:main:changed'");
       }
       closeOpenClawAgentDatabases(state.stateDir);
@@ -324,10 +402,10 @@ it("shares active runtime certification without retaining success or failure", a
     });
     await certifySessionCanonicalValidationPending(options);
     jobs.mockClear();
-    const dirty = () =>
-      database.db.exec(
-        "UPDATE session_nodes SET entry_json = entry_json || ' '; UPDATE session_nodes SET entry_valid = 1",
-      );
+    const dirty = () => {
+      markCanonicalSessionValidationPending(database);
+      database.db.exec("UPDATE session_nodes SET entry_json = entry_json || ' '");
+    };
     dirty();
     holdNext = true;
     const pending = [certifySessionCanonicalValidationPending(options)];
@@ -340,11 +418,13 @@ it("shares active runtime certification without retaining success or failure", a
       resume = undefined;
       await Promise.all(pending);
       expect(hasPendingCanonicalSessionValidation(database)).toBe(false);
-      expect(jobs).toHaveBeenCalledOnce();
+      // One shared drain seeds revoked admission, then certifies its rows.
+      expect(jobs).toHaveBeenCalledTimes(2);
       dirty();
       await certifySessionCanonicalValidationPending(options);
       expect(hasPendingCanonicalSessionValidation(database)).toBe(false);
-      expect(jobs).toHaveBeenCalledTimes(2);
+      expect(jobs).toHaveBeenCalledTimes(4);
+      markCanonicalSessionValidationPending(database);
       database.db.exec("UPDATE session_nodes SET parent_session_key = 'agent:main:changed'");
       const failures = await Promise.allSettled(
         Array.from({ length: 3 }, () => certifySessionCanonicalValidationPending(options)),
@@ -357,12 +437,12 @@ it("shares active runtime certification without retaining success or failure", a
           }),
         })),
       );
-      expect(jobs).toHaveBeenCalledTimes(3);
+      expect(jobs).toHaveBeenCalledTimes(6);
       expect(hasPendingCanonicalSessionValidation(database)).toBe(true);
       database.db.exec("UPDATE session_nodes SET parent_session_key = NULL");
       await certifySessionCanonicalValidationPending(options);
       expect(hasPendingCanonicalSessionValidation(database)).toBe(false);
-      expect(jobs).toHaveBeenCalledTimes(4);
+      expect(jobs).toHaveBeenCalledTimes(8);
     } finally {
       resume?.();
       await Promise.allSettled(pending);

@@ -177,7 +177,7 @@ describe("install smoke no-push root image transport", () => {
     expect(fastJob.needs).toContain("preflight");
     expect(warningRelay.with).toMatchObject({
       repository: "openclaw/openclaw",
-      ref: "main",
+      ref: "${{ github.sha }}",
       path: ".artifacts/build-warning-harness",
       "fetch-depth": 1,
       "persist-credentials": false,
@@ -189,7 +189,7 @@ describe("install smoke no-push root image transport", () => {
       "node .artifacts/build-warning-harness/scripts/relay-build-limit-warnings.mts",
     );
     expect(
-      fastJob.steps!.indexOf(step(fastJob, "Restore exact trusted workflow revision")),
+      fastJob.steps!.indexOf(step(fastJob, "Resolve exact trusted workflow identity")),
     ).toBeLessThan(fastJob.steps!.indexOf(warningBuild));
     const trustedJobs: string[] = [];
     for (const [jobName, workflowJob] of Object.entries(workflow.jobs)) {
@@ -200,28 +200,34 @@ describe("install smoke no-push root image transport", () => {
         continue;
       }
       trustedJobs.push(jobName);
-      const resolver = step(workflowJob, "Restore exact trusted workflow revision");
+      const resolver = step(workflowJob, "Resolve exact trusted workflow identity");
       expect(resolver.env, jobName).toMatchObject({
         EXPECTED_WORKFLOW_REPOSITORY: "${{ github.repository }}",
         JOB_CONTEXT: "${{ toJSON(job) }}",
       });
       const harnessPath =
         jobName === "install-smoke-fast" ? ".artifacts/build-warning-harness" : ".release-harness";
-      expect(resolver.env?.HARNESS_PATH, jobName).toBe(harnessPath);
       expect(resolver.run, jobName).toContain(
         "job.workflow_sha must be a full lowercase commit SHA",
       );
-      expect(resolver.run, jobName).toContain('"fetch"');
+      expect(resolver.run, jobName).not.toContain("execFileSync");
       expect(resolver.run, jobName).toContain(
         "`repository=${repository}\\nsha=${job.workflow_sha}\\n`",
       );
       const checkoutIndex = workflowJob.steps!.indexOf(trustedCheckouts[0]!);
       const resolverIndex = workflowJob.steps!.indexOf(resolver);
-      expect(checkoutIndex, jobName).toBeLessThan(resolverIndex);
+      expect(resolverIndex, jobName).toBeLessThan(checkoutIndex);
+      const restore = step(workflowJob, "Restore exact trusted workflow revision");
+      expect(workflowJob.steps!.indexOf(restore), jobName).toBe(checkoutIndex + 1);
+      expect(restore.env, jobName).toMatchObject({
+        HARNESS_PATH: harnessPath,
+        WORKFLOW_REPOSITORY: "${{ steps.workflow.outputs.repository }}",
+        WORKFLOW_SHA: "${{ steps.workflow.outputs.sha }}",
+      });
       for (const checkout of trustedCheckouts) {
         expect(checkout.with, jobName).toMatchObject({
           repository: "openclaw/openclaw",
-          ref: "main",
+          ref: "${{ github.sha }}",
           path: harnessPath,
           "fetch-depth": 1,
           "persist-credentials": false,
@@ -245,7 +251,7 @@ describe("install smoke no-push root image transport", () => {
 
     const candidateResolver = step(
       job(workflow, "installer_smoke_candidate_payload"),
-      "Restore exact trusted workflow revision",
+      "Resolve exact trusted workflow identity",
     );
     const runResolver = (workflowRepository: string, workflowSha: string) =>
       spawnSync("bash", ["--noprofile", "--norc", "-c", candidateResolver.run!], {
@@ -254,7 +260,7 @@ describe("install smoke no-push root image transport", () => {
           ...process.env,
           EXPECTED_WORKFLOW_REPOSITORY: "openclaw/openclaw",
           GITHUB_WORKFLOW_SHA: "a".repeat(40),
-          HARNESS_PATH: ".",
+          GITHUB_OUTPUT: identityOutput,
           JOB_CONTEXT: JSON.stringify({
             workflow_repository: workflowRepository,
             workflow_sha: workflowSha,
@@ -269,6 +275,10 @@ describe("install smoke no-push root image transport", () => {
     expect(wrongRepository.stderr).toContain(
       "job.workflow_repository must exactly match github.repository",
     );
+    // The per-job resolver must work before any harness checkout exists.
+    const validIdentity = runResolver("openclaw/openclaw", "c".repeat(40));
+    expect(validIdentity.status, validIdentity.stderr).toBe(0);
+    expect(readFileSync(identityOutput, "utf8")).toContain(`sha=${"c".repeat(40)}\n`);
     const manifest = step(preflight, "Build install-smoke CI manifest");
     expect(manifest.env).toEqual({
       OPENCLAW_CI_WORKFLOW_BUN_GLOBAL_INSTALL_SMOKE:
@@ -833,8 +843,9 @@ describe("install smoke no-push root image transport", () => {
       },
     });
     expect(bunOnlyConsumer.steps).toEqual([
-      step(bunOnlyConsumer, "Checkout trusted release harness"),
       bunOnlyNode,
+      step(bunOnlyConsumer, "Resolve exact trusted workflow identity"),
+      step(bunOnlyConsumer, "Checkout trusted release harness"),
       step(bunOnlyConsumer, "Restore exact trusted workflow revision"),
       bunBinding,
       bunOnlyDownload,
@@ -872,7 +883,7 @@ describe("install smoke no-push root image transport", () => {
     });
     expect(step(producer, "Checkout trusted release harness").with).toMatchObject({
       repository: "openclaw/openclaw",
-      ref: "main",
+      ref: "${{ github.sha }}",
       "fetch-depth": 1,
       "persist-credentials": false,
     });

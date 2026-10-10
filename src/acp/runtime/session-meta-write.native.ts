@@ -86,9 +86,6 @@ export async function upsertAcpSessionMetaNative(params: {
     env: params.env,
     clone: false,
   });
-  if (!storeEntry.storePath) {
-    return null;
-  }
   const { entry, storePath } = storeEntry;
   const storageSessionKey = storeEntry.storeSessionKey;
   let current: SessionAcpMeta | undefined;
@@ -148,7 +145,7 @@ export async function upsertAcpSessionMetaNative(params: {
           env: params.env,
           now: updatedAt,
         });
-        applyAcpSessionMutation(database.db, {
+        const facts = applyAcpSessionMutation(database.db, {
           agentId: storeEntry.agentId,
           storageSessionKey,
           sessionKey: publishedSessionKey,
@@ -157,7 +154,13 @@ export async function upsertAcpSessionMetaNative(params: {
           decision,
         });
         sessionChanges.emit(
-          { agentId: storeEntry.agentId, sessionKey: publishedSessionKey },
+          {
+            agentId: storeEntry.agentId,
+            sessionKey: publishedSessionKey,
+            storePath,
+            scope: "acp",
+            facts,
+          },
           database.db,
         );
       },
@@ -172,7 +175,7 @@ export async function upsertAcpSessionMetaNative(params: {
     const patched = entry
       ? await patchSessionEntryWithKey(
           {
-            ...(storeEntry.agentId ? { agentId: storeEntry.agentId } : {}),
+            agentId: storeEntry.agentId,
             storePath: storeEntry.storePath,
             sessionKey: storageSessionKey,
           },
@@ -199,7 +202,7 @@ export async function upsertAcpSessionMetaNative(params: {
   }
   const persisted = await patchSessionEntryWithKey(
     {
-      ...(storeEntry.agentId ? { agentId: storeEntry.agentId } : {}),
+      agentId: storeEntry.agentId,
       storePath: storeEntry.storePath,
       sessionKey: storageSessionKey,
     },

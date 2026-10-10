@@ -26,9 +26,16 @@ import {
 } from "../../channels/turn/agent-run-terminal-outcome.js";
 import { agentCommandFromGatewayIngress } from "../../commands/agent.js";
 import { isAbortError } from "../../infra/abort-signal.js";
-import { clearAgentRunContext } from "../../infra/agent-run-registry.js";
+import { isAgentEventLifecycleGenerationCurrent } from "../../infra/agent-events.js";
+import {
+  clearAgentRunContext,
+  validateAgentRunDelegatedAuthority,
+} from "../../infra/agent-run-registry.js";
 import { formatErrorMessage, toErrorObject } from "../../infra/errors.js";
+import { withExecRequestTurn } from "../../infra/exec-request-context.js";
+import { readWithdrawnUserTurnInputId } from "../../sessions/user-turn-transcript-admission.js";
 import { completeUserTurnProcessing } from "../../sessions/user-turn-transcript-processing.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import type { ChatAbortControllerEntry } from "../chat-abort.js";
 import { errorShapeFromError } from "../error-shape.js";
 import type { GatewayCronCreatorAuthorityAdmission } from "../server-methods/cron-creator-authority-admission.js";
@@ -40,11 +47,12 @@ import { readAgentRunDispatchExecutionIdentity } from "./agent-run-dispatch-exec
 import {
   isGatewayAgentAbortRejection,
   projectRejectedGatewayStatus,
+  projectWithdrawnAgentInput,
   RESOLVED_GATEWAY_STATUS_BY_TERMINAL_CLASSIFICATION,
   resolveGatewayAgentAbortStopReason,
   resolveResolvedAgentTimeoutStopReason,
 } from "./agent-run-dispatch-outcome.js";
-import { bindGatewayAgentTerminalProducer } from "./agent-run-terminal-producer.js";
+import type { createAgentRunMediaCustody } from "./agent-run-media-custody.js";
 import type { AgentTurnContext, AgentTurnIo } from "./types.js";
 
 export function dispatchAgentRunFromGateway(params: {
@@ -53,6 +61,7 @@ export function dispatchAgentRunFromGateway(params: {
   followupCompletion?: FollowupCompletionOwner;
   admittedRunEntry: ChatAbortControllerEntry | undefined;
   ingressOpts: Parameters<typeof agentCommandFromGatewayIngress>[0];
+  loadMedia?: () => Promise<ReturnType<typeof createAgentRunMediaCustody>>;
   runId: string;
   cronCreatorAuthority?: GatewayCronCreatorAuthorityAdmission;
   dedupeKeys: readonly string[];
@@ -84,6 +93,12 @@ export function dispatchAgentRunFromGateway(params: {
   const registeredRunEntry = params.admittedRunEntry;
   const jobSessionBinding = registeredRunEntry ?? params.ingressOpts;
   let runOwnerSettled = false;
+  const projectInputOutcome = (payload: unknown) =>
+    projectWithdrawnAgentInput(
+      payload,
+      readWithdrawnUserTurnInputId(params.ingressOpts.userTurnTranscriptRecorder),
+      registeredRunEntry?.abortStopReason,
+    );
   let pendingReplay: DedupeEntry | undefined;
   const publishReplay = (entry: DedupeEntry) => {
     if (!runOwnerSettled) {
@@ -94,7 +109,7 @@ export function dispatchAgentRunFromGateway(params: {
       dedupe: params.context.dedupe,
       keys: params.dedupeKeys,
       session: captureAgentJobSession(jobSessionBinding),
-      entry: diagnostics.forReplay(entry),
+      entry: diagnostics.forReplay({ ...entry, payload: projectInputOutcome(entry.payload) }),
     });
   };
   const registeredRunInstance = registeredRunEntry?.operationalRunInstance;
@@ -185,20 +200,82 @@ export function dispatchAgentRunFromGateway(params: {
   if (cronCreatorAuthorityCapability) {
     params.cronCreatorAuthority?.bindRunScope?.(cronCreatorAuthorityCapability);
   }
-  const terminalProducer = bindGatewayAgentTerminalProducer({
-    runId: params.runId,
-    entry: registeredRunEntry,
-    controller: params.abortController,
-    ingressOpts: params.ingressOpts,
-    chatAbortControllers: params.context.chatAbortControllers,
-    isOwnerReleased: () => runOwnerCleanedUp,
-  });
-  const ingressOptsWithSpawnFacts = withAgentCommandExecutionIdentitySpawnFacts(
-    { ...params.ingressOpts, beforeTerminalDelivery: terminalProducer.complete },
-    readAgentRunDispatchExecutionIdentity(params),
-  );
-  const activateAgent = () => {
+  const producerRunInstance = registeredRunEntry?.operationalRunInstance;
+  const producerLifecycleGeneration = registeredRunEntry?.lifecycleGeneration;
+  const producerSessionKey = registeredRunEntry?.sessionKey;
+  const producerCompletion = createDeferredCore<unknown>();
+  let terminalSettlement: Promise<void> | undefined;
+  if (registeredRunEntry && params.ingressOpts.abortSignal === params.abortController.signal) {
+    registeredRunEntry.resolveTerminalProducer = () => {
+      const { sessionId, sessionKey } = registeredRunEntry;
+      const isCurrent = () => {
+        const authority = registeredRunEntry.agentRunDelegatedAuthority;
+        return (
+          !runOwnerCleanedUp &&
+          !params.abortController.signal.aborted &&
+          params.ingressOpts.abortSignal === params.abortController.signal &&
+          params.context.chatAbortControllers.get(params.runId) === registeredRunEntry &&
+          registeredRunEntry.controller === params.abortController &&
+          registeredRunEntry.operationalRunInstance === producerRunInstance &&
+          registeredRunEntry.lifecycleGeneration === producerLifecycleGeneration &&
+          registeredRunEntry.sessionId === sessionId &&
+          registeredRunEntry.sessionKey === sessionKey &&
+          sessionKey === producerSessionKey &&
+          !registeredRunEntry.registrationCleanupRequested &&
+          (!producerLifecycleGeneration ||
+            isAgentEventLifecycleGenerationCurrent(producerLifecycleGeneration)) &&
+          (!registeredRunEntry.executionStarted || authority !== undefined) &&
+          (!authority ||
+            (authority.operationalRunInstance === producerRunInstance &&
+              validateAgentRunDelegatedAuthority(authority)))
+        );
+      };
+      if (!isCurrent()) {
+        return undefined;
+      }
+      return {
+        sessionId,
+        sessionKey,
+        handoff: (settleTranscript) => {
+          if (!isCurrent()) {
+            return false;
+          }
+          const settlement = settleTranscript(producerCompletion.promise);
+          terminalSettlement = terminalSettlement
+            ? Promise.all([terminalSettlement, settlement]).then(() => undefined)
+            : settlement;
+          return true;
+        },
+      };
+    };
+  }
+  const completeTerminalProducer = async (producerError?: unknown) => {
+    producerCompletion.resolve(producerError);
+    let joined: Promise<void> | undefined;
+    do {
+      joined = terminalSettlement;
+      await joined;
+    } while (joined !== terminalSettlement);
+  };
+  const activateAgent = (media?: ReturnType<typeof createAgentRunMediaCustody>) => {
     assertCurrent();
+    const ingressOptsWithSpawnFacts = withAgentCommandExecutionIdentitySpawnFacts(
+      {
+        ...params.ingressOpts,
+        ...(media
+          ? { prepareAssistantTranscriptMessage: media.prepareAssistantTranscriptMessage }
+          : {}),
+        beforeTerminalDelivery: async (reply, producerError) => {
+          try {
+            await media?.finalize(reply);
+          } finally {
+            await completeTerminalProducer(producerError);
+          }
+        },
+        isTerminalOutcomeObserved: () => registeredRunEntry?.terminalOutcomeObserved === true,
+      },
+      readAgentRunDispatchExecutionIdentity(params),
+    );
     const invoke = () =>
       runWithCanonicalSkillWorkspace(params.canonicalSkillWorkspaceDir, () =>
         agentCommandFromGatewayIngress(
@@ -222,12 +299,12 @@ export function dispatchAgentRunFromGateway(params: {
       }
       followupCompletion.assertExecutionCurrent(params.runId);
     }
-    return invoke();
+    return media ? media.run(invoke) : invoke();
   };
   const runAgent = () => {
     try {
       assertCurrent();
-      return activateAgent();
+      return params.loadMedia ? params.loadMedia().then(activateAgent) : activateAgent();
     } catch (error) {
       const failure = toErrorObject(error, formatErrorMessage(error));
       if (!(error instanceof Error)) {
@@ -236,15 +313,42 @@ export function dispatchAgentRunFromGateway(params: {
       return Promise.reject(failure);
     }
   };
+  const runOwnedAgent = () =>
+    withExecRequestTurn(
+      {
+        identity: {
+          runId: params.runId,
+          sessionKey: registeredRunEntry?.sessionKey,
+          sessionId: registeredRunEntry?.sessionId,
+          agentId: registeredRunEntry?.agentId,
+          ownerConnId: registeredRunEntry?.ownerConnId,
+          ownerDeviceId: registeredRunEntry?.ownerDeviceId,
+          controlUiVisible: registeredRunEntry?.controlUiVisible,
+          turnKind: registeredRunEntry?.turnKind,
+        },
+        abortSignal: params.abortController.signal,
+      },
+      runAgent,
+    );
   const agentExecution = cronCreatorAuthorityCapability
     ? runWithCronCreatorAuthorityCapability(
         cronCreatorAuthorityCapability,
-        runAgent,
+        runOwnedAgent,
         params.abortController.signal,
       )
-    : runAgent();
+    : runOwnedAgent();
   // Startup failures may never enter command finalization; delivery already joined this boundary.
-  const agentRun = terminalProducer.settle(agentExecution);
+  const agentRun = (async () => {
+    let producerError: unknown;
+    try {
+      return await agentExecution;
+    } catch (error) {
+      producerError = error;
+      throw error;
+    } finally {
+      await completeTerminalProducer(producerError);
+    }
+  })();
   let inputCompletionWriteFailed = false;
   const dispatchCompletion = agentRun
     .then(async (result) => {
@@ -357,7 +461,7 @@ export function dispatchAgentRunFromGateway(params: {
       await cleanupRunOwner();
       // Send a second res frame (same id) so TS clients with expectFinal can wait.
       // Swift clients will typically treat the first res as the result and ignore this.
-      params.io.emitFinal([true, { ...payload }, undefined], { runId: params.runId });
+      params.io.emitFinal([true, projectInputOutcome(payload), undefined], { runId: params.runId });
       return { terminalOutcome, settled };
     })
     .catch(async (cause: unknown) => {
@@ -423,13 +527,14 @@ export function dispatchAgentRunFromGateway(params: {
       persistTerminalDedupe(settled);
       await cleanupRunOwner();
       const responseError = aborted && settled ? undefined : error;
-      params.io.emitFinal([aborted && settled, payload, responseError], {
+      params.io.emitFinal([aborted && settled, projectInputOutcome(payload), responseError], {
         runId: params.runId,
         ...diagnostics.errorMeta(responseError?.message, !aborted),
       });
       return { terminalOutcome, settled };
     });
-  const runCompletion = (async () => {
+  // Gateway shutdown must join this execution, not just its admission.
+  return (async () => {
     try {
       return await dispatchCompletion;
     } finally {
@@ -440,7 +545,4 @@ export function dispatchAgentRunFromGateway(params: {
       }
     }
   })();
-
-  // Gateway shutdown must join this execution, not just its admission.
-  return runCompletion;
 }

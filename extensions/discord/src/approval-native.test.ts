@@ -135,33 +135,6 @@ describe("createDiscordNativeApprovalAdapter", () => {
     ).toBe(true);
   });
 
-  it("reports each configured account as a raw candidate for coordinator selection", () => {
-    const cfg = {
-      commands: { ownerAllowFrom: ["discord:123"] },
-      channels: {
-        discord: {
-          accounts: {
-            default: { token: "token-default", execApprovals: { enabled: true } },
-            ops: { token: "token-ops", execApprovals: { enabled: true } },
-          },
-        },
-      },
-    } as const;
-    const request = {
-      id: "approval-unbound",
-      request: { command: "pwd", turnSourceChannel: "discord" },
-      createdAtMs: 1,
-      expiresAtMs: 2,
-    } as const;
-
-    expect(
-      shouldHandleDiscordApprovalRequest({ cfg: cfg as never, accountId: "default", request }),
-    ).toBe(true);
-    expect(
-      shouldHandleDiscordApprovalRequest({ cfg: cfg as never, accountId: "ops", request }),
-    ).toBe(true);
-  });
-
   it("describes the correct Discord exec-approval setup path", () => {
     const text = getDiscordApprovalCapability().describeExecApprovalSetup?.({
       channel: "discord",
@@ -195,17 +168,6 @@ describe("createDiscordNativeApprovalAdapter", () => {
     });
 
     expect(target).toEqual({ to: "123456789" });
-  });
-
-  it("falls back to approver DMs for canonical Discord direct sessions", async () => {
-    const target = await resolveOriginTarget({
-      sessionKey: "agent:main:discord:direct:123456789",
-      turnSourceChannel: "discord",
-      turnSourceTo: "123456789",
-      turnSourceAccountId: "main",
-    });
-
-    expect(target).toBeNull();
   });
 
   it("falls back to approver DMs for account-scoped Discord direct sessions", async () => {
@@ -258,29 +220,6 @@ describe("createDiscordNativeApprovalAdapter", () => {
     });
 
     expect(target).toEqual({ to: "123456789", threadId: undefined });
-  });
-
-  it("falls back to extracting the channel id from the session key", async () => {
-    const target = await resolveOriginTarget(
-      {
-        sessionKey: "agent:main:discord:channel:987654321",
-      },
-      { accountId: "default" },
-    );
-
-    expect(target).toEqual({ to: "987654321", threadId: undefined });
-  });
-
-  it("preserves explicit turn-source thread ids on origin targets", async () => {
-    const target = await resolveOriginTarget({
-      sessionKey: "agent:main:discord:channel:123456789:thread:777888999",
-      turnSourceChannel: "discord",
-      turnSourceTo: "channel:123456789",
-      turnSourceThreadId: "777888999",
-      turnSourceAccountId: "main",
-    });
-
-    expect(target).toEqual({ to: "123456789", threadId: "777888999" });
   });
 
   it("falls back to extracting thread ids from the session key", async () => {

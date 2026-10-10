@@ -2,7 +2,7 @@
 import { setImmediate as waitForImmediate } from "node:timers/promises";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { runExclusiveSessionStoreWrite } from "../config/sessions/store-writer.js";
 import {
   resetGatewayWorkAdmission,
@@ -15,8 +15,8 @@ import {
   consumeSessionWorkAdmissionHandoff,
   getActiveSessionLifecycleMutationCount,
   getActiveSessionWorkAdmissionCount,
-  getSessionWorkAdmissionOwnerRelease,
   getSessionWorkAdmissionRelease,
+  getSessionWorkAdmissionOwnerRelease,
   hasOnlySessionLifecycleMutationKindActive,
   interruptSessionWorkAdmissions,
   isCompetingSessionWorkAdmissionActive,
@@ -701,7 +701,9 @@ it("admits an independent session while revalidating a conflicting writer's auth
   }
 });
 
-it("releases an admission aborted while waiting for the store writer barrier", async () => {
+it("releases lifecycle locks when admission aborts behind the store writer barrier", async ({
+  signal,
+}) => {
   const storePath = "store-writer-abort";
   const writerStarted = createDeferred();
   const releaseWriter = createDeferred();
@@ -722,14 +724,26 @@ it("releases an admission aborted while waiting for the store writer barrier", a
       firstValidation.resolve();
     },
   });
-  await firstValidation.promise;
-  controller.abort(abortError);
+  let mutation: Promise<void> | undefined;
+  try {
+    await withinTest(firstValidation.promise, signal);
+    expect(isSessionWorkAdmissionActive(storePath, ["session-writer-abort"])).toBe(true);
+    controller.abort(abortError);
 
-  await expect(admission).rejects.toBe(abortError);
-  expect(isSessionWorkAdmissionActive(storePath, ["session-writer-abort"])).toBe(false);
+    await expect(admission).rejects.toBe(abortError);
+    expect(isSessionWorkAdmissionActive(storePath, ["session-writer-abort"])).toBe(false);
 
-  releaseWriter.resolve();
-  await writer;
+    mutation = runExclusiveSessionLifecycleMutation("patch", {
+      scope: storePath,
+      identities: ["session-writer-abort"],
+      run: async () => {},
+    });
+    // Cancellation must release the lifecycle lock before the unrelated writer finishes.
+    await withinTest(mutation, signal);
+  } finally {
+    releaseWriter.resolve();
+    await Promise.allSettled([writer, admission, mutation]);
+  }
 });
 
 it("revalidates without inheriting a released gateway root from the writer queue", async () => {

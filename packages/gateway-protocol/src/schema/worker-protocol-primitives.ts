@@ -248,6 +248,7 @@ export function workerMessageSchemas(text: TString, signature: TString, timestam
   };
   return {
     image: content.image,
+    operatorMessage: closedObject({ turnScoped: Type.Boolean() }),
     userContent: Type.Array(textOrImage, {
       minItems: 1,
       maxItems: WORKER_TRANSCRIPT_MAX_CONTENT_PARTS,

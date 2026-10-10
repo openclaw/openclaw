@@ -3,7 +3,7 @@ summary: "How plugin hooks register and execute, plus the complete typed hook ca
 read_when:
   - You are wiring a typed handler and need the ordering, timeout, and failure rules
   - You want to know which typed hook exists for a surface
-  - You are registering a Skill Workshop evaluator or a pairing observer
+  - You are registering a skill lifecycle or pairing observer
 title: "Hook reference"
 sidebarTitle: "Hook reference"
 ---
@@ -92,10 +92,9 @@ The standard runner applies these defaults **per handler**:
 | -------------------------------------------------------------------------------------------------------------- | ----------------------------------- | ---------------------------------------------------------------- |
 | `before_agent_run`, `before_tool_call`, `before_install`                                                       | 15 seconds                          | Fail closed: block the run, tool call, or install                |
 | `before_agent_finalize`, `before_prompt_build`, `message_sending`, `reply_payload_sending`, `resolve_exec_env` | 15 seconds                          | Log and skip the failed handler; retain other successful results |
-| `agent_end`, `before_compaction`, `after_compaction`, `skill_changed`, `skill_proposal_changed`                | 30 seconds                          | Log and continue                                                 |
+| `agent_end`, `before_compaction`, `after_compaction`, `skill_changed`                                          | 30 seconds                          | Log and continue                                                 |
 | `channel_pairing_requested`                                                                                    | 2 seconds                           | Log and continue                                                 |
 | `gateway_stop`                                                                                                 | 5 seconds                           | Log and continue shutdown                                        |
-| `skill_proposal_evaluate`                                                                                      | 120 seconds                         | Record an attributed error outcome                               |
 | Other asynchronous hooks, including claim hooks                                                                | No runner timeout unless configured | Log and continue                                                 |
 | `tool_result_persist`, `before_message_write`                                                                  | No asynchronous timeout             | Synchronous errors are logged; failed results are ignored        |
 
@@ -171,6 +170,8 @@ original prompt in transcript, use `before_agent_run` on a supported runner.
 To short-circuit an agent turn with a synthetic reply or silence, use
 `before_agent_reply`.
 
+<a id="sessions-and-compaction" />
+
 **Sessions and compaction**
 
 | Hook                                     | Kind    | Purpose                                                      |
@@ -240,68 +241,13 @@ For `sessions.create` calls with `parentSessionKey` and `emitCommandHooks: true`
 | `cron_reconciled`                | Observe       | Reconcile against the complete Gateway cron state after startup or reload                            |
 | `cron_changed`                   | Observe       | Observe Gateway-owned cron lifecycle changes (added, updated, removed, started, finished, scheduled) |
 | `before_install`                 | Modify / gate | Inspect staged skill or plugin install material from a loaded plugin runtime                         |
-| `skill_proposal_evaluate`        | Evaluate      | Evaluate one exact Skill Workshop draft and return attributed findings, metrics, or a decision       |
-| `skill_proposal_changed`         | Observe       | Observe durable Skill Workshop proposal lifecycle events after they commit                           |
 | `skill_changed`                  | Observe       | Observe committed live-skill create, update, and removal events                                      |
 
-### Skill lifecycle and evaluation
+### Skill lifecycle
 
-Use `skill_proposal_evaluate` for static analyzers, security scanners,
-benchmarks, model-based graders, or other third-party evaluators. OpenClaw
-passes an immutable candidate bundle with file hashes and a tree hash. Update
-proposals also include the complete current skill as `baseline`. Text files use
-UTF-8 content; binary files use base64.
-
-Evaluator registrations run concurrently. Give each evaluator a stable
-`registrationId`:
-
-```typescript
-api.on(
-  "skill_proposal_evaluate",
-  async (event) => {
-    const score = await evaluateBundle(event.candidate, event.baseline);
-    return {
-      evaluatorVersion: "rules-2026-07",
-      mode: "baseline-comparison",
-      decision: score.regressed ? "revise" : "pass",
-      summary: score.summary,
-      metrics: score.metrics,
-      findings: score.findings,
-    };
-  },
-  { registrationId: "quality-regression", timeoutMs: 90_000 },
-);
-```
-
-When evaluation input includes `correlationId`, OpenClaw forwards it to the
-evaluator event for both manual and apply-triggered evaluations. This value is
-caller-supplied correlation metadata, not authenticated identity or proof of
-authorization. An authorization plugin must mint or replace the value through
-a trusted entry point, bind it to the intended operation, and validate and
-consume it itself.
-
-Stored outcomes identify the evaluator, plugin id, plugin package version,
-status, and returned result. Timeouts and thrown errors are recorded as
-attributed error outcomes; they do not fail the whole evaluation. Among
-evaluator outcomes, only a completed `decision: "block"` vetoes apply. Other
-Workshop validation and ownership checks still apply. Apply revalidates the
-evaluated target tree under the Workshop mutation lock, so any live skill asset
-drift requires reevaluation.
-The complete persisted evaluation envelope is capped at 512 KiB.
-
-`skill_proposal_changed` fires after the matching proposal row and append-only
-lifecycle event commit. It carries the event id, sequence, exact proposal
-revision hash, optional correlation id, and evaluation outcomes.
 `skill_changed` fires after a live skill create, update, or removal commits and
 includes optional before/after artifacts with content and tree hashes, plus
 declared and source versions when available.
-
-These hooks are primitives, not an optimization scheduler. A plugin or external
-controller can observe a durable proposal event, evaluate its exact revision hash,
-revise with that hash and a correlation id, then repeat. OpenClaw does not
-automatically revise proposals or run an unbounded evaluation loop.
-Event replay is byte-bounded and returns `nextSequence` when another page is
-available.
 
 ### Channel pairing requests
 

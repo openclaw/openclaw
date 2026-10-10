@@ -90,11 +90,16 @@ the exact tarballs intended for publication and records their immutable artifact
 descriptors. Publication consumes those same bytes. Unpacked source fixtures do
 not participate unless npm includes them in a shipped tarball.
 
-Dependency advisories never block or delay a release. Release dependency
-evidence records every advisory finding, at any severity, and CI dispatched by
-release validation or publication reports a failing dependency audit as a
-warning. The dependency fix ships through `main` after publication. Only a
-known-malware finding stops publication.
+Dependency advisories never block CI, local commits, or delay a release. Ordinary
+pull-request, push, and scheduled CI skip the production dependency audit. It
+runs only for release dispatch IDs beginning with `full-release-validation-`
+or `release-native-android-`, where every audit failure is a warning with exit
+code 0. The optional production audit pre-commit hook follows the same policy.
+The separate daily Dependency Audit stays strict for triage and is not a required
+PR check. Release dependency evidence records every advisory finding, at any
+severity. The dependency fix ships through `main` after publication. The release
+`pnpm deps:vuln:gate` still stops publication on known malware, which identifies
+a compromised package rather than a vulnerability advisory.
 
 The health of `main` CI does not gate a release. Validation and publication run
 from the release branch with pinned release tooling, so a red `main` is not a
@@ -102,6 +107,47 @@ reason to wait, re-cut, or pause.
 
 See [Full release validation](/reference/full-release-validation) for coverage
 by profile and how to interpret the results.
+
+### Frozen qualification identity
+
+New candidate qualification records three separate identities:
+
+- **C — candidate:** the exact commit whose source and publication bytes are checked.
+- **Q — qualification:** the full workflow closure at C, including reusable workflows,
+  local actions, scripts, planners, contracts, and coverage data. By default **Q=C**.
+- **P — admission, verification, and publication tooling:** an independently trusted
+  main revision or protected publication tag. P may differ from C/Q; C/Q does not
+  need to be an ancestor of P. Trust in P does not replace qualification of C.
+
+The canonical SHA-pinned helper first asks P to record the reviewed operator
+attestation, complete normalized inputs, and data-only frozen Q coverage in an
+immutable admission artifact. Only then does that same helper dispatch Full
+Release Validation from an immutable `release-ci/*` ref at Q. A publication
+`release-publish/*` tag belongs to P, never to Q merely to make validation run.
+Admission is not a successful test result or publication approval.
+
+A candidate missing the required qualification contracts needs a deliberate
+backport. The helper does not silently use future-main checks or import
+main-only scenarios. A repair to the qualification harness changes C and Q and
+requires newly bound evidence; a P-only verifier/publisher repair can preserve
+C/Q and their original artifacts. Explicit trusted-main or protected-tag
+cross-revision validation is limited to diagnostic, main-qualification, and
+postpublish-confidence requests. It cannot supply new final candidate
+qualification. Existing historical publish requests keep their original meaning
+and remain recoverable. New publish qualification requires admitted Q=C.
+
+Evidence reuse preserves both the original producer identity and the current
+consumer identity, inputs, coverage, and artifact provenance. It cannot relabel
+an old run as candidate-owned. Reconciliation is read-only; explicit resume is
+limited to a candidate request before any qualification-ref mutation or FRV
+dispatch. An uncertain write never authorizes another dispatch. All publication
+gates, stable soak, blocking performance, environment approvals, and exact-byte
+checks remain unchanged.
+
+Local contract tests can prove input binding, refusal, and recovery behavior.
+They do not prove hosted workflow admission, environment access, OIDC, signing,
+or publication. Report hosted evidence and untested deployment prerequisites
+separately; a local green check is not a hosted release receipt.
 
 ## Packages and apps can become available at different times
 
@@ -119,6 +165,12 @@ also carry validation results, dependency reports, and checks of the published
 packages. These records identify the tested version and the files that shipped.
 Later documentation updates may improve the release notes without rebuilding
 or replacing packages.
+
+Beta release notes show changes since the version selected by npm's `beta`
+channel before publication. That baseline can be a stable version when `beta`
+and `latest` select the same package; it is not necessarily the last GitHub
+prerelease. Each beta freezes its own changelog and contribution record.
+Stable release notes remain cumulative since the previous stable release.
 
 For dependency review, see [Dependency locking](/gateway/security/dependency-locking).
 Release dependency archives include npm-format locks separately from the
@@ -213,6 +265,13 @@ runbook. Former section links below lead to their corresponding procedures.
 <a id="stable-main-closeout" />
 
 [Stable main closeout](https://github.com/openclaw/openclaw/blob/main/.agents/skills/release-openclaw-maintainer/references/stable-main-closeout.md).
+
+After every stable release, regenerate the committed shipped Plugin SDK surface
+on `main` with `pnpm plugin-sdk:shipped-surface:gen -- --release <stable tag>`,
+then run `pnpm plugin-sdk:surface:check`. Commit the generated
+`scripts/lib/plugin-sdk-shipped-surface.json` as part of stable closeout; do not
+edit it by hand. The inventory records the stable tag's typed public declarations
+so later export-budget reductions cannot authorize their removal.
 
 <a id="post-release-documentation-publication" />
 

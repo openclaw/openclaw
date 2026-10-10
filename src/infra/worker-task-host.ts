@@ -1,3 +1,4 @@
+import { MessageChannel } from "node:worker_threads";
 import type { WorkerTaskHost } from "@openclaw/worker-runtime";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { captureDeletedAgentDatabaseFences } from "./agent-database-readers.js";
@@ -12,24 +13,59 @@ import {
   captureRetainedNativeWorkerSource,
   createRetainedNativeWorker,
 } from "./worker-native-lifecycle.js";
+import { resolveWorkerPoolSize, type WorkerPoolClass } from "./worker-pool-sizing.js";
+import { classifyWorkerRequest, trackWorkerRequest } from "./worker-request-diagnostics.js";
+import { workerRequestKind } from "./worker-request-kind.js";
 import { getWorkerComputeCapacity } from "./worker-task-capacity.js";
 import { liveWorkerTaskPools } from "./worker-task-pool-registry.js";
 import type { WorkerTaskPoolOwnerOptions } from "./worker-task-pool.types.js";
 
 const prepareResources = createLazyRuntimeModule(() => import("./temp-artifact-cleanup.js"));
 
-export function createWorkerTaskHost(owner: WorkerTaskPoolOwnerOptions = {}): WorkerTaskHost {
+export function createWorkerTaskHost(
+  owner: WorkerTaskPoolOwnerOptions = {},
+  workerClass?: WorkerPoolClass,
+): WorkerTaskHost {
+  const boundedHeap = workerClass && workerClass !== "writer" && workerClass !== "singleton";
   const source = owner.retainedTransport
     ? (owner.nativeSource ?? captureRetainedNativeWorkerSource({ runtimeGeneration: undefined }))
     : undefined;
   return {
+    maxWorkers: workerClass ? resolveWorkerPoolSize(workerClass) : undefined,
+    requiresReady: owner.retainedTransport,
     createWorker(url, options) {
       const workerOptions = { execArgv: resolveRuntimeWorkerThreadExecArgv(url), ...options };
+      if (boundedHeap) {
+        const limits = workerOptions.resourceLimits;
+        workerOptions.resourceLimits = {
+          maxOldGenerationSizeMb: limits?.maxOldGenerationSizeMb ?? 512,
+          maxYoungGenerationSizeMb: limits?.maxYoungGenerationSizeMb,
+          codeRangeSizeMb: limits?.codeRangeSizeMb,
+          stackSizeMb: limits?.stackSizeMb,
+        };
+      }
       if (owner.retainedTransport) {
-        const native = createRetainedNativeWorker(url, workerOptions, source, owner.nativeResource);
-        return { worker: native, native };
+        const { port1, port2 } = new MessageChannel();
+        try {
+          const native = createRetainedNativeWorker(
+            url,
+            workerOptions,
+            source,
+            owner.nativeResource,
+            { host: port1, worker: port2 },
+          );
+          return { worker: native, native };
+        } catch (error) {
+          port1.close();
+          port2.close();
+          throw error;
+        }
       }
       return { worker: createCpuTrackedWorker(url, workerOptions) };
+    },
+    serviceNativeWorkers(workers) {
+      // This factory binds every native worker in the pool to the same captured source.
+      workers[0]?.service();
     },
     prepareResources,
     async releaseTemporaryDirectory(directory) {
@@ -37,6 +73,14 @@ export function createWorkerTaskHost(owner: WorkerTaskPoolOwnerOptions = {}): Wo
       await removeTemporaryArtifacts(directory, "Worker task");
     },
     captureTaskContext: captureDeletedAgentDatabaseFences,
+    createTaskObserver(url) {
+      const kind = workerRequestKind(url);
+      return (operation) =>
+        trackWorkerRequest(
+          kind,
+          operation === undefined ? "task" : classifyWorkerRequest(operation),
+        );
+    },
     receiveMessage: receiveWorkerMemoryPort,
     workerStarted: attributeWorkerToPool,
     workerRetiring: markWorkerRetirement,

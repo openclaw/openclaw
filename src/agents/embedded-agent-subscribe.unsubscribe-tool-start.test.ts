@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createSubscribedSessionHarness } from "./embedded-agent-subscribe.e2e-harness.js";
-import { countActiveToolExecutions } from "./embedded-agent-subscribe.handlers.tools.js";
+import { countActiveToolExecutions } from "./embedded-agent-subscribe.handlers.tools.start.js";
 
 describe("subscribeEmbeddedAgentSession unsubscribe tool cleanup", () => {
   it("removes only the unsubscribed run's unfinished tool starts", () => {

@@ -9,9 +9,9 @@ import {
 import type { DB } from "../../state/openclaw-state-db.generated.js";
 import type { WorkerOperationHandlers } from "../../state/worker-operation-registry.js";
 import { classifyHiddenGitHubStoreName } from "./secret-store-hidden-github.js";
-import { isMissingSecretStoreTableError } from "./secret-store-sqlite.js";
+import { withMissingSecretStoreFallback } from "./secret-store-sqlite.js";
 import { SECRET_STORE_VALUE_MAX_BYTES } from "./secret-store-validation-error.js";
-import { assertSecretStoreEnvName, normalizeScope } from "./secret-store-validation.js";
+import { assertSecretStoreEnvName } from "./secret-store-validation.js";
 import type {
   SecretStoreListInput,
   SecretStoreReadOperations,
@@ -30,7 +30,7 @@ function readExecEnvironmentRows(
   const rows: SecretStoreReadOperations["secrets.execEnvironment"]["output"]["rows"] = [];
   const excluded = new Set(input.excludeNames);
   let bytes = 0;
-  try {
+  return withMissingSecretStoreFallback(() => {
     const query = getNodeSqliteKysely<SecretStoreDatabase>(sqlite)
       .selectFrom("secret_store_entries")
       .select(["name", "value", "kind", "allowed_hosts"])
@@ -56,17 +56,12 @@ function readExecEnvironmentRows(
       rows.push(row);
     }
     return rows;
-  } catch (error) {
-    if (isMissingSecretStoreTableError(error)) {
-      return [];
-    }
-    throw error;
-  }
+  }, []);
 }
 
 function readValueRow(sqlite: DatabaseSync, name: string) {
   assertSecretStoreEnvName(name);
-  try {
+  return withMissingSecretStoreFallback(() => {
     const row = executeSqliteQueryTakeFirstSync(
       sqlite,
       getNodeSqliteKysely<SecretStoreDatabase>(sqlite)
@@ -81,23 +76,17 @@ function readValueRow(sqlite: DatabaseSync, name: string) {
       throw new Error("Secret store value exceeds its 64 KiB read limit.");
     }
     return row;
-  } catch (error) {
-    if (isMissingSecretStoreTableError(error)) {
-      return undefined;
-    }
-    throw error;
-  }
+  }, undefined);
 }
 
 function listSecretStoreRows(sqlite: DatabaseSync, params: SecretStoreListInput): SecretStoreRow[] {
-  const { scopeKind, scopeId } = normalizeScope(params.scope);
-  try {
+  return withMissingSecretStoreFallback(() => {
     const db = getNodeSqliteKysely<SecretStoreDatabase>(sqlite);
     let query = db
       .selectFrom("secret_store_entries")
       .selectAll()
-      .where("scope_kind", "=", scopeKind)
-      .where("scope_id", "=", scopeId)
+      .where("scope_kind", "=", "team")
+      .where("scope_id", "=", "")
       .orderBy("name", "asc");
     if (!params.includeDeleted) {
       query = query.where("deleted_at_ms", "is", null);
@@ -107,12 +96,7 @@ function listSecretStoreRows(sqlite: DatabaseSync, params: SecretStoreListInput)
         classifyHiddenGitHubStoreName(row.name) === undefined &&
         (!params.redactedOnly || isRedactedSecretValue(row.value)),
     );
-  } catch (error) {
-    if (isMissingSecretStoreTableError(error)) {
-      return [];
-    }
-    throw error;
-  }
+  }, []);
 }
 
 export const secretStoreReadOperations = {

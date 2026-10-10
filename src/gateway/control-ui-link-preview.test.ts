@@ -21,11 +21,20 @@ function requestUrl(input: Parameters<typeof fetch>[0]): string {
 function html(text: string) {
   return new Response(text, { headers: { "content-type": "text/html; charset=utf-8" } });
 }
-function load(path: string, enabled = () => true) {
-  return loadControlUiLinkPreview(new URL(path, "https://public.example"), enabled);
+const principal = {};
+function load(path: string, enabled = () => true, scope = principal, revision = 0) {
+  return loadControlUiLinkPreview(
+    parseControlUiLinkPreviewUrl(new URL(path, "https://public.example").href)!,
+    enabled,
+    {
+      principal: scope,
+      revision,
+    },
+  );
 }
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
   encode.mockReset();
@@ -170,24 +179,196 @@ describe("public link previews", () => {
     },
   );
 
-  it("shares in-flight anonymous reads and caches unavailable results", async () => {
-    const gate = createDeferred<Response>();
-    const fetch = vi
-      .fn<typeof globalThis.fetch>()
-      .mockImplementation(async (input) =>
+  it.each(["</head>", "<body>"])(
+    "stops reading at a split %s without treating inert markup as a head boundary",
+    async (boundary) => {
+      const chunks = [
+        Buffer.from(
+          '<html><head><!-- </head><meta property="og:title" content="Wrong"> -->' +
+            '<script>const tag = "</head>";</script><style>/* </head> */</style>' +
+            "<title>A &am",
+        ),
+        Buffer.from("p; B</title>" + boundary.slice(0, 3)),
+        Buffer.from(boundary.slice(3)),
+        Buffer.from('<meta property="og:title" content="Body">' + "x".repeat(128 * 1024)),
+      ];
+      const cancel = vi.fn();
+      const pull = vi.fn((controller: ReadableStreamDefaultController<Uint8Array>) => {
+        const chunk = chunks.shift();
+        if (chunk) {
+          controller.enqueue(chunk);
+        } else {
+          controller.close();
+        }
+      });
+      vi.stubGlobal(
+        "fetch",
+        vi.fn<typeof globalThis.fetch>().mockImplementation(async (input) =>
+          requestUrl(input).endsWith("/favicon.ico")
+            ? new Response(null, { status: 404 })
+            : new Response(new ReadableStream({ pull, cancel }, { highWaterMark: 0 }), {
+                headers: { "content-type": "text/html" },
+              }),
+        ),
+      );
+      expect(await load("/streamed-" + encodeURIComponent(boundary))).toEqual({ title: "A & B" });
+      expect(pull).toHaveBeenCalledTimes(3);
+      expect(cancel).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("limits an unterminated head to 64 KiB before late metadata", async () => {
+    const prefix = "<head><title>Early</title><!--";
+    const bytes = Buffer.from(
+      prefix +
+        "x".repeat(64 * 1024 - prefix.length) +
+        '--><meta property="og:title" content="Too late"></head>',
+    );
+    const cancel = vi.fn();
+    const pull = vi.fn((controller: ReadableStreamDefaultController<Uint8Array>) => {
+      controller.enqueue(bytes);
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof globalThis.fetch>().mockImplementation(async (input) =>
         requestUrl(input).endsWith("/favicon.ico")
           ? new Response(null, { status: 404 })
-          : gate.promise,
-      );
+          : new Response(new ReadableStream({ pull, cancel }, { highWaterMark: 0 }), {
+              headers: { "content-type": "text/html" },
+            }),
+      ),
+    );
+    expect(await load("/unterminated-head")).toEqual({ title: "Early" });
+    expect(pull).toHaveBeenCalledOnce();
+    expect(cancel).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    { name: "successful", ttl: 60 * 60_000, result: { title: "Cached" } },
+    { name: "unavailable", ttl: 5 * 60_000, result: {} },
+  ])(
+    "expires $name previews by URL while coalescing fragment variants",
+    async ({ name, ttl, result }) => {
+      const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
+      const fetch = vi
+        .fn<typeof globalThis.fetch>()
+        .mockImplementation(async (input) =>
+          requestUrl(input).endsWith("/favicon.ico") || name === "unavailable"
+            ? new Response(null, { status: 404 })
+            : html("<head><title>Cached</title></head>"),
+        );
+      vi.stubGlobal("fetch", fetch);
+      const path = "/cache-ttl-" + name;
+      expect(await load(path)).toEqual(result);
+      now.mockReturnValue(1_000 + ttl - 1);
+      expect(await load(path + "#fragment")).toEqual(result);
+      expect(fetch).toHaveBeenCalledTimes(2);
+      now.mockReturnValue(1_000 + ttl);
+      expect(await load(path)).toEqual(result);
+      expect(fetch).toHaveBeenCalledTimes(4);
+    },
+  );
+
+  it("shares in-flight anonymous reads and caches unavailable results", async () => {
+    const gate = createDeferred<Response>();
+    const requested = createDeferred();
+    const fetch = vi.fn<typeof globalThis.fetch>().mockImplementation(async (input) => {
+      requested.resolve();
+      return requestUrl(input).endsWith("/favicon.ico")
+        ? new Response(null, { status: 404 })
+        : gate.promise;
+    });
     vi.stubGlobal("fetch", fetch);
     const first = load("/shared");
     const second = load("/shared");
-    await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(1));
+    await requested.promise;
+    expect(fetch).toHaveBeenCalledTimes(1);
     gate.resolve(new Response(null, { status: 404 }));
     expect(await first).toEqual({});
     expect(await second).toEqual({});
     expect(await load("/shared")).toEqual({});
     expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not share cached or in-flight previews across principals or revisions", async () => {
+    const gate = createDeferred<Response>();
+    const requested = createDeferred();
+    const fetch = vi.fn<typeof globalThis.fetch>().mockImplementation(async (input) => {
+      if (requestUrl(input).endsWith("/favicon.ico")) {
+        return new Response(null, { status: 404 });
+      }
+      if (fetch.mock.calls.length === 1) {
+        requested.resolve();
+        return gate.promise;
+      }
+      return html("<head><title>Current</title></head>");
+    });
+    vi.stubGlobal("fetch", fetch);
+    const first = load("/scoped");
+    await requested.promise;
+    const second = load("/scoped", () => true, {});
+    gate.resolve(html("<head><title>Original</title></head>"));
+    expect(await second).toEqual({ title: "Current" });
+    expect(await first).toEqual({ title: "Original" });
+    expect(await load("/scoped")).toEqual({ title: "Original" });
+    expect(await load("/scoped", () => true, principal, 1)).toEqual({ title: "Current" });
+    expect(fetch).toHaveBeenCalledTimes(6);
+  });
+
+  it("fetches a shared social image and favicon only once while sizing each output", async () => {
+    encode.mockResolvedValue({ data: PNG });
+    const fetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockImplementation(async (input) =>
+        requestUrl(input).endsWith("/shared-image")
+          ? html(
+              '<head><meta property="og:image" content="/image.png"><link rel="icon" href="/image.png"></head>',
+            )
+          : new Response(PNG),
+      );
+    vi.stubGlobal("fetch", fetch);
+    expect(await load("/shared-image")).toEqual({ imageDataUrl: pngUrl, faviconDataUrl: pngUrl });
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(
+      encode.mock.calls.map(([, options]) => options.resize.maxSide).toSorted((a, b) => a - b),
+    ).toEqual([64, 640]);
+  });
+
+  it("bounds queue wait by the preview deadline and never fetches an expired queued URL", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(AbortSignal, "timeout").mockImplementation((ms) => {
+      const controller = new AbortController();
+      setTimeout(() => controller.abort(), ms);
+      return controller.signal;
+    });
+    const gate = createDeferred();
+    const started = createDeferred();
+    let active = 0;
+    const fetch = vi.fn<typeof globalThis.fetch>().mockImplementation(async () => {
+      if (++active === 4) {
+        started.resolve();
+      }
+      await gate.promise;
+      return new Response(null, { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetch);
+    const pending = Array.from({ length: 4 }, (_, i) => load(`/busy-${i}`));
+    await started.promise;
+    let result: unknown;
+    const queued = load("/expired-in-queue").then((preview) => {
+      result = preview;
+    });
+    try {
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(result).toEqual({});
+      expect(fetch).toHaveBeenCalledTimes(4);
+    } finally {
+      gate.resolve();
+      await Promise.all([...pending, queued]);
+    }
+    expect(fetch.mock.calls.some(([url]) => requestUrl(url).includes("expired-in-queue"))).toBe(
+      false,
+    );
   });
 
   it("does no work while disabled, including cached previews; disabling during HTML stops images", async () => {

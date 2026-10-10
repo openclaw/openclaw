@@ -16,6 +16,18 @@ Assembly has three layers:
 
 This keeps exported/debug prompt surfaces aligned with live runs without turning every runtime detail into one monolithic builder.
 
+Node-hosted OpenClaw sessions use the same prompt and bootstrap preparation as
+Gateway-local sessions. The Gateway selects agent instructions, persona files,
+skills, memory guidance, and conversation context under the session's existing
+privacy and tool policies. The node supplies its own workspace path, host, OS,
+shell, and active process facts. Moving execution to a node does not switch the
+agent to a generic coding prompt or make unselected node-local bootstrap files
+part of its context.
+
+Context-engine selection, history preparation, and turn settlement remain
+Gateway-owned. Direct post-turn hooks run after the node's workspace results
+are accepted and before its placement claim is released.
+
 Provider plugins can contribute cache-aware guidance without replacing the OpenClaw-owned prompt. A provider runtime can:
 
 - replace one of three named core sections: `interaction_style`, `tool_call_style`, `execution_bias`
@@ -50,6 +62,8 @@ The prompt is compact, with fixed sections:
 - **Reasoning**: current visibility level plus the `/reasoning` toggle hint.
 
 Large stable content (including **Project Context** and static **Memory Recall** instructions) stays above the internal prompt cache boundary. Volatile per-turn sections (**UI Presentation**, Control UI embed guidance, **Messaging**, **Collapsible Details**, **Voice**, **Group Chat Context**, **Reactions**, **Runtime**, **Project Memory** facts, channel-specific ACP hints, delegation/orchestration mode, and the current elevated level) are appended below that boundary so local backends with prefix caches can reuse the stable workspace prefix across channel turns. Exec, subagent, and media facts use the later Runtime Context carrier to preserve the conversation-history prefix too; their capability-based instructions stay in the system prompt. The boundary is internal transport metadata: every section remains system-prompt guidance for CLI backends. Tool descriptions should avoid embedding current channel names when the accepted schema already carries that runtime detail.
+
+On supported direct Anthropic API-key routes and native OpenAI Responses routes, the embedded session pins both sides of this boundary. Refreshed sections are appended as instruction messages after the current user turn, preserving earlier prompt and history bytes. Route or selected personal-profile changes, reset, and compaction start a new series; skill and memory refresh contracts continue to deliver updated guidance. Prompt-cache diagnostics identify changed sections using a bounded set of names without logging their contents.
 
 Media task facts include only enabled media tools and tasks belonging to the current requester. Restored tasks without a recorded requester use the configured session owner; completed tasks are omitted.
 
@@ -112,9 +126,9 @@ Branches and restored history keep the source version, as do reset boundaries
 and compaction within an existing transcript. Adoption leaves retained history
 untouched; Doctor repairs legacy headerless history with version 3. Unknown projection versions are
 rejected before model submission. Provider message roles remain unchanged to
-preserve retained-thinking prefix compatibility. Cloud-worker prompt assembly
-uses a separate launch contract and still needs this hardening; see
-[the cloud-worker follow-up](https://github.com/openclaw/openclaw/issues/140666).
+preserve retained-thinking prefix compatibility. Cloud-worker turns use the same
+Gateway-owned prompt projection before launch and carry trusted runtime context
+separately to the worker, which adds its execution-host facts.
 
 Resumed room CLI turns retain new thread notes, system events, and MCP App context.
 

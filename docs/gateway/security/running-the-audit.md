@@ -14,7 +14,7 @@ Run this after any config change or before exposing network surfaces:
 
 ```bash
 openclaw security audit
-openclaw security audit --deep    # attempts a live Gateway probe
+openclaw security audit --deep    # attempts a live Gateway check
 openclaw security audit --fix     # apply safe remediations
 openclaw security audit --json
 ```

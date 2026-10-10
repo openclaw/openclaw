@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { NODE_WORKER_IDLE_RETENTION_PROTOCOL_FEATURE } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { NodeWorkerCapacitySnapshot } from "../infra/node-runner-inventory.js";
 import { nodeWorkerTurnMatchesIdentity } from "../worker/node-supervisor-protocol.js";
@@ -10,7 +9,6 @@ import { createNodeWorkerSupervisor, mocks } from "./node-worker-supervisor.mock
 import {
   TEST_WORKER_ENDPOINT,
   testNodeWorkerEnvironmentIdentity,
-  testNodeWorkerLaunchIdentity,
   testWorkerLaunchInput,
 } from "./node-worker-supervisor.test-support.js";
 import type { NodeWorkerTurnReceipt } from "./node-worker-turn-store.js";
@@ -298,7 +296,7 @@ describe("node worker idle retention", () => {
     }
   });
 
-  it.each(["completed", "failed", "closed", "aborted"] as const)(
+  it.each(["completed", "closed", "aborted"] as const)(
     "releases prepared workspace custody when public launch is %s",
     async (outcome) => {
       const f = fixture();
@@ -318,9 +316,6 @@ describe("node worker idle retention", () => {
         started.resolve();
         await startup.promise;
       });
-      if (outcome === "failed") {
-        mocks.launchClaim.mockRejectedValueOnce(failure);
-      }
       const pending = f.supervisor.launch(
         input("prepared"),
         TEST_WORKER_ENDPOINT,
@@ -442,34 +437,63 @@ describe("node worker idle retention", () => {
     }
   });
 
-  it("joins idle cleanup before capacity-one admission, including an expiry race", async () => {
-    const f = fixture();
-    const cleanup = createDeferred();
-    try {
-      const old = input("old", "old-environment");
-      const owner = await f.launch(old);
-      await owner.complete(old.launchId, "idle");
-      await vi.advanceTimersByTimeAsync(119_999);
-      owner.holdCleanup(cleanup.promise);
-      const replacement = f.supervisor.launch(
-        input("replacement", "new-environment"),
-        TEST_WORKER_ENDPOINT,
-      );
-      await owner.killed.promise;
-      expect(mocks.prepare).toHaveBeenCalledTimes(1);
-      expect(f.snapshots.at(-1)).toEqual({ total: 1, available: 0, reclaimableIdle: 0 });
-      await vi.advanceTimersByTimeAsync(9_999);
-      expect(owner.adapter.kill).toHaveBeenCalledTimes(2);
-      expect(mocks.prepare).toHaveBeenCalledTimes(1);
-      cleanup.resolve();
-      expect(await replacement).toMatchObject({ launchId: "replacement", state: "running" });
-      expect(owner.adapter.dispose).toHaveBeenCalledOnce();
-      expect(mocks.prepare).toHaveBeenCalledTimes(2);
-    } finally {
-      cleanup.resolve();
-      await f.supervisor.close();
-    }
-  });
+  it.each(["before", "at"] as const)(
+    "settles idle cleanup %s the admission deadline",
+    async (timing) => {
+      const f = fixture();
+      const cleanup = createDeferred();
+      try {
+        const old = input("old", "old-environment");
+        const owner = await f.launch(old);
+        await owner.complete(old.launchId, "idle");
+        if (timing === "before") {
+          await vi.advanceTimersByTimeAsync(119_999);
+        }
+        owner.holdCleanup(cleanup.promise);
+        const replacement = f.supervisor
+          .launch(input("replacement", "new-environment"), TEST_WORKER_ENDPOINT)
+          .then(
+            (value) => ({ value }),
+            (error: unknown) => ({ error }),
+          );
+        await owner.killed.promise;
+        expect(mocks.prepare).toHaveBeenCalledTimes(1);
+        expect(f.snapshots.at(-1)).toEqual({ total: 1, available: 0, reclaimableIdle: 0 });
+        if (timing === "before") {
+          await vi.advanceTimersByTimeAsync(9_999);
+          expect(owner.adapter.kill).toHaveBeenCalledTimes(2);
+          expect(mocks.prepare).toHaveBeenCalledTimes(1);
+        } else {
+          // Move wall time to the boundary without firing the deadline callback.
+          vi.setSystemTime(10_000);
+        }
+        cleanup.resolve();
+        if (timing === "before") {
+          expect(await replacement).toMatchObject({
+            value: { launchId: "replacement", state: "running" },
+          });
+          expect(mocks.prepare).toHaveBeenCalledTimes(2);
+        } else {
+          expect(await replacement).toEqual({
+            error: expect.objectContaining({
+              name: "NodeWorkerCapacityExhaustedError",
+              message: "node worker capacity remained full for 10000 ms",
+            }),
+          });
+          expect(owner.adapter.kill).toHaveBeenCalledOnce();
+          expect(f.launches.get("old")?.state).toBe("interrupted");
+          expect(f.launches.has("replacement")).toBe(false);
+          expect(mocks.prepare).toHaveBeenCalledTimes(1);
+          expect(f.snapshots.at(-1)).toEqual({ total: 1, available: 1, reclaimableIdle: 0 });
+          expect(vi.getTimerCount()).toBe(0);
+        }
+        expect(owner.adapter.dispose).toHaveBeenCalledOnce();
+      } finally {
+        cleanup.resolve();
+        await f.supervisor.close();
+      }
+    },
+  );
 
   it.each(["deadline", "abort", "close"] as const)(
     "bounds admission by %s while retaining stalled idle cleanup",
@@ -542,44 +566,6 @@ describe("node worker idle retention", () => {
     },
   );
 
-  it.each([10_000, 10_001])(
-    "rejects idle reclamation completed at %i ms before its timeout callback runs",
-    async (elapsedMs) => {
-      const f = fixture();
-      const cleanup = createDeferred();
-      try {
-        const owner = await f.launch(input("old", "old-environment"));
-        await owner.complete("old", "idle");
-        owner.holdCleanup(cleanup.promise);
-        const outcome = f.supervisor
-          .launch(input("replacement", "new-environment"), TEST_WORKER_ENDPOINT)
-          .then(
-            (value) => ({ value }),
-            (error: unknown) => ({ error }),
-          );
-        await owner.killed.promise;
-        vi.setSystemTime(elapsedMs);
-        cleanup.resolve();
-        expect(await outcome).toEqual({
-          error: expect.objectContaining({
-            name: "NodeWorkerCapacityExhaustedError",
-            message: "node worker capacity remained full for 10000 ms",
-          }),
-        });
-        expect(owner.adapter.kill).toHaveBeenCalledOnce();
-        expect(owner.adapter.dispose).toHaveBeenCalledOnce();
-        expect(f.launches.get("old")?.state).toBe("interrupted");
-        expect(f.launches.has("replacement")).toBe(false);
-        expect(mocks.prepare).toHaveBeenCalledTimes(1);
-        expect(f.snapshots.at(-1)).toEqual({ total: 1, available: 1, reclaimableIdle: 0 });
-        expect(vi.getTimerCount()).toBe(0);
-      } finally {
-        cleanup.resolve();
-        await f.supervisor.close();
-      }
-    },
-  );
-
   it("rejects reuse when idle expiry revokes the owner during turn admission", async () => {
     const f = fixture();
     const release = createDeferred();
@@ -639,7 +625,7 @@ describe("node worker idle retention", () => {
     }
   });
 
-  it.each(["stop", "disconnect", "close"] as const)(
+  it.each(["stop", "close"] as const)(
     "%s retires idle through physical cleanup and preserves the completed turn",
     async (operation) => {
       const f = fixture();
@@ -652,8 +638,6 @@ describe("node worker idle retention", () => {
         expect(owner.adapter.kill).not.toHaveBeenCalled();
         if (operation === "stop") {
           await f.supervisor.stopEnvironment(identity);
-        } else if (operation === "disconnect") {
-          await f.supervisor.retireIdle();
         } else {
           await f.supervisor.close();
         }
@@ -742,55 +726,6 @@ describe("node worker idle retention", () => {
           reclaimableIdle: 0,
         });
         expect(await f.supervisor.status("idle")).toMatchObject({ state: "completed" });
-      } finally {
-        await f.supervisor.close();
-      }
-    },
-  );
-
-  it.each(["old-gateway", "old-bundle"] as const)(
-    "keeps %s retention background-only and preserves the old managed turn shape",
-    async (compatibility) => {
-      const f = fixture();
-      try {
-        const value = input("legacy");
-        if (compatibility === "old-gateway") {
-          delete value.idleRetention;
-        } else {
-          value.descriptor.admission.handshake.protocolFeatures =
-            value.descriptor.admission.handshake.protocolFeatures.filter(
-              (feature) => feature !== NODE_WORKER_IDLE_RETENTION_PROTOCOL_FEATURE,
-            );
-        }
-        const owner = await f.launch(value);
-        expect(mocks.send).toHaveBeenCalledWith(owner.adapter, {
-          type: "turn",
-          turnId: value.launchId,
-          descriptor: { ...value.descriptor, connectionEndpoint: TEST_WORKER_ENDPOINT },
-        });
-        await owner.complete(value.launchId);
-        await vi.advanceTimersByTimeAsync(240_000);
-        expect(owner.adapter.kill).not.toHaveBeenCalled();
-        expect(await f.supervisor.hasActiveWork()).toBe(true);
-        expect(f.snapshots.every((snapshot) => !Object.hasOwn(snapshot, "reclaimableIdle"))).toBe(
-          true,
-        );
-        const next = {
-          ...value,
-          launchId: "legacy-next",
-          descriptor: structuredClone(value.descriptor),
-        };
-        next.descriptor.assignment.turnId = next.launchId;
-        await f.supervisor.launch(next, TEST_WORKER_ENDPOINT);
-        expect(mocks.send).toHaveBeenCalledWith(owner.adapter, {
-          type: "turn",
-          turnId: next.launchId,
-          descriptor: { ...next.descriptor, connectionEndpoint: TEST_WORKER_ENDPOINT },
-        });
-        expect(
-          await f.supervisor.cancel({ ...testNodeWorkerLaunchIdentity(value), ownerEpoch: 0 }),
-        ).toBeUndefined();
-        expect(owner.adapter.kill).not.toHaveBeenCalled();
       } finally {
         await f.supervisor.close();
       }

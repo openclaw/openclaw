@@ -10,7 +10,6 @@ import {
   type SessionEntry,
 } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { isSubagentSessionKey } from "../../routing/session-key.js";
 import {
   AGENT_HARNESS_MODEL_RUN_FORBIDDEN_MESSAGE,
   resolveAgentHarnessSessionContextError,
@@ -19,7 +18,7 @@ import {
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import { setSafeTimeout } from "../../utils/timer-delay.js";
 import type { GatewayRequestHandlerOptions } from "../server-methods/types.js";
-import { loadSessionEntry, resolveDeletedAgentIdFromSessionKey } from "../session-utils.js";
+import { loadSessionEntry, prepareDeletedAgentSessionCheck } from "../session-utils.js";
 
 export const CRON_CONTINUATION_RELEASE_RECOVERY_DELAYS_MS = [250, 1_000, 4_000, 15_000] as const;
 
@@ -27,10 +26,7 @@ export function canPrepareAgentSessionWorktree(
   sessionKey: string | undefined,
   entry: InternalSessionEntry | undefined,
 ): boolean {
-  return (
-    Boolean(sessionKey && isSubagentSessionKey(sessionKey) && entry?.pendingWorktree) &&
-    entry?.pendingProjectGitUrl === undefined
-  );
+  return Boolean(sessionKey && entry?.pendingWorktree) && entry?.pendingProjectGitUrl === undefined;
 }
 
 export function resolveAgentSessionWorkStartError(
@@ -66,25 +62,35 @@ export function respondDeletedAgentSession(params: {
   entry?: SessionEntry | null;
   acpMetadataSessionKey?: string;
   respond: GatewayRequestHandlerOptions["respond"];
-}): boolean {
-  const deletedAgentId = resolveDeletedAgentIdFromSessionKey(
-    params.cfg,
-    params.canonicalKey,
-    params.entry,
-    { acpMetadataSessionKey: params.acpMetadataSessionKey ?? params.canonicalKey },
-  );
-  if (deletedAgentId === null) {
-    return false;
-  }
-  params.respond(
-    false,
-    undefined,
-    errorShape(
-      ErrorCodes.INVALID_REQUEST,
-      `Agent "${deletedAgentId}" no longer exists in configuration`,
-    ),
-  );
-  return true;
+  assertCurrent?: () => void;
+}): boolean | Promise<boolean> {
+  const deletedAgentId = prepareDeletedAgentSessionCheck({
+    cfg: params.cfg,
+    sessionKey: params.canonicalKey,
+    entry: params.entry,
+    acpMetadataSessionKey: params.acpMetadataSessionKey,
+    assertCurrent: params.assertCurrent,
+  });
+  const respond = (agentId: string | null) => {
+    if (agentId === null) {
+      return false;
+    }
+    params.respond(
+      false,
+      undefined,
+      errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        `Agent "${agentId}" no longer exists in configuration`,
+      ),
+    );
+    return true;
+  };
+  return deletedAgentId instanceof Promise
+    ? deletedAgentId.then((agentId) => {
+        params.assertCurrent?.();
+        return respond(agentId);
+      })
+    : respond(deletedAgentId);
 }
 
 export function respondUnavailableAgentSessionForKey(params: {
@@ -93,35 +99,44 @@ export function respondUnavailableAgentSessionForKey(params: {
   isRawModelRun: boolean;
   agentId?: string;
   respond: GatewayRequestHandlerOptions["respond"];
-}): boolean {
+  assertCurrent?: () => void;
+}): boolean | Promise<boolean> {
   const { cfg, entry, canonicalKey, legacyKey } = loadSessionEntry(params.sessionKey, {
     ...(params.agentId ? { agentId: params.agentId } : {}),
     clone: false,
     projection: "list",
   });
-  if (
-    respondDeletedAgentSession({
-      cfg,
-      canonicalKey,
-      entry,
-      acpMetadataSessionKey: legacyKey,
-      respond: params.respond,
-    })
-  ) {
+  const deleted = respondDeletedAgentSession({
+    cfg,
+    canonicalKey,
+    entry,
+    acpMetadataSessionKey: legacyKey,
+    respond: params.respond,
+    assertCurrent: params.assertCurrent,
+  });
+  const respondUnavailable = (isDeleted: boolean) => {
+    if (isDeleted) {
+      return true;
+    }
+    const sessionError =
+      resolveAgentHarnessSessionContextError(canonicalKey, entry) ||
+      resolveAgentHarnessSessionIdMismatchError(entry, params.requestedSessionId) ||
+      (params.isRawModelRun && entry?.modelSelectionLocked === true
+        ? AGENT_HARNESS_MODEL_RUN_FORBIDDEN_MESSAGE
+        : undefined) ||
+      resolveAgentSessionWorkStartError(canonicalKey, entry);
+    if (!sessionError) {
+      return false;
+    }
+    params.respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, sessionError));
     return true;
-  }
-  const sessionError =
-    resolveAgentHarnessSessionContextError(canonicalKey, entry) ||
-    resolveAgentHarnessSessionIdMismatchError(entry, params.requestedSessionId) ||
-    (params.isRawModelRun && entry?.modelSelectionLocked === true
-      ? AGENT_HARNESS_MODEL_RUN_FORBIDDEN_MESSAGE
-      : undefined) ||
-    resolveAgentSessionWorkStartError(canonicalKey, entry);
-  if (!sessionError) {
-    return false;
-  }
-  params.respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, sessionError));
-  return true;
+  };
+  return deleted instanceof Promise
+    ? deleted.then((isDeleted) => {
+        params.assertCurrent?.();
+        return respondUnavailable(isDeleted);
+      })
+    : respondUnavailable(deleted);
 }
 
 export function cronContinuationHasReusableRuntime(params: {

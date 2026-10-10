@@ -49,29 +49,53 @@ export async function raceWithTimeout<T, F>(
   operation: Promise<T> | (() => Promise<T>),
   timeoutMs: number,
   onTimeout: () => F,
-  options: { ref?: boolean } = {},
+  options: { ref?: boolean; signal?: AbortSignal; onAbort?: (signal: AbortSignal) => F } = {},
 ): Promise<T | F> {
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let onAbort: (() => void) | undefined;
   try {
     const deadline = new Promise<F>((resolve, reject) => {
-      timer = setTimeout(() => {
+      const settle = (result: () => F) => {
         try {
-          resolve(onTimeout());
+          resolve(result());
         } catch (error) {
-          // oxlint-disable-next-line typescript/prefer-promise-reject-errors -- Preserve the timeout callback's rejection identity.
+          // oxlint-disable-next-line typescript/prefer-promise-reject-errors -- Preserve the boundary callback's rejection identity.
           reject(error);
         }
-      }, timeoutMs);
+      };
+      timer = setTimeout(() => settle(onTimeout), timeoutMs);
       if (options.ref === false) {
         timer.unref?.();
       }
+      const signal = options.signal;
+      if (signal) {
+        onAbort = () =>
+          settle(() => {
+            if (options.onAbort) {
+              return options.onAbort(signal);
+            }
+            throw createAbortError("Operation aborted", { cause: signal.reason });
+          });
+        signal.addEventListener("abort", onAbort, { once: true });
+        if (signal.aborted) {
+          onAbort();
+        }
+      }
     });
-    return await Promise.race([
-      typeof operation === "function" ? operation() : operation,
-      deadline,
-    ]);
+    let source: Promise<T>;
+    try {
+      source = typeof operation === "function" ? operation() : operation;
+    } catch (error) {
+      // A throwing factory must observe cancellation before synchronous cleanup.
+      void deadline.catch(() => {});
+      throw error;
+    }
+    return await Promise.race([source, deadline]);
   } finally {
     clearTimeout(timer);
+    if (onAbort) {
+      options.signal?.removeEventListener("abort", onAbort);
+    }
   }
 }
 

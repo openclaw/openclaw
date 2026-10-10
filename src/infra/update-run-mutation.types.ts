@@ -1,3 +1,4 @@
+import type { SqliteWorkerCommand } from "./sqlite-worker-contract.js";
 import type { UpdateRunPhase, UpdateRunRecord, UpdateRunStep } from "./update-run-record.js";
 import type { UpdateRecoveryRecord } from "./update-run-recovery-schema.js";
 
@@ -39,9 +40,4 @@ export type UpdateRunWriteOperations = {
   };
 };
 
-export type UpdateRunWriteCommand = {
-  [Type in keyof UpdateRunWriteOperations]: {
-    type: Type;
-    input: UpdateRunWriteOperations[Type]["input"];
-  };
-}[keyof UpdateRunWriteOperations];
+export type UpdateRunWriteCommand = SqliteWorkerCommand<UpdateRunWriteOperations>;

@@ -209,25 +209,8 @@ function createLegacyStateMigrationDetectionResult(params?: {
       hasLegacy: false,
     },
     worktrees: { hasLegacy: false, legacyIds: [], pathRewrites: [] },
-    voiceWake: {
-      triggersPath: "/tmp/state/settings/voicewake.json",
-      routingPath: "/tmp/state/settings/voicewake-routing.json",
-      hasLegacy: false,
-    },
-    updateCheck: {
-      sourcePath: "/tmp/state/update-check.json",
-      hasLegacy: false,
-    },
     configHealth: {
       sourcePath: "/tmp/state/logs/config-health.json",
-      hasLegacy: false,
-    },
-    pluginBindingApprovals: {
-      sourcePath: "/tmp/state/plugin-binding-approvals.json",
-      hasLegacy: false,
-    },
-    currentConversationBindings: {
-      sourcePath: "/tmp/state/bindings/current-conversations.json",
       hasLegacy: false,
     },
     tuiLastSessions: {
@@ -236,10 +219,6 @@ function createLegacyStateMigrationDetectionResult(params?: {
     },
     auditLogs: {
       sources: [],
-      hasLegacy: false,
-    },
-    acpReplayLedger: {
-      sourcePath: "/tmp/state/acp/event-ledger.json",
       hasLegacy: false,
     },
     managedOutgoingImages: {
@@ -553,7 +532,8 @@ vi.mock("../infra/state-migrations.plugin-doctor.js", () => ({
   autoMigrateLegacyPluginDoctorState,
 }));
 
-vi.mock("../infra/state-migrations.state-dir.js", () => ({
+vi.mock("../infra/state-migrations.state-dir.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/state-migrations.state-dir.js")>()),
   autoMigrateLegacyStateDir,
   resolvePendingLegacyStateDirMigrationPaths: vi.fn().mockReturnValue(null),
   prepareLegacyStateDirMigration: vi.fn(),

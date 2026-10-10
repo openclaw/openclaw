@@ -6,7 +6,8 @@ import {
   isAwaitingGatewayFailure,
   resolveGatewayReadRetryDelayMs,
 } from "../gateway-availability.ts";
-import { appendSessionResults, reconcileRosterPresentationMetadata } from "./reconcile.ts";
+import { createSessionEventRefreshCoordinator } from "./event-refresh-coordinator.ts";
+import { appendSessionResults } from "./reconcile.ts";
 import type {
   SessionConnectionOwner,
   SessionGateway,
@@ -19,8 +20,45 @@ import type {
   ManagedSessionListRefresh,
   ObservedSessionList,
 } from "./session-list-query.ts";
-import { requestSessionListParams } from "./session-requests.ts";
+import {
+  normalizeManagedSessionListQuery,
+  requestSessionListParams,
+  sessionListQueryKey,
+} from "./session-requests.ts";
 import type { createSessionRosterObservations } from "./session-roster-observations.ts";
+
+export function getManagedSessionList(
+  lists: Map<string, ManagedSessionList>,
+  scope: SessionListScope,
+  refresh: (entry: ManagedSessionList, isCurrent: () => boolean) => Promise<void>,
+): ManagedSessionList {
+  const key = sessionListQueryKey(scope);
+  const current = lists.get(key);
+  if (current) {
+    return current;
+  }
+  const query = normalizeManagedSessionListQuery(scope);
+  const entry: ManagedSessionList = {
+    key,
+    query,
+    scope: Object.freeze({ ...scope }),
+    retainedLimit: query.limit,
+    receivedKeys: new Set(),
+    startupRetryAttempt: 0,
+    readGeneration: 0,
+    connectionEpoch: null,
+    snapshot: { result: null, agentId: null, loading: false, error: null },
+    listeners: new Set(),
+    coordinator: createSessionEventRefreshCoordinator({
+      active: false,
+      refresh: (isCurrent) => refresh(entry, isCurrent),
+    }),
+    pending: null,
+    queued: null,
+  };
+  lists.set(key, entry);
+  return entry;
+}
 
 export function publishManagedList(
   entry: ObservedSessionList,
@@ -65,7 +103,7 @@ export function createSessionManagedListRefresh(
     managedLists: ReadonlyMap<string, ManagedSessionList>;
     observations: Pick<
       ReturnType<typeof createSessionRosterObservations>,
-      "inherit" | "accept" | "stageObservedRows" | "mergeRows"
+      "accept" | "stageObservedRows" | "mergeRows"
     >;
     nextRevision: () => number;
     isPageActive: () => boolean;
@@ -81,6 +119,10 @@ export function createSessionManagedListRefresh(
       return Promise.resolve();
     }
     if (entry.pending) {
+      // A subscriber may extend the accepted window before this drain settles.
+      if (refresh.append && !entry.snapshot.loading && !entry.queued) {
+        entry.queued = refresh;
+      }
       if (
         refresh.invalidated &&
         (!refresh.background || !entry.queued || entry.queued.background)
@@ -148,24 +190,44 @@ export function createSessionManagedListRefresh(
           if (!response) {
             throw new Error("The session query did not return a result. Try again.");
           }
+          if (
+            next.append &&
+            response.hasMore &&
+            (response.nextOffset ?? (requestParams.offset ?? 0) + response.sessions.length) <=
+              (requestParams.offset ?? 0)
+          ) {
+            throw new Error("Session list pagination did not advance.");
+          }
           const result = host.reconcileList(response, issuedRevision, entry.query.agentId);
           const previous = entry.snapshot.result;
           // Only this response's rows were observed now; pagination retains older
           // members and discards duplicate page rows without refreshing their facts.
-          const presented = reconcileRosterPresentationMetadata(result, previous);
           const agentId = entry.query.agentId;
-          observations.inherit(presented, result, previous, agentId);
           const observed = observations.accept(
-            presented,
-            previous,
+            result,
+            entry.snapshot,
             host.readState().result,
             agentId,
-            entry.snapshot.agentId,
           );
           const nextResult =
             observed && next.append && requestParams.offset && previous
               ? appendSessionResults(previous, observed)
               : observed;
+          const appending = Boolean(next.append && requestParams.offset && previous);
+          const receivedKeys = new Set(appending ? entry.receivedKeys : []);
+          for (const row of response.sessions) {
+            receivedKeys.add(row.key);
+          }
+          const totalCount =
+            response.totalCount ?? (appending ? entry.snapshot.pagination?.totalCount : undefined);
+          const pageEnd = (response.offset ?? requestParams.offset ?? 0) + response.sessions.length;
+          const hasMore = response.hasMore ?? (totalCount !== undefined && pageEnd < totalCount);
+          const pagination = {
+            count: receivedKeys.size,
+            totalCount,
+            hasMore,
+            nextOffset: response.nextOffset ?? (hasMore ? pageEnd : null),
+          };
           const decorated = host.decorate(nextResult, entry);
           if (decorated) {
             entry.retainedLimit = Math.max(entry.retainedLimit, decorated.sessions.length);
@@ -177,9 +239,12 @@ export function createSessionManagedListRefresh(
             undefined,
             false,
           );
+          entry.receivedKeys = receivedKeys;
           entry.connectionEpoch = scope.epoch;
           entry.startupRetryAttempt = 0;
           const snapshot: SessionListSnapshot = {
+            readSucceeded: true,
+            pagination,
             result: decorated,
             agentId: agentId ?? null,
             loading: false,
@@ -222,6 +287,7 @@ export function createSessionManagedListRefresh(
               ...entry.snapshot,
               loading: false,
               error: awaitingGateway ? null : formatUiError(error),
+              readSucceeded: false,
               startupPending,
             },
             isCurrent,

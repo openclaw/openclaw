@@ -24,7 +24,7 @@ afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
 });
-async function startConnect(client: GatewayBrowserClient) {
+async function startConnect(client: GatewayBrowserClient, tickIntervalMs = 1_000) {
   client.start();
   const ws = getLatestWebSocket();
   ws.emitOpen();
@@ -35,7 +35,18 @@ async function startConnect(client: GatewayBrowserClient) {
   });
   await vi.advanceTimersByTimeAsync(0);
   const connectFrame = JSON.parse(ws.sent.at(-1) ?? "{}") as { id?: string };
-  return { ws, connectFrame };
+  ws.emitMessage({
+    type: "res",
+    id: connectFrame.id,
+    ok: true,
+    payload: {
+      type: "hello-ok",
+      protocol: 4,
+      auth: { role: "operator", scopes: [] },
+      policy: { tickIntervalMs },
+    },
+  });
+  return ws;
 }
 
 describe("GatewayBrowserClient heartbeat recovery", () => {
@@ -43,18 +54,7 @@ describe("GatewayBrowserClient heartbeat recovery", () => {
     useNodeFakeTimers();
     const client = new GatewayBrowserClient({ url: DEFAULT_GATEWAY_URL });
     try {
-      const { ws, connectFrame } = await startConnect(client);
-      ws.emitMessage({
-        type: "res",
-        id: connectFrame.id,
-        ok: true,
-        payload: {
-          type: "hello-ok",
-          protocol: 4,
-          auth: { role: "operator", scopes: [] },
-          policy: { tickIntervalMs: 1_000 },
-        },
-      });
+      const ws = await startConnect(client);
 
       await vi.advanceTimersByTimeAsync(1_999);
       expect(ws.lastClose).toBeNull();
@@ -74,18 +74,7 @@ describe("GatewayBrowserClient heartbeat recovery", () => {
       const client = new GatewayBrowserClient({ url: DEFAULT_GATEWAY_URL });
 
       try {
-        const { ws, connectFrame } = await startConnect(client);
-        ws.emitMessage({
-          type: "res",
-          id: connectFrame.id,
-          ok: true,
-          payload: {
-            type: "hello-ok",
-            protocol: 4,
-            auth: { role: "operator", scopes: [] },
-            policy: { tickIntervalMs: advertisedTickIntervalMs },
-          },
-        });
+        const ws = await startConnect(client, advertisedTickIntervalMs);
         await vi.advanceTimersByTimeAsync(0);
 
         expect(setIntervalSpy).toHaveBeenLastCalledWith(expect.any(Function), 2_147_483_647);
@@ -101,18 +90,7 @@ describe("GatewayBrowserClient heartbeat recovery", () => {
     useNodeFakeTimers();
     const client = new GatewayBrowserClient({ url: DEFAULT_GATEWAY_URL });
     try {
-      const { ws, connectFrame } = await startConnect(client);
-      ws.emitMessage({
-        type: "res",
-        id: connectFrame.id,
-        ok: true,
-        payload: {
-          type: "hello-ok",
-          protocol: 4,
-          auth: { role: "operator", scopes: [] },
-          policy: { tickIntervalMs: 1_000 },
-        },
-      });
+      const ws = await startConnect(client);
       const request = client.request("wizard.next", {}, { timeoutMs: null });
       const requestFrame = JSON.parse(ws.sent.at(-1) ?? "{}") as { id?: string };
 
@@ -124,31 +102,12 @@ describe("GatewayBrowserClient heartbeat recovery", () => {
       expect(ws.lastClose).toBeNull();
       ws.emitMessage({ type: "res", id: requestFrame.id, ok: true, payload: { done: true } });
       await expect(request).resolves.toEqual({ done: true });
+      client.stop();
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(ws.lastClose).toEqual({ code: undefined, reason: undefined });
+      expect(vi.getTimerCount()).toBe(0);
     } finally {
       client.stop();
     }
-  });
-
-  it("disposes the Gateway heartbeat when its browser client stops", async () => {
-    useNodeFakeTimers();
-    const client = new GatewayBrowserClient({ url: DEFAULT_GATEWAY_URL });
-    const { ws, connectFrame } = await startConnect(client);
-    ws.emitMessage({
-      type: "res",
-      id: connectFrame.id,
-      ok: true,
-      payload: {
-        type: "hello-ok",
-        protocol: 4,
-        auth: { role: "operator", scopes: [] },
-        policy: { tickIntervalMs: 1_000 },
-      },
-    });
-
-    client.stop();
-    await vi.advanceTimersByTimeAsync(5_000);
-
-    expect(ws.lastClose).toEqual({ code: undefined, reason: undefined });
-    expect(vi.getTimerCount()).toBe(0);
   });
 });

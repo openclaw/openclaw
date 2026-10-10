@@ -28,38 +28,51 @@ afterEach(() => {
 });
 
 describe("image lightbox gallery resource lifecycle", () => {
-  it.each(["reset", "evict"] as const)(
-    "releases a late full-resolution image after %s without replacing newer intent",
+  it.each(["upgrade reset", "upgrade evict", "neighbor reset"] as const)(
+    "releases a late image once without replacing newer intent: %s",
     async (action) => {
       const initial = imageItem("preview");
-      const original = imageItem("original");
+      const late = imageItem("original");
       const replacement = imageItem("replacement");
       const beyond = imageItem("beyond");
       const pending = createDeferred<ImageLightboxItem | null>();
       const load = vi.fn(() => pending.promise);
-      const preview = { ...initial, loadFullResolution: load };
+      const moving = action === "neighbor reset";
+      const preview = moving ? initial : { ...initial, loadFullResolution: load };
       controller.reset(
         {
           index: 0,
-          items: [async () => preview, async () => replacement, async () => beyond],
+          items: [async () => preview, moving ? load : async () => replacement, async () => beyond],
         },
         preview,
       );
+      const navigation = moving ? controller.move(1) : undefined;
       await vi.waitFor(() => expect(load).toHaveBeenCalledOnce());
-
-      if (action === "reset") {
-        controller.reset(undefined, replacement);
-      } else {
-        expect(await controller.move(1)).toBe(true);
-        expect(await controller.move(1)).toBe(true);
+      if (moving) {
+        expect(controller.current).toBe(initial);
+        expect(controller.busy).toBe(true);
       }
-      pending.resolve(original);
-      await vi.waitFor(() => expect(original.release).toHaveBeenCalledOnce());
-      expect(controller.current).toBe(action === "evict" ? beyond : replacement);
+      if (action === "upgrade evict") {
+        expect(await controller.move(1)).toBe(true);
+        expect(await controller.move(1)).toBe(true);
+      } else {
+        controller.reset(undefined, replacement);
+      }
+      pending.resolve(late);
+      if (navigation) {
+        expect(await navigation).toBe(false);
+      }
+      await vi.waitFor(() => expect(late.release).toHaveBeenCalledOnce());
+      expect(controller.current).toBe(action === "upgrade evict" ? beyond : replacement);
+      expect(controller.busy).toBe(false);
+      expect(controller.failed).toBe(false);
       controller.dispose();
       await Promise.resolve();
-      expect(original.release).toHaveBeenCalledOnce();
+      expect(late.release).toHaveBeenCalledOnce();
       expect(initial.release).not.toHaveBeenCalled();
+      if (moving) {
+        expect(replacement.release).not.toHaveBeenCalled();
+      }
     },
   );
 
@@ -112,33 +125,6 @@ describe("image lightbox gallery resource lifecycle", () => {
       expect(initial.release).not.toHaveBeenCalled();
     },
   );
-
-  it("releases a late image once after reset without replacing the current selection", async () => {
-    const initial = imageItem("initial");
-    const late = imageItem("late");
-    const replacement = imageItem("replacement");
-    const pending = createDeferred<ImageLightboxItem | null>();
-    const load = vi.fn(() => pending.promise);
-    controller.reset({ index: 0, items: [async () => initial, load] }, initial);
-    const moving = controller.move(1);
-    await vi.waitFor(() => expect(load).toHaveBeenCalledOnce());
-    expect(controller.current).toBe(initial);
-    expect(controller.busy).toBe(true);
-
-    controller.reset(undefined, replacement);
-    pending.resolve(late);
-
-    expect(await moving).toBe(false);
-    await vi.waitFor(() => expect(late.release).toHaveBeenCalledOnce());
-    expect(controller.current).toBe(replacement);
-    expect(controller.busy).toBe(false);
-    expect(controller.failed).toBe(false);
-    controller.dispose();
-    await Promise.resolve();
-    expect(late.release).toHaveBeenCalledOnce();
-    expect(initial.release).not.toHaveBeenCalled();
-    expect(replacement.release).not.toHaveBeenCalled();
-  });
 
   it("keeps the current image after a failed neighbor load and retries on navigation", async () => {
     const initial = imageItem("initial");

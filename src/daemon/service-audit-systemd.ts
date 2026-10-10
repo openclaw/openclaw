@@ -64,13 +64,7 @@ function readUnitDirectives(content: string): UnitDirective[] {
   return directives;
 }
 
-function parseSystemdUnit(directives: UnitDirective[]): {
-  after: Set<string>;
-  wants: Set<string>;
-  restartSec?: string;
-  killMode?: string;
-  stopTimeoutMs: number;
-} {
+function parseSystemdUnit(directives: UnitDirective[]) {
   const after = new Set<string>();
   const wants = new Set<string>();
   let restartSec: string | undefined;
@@ -195,50 +189,43 @@ export async function auditSystemdUnit(
           parseSystemdTimeSpanMs(entries.timeoutstopusec ?? "") ?? SYSTEMD_DEFAULT_STOP_TIMEOUT_MS,
       }
     : parseSystemdUnit(directives);
+  const report = (code: string, message: string, detail = unitPath) => {
+    issues.push({ code, message, detail, level: "recommended" });
+  };
   if (parsed.stopTimeoutMs > 0 && parsed.stopTimeoutMs < GATEWAY_SERVICE_STOP_TIMEOUT_MS) {
-    issues.push({
-      code: SYSTEMD_SERVICE_AUDIT_CODES.systemdStopTimeout,
-      message: `TimeoutStopSec=${GATEWAY_SERVICE_STOP_TIMEOUT_MS / 1_000} or longer is required for the Gateway drain and final cleanup; inspect unit and drop-in overrides.`,
-      detail: `${unitPath}: ${parsed.stopTimeoutMs / 1_000}s (${entries ? "systemd manager" : "base unit; manager unavailable"})`,
-      level: "recommended",
-    });
+    report(
+      SYSTEMD_SERVICE_AUDIT_CODES.systemdStopTimeout,
+      `TimeoutStopSec=${GATEWAY_SERVICE_STOP_TIMEOUT_MS / 1_000} or longer is required for the Gateway drain and final cleanup; inspect unit and drop-in overrides.`,
+      `${unitPath}: ${parsed.stopTimeoutMs / 1_000}s (${entries ? "systemd manager" : "base unit; manager unavailable"})`,
+    );
   }
   if (!parsed.after.has("network-online.target")) {
-    issues.push({
-      code: SYSTEMD_SERVICE_AUDIT_CODES.systemdAfterNetworkOnline,
-      message: "Missing systemd After=network-online.target",
-      detail: unitPath,
-      level: "recommended",
-    });
+    report(
+      SYSTEMD_SERVICE_AUDIT_CODES.systemdAfterNetworkOnline,
+      "Missing systemd After=network-online.target",
+    );
   }
   if (!parsed.wants.has("network-online.target")) {
-    issues.push({
-      code: SYSTEMD_SERVICE_AUDIT_CODES.systemdWantsNetworkOnline,
-      message: "Missing systemd Wants=network-online.target",
-      detail: unitPath,
-      level: "recommended",
-    });
+    report(
+      SYSTEMD_SERVICE_AUDIT_CODES.systemdWantsNetworkOnline,
+      "Missing systemd Wants=network-online.target",
+    );
   }
   if (!isRestartSecPreferred(parsed.restartSec)) {
-    issues.push({
-      code: SYSTEMD_SERVICE_AUDIT_CODES.systemdRestartSec,
-      message: "RestartSec does not match the recommended 5s",
-      detail: unitPath,
-      level: "recommended",
-    });
+    report(
+      SYSTEMD_SERVICE_AUDIT_CODES.systemdRestartSec,
+      "RestartSec does not match the recommended 5s",
+    );
   }
   const killMode = normalizeLowercaseStringOrEmpty(parsed.killMode) || "control-group";
   if (killMode !== "mixed") {
-    issues.push({
-      code:
-        killMode === "process" || killMode === "none"
-          ? SYSTEMD_SERVICE_AUDIT_CODES.systemdKillModeProcessOrNone
-          : SYSTEMD_SERVICE_AUDIT_CODES.systemdKillModeControlGroup,
-      message:
-        "KillMode=mixed is required to drain active turns before final service child cleanup; inspect unit and drop-in overrides.",
-      detail: `${unitPath}: ${killMode}`,
-      level: "recommended",
-    });
+    report(
+      killMode === "process" || killMode === "none"
+        ? SYSTEMD_SERVICE_AUDIT_CODES.systemdKillModeProcessOrNone
+        : SYSTEMD_SERVICE_AUDIT_CODES.systemdKillModeControlGroup,
+      "KillMode=mixed is required to drain active turns before final service child cleanup; inspect unit and drop-in overrides.",
+      `${unitPath}: ${killMode}`,
+    );
   }
   return definitionDriftError;
 }

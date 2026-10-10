@@ -9,6 +9,7 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { formatChildRuntimeSpawnWarning } from "../../infra/child-runtime-viability.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { setProcessTimeout } from "../process-deadline.js";
@@ -86,9 +87,9 @@ export function createProcessSupervisor(): ProcessSupervisor & {
   const ownedRuns = new Set<OwnedRun>();
   const scopeCleanupOwners = new Map<string, Set<ScopeCleanupOwner>>();
   const startingScopes = new Map<string, StartingScope>();
-  let shuttingDown = false;
   let shutdownPromise: Promise<void> | null = null;
   let cleanupFailure: { error: unknown } | undefined;
+  let staleRuntimeReported = false;
 
   const cancel = (runId: string, reason: TerminationReason = "manual-cancel") => {
     for (const current of ownedRuns) {
@@ -235,6 +236,21 @@ export function createProcessSupervisor(): ProcessSupervisor & {
       throw new Error("spawn argv cannot be empty");
     }
     const resolvedArgs = input.mode === "child" ? input.resolveArgs?.() : undefined;
+    const argv =
+      input.mode === "anchored-shell"
+        ? []
+        : resolvedArgs
+          ? [...input.argv, ...resolvedArgs]
+          : input.argv;
+    if (
+      argv.some((argument) => argument.includes("\0")) ||
+      (input.mode === "child" && input.argv0?.includes("\0")) ||
+      (input.mode === "anchored-shell" && input.command.includes("\0"))
+    ) {
+      throw new Error(
+        "Execution command and arguments must not contain NUL bytes. Remove them and retry.",
+      );
+    }
     if (owner.terminationReason) {
       return settleConstructionResult(owner.terminationReason);
     }
@@ -366,6 +382,7 @@ export function createProcessSupervisor(): ProcessSupervisor & {
       const construction = {
         assertCurrent: input.assertCurrent,
         beforeSpawn: input.beforeSpawn,
+        initiateSpawn: input.initiateSpawn,
         cwd: input.cwd,
         env: input.env,
         abortSignal: constructionAbort.signal,
@@ -375,8 +392,8 @@ export function createProcessSupervisor(): ProcessSupervisor & {
         input.mode === "pty"
           ? createPtyAdapter({
               ...construction,
-              shell: expectDefined(input.argv[0], "spawn executable"),
-              args: input.argv.slice(1),
+              shell: expectDefined(argv[0], "spawn executable"),
+              args: argv.slice(1),
             }).then((adapter) => ({ adapter, ready: Promise.resolve() }))
           : input.mode === "anchored-shell"
             ? createChildAdapter({
@@ -386,7 +403,7 @@ export function createProcessSupervisor(): ProcessSupervisor & {
             : createChildAdapter({
                 ...construction,
                 ...(requireProcessTree && !external ? { ownProcessTree: true as const } : {}),
-                argv: resolvedArgs ? [...input.argv, ...resolvedArgs] : input.argv,
+                argv,
                 argv0: input.argv0,
                 exactEnv: input.exactEnv,
                 windowsVerbatimArguments: input.windowsVerbatimArguments,
@@ -553,10 +570,7 @@ export function createProcessSupervisor(): ProcessSupervisor & {
         // Windows has no catchable SIGTERM equivalent: the adapter implements it
         // with asynchronous taskkill, so waiting the cleanup grace only delays an
         // already-expired deadline before the same forced tree termination.
-        if (
-          process.platform === "win32" &&
-          (reason === "overall-timeout" || reason === "no-output-timeout")
-        ) {
+        if (process.platform === "win32" && isTimeoutReason(reason)) {
           adapter.kill("SIGKILL");
           return;
         }
@@ -625,14 +639,22 @@ export function createProcessSupervisor(): ProcessSupervisor & {
       return managedRun;
     } catch (err) {
       settleResult();
-      const { warnProcessSupervisorSpawnFailure } = await loadSupervisorLogRuntime();
-      warnProcessSupervisorSpawnFailure(`spawn failed: runId=${runId} reason=${String(err)}`);
+      const runtimeWarning = formatChildRuntimeSpawnWarning(err);
+      if (runtimeWarning && err instanceof Error) {
+        // Preserve errno/path for callers while returning the operator's recovery action.
+        err.message = runtimeWarning;
+      }
+      if (!runtimeWarning || !staleRuntimeReported) {
+        staleRuntimeReported ||= runtimeWarning !== undefined;
+        const { warnProcessSupervisorSpawnFailure } = await loadSupervisorLogRuntime();
+        warnProcessSupervisorSpawnFailure(`spawn failed: runId=${runId} reason=${String(err)}`);
+      }
       throw err;
     }
   };
 
   const spawn = (input: SpawnInput): Promise<ManagedRun> => {
-    if (shuttingDown) {
+    if (shutdownPromise) {
       return Promise.reject(new Error("process supervisor is shut down"));
     }
     const scopeKey = normalizeOptionalString(input.scopeKey);
@@ -695,7 +717,6 @@ export function createProcessSupervisor(): ProcessSupervisor & {
 
   const shutdown = (): Promise<void> => {
     // Publish the admission fence before cancellation can invoke owner callbacks.
-    shuttingDown = true;
     return (shutdownPromise ??= Promise.resolve().then(async () => {
       while (ownedRuns.size) {
         for (const owner of ownedRuns) {

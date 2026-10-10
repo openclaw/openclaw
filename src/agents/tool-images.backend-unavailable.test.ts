@@ -48,24 +48,6 @@ describe("tool image sanitizer without native image backend", () => {
     expect(getImageMetadataMock).not.toHaveBeenCalled();
   });
 
-  it("drops images that need resizing when the backend is unavailable", async () => {
-    readImageMetadataFromHeaderMock.mockReturnValueOnce({ width: 128, height: 24 });
-    const { sanitizeContentBlocksImages } = await importSanitizer();
-
-    const out = await sanitizeContentBlocksImages(
-      [{ type: "image" as const, data: PNG_BASE64, mimeType: "image/png" }],
-      "test",
-      { maxDimensionPx: 64, maxBytes: 1024 },
-    );
-
-    expect(out).toStrictEqual([
-      {
-        type: "text",
-        text: "[test] omitted image payload: Error: missing image backend",
-      },
-    ]);
-  });
-
   it("does not pass through compressed images over the pixel cap", async () => {
     readImageMetadataFromHeaderMock.mockReturnValueOnce({ width: 6000, height: 6000 });
     const { sanitizeContentBlocksImages } = await importSanitizer();

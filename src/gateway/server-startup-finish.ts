@@ -10,6 +10,7 @@ import { isNixMode } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { getAgentDatabaseStartupAdmission } from "../state/agent-database-startup.js";
 import { resolveGatewayAuth } from "./auth.js";
 import { diffGatewayReloadPaths } from "./config-diff.js";
@@ -143,10 +144,12 @@ export async function finishGatewayStartup(params: {
   } = runtime;
   const startupPluginRuntimeClaim = kernel.pluginRuntimeGeneration.currentClaim();
   const databaseStartupAdmission = getAgentDatabaseStartupAdmission();
+  const databasePreparationReady = createDeferredCore();
   const activateAgentDatabases = () => {
     if (databaseStartupAdmission && !opts.updateCanary && !lifecycle.closePreludeStarted) {
       activateGatewayAgentDatabaseStartup({
         admission: databaseStartupAdmission,
+        preparationReady: databasePreparationReady.promise,
         getConfig: getRuntimeConfig,
         getPluginRegistry: () => pluginRuntime.registry,
         getPluginMetadataSnapshot,
@@ -203,6 +206,12 @@ export async function finishGatewayStartup(params: {
   await startupTrace.measure("http.listen", () => startListening());
   kernel.setDispatchReady(true);
   startupTrace.mark("http.bound");
+  if (!minimalTestGateway && !opts.updateCanary) {
+    const { startOpenClawDatabaseIntegrityVerifier } =
+      await import("../state/openclaw-database-verify.js");
+    registerGatewayLifetimeSidecars(startOpenClawDatabaseIntegrityVerifier({ env: process.env }));
+  }
+  activateAgentDatabases();
   // Health can answer as soon as the listener binds. Discovery, remote-skill
   // setup, and maintenance do not determine liveness, so keep them off that
   // critical path while still completing before usable readiness.
@@ -238,11 +247,11 @@ export async function finishGatewayStartup(params: {
       kernel.setScheduledServiceHandles(activated);
     });
   };
-  const { createGatewayServerActiveWorkInspectors } = await startupTrace.measure(
+  const { startGatewayActiveWork } = await startupTrace.measure(
     "gateway.active-work-import",
-    () => import("./server-active-work.js"),
+    () => import("./server-work-metrics.js"),
   );
-  const activeWorkInspectors = createGatewayServerActiveWorkInspectors(gatewayRequestContext);
+  const activeWorkInspectors = startGatewayActiveWork(runtime, log);
   const trackStartupWork = <T>(run: (signal: AbortSignal) => Promise<T>): Promise<T> => {
     // Register before starting, without lending the connection scope to long-lived services.
     const operation = Promise.resolve().then(() => run(runtime.connectionWork.signal));
@@ -280,6 +289,7 @@ export async function finishGatewayStartup(params: {
           deps,
           startChannels,
           recoveryRuntime: gatewayInstanceRuntime.recovery,
+          isRestartRecoverySuppressed: () => channelManager.getAutostartSuppression() !== null,
           resolveGatewayContext: gatewayRequestContext.resolveGatewayContext!,
           logHooks,
           logChannels,
@@ -370,7 +380,7 @@ export async function finishGatewayStartup(params: {
             : {}),
           onSidecarsReady: () => {
             kernel.markSidecarsReady();
-            activateAgentDatabases();
+            databasePreparationReady.resolve();
             activateScheduledServicesWhenReady();
           },
           getReadiness,
@@ -385,11 +395,13 @@ export async function finishGatewayStartup(params: {
   );
   kernel.setPostAttachHandles(postAttachHandles);
   if (minimalTestGateway) {
-    activateAgentDatabases();
+    databasePreparationReady.resolve();
   }
   startupTrace.detail("memory.ready", [
     ...collectGatewayProcessMemoryUsageMb(),
-    ...(minimalTestGateway ? [] : await collectGatewayWorkerPoolMetrics()),
+    ...(minimalTestGateway
+      ? []
+      : await startupTrace.measure("runtime.worker-pool-metrics", collectGatewayWorkerPoolMetrics)),
   ]);
   if (getReadiness().ready) {
     startupTrace.mark("ready");
@@ -401,11 +413,6 @@ export async function finishGatewayStartup(params: {
   if (opts.updateCanary) {
     // Copied queues and jobs must not resume; the canary owns only startup probes.
     return { startupSettled: postAttachHandles.startupSettled };
-  }
-  if (!minimalTestGateway) {
-    const { startOpenClawDatabaseIntegrityVerifier } =
-      await import("../state/openclaw-database-verify.js");
-    registerGatewayLifetimeSidecars(startOpenClawDatabaseIntegrityVerifier({ env: process.env }));
   }
   postAttachRuntimeReturned = true;
   activateScheduledServicesWhenReady();
@@ -619,13 +626,10 @@ export async function finishGatewayStartup(params: {
       signal: runtime.connectionWork.signal,
       delayMs: POST_READY_MAINTENANCE_DELAY_MS,
       isClosing: () => lifecycle.closePreludeStarted,
-      startMaintenance: async () => {
-        await params.waitForPostReadyWork();
-        if (lifecycle.closePreludeStarted) {
-          return null;
-        }
-        return earlyRuntime.startMaintenance(activeWorkInspectors);
-      },
+      waitForPostReadyWork: params.waitForPostReadyWork,
+      startupMaintenance: runtime,
+      startMaintenance: () =>
+        earlyRuntime.startMaintenance(activeWorkInspectors, resolvePluginGatewayContext),
       applyMaintenance: async (maintenance) => {
         if (lifecycle.closePreludeStarted) {
           await clearGatewayMaintenanceHandles(maintenance);
@@ -670,9 +674,19 @@ export async function finishGatewayStartup(params: {
         isClosing: () => lifecycle.closePreludeStarted,
         isBusy: () => getActiveGatewayRootWorkCount({ excludeCurrent: true }) > 0,
         run: async () => {
-          const { cleanupRetainedPluginInstallGenerations } =
+          await params.waitForPostReadyWork();
+          const { cleanupGatewayRetiredPluginArtifacts } =
             await import("./server-retained-plugin-cleanup.js");
-          await cleanupRetainedPluginInstallGenerations({ log, startupInstallPaths });
+          await cleanupGatewayRetiredPluginArtifacts({
+            log,
+            startupInstallPaths,
+            signal: runtime.connectionWork.signal,
+            assertCurrent: () => {
+              if (lifecycle.closePreludeStarted) {
+                throw runtime.connectionWork.signal.reason ?? new Error("Gateway is closing");
+              }
+            },
+          });
         },
         log,
         errorMessage: "retained npm generation cleanup failed",

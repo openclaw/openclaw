@@ -7,7 +7,11 @@ import {
 } from "../delivery-queue-sqlite-bound.js";
 import { transitionOwnedDeliveryQueueEntryInDatabase } from "../delivery-queue-sqlite-claim.kernel.js";
 import { upsertDeliveryQueueEntryInDatabase } from "../delivery-queue-sqlite.kernel.js";
-import { executeSqliteQuerySync } from "../kysely-sync.js";
+import { createSqliteQueryCache, executeSqliteQuerySync } from "../kysely-sync.js";
+import {
+  getSqliteReadOperationRevision,
+  type SqliteReadOperationRevision,
+} from "../sqlite-schema-facts.js";
 import {
   OUTBOUND_EXECUTABLE_QUEUE_NAMES,
   outboundDeliveryQueueName,
@@ -16,6 +20,10 @@ import { resolveOutboundDeliveryQueueNameInDatabase } from "./delivery-queue-own
 import { projectOutboundDelivery } from "./delivery-queue-projection.js";
 import type { OutboundDeliveryStorageEntry } from "./delivery-queue-storage.types.js";
 import type { QueuedDelivery } from "./delivery-queue-types.js";
+
+const unfinishedDeliveryFacts = createSqliteQueryCache<{
+  empty?: SqliteReadOperationRevision;
+}>(() => ({}));
 
 /** Restore the exact pre-attempt row while its original owner still holds custody. */
 export function restoreDeliveryAttemptBeforeDispatchInDatabase(
@@ -69,10 +77,7 @@ export function loadOutboundDeliveryInDatabase(
 ): QueuedDelivery | null {
   const queueName = resolveOutboundDeliveryQueueNameInDatabase(database, id);
   const entry = loadDeliveryQueueEntryInDatabase(database, queueName, id, mode);
-  if (!entry) {
-    return null;
-  }
-  return projectOutboundDelivery(queueName, entry);
+  return entry ? projectOutboundDelivery(queueName, entry) : null;
 }
 
 /** One read snapshot orders all executable formats without pruning or mutating custody. */
@@ -80,6 +85,14 @@ export function readOutboundDeliveriesInDatabase(
   database: Pick<OpenClawStateDatabase, "db">,
   input: { id?: string; mode: "pending" | "unfinished" },
 ): OutboundDeliveryStorageEntry[] {
+  const idle =
+    input.id === undefined && input.mode === "unfinished"
+      ? unfinishedDeliveryFacts(database.db)
+      : undefined;
+  const revision = idle && getSqliteReadOperationRevision(database.db);
+  if (revision && idle?.empty === revision) {
+    return [];
+  }
   let query = deliveryQueueEntriesQuery(database, OUTBOUND_EXECUTABLE_QUEUE_NAMES, input.mode)
     .select("queue_name")
     .orderBy("enqueued_at", "asc")
@@ -88,7 +101,7 @@ export function readOutboundDeliveriesInDatabase(
     query = query.where("id", "=", input.id);
   }
   const seen = new Set<string>();
-  return executeSqliteQuerySync(database.db, query).rows.flatMap((row) => {
+  const entries = executeSqliteQuerySync(database.db, query).rows.flatMap((row) => {
     const entry = inflateDeliveryQueueRow(row);
     if (!entry) {
       return [];
@@ -99,4 +112,12 @@ export function readOutboundDeliveriesInDatabase(
     seen.add(entry.id);
     return [{ queueName: row.queue_name, entry: projectOutboundDelivery(row.queue_name, entry) }];
   });
+  if (idle) {
+    // The enclosing read admission probes foreign commits on every new poll.
+    idle.empty =
+      entries.length === 0 && getSqliteReadOperationRevision(database.db) === revision
+        ? revision
+        : undefined;
+  }
+  return entries;
 }

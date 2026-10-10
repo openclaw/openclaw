@@ -12,7 +12,8 @@ import { publishSessionSharingMemberChange } from "./session-accessor.sqlite-ent
 import { readSessionEntryInstanceId } from "./session-accessor.sqlite-entry-identity.js";
 import { readExactSessionEntryRow } from "./session-accessor.sqlite-entry-read.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
-import { getSessionMemberKysely, type SessionMember } from "./session-sharing-store.kernel.js";
+import type { SessionMember } from "./session-membership-facts.types.js";
+import { getSessionMemberKysely } from "./session-sharing-store.kernel.js";
 import type {
   SessionMemberAdd,
   SessionSharingExpectedEntry,

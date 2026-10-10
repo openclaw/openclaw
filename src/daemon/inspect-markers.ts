@@ -137,7 +137,7 @@ export function detectWindowsServiceExecutionMarker(args: string[], cwd?: string
 export function detectLauncherGatewayMarker(contents: string): Marker | null {
   const environment: Record<string, string> = {};
   for (const line of contents.split(/\r?\n/)) {
-    const command = normalizeLowercaseStringOrEmpty(line.trim());
+    const command = normalizeLowercaseStringOrEmpty(line);
     if (command.startsWith("set ")) {
       const assignment = parseCmdSetAssignment(line.trimStart().slice(4), true);
       if (assignment) {

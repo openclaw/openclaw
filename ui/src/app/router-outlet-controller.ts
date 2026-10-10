@@ -34,10 +34,6 @@ export type RouterOutletInputs<TRouteId extends string, TLoadContext, TModule, T
   retryEnabled?: boolean;
 };
 
-type RouterOutletControllerOptions = {
-  pendingDelayMs?: number;
-};
-
 export function selectRenderedRouteMatch<TRouteId extends string, TModule, TData>(
   active: RouteMatch<TRouteId, TModule, TData> | undefined,
   pending: RouteMatch<TRouteId, TModule, TData> | undefined,
@@ -97,19 +93,13 @@ export class RouterOutletController<
   private notFoundQueued = false;
   private notFoundGeneration = 0;
   private notFoundRecoveryReady = true;
-  private readonly pendingDelayMs: number;
   private retryContext?: TLoadContext;
   private retryEnabled = true;
   private startupMatchId?: string;
   private startupAttempt = 0;
   private startupTimer?: ReturnType<typeof globalThis.setTimeout>;
 
-  constructor(
-    private readonly invalidate: () => void,
-    options: RouterOutletControllerOptions = {},
-  ) {
-    this.pendingDelayMs = options.pendingDelayMs ?? DEFAULT_PENDING_DELAY_MS;
-  }
+  constructor(private readonly invalidate: () => void) {}
 
   get snapshot(): RouterOutletSnapshot<TRouteId, TModule, TData> {
     return this.snapshotValue;
@@ -266,7 +256,7 @@ export class RouterOutletController<
       }
       this.showPending = true;
       this.publish({ ...this.selection, settled: this.settled, showPending: true });
-    }, this.pendingDelayMs);
+    }, DEFAULT_PENDING_DELAY_MS);
   }
 
   private updateStartupRetry(): void {

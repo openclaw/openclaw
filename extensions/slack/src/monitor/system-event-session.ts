@@ -5,11 +5,7 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 import type { SlackMessageEvent } from "../types.js";
 import { normalizeSlackChannelType, resolveSlackChatType } from "./channel-type.js";
 import type { SlackEventScope } from "./event-scope.js";
-import {
-  qualifySlackConversationId,
-  qualifySlackRoutePeerId,
-  resolveSlackEnterpriseMainDmSessionKey,
-} from "./workspace-routing.js";
+import { qualifySlackConversationId, resolveSlackAgentRoute } from "./workspace-routing.js";
 
 type SlackSystemEventSessionKeyParams = {
   channelId?: string | null;
@@ -53,28 +49,16 @@ export function createSlackSystemEventRouteResolver(params: {
     if (!peerId) {
       throw new Error("Slack system event route requires a peer");
     }
-    let route = resolveAgentRoute({
+    const route = resolveSlackAgentRoute({
       cfg: params.cfg,
-      channel: "slack",
       accountId: params.accountId,
       teamId: event.eventScope?.teamId ?? params.getTeamId(),
       peer: {
         kind: resolveSlackChatType(channelType),
-        id: qualifySlackRoutePeerId({
-          id: peerId,
-          kind: isDirectMessage ? "user" : "channel",
-          eventScope: event.eventScope,
-        }),
+        id: peerId,
       },
+      eventScope: event.eventScope,
     });
-    if (event.eventScope && isDirectMessage && route.dmScope === "main") {
-      const sessionKey = resolveSlackEnterpriseMainDmSessionKey({
-        baseSessionKey: route.sessionKey,
-        accountId: params.accountId,
-        eventScope: event.eventScope,
-      });
-      route = { ...route, sessionKey, mainSessionKey: sessionKey };
-    }
 
     const threadTs = normalizeOptionalString(event.threadTs);
     const baseConversationId = qualifySlackConversationId(

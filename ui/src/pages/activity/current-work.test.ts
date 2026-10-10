@@ -14,7 +14,9 @@ it("loads a bounded current-work query independently of chat, people, and recenc
     "sessions.list",
     {
       rowMode: "compact",
+      source: "activity",
       activeOnly: true,
+      excludeDock: true,
       archived: "all",
       includeGlobal: true,
       includeUnknown: true,
@@ -539,9 +541,10 @@ it.each([
   { hasMore: false, limitApplied: 100, admit: true },
   { hasMore: true, limitApplied: 100, admit: false },
   { hasMore: false, limitApplied: 1, admit: false },
+  { hasMore: false, limitApplied: 100, isDock: true, admit: false },
 ])(
   "admits certified active membership only into a complete window with space (%j)",
-  async ({ hasMore, limitApplied, admit }) => {
+  async ({ hasMore, limitApplied, isDock = false, admit }) => {
     vi.useFakeTimers();
     const { client, request, controller } = setup();
     request.mockResolvedValue({ ...listing([active]), hasMore, limitApplied });
@@ -550,6 +553,7 @@ it.each([
       ...active,
       key: "agent:work:new",
       sessionId: "new-session",
+      isDock,
       updatedAt: 200,
       snapshotAt: 200,
     };
@@ -561,7 +565,7 @@ it.each([
     });
     expect(controller.result?.sessions).toEqual(admit ? [added, active] : [active]);
     await vi.advanceTimersByTimeAsync(5_000);
-    expect(request).toHaveBeenCalledTimes(admit ? 1 : 2);
+    expect(request).toHaveBeenCalledTimes(admit || isDock ? 1 : 2);
   },
 );
 

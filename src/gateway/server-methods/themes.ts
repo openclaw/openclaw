@@ -67,14 +67,12 @@ function requestOwner(options: ThemeRequest) {
     if (options.hasCurrentClientAuthority?.() === false || client?.invalidated) {
       throw new Error("Theme request authority is no longer active.");
     }
-    if (capturedProfile && resolveUserProfileId(capturedProfile) !== profileId) {
-      throw new Error("The requesting profile changed. Ask again from your current profile.");
-    }
     if (
-      !runtimeIdentity &&
-      !participant &&
-      !client?.internal?.syntheticClient &&
-      client?.authenticatedUserProfile?.profileId !== capturedProfile
+      (capturedProfile && resolveUserProfileId(capturedProfile) !== profileId) ||
+      (!runtimeIdentity &&
+        !participant &&
+        !client?.internal?.syntheticClient &&
+        client?.authenticatedUserProfile?.profileId !== capturedProfile)
     ) {
       throw new Error("The requesting profile changed. Ask again from your current profile.");
     }
@@ -99,6 +97,15 @@ function catalogForPreferences(entries: Record<string, unknown>): ThemeCatalogEn
       name: definition.name,
       description: definition.description,
       ...(definition.mascot !== undefined ? { mascot: definition.mascot } : {}),
+      ...(definition.brandName !== undefined ? { brandName: definition.brandName } : {}),
+      ...(definition.brandIcon !== undefined ? { brandIcon: definition.brandIcon } : {}),
+      ...(definition.workingIndicator !== undefined
+        ? { workingIndicator: definition.workingIndicator }
+        : {}),
+      ...(definition.lobsterdex !== undefined ? { lobsterdex: definition.lobsterdex } : {}),
+      ...(definition.communityLinks !== undefined
+        ? { communityLinks: definition.communityLinks }
+        : {}),
       ...(definition.workingPhrases !== undefined
         ? { workingPhrases: definition.workingPhrases }
         : {}),

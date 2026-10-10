@@ -8,6 +8,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import { createSqliteSchemaEnsurer } from "../infra/sqlite-schema-ensure.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db-contract.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
@@ -35,7 +36,6 @@ import {
   decodeOperatorApprovalHistoryCursor,
   encodeOperatorApprovalHistoryCursor,
 } from "./operator-approval-store.rows.js";
-import { expireDueOperatorApprovalsInDatabase } from "./operator-approval-store.transitions.js";
 import type {
   NewOperatorApproval,
   OperatorApprovalKind,
@@ -46,6 +46,11 @@ import type {
   ListTerminalOperatorApprovalsInput,
   ListTerminalOperatorApprovalsResult,
 } from "./operator-approval-store.types.js";
+
+const ensureExecutionIdentitySchema = createSqliteSchemaEnsurer(
+  () => OPERATOR_APPROVAL_EXECUTION_IDENTITY_SCHEMA_SQL,
+  { tables: ["operator_approval_execution_identities"] },
+);
 
 export function insertOperatorApprovalInDatabase(params: {
   approval: NewOperatorApproval;
@@ -150,8 +155,7 @@ export function insertOperatorApprovalInDatabase(params: {
     }
     if (result.numAffectedRows === 1n) {
       if (executionIdentityBinding) {
-        // sqlite-allow-raw -- feature-local additive schema DDL; binding rows use Kysely.
-        database.db.exec(OPERATOR_APPROVAL_EXECUTION_IDENTITY_SCHEMA_SQL);
+        ensureExecutionIdentitySchema(database.db);
         executeSqliteQuerySync(
           database.db,
           stateDb.insertInto("operator_approval_execution_identities").values({
@@ -230,10 +234,6 @@ export function listPendingOperatorApprovalsInDatabase(
     databaseOptions?: OpenClawStateDatabaseOptions;
   } = {},
 ): OperatorApprovalRecord[] {
-  expireDueOperatorApprovalsInDatabase({
-    nowMs: params.nowMs,
-    databaseOptions: params.databaseOptions,
-  });
   return runOpenClawStateWriteTransaction((database) => {
     const nowMs = params.nowMs ?? Date.now();
     const stateDb = getNodeSqliteKysely<OperatorApprovalDatabase>(database.db);

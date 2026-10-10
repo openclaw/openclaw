@@ -364,6 +364,7 @@ export const OpenClawSchemaShape = {
     )
     .optional(),
   worktreeAcceleration: z.boolean().optional(),
+  worktreeMaxCount: z.number().int().positive().optional(),
   tools: ToolsSchema,
   security: SecuritySchema,
   bindings: BindingsSchema,
@@ -558,18 +559,14 @@ export const OpenClawSchemaShape = {
         .optional(),
       workshop: z
         .strictObject({
-          /** Autonomous Skill Workshop behavior controlled separately from user-prompted proposals. */
+          /** Autonomous Skill Workshop learning. */
           autonomous: z
             .strictObject({
-              /** Capture policy for durable conversation signals and substantial completed work. */
-              mode: z.union([z.literal("off"), z.literal("propose"), z.literal("auto")]).optional(),
+              /** "auto" lets agents save and update Workshop skills; "off" disables autonomous learning. */
+              mode: z.union([z.literal("off"), z.literal("auto")]).optional(),
             })
             .optional(),
-          /** Whether proposal lifecycle actions need explicit approval. */
-          approvalPolicy: z.union([z.literal("pending"), z.literal("auto")]).optional(),
-          /** Maximum pending/quarantined proposals retained per workspace. */
-          maxPending: z.number().int().min(1).optional(),
-          /** Maximum generated skill proposal size in bytes. */
+          /** Maximum Workshop skill file size in bytes. */
           maxSkillBytes: z.number().int().min(1).optional(),
         })
         .optional(),

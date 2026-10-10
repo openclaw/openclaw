@@ -1,4 +1,3 @@
-import { readChannelAllowFromStore } from "../../pairing/pairing-store.read.js";
 import type { PairingChannel } from "../../pairing/pairing-store.types.js";
 import type { ResolveChannelMessageIngressParams } from "./runtime-types.js";
 
@@ -22,8 +21,11 @@ export async function readChannelIngressStoreAllowFromForDmPolicy(params: {
   }
   const readStore =
     params.readStore ??
-    ((provider: PairingChannel, accountId: string) =>
-      readChannelAllowFromStore(provider, process.env, accountId));
+    (async (provider: PairingChannel, accountId: string) => {
+      // Doctor contracts import this policy helper; defer the database graph until a store read.
+      const { readChannelAllowFromStore } = await import("../../pairing/pairing-store.read.js");
+      return await readChannelAllowFromStore(provider, process.env, accountId);
+    });
   return await readStore(params.provider, params.accountId).catch(() => []);
 }
 

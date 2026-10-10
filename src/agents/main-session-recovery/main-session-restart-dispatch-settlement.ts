@@ -1,11 +1,8 @@
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import {
-  buildRestartRecoveryClaimCleanupPatch,
-  hasRestartRecoveryTerminalRun,
-} from "../../config/sessions/restart-recovery-state.js";
+import { hasRestartRecoveryTerminalRun } from "../../config/sessions/restart-recovery-state.js";
 import { applySessionEntryReplacements } from "../../config/sessions/session-accessor.js";
-import { buildMainSessionRecoveryClearPatch } from "./main-session-recovery-clear.js";
+import { buildMainSessionRecoverySettlementPatch } from "./main-session-recovery-clear.js";
 import type { MainSessionRecoveryReservation } from "./main-session-recovery-state.js";
 import { commitMainSessionRecovery } from "./main-session-recovery-store.js";
 import type { RestartRecoveryTerminalStatus } from "./main-session-restart-dispatch-start.js";
@@ -44,7 +41,6 @@ async function settleRestartRecoveryDispatch(params: {
       const entry = current.entry;
       const now = Date.now();
       if (params.terminalStatus) {
-        entry.abortedLastRun = params.terminalStatus !== "ok";
         entry.status =
           params.terminalStatus === "ok"
             ? "done"
@@ -56,16 +52,14 @@ async function settleRestartRecoveryDispatch(params: {
         if (startedAt !== undefined) {
           entry.runtimeMs = Math.max(0, now - startedAt);
         }
-        entry.restartRecoveryForceSafeTools = undefined;
         Object.assign(
           entry,
-          buildRestartRecoveryClaimCleanupPatch({
+          buildMainSessionRecoverySettlementPatch({
             entry,
             recordTerminalSource: true,
             terminalRunId: params.expectedRecoveryRunId,
             terminalSourceRunId: params.expectedRecoverySourceRunId,
           }),
-          buildMainSessionRecoveryClearPatch(entry),
         );
       } else {
         entry.abortedLastRun = false;

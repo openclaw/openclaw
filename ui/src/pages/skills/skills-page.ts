@@ -40,7 +40,7 @@ import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { PluginIconController, pluginIconFetchContext } from "../plugins/plugin-icon-controller.ts";
 import { renderPluginsHubHeader } from "../plugins/plugins-hub-header.ts";
-import { PLUGINS_HUB_PANEL_ID, type PluginsHubTab } from "../plugins/plugins-hub.ts";
+import { PLUGINS_HUB_PANEL_ID } from "../plugins/plugins-hub.ts";
 import { SkillLibraryController } from "./library-controller.ts";
 import {
   renderSkillLibrary,
@@ -130,8 +130,6 @@ class SkillsPage extends OpenClawLightDomElement {
   private readonly library = new SkillLibraryController(
     this,
     this.gateway,
-    () => this.skillsAgentId,
-    () => this.refreshPage(),
     () => this.context?.config,
   );
   private readonly clawhubSearchTask = new Task(this, {
@@ -195,10 +193,7 @@ class SkillsPage extends OpenClawLightDomElement {
 
   override disconnectedCallback() {
     this.subscriptions.clear();
-    if (this.clawhubSearchTimer) {
-      clearTimeout(this.clawhubSearchTimer);
-      this.clawhubSearchTimer = null;
-    }
+    this.clearClawHubSearchTimer();
     this.clawhubIcons.reset();
     super.disconnectedCallback();
   }
@@ -226,10 +221,7 @@ class SkillsPage extends OpenClawLightDomElement {
   private resetLoadedSkillState() {
     this.library.reset();
     this.clawhubSearchTask.abort();
-    if (this.clawhubSearchTimer) {
-      clearTimeout(this.clawhubSearchTimer);
-      this.clawhubSearchTimer = null;
-    }
+    this.clearClawHubSearchTimer();
     if (this.routeDataInitialized) {
       this.routeDataEnabled = false;
     }
@@ -344,15 +336,20 @@ class SkillsPage extends OpenClawLightDomElement {
   private changeClawHubQuery(query: string) {
     this.clawhubSearchQuery = query;
     this.clawhubInstallMessage = null;
-    if (this.clawhubSearchTimer) {
-      clearTimeout(this.clawhubSearchTimer);
-    }
+    this.clearClawHubSearchTimer();
     this.clawhubSearchTimer = setTimeout(() => {
       this.clawhubSearchTimer = null;
       this.debouncedClawHubSearchQuery = query.trim();
       this.requestUpdate();
     }, 300);
     this.requestUpdate();
+  }
+
+  private clearClawHubSearchTimer() {
+    if (this.clawhubSearchTimer) {
+      clearTimeout(this.clawhubSearchTimer);
+      this.clawhubSearchTimer = null;
+    }
   }
 
   get clawhubSearchResults(): ClawHubSearchResult[] | null {
@@ -407,11 +404,10 @@ class SkillsPage extends OpenClawLightDomElement {
     );
   }
 
-  private selectHubTab(tab: PluginsHubTab) {
-    if (tab === "skills") {
-      return;
-    }
-    this.context.navigate(tab);
+  private navigateSkills(route: "skills" | "skill-settings") {
+    this.context.navigate(route, {
+      search: this.skillsAgentId ? `?agent=${encodeURIComponent(this.skillsAgentId)}` : "",
+    });
   }
 
   override render() {
@@ -422,16 +418,15 @@ class SkillsPage extends OpenClawLightDomElement {
         this.surface === "discovery"
           ? renderPluginsHubHeader({
               active: "skills",
-              onSelect: (tab) => this.selectHubTab(tab),
+              onSelect: (tab) => {
+                if (tab !== "skills") {
+                  this.context.navigate(tab);
+                }
+              },
               secondaryAction: {
                 label: t("skillDiscovery.settings"),
                 icon: icons.settings,
-                onClick: () =>
-                  this.context.navigate("skill-settings", {
-                    search: this.skillsAgentId
-                      ? `?agent=${encodeURIComponent(this.skillsAgentId)}`
-                      : "",
-                  }),
+                onClick: () => this.navigateSkills("skill-settings"),
               },
             })
           : renderSettingsPageHeader({
@@ -462,12 +457,7 @@ class SkillsPage extends OpenClawLightDomElement {
                       <button
                         type="button"
                         class="btn"
-                        @click=${() =>
-                          this.context.navigate("skills", {
-                            search: this.skillsAgentId
-                              ? `?agent=${encodeURIComponent(this.skillsAgentId)}`
-                              : "",
-                          })}
+                        @click=${() => this.navigateSkills("skills")}
                       >
                         ${icons.search} ${t("skillDiscovery.search")}
                       </button>

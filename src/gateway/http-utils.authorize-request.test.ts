@@ -56,6 +56,11 @@ const ownerProfile = {
   updatedAt: 2,
 };
 
+const readProfileSource = () => ({
+  path: "/synthetic/openclaw.sqlite",
+  env: { OPENCLAW_STATE_DIR: "/synthetic" },
+});
+
 function createReq(headers: Record<string, string> = {}): IncomingMessage {
   return { headers } as IncomingMessage;
 }
@@ -86,6 +91,7 @@ describe("authorizeGatewayHttpRequestOrReply", () => {
         role: null,
         aliases: [profileId],
         isCurrent: () => true,
+        readSource: readProfileSource,
         display: {
           id: profileId,
           displayName: profileId === ownerProfile.profileId ? ownerProfile.displayName : "Guest",
@@ -459,6 +465,7 @@ describe("authorizeGatewayHttpRequestOrReply", () => {
       role: null,
       aliases: ["profile-github", "profile-github-canonical"],
       isCurrent: () => true,
+      readSource: readProfileSource,
       display: {
         id: "profile-github-canonical",
         displayName: "GitHub User",

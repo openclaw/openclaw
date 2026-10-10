@@ -105,12 +105,8 @@ export async function resolveRealtimeBootstrapContextInstructions(params: {
   }
   selectedFiles.sort((left, right) => {
     // Preserve requested profile-file order, then path-sort duplicate sources.
-    const leftOrder = requestedOrder.get(left.name) ?? 0;
-    const rightOrder = requestedOrder.get(right.name) ?? 0;
-    if (leftOrder !== rightOrder) {
-      return leftOrder - rightOrder;
-    }
-    return left.path.localeCompare(right.path);
+    const order = (requestedOrder.get(left.name) ?? 0) - (requestedOrder.get(right.name) ?? 0);
+    return order || left.path.localeCompare(right.path);
   });
   if (selectedFiles.length === 0) {
     return undefined;

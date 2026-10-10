@@ -173,6 +173,7 @@ env:
   NODE_VERSION: "24.21.0"
   RELEASE_ISOLATION_TOOLING_CONTRACT: "2"
   FULL_RELEASE_DISPATCH_WITNESS_CONTRACT: "1"
+  FULL_RELEASE_QUALIFICATION_ADMISSION_CONTRACT: "1"
   FULL_RELEASE_SOURCE_ADMISSION_CONTRACT: "1"
   FULL_RELEASE_PUBLICATION_ADMISSION_CONTRACT: "1"
   FULL_RELEASE_EXECUTION_PLAN_RESTORE_CONTRACT: "1"
@@ -192,6 +193,7 @@ jobs:
       release_candidate_branch: ${{ steps.release_inputs.outputs.release_candidate_branch }}
       trusted_workflow_json: ${{ steps.tooling_identity.outputs.json }}
       extension_test_exclude_patterns_json: ${{ steps.publication_dispatch.outputs.extension_test_exclude_patterns_json }}
+      qualification_baselines_json: ${{ steps.publication_dispatch.outputs.qualification_baselines_json }}
       live_suite_filter: ${{ steps.filters.outputs.live_suite_filter }}
       cross_os_suite_filter: ${{ steps.filters.outputs.cross_os_suite_filter }}
       candidate_required: ${{ steps.candidate_request.outputs.required }}
@@ -307,6 +309,7 @@ jobs:
       - name: Decode publication dispatch envelope
         id: publication_dispatch
         env:
+          QUALIFICATION_ADMISSION_CONTRACT: ${{ env.FULL_RELEASE_QUALIFICATION_ADMISSION_CONTRACT }}
           PUBLICATION_INPUTS_JSON: ${{ toJSON(inputs) }}
         run: |
           set -euo pipefail
@@ -317,14 +320,22 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           REQUESTED_IDENTITY_JSON: ${{ steps.publication_dispatch.outputs.trusted_workflow_json }}
+          QUALIFICATION_ADMISSION_JSON: ${{ steps.publication_dispatch.outputs.qualification_admission_json }}
+          QUALIFICATION_INPUTS_JSON: ${{ toJSON(inputs) }}
+          CANDIDATE_SHA: ${{ inputs.expected_sha }}
           WORKFLOW_CONTRACT: ${{ env.RELEASE_ISOLATION_TOOLING_CONTRACT }}
           WORKFLOW_FULL_REF: ${{ github.ref }}
           WORKFLOW_REF: ${{ github.ref_name }}
           WORKFLOW_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
+          admission_args=()
+          if [[ -n "$QUALIFICATION_ADMISSION_JSON" ]]; then
+            admission_args+=(--qualification-admission-json "$QUALIFICATION_ADMISSION_JSON"
+              --qualification-inputs-json "$QUALIFICATION_INPUTS_JSON" --candidate-sha "$CANDIDATE_SHA")
+          fi
           identity="$(
-            node workflow/scripts/release-tooling-identity.mjs resolve \
+            node workflow/scripts/release-tooling-identity.mjs resolve "${admission_args[@]}" \
               --repository "$GITHUB_REPOSITORY" \
               --workflow-contract "$WORKFLOW_CONTRACT" \
               --workflow-ref "$WORKFLOW_REF" \
@@ -374,8 +385,10 @@ jobs:
           TARGET_SHA: ${{ steps.resolve.outputs.sha }}
           RELEASE_PROFILE: ${{ inputs.release_profile }}
           RELEASE_SOAK: ${{ inputs.run_release_soak || inputs.release_profile == 'stable' || inputs.release_profile == 'full' }}
+          QUALIFICATION_BASELINES_JSON: ${{ steps.publication_dispatch.outputs.qualification_baselines_json }}
+          QUALIFICATION_ADMISSION_JSON: ${{ steps.publication_dispatch.outputs.qualification_admission_json }}
           UPGRADE_SURVIVOR_SCENARIOS: ${{ (inputs.run_release_soak || inputs.release_profile == 'stable' || inputs.release_profile == 'full') && 'reported-issues' || '' }}
-          ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS: ${{ inputs.target_context_ref != '' }}
+          TARGET_CONTEXT_REF: ${{ inputs.target_context_ref }}
           ALLOW_UNRELEASED_CHANGELOG: ${{ inputs.allow_unreleased_changelog || (inputs.target_context_ref == '' && (inputs.ref == 'main' || inputs.ref == 'refs/heads/main')) }}
           PACKAGE_PUBLISHED: ${{ inputs.release_package_spec != '' }}
           RELEASE_PACKAGE_SPEC: ${{ inputs.release_package_spec }}
@@ -386,16 +399,30 @@ jobs:
           set -euo pipefail
           input="${RUNNER_TEMP}/full-release-candidate-request-input.json"
           output="${RUNNER_TEMP}/full-release-candidate-request.json"
+          allow_frozen_target_scenario_omissions=false
+          if [[ -n "$TARGET_CONTEXT_REF" && "$TARGET_SHA" != "$GITHUB_SHA" ]]; then
+            allow_frozen_target_scenario_omissions=true
+          fi
+          if [[ -n "$QUALIFICATION_ADMISSION_JSON" && -z "$QUALIFICATION_BASELINES_JSON" ]]; then
+            echo "Candidate-owned qualification requires captured baseline inputs." >&2
+            exit 1
+          fi
+          upgrade_baseline="openclaw@latest"
+          upgrade_baselines=""
+          if [[ -n "$QUALIFICATION_BASELINES_JSON" ]]; then
+            upgrade_baseline="$(jq -er .upgradeBaseline <<< "$QUALIFICATION_BASELINES_JSON")"
+            upgrade_baselines="$(jq -er '.upgradeSurvivorBaselines | join(" ")' <<< "$QUALIFICATION_BASELINES_JSON")"
+          fi
           jq -cn \
             --arg repository "$GITHUB_REPOSITORY" \
             --arg targetSha "$TARGET_SHA" \
             --arg toolingSha "$GITHUB_SHA" \
             --arg releaseProfile "$RELEASE_PROFILE" \
             --argjson releaseSoak "$RELEASE_SOAK" \
-            --arg upgradeSurvivorBaseline "openclaw@latest" \
-            --arg upgradeSurvivorBaselines "" \
+            --arg upgradeSurvivorBaseline "$upgrade_baseline" \
+            --arg upgradeSurvivorBaselines "$upgrade_baselines" \
             --arg upgradeSurvivorScenarios "$UPGRADE_SURVIVOR_SCENARIOS" \
-            --argjson allowFrozenTargetScenarioOmissions "$ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS" \
+            --argjson allowFrozenTargetScenarioOmissions "$allow_frozen_target_scenario_omissions" \
             --argjson allowUnreleasedChangelog "$ALLOW_UNRELEASED_CHANGELOG" \
             --argjson packagePublished "$PACKAGE_PUBLISHED" \
             --arg sharedImagePolicy "no-push-artifact" \
@@ -999,6 +1026,16 @@ jobs:
       evidence_sha: ${{ steps.find.outputs.evidence_sha }}
       evidence_policy: ${{ steps.find.outputs.evidence_policy }}
       changed_paths: ${{ steps.find.outputs.changed_paths }}
+      publication_artifacts_reused: ${{ steps.artifacts.outputs.publication_artifacts_reused }}
+      prepared_bundle_json: ${{ steps.artifacts.outputs.prepared_bundle_json }}
+      qualified_preflight_bundle_json: ${{ steps.artifacts.outputs.qualified_preflight_bundle_json }}
+      npm_run_id: ${{ steps.artifacts.outputs.npm_run_id }}
+      npm_run_attempt: ${{ steps.artifacts.outputs.npm_run_attempt }}
+      prepared_run_id: ${{ steps.artifacts.outputs.prepared_run_id }}
+      prepared_run_attempt: ${{ steps.artifacts.outputs.prepared_run_attempt }}
+      prepared_artifact_name: ${{ steps.artifacts.outputs.prepared_artifact_name }}
+      prepared_manifest_sha256: ${{ steps.artifacts.outputs.prepared_manifest_sha256 }}
+      plugin_npm_descriptor_json: ${{ steps.artifacts.outputs.descriptor_json }}
     steps:
       - name: Checkout trusted workflow helper
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1008,6 +1045,19 @@ jobs:
           sparse-checkout: |
             scripts
             .github/actions/setup-pnpm-store-cache
+          sparse-checkout-cone-mode: false
+          fetch-depth: 1
+          persist-credentials: false
+          submodules: false
+
+      - &qualification_evidence_verifier_checkout
+        name: Checkout admitted qualification verifier
+        if: ${{ needs.resolve_target.result == 'success' && fromJSON(needs.resolve_target.outputs.source_admission_json || '{}').qualificationAdmission != null }}
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ fromJSON(needs.resolve_target.outputs.source_admission_json).qualificationAdmission.workflowSha }}
+          path: qualification-verifier
+          sparse-checkout: scripts
           sparse-checkout-cone-mode: false
           fetch-depth: 1
           persist-credentials: false
@@ -1070,7 +1120,10 @@ jobs:
           ALLOW_UNRELEASED_CHANGELOG: ${{ inputs.allow_unreleased_changelog || (inputs.target_context_ref == '' && (inputs.ref == 'main' || inputs.ref == 'refs/heads/main')) }}
           PLUGIN_PRERELEASE_NODE_EXCLUDE_PATTERNS_JSON: ${{ inputs.plugin_prerelease_node_exclude_patterns_json }}
           EXTENSION_TEST_EXCLUDE_PATTERNS_JSON: ${{ needs.resolve_target.outputs.extension_test_exclude_patterns_json }}
+          QUALIFICATION_BASELINES_JSON: ${{ needs.resolve_target.outputs.qualification_baselines_json }}
           TRUSTED_WORKFLOW_JSON: ${{ needs.resolve_target.outputs.trusted_workflow_json }}
+          SOURCE_ADMISSION_JSON: ${{ needs.resolve_target.outputs.source_admission_json }}
+          QUALIFICATION_INPUTS_JSON: ${{ toJSON(inputs) }}
           CANDIDATE_REQUEST_JSON: ${{ needs.resolve_target.outputs.candidate_request_json }}
           PUBLICATION_CANDIDATE_REQUIRED: ${{ needs.resolve_target.outputs.candidate_required }}
         run: |
@@ -1102,6 +1155,7 @@ jobs:
             --arg allowUnreleasedChangelog "$ALLOW_UNRELEASED_CHANGELOG" \
             --arg pluginPrereleaseNodeExcludePatternsJson "$PLUGIN_PRERELEASE_NODE_EXCLUDE_PATTERNS_JSON" \
             --arg extensionTestExcludePatternsJson "$EXTENSION_TEST_EXCLUDE_PATTERNS_JSON" \
+            --arg qualificationBaselinesJson "$QUALIFICATION_BASELINES_JSON" \
             '{
               validationPurpose: $validationPurpose,
               publicationSelectionJson: $publicationSelectionJson,
@@ -1120,15 +1174,31 @@ jobs:
               skipPackageTelegramE2e: $skipPackageTelegramE2e,
               allowUnreleasedChangelog: $allowUnreleasedChangelog,
               pluginPrereleaseNodeExcludePatternsJson: $pluginPrereleaseNodeExcludePatternsJson,
-              extensionTestExcludePatternsJson: $extensionTestExcludePatternsJson
+              extensionTestExcludePatternsJson: $extensionTestExcludePatternsJson,
+              qualificationBaselinesJson: $qualificationBaselinesJson
             } + (if $coveragePolicy == "" then {} else {coveragePolicy: $coveragePolicy} end) + (if $telegramWaiver == "" then {} else {telegramWaiver: $telegramWaiver} end)')"
           trusted_workflow_json="${TRUSTED_WORKFLOW_JSON}"
           trusted_workflow_ref="$(jq -er '.ref | select(type == "string" and length > 0)' <<< "$trusted_workflow_json")"
           trusted_workflow_full_ref="$(jq -er '.fullRef | select(type == "string" and length > 0)' <<< "$trusted_workflow_json")"
           trusted_workflow_sha="$(jq -er '.sha | select(type == "string" and test("^[0-9a-f]{40}$"))' <<< "$trusted_workflow_json")"
+          verifier_sha="$GITHUB_SHA"
+          qualification_args=()
+          qualification_admission="$(jq -c '.qualificationAdmission // empty' <<< "$SOURCE_ADMISSION_JSON")"
+          if [[ -n "$qualification_admission" ]]; then
+            # resolve_target authenticated this P admission; P rechecks both
+            # receipts before selecting Q evidence from another transport ref.
+            trusted_workflow_ref="$(jq -er '.workflowHeadBranch' <<< "$qualification_admission")"
+            trusted_workflow_full_ref="$(jq -er '.workflowFullRef' <<< "$qualification_admission")"
+            trusted_workflow_sha="$(jq -er '.workflowSha' <<< "$qualification_admission")"
+            verifier_sha="$trusted_workflow_sha"
+            export OPENCLAW_RELEASE_CI_SUMMARY_VALIDATOR="$GITHUB_WORKSPACE/qualification-verifier/scripts/release-ci-summary.mjs"
+            qualification_args=(--qualification-admission-json "$qualification_admission"
+              --qualification-inputs-json "$QUALIFICATION_INPUTS_JSON")
+          fi
           bash workflow/scripts/github/find-reusable-release-validation.sh \
             --target-sha "$TARGET_SHA" \
             --workflow-sha "$GITHUB_SHA" \
+            --verifier-source-sha "$verifier_sha" \
             --workflow-ref "$WORKFLOW_REF" \
             --trusted-workflow-ref "$trusted_workflow_ref" \
             --trusted-workflow-full-ref "$trusted_workflow_full_ref" \
@@ -1138,8 +1208,27 @@ jobs:
             --inputs-json "$inputs_json" \
             --repo "$GITHUB_REPOSITORY" \
             --repo-dir target \
+            "${qualification_args[@]}" \
             --github-output "$RUNNER_TEMP/reusable-evidence.outputs"
           node workflow/scripts/full-release-validation-state.mjs reuse-publication
+
+      - name: Resolve original publication artifact receipts
+        id: artifacts
+        if: steps.find.outputs.reuse == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVIDENCE_REUSE: ${{ steps.find.outputs.reuse }}
+          EVIDENCE_POLICY: ${{ steps.find.outputs.evidence_policy }}
+          EVIDENCE_SHA: ${{ steps.find.outputs.evidence_sha }}
+          EVIDENCE_ROOT_RUN_ID: ${{ steps.find.outputs.evidence_root_run_id }}
+          TARGET_SHA: ${{ needs.resolve_target.outputs.sha }}
+          PARENT_WORKFLOW_SHA: ${{ github.sha }}
+          RELEASE_TAG: ${{ needs.resolve_target.outputs.release_tag }}
+          SOURCE_ADMISSION_JSON: ${{ needs.resolve_target.outputs.source_admission_json }}
+          QUALIFICATION_INPUTS_JSON: ${{ toJSON(inputs) }}
+          PLUGIN_NPM_REQUIRED: ${{ needs.resolve_target.outputs.plugin_npm_preflight_required }}
+          OPENCLAW_RELEASE_CI_SUMMARY_VALIDATOR: ${{ fromJSON(needs.resolve_target.outputs.source_admission_json || '{}').qualificationAdmission != null && format('{0}/qualification-verifier/scripts/release-ci-summary.mjs', github.workspace) || format('{0}/workflow/scripts/release-ci-summary.mjs', github.workspace) }}
+        run: node workflow/scripts/full-release-artifacts.mjs reuse
 
       - name: Summarize evidence reuse
         env:
@@ -1199,6 +1288,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           CHILD_WORKFLOW_KIND: ci
+          QUALIFICATION_BASELINES_JSON: ${{ needs.resolve_target.outputs.qualification_baselines_json }}
           CI_RELEASE_SCOPE: ${{ needs.resolve_target.outputs.ci_release_scope }}
           TARGET_REF: ${{ inputs.ref }}
           TARGET_CONTEXT_REF: ${{ inputs.target_context_ref }}
@@ -1412,6 +1502,7 @@ jobs:
               elif [[ "$context_ref" =~ ^(release/[0-9]{4}\.[0-9]+\.[0-9]+(-[1-9][0-9]*)?|extended-stable/[0-9]{4}\.[0-9]+\.33)$ ]]; then
                 args+=(-f target_context_ref="$context_ref")
               fi
+              if [[ -n "${QUALIFICATION_BASELINES_JSON:-}" ]]; then args+=(-f qualification_baselines_json="$QUALIFICATION_BASELINES_JSON"); fi
               dispatch_child ci.yml "$dispatch_run_name" "${args[@]}"
               ;;
             artifact-npm|artifact-candidate|artifact-docker)
@@ -1455,11 +1546,14 @@ jobs:
               args=(-f target_ref="$TARGET_SHA" -f expected_sha="$TARGET_SHA" -f full_release_validation=true -f phase="$PHASE" -f dispatch_id="$dispatch_id" -f node_test_exclude_patterns_json="$PLUGIN_PRERELEASE_NODE_EXCLUDE_PATTERNS_JSON" -f extension_test_exclude_patterns_json="$EXTENSION_TEST_EXCLUDE_PATTERNS_JSON")
               if [[ -n "${TARGET_CONTEXT_REF:-}" ]]; then
                 args+=(-f target_context_ref="$TARGET_CONTEXT_REF")
-                args+=(-f allow_frozen_target_scenario_omissions=true)
+                if [[ "$TARGET_SHA" != "$PARENT_WORKFLOW_SHA" ]]; then
+                  args+=(-f allow_frozen_target_scenario_omissions=true)
+                fi
               fi
               if [[ -n "${CANDIDATE_ARTIFACT_JSON// }" ]]; then
                 args+=(-f candidate_artifact_json="$CANDIDATE_ARTIFACT_JSON")
               fi
+              if [[ -n "${QUALIFICATION_BASELINES_JSON:-}" ]]; then args+=(-f qualification_baselines_json="$QUALIFICATION_BASELINES_JSON"); fi
               dispatch_child plugin-prerelease.yml "$dispatch_run_name" "${args[@]}"
               ;;
             release-checks)
@@ -1514,7 +1608,9 @@ jobs:
               )
               if [[ -n "${TARGET_CONTEXT_REF// }" ]]; then
                 args+=(-f target_context_ref="$TARGET_CONTEXT_REF")
-                args+=(-f allow_frozen_target_scenario_omissions=true)
+                if [[ "$TARGET_SHA" != "$PARENT_WORKFLOW_SHA" ]]; then
+                  args+=(-f allow_frozen_target_scenario_omissions=true)
+                fi
               fi
               if [[ -n "${LIVE_SUITE_FILTER// }" ]]; then
                 args+=(-f live_suite_filter="$LIVE_SUITE_FILTER")
@@ -1537,6 +1633,7 @@ jobs:
               dispatch_id="full-release-validation-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-release-checks-${PHASE}"
               dispatch_run_name="OpenClaw Release Checks ${dispatch_id}"
               args+=(-f dispatch_id="$dispatch_id")
+              if [[ -n "${QUALIFICATION_BASELINES_JSON:-}" ]]; then args+=(-f qualification_baselines_json="$QUALIFICATION_BASELINES_JSON"); fi
               dispatch_child openclaw-release-checks.yml "$dispatch_run_name" "${args[@]}"
               ;;
             npm-telegram)
@@ -1615,6 +1712,7 @@ jobs:
           CANDIDATE_ARTIFACT_JSON: ""
           PLUGIN_PRERELEASE_NODE_EXCLUDE_PATTERNS_JSON: ${{ inputs.plugin_prerelease_node_exclude_patterns_json }}
           EXTENSION_TEST_EXCLUDE_PATTERNS_JSON: ${{ needs.resolve_target.outputs.extension_test_exclude_patterns_json }}
+          QUALIFICATION_BASELINES_JSON: ${{ needs.resolve_target.outputs.qualification_baselines_json }}
         run: *full_release_child_dispatch
 
   plugin_prerelease_candidate:
@@ -1646,6 +1744,7 @@ jobs:
           CANDIDATE_ARTIFACT_JSON: ${{ needs.candidate_acquisition.outputs.candidate_artifact_json }}
           PLUGIN_PRERELEASE_NODE_EXCLUDE_PATTERNS_JSON: ${{ inputs.plugin_prerelease_node_exclude_patterns_json }}
           EXTENSION_TEST_EXCLUDE_PATTERNS_JSON: ${{ needs.resolve_target.outputs.extension_test_exclude_patterns_json }}
+          QUALIFICATION_BASELINES_JSON: ${{ needs.resolve_target.outputs.qualification_baselines_json }}
         run: *full_release_child_dispatch
 
   release_checks_independent:
@@ -1668,6 +1767,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           CHILD_WORKFLOW_KIND: release-checks
+          QUALIFICATION_BASELINES_JSON: ${{ needs.resolve_target.outputs.qualification_baselines_json }}
           PHASE: independent
           TARGET_REF: ${{ inputs.ref }}
           TARGET_CONTEXT_REF: ${{ inputs.target_context_ref }}
@@ -1711,6 +1811,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           CHILD_WORKFLOW_KIND: release-checks
+          QUALIFICATION_BASELINES_JSON: ${{ needs.resolve_target.outputs.qualification_baselines_json }}
           PHASE: candidate
           TARGET_REF: ${{ inputs.ref }}
           TARGET_CONTEXT_REF: ${{ inputs.target_context_ref }}
@@ -1795,12 +1896,13 @@ jobs:
     runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
     timeout-minutes: 360
     outputs:
-      run_id: ${{ steps.producer.outputs.run_id }}
-      run_attempt: ${{ steps.producer.outputs.run_attempt }}
+      run_id: ${{ steps.reused.outputs.run_id || steps.producer.outputs.run_id }}
+      run_attempt: ${{ steps.reused.outputs.run_attempt || steps.producer.outputs.run_attempt }}
       dispatch_id: ${{ steps.producer.outputs.dispatch_id }}
-      prepared_bundle_json: ${{ steps.bundle.outputs.prepared_bundle_json }}
+      prepared_bundle_json: ${{ steps.reused.outputs.prepared_bundle_json || steps.bundle.outputs.prepared_bundle_json }}
     env:
       GH_TOKEN: ${{ github.token }}
+      PUBLICATION_ARTIFACTS_REUSED: ${{ needs.evidence_reuse.outputs.publication_artifacts_reused }}
       CHILD_WORKFLOW_KIND: artifact-npm
       ARTIFACT_STAGE: npm
       ARTIFACT_DISPATCH_ID: full-release-validation-${{ github.run_id }}-1-artifacts-npm
@@ -1812,18 +1914,29 @@ jobs:
       CHILD_WORKFLOW_REF: ${{ github.ref_name }}
       PARENT_WORKFLOW_SHA: ${{ github.sha }}
     steps:
+      - name: Retain original npm package descriptor
+        id: reused
+        if: env.PUBLICATION_ARTIFACTS_REUSED == 'true'
+        env:
+          PREPARED_BUNDLE_JSON: ${{ needs.evidence_reuse.outputs.prepared_bundle_json }}
+          PRODUCER_RUN_ID: ${{ needs.evidence_reuse.outputs.npm_run_id }}
+          PRODUCER_RUN_ATTEMPT: ${{ needs.evidence_reuse.outputs.npm_run_attempt }}
+        run: |
+          printf '%s\n' "prepared_bundle_json=$PREPARED_BUNDLE_JSON" "run_id=$PRODUCER_RUN_ID" "run_attempt=$PRODUCER_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
       - name: Dispatch immutable npm artifact producer
         id: dispatch
-        if: github.run_attempt == 1
+        if: github.run_attempt == 1 && env.PUBLICATION_ARTIFACTS_REUSED != 'true'
         run: *full_release_child_dispatch
       - &artifact_tooling_checkout
         name: Checkout artifact receipt tooling
+        if: env.PUBLICATION_ARTIFACTS_REUSED != 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
           sparse-checkout: scripts
           persist-credentials: false
       - name: Setup supported Node runtime
+        if: env.PUBLICATION_ARTIFACTS_REUSED != 'true'
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ env.NODE_VERSION }}
@@ -1831,6 +1944,7 @@ jobs:
 
       - &artifact_producer_resolution
         name: Recover original artifact producer
+        if: env.PUBLICATION_ARTIFACTS_REUSED != 'true'
         id: producer
         env:
           ARTIFACT_RUN_ID: ${{ steps.dispatch.outputs.run_id }}
@@ -1839,6 +1953,7 @@ jobs:
       # Raw bytes unblock package consumers while source/SDK/dependency proof continues.
       - name: Wait for publishable npm package
         id: bundle
+        if: env.PUBLICATION_ARTIFACTS_REUSED != 'true'
         env:
           ARTIFACT_RUN_ID: ${{ steps.producer.outputs.run_id }}
           ARTIFACT_RUN_ATTEMPT: ${{ steps.producer.outputs.run_attempt }}
@@ -1847,14 +1962,15 @@ jobs:
 
   qualify_npm_package:
     name: Qualify release npm artifacts
-    needs: [resolve_target, prepare_npm_package]
+    needs: [resolve_target, evidence_reuse, prepare_npm_package]
     if: ${{ always() && needs.resolve_target.result == 'success' && inputs.rerun_group == 'all' && needs.prepare_npm_package.result == 'success' }}
     runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
     timeout-minutes: 360
     outputs:
-      qualified_preflight_bundle_json: ${{ steps.bundle.outputs.qualified_preflight_bundle_json }}
+      qualified_preflight_bundle_json: ${{ steps.reused.outputs.qualified_preflight_bundle_json || steps.bundle.outputs.qualified_preflight_bundle_json }}
     env:
       GH_TOKEN: ${{ github.token }}
+      PUBLICATION_ARTIFACTS_REUSED: ${{ needs.evidence_reuse.outputs.publication_artifacts_reused }}
       ARTIFACT_STAGE: npm
       ARTIFACT_DISPATCH_ID: ${{ needs.prepare_npm_package.outputs.dispatch_id }}
       ARTIFACT_RUN_ID: ${{ needs.prepare_npm_package.outputs.run_id }}
@@ -1866,8 +1982,15 @@ jobs:
       CHILD_WORKFLOW_REF: ${{ github.ref_name }}
       PARENT_WORKFLOW_SHA: ${{ github.sha }}
     steps:
+      - name: Retain original npm qualification descriptor
+        id: reused
+        if: env.PUBLICATION_ARTIFACTS_REUSED == 'true'
+        env:
+          QUALIFIED_BUNDLE_JSON: ${{ needs.evidence_reuse.outputs.qualified_preflight_bundle_json }}
+        run: printf '%s\n' "qualified_preflight_bundle_json=$QUALIFIED_BUNDLE_JSON" >> "$GITHUB_OUTPUT"
       - *artifact_tooling_checkout
       - name: Setup supported Node runtime
+        if: env.PUBLICATION_ARTIFACTS_REUSED != 'true'
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ env.NODE_VERSION }}
@@ -1875,6 +1998,7 @@ jobs:
 
       - name: Wait for exact npm qualification
         id: bundle
+        if: env.PUBLICATION_ARTIFACTS_REUSED != 'true'
         run: node scripts/full-release-artifacts.mjs wait
 
   prepare_plugin_npm:
@@ -1884,11 +2008,12 @@ jobs:
     runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
     timeout-minutes: 150
     outputs:
-      descriptor_json: ${{ steps.prepared.outputs.descriptor_json }}
-      run_id: ${{ steps.prepared.outputs.run_id }}
-      run_attempt: ${{ steps.prepared.outputs.run_attempt }}
+      descriptor_json: ${{ steps.reused.outputs.descriptor_json || steps.prepared.outputs.descriptor_json }}
+      run_id: ${{ steps.reused.outputs.run_id || steps.prepared.outputs.run_id }}
+      run_attempt: ${{ steps.reused.outputs.run_attempt || steps.prepared.outputs.run_attempt }}
     env:
       GH_TOKEN: ${{ github.token }}
+      PUBLICATION_ARTIFACTS_REUSED: ${{ needs.evidence_reuse.outputs.publication_artifacts_reused }}
       CHILD_WORKFLOW_KIND: plugin-npm-preflight
       TARGET_SHA: ${{ needs.resolve_target.outputs.sha }}
       PLUGIN_PUBLISH_SCOPE: ${{ needs.resolve_target.outputs.plugin_npm_publish_scope }}
@@ -1898,13 +2023,21 @@ jobs:
       PARENT_WORKFLOW_SHA: ${{ github.sha }}
       DISPATCH_ID: full-release-validation-${{ github.run_id }}-1-plugin-npm-preflight
     steps:
+      - name: Retain original plugin npm artifact descriptor
+        id: reused
+        if: env.PUBLICATION_ARTIFACTS_REUSED == 'true'
+        env:
+          DESCRIPTOR_JSON: ${{ needs.evidence_reuse.outputs.plugin_npm_descriptor_json }}
+        run: |
+          printf '%s\n' "descriptor_json=$DESCRIPTOR_JSON" "run_id=$(jq -er .runId <<< "$DESCRIPTOR_JSON")" "run_attempt=$(jq -er .runAttempt <<< "$DESCRIPTOR_JSON")" >> "$GITHUB_OUTPUT"
       - name: Dispatch exact plugin npm artifact preflight
         id: dispatch
-        if: github.run_attempt == 1
+        if: github.run_attempt == 1 && env.PUBLICATION_ARTIFACTS_REUSED != 'true'
         run: *full_release_child_dispatch
 
       - name: Resolve and seal exact plugin npm artifact descriptor
         id: prepared
+        if: env.PUBLICATION_ARTIFACTS_REUSED != 'true'
         env:
           DISPATCH_RUN_ID: ${{ steps.dispatch.outputs.run_id }}
           DISPATCH_RUN_ATTEMPT: ${{ steps.dispatch.outputs.run_attempt }}
@@ -1974,12 +2107,13 @@ jobs:
     runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
     timeout-minutes: 360
     outputs:
-      prepared_run_id: ${{ steps.bundle.outputs.prepared_run_id }}
-      prepared_run_attempt: ${{ steps.bundle.outputs.prepared_run_attempt }}
-      prepared_artifact_name: ${{ steps.bundle.outputs.prepared_artifact_name }}
-      prepared_manifest_sha256: ${{ steps.bundle.outputs.prepared_manifest_sha256 }}
+      prepared_run_id: ${{ steps.reused.outputs.prepared_run_id || steps.bundle.outputs.prepared_run_id }}
+      prepared_run_attempt: ${{ steps.reused.outputs.prepared_run_attempt || steps.bundle.outputs.prepared_run_attempt }}
+      prepared_artifact_name: ${{ steps.reused.outputs.prepared_artifact_name || steps.bundle.outputs.prepared_artifact_name }}
+      prepared_manifest_sha256: ${{ steps.reused.outputs.prepared_manifest_sha256 || steps.bundle.outputs.prepared_manifest_sha256 }}
     env:
       GH_TOKEN: ${{ github.token }}
+      PUBLICATION_ARTIFACTS_REUSED: ${{ needs.evidence_reuse.outputs.publication_artifacts_reused }}
       CHILD_WORKFLOW_KIND: artifact-docker
       ARTIFACT_STAGE: docker
       ARTIFACT_DISPATCH_ID: full-release-validation-${{ github.run_id }}-1-artifacts-docker
@@ -1989,12 +2123,23 @@ jobs:
       CHILD_WORKFLOW_REF: ${{ github.ref_name }}
       PARENT_WORKFLOW_SHA: ${{ github.sha }}
     steps:
+      - name: Retain original Docker preparation descriptor
+        id: reused
+        if: env.PUBLICATION_ARTIFACTS_REUSED == 'true'
+        env:
+          PREPARED_RUN_ID: ${{ needs.evidence_reuse.outputs.prepared_run_id }}
+          PREPARED_RUN_ATTEMPT: ${{ needs.evidence_reuse.outputs.prepared_run_attempt }}
+          PREPARED_ARTIFACT_NAME: ${{ needs.evidence_reuse.outputs.prepared_artifact_name }}
+          PREPARED_MANIFEST_SHA256: ${{ needs.evidence_reuse.outputs.prepared_manifest_sha256 }}
+        run: |
+          printf '%s\n' "prepared_run_id=$PREPARED_RUN_ID" "prepared_run_attempt=$PREPARED_RUN_ATTEMPT" "prepared_artifact_name=$PREPARED_ARTIFACT_NAME" "prepared_manifest_sha256=$PREPARED_MANIFEST_SHA256" >> "$GITHUB_OUTPUT"
       - name: Dispatch immutable Docker artifact producer
         id: dispatch
-        if: github.run_attempt == 1
+        if: github.run_attempt == 1 && env.PUBLICATION_ARTIFACTS_REUSED != 'true'
         run: *full_release_child_dispatch
       - *artifact_tooling_checkout
       - name: Setup supported Node runtime
+        if: env.PUBLICATION_ARTIFACTS_REUSED != 'true'
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ env.NODE_VERSION }}
@@ -2003,6 +2148,7 @@ jobs:
       - *artifact_producer_resolution
       - name: Wait for exact Docker preparation
         id: bundle
+        if: env.PUBLICATION_ARTIFACTS_REUSED != 'true'
         env:
           ARTIFACT_RUN_ID: ${{ steps.producer.outputs.run_id }}
           ARTIFACT_RUN_ATTEMPT: ${{ steps.producer.outputs.run_attempt }}
@@ -2082,6 +2228,8 @@ jobs:
           sparse-checkout-cone-mode: false
           persist-credentials: false
 
+      - *qualification_evidence_verifier_checkout
+
       # Reruns lose parent artifacts. The original upload's digest witness
       # authenticates cached bytes before resolution republishes the same plan.
       # Relative cache paths keep the version identical across runner classes.
@@ -2121,6 +2269,7 @@ jobs:
         id: plan
         env:
           GH_TOKEN: ${{ github.token }}
+          OPENCLAW_RELEASE_CI_SUMMARY_VALIDATOR: ${{ fromJSON(needs.resolve_target.outputs.source_admission_json || '{}').qualificationAdmission != null && format('{0}/qualification-verifier/scripts/release-ci-summary.mjs', github.workspace) || format('{0}/scripts/release-ci-summary.mjs', github.workspace) }}
           SOURCE_ADMISSION_JSON: ${{ needs.resolve_target.outputs.source_admission_json }}
           TARGET_CONTEXT_REF: ${{ inputs.target_context_ref || inputs.ref }}
           RELEASE_PROFILE: ${{ inputs.release_profile }}
@@ -2342,6 +2491,8 @@ jobs:
           sparse-checkout-cone-mode: false
           persist-credentials: false
 
+      - *qualification_evidence_verifier_checkout
+
       - name: Download immutable release execution plan
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
@@ -2359,6 +2510,7 @@ jobs:
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
+          OPENCLAW_RELEASE_CI_SUMMARY_VALIDATOR: ${{ fromJSON(needs.resolve_target.outputs.source_admission_json || '{}').qualificationAdmission != null && format('{0}/qualification-verifier/scripts/release-ci-summary.mjs', github.workspace) || format('{0}/scripts/release-ci-summary.mjs', github.workspace) }}
           FAIL_FAST: ${{ inputs.fail_fast }}
           RELEASE_PROFILE: ${{ inputs.release_profile }}
           RERUN_GROUP: ${{ inputs.rerun_group }}
@@ -2723,6 +2875,7 @@ jobs:
           ALLOW_UNRELEASED_CHANGELOG: ${{ inputs.allow_unreleased_changelog || (inputs.target_context_ref == '' && (inputs.ref == 'main' || inputs.ref == 'refs/heads/main')) }}
           PLUGIN_PRERELEASE_NODE_EXCLUDE_PATTERNS_JSON: ${{ inputs.plugin_prerelease_node_exclude_patterns_json }}
           EXTENSION_TEST_EXCLUDE_PATTERNS_JSON: ${{ needs.resolve_target.outputs.extension_test_exclude_patterns_json }}
+          QUALIFICATION_BASELINES_JSON: ${{ needs.resolve_target.outputs.qualification_baselines_json }}
           RELEASE_EXECUTION_PLAN_PATH: ${{ runner.temp }}/full-release-execution-plan/full-release-execution-plan.json
           DIAGNOSTIC_DRAIN_PATH: ${{ runner.temp }}/full-release-diagnostics/full-release-diagnostic-manifest.json
           QUALIFIED_NPM_BUNDLE_JSON: ${{ needs.qualify_npm_package.outputs.qualified_preflight_bundle_json }}

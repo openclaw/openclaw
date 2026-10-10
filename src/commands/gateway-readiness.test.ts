@@ -106,7 +106,7 @@ describe("ensureDashboardGatewayReady", () => {
       expect(installGateway).not.toHaveBeenCalled();
       expect(startGateway).not.toHaveBeenCalled();
       const output = runtime.log.mock.calls.flat().join("\n");
-      expect(output).toContain("Gateway probe failed:");
+      expect(output).toContain("Gateway check failed:");
       expect(output).not.toContain("Gateway is not running");
       expect(output).not.toContain("gateway start");
     },
@@ -263,7 +263,7 @@ describe("ensureDashboardGatewayReady", () => {
     expect(result).toMatchObject({ ready: false, recoverable: false });
     expect(confirm).not.toHaveBeenCalled();
     expect(runtime.log.mock.calls.map(([line]) => String(line)).join("\n")).toContain(
-      "Gateway probe failed: gateway closed (1008): auth failed",
+      "Gateway check failed: gateway closed (1008): auth failed",
     );
   });
 
@@ -415,7 +415,7 @@ describe("ensureDashboardGatewayReady", () => {
     expect(result).toMatchObject({ ready: false, recoverable: false });
     expect(confirm).not.toHaveBeenCalled();
     expect(runtime.log.mock.calls.map(([line]) => String(line)).join("\n")).toContain(
-      "Gateway probe failed: timeout",
+      "Gateway check failed: timeout",
     );
   });
 
@@ -447,7 +447,7 @@ describe("ensureDashboardGatewayReady", () => {
     expect(result).toMatchObject({ ready: false, recoverable: false });
     expect(confirm).not.toHaveBeenCalled();
     expect(runtime.log.mock.calls.map(([line]) => String(line)).join("\n")).toContain(
-      "Gateway probe failed: Unexpected server response: 200",
+      "Gateway check failed: Unexpected server response: 200",
     );
   });
 });

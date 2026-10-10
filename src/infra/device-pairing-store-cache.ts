@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { DevicePairingStoreState, PairedDevice } from "./device-pairing.types.js";
-import { readSqliteDataVersion } from "./sqlite-schema-facts.js";
+import { readSqliteCacheDataVersion } from "./sqlite-schema-facts.js";
 import { runSqliteDeferredTransactionSync } from "./sqlite-transaction.js";
 
 type DevicePairingStoreCache = {
@@ -51,12 +51,14 @@ export function readCachedDevicePairingStoreSnapshot(
     const state = read();
     return { state, revision: resolveDevicePairingStoreRevision(state.pairedByDeviceId) };
   }
-  const dataVersion = readSqliteDataVersion(db);
+  const dataVersion = readSqliteCacheDataVersion(db);
   const cached = cache.value;
   if (cached?.connection === db && cached.path === path && cached.dataVersion === dataVersion) {
     return cached;
   }
-  const state = runSqliteDeferredTransactionSync(db, read);
+  const state = runSqliteDeferredTransactionSync(db, read, {
+    operationLabel: "devicePairing.snapshot",
+  });
   const revision = resolveDevicePairingStoreRevision(state.pairedByDeviceId);
   cache.value = { connection: db, path, state, dataVersion, revision };
   return cache.value;

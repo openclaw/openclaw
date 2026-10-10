@@ -20,10 +20,7 @@ export type ChatSendRetryComparison = {
 };
 
 /** Submitted bytes compare input; the caller's current owner still decides replay. */
-export function readChatSendRetryComparison(
-  session: ComparisonSession,
-  assertCurrent?: () => void,
-) {
+export function readChatSendRetryComparison(session: ComparisonSession) {
   if (!session.entry?.sessionId) {
     return undefined;
   }
@@ -33,7 +30,6 @@ export function readChatSendRetryComparison(
     { agentId, storePath, sessionKey, sessionId },
     `${clientRunId}:user`,
   ).then((submitted): ChatSendRetryComparison => {
-    assertCurrent?.();
     return { agentId, storePath, sessionKey, sessionId, lifecycleRevision, clientRunId, submitted };
   });
 }

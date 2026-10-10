@@ -24,8 +24,8 @@ export async function compactDoctorSessionSqliteTarget(
 ): Promise<DoctorSessionSqliteCompactReport> {
   const databaseOptions = resolveTargetSqliteOptions(target, options.env);
   const sqlitePath = resolveOpenClawAgentSqlitePath(databaseOptions);
-  const beforeFileSizes = readSqliteFileSizes(sqlitePath);
-  const stat = readSessionDatabaseStat(sqlitePath);
+  const walSizeBytes = safeStatSync(`${sqlitePath}-wal`)?.size ?? 0;
+  const stat = fs.lstatSync(sqlitePath, { throwIfNoEntry: false });
   if (!stat) {
     return {
       dbSizeAfterBytes: 0,
@@ -35,8 +35,8 @@ export async function compactDoctorSessionSqliteTarget(
       pageSizeBytes: 0,
       reclaimedBytes: 0,
       skipped: true,
-      walSizeAfterBytes: beforeFileSizes.walSizeBytes,
-      walSizeBeforeBytes: beforeFileSizes.walSizeBytes,
+      walSizeAfterBytes: walSizeBytes,
+      walSizeBeforeBytes: walSizeBytes,
     };
   }
   if (!stat.isFile()) {
@@ -93,22 +93,4 @@ export async function compactDoctorSessionSqliteTarget(
         return compactTarget();
       })
     : compactTarget();
-}
-
-function readSessionDatabaseStat(sqlitePath: string): fs.Stats | undefined {
-  try {
-    return fs.lstatSync(sqlitePath);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return undefined;
-    }
-    throw error;
-  }
-}
-
-function readSqliteFileSizes(sqlitePath: string): { dbSizeBytes: number; walSizeBytes: number } {
-  return {
-    dbSizeBytes: safeStatSync(sqlitePath)?.size ?? 0,
-    walSizeBytes: safeStatSync(`${sqlitePath}-wal`)?.size ?? 0,
-  };
 }

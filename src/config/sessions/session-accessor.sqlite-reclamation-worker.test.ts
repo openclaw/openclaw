@@ -499,9 +499,10 @@ test.each(["active key", "provider"] as const)(
         });
         const workerThreadIds: number[] = [];
         let raced = false;
-        const unregister = registerSessionMaintenancePreserveKeysProvider(() =>
-          change === "provider" && raced ? [unrelated.sessionKey] : [],
-        );
+        const unregister = registerSessionMaintenancePreserveKeysProvider(async () => ({
+          capture: () => (change === "provider" && raced ? [unrelated.sessionKey] : []),
+          dispose() {},
+        }));
         observeSessionMaintenancePlanningWorker({
           afterPrepare() {
             if (raced || !armed) {
@@ -607,7 +608,10 @@ test("retains a selected maintenance row protected after native preparation", as
     } satisfies SqliteSessionReclamationPlan;
     const prepared: string[] = [];
     const released: string[] = [];
-    let refreshed = 0;
+    const refreshed = vi.fn(() => ({
+      activeSessionKeys: [active.sessionKey],
+      preservation: protection,
+    }));
     observeSessionMaintenancePlanningWorker({
       afterPrepare(id) {
         prepared.push(id);
@@ -626,13 +630,17 @@ test("retains a selected maintenance row protected after native preparation", as
         runSqliteSessionReclamation({
           forceInProcess: false,
           plan,
-          refreshMaintenanceProtection: () => {
-            refreshed += 1;
-            return { activeSessionKeys: [active.sessionKey], preservation: protection };
-          },
+          refreshMaintenanceProtection: refreshed,
         }),
       ).resolves.toEqual({ kind: "maintenance-plan-stale" });
-      expect(refreshed).toBe(1);
+      expect(refreshed).toHaveReturnedWith({
+        activeSessionKeys: [active.sessionKey],
+        preservation: {
+          providerKeys: [victim.sessionKey],
+          workIdentities: [],
+          lifecycleIdentities: [],
+        },
+      });
       expect(prepared).toHaveLength(1);
       expect(released).toEqual(prepared);
       expect(loadSessionEntry(victim)).toEqual(originalVictim);

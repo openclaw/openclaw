@@ -128,14 +128,14 @@ describe("pending Stop producer binding", () => {
         },
       );
       const runId = "pending-chat-admission";
-      const request = normalizeChatSendRequest({
+      const request = await normalizeChatSendRequest({
         params: { sessionKey: key, message: "queued", idempotencyKey: runId },
         client,
       });
       if (!request.ok) {
         throw new Error(request.error);
       }
-      const session = prepareChatSendSession({ request: request.value, client, context });
+      const session = await prepareChatSendSession({ request: request.value, client, context });
       if (!session.ok) {
         throw new Error("chat session preparation failed");
       }

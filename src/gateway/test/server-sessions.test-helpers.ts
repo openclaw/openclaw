@@ -598,11 +598,13 @@ export async function directSessionReq<TPayload = unknown>(
   if (!handler) {
     throw new Error(`missing sessions handler for ${method}`);
   }
+  const contextKey = opts?.context ?? defaultDirectContext;
+  const existingContext = directContexts.get(contextKey);
   const contextFields: GatewayRequestContext = createDirectChatContext({
     broadcastToConnIds: vi.fn(),
-    chatAbortControllers: new Map(),
-    chatQueuedTurns: new Map(),
-    dedupe: new Map(),
+    chatAbortControllers: existingContext?.chatAbortControllers ?? new Map(),
+    chatQueuedTurns: existingContext?.chatQueuedTurns ?? new Map(),
+    dedupe: existingContext?.dedupe ?? new Map(),
     getSessionEventSubscriberConnIds: () => new Set<string>(),
     readPreparedGatewayModelCatalog: async () => {
       const catalog = await contextFields.loadGatewayModelCatalogSnapshot();
@@ -611,8 +613,7 @@ export async function directSessionReq<TPayload = unknown>(
     getRuntimeConfig,
     ...opts?.context,
   });
-  const contextKey = opts?.context ?? defaultDirectContext;
-  const context = directContexts.get(contextKey) ?? createDirectChatContext();
+  const context = existingContext ?? createDirectChatContext();
   Object.assign(context, contextFields);
   directContexts.set(contextKey, context);
   if (

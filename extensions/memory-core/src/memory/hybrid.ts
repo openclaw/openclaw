@@ -1,8 +1,7 @@
 import type { MemoryEntryProvenance } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
-import { applyImportanceMultiplier } from "./importance.js";
 import { applyMMRToHybridResults, type MMRConfig, DEFAULT_MMR_CONFIG } from "./mmr.js";
 import {
-  applyProjectRanking,
+  applyRetrievalRanking,
   prepareActiveProjectKeys,
   projectScoreMultiplier,
 } from "./project-ranking.js";
@@ -71,12 +70,7 @@ export async function mergeHybridResults<TSource extends HybridSource>(params: {
   nowMs?: number;
 }): Promise<HybridSearchResult<TSource>[]> {
   const createCandidate = (r: HybridCandidate<TSource>) => ({
-    id: r.id,
-    path: r.path,
-    startLine: r.startLine,
-    endLine: r.endLine,
-    source: r.source,
-    snippet: r.snippet,
+    ...r,
     vectorScore: 0,
     textScore: 0,
     rankingScore: 0,
@@ -85,10 +79,6 @@ export async function mergeHybridResults<TSource extends HybridSource>(params: {
     hasBodyMatch: false,
     hasVector: false,
     hasKeyword: false,
-    importance: r.importance,
-    triggers: r.triggers,
-    projectKey: r.projectKey,
-    ...(r.provenance ? { provenance: r.provenance } : {}),
   });
   const byId = new Map<string, ReturnType<typeof createCandidate>>();
 
@@ -190,22 +180,20 @@ export async function mergeHybridResults<TSource extends HybridSource>(params: {
     nowMs: params.nowMs,
   });
   const activeProjects = prepareActiveProjectKeys(params.activeProjectKeys);
-  const rankable = applyProjectRanking(applyImportanceMultiplier(decayed), activeProjects).map(
-    (entry) => {
-      // Exact tiers and recall-only LIKE hits keep their public confidence;
-      // their private ranking score still includes every weighting pass.
-      const rankingScore = entry.score;
-      return Object.assign(entry, {
-        rankingScore,
-        score:
-          entry.exactPathSpecificity > 0
-            ? projectScoreMultiplier(entry.projectKey, activeProjects)
-            : entry.contentScore === 0
-              ? 0
-              : entry.score,
-      });
-    },
-  );
+  const rankable = applyRetrievalRanking(decayed, activeProjects).map((entry) => {
+    // Exact tiers and recall-only LIKE hits keep their public confidence;
+    // their private ranking score still includes every weighting pass.
+    const rankingScore = entry.score;
+    return Object.assign(entry, {
+      rankingScore,
+      score:
+        entry.exactPathSpecificity > 0
+          ? projectScoreMultiplier(entry.projectKey, activeProjects)
+          : entry.contentScore === 0
+            ? 0
+            : entry.score,
+    });
+  });
   const compareRankingScores = (a: (typeof rankable)[number], b: (typeof rankable)[number]) =>
     b.rankingScore - a.rankingScore ||
     b.lexicalRank - a.lexicalRank ||
@@ -224,7 +212,7 @@ export async function mergeHybridResults<TSource extends HybridSource>(params: {
     }
     return applyMMRToHybridResults(
       entries.map((entry) => Object.assign(entry, { score: entry.rankingScore })),
-      mmrConfig,
+      mmrConfig.lambda,
     ).map((entry) =>
       Object.assign(entry, {
         score: projectScoreMultiplier(entry.projectKey, activeProjects),
@@ -244,7 +232,7 @@ export async function mergeHybridResults<TSource extends HybridSource>(params: {
   });
   const ranked = [
     ...exact,
-    ...(mmrConfig.enabled ? applyMMRToHybridResults(nonExact, mmrConfig) : nonExact),
+    ...(mmrConfig.enabled ? applyMMRToHybridResults(nonExact, mmrConfig.lambda) : nonExact),
   ];
 
   return ranked.map(

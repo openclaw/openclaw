@@ -237,7 +237,7 @@ test.each([
   "two foreground writers progress at reclamation ($operation, rejected: $rejected, alias: $alias)",
   async ({ operation, rejected, alias }) => {
     const { databaseOptions, plan, scopes } = createFixture(alias);
-    const { workers, stopObserving } = observeWorkers();
+    const { workers: observedWorkers, stopObserving } = observeWorkers();
     const diagnostics: SqliteSessionReclamationDiagnostics = {};
     const board = new SqliteBoardStore({
       env: databaseOptions.env,
@@ -345,16 +345,14 @@ test.each([
     } finally {
       stopObserving();
     }
-    // Boards add one canonical data worker; reclamation retains its separate worker.
-    expect(workers).toHaveLength(operation === "board" ? 2 : 1);
+    const workers = observedWorkers.filter(({ id }) => id === diagnostics.workerThreadId);
+    expect(workers).toHaveLength(1);
     expect(workers[0]?.id).toBeGreaterThan(0);
     expect(diagnostics).toEqual({ kind: "history-eviction", workerThreadId: workers[0]?.id });
+    expect(workers[0]?.worker.threadId).toBe(workers[0]?.id);
     await closeOpenClawAgentDatabasesAsync();
     expect(workers[0]?.worker.threadId).toBe(-1);
     if (operation === "board") {
-      expect(workers[1]?.id).toBeGreaterThan(0);
-      expect(workers[1]?.id).not.toBe(workers[0]?.id);
-      expect(workers[1]?.worker.threadId).toBe(-1);
       expect(checksDuringWriters).toBe(0);
       expect(boardWriteOrder).toEqual(scopes.map((scope) => scope.sessionId));
     } else {
@@ -538,11 +536,14 @@ test.each([false, true])(
           events: before.events,
           windows: before.windows,
         });
-        expect(after.leases).toHaveLength(1);
+        // Cold admission retains its worker alongside the adopted host handle.
+        expect(after.leases).toHaveLength(2);
         expect(loadSessionEntryReadOnly(current)).toBeUndefined();
       }
       expect(database.db.isOpen).toBe(false);
       expect(loadSessionEntryReadOnly(survivor)).toEqual(survivorEntry);
+      await closeOpenClawAgentDatabaseByPathAsync(database.path);
+      expect(inspect()).toMatchObject({ writerOpen: false, leases: [] });
     } finally {
       await closeOpenClawAgentDatabaseByPathAsync(database.path);
       await closeOpenClawStateDatabaseAsync();
@@ -738,9 +739,9 @@ test("file warnings retain rejected native admission releases without attributin
     await expect(second).resolves.toBe("successor");
     await flushLogger();
     const records = (await readLogRecords(file))
-      .filter((record) => record["1"] === "slow SQLite session write")
+      .filter((record) => record["2"] === "slow SQLite session write")
       .map((record) => {
-        const details = record["2"];
+        const details = record["1"];
         assert.ok(isRecord(details));
         return details;
       });
@@ -798,12 +799,13 @@ test("a synchronous writer reports actual reclamation service time inside its BE
   const file = path.join(tempDirs.make("openclaw-begin-service-log-"), "writer.log");
   const owner = new AsyncLocalStorage<string>();
   const writerTrace = { traceId: "3".repeat(32), spanId: "4".repeat(16), traceFlags: "01" };
+  const diagnostics: SqliteSessionReclamationDiagnostics = {};
   let clock = Date.now();
   let insideWriter = false;
   let serviceObserved = false;
   vi.spyOn(Date, "now").mockImplementation(() => clock);
   setLoggerOverride({ level: "info", consoleLevel: "silent", file });
-  const { workers, stopObserving } = observeWorkers();
+  const { workers: observedWorkers, stopObserving } = observeWorkers();
   hooks.beforeAuthorization = () =>
     owner.run("synchronous-writer", () =>
       runWithDiagnosticTraceContext(writerTrace, () => {
@@ -819,6 +821,7 @@ test("a synchronous writer reports actual reclamation service time inside its BE
     runSqliteSessionReclamation({
       forceInProcess: false,
       plan,
+      diagnostics,
       assertCommitAllowed: () => {
         expect(owner.getStore()).toBe("reclamation-owner");
         if (insideWriter && !serviceObserved) {
@@ -836,6 +839,7 @@ test("a synchronous writer reports actual reclamation service time inside its BE
     });
     expect(serviceObserved).toBe(true);
     expect(loadSessionEntry(scope)?.updatedAt).toBe(2);
+    const workers = observedWorkers.filter(({ id }) => id === diagnostics.workerThreadId);
     expect(workers).toHaveLength(1);
     await closeOpenClawAgentDatabasesAsync();
     expect(workers[0]?.worker.threadId).toBe(-1);
@@ -953,7 +957,7 @@ test.each([
       await closeOpenClawAgentDatabasesAsync();
       expect(workers[0]?.worker.threadId).toBe(-1);
       expect(exits).toEqual([0]);
-      expect(records.some((record) => record["1"] === "slow SQLite session write")).toBe(false);
+      expect(records.some((record) => record["2"] === "slow SQLite session write")).toBe(false);
       expect(hooks.workerLogAttempts).toBe(elapsedMs > 0 || rejected ? 1 : 0);
       expect(observations).toHaveLength((elapsedMs > 0 || rejected) && !failLog ? 1 : 0);
       if (observations[0]) {

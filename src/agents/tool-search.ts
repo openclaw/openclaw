@@ -339,13 +339,21 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
             onUpdate,
           });
           const { id, name, source } = callResult.tool;
+          const images = callResult.result.content.filter((block) => block.type === "image");
+          const modelResult =
+            images.length > 0
+              ? {
+                  ...callResult.result,
+                  content: callResult.result.content.filter((block) => block.type !== "image"),
+                }
+              : callResult.result;
           // Invocation results need identity, not another copy of the discovery metadata.
-          // Keep full metadata in details for callers and the unchanged target result on both surfaces.
+          // Keep the full target result in details; forward its already-projected images as content.
           const wrappedResult = {
             ...formatToolSearchControlResult(
-              { tool: { id, name, source }, result: callResult.result },
+              { tool: { id, name, source }, result: modelResult },
               runtime,
-              { parentToolCallId: toolCallId },
+              { parentToolCallId: toolCallId, images },
             ),
             details: callResult,
           };

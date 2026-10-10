@@ -71,7 +71,6 @@ export function resolvePluginConfigContractsById(params: {
     if (bundledContractFallbacks.get(pluginId) === undefined) {
       const bundledMetadata = findBundledPluginMetadataById(pluginId, {
         includeChannelConfigs: false,
-        includeSyntheticChannelConfigs: false,
       });
       if (bundledMetadata?.manifest.configContracts) {
         bundledContractFallbacks.set(pluginId, bundledMetadata.manifest.configContracts);

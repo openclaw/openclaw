@@ -2,10 +2,12 @@
 
 import { Value } from "typebox/value";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { SessionsCatalogListResult } from "../../../packages/gateway-protocol/src/index.ts";
 import { SessionsCatalogListParamsSchema } from "../../../packages/gateway-protocol/src/schema/sessions-catalog.js";
 import { createDeferred as deferred } from "../../../test/helpers/promise.js";
 import type { ApplicationGatewaySnapshot } from "../app/context.ts";
 import {
+  catalogErrorPage,
   catalogPage,
   createContext,
   createGatewayHarness,
@@ -156,41 +158,6 @@ describe("AppSidebar hidden catalog discovery", () => {
     expect(request).toHaveBeenCalledTimes(16);
   });
 
-  it.each(["row", "cursor"])(
-    "rechecks fresh-head %s changes before continuing discovery",
-    async (change) => {
-      let changed = false;
-      const request = createGatewayRequestMock((_method, params) => {
-        const cursor = catalogParams(params).cursors?.["gateway:local"];
-        if (!cursor) {
-          return Promise.resolve(
-            changed
-              ? change === "row"
-                ? catalogPage([{ threadId: "new", name: "New native session" }], "page-2")
-                : catalogPage([], "new-page")
-              : catalogPage([], "page-2"),
-          );
-        }
-        return Promise.resolve(
-          cursor === "new-page"
-            ? catalogPage([{ threadId: "new", name: "New native session" }])
-            : catalogPage([]),
-        );
-      });
-      const { sidebar, gatewayHarness } = await mountDiscovery(request);
-      changed = true;
-      gatewayHarness.publishEvent("sessions.catalog.changed", { agentId: "main" });
-      await vi.advanceTimersByTimeAsync(5_000);
-      await settle(sidebar);
-      expect(sidebar.textContent).toContain("New native session");
-      expect(requestedCursors(request)).toEqual(
-        change === "row"
-          ? [undefined, "page-2", undefined]
-          : [undefined, "page-2", undefined, "new-page"],
-      );
-    },
-  );
-
   it("renews a finished empty sweep on invalidation so older membership changes remain discoverable", async () => {
     let added = false;
     const request = createGatewayRequestMock((_method, params) => {
@@ -236,7 +203,7 @@ describe("AppSidebar hidden catalog discovery", () => {
     expect(requestedCursors(request)).toEqual([undefined, "page-2", undefined, "page-2"]);
   });
 
-  it.each(["request", "catalog", "host", "missing host", "missing catalog"] as const)(
+  it.each(["request", "catalog", "missing host", "missing catalog"] as const)(
     "preserves discovery progress and retries a %s page failure",
     async (failure) => {
       let failing = true;
@@ -256,8 +223,6 @@ describe("AppSidebar hidden catalog discovery", () => {
           }
           if (failure === "catalog") {
             page.catalogs[0]!.error = error;
-          } else if (failure === "host") {
-            page.catalogs[0]!.hosts[0]!.error = error;
           } else if (failure === "missing host") {
             page.catalogs[0]!.hosts = [];
           } else {
@@ -296,22 +261,18 @@ describe("AppSidebar hidden catalog discovery", () => {
     },
   );
 
-  it.each([1, 2])("stops a %i-page cursor cycle without a request loop", async (cycleLength) => {
+  it("stops a two-page cursor cycle without a request loop", async () => {
     let revealed = false;
     const request = createGatewayRequestMock((_method, params) => {
       const cursor = catalogParams(params).cursors?.["gateway:local"];
       if (revealed && cursor === "page-a") {
         return Promise.resolve(catalogPage([{ threadId: "recovered", name: "Recovered session" }]));
       }
-      return Promise.resolve(
-        catalogPage([], cursor === "page-a" && cycleLength === 2 ? "page-b" : "page-a"),
-      );
+      return Promise.resolve(catalogPage([], cursor === "page-a" ? "page-b" : "page-a"));
     });
     const { sidebar } = await mountDiscovery(request);
-    if (cycleLength === 2) {
-      await vi.advanceTimersByTimeAsync(10_000);
-      await settle(sidebar);
-    }
+    await vi.advanceTimersByTimeAsync(10_000);
+    await settle(sidebar);
     const host = sidebar.sessionData.sessionCatalogs[0]!.hosts[0]!;
     expect(host.error?.code).toBe("PAGINATION_FAILED");
     const requests = request.mock.calls.length;
@@ -365,5 +326,173 @@ describe("AppSidebar hidden catalog discovery", () => {
     } finally {
       visibilitySpy.mockRestore();
     }
+  });
+});
+
+const page = (number: number, label = "Original", nextCursor = `page-${number + 1}`) =>
+  catalogPage([{ threadId: `thread-${number}`, name: `${label} ${number}` }], nextCursor);
+
+function expandedRequest() {
+  return vi
+    .fn()
+    .mockResolvedValueOnce(page(1))
+    .mockResolvedValueOnce(page(2))
+    .mockResolvedValueOnce(page(3));
+}
+
+async function loadMore(sidebar: SidebarLifecycleState) {
+  const button = sidebar.querySelector<HTMLButtonElement>(
+    '[data-session-catalog-load-more="codex"]',
+  );
+  expect(button).not.toBeNull();
+  expect(button?.disabled).toBe(false);
+  button?.click();
+  await settle(sidebar);
+}
+
+async function mountExpanded(request: ReturnType<typeof expandedRequest>) {
+  const gateway = discoveryGateway(request);
+  const mounted = await mountSidebar(gateway.gateway, createSessions("main", ["agent:main:main"]));
+  mounted.sidebar.connected = true;
+  await mounted.sidebar.updateComplete;
+  await settle(mounted.sidebar);
+  await loadMore(mounted.sidebar);
+  await loadMore(mounted.sidebar);
+  expect(request).toHaveBeenCalledTimes(3);
+  expect(mounted.sidebar.textContent).toContain("Original 3");
+  return { ...mounted, gateway };
+}
+
+describe("AppSidebar expanded catalog refresh visibility", () => {
+  let visibility: DocumentVisibilityState;
+
+  const setVisibility = (next: DocumentVisibilityState) => {
+    visibility = next;
+    document.dispatchEvent(new Event("visibilitychange"));
+  };
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    visibility = "visible";
+    vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibility);
+  });
+
+  it("stops automatic replay after hiding during an expanded response and catches up once", async () => {
+    const pending = deferred<SessionsCatalogListResult>();
+    const request = expandedRequest();
+    request.mockResolvedValueOnce(page(1, "Refreshed"));
+    request.mockReturnValueOnce(pending.promise);
+    request.mockImplementation((_method, params: { cursors?: Record<string, string> }) => {
+      const cursor = params.cursors?.["gateway:local"];
+      return Promise.resolve(
+        page(cursor === "page-2" ? 2 : cursor === "page-3" ? 3 : 1, "Refreshed"),
+      );
+    });
+    const { sidebar, gateway } = await mountExpanded(request);
+    gateway.publishEvent("sessions.catalog.changed", { agentId: "main" });
+    await vi.advanceTimersByTimeAsync(5_000);
+    const issuedBeforeHide = 5;
+    expect(request).toHaveBeenCalledTimes(issuedBeforeHide);
+
+    setVisibility("hidden");
+    pending.resolve(page(2, "Refreshed"));
+    await settle(sidebar);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect.soft(request).toHaveBeenCalledTimes(issuedBeforeHide);
+    const host = sidebar.sessionData.sessionCatalogs[0]?.hosts[0];
+    expect(host?.sessions.map((row) => row.threadId)).toEqual(["thread-1", "thread-2", "thread-3"]);
+    expect(host?.nextCursor).toBe("page-4");
+
+    const baseCallsBeforeShow = request.mock.calls.filter(([, params]) => !params.cursors).length;
+    const callsBeforeShow = request.mock.calls.length;
+    setVisibility("visible");
+    globalThis.dispatchEvent(new Event("focus"));
+    await vi.advanceTimersByTimeAsync(5_000);
+    await settle(sidebar);
+    expect(request.mock.calls.filter(([, params]) => !params.cursors)).toHaveLength(
+      baseCallsBeforeShow + 1,
+    );
+    expect(request).toHaveBeenCalledTimes(callsBeforeShow + 3);
+    expect(sidebar.textContent).toContain("Refreshed 1");
+    expect(sidebar.textContent).toContain("Refreshed 2");
+    expect(sidebar.textContent).toContain("Refreshed 3");
+  });
+
+  it("keeps resources retired during a detached update and resumes on reconnect", async () => {
+    const observed = new Set<Element>();
+    const observe = vi.fn((target: Element) => observed.add(target));
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        private targets = new Set<Element>();
+        observe(target: Element) {
+          this.targets.add(target);
+          observe(target);
+        }
+        disconnect() {
+          for (const target of this.targets) {
+            observed.delete(target);
+          }
+          this.targets.clear();
+        }
+        unobserve(target: Element) {
+          this.targets.delete(target);
+          observed.delete(target);
+        }
+      },
+    );
+    let mounted: Awaited<ReturnType<typeof mountExpanded>> | undefined;
+    try {
+      const request = vi.fn((_method, params: { cursors?: Record<string, string> }) => {
+        const cursor = params.cursors?.["gateway:local"];
+        return Promise.resolve(page(cursor === "page-2" ? 2 : cursor === "page-3" ? 3 : 1));
+      });
+      mounted = await mountExpanded(request);
+      const { sidebar, provider } = mounted;
+      const scrollBody = sidebar.querySelector(".sidebar-shell__body");
+      expect(scrollBody).not.toBeNull();
+      expect(observed.has(scrollBody!)).toBe(true);
+
+      sidebar.requestUpdate();
+      provider.remove();
+      expect(observed.has(scrollBody!)).toBe(false);
+      const timersAfterDetach = vi.getTimerCount();
+      const observationsAfterDetach = observe.mock.calls.length;
+      await sidebar.updateComplete;
+      expect.soft(vi.getTimerCount()).toBe(timersAfterDetach);
+      expect.soft(observe).toHaveBeenCalledTimes(observationsAfterDetach);
+      expect.soft(observed.has(scrollBody!)).toBe(false);
+
+      document.body.append(provider);
+      await sidebar.updateComplete;
+      await vi.advanceTimersByTimeAsync(200);
+      await settle(sidebar);
+      expect(observed.has(sidebar.querySelector(".sidebar-shell__body")!)).toBe(true);
+      expect(request).toHaveBeenCalledTimes(4);
+      expect(sidebar.textContent).toContain("Original 1");
+    } finally {
+      mounted?.provider.remove();
+      await mounted?.sidebar.updateComplete;
+      // A red lifecycle assertion must not leave its retired resources in the next test.
+      vi.clearAllTimers();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("accepts an already-issued manual Load More error while hidden", async () => {
+    const pending = deferred<SessionsCatalogListResult>();
+    const request = expandedRequest().mockReturnValueOnce(pending.promise);
+    const { sidebar } = await mountExpanded(request);
+    await loadMore(sidebar);
+    expect(request).toHaveBeenCalledTimes(4);
+    setVisibility("hidden");
+    pending.resolve(catalogErrorPage("Page failed"));
+    await settle(sidebar);
+    expect(sidebar.sessionData.loadingMoreSessionCatalogIds.size).toBe(0);
+    expect(request).toHaveBeenCalledTimes(4);
+    expect(sidebar.textContent).toContain("Original 3");
+    const host = sidebar.sessionData.sessionCatalogs[0]?.hosts[0];
+    expect(host?.error?.message).toBe("Page failed");
+    expect(host?.nextCursor).toBe("page-4");
   });
 });

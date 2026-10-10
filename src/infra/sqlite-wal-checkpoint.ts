@@ -4,6 +4,7 @@ import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { registerListener } from "../shared/listeners.js";
 import { hasErrnoCode } from "./errno.js";
 import { formatErrorMessage } from "./errors.js";
+import { supportsNodeSqliteWalCheckpointNoop } from "./node-sqlite.js";
 import { normalizeSqliteNumber, readFiniteSqliteNumber } from "./sqlite-number.js";
 import {
   readSqliteReaderDiagnosticsForPath,
@@ -13,6 +14,13 @@ import {
 } from "./sqlite-reader-lifecycle.js";
 
 export type SqliteWalCheckpointMode = "PASSIVE" | "FULL" | "RESTART" | "TRUNCATE";
+
+/** Unknown modes backfill on older SQLite; never issue NOOP without native support. */
+export function readSqliteWalState(database: DatabaseSync) {
+  return supportsNodeSqliteWalCheckpointNoop()
+    ? database.prepare("PRAGMA main.wal_checkpoint(NOOP)").get() // sqlite-allow-raw -- Observe without copying WAL pages.
+    : undefined;
+}
 
 export type SqliteWalCheckpointOptions = {
   databaseLabel?: string;

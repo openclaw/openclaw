@@ -1,12 +1,10 @@
 import {
   AgentHarnessSessionSupersededError,
   embeddedAgentLog,
-  type AgentHarnessCompactParams,
   type CompactEmbeddedAgentSessionParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createDedupeCache } from "openclaw/plugin-sdk/dedupe-runtime";
 import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import type { SandboxContext } from "openclaw/plugin-sdk/sandbox";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   retainCodexAppServerLiveThread,
@@ -14,7 +12,6 @@ import {
 } from "./client-runtime.js";
 import type { CodexAppServerLiveThreadOwnership } from "./client-thread-owner.js";
 import type { CodexAppServerClient } from "./client.js";
-import { resolveCodexNativeExecutionBlock } from "./sandbox-guard.js";
 import type {
   CodexAppServerBindingIdentity,
   CodexAppServerBindingStore,
@@ -170,7 +167,11 @@ const warnedIgnoredCompactionOverrides = createDedupeCache({ ttlMs: 0, maxSize: 
 export function warnIfIgnoringOpenClawCompactionOverrides(
   params: CompactEmbeddedAgentSessionParams,
 ): void {
-  const ignoredConfig = readIgnoredCompactionOverridePaths(params);
+  const compaction = asOptionalRecord(params.config?.agents?.defaults?.compaction);
+  const ignoredConfig = ["model", "thinkingLevel", "provider"].flatMap((field) => {
+    const value = compaction?.[field];
+    return typeof value === "string" && value.trim() ? [`agents.defaults.compaction.${field}`] : [];
+  });
   if (ignoredConfig.length === 0) {
     return;
   }
@@ -186,25 +187,4 @@ export function warnIfIgnoringOpenClawCompactionOverrides(
       ignoredConfig,
     },
   );
-}
-
-function readIgnoredCompactionOverridePaths(params: CompactEmbeddedAgentSessionParams): string[] {
-  const compaction = asOptionalRecord(params.config?.agents?.defaults?.compaction);
-  return ["model", "thinkingLevel", "provider"].flatMap((field) => {
-    const value = compaction?.[field];
-    return typeof value === "string" && value.trim() ? [`agents.defaults.compaction.${field}`] : [];
-  });
-}
-
-export function resolveCodexCompactionExecutionBlock(
-  params: AgentHarnessCompactParams<2> & { sandbox?: SandboxContext | null },
-) {
-  return resolveCodexNativeExecutionBlock({
-    config: params.config,
-    sessionKey: params.sandboxSessionKey ?? params.sessionKey,
-    sessionId: params.sessionId,
-    agentId: params.sandboxAgentId ?? params.agentId,
-    sandbox: params.sandbox,
-    surface: "native compaction",
-  });
 }

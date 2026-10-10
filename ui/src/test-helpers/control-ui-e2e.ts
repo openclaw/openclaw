@@ -1730,25 +1730,6 @@ function installControlUiMockGateway(
     sessionMessageEventTimer = window.setInterval(emitRepeatingSessionEvent, intervalMs);
   }
 
-  function updateSessionMessageSubscription(
-    socket: MockWebSocket,
-    method: string,
-    params: unknown,
-  ): void {
-    if (socket.readyState !== MockWebSocket.OPEN) {
-      return;
-    }
-    socket.sessionMessageSubscriptions.recordRequest(method, params);
-    if (method === "sessions.messages.subscribe") {
-      startRepeatingSessionEvents();
-    } else if (
-      method === "sessions.messages.unsubscribe" &&
-      socket.sessionMessageSubscriptions.size === 0
-    ) {
-      stopRepeatingSessionEvents();
-    }
-  }
-
   function parseMockConfig(raw: string, fallback: unknown): { value: unknown; parsed: boolean } {
     try {
       return { value: parseJson5(raw), parsed: true };
@@ -2157,13 +2138,10 @@ function installControlUiMockGateway(
       }
       case "chat.abort":
         return { aborted: true };
-      case "skills.proposals.list":
-        return {
-          schema: "openclaw.skill-workshop.proposals-manifest.v1",
-          updatedAt: new Date().toISOString(),
-          proposals: [],
-          installedSkills: [],
-        };
+      case "skills.workshop.list":
+        return { agentId: "main", mode: "auto", root: "/tmp/workshop", skills: [], archived: [] };
+      case "skills.workshop.changes":
+        return { changes: [] };
       case "skills.status":
         return {
           workspaceDir: "/tmp/control-ui-mock/workspace",
@@ -2455,7 +2433,11 @@ function installControlUiMockGateway(
     readyState = MockWebSocket.CONNECTING;
     readonly url: string;
     private tickTimer: number | null = null;
-    readonly sessionMessageSubscriptions = subscriptionRouting.createClient();
+    readonly sessionMessageSubscriptions = subscriptionRouting.createClient({
+      isOpen: () => this.readyState === MockWebSocket.OPEN,
+      startRepeatingEvents: startRepeatingSessionEvents,
+      stopRepeatingEvents: stopRepeatingSessionEvents,
+    });
 
     constructor(url: string | URL) {
       super();
@@ -2532,7 +2514,7 @@ function installControlUiMockGateway(
         const mockError =
           isRecord(payload) && isRecord(payload["__mockError"]) ? payload["__mockError"] : null;
         if (!mockError) {
-          updateSessionMessageSubscription(this, method, frame.params);
+          this.sessionMessageSubscriptions.recordRequest(method, frame.params, payload);
         }
         this.deliver(
           mockError
@@ -2664,7 +2646,11 @@ function installControlUiMockGateway(
         );
         const mockError = isRecord(resolvedPayload) ? resolvedPayload["__mockError"] : undefined;
         if (!mockError) {
-          updateSessionMessageSubscription(response.socket, response.method, response.params);
+          response.socket.sessionMessageSubscriptions.recordRequest(
+            response.method,
+            response.params,
+            resolvedPayload,
+          );
         }
         response.socket.deliver({
           id: response.id,

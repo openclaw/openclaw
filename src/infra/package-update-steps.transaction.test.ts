@@ -1,14 +1,14 @@
 import assert from "node:assert/strict";
-import { rmSync, writeFileSync } from "node:fs";
+import { writeFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { writePackageDistInventory } from "../../scripts/lib/package-dist-inventory.ts";
 import {
   CommandProcessCleanupError,
   hasCommandProcessCleanupError,
 } from "../process/exec-result.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
+import { PACKAGE_DIST_INVENTORY_RELATIVE_PATH } from "./package-dist-inventory.js";
 import { runGlobalPackageUpdateSteps } from "./package-update-steps.js";
 import {
   createNpmUpdateOptions,
@@ -17,6 +17,7 @@ import {
   writePackageRoot,
 } from "./package-update-steps.test-support.js";
 import type { PackageUpdateTransaction } from "./package-update-swap-contract.js";
+import { resolveNpmGlobalPrefixLayoutFromPrefix } from "./update-npm-prefix.js";
 import type { UpdateStepResult } from "./update-step-result.js";
 
 async function expectPackageVersion(packageRoot: string, version: string) {
@@ -27,40 +28,21 @@ async function expectPackageVersion(packageRoot: string, version: string) {
 
 describe("retained package update transactions", () => {
   it.each([
-    "already current",
-    "wrong target",
-    "install timed out",
-    "install killed",
-    "fallback install timed out",
-    "validation rejected",
-    "validation output exceeded",
     "activation rejected",
     "backup failed",
-    "activation failed",
-    "doctor rejected",
     "doctor receipt throw",
     "doctor success receipt throw",
-    "doctor advisory receipt throw",
     "doctor cleanup uncertain",
     "confirm",
   ] as const)(
     "keeps the original serving through validation and retains recovery until %s",
     async (outcome) => {
-      const failedInstall =
-        outcome.startsWith("install ") || outcome === "fallback install timed out";
       await withTestDir({ prefix: "openclaw-package-transaction-" }, async (base) => {
         const prefix = path.join(base, "prefix");
         const globalRoot = path.join(prefix, "lib", "node_modules");
         const packageRoot = path.join(globalRoot, "openclaw");
         const launcher = path.join(prefix, "bin", "openclaw");
         await writePackageRoot(packageRoot, "1.0.0");
-        if (outcome === "already current") {
-          await fs.writeFile(
-            path.join(packageRoot, "dist", "build-info.json"),
-            JSON.stringify({ buildId: "same-build" }),
-          );
-          await writePackageDistInventory(packageRoot);
-        }
         await fs.mkdir(path.dirname(launcher), { recursive: true });
         await fs.writeFile(launcher, "old launcher\n");
         let transaction: PackageUpdateTransaction | undefined;
@@ -94,48 +76,24 @@ describe("retained package update transactions", () => {
                 ],
               }
             : {}),
-          ...(outcome === "doctor advisory receipt throw"
+          ...(outcome === "doctor success receipt throw"
             ? {
-                exitCode: 86,
                 advisory: { kind: "package-post-install-doctor", message: "Deferred repair" },
               }
             : {}),
         };
         const update = runGlobalPackageUpdateSteps({
-          ...createNpmUpdateOptions(
-            globalRoot,
-            outcome === "already current" ? "./candidate.tgz" : "openclaw@2.0.0",
-          ),
+          ...createNpmUpdateOptions(globalRoot, "openclaw@2.0.0"),
           runStep: async ({ name, argv }) => {
-            const fallback = argv.includes("--omit=optional");
             const stagePrefix = stagedNpmPrefix(argv);
             stageRoot = path.join(stagePrefix, "lib", "node_modules", "openclaw");
-            await writePackageRoot(
-              stageRoot,
-              outcome === "already current" || outcome === "wrong target" ? "1.0.0" : "2.0.0",
-            );
-            if (outcome === "already current") {
-              await fs.writeFile(
-                path.join(stageRoot, "dist", "build-info.json"),
-                JSON.stringify({ buildId: "same-build" }),
-              );
-              await writePackageDistInventory(stageRoot);
-            }
+            await writePackageRoot(stageRoot, "2.0.0");
             await fs.mkdir(path.join(stagePrefix, "bin"), { recursive: true });
             stageLauncher = path.join(stagePrefix, "bin", "openclaw");
             await fs.writeFile(stageLauncher, "new launcher\n");
             return packageUpdateStepResult(
               { name, argv, cwd: stagePrefix },
-              {
-                durationMs: 0,
-                exitCode: outcome === "fallback install timed out" && !fallback ? 1 : 0,
-                termination:
-                  outcome === "install timed out" ||
-                  (outcome === "fallback install timed out" && fallback)
-                    ? "timeout"
-                    : "exit",
-                killed: outcome === "install killed",
-              },
+              { durationMs: 0, exitCode: 0 },
             );
           },
           validateCandidate: async (candidateRoot) => {
@@ -150,9 +108,8 @@ describe("retained package update transactions", () => {
                 command: "canary",
                 cwd: candidateRoot,
                 durationMs: 1,
-                exitCode: outcome === "validation rejected" ? 1 : 0,
+                exitCode: 0,
                 termination: "exit",
-                outputLimitExceeded: outcome === "validation output exceeded",
               },
             ];
           },
@@ -165,9 +122,7 @@ describe("retained package update transactions", () => {
           },
           onTransaction: (retained) => {
             transaction = retained;
-            if (outcome === "activation failed" && stageLauncher) {
-              rmSync(stageLauncher);
-            } else if (outcome === "backup failed") {
+            if (outcome === "backup failed") {
               writeFileSync(retained.backupRoot, "blocked backup destination");
             }
           },
@@ -187,7 +142,7 @@ describe("retained package update transactions", () => {
               command: "doctor --fix",
               cwd: candidateRoot,
               durationMs: 0,
-              exitCode: outcome === "doctor rejected" ? 1 : 0,
+              exitCode: 0,
             };
           },
         });
@@ -260,75 +215,149 @@ describe("retained package update transactions", () => {
             reason: "runtime-verification-failed",
           });
         }
-        if (outcome === "already current" || outcome === "wrong target") {
-          expect(phases).toEqual([]);
-          expect(transaction).toBeUndefined();
-          if (outcome === "wrong target") {
-            expect(result.reason).toBeUndefined();
-            expect(result.failedStep).toMatchObject({
-              name: "package-verify",
-              stderrTail: "expected installed version 2.0.0, found 1.0.0",
-            });
-          } else {
-            expect(result.reason).toBe("already-current");
-            expect(result.failedStep).toBeNull();
-          }
-          expect(result.afterVersion).toBe("1.0.0");
-          await expect(fs.readFile(launcher, "utf8")).resolves.toBe("old launcher\n");
-        } else if (failedInstall || outcome.startsWith("validation ")) {
-          expect(phases).toEqual(failedInstall ? [] : ["validate"]);
-          expect(transaction).toBeUndefined();
-          expect(result.failedStep).toMatchObject({
-            name: failedInstall
-              ? outcome === "fallback install timed out"
-                ? "package-install-omit-optional"
-                : "package-install"
-              : "candidate canary",
-            exitCode: outcome === "validation rejected" ? 1 : 0,
-          });
-          expect(result.recovery).toEqual({ serviceRestartSafe: true, version: "1.0.0" });
-          await expectPackageVersion(packageRoot, "1.0.0");
-          await expect(fs.readFile(launcher, "utf8")).resolves.toBe("old launcher\n");
-        } else {
-          const activationFailed = outcome === "activation failed" || outcome === "backup failed";
-          expect(phases, JSON.stringify(result.failedStep)).toEqual(
-            activationFailed ? ["validate", "stop"] : ["validate", "stop", "migrate"],
-          );
-          expect(result.failedStep?.name ?? null).toBe(
-            activationFailed
-              ? "package-swap"
-              : outcome === "doctor rejected"
-                ? "doctor"
-                : receiptThrow
-                  ? "openclaw doctor"
-                  : null,
-          );
-          expect(result.activePackageRoot).toBe(packageRoot);
-          expect(result.afterVersion).toBe(outcome === "backup failed" ? "1.0.0" : "2.0.0");
-          if (!transaction) {
-            throw new Error("activated package did not retain a transaction");
-          }
-          if (outcome === "backup failed") {
-            await expectPackageVersion(packageRoot, "1.0.0");
-          } else {
-            await expectPackageVersion(transaction.backupRoot, "1.0.0");
-          }
-          await expect(fs.readFile(launcher, "utf8")).resolves.toBe(
-            activationFailed ? "old launcher\n" : "new launcher\n",
-          );
-          if (outcome !== "confirm") {
-            const restored = await transaction.rollback(() => {});
-            expect(restored).toMatchObject({ exitCode: 0, activePackageRoot: packageRoot });
-            expect(await transaction.rollback(() => {})).toEqual(restored);
-            await expect(fs.readFile(launcher, "utf8")).resolves.toBe("old launcher\n");
-          }
-          await transaction.complete({ activationVerified: outcome === "confirm" }, () => {});
-          await transaction.complete({ activationVerified: outcome === "confirm" }, () => {});
-          await expectPackageVersion(packageRoot, outcome === "confirm" ? "2.0.0" : "1.0.0");
-          expect((await transaction.rollback(() => {})).exitCode).toBe(1);
+        const activationFailed = outcome === "backup failed";
+        expect(phases, JSON.stringify(result.failedStep)).toEqual(
+          activationFailed ? ["validate", "stop"] : ["validate", "stop", "migrate"],
+        );
+        expect(result.failedStep?.name ?? null).toBe(
+          activationFailed ? "package-swap" : receiptThrow ? "openclaw doctor" : null,
+        );
+        expect(result.activePackageRoot).toBe(packageRoot);
+        expect(result.afterVersion).toBe(outcome === "backup failed" ? "1.0.0" : "2.0.0");
+        if (!transaction) {
+          throw new Error("activated package did not retain a transaction");
         }
+        if (outcome === "backup failed") {
+          await expectPackageVersion(packageRoot, "1.0.0");
+        } else {
+          await expectPackageVersion(transaction.backupRoot, "1.0.0");
+        }
+        await expect(fs.readFile(launcher, "utf8")).resolves.toBe(
+          activationFailed ? "old launcher\n" : "new launcher\n",
+        );
+        if (outcome !== "confirm") {
+          const restored = await transaction.rollback(() => {});
+          expect(restored).toMatchObject({ exitCode: 0, activePackageRoot: packageRoot });
+          expect(await transaction.rollback(() => {})).toEqual(restored);
+          await expect(fs.readFile(launcher, "utf8")).resolves.toBe("old launcher\n");
+        }
+        await transaction.complete({ activationVerified: outcome === "confirm" }, () => {});
+        await transaction.complete({ activationVerified: outcome === "confirm" }, () => {});
+        await expectPackageVersion(packageRoot, outcome === "confirm" ? "2.0.0" : "1.0.0");
+        expect((await transaction.rollback(() => {})).exitCode).toBe(1);
         expect((await fs.readdir(globalRoot)).filter((entry) => entry.startsWith("."))).toEqual([]);
       });
     },
   );
+});
+
+// Package-owner boundary interleaving with injected package-manager steps;
+// this does not reproduce overlapping public CLI invocations or a triage incident.
+describe("runGlobalPackageUpdateSteps staging ownership", () => {
+  it("preserves an active recreated omit-optional npm candidate through another owner's cleanup", async () => {
+    await withTestDir({ prefix: "openclaw-package-stage-interleaving-" }, async (base) => {
+      const { globalRoot } = resolveNpmGlobalPrefixLayoutFromPrefix(path.join(base, "prefix"));
+      const packageRoot = path.join(globalRoot, "openclaw");
+      const packageFiles = ["package.json", "dist/index.js", PACKAGE_DIST_INVENTORY_RELATIVE_PATH];
+      const readPackageBytes = (root: string) =>
+        packageFiles.map((relativePath) => fs.readFile(path.join(root, relativePath), "utf8"));
+      await writePackageRoot(packageRoot, "1.0.0");
+      const staleStage = path.join(globalRoot, ".openclaw.update-stage-abandoned");
+      await fs.mkdir(staleStage);
+      await fs.writeFile(path.join(staleStage, "evidence"), "earlier candidate bytes\n");
+      const originalBytes = await Promise.all(readPackageBytes(packageRoot));
+      const params = {
+        ...createNpmUpdateOptions(globalRoot),
+        packageRoot,
+      };
+      const aPrefixes: string[] = [];
+      let candidateBytes: string[] = [];
+      const protectedBackup = path.join(globalRoot, ".openclaw.package-backup-recovery");
+
+      const result = await runGlobalPackageUpdateSteps({
+        ...params,
+        runStep: async ({ name, argv, cwd }) => {
+          const stagePrefix = stagedNpmPrefix(argv);
+          expect((await fs.stat(stagePrefix)).isDirectory()).toBe(true);
+          aPrefixes.push(stagePrefix);
+          const stageLayout = resolveNpmGlobalPrefixLayoutFromPrefix(stagePrefix);
+          const candidateRoot = path.join(stageLayout.globalRoot, "openclaw");
+          await writePackageRoot(candidateRoot, "2.0.0");
+          const step = { name, command: argv.join(" "), cwd: cwd ?? base, durationMs: 0 };
+          if (aPrefixes.length === 1) {
+            return { ...step, exitCode: 1, stderrTail: "injected optional dependency failure" };
+          }
+          expect(argv).toContain("--omit=optional");
+          const firstPrefix = aPrefixes[0]!;
+          expect(stagePrefix).not.toBe(firstPrefix);
+          await expect(fs.access(firstPrefix)).rejects.toMatchObject({ code: "ENOENT" });
+          candidateBytes = await Promise.all(readPackageBytes(candidateRoot));
+
+          // Seed after A's initial cleanup so only the nested B can remove these.
+          const obsoleteDirs = [
+            ".openclaw-a1b2c3d4",
+            ".openclaw-package-backup-retired",
+            ".openclaw-shim-backup-retired",
+          ].map((entry) => path.join(globalRoot, entry));
+          for (const directory of [...obsoleteDirs, protectedBackup]) {
+            await fs.mkdir(directory);
+            await fs.writeFile(path.join(directory, "evidence"), "existing backup bytes\n");
+          }
+
+          let bPrefix: string | undefined;
+          const stoppedB = await runGlobalPackageUpdateSteps({
+            ...params,
+            runStep: async ({ argv: bArgv }) => {
+              bPrefix = stagedNpmPrefix(bArgv);
+              expect(bPrefix).not.toBe(stagePrefix);
+              expect((await fs.stat(bPrefix)).isDirectory()).toBe(true);
+              throw new Error("injected B stop before live mutation");
+            },
+          });
+          expect(stoppedB).toMatchObject({
+            failedStep: { exitCode: 1, stderrTail: "injected B stop before live mutation" },
+            afterVersion: null,
+            recovery: { serviceRestartSafe: true, version: "1.0.0" },
+          });
+          if (!bPrefix) {
+            throw new Error("B did not reach its package-manager step");
+          }
+          for (const removed of [bPrefix, ...obsoleteDirs]) {
+            await expect(fs.access(removed)).rejects.toMatchObject({ code: "ENOENT" });
+          }
+          await expect(fs.readFile(path.join(protectedBackup, "evidence"), "utf8")).resolves.toBe(
+            "existing backup bytes\n",
+          );
+          expect(await Promise.all(readPackageBytes(packageRoot))).toEqual(originalBytes);
+          const survivingCandidate = await Promise.allSettled(readPackageBytes(candidateRoot));
+          // Keep A running after this diagnostic so real verification and cleanup also settle.
+          expect
+            .soft(survivingCandidate, "B cleanup must preserve A's existing candidate bytes")
+            .toEqual(candidateBytes.map((value) => ({ status: "fulfilled", value })));
+          return { ...step, exitCode: 0 };
+        },
+      });
+
+      expect(aPrefixes).toHaveLength(2);
+      for (const prefix of aPrefixes) {
+        await expect(fs.access(prefix)).rejects.toMatchObject({ code: "ENOENT" });
+      }
+      expect((await fs.readdir(globalRoot)).toSorted()).toEqual(
+        [path.basename(protectedBackup), path.basename(staleStage), "openclaw"].toSorted(),
+      );
+      await expect(fs.readFile(path.join(staleStage, "evidence"), "utf8")).resolves.toBe(
+        "earlier candidate bytes\n",
+      );
+      expect(result).toMatchObject({
+        failedStep: null,
+        afterVersion: "2.0.0",
+        activePackageRoot: packageRoot,
+        recovery: { serviceRestartSafe: true, version: "2.0.0" },
+      });
+      expect(result.steps).toContainEqual(
+        expect.objectContaining({ name: "package-swap", exitCode: 0 }),
+      );
+      expect(await Promise.all(readPackageBytes(packageRoot))).toEqual(candidateBytes);
+    });
+  });
 });

@@ -4,10 +4,13 @@ import type { RunCliAgentParams } from "../agents/cli-runner/types.js";
 import type { RunEmbeddedAgentParams } from "../agents/embedded-agent-runner/run/params.js";
 import { resolveRequestStreamTransportOverrides } from "../agents/embedded-agent-runner/run/runtime-resolution.js";
 import { fingerprintResolvedProviderAuth } from "../agents/execution-auth-binding.js";
+import {
+  PreparedModelRuntimeOwnerNotPublishedError,
+  PreparedModelRuntimePublicationSupersededError,
+} from "../agents/prepared-model-runtime.errors.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { CommandLane } from "../process/lanes.js";
-import { planSystemAgentCommand } from "./assistant.js";
-import { SystemAgentInferenceUnavailableError } from "./inference-error.js";
+import { planSystemAgentCommand } from "./assistant.test-support.js";
 import { resolveSystemAgentConfiguredRouteFromConfig } from "./inference-route.js";
 import type { SystemAgentOverview } from "./overview.js";
 import {
@@ -127,6 +130,7 @@ describe("OpenClaw configured-model planner", () => {
         meta: {
           finalAssistantVisibleText: '{"reply":"I will restart it.","command":"restart gateway"}',
           error: { kind: "incomplete_turn", message: "The setup turn timed out." },
+          stopReason: "timeout",
         },
       }));
       const removeTempDir = vi.fn(async () => {});
@@ -147,11 +151,43 @@ describe("OpenClaw configured-model planner", () => {
       ).rejects.toMatchObject({
         code: "SYSTEM_AGENT_INFERENCE_UNAVAILABLE",
         stage: "planner",
-        message: expect.stringContaining("The setup turn timed out."),
+        message: expect.stringContaining("The inference request timed out."),
       });
       expect(removeTempDir).toHaveBeenCalledOnce();
     },
   );
+
+  it.each([
+    {
+      error: new PreparedModelRuntimePublicationSupersededError("prepared runtime superseded"),
+      guidance: "runtime was superseded",
+    },
+    {
+      error: new PreparedModelRuntimeOwnerNotPublishedError("no runtime owner published"),
+      guidance: "runtime became unavailable or was superseded",
+    },
+  ])("reports $guidance without onboarding", async ({ error, guidance }) => {
+    const config = { agents: { defaults: { model: "openai/gpt-5.5" } } } satisfies OpenClawConfig;
+    const { binding, deps } = await createSystemAgentVerifiedInferenceTestFixture(config);
+    useFastVerifiedInference(binding);
+    const runEmbeddedAgent = vi.fn(async () => {
+      throw error;
+    });
+
+    await expect(
+      planSystemAgentCommand({
+        input: "check the gateway",
+        overview: overview(),
+        verifiedInference: binding,
+        deps: { ...deps, runEmbeddedAgent: runEmbeddedAgent as never },
+      }),
+    ).rejects.toMatchObject({
+      code: "SYSTEM_AGENT_INFERENCE_UNAVAILABLE",
+      stage: "planner",
+      message: expect.stringContaining(guidance),
+    });
+    expect(runEmbeddedAgent).toHaveBeenCalledOnce();
+  });
 
   it("rejects a low-level missing binding before config lookup or model execution", async () => {
     const readConfigFileSnapshot = vi.fn();
@@ -165,7 +201,7 @@ describe("OpenClaw configured-model planner", () => {
         verifiedInference: undefined as never,
         deps: { readConfigFileSnapshot, runCliAgent, runEmbeddedAgent },
       }),
-    ).rejects.toBeInstanceOf(SystemAgentInferenceUnavailableError);
+    ).rejects.toMatchObject({ message: expect.stringContaining("openclaw onboard") });
 
     expect(readConfigFileSnapshot).not.toHaveBeenCalled();
     expect(runCliAgent).not.toHaveBeenCalled();
@@ -286,7 +322,9 @@ describe("OpenClaw configured-model planner", () => {
           runEmbeddedAgent,
         },
       }),
-    ).rejects.toBeInstanceOf(SystemAgentInferenceUnavailableError);
+    ).rejects.toMatchObject({
+      message: expect.stringContaining("verified inference route changed"),
+    });
 
     expect(readConfigFileSnapshot).toHaveBeenCalledOnce();
     expect(runCliAgent).not.toHaveBeenCalled();
@@ -321,7 +359,9 @@ describe("OpenClaw configured-model planner", () => {
           },
         },
       }),
-    ).rejects.toBeInstanceOf(SystemAgentInferenceUnavailableError);
+    ).rejects.toMatchObject({
+      message: expect.stringContaining("verified inference route changed"),
+    });
     expect(runEmbeddedAgent).toHaveBeenCalledOnce();
   });
 

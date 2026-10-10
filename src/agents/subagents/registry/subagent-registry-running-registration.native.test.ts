@@ -13,8 +13,8 @@ import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state
 import { holdStateDatabaseWriteTransaction } from "../../../test-utils/state-database-contention.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
+import { loadSubagentRegistryFromSqlite } from "./subagent-registry-state.fixture.test-support.js";
 import { registerSubagentRun } from "./subagent-registry.js";
-import { loadSubagentRegistryFromSqlite } from "./subagent-registry.store.sqlite.js";
 
 const fixture = useSubagentPersistenceFixture();
 

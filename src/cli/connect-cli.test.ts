@@ -254,6 +254,25 @@ describe("connect cli", () => {
     await expect(fs.stat(targetFile)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
+  it.skipIf(process.platform === "win32").each([" setup-code", "setup-code "])(
+    "consumes only the literal target file %j",
+    async (fileName) => {
+      const root = tempDirs.make("openclaw-connect-literal-target-");
+      const targetFile = path.join(root, fileName);
+      const neighbor = path.join(root, "setup-code");
+      await fs.writeFile(targetFile, setupCode(), { mode: 0o600 });
+      await fs.writeFile(neighbor, "unrelated target", { mode: 0o600 });
+
+      await runConnect(["--target-file", targetFile, "--ephemeral"]);
+
+      expect(mocks.runNodeHost).toHaveBeenCalledWith(
+        expect.objectContaining({ gatewayPort: 8443, forceWorkerRuns: true }),
+      );
+      await expect(fs.stat(targetFile)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fs.readFile(neighbor, "utf8")).resolves.toBe("unrelated target");
+    },
+  );
+
   it.skipIf(process.platform === "win32")(
     "rejects a socket target without removing it",
     async () => {
@@ -288,6 +307,16 @@ describe("connect cli", () => {
       name: "empty",
       contents: Buffer.alloc(0),
       message: "Connect target file is empty.",
+    },
+    {
+      name: "malformed UTF-8",
+      contents: Buffer.from([0xff]),
+      message: "Connect target file must be valid UTF-8.",
+    },
+    {
+      name: "truncated UTF-8",
+      contents: Buffer.from([0xe2, 0x82]),
+      message: "Connect target file must be valid UTF-8.",
     },
     {
       name: "oversized",

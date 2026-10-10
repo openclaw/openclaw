@@ -9,16 +9,14 @@ import {
   type PolicyEvidence,
 } from "../policy-state.js";
 import {
-  authProfileMetadataRequirementFindings,
   invalidChannelDenyRuleFindings,
+  metadataRequirementShapeFindings,
 } from "./access-findings.js";
 import { agentWorkspaceFindings } from "./agent-workspace-findings.js";
 import { CHECK_IDS } from "./check-ids.js";
 import { dataHandlingFindings, secretAuthProvenanceFindings } from "./data-auth-findings.js";
 import { execApprovalsFindings } from "./exec-approval-findings.js";
 import { ingressFindings } from "./ingress-findings.js";
-import { createOrderedPolicyShape } from "./ordered-shape.js";
-import { SUPPORTED_TOOL_METADATA } from "./policy-constants.js";
 import { policyEvidenceFinding } from "./policy-evidence-finding.js";
 import {
   parsePolicyFile,
@@ -43,13 +41,7 @@ import {
   modelProviderFindings,
   networkFindings,
 } from "./scopes/model-network.js";
-import {
-  toolOwnerFindings,
-  toolPostureFindings,
-  toolRiskFindings,
-  toolSensitivityFindings,
-  toolUnknownRiskFindings,
-} from "./tool-findings.js";
+import { toolMetadataFindings, toolPostureFindings } from "./tool-findings.js";
 import type { PolicyEvaluation } from "./types.js";
 
 const policyEvaluationCache = new WeakMap<HealthCheckContext, Promise<PolicyEvaluation>>();
@@ -133,15 +125,17 @@ async function evaluatePolicyUncached(ctx: HealthCheckContext): Promise<PolicyEv
     };
   }
 
-  const metadataRequirementFindings = toolMetadataRequirementFindings(
+  const metadataRequirementFindings = metadataRequirementShapeFindings(
     policy,
     policyFile.displayName,
     policyFile.ocDocName,
+    "tools.requireMetadata",
   );
-  const authMetadataRequirementFindings = authProfileMetadataRequirementFindings(
+  const authMetadataRequirementFindings = metadataRequirementShapeFindings(
     policy,
     policyFile.displayName,
     policyFile.ocDocName,
+    "auth.profiles.requireMetadata",
   );
   const requiredMetadata =
     metadataRequirementFindings.length === 0 ? requiredToolMetadata(policy) : new Set<string>();
@@ -155,7 +149,7 @@ async function evaluatePolicyUncached(ctx: HealthCheckContext): Promise<PolicyEv
     }) === undefined
       ? policyRoutingRules(policy)
       : undefined;
-  const execApprovalsFile = includeExecApprovals ? await readExecApprovalsFile(ctx) : undefined;
+  const execApprovalsFile = includeExecApprovals ? await readExecApprovalsFile() : undefined;
   const evidenceOptions = {
     includeIngress: policyHasRules(policy, "ingress"),
     includeGatewayExposure: policyHasRules(policy, "gateway"),
@@ -222,16 +216,7 @@ async function evaluatePolicyUncached(ctx: HealthCheckContext): Promise<PolicyEv
     ...metadataRequirementFindings,
     ...(unmigratedToolsFinding === undefined ? [] : [unmigratedToolsFinding]),
   ];
-  if (requiredMetadata.has("risk")) {
-    policyFindings.push(...toolRiskFindings(policyFile.ocDocName, evidence));
-    policyFindings.push(...toolUnknownRiskFindings(policyFile.ocDocName, evidence));
-  }
-  if (requiredMetadata.has("sensitivity")) {
-    policyFindings.push(...toolSensitivityFindings(policyFile.ocDocName, evidence));
-  }
-  if (requiredMetadata.has("owner")) {
-    policyFindings.push(...toolOwnerFindings(policyFile.ocDocName, evidence));
-  }
+  policyFindings.push(...toolMetadataFindings(policyFile.ocDocName, evidence, requiredMetadata));
   const attestationFindings = policyAttestationFindings(
     policyFile.displayName,
     policyHash,
@@ -299,7 +284,7 @@ function channelFindings(
     if (channel.enabled === false) {
       return [];
     }
-    const rule = denyRules.find((candidate) => candidate.when?.provider === channel.provider);
+    const rule = denyRules.find((candidate) => candidate.when.provider === channel.provider);
     if (rule === undefined) {
       return [];
     }
@@ -352,7 +337,7 @@ function policyAttestationFindings(
   ];
 }
 
-function toAttestedFinding(finding: HealthFinding): Record<string, unknown> {
+export function toAttestedFinding(finding: HealthFinding) {
   return {
     checkId: finding.checkId,
     severity: finding.severity,
@@ -366,25 +351,4 @@ function toAttestedFinding(finding: HealthFinding): Record<string, unknown> {
     ...(finding.requirement !== undefined ? { requirement: finding.requirement } : {}),
     ...(finding.fixHint !== undefined ? { fixHint: finding.fixHint } : {}),
   };
-}
-
-function toolMetadataRequirementFindings(
-  policy: unknown,
-  policyPath: string,
-  policyDocName: string,
-): readonly HealthFinding[] {
-  const shape = createOrderedPolicyShape(policy, { policyPath, policyDocName });
-  const finding = shape.list("tools.requireMetadata", {
-    allowed: SUPPORTED_TOOL_METADATA,
-    normalize: "lower",
-    array: {
-      message: "{policy} {property} must be an array of metadata keys.",
-      hint: "Use supported metadata keys: {allowed}.",
-    },
-    entry: {
-      message: "{policy} {property}[{index}] must be a supported metadata key.",
-      hint: "Use supported metadata keys: {allowed}.",
-    },
-  });
-  return finding === undefined ? [] : [finding];
 }

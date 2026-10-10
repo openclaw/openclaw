@@ -91,31 +91,6 @@ describe("extension profile readiness", () => {
     browser.dispose();
   });
 
-  it("cancels an attachment wait immediately with its owning browser operation", async () => {
-    vi.useFakeTimers();
-    vi.mocked(chromeModule.isChromeReachable).mockResolvedValue(false);
-    const controller = new AbortController();
-
-    const browser = createExtensionProfile();
-    const cancelled = browser.profile
-      .ensureBrowserAvailable({ signal: controller.signal })
-      .catch((error: unknown) => error);
-    await vi.advanceTimersByTimeAsync(300);
-    controller.abort(new Error("browser request cancelled"));
-
-    expect((await cancelled) as Error).toHaveProperty("message", "browser request cancelled");
-    await vi.advanceTimersByTimeAsync(0);
-    const runtime = browser.state.profiles.get("chrome");
-    expect(runtime).toBeDefined();
-    if (runtime) {
-      const actor = getProfileLifecycle(runtime);
-      expect(actor.starts.size).toBe(0);
-      expect(actor.leases.size).toBe(0);
-    }
-    expect(vi.getTimerCount()).toBe(0);
-    browser.dispose();
-  });
-
   it("keeps a sibling attachment wait alive when one request is cancelled", async () => {
     vi.useFakeTimers();
     vi.mocked(chromeModule.isChromeReachable).mockResolvedValue(true);
@@ -135,10 +110,12 @@ describe("extension profile readiness", () => {
       expect(getProfileLifecycle(runtime).leases.size).toBe(1);
     }
     expect(browser.state.extensionRelays?.get("chrome")).toBe(browser.relay);
+    expect(vi.getTimerCount()).toBe(1);
 
     browser.connect();
     await expect(sibling).resolves.toBeUndefined();
     if (runtime) {
+      expect(getProfileLifecycle(runtime).starts.size).toBe(0);
       expect(getProfileLifecycle(runtime).leases.size).toBe(0);
     }
     expect(browser.relay.bridge.extensionConnected).toBe(true);

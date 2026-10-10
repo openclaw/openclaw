@@ -6,7 +6,6 @@ import {
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
 import { normalizeSqliteNumber } from "../../infra/sqlite-number.js";
-import { createSqliteWorkerWriteAdmission } from "../../infra/sqlite-worker-store.js";
 import { registerSecretValueForRedaction } from "../../logging/secret-redaction-registry.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { executeExistingOpenClawStateRead } from "../../state/openclaw-state-db-readonly.js";
@@ -21,22 +20,17 @@ import {
   captureOpenClawStateWorkerContext,
 } from "../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
-import {
-  executeOpenClawStateWorker,
-  runOpenClawStateWorkerOperation,
-} from "../../state/openclaw-state-worker-store.js";
+import { executeOpenClawStateWorker } from "../../state/openclaw-state-worker-store.js";
 import { sealSecretSentinel } from "../sentinel.js";
 import { captureSecretStoreExpiryCutoffs } from "./secret-store-expiry.kernel.js";
 import {
   classifyHiddenGitHubStoreName,
   GITHUB_SETUP_HANDOFF_MAX_AGE_MS,
 } from "./secret-store-hidden-github.js";
-import { isMissingSecretStoreTableError } from "./secret-store-sqlite.js";
+import { withMissingSecretStoreFallback } from "./secret-store-sqlite.js";
 import { SecretStoreValidationError } from "./secret-store-validation-error.js";
 import {
   assertSecretStoreEnvName,
-  assertSecretStoreValue,
-  normalizeScope,
   normalizeSecretAllowedHosts,
   parseSecretAllowedHosts,
   type SecretStoreKind,
@@ -55,6 +49,7 @@ export {
   writeSecretStoreEntry,
   writeSecretStoreEntries,
   writeSecretStoreEntryWithRollback,
+  writeSecretStoreEntryForConfigRef,
   type SecretStoreBatchWriteParams,
   type SecretStoreWriteEntry,
   type SecretStoreWriteParams,
@@ -162,7 +157,7 @@ export function consumeGitHubSetupHandoff(params: {
     return undefined;
   }
   const now = params.nowMs ?? Date.now();
-  try {
+  return withMissingSecretStoreFallback(() => {
     const value = runOpenClawStateWriteTransaction(
       ({ db: sqlite }) => {
         const db = getNodeSqliteKysely<SecretStoreDatabase>(sqlite);
@@ -200,12 +195,7 @@ export function consumeGitHubSetupHandoff(params: {
       registerSecretValueForRedaction(value);
     }
     return value;
-  } catch (error) {
-    if (isMissingSecretStoreTableError(error)) {
-      return undefined;
-    }
-    throw error;
-  }
+  }, undefined);
 }
 
 /** Captures one coherent team-store snapshot for an agent run's exec environment. */
@@ -310,48 +300,6 @@ export async function readSecretStoreValue(params: {
   }
 }
 
-/**
- * Saves a secret for one config key in a fresh team-store entry through the
- * state worker and returns the entry name. `assertCurrent` is the requester's
- * live authority; the worker checks it again at transaction and commit
- * admission, so a revoked request writes nothing.
- */
-export async function writeSecretStoreEntryForConfigRef(params: {
-  baseName: string;
-  value: string;
-  updatedBy: string;
-  assertCurrent?: () => void;
-  database?: Pick<OpenClawStateDatabaseOptions, "path" | "env">;
-}): Promise<string> {
-  registerSecretValueForRedaction(params.value);
-  assertSecretStoreValue(params.value, "secret", params.baseName);
-  const context = captureOpenClawStateWorkerContext(params.database);
-  const assertCurrent = () => {
-    context.admission.assertCurrent();
-    params.assertCurrent?.();
-  };
-  const { name } = await runOpenClawStateWorkerOperation(
-    context,
-    (scope) =>
-      scope.execute({
-        type: "secrets.writeForConfigRef",
-        input: {
-          baseName: params.baseName,
-          value: params.value,
-          writer: params.updatedBy,
-          now: Date.now(),
-        },
-      }),
-    {
-      assertCurrent,
-      createAdmission: createSqliteWorkerWriteAdmission(assertCurrent, [
-        context.admission.databasePath,
-      ]),
-    },
-  );
-  return name;
-}
-
 export function updateSecretStoreAllowedHosts(params: {
   scope: SecretStoreScope;
   name: string;
@@ -361,7 +309,6 @@ export function updateSecretStoreAllowedHosts(params: {
 }): void {
   assertSecretStoreEnvName(params.name);
   const allowedHosts = normalizeSecretAllowedHosts(params.allowedHosts);
-  const { scopeKind, scopeId } = normalizeScope(params.scope);
   const now = Date.now();
   runOpenClawStateWriteTransaction(
     ({ db: sqlite }) => {
@@ -376,8 +323,8 @@ export function updateSecretStoreAllowedHosts(params: {
             updated_at_ms: now,
             updated_by: params.updatedBy,
           })
-          .where("scope_kind", "=", scopeKind)
-          .where("scope_id", "=", scopeId)
+          .where("scope_kind", "=", "team")
+          .where("scope_id", "=", "")
           .where("name", "=", params.name)
           .where("kind", "=", "secret")
           .where("deleted_at_ms", "is", null),

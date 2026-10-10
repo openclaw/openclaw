@@ -31,7 +31,15 @@ function pruneProbeState(now: number): void {
   }
 }
 
-function enforceProbeStateCap(): void {
+function isProbeThrottleOpen(now: number, throttleKey: string): boolean {
+  pruneProbeState(now);
+  const lastProbe = lastProbeAttempt.get(throttleKey) ?? 0;
+  return now - lastProbe >= MIN_PROBE_INTERVAL_MS;
+}
+
+export function markProbeAttempt(now: number, throttleKey: string): void {
+  pruneProbeState(now);
+  lastProbeAttempt.set(throttleKey, now);
   while (lastProbeAttempt.size > MAX_PROBE_KEYS) {
     let oldestKey: string | null = null;
     let oldestTs = Number.POSITIVE_INFINITY;
@@ -46,72 +54,6 @@ function enforceProbeStateCap(): void {
     }
     lastProbeAttempt.delete(oldestKey);
   }
-}
-
-function isProbeThrottleOpen(now: number, throttleKey: string): boolean {
-  pruneProbeState(now);
-  const lastProbe = lastProbeAttempt.get(throttleKey) ?? 0;
-  return now - lastProbe >= MIN_PROBE_INTERVAL_MS;
-}
-
-export function markProbeAttempt(now: number, throttleKey: string): void {
-  pruneProbeState(now);
-  lastProbeAttempt.set(throttleKey, now);
-  enforceProbeStateCap();
-}
-
-function hasActiveProviderRateLimitResetWindow(params: {
-  authStore: AuthProfileStore;
-  profileIds: string[];
-  now: number;
-  model: string;
-}): boolean {
-  return params.profileIds.some((profileId) => {
-    const stats = params.authStore.usageStats?.[profileId];
-    if (!stats || !isActiveUnusableWindow(stats.blockedUntil, params.now)) {
-      return false;
-    }
-    if (stats.blockedReason !== "subscription_limit" || !stats.blockedSource) {
-      return false;
-    }
-    return !stats.blockedModel || stats.blockedModel === params.model;
-  });
-}
-
-function shouldProbePrimaryDuringCooldown(params: {
-  isPrimary: boolean;
-  hasFallbackCandidates: boolean;
-  reason: FailoverReason | null | undefined;
-  now: number;
-  throttleKey: string;
-  authRuntime: CooldownAuthRuntime;
-  authStore: AuthProfileStore;
-  profileIds: string[];
-  model: string;
-}): boolean {
-  if (!params.isPrimary || !isProbeThrottleOpen(params.now, params.throttleKey)) {
-    return false;
-  }
-
-  // Without fallbacks, probe on every open throttle slot: rolling caps can
-  // recover before the provider's reported reset, which may be days away (#90702).
-  if (!params.hasFallbackCandidates) {
-    return true;
-  }
-
-  const soonest = params.authRuntime.getSoonestCooldownExpiry(params.authStore, params.profileIds, {
-    now: params.now,
-    forModel: params.model,
-  });
-  // Generic 429 backoff can become stale before its local cooldown expires.
-  // Provider-recorded reset windows still remain authoritative until near expiry.
-  if (params.reason === "rate_limit" && !hasActiveProviderRateLimitResetWindow(params)) {
-    return true;
-  }
-  if (soonest === null || !Number.isFinite(soonest)) {
-    return true;
-  }
-  return params.now >= soonest - PROBE_MARGIN_MS;
 }
 
 /** @internal – exposed for unit tests only */
@@ -149,17 +91,35 @@ export function resolveCooldownDecision(params: {
       profileIds: params.profileIds,
       now: params.now,
     }) ?? "unknown";
-  const shouldProbe = shouldProbePrimaryDuringCooldown({
-    isPrimary: params.isPrimary,
-    hasFallbackCandidates: params.hasFallbackCandidates,
-    reason: inferredReason,
-    now: params.now,
-    throttleKey: params.probeThrottleKey,
-    authRuntime: params.authRuntime,
-    authStore: params.authStore,
-    profileIds: params.profileIds,
-    model: params.candidate.model,
-  });
+  let shouldProbe = params.isPrimary && isProbeThrottleOpen(params.now, params.probeThrottleKey);
+  // Without fallbacks, probe on every open throttle slot: rolling caps can
+  // recover before the provider's reported reset, which may be days away (#90702).
+  if (shouldProbe && params.hasFallbackCandidates) {
+    const soonest = params.authRuntime.getSoonestCooldownExpiry(
+      params.authStore,
+      params.profileIds,
+      { now: params.now, forModel: params.candidate.model },
+    );
+    // Generic 429 backoff can become stale before its local cooldown expires.
+    // Provider-recorded reset windows still remain authoritative until near expiry.
+    const staleRateLimit =
+      inferredReason === "rate_limit" &&
+      !params.profileIds.some((profileId) => {
+        const stats = params.authStore.usageStats?.[profileId];
+        return (
+          stats &&
+          isActiveUnusableWindow(stats.blockedUntil, params.now) &&
+          stats.blockedReason === "subscription_limit" &&
+          stats.blockedSource &&
+          (!stats.blockedModel || stats.blockedModel === params.candidate.model)
+        );
+      });
+    shouldProbe =
+      staleRateLimit ||
+      soonest === null ||
+      !Number.isFinite(soonest) ||
+      params.now >= soonest - PROBE_MARGIN_MS;
+  }
 
   const isPersistentAuthIssue = inferredReason === "auth" || inferredReason === "auth_permanent";
   if (isPersistentAuthIssue) {

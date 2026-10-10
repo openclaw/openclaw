@@ -24,20 +24,18 @@ import {
   getEmbeddedSessionPromptState,
   prepareSessionSystemPrompt,
 } from "../session-prompt-state.js";
-import * as embeddedSystemPrompt from "../system-prompt.js";
 import { withPromptFixture } from "./attempt-system-prompt.sandbox-info.test-support.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 const hoisted = vi.hoisted(() => ({
   applyAgentAutoCompactionGuard: vi.fn(),
-  applyAgentCompactionSettingsFromConfig: vi.fn(),
-  applySystemPromptToSession: vi.fn(),
   buildEmbeddedExtensionFactories: vi.fn(),
-  createAgentSessionForEmbeddedRunner: vi.fn(),
+  createAgentSession: vi.fn(),
   DefaultResourceLoader: vi.fn<new () => { reload: () => Promise<void> }>(),
   createPreparedEmbeddedAgentSettingsManager: vi.fn(),
   getGlobalHookRunner: vi.fn(),
   installMessageToolOnlyTerminalHook: vi.fn(),
+  installToolAuthoredSourceReplyTerminalHook: vi.fn(),
   prepareEmbeddedAttemptClientTools: vi.fn(),
   resolveEffectiveCompactionMode: vi.fn(),
   isSilentOverflowProneModel: vi.fn(),
@@ -52,17 +50,18 @@ vi.mock("../../../plugins/hook-runner-global.js", () => ({
 vi.mock("../../agent-project-settings.js", () => ({
   createPreparedEmbeddedAgentSettingsManager: hoisted.createPreparedEmbeddedAgentSettingsManager,
 }));
+// mock-isolation: Keep configuration policy outside the session assembly fixture.
 vi.mock("../../agent-settings.js", () => ({
   applyAgentAutoCompactionGuard: hoisted.applyAgentAutoCompactionGuard,
-  applyAgentCompactionSettingsFromConfig: hoisted.applyAgentCompactionSettingsFromConfig,
   isSilentOverflowProneModel: hoisted.isSilentOverflowProneModel,
   resolveEffectiveCompactionMode: hoisted.resolveEffectiveCompactionMode,
 }));
 vi.mock("../../agent-tool-definition-adapter.js", () => ({
   toToolDefinitions: hoisted.toToolDefinitions,
 }));
+// mock-isolation: Keep session storage and provider runtime outside the preparation fixture.
 vi.mock("../../sessions/sdk.js", () => ({
-  createAgentSessionForEmbeddedRunner: hoisted.createAgentSessionForEmbeddedRunner,
+  createAgentSession: hoisted.createAgentSession,
 }));
 vi.mock("../../sessions/tools/tool-definition-wrapper.js", () => ({
   wrapToolDefinition: hoisted.wrapToolDefinition,
@@ -77,8 +76,10 @@ vi.mock("../../sessions/resource-loader.js", () => ({
 vi.mock("./attempt-client-tools.js", () => ({
   prepareEmbeddedAttemptClientTools: hoisted.prepareEmbeddedAttemptClientTools,
 }));
-vi.mock("./message-tool-terminal.js", () => ({
+vi.mock("./message-tool-terminal.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./message-tool-terminal.js")>()),
   installMessageToolOnlyTerminalHook: hoisted.installMessageToolOnlyTerminalHook,
+  installToolAuthoredSourceReplyTerminalHook: hoisted.installToolAuthoredSourceReplyTerminalHook,
 }));
 
 import { prepareEmbeddedAttemptAgentSession } from "./attempt-session-prepare.js";
@@ -122,6 +123,10 @@ function createInput(options?: { activationError?: Error }) {
     [agentSessionQueuePromptContext]: queuePromptContext,
     agent: { id: "agent", subscribe: vi.fn(), state: { systemPrompt: "", tools: [] } },
     setActiveToolsByName,
+    setBaseSystemPrompt: vi.fn((prompt: string) => {
+      activeSession.agent.state.systemPrompt = prompt;
+      events.push("apply-system-prompt");
+    }),
     replaceCustomTools: vi.fn(),
   } as unknown as AgentSession;
   const sessionManager = { id: "session-manager" };
@@ -139,6 +144,7 @@ function createInput(options?: { activationError?: Error }) {
     replaySafeToolNames: new Set(["read"]),
     replaySafeTools: new Set(allCustomTools),
     trustedLocalMediaToolNames: new Set(["read"]),
+    sourceReplyCapableToolNames: new Set(["order_status"]),
   };
   let onDeliveredSourceReply: (() => void) | undefined;
 
@@ -158,13 +164,9 @@ function createInput(options?: { activationError?: Error }) {
     ...clientToolRuntime,
     refreshTools: vi.fn(),
   });
-  hoisted.createAgentSessionForEmbeddedRunner.mockImplementation(async () => {
+  hoisted.createAgentSession.mockImplementation(async () => {
     events.push("create-session");
     return { session: activeSession };
-  });
-  hoisted.applySystemPromptToSession.mockImplementation((_session, prompt: string) => {
-    activeSession.agent.state.systemPrompt = prompt;
-    events.push("apply-system-prompt");
   });
   hoisted.installMessageToolOnlyTerminalHook.mockImplementation(
     (input: { onDeliveredSourceReply?: () => void }) => {
@@ -261,9 +263,6 @@ beforeEach(() => {
   vi.spyOn(toolSearch, "resolveToolSearchCatalogTool").mockImplementation(
     hoisted.resolveToolSearchCatalogTool,
   );
-  vi.spyOn(embeddedSystemPrompt, "applySystemPromptToSession").mockImplementation(
-    hoisted.applySystemPromptToSession,
-  );
 });
 
 afterEach(() => {
@@ -319,8 +318,7 @@ describe("prepareEmbeddedAttemptAgentSession", () => {
     });
     setEmbeddedMode(true);
     setEmbeddedPluginApprovalBroker(broker);
-    const resolveDeferredTool =
-      hoisted.createAgentSessionForEmbeddedRunner.mock.calls[0]![0].resolveDeferredTool;
+    const resolveDeferredTool = hoisted.createAgentSession.mock.calls[0]![0].resolveDeferredTool;
     const tool = resolveDeferredTool({ toolCall: { name: "mcp_write" } });
     const settled = Promise.allSettled([tool.execute("deferred-write", {})]);
     try {
@@ -534,7 +532,7 @@ describe("prepareEmbeddedAttemptAgentSession", () => {
     const admit = await prepare!();
     expect(state.pendingSystemPrompt?.renderedPrefix).toBe(pinnedPrompt);
     expect(steer).not.toHaveBeenCalled();
-    admit?.();
+    await admit?.((commit) => commit?.());
     expect(state.pendingSystemPrompt?.renderedPrefix).toBe("## Tools\nread");
     expect(steer).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({
@@ -634,6 +632,10 @@ describe("prepareEmbeddedAttemptAgentSession", () => {
 
   it("prepares resources and publishes the activated session runtime", async () => {
     const fixture = createInput();
+    fixture.input.initialSystemPrompt = "  system prompt\n";
+    fixture.input.onSystemPromptChanged = vi.fn(() => {
+      fixture.events.push("publish-system-prompt");
+    });
 
     const result = await prepareEmbeddedAttemptAgentSession(fixture.input);
 
@@ -648,19 +650,22 @@ describe("prepareEmbeddedAttemptAgentSession", () => {
       "install-terminal-hook",
       "stage:agent-session",
     ]);
-    expect(hoisted.applyAgentAutoCompactionGuard).toHaveBeenCalledTimes(2);
-    expect(hoisted.applyAgentCompactionSettingsFromConfig).toHaveBeenCalledOnce();
-    expect(hoisted.applyAgentCompactionSettingsFromConfig.mock.invocationCallOrder[0]).toBeLessThan(
-      hoisted.applyAgentAutoCompactionGuard.mock.invocationCallOrder[1] ?? 0,
-    );
-    const sessionCall = hoisted.createAgentSessionForEmbeddedRunner.mock.calls[0];
+    expect(hoisted.applyAgentAutoCompactionGuard).toHaveBeenCalledOnce();
+    const sessionCall = hoisted.createAgentSession.mock.calls[0];
     expect(sessionCall?.[0]).toMatchObject({ resourceLoader: fixture.resourceLoader });
-    expect(sessionCall?.[1]).toMatchObject({
+    expect(sessionCall?.[0]).toMatchObject({
       beforeToolBatch: undefined,
       contextOverflowRecoveryOwner: "caller",
+      cleanupProviderSessionResourcesOnDispose: false,
     });
-    expect(sessionCall?.[0]).not.toHaveProperty("contextOverflowRecoveryOwner");
+    expect(fixture.activeSession.agent.state.systemPrompt).toBe("system prompt");
+    expect(fixture.input.onSystemPromptChanged).toHaveBeenCalledWith("  system prompt\n");
     expect(fixture.setActiveToolsByName).toHaveBeenCalledWith(fixture.sessionToolAllowlist);
+    // Only author-declared reply tools may end the batch with their own reply.
+    expect(hoisted.installToolAuthoredSourceReplyTerminalHook).toHaveBeenCalledWith({
+      agent: fixture.activeSession.agent,
+      sourceReplyCapableToolNames: new Set(["order_status"]),
+    });
     expect(result).toEqual(
       expect.objectContaining({
         activeSession: fixture.activeSession,
@@ -679,9 +684,9 @@ describe("prepareEmbeddedAttemptAgentSession", () => {
     const fixture = createInput();
     fixture.input.onSystemPromptChanged = vi.fn();
     const entered = createDeferredCore();
-    const release = createDeferredCore<() => void>();
-    const originalAdmission = vi.fn();
-    const currentAdmission = vi.fn();
+    const release = createDeferredCore<(onAdmitted: () => void) => Promise<void>>();
+    const originalAdmission = vi.fn(async (onAdmitted: () => void) => onAdmitted());
+    const currentAdmission = vi.fn(async (onAdmitted: () => void) => onAdmitted());
     const prepareReplay = vi
       .fn()
       .mockImplementationOnce(() => {
@@ -703,7 +708,7 @@ describe("prepareEmbeddedAttemptAgentSession", () => {
     expect(fixture.activeSession.agent.state.systemPrompt).toBe("current permissions");
     expect(originalAdmission).not.toHaveBeenCalled();
     expect(currentAdmission).not.toHaveBeenCalled();
-    admit?.();
+    await admit?.((commit) => commit?.());
     expect(currentAdmission).toHaveBeenCalledOnce();
   });
 
@@ -761,11 +766,11 @@ describe("prepareEmbeddedAttemptAgentSession", () => {
   });
 
   it.each([false, true])(
-    "checks replay ownership synchronously after preparation with cancellation %s",
+    "checks replay ownership before admission with cancellation %s",
     async (cancel) => {
       const fixture = createInput();
       const controller = new AbortController();
-      const assertInitialUserTurnReplay = vi.fn();
+      const assertInitialUserTurnReplay = vi.fn(async (onAdmitted: () => void) => onAdmitted());
       await prepareEmbeddedAttemptAgentSession({
         ...fixture.input,
         runAbortSignal: controller.signal,
@@ -776,11 +781,59 @@ describe("prepareEmbeddedAttemptAgentSession", () => {
       const reason = new Error("closed after preparation");
       if (cancel) {
         controller.abort(reason);
-        expect(() => admit?.()).toThrow(reason);
+        await expect(admit?.((commit) => commit?.())).rejects.toThrow(reason);
         expect(assertInitialUserTurnReplay).not.toHaveBeenCalled();
       } else {
-        admit?.();
+        await admit?.((commit) => commit?.());
         expect(assertInitialUserTurnReplay).toHaveBeenCalledOnce();
+      }
+    },
+  );
+
+  it.each(["allow", "abort", "replace"] as const)(
+    "rechecks permission ownership inside awaited replay admission: %s",
+    async (closure) => {
+      const { fixture, pinnedPrompt, steer, state, prepareSystemPromptUpdate } =
+        createSystemUpdateInput();
+      const controller = new AbortController();
+      const entered = createDeferredCore();
+      const release = createDeferredCore();
+      const prepared = await prepareEmbeddedAttemptAgentSession({
+        ...fixture.input,
+        runAbortSignal: controller.signal,
+        prepareSystemPromptUpdate,
+        prepareInitialUserTurnReplay: async () => async (onAdmitted) => {
+          entered.resolve();
+          await release.promise;
+          onAdmitted();
+        },
+      });
+      prepared.setPermissionPromptPreparation(async () => () => "## Tools\nread");
+      const admit = await fixture.setPromptPreparation.mock.lastCall?.[0]?.();
+      const start = vi.fn();
+      const admission = admit?.((commit) => {
+        commit?.();
+        start();
+      });
+      const settled = Promise.allSettled([admission]);
+      await entered.promise;
+      expect(state.pendingSystemPrompt?.renderedPrefix).toBe(pinnedPrompt);
+      if (closure === "abort") {
+        controller.abort(new Error("run closed during replay admission"));
+      } else if (closure === "replace") {
+        prepared.setPermissionPromptPreparation(async () => () => "replacement permissions");
+      }
+      release.resolve();
+      const [result] = await settled;
+      if (closure === "allow") {
+        expect(result.status).toBe("fulfilled");
+        expect(start).toHaveBeenCalledOnce();
+        expect(steer).toHaveBeenCalledOnce();
+      } else {
+        expect(result.status).toBe("rejected");
+        expect(start).not.toHaveBeenCalled();
+        expect(steer).not.toHaveBeenCalled();
+        expect(state.pendingSystemPrompt?.renderedPrefix).toBe(pinnedPrompt);
       }
     },
   );
@@ -794,10 +847,24 @@ describe("prepareEmbeddedAttemptAgentSession", () => {
 
     await prepareEmbeddedAttemptAgentSession(fixture.input);
 
-    expect(hoisted.createAgentSessionForEmbeddedRunner.mock.calls[0]?.[1]).toMatchObject({
+    expect(hoisted.createAgentSession.mock.calls[0]?.[0]).toMatchObject({
       beforeToolBatch: undefined,
       contextOverflowRecoveryOwner: "session",
     });
+  });
+
+  it.each([
+    ["settled-tool-finalization", true],
+    [undefined, false],
+  ] as const)("sets compactionForbidden for operation %s to %s", async (operation, expected) => {
+    const fixture = createInput();
+    fixture.input.attempt = { ...fixture.input.attempt, operation };
+
+    await prepareEmbeddedAttemptAgentSession(fixture.input);
+
+    expect(hoisted.applyAgentAutoCompactionGuard).toHaveBeenCalledWith(
+      expect.objectContaining({ compactionForbidden: expected }),
+    );
   });
 
   it("publishes session ownership before activation can fail", async () => {

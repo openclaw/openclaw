@@ -2,8 +2,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { DOMParser } from "linkedom";
 import { hasErrnoCode } from "../infra/errno.js";
 import { inspectPortUsage } from "../infra/ports-inspect.js";
+import { WINDOWS_POWERSHELL_COLD_SPAWN_TIMEOUT_MS } from "../infra/windows-powershell-spawn.js";
 import { resolveGatewayServiceDescription } from "./constants.js";
 import { resolveGatewayServiceProbeHosts } from "./gateway-service-probe-hosts.js";
 import { formatLine, writeFormattedLines } from "./output.js";
@@ -11,12 +13,14 @@ import {
   readScheduledTaskDefinition,
   restartRegisteredScheduledTask,
   runScheduledTaskOrThrow,
+  stopRegisteredScheduledTask,
   type ScheduledTaskActivation,
 } from "./schtasks-control.js";
 import { execSchtasks } from "./schtasks-exec.js";
 import {
   backupScheduledTaskDefinition,
   publishScheduledTaskFiles,
+  type ScheduledTaskFileRecovery,
 } from "./schtasks-install-files.js";
 import {
   buildHiddenLauncherScript,
@@ -35,6 +39,8 @@ import {
 import {
   findInstalledProcessPid,
   readWindowsProcessSnapshot,
+} from "./schtasks-process-snapshot.js";
+import {
   resolveScheduledTaskCommandPort,
   shouldManageGatewayListenerPort,
   terminateGatewayProcessTree,
@@ -42,6 +48,7 @@ import {
 import {
   assertSchtasksAvailable,
   isRegisteredScheduledTask,
+  isScheduledTaskDefinitelyNotRunning,
   isStartupEntryInstalled,
   launchFallbackTaskScript,
   removeStartupEntries,
@@ -89,20 +96,6 @@ function resolveScheduledTaskRenderEnv(
   return merged;
 }
 
-function resolveScheduledTaskScriptEnvironment(
-  taskEnv: GatewayServiceEnv,
-  environment: GatewayServiceEnv | undefined,
-): GatewayServiceEnv | undefined {
-  const scriptEnv = environment ? { ...environment } : {};
-  for (const key of CALLER_OWNED_SERVICE_IDENTITY_KEYS) {
-    const value = taskEnv[key]?.trim();
-    if (value) {
-      scriptEnv[key] = value;
-    }
-  }
-  return Object.keys(scriptEnv).length > 0 ? scriptEnv : undefined;
-}
-
 const SCHEDULED_TASK_ACTIVATION_KEYS = [
   "OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER",
   "OPENCLAW_TASK_SCRIPT_NAME",
@@ -130,31 +123,43 @@ function resolveScheduledTaskActivationEnv(
   return activationEnv;
 }
 
-async function writeScheduledTaskScript({
-  env,
-  programArguments,
-  workingDirectory,
-  environment,
-  description,
-  definitionTransaction,
-}: Omit<GatewayServiceInstallArgs, "stdout">): Promise<{
+async function writeScheduledTaskScript(
+  {
+    env,
+    programArguments,
+    workingDirectory,
+    environment,
+    description,
+    definitionTransaction,
+  }: Omit<GatewayServiceInstallArgs, "stdout">,
+  beforePublish?: (recovery?: ScheduledTaskFileRecovery) => Promise<void>,
+): Promise<{
   scriptPath: string;
   taskLaunchPath: string;
   taskDescription: string;
-  recovery: Awaited<ReturnType<typeof publishScheduledTaskFiles>>;
 }> {
   const taskEnv = resolveScheduledTaskRenderEnv(env, environment);
   const scriptPath = resolveTaskScriptPath(taskEnv);
-  const taskLaunchPath = resolveTaskLauncherScriptPath(taskEnv, scriptPath);
+  const taskLaunchPath =
+    taskEnv.OPENCLAW_SERVICE_KIND !== "node" && resolveTaskUser(taskEnv)
+      ? scriptPath
+      : resolveTaskLauncherScriptPath(taskEnv, scriptPath);
   const taskDescription = resolveGatewayServiceDescription({
     env: taskEnv,
     description,
   });
+  const scriptEnv = environment ? { ...environment } : {};
+  for (const key of CALLER_OWNED_SERVICE_IDENTITY_KEYS) {
+    const value = taskEnv[key]?.trim();
+    if (value) {
+      scriptEnv[key] = value;
+    }
+  }
   const script = buildTaskScript({
     description: taskDescription,
     programArguments,
     workingDirectory,
-    environment: resolveScheduledTaskScriptEnvironment(taskEnv, environment),
+    environment: Object.keys(scriptEnv).length > 0 ? scriptEnv : undefined,
   });
   const files = [
     { path: scriptPath, contents: encodeWindowsLauncherScript({ format: "cmd", content: script }) },
@@ -170,8 +175,8 @@ async function writeScheduledTaskScript({
       contents: encodeWindowsLauncherScript({ format: "vbs", content: launcher }),
     });
   }
-  const recovery = await publishScheduledTaskFiles(files, definitionTransaction);
-  return { scriptPath, taskLaunchPath, taskDescription, recovery };
+  await publishScheduledTaskFiles(files, definitionTransaction, beforePublish);
+  return { scriptPath, taskLaunchPath, taskDescription };
 }
 
 export async function stageScheduledTask({
@@ -179,9 +184,7 @@ export async function stageScheduledTask({
   ...args
 }: GatewayServiceInstallArgs): Promise<{ scriptPath: string }> {
   const { scriptPath } = await writeScheduledTaskScript(args);
-  writeFormattedLines(stdout, [{ label: "Staged task script", value: scriptPath }], {
-    leadingBlankLine: true,
-  });
+  writeFormattedLines(stdout, [{ label: "Staged task script", value: scriptPath }]);
   return { scriptPath };
 }
 
@@ -203,11 +206,38 @@ async function activateScheduledTask(
 ): Promise<ScheduledTaskActivation | "startup-fallback"> {
   const taskDescription = params.description ?? "OpenClaw Gateway";
   const taskName = resolveTaskName(params.env);
+  const original = params.registration?.xml;
+  // Password credentials are absent from exported XML. Re-registering would discard
+  // an operator's working unattended account; refresh its launcher files in place.
+  if (
+    original &&
+    new DOMParser()
+      .parseFromString(original, "text/xml")
+      .querySelector("Principals > Principal > LogonType")?.textContent === "Password"
+  ) {
+    assertGatewayServiceUpdateCurrent();
+    params.onActivation?.();
+    const activation = await runScheduledTaskOrThrow({
+      taskName,
+      env: params.env,
+      scriptPath: params.scriptPath,
+      allowFallback: false,
+    });
+    writeFormattedLines(params.stdout, [
+      { label: "Updated task script", value: params.scriptPath },
+      {
+        label: "Startup mode",
+        value: "Preserved Password task (operator-managed account and triggers)",
+      },
+    ]);
+    return activation;
+  }
   const quotedLaunchPath = quoteSchtasksArg(params.taskLaunchPath);
   let expectedXml = buildScheduledTaskXml({
     taskDescription,
     taskUser: resolveTaskUser(params.env),
     launchPath: params.taskLaunchPath,
+    interactive: params.env.OPENCLAW_SERVICE_KIND === "node",
   });
   if (params.definitionTransaction?.preservePolicy?.length) {
     expectedXml = preserveServicePolicyXml(
@@ -235,8 +265,7 @@ async function activateScheduledTask(
   let create: Awaited<ReturnType<typeof execSchtasks>>;
   try {
     const xmlArgs = ["/Create", "/F", "/TN", taskName, "/XML", xmlPath];
-    // The XML owns UserId and InteractiveToken. `/NP` overrides that principal
-    // with a non-interactive S4U logon, so a successful task never starts here.
+    // The XML owns the account and logon type; CLI credential flags must not override it.
     await params.definitionTransaction?.taskPrepared(expectedXml);
     params.definitionTransaction?.assertCurrent();
     assertGatewayServiceUpdateCurrent();
@@ -293,14 +322,11 @@ async function activateScheduledTask(
       });
       params.registration?.retainRecovery();
       await launchFallbackTaskScript(params.env);
-      writeFormattedLines(
-        params.stdout,
-        [
-          { label: "Installed Windows login item", value: startupEntryPath },
-          { label: "Task script", value: params.scriptPath },
-        ],
-        { leadingBlankLine: true },
-      );
+      writeFormattedLines(params.stdout, [
+        { label: "Installed Windows login item", value: startupEntryPath },
+        { label: "Startup mode", value: "Per-user desktop (requires interactive logon)" },
+        { label: "Task script", value: params.scriptPath },
+      ]);
       return "startup-fallback";
     }
     throw new Error(`schtasks create failed: ${detail}`.trim());
@@ -318,14 +344,19 @@ async function activateScheduledTask(
     allowFallback: params.definitionTransaction ? false : undefined,
   });
   // Ensure we don't end up writing to a clack spinner line (wizards show progress without a newline).
-  writeFormattedLines(
-    params.stdout,
-    [
-      { label: updating ? "Updated Scheduled Task" : "Installed Scheduled Task", value: taskName },
-      { label: "Task script", value: params.scriptPath },
-    ],
-    { leadingBlankLine: true },
-  );
+  writeFormattedLines(params.stdout, [
+    { label: updating ? "Updated Scheduled Task" : "Installed Scheduled Task", value: taskName },
+    {
+      label: "Startup mode",
+      value:
+        create.code !== 0
+          ? "Existing task policy retained (inspect Task Scheduler)"
+          : params.env.OPENCLAW_SERVICE_KIND !== "node" && resolveTaskUser(params.env)
+            ? "Unattended (S4U; boot and logon; no stored password)"
+            : "Per-user desktop (requires interactive logon)",
+    },
+    { label: "Task script", value: params.scriptPath },
+  ]);
   return activation;
 }
 
@@ -334,6 +365,7 @@ export async function installScheduledTask(
 ): Promise<{ scriptPath: string }> {
   let restoreTask: Awaited<ReturnType<typeof backupScheduledTaskDefinition>> | undefined;
   let staged: Awaited<ReturnType<typeof writeScheduledTaskScript>> | undefined;
+  let recovery: ScheduledTaskFileRecovery | undefined;
   const warn = args.warn ?? ((message: string) => args.stdout.write(`${message}\n`));
   let activationAttempted = false;
   const install = async () => {
@@ -382,7 +414,61 @@ export async function installScheduledTask(
         resolveTaskScriptPath(resolveScheduledTaskRenderEnv(args.env, args.environment)),
       );
     }
-    staged = await writeScheduledTaskScript(args);
+    staged = await writeScheduledTaskScript(args, async (files) => {
+      recovery = files;
+      const assertOriginal = async () => {
+        await files?.assertPublished();
+        await restoreTask?.assertCurrent();
+        await args.definitionTransaction?.beforeWrite();
+        args.assertCurrent?.();
+      };
+      await assertOriginal();
+      const registered =
+        restoreTask?.registered ?? probeScheduledTaskExists(resolveTaskName(args.env));
+      if (registered === null) {
+        throw new Error("Scheduled Task registration could not be verified before replacement.");
+      }
+      if (!registered) {
+        return;
+      }
+      if (
+        isScheduledTaskDefinitelyNotRunning(resolveTaskName(fallbackEnv)) &&
+        (
+          await resolveFallbackRuntime(
+            fallbackEnv,
+            installedCommand,
+            "control",
+            performance.now() + WINDOWS_POWERSHELL_COLD_SPAWN_TIMEOUT_MS,
+          )
+        ).status === "stopped"
+      ) {
+        // An update may already own stopped-state custody. Observation must not reacquire it.
+        await assertOriginal();
+        return;
+      }
+      try {
+        // Stop against the original command; IgnoreNew cannot activate a rewritten running task.
+        const replaced = await stopRegisteredScheduledTask({
+          env: fallbackEnv,
+          stdout: args.stdout,
+          assertCurrent: args.assertCurrent,
+          beforeMutation: assertOriginal,
+          onProcessStopped: restoreTask?.recordStoppedProcess,
+          warn,
+          onEndMutation: () => {
+            activationAttempted = true;
+          },
+        });
+        if (replaced) {
+          throw new Error("Gateway ownership changed before Scheduled Task replacement.");
+        }
+      } catch (error) {
+        // A changed or unsettled task is not ours to end again during compensation.
+        restoreTask?.retainRecovery();
+        throw error;
+      }
+      await assertOriginal();
+    });
     const activation = await activateScheduledTask({
       env: activationEnv,
       stdout: args.stdout,
@@ -409,7 +495,7 @@ export async function installScheduledTask(
         : startupRuntime;
     if (takeoverRuntime?.status === "running" && takeoverRuntime.pid) {
       // The old launcher can still own the listener; terminate it and prove the replacement.
-      await terminateGatewayProcessTree(takeoverRuntime.pid, 300);
+      await terminateGatewayProcessTree(takeoverRuntime.pid);
       let scheduledTaskRunAccepted = false;
       try {
         // Re-reading ownership now would inspect the replacement command, not the captured fallback.
@@ -443,10 +529,10 @@ export async function installScheduledTask(
     return install();
   }
   return withGatewayServiceInstallationRecovery(install, async () => {
-    if (!staged?.recovery || !restoreTask) {
+    if (!recovery || !restoreTask) {
       return false;
     }
-    return restoreTask.restore(staged.recovery, activationAttempted);
+    return restoreTask.restore(recovery, activationAttempted);
   }).catch((error: unknown) => {
     if (
       (error instanceof GatewayServiceAuthorityError && error.outcome === "recovery-pending") ||

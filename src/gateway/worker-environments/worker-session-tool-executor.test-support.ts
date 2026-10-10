@@ -207,6 +207,7 @@ type WorkerSessionToolTestOptions = {
   collectExecutionIdentity?: boolean;
   operatorProfileId?: string;
   operatorScopes?: readonly string[];
+  inheritedToolPolicySource?: "sender";
 };
 
 async function createWorkerSessionToolTestFixture(
@@ -385,6 +386,7 @@ async function createWorkerSessionToolTestFixture(
     },
   );
   const executorParams: Parameters<typeof createWorkerSessionToolExecutor>[0] = {
+    inheritedToolPolicySource: options.inheritedToolPolicySource,
     resolveGatewayContext,
     placements,
     dispatchChild,
@@ -466,11 +468,13 @@ async function createWorkerSessionToolTestFixture(
       prepare: async () => ({
         policy: prepareCoreToolPolicy({}),
         presentation: createToolSurfacePresentationForTest(),
-        tools: createWorkerGatewayTools({
-          ...executorParams,
-          ...runtimeOptions,
-          identity: workerIdentity,
-        }).filter((tool) => placements.isWorkerTurnToolAuthorized(claim, tool.name)),
+        tools: (
+          await createWorkerGatewayTools({
+            ...executorParams,
+            ...runtimeOptions,
+            identity: workerIdentity,
+          })
+        ).filter((tool) => placements.isWorkerTurnToolAuthorized(claim, tool.name)),
       }),
     });
     bindWorkerTurnCapabilities(placements, claim, { toolSurface: runtime });

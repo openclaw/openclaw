@@ -54,14 +54,6 @@ export type PackageActivationPreparation = {
   launchers: Array<{ name: string; previous: string | null }>;
 };
 
-function readPackageActivationRuntime(): Buffer {
-  const source = resolveRuntimeWorkerUrl(packageActivationRuntimeEntrypoint);
-  if (!source.pathname.endsWith(".mjs")) {
-    throw new Error("Package publication recovery requires its built sealed helper.");
-  }
-  return fs.readFileSync(source);
-}
-
 function packageActivationRecoveryCommand(
   node: string,
   anchor: string,
@@ -189,8 +181,8 @@ export async function preparePackageActivationJournal(
         entry.previous === null ? null : packageActivationIdentity(destination, "launcher"),
     });
   }
-  const parentIdentity = packageActivationIdentity(parent, true);
-  const binIdentity = packageActivationIdentity(binDir, true);
+  const parentIdentity = packageActivationIdentity(parent, "parent");
+  const binIdentity = packageActivationIdentity(binDir, "parent");
   if (
     candidate.identity.split(":")[0] !== parentIdentity.split(":")[0] ||
     params.previous.identity.split(":")[0] !== parentIdentity.split(":")[0]
@@ -198,7 +190,7 @@ export async function preparePackageActivationJournal(
     throw new Error("Package publication recovery requires same-filesystem directories.");
   }
   // A completed receipt may be replaced only by this new, genuinely admitted
-  // operation in the same original store. Legacy/incomplete artifacts refuse.
+  // operation under its current fence. Legacy/incomplete artifacts refuse.
   assertPackageActivationLayout(anchor);
   const priorJournal = fs.lstatSync(resolvePackageActivationControl(anchor), {
     throwIfNoEntry: false,
@@ -229,13 +221,14 @@ export async function preparePackageActivationJournal(
     name: entry.name,
     source: entry.source,
     identity: entry.identity,
-    sourceParentIdentity: packageActivationIdentity(path.dirname(entry.source), true),
+    sourceParentIdentity: packageActivationIdentity(path.dirname(entry.source), "parent"),
   }));
   // Preflight the sealed helper before creating any blocking recovery artifact.
-  const helperBytes = sealPackageActivationSqliteLibrary(
-    readPackageActivationRuntime(),
-    sqliteLibrary,
-  );
+  const source = resolveRuntimeWorkerUrl(packageActivationRuntimeEntrypoint);
+  if (!source.pathname.endsWith(".mjs")) {
+    throw new Error("Package publication recovery requires its built sealed helper.");
+  }
+  const helperBytes = sealPackageActivationSqliteLibrary(fs.readFileSync(source), sqliteLibrary);
   assertCurrent();
   assertRuntime();
   // These objects remain inside the existing stage cleanup owner's prefix
@@ -275,13 +268,13 @@ export async function preparePackageActivationJournal(
       name: "anchor",
       source: stagedAnchor,
       identity: anchorIdentity,
-      sourceParentIdentity: packageActivationIdentity(path.dirname(stagedAnchor), true),
+      sourceParentIdentity: packageActivationIdentity(path.dirname(stagedAnchor), "parent"),
     },
     {
       name: "helper",
       source: stagedControl ? resolvePackageActivationHelper(anchor) : stagedHelper,
       identity: helperIdentity,
-      sourceParentIdentity: packageActivationIdentity(path.dirname(stagedHelper), true),
+      sourceParentIdentity: packageActivationIdentity(path.dirname(stagedHelper), "parent"),
     },
   );
   const descriptor = {

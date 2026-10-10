@@ -358,7 +358,11 @@ describe("resolveSidebarSessionSubtitle", () => {
     expect(
       hidden({
         ...workSession(),
-        attention: { kind: "error", reason: "⚠️ ✉️ Message failed: deployment unavailable" },
+        attention: {
+          kind: "error",
+          reason: "⚠️ ✉️ Message failed: deployment unavailable",
+          sourceSessionKey: "agent:main:deployment",
+        },
         agentStatusNote: "Waiting for deployment",
         lastMessagePreview: "The final reply is durable.",
       }),

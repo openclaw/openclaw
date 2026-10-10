@@ -18,6 +18,7 @@ import {
   assertOpenClawDatabasesReady,
   preflightOpenClawDatabaseSchemas,
 } from "./openclaw-database-preflight.js";
+import { clearOpenClawAgentIntegrityVerification } from "./openclaw-quarantine-store.js";
 import { closeOpenClawStateDatabaseForTest } from "./openclaw-state-db.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
@@ -52,6 +53,7 @@ function createFleet() {
   }
   const onAgentInspection = vi.fn();
   return {
+    config,
     env,
     paths,
     onAgentInspection,
@@ -71,6 +73,89 @@ function createFleet() {
       }),
   };
 }
+
+it("skips an unconfigured system-agent database across startup passes while keeping Doctor strict", async () => {
+  const fleet = createFleet();
+  const leftover = openOpenClawAgentDatabase({ agentId: "openclaw", env: fleet.env }).path;
+  closeOpenClawAgentDatabasesForTest();
+  closeOpenClawStateDatabaseForTest();
+  fs.writeFileSync(leftover, "not a configured database");
+  const before = fs.readFileSync(leftover);
+  await withAgentDatabaseStartupAdmission(async () => {
+    await expect(fleet.ready()).resolves.toBeUndefined();
+    expect(fleet.onAgentInspection).toHaveBeenLastCalledWith(
+      expect.objectContaining({ schemaInspectionCount: fleet.paths.length }),
+    );
+    await expect(
+      preflightOpenClawDatabaseSchemas({
+        env: fleet.env,
+        agentAdmissionConfig: fleet.config,
+        reuseStartupSchemaPreparation: true,
+        onAgentInspection: fleet.onAgentInspection,
+      }),
+    ).resolves.toEqual({ incompatible: [], indeterminate: [] });
+    expect(fleet.onAgentInspection).toHaveBeenLastCalledWith({
+      schemaInspectionCount: 0,
+      schemaProcessCount: 0,
+      schemaSnapshotCount: 0,
+    });
+    expect(readAgentDatabaseAdmissionRefusal("openclaw", { env: fleet.env })).toBeUndefined();
+  });
+  await expect(
+    assertOpenClawDatabasesReady({
+      env: fleet.env,
+      config: fleet.config,
+      operation: "doctor",
+      configuredAgentDatabaseTargets: [],
+    }),
+  ).rejects.toThrow();
+  expect(fs.readFileSync(leftover)).toEqual(before);
+});
+
+it.each(["historical", "retired shared"] as const)(
+  "does not activate %s database owners",
+  async (kind) => {
+    const fleet = createFleet();
+    const historyPath = path.join(
+      fleet.env.OPENCLAW_STATE_DIR,
+      "rollback-drill",
+      "openclaw-agent.sqlite",
+    );
+    const agentId = kind === "retired shared" ? "retired" : "first";
+    if (kind === "retired shared") {
+      fleet.config.session = { store: historyPath };
+    }
+    openOpenClawAgentDatabase({ agentId, path: historyPath, env: fleet.env });
+    closeOpenClawAgentDatabasesForTest();
+    closeOpenClawStateDatabaseForTest();
+    clearOpenClawAgentIntegrityVerification(historyPath, fleet.env);
+    const history = new (requireNodeSqlite().DatabaseSync)(historyPath);
+    try {
+      history.exec("PRAGMA journal_mode=DELETE;");
+    } finally {
+      history.close();
+    }
+    await withAgentDatabaseStartupAdmission(async () => {
+      await fleet.ready();
+      expect(readAgentDatabaseAdmissionRefusal("first", { env: fleet.env })).toBeUndefined();
+      expect(readAgentDatabaseAdmissionRefusal(agentId, { env: fleet.env })).toBeUndefined();
+    });
+  },
+);
+
+it("isolates an unreadable configured path while inspecting healthy agents", async () => {
+  const fleet = createFleet();
+  fleet.config.agents!.entries = { broken: {}, ...fleet.config.agents!.entries };
+  fs.writeFileSync(path.join(fleet.env.OPENCLAW_STATE_DIR, "agents", "broken"), "not a directory");
+  await withAgentDatabaseStartupAdmission(async () => {
+    await fleet.ready();
+    expect(readAgentDatabaseAdmissionRefusal("first", { env: fleet.env })).toBeUndefined();
+    expect(readAgentDatabaseAdmissionRefusal("broken", { env: fleet.env })).toMatchObject({
+      code: "agent-database-inspection-failed",
+      reason: expect.stringMatching(/ENOTDIR|not a directory/i),
+    });
+  });
+});
 
 it("keeps pending startup stores fenced without inspecting or copying them again in bootstrap", async () => {
   const fleet = createFleet();
@@ -153,6 +238,43 @@ it("carries fleet compatibility once into bootstrap while readiness always inspe
   expect(fleet.onAgentInspection).toHaveBeenLastCalledWith(
     expect.objectContaining({ schemaInspectionCount: fleet.paths.length }),
   );
+});
+
+it("preserves configured ownership when reusing an unchanged inspected database", async () => {
+  const fleet = createFleet();
+  await withAgentDatabaseStartupAdmission(async () => {
+    await fleet.ready();
+    const inspected = await preflightOpenClawDatabaseSchemas(
+      {
+        env: fleet.env,
+        agentAdmissionConfig: {
+          ...fleet.config,
+          agents: {
+            ...fleet.config.agents,
+            entries: { ...fleet.config.agents?.entries, alias: {} },
+          },
+        },
+        configuredAgentDatabaseTargets: [{ agentId: "alias", path: fleet.paths[0]! }],
+        reuseStartupSchemaPreparation: true,
+        onAgentInspection: fleet.onAgentInspection,
+      },
+      "runtime",
+    );
+    expect(inspected).toMatchObject({ incompatible: [], indeterminate: [] });
+    expect(inspected.agentRefusals).toEqual([
+      expect.objectContaining({
+        agentId: "alias",
+        embeddedOwnerId: "first",
+        code: "agent-database-ownership-mismatch",
+        paths: [fleet.paths[0]],
+      }),
+    ]);
+    expect(fleet.onAgentInspection).toHaveBeenLastCalledWith({
+      schemaInspectionCount: 0,
+      schemaProcessCount: 0,
+      schemaSnapshotCount: 0,
+    });
+  });
 });
 
 it.each(["WAL commit", "replacement", "new registration"] as const)(
