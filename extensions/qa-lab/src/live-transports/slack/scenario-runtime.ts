@@ -80,12 +80,24 @@ async function runSlackMessageScenario(
     const observedMessageStartIndex = environment.observedMessages.length;
     const messageWriteCursor = await environment.getMessageWriteCursor();
     const requestStartedAt = new Date();
-    const sent = await sendSlackChannelMessage({
-      channelId,
-      client: environment.context.driverClient,
-      text: run.input,
-      threadTs: typeof beforeRunResult === "object" ? beforeRunResult?.inputThreadTs : undefined,
-    });
+    const threadTs =
+      typeof beforeRunResult === "object" ? beforeRunResult?.inputThreadTs : undefined;
+    const owned =
+      environment.channelE2e && channelId === environment.channelId
+        ? await environment.channelE2e.send({
+            text: run.input,
+            mention: false,
+            threadId: threadTs,
+          })
+        : undefined;
+    const sent = owned
+      ? { channelId: owned.channelId, ts: owned.id }
+      : await sendSlackChannelMessage({
+          channelId,
+          client: environment.context.driverClient,
+          text: run.input,
+          threadTs,
+        });
     const requestThreadTs =
       (typeof beforeRunResult === "object" ? beforeRunResult?.inputThreadTs : undefined) ?? sent.ts;
     const observation = {
@@ -127,6 +139,14 @@ async function runSlackMessageScenario(
       threadTs: requestThreadTs,
       timeoutMs: scenario.timeoutMs,
     });
+    if (owned) {
+      await environment.channelE2e!.waitForReply({
+        afterMessageId: sent.ts,
+        threadId: threadTs,
+        textIncludes: run.matchText,
+        timeoutMs: scenario.timeoutMs,
+      });
+    }
     run.verify?.(reply.message, { requestThreadTs, sentTs: sent.ts });
     if (run.settleObservedMs) {
       await observeSlackScenarioMessages({
