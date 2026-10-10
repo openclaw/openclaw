@@ -114,6 +114,72 @@ describe("resolveCliAuthEpoch", () => {
     });
   });
 
+  it("separates Gemini CLI OAuth profile epochs by profile id", async () => {
+    let access = "access-a";
+    let refresh = "refresh-a";
+    const store: AuthProfileStore = createAuthProfileStoreFixture({
+      "google-gemini-cli:primary": {
+        type: "oauth",
+        provider: "google-gemini-cli",
+        access,
+        refresh,
+        expires: 1,
+        email: "user@example.test",
+        accountId: "google-account-1",
+        projectId: "project-1",
+      },
+      "google-gemini-cli:renamed": {
+        type: "oauth",
+        provider: "google-gemini-cli",
+        access,
+        refresh,
+        expires: 1,
+        email: "user@example.test",
+        accountId: "google-account-1",
+        projectId: "project-1",
+      },
+    });
+    setCliAuthEpochTestDeps({
+      readGeminiCliCredentialsCached: () => null,
+      loadAuthProfileStoreForRuntime: () => store,
+    });
+
+    const primary = await resolveCliAuthEpoch({
+      provider: "google-gemini-cli",
+      agentDir: "/agents/main/agent",
+      authProfileId: "google-gemini-cli:primary",
+      skipLocalCredential: true,
+    });
+    access = "access-b";
+    refresh = "refresh-b";
+    store.profiles["google-gemini-cli:primary"] = {
+      type: "oauth",
+      provider: "google-gemini-cli",
+      access,
+      refresh,
+      expires: 2,
+      email: "user@example.test",
+      accountId: "google-account-1",
+      projectId: "project-1",
+    };
+    const primaryAfterRefresh = await resolveCliAuthEpoch({
+      provider: "google-gemini-cli",
+      agentDir: "/agents/main/agent",
+      authProfileId: "google-gemini-cli:primary",
+      skipLocalCredential: true,
+    });
+    const renamed = await resolveCliAuthEpoch({
+      provider: "google-gemini-cli",
+      agentDir: "/agents/main/agent",
+      authProfileId: "google-gemini-cli:renamed",
+      skipLocalCredential: true,
+    });
+
+    expectCliAuthEpoch(primary);
+    expect(primaryAfterRefresh).toBe(primary);
+    expect(renamed).not.toBe(primary);
+  });
+
   it("keeps strict CLI bindings stable for a known OAuth principal", () => {
     let access = "access-a";
     let refresh = "refresh-a";
