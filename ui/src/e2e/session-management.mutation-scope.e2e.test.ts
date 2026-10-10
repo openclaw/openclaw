@@ -155,7 +155,9 @@ suite.define(() => {
         if (operation === "rename") {
           // The inline editor permits navigation while the mutation is pending;
           // the sidebar rename dialog intentionally holds focus until it settles.
-          await page.locator(".chat-pane__session-title-button").click();
+          await page
+            .getByRole("button", { name: "Rename session Original name", exact: true })
+            .click();
           const input = page.locator(".chat-pane__session-title-input");
           await input.fill("Renamed original");
           await input.press("Enter");

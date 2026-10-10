@@ -29,6 +29,7 @@ import type {
   ControlUiMockRequestHandler,
   MockGatewayControls,
   MockGatewayRequest,
+  MockGatewayRequestSelector,
   MockGatewayWindow,
 } from "./control-ui-e2e-contract.ts";
 import { createMockGatewayControls } from "./control-ui-e2e-controls.ts";
@@ -46,6 +47,7 @@ import {
   waitForControlUiInitialRoster,
 } from "./control-ui-e2e-readiness.ts";
 import { getSharedControlUiE2ePreview } from "./control-ui-e2e-shared-preview.ts";
+import { createControlUiMockDeferredRequests } from "./control-ui-mock-deferred-requests.ts";
 import { createControlUiMockPresence } from "./control-ui-mock-presence.ts";
 import { createControlUiMockReactions } from "./control-ui-mock-reactions.ts";
 import { createControlUiMockResponses } from "./control-ui-mock-responses.ts";
@@ -423,8 +425,11 @@ export type ControlUiMockGatewayScenario = {
   connectCapabilities?: string[];
   defaultAgentId?: string;
   deferredMethods?: string[];
+  deferredRequests?: MockGatewayRequestSelector[];
   /** Hold every request until resolveDeferred/rejectDeferred releases the method. */
   heldMethods?: string[];
+  /** Hold only requests matching these method and parameter selectors. */
+  heldRequests?: MockGatewayRequestSelector[];
   /** Fail each admission-dependent read this many times before serving its normal response. */
   startupPendingResponses?: number;
   /** Non-release gateway checkout branch surfaced in the sidebar footer. */
@@ -625,6 +630,21 @@ export function canRunPlaywrightChromium(chromiumExecutablePath: string): boolea
 // the Date.now() read and the pause; jumping to it fires nothing relevant.
 export async function pauseVirtualClock(page: Page): Promise<void> {
   await page.clock.pauseAt((await page.evaluate(() => Date.now())) + 5_000);
+}
+
+// New-session place catalog refreshes read placement policy before inventory. Mock
+// replies are delivered on page timers, so a paused virtual clock holds that read
+// until advanced; release it without reaching any retry deadline.
+export async function releasePlacementPolicyRead(
+  page: Page,
+  gateway: MockGatewayControls,
+  trigger: () => Promise<void>,
+): Promise<void> {
+  const match = { includeSessionPlacement: true };
+  const before = (await gateway.getRequests("agents.list", match)).length;
+  await trigger();
+  await gateway.waitForRequest("agents.list", { after: before, match });
+  await page.clock.runFor(1);
 }
 
 export async function startControlUiE2eServer(
@@ -960,7 +980,9 @@ function normalizeScenario(
     ],
     defaultAgentId,
     deferredMethods: scenario.deferredMethods ?? [],
+    deferredRequests: scenario.deferredRequests ?? [],
     heldMethods: scenario.heldMethods ?? [],
+    heldRequests: scenario.heldRequests ?? [],
     startupPendingResponses: scenario.startupPendingResponses ?? 0,
     devGitBranch: scenario.devGitBranch?.trim() || "",
     serverBuildId: scenario.serverBuildId?.trim() || sharedBuildInfo?.buildId || "e2e",
@@ -1063,7 +1085,7 @@ export function createControlUiMockGatewayInitScript(
     protocolVersion: PROTOCOL_VERSION,
     scenario: normalizeScenario(scenario),
   };
-  return `${json5BrowserSource}\n;(() => { const __name = (target) => target; (${installControlUiMockGateway.toString()})(${JSON.stringify(input)}, globalThis.JSON5.parse, ${createControlUiSessionFixtures.toString()}, ${createControlUiAttachmentFacts.toString()}, ${createControlUiMockResponses.toString()}, ${createControlUiMockSessionSubscriptions.toString()}, ${createControlUiMockPresence.toString()}, ${createControlUiMockReactions.toString()}); })();`;
+  return `${json5BrowserSource}\n;(() => { const __name = (target) => target; (${installControlUiMockGateway.toString()})(${JSON.stringify(input)}, globalThis.JSON5.parse, ${createControlUiSessionFixtures.toString()}, ${createControlUiAttachmentFacts.toString()}, ${createControlUiMockResponses.toString()}, ${createControlUiMockDeferredRequests.toString()}, ${createControlUiMockSessionSubscriptions.toString()}, ${createControlUiMockPresence.toString()}, ${createControlUiMockReactions.toString()}); })();`;
 }
 
 function installControlUiMockGateway(
@@ -1075,6 +1097,7 @@ function installControlUiMockGateway(
   createSessions: typeof createControlUiSessionFixtures,
   createAttachmentFacts: typeof createControlUiAttachmentFacts,
   createResponses: typeof createControlUiMockResponses,
+  createDeferredRequests: typeof createControlUiMockDeferredRequests,
   createSubscriptions: typeof createControlUiMockSessionSubscriptions,
   createPresence: typeof createControlUiMockPresence,
   createReactions: typeof createControlUiMockReactions,
@@ -1091,10 +1114,6 @@ function installControlUiMockGateway(
     method: string;
     params?: unknown;
     socket: MockWebSocket;
-  };
-  type DeferredMethod = {
-    method: string;
-    match?: Record<string, unknown>;
   };
   type MockTerminalSession = {
     sessionId: string;
@@ -1146,9 +1165,6 @@ function installControlUiMockGateway(
   } catch {
     // Opaque initial documents may not expose storage; the target page will.
   }
-  const deferredMethods: DeferredMethod[] = scenario.deferredMethods.map((method) => ({ method }));
-  const heldMethods = new Set(scenario.heldMethods);
-  const deferredResponses: DeferredResponse[] = [];
   const requests: MockGatewayRequest[] = [];
   const requestHandlers = new Map<string, ControlUiMockRequestHandler>();
   const pendingApprovals = new Map<string, Map<string, Record<string, unknown>>>();
@@ -1216,6 +1232,11 @@ function installControlUiMockGateway(
       groupRenames: () => groupsState.renames,
     },
     isRecord,
+  );
+  const deferredRequests = createDeferredRequests<DeferredResponse>(
+    scenario,
+    responseFixtures.matches,
+    responseFixtures.matchesExact,
   );
   let online = true;
   try {
@@ -2003,7 +2024,7 @@ function installControlUiMockGateway(
           name: scenario.assistantName,
         };
       case "agents.list":
-        return {
+        return responseFixtures.applySessionPlacement(params, {
           agents: [
             {
               id: scenario.defaultAgentId,
@@ -2017,7 +2038,7 @@ function installControlUiMockGateway(
           defaultId: scenario.defaultAgentId,
           mainKey: "main",
           scope: scenario.sessionScope,
-        };
+        });
       case "agents.files.list":
         return {
           agentId:
@@ -2369,40 +2390,6 @@ function installControlUiMockGateway(
     });
   }
 
-  function shouldDefer(method: string, params: unknown): boolean {
-    if (heldMethods.has(method)) {
-      return true;
-    }
-    const index = deferredMethods.findIndex(
-      (candidate) =>
-        candidate.method === method && responseFixtures.matches(params, candidate.match),
-    );
-    if (index < 0) {
-      return false;
-    }
-    deferredMethods.splice(index, 1);
-    return true;
-  }
-
-  function takeDeferredResponses(method: string): DeferredResponse[] {
-    const index = deferredResponses.findIndex((response) => response.method === method);
-    if (index < 0) {
-      throw new Error(`No deferred mock Gateway response for ${method}`);
-    }
-    if (!heldMethods.delete(method)) {
-      return deferredResponses.splice(index, 1);
-    }
-    // Startup can replace a request when connection scope settles. A held
-    // catalog releases every admitted request, not only its retired predecessor.
-    const responses = deferredResponses.filter((response) => response.method === method);
-    for (let i = deferredResponses.length - 1; i >= 0; i -= 1) {
-      if (deferredResponses[i]?.method === method) {
-        deferredResponses.splice(i, 1);
-      }
-    }
-    return responses;
-  }
-
   function parseFrame(raw: string | ArrayBufferLike | Blob | ArrayBufferView): BrowserFrame | null {
     if (typeof raw !== "string") {
       return null;
@@ -2505,8 +2492,8 @@ function installControlUiMockGateway(
         return;
       }
       requests.push({ id, method, params: frame.params });
-      if (shouldDefer(method, frame.params)) {
-        deferredResponses.push({ id, method, params: frame.params, socket: this });
+      if (deferredRequests.shouldDefer(method, frame.params)) {
+        deferredRequests.responses.push({ id, method, params: frame.params, socket: this });
         return;
       }
       const respond = (response: unknown) => {
@@ -2605,21 +2592,22 @@ function installControlUiMockGateway(
     deliverLatest(frame) {
       MockWebSocket.latest?.deliver(frame);
     },
-    deferNext(method, match) {
-      deferredMethods.push({ method, match });
-      return exposed.findRequests(method, match).length;
+    deferNext(method, match, options) {
+      deferredRequests.defer({ method, match, exactParams: options?.exactParams });
+      return exposed.findRequests(method, match, options).length;
     },
     emit(event, payload) {
       emitGatewayEvent(MockWebSocket.latest, event, payload);
     },
     // Capture and deferral must select the same RPC scope; child lists share the roster method.
-    findRequests: (method, match) =>
+    findRequests: (method, match, options) =>
       requests.filter(
         (request) =>
-          (!method || request.method === method) && responseFixtures.matches(request.params, match),
+          (!method || request.method === method) &&
+          deferredRequests.matches(request.params, { match, exactParams: options?.exactParams }),
       ),
-    rejectDeferred(method, error) {
-      for (const response of takeDeferredResponses(method)) {
+    rejectDeferred(method, error, options) {
+      for (const response of deferredRequests.take(method, options)) {
         response.socket.deliver({
           error: {
             code: error?.code ?? "INVALID_REQUEST",
@@ -2634,8 +2622,8 @@ function installControlUiMockGateway(
       }
     },
     requests,
-    resolveDeferred(method, payload) {
-      for (const response of takeDeferredResponses(method)) {
+    resolveDeferred(method, payload, options) {
+      for (const response of deferredRequests.take(method, options)) {
         const resolvedPayload = commitFixtureResponse(
           response.method,
           response.params,
@@ -2880,9 +2868,12 @@ export async function installMockGateway(
     scenario.awaitInitialRoster ??
     (!connectFails &&
       normalizedScenario.startupPendingResponses === 0 &&
-      ![...normalizedScenario.heldMethods, ...normalizedScenario.deferredMethods].some((method) =>
-        rosterGates.has(method),
-      ))
+      ![
+        ...normalizedScenario.heldMethods,
+        ...normalizedScenario.deferredMethods,
+        ...normalizedScenario.heldRequests.map((request) => request.method),
+        ...normalizedScenario.deferredRequests.map((request) => request.method),
+      ].some((method) => rosterGates.has(method)))
   ) {
     // Startup renders the selected descriptor before releasing the automatic roster.
     // Keep navigation's Response, but give ordinary scenarios the fully rendered roster.

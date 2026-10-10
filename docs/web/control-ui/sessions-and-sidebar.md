@@ -90,6 +90,14 @@ refreshes the page you are reading without changing your selection. A long messa
 uses the normal full-message reader without becoming a transcript reply, fork,
 or rewind target.
 
+The composer stays available while a new chat starts. You can keep typing and
+queue follow-up messages; they wait behind the initial prompt and keep their order.
+Before the Gateway confirms the new session, these follow-ups stay in the current
+tab, so keep it open. If creation fails, the original prompt, queued follow-ups,
+and unfinished follow-up draft remain available for retry. Once creation succeeds,
+follow-ups use the confirmed conversation’s normal outbox. A failed initial prompt
+keeps its follow-ups paused for review rather than sending them ahead of it.
+
 Browser drafts and unsent messages remain in the local queue. Once the Gateway
 accepts an ordinary browser message, it owns the approved input in durable
 custody. Collect mode consumes the accepted sources with their combined

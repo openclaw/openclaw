@@ -188,6 +188,13 @@ export type OpenClawStateWorkerOperations = RegisteredStateWorkerOperations &
       input: Omit<Parameters<typeof secretWrites.deleteSecretStoreEntryInDatabase>[0], "database">;
       output: void;
     };
+    "secrets.allowedHosts": {
+      input: Omit<
+        Parameters<typeof secretWrites.updateSecretStoreAllowedHostsInDatabase>[0],
+        "database"
+      >;
+      output: void;
+    };
     "secrets.purge": { input: SecretStoreExpiryCutoffs; output: number };
     "secrets.writeForConfigRef": {
       input: SecretStoreConfigRefWrite;

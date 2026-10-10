@@ -24,6 +24,7 @@ import {
 import { createDeferredCore } from "../shared/deferred.js";
 import { freezeJsonSnapshot } from "../shared/immutable-data.js";
 import { registerOpenClawAgentDatabaseAsyncResource } from "../state/openclaw-agent-db-resources.js";
+import { retainGatewayDeviceRevocation } from "./device-revocation.js";
 import {
   loadWorkerPlacementSessionRuntimeModule,
   resolveWorkerPlacementSessionStoreTarget,
@@ -310,32 +311,44 @@ export function createGatewayWorkerDispatchAdmission(
   loadSessionRuntime: () => Promise<WorkerPlacementSessionRuntime> = loadWorkerPlacementSessionRuntimeModule,
 ): WorkerPlacementDispatchAdmission {
   return async (identity, run, authorize, signal) => {
-    // v2026.9.8 Gateway contexts accept opaque dispatch/move authorization callbacks.
+    // The requested acknowledgment can release the RPC while dispatch still owns setup.
+    const releaseCaller = retainGatewayDeviceRevocation(authorize);
     const sourceAuthorize = captureExternalSessionCommitGuard(authorize);
-    signal?.throwIfAborted();
-    sourceAuthorize?.();
-    const runtime = await loadSessionRuntime();
-    const target = resolveWorkerPlacementSessionStoreTarget(runtime, getRuntimeConfig(), identity);
-    const entry = runtime.resolveCanonicalSessionEntryFromStoreKeys(target.store, target.storeKeys);
-    if (
-      !entry ||
-      target.agentId !== identity.agentId ||
-      target.canonicalKey !== identity.sessionKey
-    ) {
-      throw new WorkerPlacementAdmissionTargetError(
-        "Worker dispatch lost its canonical session target; retry.",
-      );
-    }
-    return await withGatewayWorkerSessionAdmission(
-      {
+    try {
+      signal?.throwIfAborted();
+      sourceAuthorize?.();
+      const runtime = await loadSessionRuntime();
+      const target = resolveWorkerPlacementSessionStoreTarget(
+        runtime,
+        getRuntimeConfig(),
         identity,
-        target,
-        expectedEntry: { sessionId: entry.sessionId, lifecycleRevision: entry.lifecycleRevision },
-        authorize: sourceAuthorize,
-        signal,
-        retainEntryFields: ["agentRuntimeOverride", "execNode"],
-      },
-      (source) => run(source.signal, source.assertCurrent),
-    );
+      );
+      const entry = runtime.resolveCanonicalSessionEntryFromStoreKeys(
+        target.store,
+        target.storeKeys,
+      );
+      if (
+        !entry ||
+        target.agentId !== identity.agentId ||
+        target.canonicalKey !== identity.sessionKey
+      ) {
+        throw new WorkerPlacementAdmissionTargetError(
+          "Worker dispatch lost its canonical session target; retry.",
+        );
+      }
+      return await withGatewayWorkerSessionAdmission(
+        {
+          identity,
+          target,
+          expectedEntry: { sessionId: entry.sessionId, lifecycleRevision: entry.lifecycleRevision },
+          authorize: sourceAuthorize,
+          signal,
+          retainEntryFields: ["agentRuntimeOverride", "execNode"],
+        },
+        (source) => run(source.signal, source.assertCurrent),
+      );
+    } finally {
+      releaseCaller?.();
+    }
   };
 }

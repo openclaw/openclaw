@@ -13,7 +13,11 @@ import {
   deferSqlitePostCommitPublication,
   hasSqlitePostCommitScope,
 } from "../infra/sqlite-post-commit.js";
-import { readSqliteDataVersion, runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
+import {
+  invalidateSqliteSchemaFacts,
+  readSqliteDataVersion,
+  runSqliteReadOperationSync,
+} from "../infra/sqlite-schema-facts.js";
 import { openSqliteReadOnlyDatabase } from "../infra/sqlite-snapshot-source.js";
 import { createSqliteTerminalOpenLatch } from "../infra/sqlite-terminal-open-latch.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
@@ -38,6 +42,8 @@ import {
   isOpenClawAgentDatabasePathCurrent,
 } from "./openclaw-agent-db-identity.js";
 import {
+  assertAgentDatabaseMaintenanceAuthority,
+  hasAgentDatabaseMaintenanceAuthority,
   readOpenClawAgentDatabaseWorkerLeaseReceiptFromClaim,
   recordOpenClawAgentDatabaseAdmission,
   releaseOpenClawAgentDatabaseLease,
@@ -183,6 +189,10 @@ export function deferOpenClawAgentPostCommitPublication(
 ): boolean {
   // Maintenance can mark projections dirty without scheduling runtime publication.
   if (!hasSqlitePostCommitScope(database.db)) {
+    return false;
+  }
+  if (hasAgentDatabaseMaintenanceAuthority()) {
+    assertAgentDatabaseMaintenanceAuthority();
     return false;
   }
   const lease = cache.leases.get(database.path);
@@ -694,6 +704,7 @@ export async function closeOpenClawAgentDatabaseByPathAsync(
 /** Read a database's durable role and agent owner without mutating it. */
 export function inspectOpenClawAgentDatabaseOwner(
   pathname: string,
+  options?: { revalidateSchema: true },
 ): OpenClawAgentDatabaseOwnerInspection {
   let db: DatabaseSync | undefined;
   try {
@@ -701,7 +712,7 @@ export function inspectOpenClawAgentDatabaseOwner(
     // not a verified owner. Only admitted handles can answer from cache.
     const resolvedPath = path.resolve(pathname);
     const opened = cache.databases.get(resolvedPath);
-    if (opened?.db.isOpen && !cache.failures.has(resolvedPath)) {
+    if (!options?.revalidateSchema && opened?.db.isOpen && !cache.failures.has(resolvedPath)) {
       runSqliteReadOperationSync(
         opened.db,
         () => assertSupportedAgentSchemaVersion(opened.db, pathname),
@@ -712,6 +723,9 @@ export function inspectOpenClawAgentDatabaseOwner(
     }
     db = openSqliteReadOnlyDatabase(pathname, { readOnly: true });
     setSqliteBusyTimeout(db, OPENCLAW_SQLITE_BUSY_TIMEOUT_MS);
+    if (options?.revalidateSchema) {
+      invalidateSqliteSchemaFacts(db);
+    }
     assertSupportedAgentSchemaVersion(db, pathname);
     const existing = readExistingAgentSchemaMeta(db);
     if (!existing) {

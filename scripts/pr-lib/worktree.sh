@@ -615,14 +615,18 @@ list_pr_worktrees() {
 }
 
 gc_pr_worktrees() {
-  local dry_run="${1:-false}"
+  local dry_run="${1:-false}" selected_pr="${2:-}"
+  [ -z "$selected_pr" ] || is_canonical_pr_number "$selected_pr" || return 2
   local root
   root=$(repo_root)
   cd "$root"
 
   local dir
   local removed=0
-  for dir in .worktrees/pr-*; do
+  # Select before locks or remote reads: scoped cleanup must not observe sibling PRs.
+  local directories=(".worktrees/pr-$selected_pr")
+  [ -n "$selected_pr" ] || directories=(.worktrees/pr-*)
+  for dir in "${directories[@]}"; do
     [ -d "$dir" ] || continue
     local pr
     if ! pr=$(pr_number_from_worktree_dir "$dir"); then
