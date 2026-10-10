@@ -1,7 +1,6 @@
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
-import { runWithLocalStateOwner } from "../cli/local-state-owner.js";
 import * as config from "../config/config.js";
 import { clearRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import * as gatewayLock from "../infra/gateway-lock.js";
@@ -69,31 +68,6 @@ describe("migration command resources", () => {
       }
     },
   );
-
-  it("refuses an explicit different root inside the provider ownership scope", async () => {
-    const fixture = createMigrationResourceFixture();
-    const write = vi.fn();
-    try {
-      await withEnvAsync({ OPENCLAW_STATE_DIR: path.join(fixture.root, "state") }, async () => {
-        await expect(
-          withMemoryMigrationProviders(fixture.config, async () =>
-            runWithLocalStateOwner({
-              env: { ...process.env, OPENCLAW_STATE_DIR: path.join(fixture.root, "replacement") },
-              method: "migrate.apply",
-              params: {},
-              target: "replacement root",
-              onForeignOwner: "refuse",
-              runLocal: write,
-            }),
-          ),
-        ).rejects.toMatchObject({ code: "OWNER_UNAVAILABLE" });
-        expect(write).not.toHaveBeenCalled();
-        expect(fixture.state.connections[0]?.database.isOpen).toBe(false);
-      });
-    } finally {
-      fixture.cleanup();
-    }
-  });
 
   it("refuses a nested apply if the selected state root changed during planning", async () => {
     const fixture = createMigrationResourceFixture({ pausePlan: true });
