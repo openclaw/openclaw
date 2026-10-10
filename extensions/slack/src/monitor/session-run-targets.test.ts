@@ -64,10 +64,10 @@ it("targets Stop at the live bound actor and revokes it on rebind or generation 
     const input = {
       ctx,
       account: createSlackTestAccount(),
-      chatType: "direct" as const,
-      intent: "stop" as const,
+      chatType: "direct",
+      intent: "stop",
       message: {
-        type: "message" as const,
+        type: "message",
         channel: "D1",
         channel_type: "im",
         user: "U1",
@@ -75,7 +75,7 @@ it("targets Stop at the live bound actor and revokes it on rebind or generation 
         ts: "2.000",
         thread_ts: "1.000",
       },
-    };
+    } satisfies Parameters<typeof resolveSlackSessionEventRoutingContext>[0];
     await withIncognitoSessionBinding({ actor }, async () => {
       const sql = observeHostDataSql();
       try {

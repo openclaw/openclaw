@@ -1,15 +1,15 @@
 import type { Message } from "grammy/types";
 import { formatMediaPlaceholderText } from "openclaw/plugin-sdk/channel-inbound";
-import { resolveStoredModelOverrideAsync } from "openclaw/plugin-sdk/command-auth-native";
 import type { OpenClawConfig, TelegramAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolvePromptHistoryLimit } from "openclaw/plugin-sdk/number-runtime";
 import {
   captureSessionEntryCurrentCheck,
   composeSessionEntryCommitGuards,
+  readAmbientTranscriptWatermarkAsync,
+  resolveStoredModelOverrideAsync,
 } from "openclaw/plugin-sdk/session-binding-runtime";
 import {
   getSessionEntryAsync,
-  readAmbientTranscriptWatermarkAsync,
   resolveAmbientTranscriptWatermarkKey,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { asFiniteNumber } from "openclaw/plugin-sdk/string-coerce-runtime";

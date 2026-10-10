@@ -10,7 +10,7 @@ vi.mock("openclaw/plugin-sdk/session-binding-runtime", async (importOriginal) =>
   const actual =
     await importOriginal<typeof import("openclaw/plugin-sdk/session-binding-runtime")>();
   const { createDiscussionSessionRuntimeMock } = await import("./session-source-test-support.js");
-  return createDiscussionSessionRuntimeMock(actual);
+  return { ...actual, ...createDiscussionSessionRuntimeMock(actual) };
 });
 import { resolveClickClackAccount } from "../accounts.js";
 import { createClickClackClient } from "../http-client.js";

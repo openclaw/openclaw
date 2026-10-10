@@ -1,9 +1,9 @@
 import { resolveDefaultModelForAgent } from "openclaw/plugin-sdk/agent-runtime";
+import { resolveEffectiveAgentRuntime } from "openclaw/plugin-sdk/command-auth-native";
 import {
-  resolveEffectiveAgentRuntime,
+  captureSessionEntryCurrentCheck,
   resolveStoredModelOverrideAsync,
-} from "openclaw/plugin-sdk/command-auth-native";
-import { captureSessionEntryCurrentCheck } from "openclaw/plugin-sdk/session-binding-runtime";
+} from "openclaw/plugin-sdk/session-binding-runtime";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { SlackMonitorContext } from "./context.js";

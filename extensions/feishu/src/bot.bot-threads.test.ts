@@ -36,7 +36,8 @@ vi.mock("./reply-dispatcher.js", () => ({
     ensureNoVisibleReplyFallback: vi.fn(),
   })),
 }));
-vi.mock("./reasoning-preview.js", () => ({
+vi.mock("./reasoning-preview.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./reasoning-preview.js")>()),
   resolveFeishuReasoningPreviewEnabled: vi.fn(async () => ({
     enabled: false,
     isCurrent: () => true,

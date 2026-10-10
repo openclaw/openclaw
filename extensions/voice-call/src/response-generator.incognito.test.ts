@@ -4,6 +4,7 @@ import {
   registerVirtualTestPlugin,
 } from "openclaw/plugin-sdk/plugin-test-contracts";
 import {
+  createPluginRuntimeMock,
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
@@ -50,16 +51,13 @@ it("uses the actor for an explicit same-agent key and the native owner for gener
     meta: { durationMs: 1, aborted: false },
   }));
   const agentRuntime = {
+    ...createPluginRuntimeMock().agent,
     session,
-    defaults: { provider: "openai", model: "gpt-4.1-mini" },
     resolveAgentDir: () => "/synthetic/agent",
     resolveAgentWorkspaceDir: () => "/synthetic/workspace",
-    ensureAgentWorkspace: async () => {},
     resolveAgentIdentity: () => ({ name: "Voice fixture" }),
-    resolveThinkingDefault: () => "off" as const,
-    resolveAgentTimeoutMs: () => 5_000,
     runEmbeddedAgent,
-  } as OpenClawPluginApi["runtime"]["agent"];
+  } satisfies OpenClawPluginApi["runtime"]["agent"];
   const run = (explicitSessionKey?: string) =>
     generateVoiceResponse({
       voiceConfig: VoiceCallConfigSchema.parse({}),

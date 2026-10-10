@@ -34,7 +34,12 @@ export function createDiscussionSessionRuntimeMock(actual: SessionBindingRuntime
         return (
           params.isActive?.() !== false &&
           (current === undefined) === (expected === undefined) &&
-          fields.every((field) => isDeepStrictEqual(current?.[field], expected?.[field]))
+          fields.every((field) =>
+            isDeepStrictEqual(
+              current ? Reflect.get(current, field) : undefined,
+              expected ? Reflect.get(expected, field) : undefined,
+            ),
+          )
         );
       };
       const assertCurrent = () => {

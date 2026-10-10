@@ -46,6 +46,7 @@ vi.mock("../session-transcript-title-reader.js", () => ({
 vi.mock("./session-change-event.js", () => ({
   emitSessionsChanged: mocks.emitSessionsChanged,
 }));
+// mock-isolation: handler fixtures supply the session owner; bound-owner suites exercise real storage.
 vi.mock("../session-utils-read-lifetime.js", () => ({
   withGatewaySessionEntryReadOnly: async (
     params: unknown,

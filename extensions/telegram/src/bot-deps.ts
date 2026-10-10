@@ -21,12 +21,12 @@ import { dispatchReplyWithBufferedBlockDispatcher } from "openclaw/plugin-sdk/re
 import { resolveInboundLastRouteSessionKey } from "openclaw/plugin-sdk/routing";
 import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
+import { readAmbientTranscriptWatermarkAsync } from "openclaw/plugin-sdk/session-binding-runtime";
 import {
   getSessionEntry,
   getSessionEntryAsync,
   readSessionUpdatedAtAsync,
   readAmbientTranscriptWatermark,
-  readAmbientTranscriptWatermarkAsync,
   resolveAmbientTranscriptWatermarkKey,
   resolveStorePath,
 } from "openclaw/plugin-sdk/session-store-runtime";

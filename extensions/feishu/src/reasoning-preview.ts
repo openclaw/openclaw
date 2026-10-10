@@ -29,7 +29,7 @@ export async function resolveFeishuReasoningPreviewEnabled(params: {
     }),
   );
   const prepared = await readCurrent();
-  const enabled = (level: "on" | "off" | "stream" | undefined) =>
+  const enabled = (level: string | undefined) =>
     level === "on" || level === "stream" || level === "off"
       ? level === "stream"
       : configDefault === "stream";

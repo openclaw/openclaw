@@ -14,8 +14,9 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { EmbeddedTuiBackend } from "./embedded-backend.js";
 
 const provider = vi.hoisted(() => ({ run: vi.fn() }));
-// The local adapter owns source selection and settlement; provider execution is the external boundary.
+// mock-isolation: source selection and settlement stay real; provider execution is the external boundary.
 vi.mock("../agents/agent-command.js", () => ({ agentCommandFromIngress: provider.run }));
+// mock-isolation: side questions stop at the provider boundary and return a deterministic reply.
 vi.mock("../agents/btw.js", () => ({
   runBtwSideQuestion: vi.fn(async () => ({ text: "A private side answer" })),
 }));

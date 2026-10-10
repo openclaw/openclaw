@@ -15,10 +15,12 @@ import {
   resolveCommandArgMenu,
   resolveEffectiveAgentRuntime,
   resolveFastModeState,
-  resolveStoredModelOverrideAsync,
 } from "openclaw/plugin-sdk/command-auth-native";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { captureSessionEntryCurrentCheck } from "openclaw/plugin-sdk/session-binding-runtime";
+import {
+  captureSessionEntryCurrentCheck,
+  resolveStoredModelOverrideAsync,
+} from "openclaw/plugin-sdk/session-binding-runtime";
 import { resolveStorePath, type SessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { withTelegramApiErrorLogging } from "./api-logging.js";

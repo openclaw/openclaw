@@ -1,4 +1,8 @@
-import { resolveStorePath, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import {
+  resolveStorePath,
+  upsertSessionEntry,
+  type SessionEntry,
+} from "openclaw/plugin-sdk/session-store-runtime";
 import {
   closeOpenClawAgentDatabasesAsync,
   observeHostDataSql,
@@ -60,7 +64,11 @@ export function registerFeishuReasoningPreviewTests(params: {
           isReasoningPreviewCurrent: prepared.isCurrent,
           prepareReasoningPreviewCurrent: prepared.prepareCurrent,
         });
-        const entry = { sessionId: "created-reasoning", updatedAt: 1, incognito: true };
+        const entry = {
+          sessionId: "created-reasoning",
+          updatedAt: 1,
+          incognito: true,
+        } satisfies SessionEntry;
         if (actor) {
           await actor.sessions.create(authority, { sessionKey, entry });
         } else {
