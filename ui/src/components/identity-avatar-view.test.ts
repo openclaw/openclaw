@@ -292,6 +292,7 @@ describe("shared identity avatar view", () => {
       await vi.waitFor(() => expect(image()?.getAttribute("src")).toBe("blob:view-1"));
       renderAvatar(resolveIdentityAvatarView(identity), second);
       expect(image()?.getAttribute("src")).toBe("blob:view-1");
+      expect(revoke).not.toHaveBeenCalledWith("blob:view-1");
       expect(avatarRequests).toBe(2);
       renderAvatar(
         resolveIdentityAvatarView({

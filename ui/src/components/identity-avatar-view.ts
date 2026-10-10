@@ -2,7 +2,8 @@ import { html, noChange, nothing, type AttributePart } from "lit";
 import { AsyncDirective } from "lit/async-directive.js";
 import { Directive, directive } from "lit/directive.js";
 import { guard } from "lit/directives/guard.js";
-import { until, UntilDirective } from "lit/directives/until.js";
+import { until } from "lit/directives/until.js";
+import { createRoot, createSignal, flush } from "solid-js";
 import {
   isThemeAvatarHatId,
   type ThemeBranding,
@@ -11,7 +12,7 @@ import { isReservedSystemAgentId } from "../../../src/system-agent/agent-id.js";
 import { inferControlUiPublicAssetPath } from "../app/public-assets.ts";
 import { currentThemeBranding, subscribeThemeBranding } from "../app/theme-branding.ts";
 import { readAvatarGatewayContext } from "../lib/identity-avatar-context.ts";
-import { resolveAvatarImageUrl, retainAvatarImageUrl } from "../lib/identity-avatar-loader.ts";
+import { resolveAvatarImageUrl } from "../lib/identity-avatar-loader.ts";
 import {
   resolveAvatar,
   resolveAvatarInitials,
@@ -19,10 +20,14 @@ import {
   type IdentityAvatarInput,
   type ResolvedIdentityAvatar,
 } from "../lib/identity-avatar.ts";
-import "../styles/identity-avatar.css";
 import { resolveAvatarHat } from "./agent-avatar-hat.ts";
+import "../styles/identity-avatar.css";
 import { icons } from "./icons.ts";
 import { renderPluginThemeArtwork } from "./plugin-theme-artwork.ts";
+import {
+  IdentityAvatarImage,
+  setIdentityAvatarState as setAvatarState,
+} from "./solid/identity-avatar-image.tsx";
 import { renderThemeBrandIcon } from "./theme-brand-icon.ts";
 import { AVATAR_HAT_SPRITES } from "./theme-flair-sprites.ts";
 
@@ -48,14 +53,6 @@ export function resolveIdentityAvatarView(identity: IdentityAvatarInput): Identi
   };
 }
 
-type AvatarState = "none" | "pending" | "loaded" | "failed";
-
-function setAvatarState(element: Element, state: AvatarState) {
-  element.setAttribute("data-avatar-state", state);
-  element.classList.toggle("is-pending", state === "pending");
-  element.classList.toggle("is-fallback", state === "none" || state === "failed");
-}
-
 class IdentityAvatarClassDirective extends Directive {
   private hasImage = false;
 
@@ -78,121 +75,87 @@ class IdentityAvatarClassDirective extends Directive {
 /** Preserve image-event state when Lit reconciles an unchanged source. */
 export const identityAvatarClass = directive(IdentityAvatarClassDirective);
 
-function settleIdentityAvatarImage(event: Event, fallbackSelector: string, failed: boolean): void {
-  const image = event.currentTarget;
-  if (!(image instanceof HTMLImageElement)) {
-    return;
-  }
-  const wrapper = image.closest(fallbackSelector);
-  if (wrapper) {
-    setAvatarState(wrapper, failed ? "failed" : "loaded");
-  }
-}
-
-// Each rendered image owns its resource until replacement or disconnect.
-class IdentityAvatarImageDirective extends UntilDirective<unknown> {
+// Lit supplies the existing image node; the Solid component owns every resource and event.
+class IdentityAvatarImageDirective extends AsyncDirective {
   private part?: AttributePart;
-  private sourceUrl?: string;
-  private imageUrl: IdentityAvatarView["imageUrl"] = null;
-  private release?: () => void;
-  private value: unknown = nothing;
-  private resolvedUrl: string | null = null;
+  private view: Pick<IdentityAvatarView, "imageUrl" | "sourceUrl"> = { imageUrl: null };
   private fallbackSelector = "";
+  private onImageError?: () => void;
+  private dispose?: () => void;
+  private publish?: (view: Pick<IdentityAvatarView, "imageUrl" | "sourceUrl">) => void;
 
   override render(
     _imageUrl: IdentityAvatarView["imageUrl"],
     _sourceUrl: string | undefined,
     _fallbackSelector: string,
+    _onImageError?: () => void,
   ) {
-    return nothing;
+    return noChange;
   }
 
   override update(
     part: AttributePart,
-    [value, sourceUrl, fallbackSelector]: [
-      IdentityAvatarView["imageUrl"],
-      string | undefined,
-      string,
-    ],
+    [imageUrl, sourceUrl, fallbackSelector, onImageError]: Parameters<this["render"]>,
   ) {
-    // Only Gateway avatars need reacquisition; public image URLs stay on the page.
-    const inputUrl = sourceUrl ?? (typeof value === "string" ? value : undefined);
-    const avatarUrl = inputUrl
-      ? resolveTrustedAvatarUrl(inputUrl, readAvatarGatewayContext().origin)
-      : null;
-    const imageUrl = avatarUrl && value === inputUrl ? resolveAvatarImageUrl(avatarUrl) : value;
     this.part = part;
+    this.view = { imageUrl, sourceUrl };
     this.fallbackSelector = fallbackSelector;
-    this.sourceUrl = avatarUrl ?? undefined;
-    if (imageUrl !== this.imageUrl || !this.release) {
-      const release = this.isConnected ? retainAvatarImageUrl(imageUrl) : undefined;
-      this.release?.();
-      this.release = release;
-      this.imageUrl = imageUrl;
-      this.value =
-        typeof imageUrl === "string"
-          ? imageUrl
-          : (imageUrl?.then((url) => url ?? nothing) ?? nothing);
+    this.onImageError = onImageError;
+    if (this.isConnected) {
+      if (this.publish) {
+        this.publish(this.view);
+      } else {
+        this.mount();
+      }
+      flush();
     }
-    const result = super.update(part, [this.value, nothing]);
-    this.reconcileSource(result, false);
-    return result;
+    return noChange;
   }
 
-  override setValue(value: unknown) {
-    super.setValue(value);
-    this.reconcileSource(value, true);
-  }
-
-  private reconcileSource(value: unknown, settled: boolean) {
-    if (value === noChange || !this.part) {
-      return;
-    }
-    const image = this.part.element;
+  private mount() {
+    const image = this.part?.element;
     if (!(image instanceof HTMLImageElement)) {
       return;
     }
-    const url = typeof value === "string" ? value : null;
-    if (url !== this.resolvedUrl || !url) {
-      this.resolvedUrl = url;
-      const wrapper = image.closest(this.fallbackSelector);
-      if (wrapper) {
-        setAvatarState(wrapper, !url && settled ? "failed" : "pending");
-      }
-    }
-    // Attribute directives run before src is committed; cached decodes need no new event.
-    queueMicrotask(() => {
-      if (
-        url &&
-        this.resolvedUrl === url &&
-        image.getAttribute("src") === url &&
-        image.complete &&
-        image.naturalWidth > 0
-      ) {
-        const wrapper = image.closest(this.fallbackSelector);
-        if (wrapper) {
-          setAvatarState(wrapper, "loaded");
-        }
-      }
+    const source = this.view.sourceUrl;
+    const trusted = source
+      ? resolveTrustedAvatarUrl(source, readAvatarGatewayContext().origin)
+      : null;
+    createRoot((dispose) => {
+      this.dispose = dispose;
+      const [view, publish] = createSignal(this.view);
+      this.publish = publish;
+      const selector = () => this.fallbackSelector;
+      const onError = () => this.onImageError?.();
+      IdentityAvatarImage({
+        element: image,
+        get view() {
+          return view();
+        },
+        get fallbackSelector() {
+          return selector();
+        },
+        onImageError: onError,
+      });
     });
+    this.view = { ...this.view, sourceUrl: trusted ?? undefined };
   }
 
   override disconnected() {
-    super.disconnected();
-    this.release?.();
-    this.release = undefined;
+    this.dispose?.();
+    this.dispose = undefined;
+    this.publish = undefined;
   }
 
   override reconnected() {
-    if (this.part) {
-      const imageUrl = this.sourceUrl ? resolveAvatarImageUrl(this.sourceUrl) : this.imageUrl;
-      this.setValue(this.update(this.part, [imageUrl, this.sourceUrl, this.fallbackSelector]));
+    if (this.view.sourceUrl) {
+      this.view = { ...this.view, imageUrl: resolveAvatarImageUrl(this.view.sourceUrl) };
     }
-    super.reconnected();
+    this.mount();
+    flush();
   }
 }
 
-/** Local agent and profile routes share the same authenticated image lease. */
 const identityAvatarImage = directive(IdentityAvatarImageDirective);
 
 /** Render the shared authenticated user image with its canonical event lifecycle. */
@@ -216,15 +179,10 @@ export function renderIdentityAvatarImage({
   }
   return html`<img
     class=${className ?? nothing}
-    src=${identityAvatarImage(view.imageUrl, view.sourceUrl, fallbackSelector)}
+    src=${identityAvatarImage(view.imageUrl, view.sourceUrl, fallbackSelector, onImageError)}
     alt=${alt}
     aria-hidden=${ariaHidden ? "true" : nothing}
     referrerpolicy="no-referrer"
-    @error=${(event: Event) => {
-      settleIdentityAvatarImage(event, fallbackSelector, true);
-      onImageError?.();
-    }}
-    @load=${(event: Event) => settleIdentityAvatarImage(event, fallbackSelector, false)}
   />`;
 }
 
