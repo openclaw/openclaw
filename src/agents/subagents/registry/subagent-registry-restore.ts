@@ -43,7 +43,10 @@ import type { SubagentLaunchManager } from "./subagent-registry-run-launch.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { getSubagentRunRuntimeKey, isSameSubagentRunOwner } from "./subagent-run-generation.js";
 import { deleteSubagentSessionForCleanup } from "./subagent-session-cleanup.js";
-import { loadSubagentSessionEntry } from "./subagent-session-reconciliation.js";
+import {
+  loadSubagentSessionEntry,
+  resolveSubagentRunOrphanReason,
+} from "./subagent-session-reconciliation.js";
 
 const restoredQueuedFailureSettlementClaims = new WeakMap<object, object>();
 
@@ -454,6 +457,15 @@ export function createSubagentRegistryRestorer(config: {
         sessionEntry?.abortedLastRun === true ||
         isRetiredSubagentSessionOwner(entry, sessionEntry)
       ) {
+        continue;
+      }
+      if (
+        entry.execution.status !== "queued" &&
+        entry.execution.endedAt === undefined &&
+        resolveSubagentRunOrphanReason({ entry, includeStaleUnended: true })
+      ) {
+        // The sweeper owns active restored orphans so it can attribute a
+        // gateway death and publish a requester-visible terminal outcome.
         continue;
       }
       resumeRun(runId);

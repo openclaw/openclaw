@@ -11,7 +11,10 @@ import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 type GatewayBootLifecycleDatabase = Pick<DB, "gateway_boot_lifecycle">;
 
 export const gatewayBootOperations = {
-  "gatewayBoot.recover": (input: { bootId?: string; nowMs?: number }, context) =>
+  "gatewayBoot.recover": (
+    input: { bootId?: string; nowMs?: number; hostBootId?: string },
+    context,
+  ) =>
     runOpenClawStateWriteTransaction(({ db }) => {
       const nowMs = input.nowMs ?? Date.now();
       const decision = inspectGatewayCrashLoopBreakerInDatabase(db, nowMs);
@@ -43,6 +46,7 @@ export const gatewayBootOperations = {
           outcome: null,
           startup_reason: GATEWAY_CRASH_LOOP_RECOVERED_REASON,
           reason: null,
+          host_boot_id: input.hostBootId ?? null,
         }),
       );
       return recoveredBootId;

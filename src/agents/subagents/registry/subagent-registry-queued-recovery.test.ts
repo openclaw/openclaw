@@ -71,6 +71,7 @@ vi.mock("./subagent-session-reconciliation.js", async (importOriginal) => ({
     lifecycleRevision: fixture.lifecycleRevision,
     updatedAt: 1,
   })),
+  resolveSubagentRunOrphanReason: () => null,
 }));
 
 let state: OpenClawTestState;

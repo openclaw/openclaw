@@ -264,6 +264,9 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
           (input.command.scope.kind === "ids" && isStringArray(input.command.scope.runIds)))) ||
       input.command.type === "subagents.restore" ||
       input.command.type === "exec-approvals.read" ||
+      (input.command.type === "gatewayBootLifecycle.segments" &&
+        (input.command.sinceMs === undefined || typeof input.command.sinceMs === "number") &&
+        (input.command.limit === undefined || typeof input.command.limit === "number")) ||
       (input.command.type === "skillLibrary.read" &&
         isRecord(input.command.input) &&
         typeof input.command.input.kind === "string" &&

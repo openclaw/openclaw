@@ -198,6 +198,44 @@ describe("explicit copied shared-state preflight", () => {
     },
   );
 
+  it("classifies a copied database without the host boot id as startup-repairable", async () => {
+    const sourcePath = createExplicitStateDatabase();
+    execDatabase(sourcePath, "ALTER TABLE gateway_boot_lifecycle DROP COLUMN host_boot_id;");
+    const databasePath = path.join(
+      tempDirs.make("openclaw-copied-host-boot-preflight-"),
+      "candidate.sqlite",
+    );
+    fs.copyFileSync(sourcePath, databasePath);
+    const before = snapshotSourceFamily(sourcePath);
+
+    await expect(preflightOpenClawStateDatabasePath(databasePath)).resolves.toMatchObject({
+      foundVersion: OPENCLAW_STATE_SCHEMA_VERSION,
+      status: "startup-repairable",
+      requiresWrite: true,
+      issues: [
+        {
+          code: "missing-column",
+          objectName: "gateway_boot_lifecycle.host_boot_id",
+        },
+      ],
+    });
+    expect(snapshotSourceFamily(sourcePath)).toEqual(before);
+  });
+
+  it("accepts first-use session group columns without requiring a startup write", async () => {
+    const databasePath = createExplicitStateDatabase();
+    execDatabase(
+      databasePath,
+      "ALTER TABLE session_groups DROP COLUMN cwd; ALTER TABLE session_groups DROP COLUMN worktree;",
+    );
+
+    await expect(preflightOpenClawStateDatabasePath(databasePath)).resolves.toMatchObject({
+      status: "exact",
+      requiresWrite: false,
+      issues: [],
+    });
+  });
+
   it("rejects an explicit preflight path with sidecars without touching it", async () => {
     const databasePath = createExplicitStateDatabase();
     const sqlite = requireNodeSqlite();
