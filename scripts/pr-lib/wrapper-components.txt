@@ -344,6 +344,11 @@ src/agents/worktrees/repository-paths.ts
 src/agents/worktrees/run-end-lifecycle.ts
 src/agents/sandbox/registry-lifecycle.ts
 src/agents/sandbox/registry-publication.ts
+src/chat/sender-identity.ts
+src/sessions/communication-admission.ts
+src/sessions/communication-policy.ts
+src/sessions/input-provenance.ts
+src/sessions/user-turn-transcript.metadata.ts
 src/talk/client-voice-session-lifecycle.ts
 src/talk/client-voice-session-source.ts
 src/agents/worktrees/run-lease-owner.ts

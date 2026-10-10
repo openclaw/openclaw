@@ -20,6 +20,19 @@ import {
 } from "../chat-abort-lifecycle-internal.js";
 import type { ChatAbortControllerEntry } from "../chat-abort.types.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
+import { TerminalSessionManager } from "../terminal/session-manager.js";
+import {
+  agentTerminalOwner,
+  baseOpenRequest,
+  expectTerminalOpen,
+  makeFakePty,
+} from "../terminal/session-manager.test-helpers.js";
+import {
+  createWorkerInferenceSessionControls,
+  registerWorkerInferenceSessionControl,
+} from "../worker-environments/inference-control-internal.js";
+import { createWorkerInferenceServiceStub } from "../worker-environments/inference-control.test-helpers.js";
+import type { WorkerSessionPlacementRecord } from "../worker-environments/placement-record.js";
 import { drainAgentDeletionRuns } from "./agents-delete-drain.js";
 import { deleteGatewayAgent } from "./agents-delete.js";
 import { prepareSessionLifecycleDrain } from "./sessions-lifecycle-drain.js";
@@ -90,6 +103,110 @@ it("preserves another agent's replacement run and admissions in a shared store d
     }
   });
 });
+
+it.each([false, true])(
+  "coalesces physical session aliases while draining every terminal (placement: %s)",
+  async (placed) => {
+    await withOpenClawTestState({ label: "deletion-session-aliases" }, async (state) => {
+      const cfg = { agents: { entries: { doomed: {}, keeper: {} } } };
+      const sessionId = "cron-shared-session";
+      const baseKey = "agent:doomed:cron:job";
+      const runKey = `${baseKey}:run:run-id`;
+      const keys = placed ? [runKey, baseKey] : [baseKey, runKey];
+      vi.spyOn(sessionInventory, "readSessionEntrySummariesInWorker").mockResolvedValue(
+        keys.map((sessionKey) => ({ sessionKey, entry: { sessionId, updatedAt: 1 } })),
+      );
+      const controls = createWorkerInferenceSessionControls({
+        active: new Map(),
+        operations: new Map(),
+        unknownSettlements: new Map(),
+        recovered: Promise.resolve(),
+        settleAbort: async () => {},
+      });
+      const workerEnvironmentService = createWorkerInferenceServiceStub();
+      registerWorkerInferenceSessionControl(workerEnvironmentService, controls);
+      const placement: WorkerSessionPlacementRecord = {
+        agentId: "doomed",
+        sessionId,
+        sessionKey: baseKey,
+        state: "local",
+        executionMode: "worker-turn",
+        generation: 1,
+        turnClaim: null,
+        createdAtMs: 1,
+        updatedAtMs: 1,
+        stateChangedAtMs: 1,
+        environmentId: null,
+        activeOwnerEpoch: null,
+        workspaceBaseManifestRef: null,
+        remoteWorkspaceDir: null,
+        workerBundleHash: null,
+        lastTranscriptAckCursor: null,
+        lastLiveEventAckCursor: null,
+        terminalReason: null,
+        terminalAtMs: null,
+        recoveryError: null,
+      };
+      const admission = await beginSessionWorkAdmission({
+        agentId: "doomed",
+        scope: state.path("agents/doomed/sessions/sessions.json"),
+        identities: [baseKey, sessionId],
+        assertAllowed: () => {},
+        onInterrupt: () => admission.release(),
+      });
+      const terminals = new TerminalSessionManager({ emit: () => {} });
+      const ptys = keys.map(() => {
+        const pty = makeFakePty();
+        const kill = pty.kill.bind(pty);
+        pty.kill = () => {
+          kill();
+          pty.emitExit(0);
+        };
+        return pty;
+      });
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      try {
+        for (const [index, key] of keys.entries()) {
+          expectTerminalOpen(
+            await terminals.open(
+              baseOpenRequest({
+                agentId: "doomed",
+                owner: agentTerminalOwner(key, sessionId, "doomed"),
+                createBackend: async () => ptys[index]!,
+              }),
+            ),
+          );
+        }
+        const context = createDirectChatContext({
+          workerEnvironmentService,
+          terminalSessions: terminals,
+          ...(placed
+            ? {
+                workerSessionPlacementService: {
+                  getMany: () => new Map([[sessionId, placement]]),
+                },
+              }
+            : {}),
+        });
+        await expect(
+          drainAgentDeletionRuns("doomed", cfg, context, () => {}),
+        ).resolves.toBeUndefined();
+        expect(admission.isActive()).toBe(false);
+        expect(ptys.map((pty) => pty.killed)).toEqual([true, true]);
+        expect(terminals.size).toBe(0);
+        const released = controls.reserveSessionDrain(sessionId).accept();
+        released.start();
+        await released.drained;
+        released.release();
+      } finally {
+        terminals.disposeAll();
+        vi.useRealTimers();
+        admission.release();
+        await controls.stop();
+      }
+    });
+  },
+);
 
 it("joins already cancelled unkeyed work after a later journal check refuses", async () => {
   await withOpenClawTestState({ label: "deletion-partial-drain" }, async () => {

@@ -92,7 +92,7 @@ export class SessionLifecycleWorkspaceRecoveryError extends Error {
 function hasAuthoritativeSessionWork(
   params: SessionLifecycleParams,
   workerDrain: WorkerInferenceSessionDrain | undefined,
-  terminalDrain: AgentTerminalSessionDrain | undefined,
+  terminalDrains: readonly AgentTerminalSessionDrain[],
   queueTarget: SessionLifecycleQueueTarget,
   embeddedRun: EmbeddedRunDrainTarget | undefined,
 ): boolean {
@@ -112,7 +112,7 @@ function hasAuthoritativeSessionWork(
       params.context.workerSessionPlacementService?.getMany([sessionId]).get(sessionId)?.turnClaim,
     ) ||
     workerDrain?.hasWork() === true ||
-    terminalDrain?.hasWork() === true
+    terminalDrains.some((drain) => drain.hasWork())
   );
 }
 
@@ -132,7 +132,7 @@ export async function prepareSessionLifecycleDrain(
   let embeddedRun = params.embeddedRun ?? undefined;
   let workerDrain: AcceptedWorkerInferenceSessionDrain | undefined;
   let workerDrained: Promise<void> | undefined;
-  let terminalDrain: AgentTerminalSessionDrain | undefined;
+  const terminalDrains: AgentTerminalSessionDrain[] = [];
   let reclaimed: Promise<void> | undefined;
   let admittedWork: Promise<void> | undefined;
   let embeddedAborted = false;
@@ -146,7 +146,9 @@ export async function prepareSessionLifecycleDrain(
     }
     released = true;
     try {
-      terminalDrain?.release();
+      for (const drain of terminalDrains) {
+        drain.release();
+      }
     } finally {
       try {
         workerDrain?.release();
@@ -201,16 +203,21 @@ export async function prepareSessionLifecycleDrain(
             workerDrain.start(params.authorize);
           }
           params.authorize?.();
-          terminalDrain = params.context.terminalSessions?.beginAgentSessionDrain(
-            {
-              kind: "agent",
-              agentSessionKey: params.sessionKey,
-              agentSessionId: params.sessionId,
-              agentId: params.agentId,
-            },
-            params.authorize,
-          );
-          void terminalDrain?.drained.catch(() => {});
+          if (params.context.terminalSessions) {
+            for (const sessionKey of new Set([params.sessionKey, ...params.sessionKeys])) {
+              const drain = params.context.terminalSessions.beginAgentSessionDrain(
+                {
+                  kind: "agent",
+                  agentSessionKey: sessionKey,
+                  agentSessionId: params.sessionId,
+                  agentId: params.agentId,
+                },
+                params.authorize,
+              );
+              terminalDrains.push(drain);
+              void drain.drained.catch(() => {});
+            }
+          }
         }
 
         // Capture dispatch custody before cancellation can settle its placement.
@@ -345,7 +352,9 @@ export async function prepareSessionLifecycleDrain(
         ? (timeoutMs === null ? work : withTimeout(work, timeoutMs, label)).then(() => true)
         : Promise.resolve(true);
     const workerWork = waitForDrain(workerDrained, "worker inference lifecycle drain");
-    const terminalWork = waitForDrain(terminalDrain?.drained, "agent terminal lifecycle drain");
+    const terminalWork = Promise.all(
+      terminalDrains.map((drain) => waitForDrain(drain.drained, "agent terminal lifecycle drain")),
+    ).then((results) => results.every(Boolean));
     const drains = await Promise.all([
       waitForChatAbortControllerRemoval({
         entries: params.context.chatAbortControllers,
@@ -385,7 +394,7 @@ export async function prepareSessionLifecycleDrain(
         return hasAuthoritativeSessionWork(
           params,
           workerDrain,
-          terminalDrain,
+          terminalDrains,
           queueTarget,
           embeddedRun,
         );
@@ -399,7 +408,7 @@ export async function prepareSessionLifecycleDrain(
       workerDrained,
       ...(timeoutMs === null
         ? [
-            terminalDrain?.drained,
+            ...terminalDrains.map((drain) => drain.drained),
             admittedWork,
             embeddedAborted ? embeddedRun?.waitForEnd(null) : undefined,
             ...replyRuns

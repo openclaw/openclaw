@@ -50,7 +50,9 @@ export async function drainAgentDeletionRuns(
           Boolean(sessionId && identities.has(sessionId))),
     );
     const selectedScope = scoped?.[0] ?? scope;
-    const key = JSON.stringify([selectedScope, canonicalKey, sessionId]);
+    const key = JSON.stringify(
+      sessionId ? ["session", sessionId] : ["key", selectedScope, canonicalKey],
+    );
     const existing = targets.get(key);
     const sessionKeys = [...new Set([...keys, ...(existing?.sessionKeys ?? [])])];
     targets.set(key, {
@@ -116,6 +118,25 @@ export async function drainAgentDeletionRuns(
           (owner.kind === "none" ? agentId : owner.agentId)) === agentId
       ) {
         add(sessionKey, entry.sessionId);
+      }
+    }
+    // Inventory resolves key-only admissions into their physical session drains.
+    const physical = [...targets.values()].filter((target) => target.sessionId);
+    for (const [key, target] of targets) {
+      if (target.sessionId) {
+        continue;
+      }
+      const owners = physical.filter((owner) =>
+        owner.sessionKeys.some((alias) => target.sessionKeys.includes(alias)),
+      );
+      for (const owner of owners) {
+        owner.sessionKeys = [...new Set([...owner.sessionKeys, ...target.sessionKeys])];
+        owner.lifecycleIdentities = [
+          ...new Set([...owner.lifecycleIdentities, ...target.lifecycleIdentities]),
+        ];
+      }
+      if (owners.length) {
+        targets.delete(key);
       }
     }
     assertCurrent();
