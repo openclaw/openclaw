@@ -20,10 +20,17 @@ const thinkingLevels = ["low", "medium", "high"].map((id) => ({ id, label: id })
 const preference = { model: "openai/gpt-4.1-mini", thinkingLevel: "low", fastMode: true };
 
 suite.define(() => {
-  it.each(["browser", "identity"] as const)(
-    "uses configured defaults without erasing %s preferences",
-    async (source) => {
-      for (const policy of ["last-used", "configured"] as const) {
+  it.each([
+    { source: "browser", required: false },
+    { source: "identity", required: false },
+    { source: "browser", required: true },
+  ] as const)(
+    "uses configured defaults without erasing $source preferences (required: $required)",
+    async ({ source, required }) => {
+      const policies = required
+        ? (["configured"] as const)
+        : (["last-used", "configured"] as const);
+      for (const policy of policies) {
         await suite.withPage(
           { ...createControlUiE2eContextOptions(), reducedMotion: "reduce" },
           async ({ page }) => {
@@ -66,6 +73,7 @@ suite.define(() => {
                 "chat.metadata",
                 "chat.startup",
                 "sessions.create",
+                ...(required ? ["sessions.describe", "sessions.send"] : []),
                 ...(source === "identity" ? ["users.prefs.get", "users.prefs.set"] : []),
               ],
               sessions: [],
@@ -83,7 +91,23 @@ suite.define(() => {
                   defaultId: "main",
                   mainKey: "main",
                   scope: "agent",
+                  sessionPlacement: required
+                    ? {
+                        requiredProfile: {
+                          id: "dedicated",
+                          providerId: "device",
+                          executionModes: ["worker-turn"],
+                        },
+                      }
+                    : {},
                 },
+                "sessions.describe": {
+                  session: {
+                    key: "agent:main:configured-defaults-proof",
+                    placement: { state: "active" },
+                  },
+                },
+                "sessions.send": { runId: "configured-defaults-proof", status: "started" },
                 "users.prefs.get": {
                   status: "ok",
                   entries: { "new-session.migration.v1": true, "new-session.v1:main": preference },
@@ -334,6 +358,9 @@ suite.define(() => {
               await page.reload();
               await expect.poll(() => effort.getAttribute("data-chat-thinking-value")).toBe("low");
               await expect
+                .poll(() => page.locator(".new-session-page__message").inputValue())
+                .toBe("Resume this draft");
+              await expect
                 .poll(() => page.locator('[data-chat-model-select="true"]').textContent())
                 .toContain("GPT-4.1 mini");
             }
@@ -344,8 +371,9 @@ suite.define(() => {
             const request = await gateway.waitForRequest("sessions.create");
             expect(request.params).toMatchObject({ model: preference.model, thinkingLevel: "low" });
             expect(request.params).toHaveProperty("fastMode", true);
+            const initialTurn = required ? await gateway.waitForRequest("sessions.send") : request;
             if (policy === "configured" && source === "browser") {
-              expect(request.params).toMatchObject({
+              expect(initialTurn.params).toMatchObject({
                 attachments: [
                   {
                     fileName: "upgrade-notes.txt",
