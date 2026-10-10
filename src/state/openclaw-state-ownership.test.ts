@@ -633,6 +633,8 @@ describe("external shared-state ownership", () => {
     const env = createEnv();
     const databasePath = openOpenClawStateDatabase({ env }).path;
     closeOpenClawStateDatabaseForTest();
+    fs.renameSync(databasePath, `${databasePath}.seed`);
+    fs.copyFileSync(`${databasePath}.seed`, databasePath);
     const { DatabaseSync } = requireNodeSqlite();
     const drifted = new DatabaseSync(databasePath);
     try {
@@ -796,6 +798,8 @@ describe("external shared-state ownership", () => {
     const { path: databasePath, db: seeded } = openOpenClawStateDatabase({ env });
     const databaseLocation = seeded.location();
     closeOpenClawStateDatabaseForTest();
+    fs.renameSync(databasePath, `${databasePath}.seed`);
+    fs.copyFileSync(`${databasePath}.seed`, databasePath);
     const { DatabaseSync } = requireNodeSqlite();
     const originalExec = Object.getOwnPropertyDescriptor(DatabaseSync.prototype, "exec")?.value as
       | ((this: import("node:sqlite").DatabaseSync, sql: string) => void)

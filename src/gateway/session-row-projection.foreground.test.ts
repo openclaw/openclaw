@@ -238,6 +238,7 @@ it("retains transcript previews across metadata edits and refreshes them after a
         await sessions.patchSessionEntryCore(scope, () => ({
           displayName: `Renamed ${edit}`,
           pinnedAt: edit % 2 === 0 ? edit + 1 : undefined,
+          sidebarRoot: edit % 2 === 0 ? true : undefined,
           updatedAt: edit + 2,
         }));
         await projection.ensureMaterialized();
@@ -245,6 +246,7 @@ it("retains transcript previews across metadata edits and refreshes them after a
         await nextTurn();
         expect(projection.snapshot(query, { includeLastMessage: true }).row).toMatchObject({
           displayName: `Renamed ${edit}`,
+          sidebarRoot: edit % 2 === 0,
           lastMessagePreview: "Original preview",
         });
       }

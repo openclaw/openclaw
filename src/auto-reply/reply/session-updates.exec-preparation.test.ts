@@ -572,18 +572,17 @@ describe("completed compaction accounting", () => {
       expect(
         await incrementCompactionCount({
           ...fixture.params,
-          transcriptByteLatch: { kind: "set", value: latch },
+          transcriptByteCompactionLatch: latch,
         }),
       ).toBe(1);
       expect(fixture.read()?.transcriptByteCompactionLatch).toEqual(latch);
 
-      // Accounting that does not act on the host transcript keeps the stored latch.
       expect(await incrementCompactionCount(fixture.params)).toBe(2);
       expect(fixture.read()?.transcriptByteCompactionLatch).toEqual(latch);
 
       await incrementCompactionCount({
         ...fixture.params,
-        transcriptByteLatch: { kind: "clear" },
+        transcriptByteCompactionLatch: null,
       });
       expect(fixture.read()?.transcriptByteCompactionLatch).toBeUndefined();
     });

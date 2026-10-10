@@ -1,5 +1,4 @@
 import crypto from "node:crypto";
-import type { EmbeddedAgentCompactResult } from "../../agents/embedded-agent-runner/types.js";
 import {
   type ExecPolicyOverrides,
   prepareExecDefaults,
@@ -10,7 +9,7 @@ import { withSandboxRuntimeStatusInWorker } from "../../agents/sandbox/runtime-s
 import type { SessionEntry } from "../../config/sessions.js";
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { applySessionEntryOperation } from "../../config/sessions/session-accessor.sqlite-entry.js";
-import type { TranscriptByteCompactionLatchAccounting } from "../../config/sessions/session-entry-projection.js";
+import type { projectCompactionAccountingPatch } from "../../config/sessions/session-entry-projection.js";
 import { readSessionEntryInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { SessionEntryCohortReader } from "../../config/sessions/session-entry-read-runtime.types.js";
 import {
@@ -315,23 +314,20 @@ export async function ensureSkillSnapshot(params: {
 }
 
 /** Accounts completed compaction without creating or changing session ownership. */
-export async function incrementCompactionCount(params: {
-  agentId?: string;
-  sessionEntry?: SessionEntry;
-  sessionStore?: Record<string, SessionEntry>;
-  sessionKey?: string;
-  storePath: string;
-  now?: number;
-  amount?: number;
-  tokensAfter?: number;
-  compactionKind?: EmbeddedAgentCompactResult["compactionKind"];
-  expectedSession?: Pick<
-    InternalSessionEntry,
-    "sessionId" | "lifecycleRevision" | "activeWriterRunId"
-  >;
-  transcriptByteLatch?: TranscriptByteCompactionLatchAccounting;
-  authorize?: () => boolean;
-}): Promise<number | undefined> {
+export async function incrementCompactionCount(
+  params: Parameters<typeof projectCompactionAccountingPatch>[1] & {
+    agentId?: string;
+    sessionEntry?: SessionEntry;
+    sessionStore?: Record<string, SessionEntry>;
+    sessionKey?: string;
+    storePath: string;
+    expectedSession?: Pick<
+      InternalSessionEntry,
+      "sessionId" | "lifecycleRevision" | "activeWriterRunId"
+    >;
+    authorize?: () => boolean;
+  },
+): Promise<number | undefined> {
   const { sessionStore, sessionKey, storePath, authorize } = params;
   if (!sessionKey || !storePath) {
     return undefined;
@@ -348,9 +344,8 @@ export async function incrementCompactionCount(params: {
   };
   let committed = false;
   const authorityRevoked = new Error("compaction accounting authority revoked");
-  let persisted: InternalSessionEntry | null;
   try {
-    persisted = await applySessionEntryOperation(
+    const persisted = await applySessionEntryOperation(
       { agentId: params.agentId, storePath, sessionKey },
       {
         kind: "compaction-accounting",
@@ -360,7 +355,7 @@ export async function incrementCompactionCount(params: {
           compactionKind: params.compactionKind,
           now: params.now,
           tokensAfter: params.tokensAfter,
-          transcriptByteLatch: params.transcriptByteLatch,
+          transcriptByteCompactionLatch: params.transcriptByteCompactionLatch,
         },
       },
       {
@@ -382,14 +377,11 @@ export async function incrementCompactionCount(params: {
         },
       },
     );
+    return committed ? persisted?.compactionCount : undefined;
   } catch (error) {
     if (error === authorityRevoked) {
       return undefined;
     }
     throw error;
   }
-  if (!committed || !persisted) {
-    return undefined;
-  }
-  return persisted.compactionCount;
 }

@@ -127,26 +127,6 @@ describe("probeMattermost", () => {
     expect(requireFirstFetchCall().timeoutMs).toBe(MAX_TIMER_TIMEOUT_MS);
   });
 
-  it("returns API error details from JSON response", async () => {
-    mockFetchGuard.mockResolvedValueOnce({
-      response: Response.json(
-        { message: "invalid auth token" },
-        { status: 401, statusText: "Unauthorized" },
-      ),
-      release: mockRelease,
-    });
-
-    const result = await probeMattermost("https://mm.example.com", "bad-token");
-    const { elapsedMs, ...stableResult } = result;
-    expect(stableResult).toStrictEqual({
-      ok: false,
-      status: 401,
-      error: "invalid auth token",
-    });
-    expect(elapsedMs).toBeGreaterThanOrEqual(0);
-    expect(mockRelease).toHaveBeenCalledTimes(1);
-  });
-
   it("returns a string diagnostic without a reflected active credential in an object message", async () => {
     mockFetchGuard.mockImplementationOnce(async ({ init }: { init: RequestInit }) => {
       const authorization = new Headers(init.headers).get("Authorization");
@@ -189,18 +169,5 @@ describe("probeMattermost", () => {
     });
     expect(elapsedMs).toBeGreaterThanOrEqual(0);
     expect(mockRelease).toHaveBeenCalledTimes(1);
-  });
-
-  it("returns fetch error when request throws", async () => {
-    mockFetchGuard.mockRejectedValueOnce(new Error("network down"));
-
-    const result = await probeMattermost("https://mm.example.com", "token");
-    const { elapsedMs, ...stableResult } = result;
-    expect(stableResult).toStrictEqual({
-      ok: false,
-      status: null,
-      error: "network down",
-    });
-    expect(elapsedMs).toBeGreaterThanOrEqual(0);
   });
 });

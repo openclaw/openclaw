@@ -190,10 +190,7 @@ function persistCompactionBoundary(
         ...fresh!,
         ...projectCompactionAccountingPatch(fresh!, {
           compactionKind: "context-engine",
-          transcriptByteLatch: {
-            kind: "set",
-            value: params.transcriptByteCompactionLatch,
-          },
+          transcriptByteCompactionLatch: params.transcriptByteCompactionLatch,
         }),
       });
       writeSessionEntry(database, resolved.sessionKey, entry, {

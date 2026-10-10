@@ -55,8 +55,6 @@ export function recordTurnCompaction(
     count: (previous?.count ?? 0) + fact.count,
     currentContextSnapshot: fact.currentContextSnapshot ?? previous?.currentContextSnapshot,
     // A later native-only fact from the same writer cannot erase an earlier host rewrite.
-    ...(previous?.hostCompactionCommitted && !fact.hostCompactionCommitted
-      ? { hostCompactionCommitted: true as const }
-      : {}),
+    hostCompactionCommitted: fact.hostCompactionCommitted || previous?.hostCompactionCommitted,
   });
 }

@@ -240,10 +240,9 @@ describe("handleCompactCommand lifecycle authority", () => {
         expected.sessionId === currentSessionId ? { updatedAt: 1, ...expected } : undefined,
       );
       vi.mocked(incrementCompactionCount).mockImplementationOnce(
-        async ({ expectedSession, transcriptByteLatch }) => {
+        async ({ expectedSession, transcriptByteCompactionLatch }) => {
           expect(expectedSession?.sessionId).toBe("successor-session");
-          // Manual host-rewrite accounting must lift byte-preflight suppression.
-          expect(transcriptByteLatch).toEqual({ kind: "clear" });
+          expect(transcriptByteCompactionLatch).toBeNull();
           if (replaceBeforeAccounting) {
             currentSessionId = "replacement-session";
             return undefined;

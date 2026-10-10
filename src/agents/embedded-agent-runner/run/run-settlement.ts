@@ -62,9 +62,7 @@ export async function settleEmbeddedRun(input: {
           ...(committed?.previousSessionId !== undefined
             ? { previousSessionId: committed.previousSessionId }
             : {}),
-          // A committed host compaction rewrote the transcript, so its accounting must
-          // lift byte-preflight suppression instead of inheriting the keep default.
-          ...(committed ? { hostCompactionCommitted: true as const } : {}),
+          ...(committed ? { hostCompactionCommitted: true } : {}),
           target: {
             agentId: target.agentId,
             sessionId: committed?.entry.sessionId ?? target.sessionId,
@@ -90,7 +88,7 @@ export async function settleEmbeddedRun(input: {
         expectedSession: fact.target,
         amount: fact.count,
         tokensAfter: fact.currentContextSnapshot?.tokens,
-        transcriptByteLatch: fact.hostCompactionCommitted ? { kind: "clear" } : undefined,
+        transcriptByteCompactionLatch: fact.hostCompactionCommitted ? null : undefined,
         // Cancellation preserves bookkeeping, but a reused run id cannot lend a new admission.
         authorize: () =>
           compaction.authority !== undefined &&

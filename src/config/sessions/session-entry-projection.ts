@@ -81,17 +81,6 @@ export const COMPACTION_RUN_USAGE_CLEAR_PATCH = {
   estimatedCostUsd: undefined,
 } satisfies Partial<InternalSessionEntry>;
 
-// Accounting only rewrites the transcript-byte latch when the caller acted on the host
-// transcript. Native-thread rewrites leave the host transcript oversized, so unlatched
-// accounting must preserve the stored latch instead of clearing it.
-export type TranscriptByteCompactionLatchAccounting =
-  | { kind: "keep" }
-  | { kind: "clear" }
-  | {
-      kind: "set";
-      value: NonNullable<InternalSessionEntry["transcriptByteCompactionLatch"]>;
-    };
-
 export function projectCompactionAccountingPatch(
   current: InternalSessionEntry,
   params: {
@@ -99,7 +88,8 @@ export function projectCompactionAccountingPatch(
     compactionKind?: "context-engine" | "native-harness" | "server-endpoint";
     now?: number;
     tokensAfter?: number;
-    transcriptByteLatch?: TranscriptByteCompactionLatchAccounting;
+    /** Omission preserves host suppression; null clears it across the worker boundary. */
+    transcriptByteCompactionLatch?: InternalSessionEntry["transcriptByteCompactionLatch"] | null;
   },
 ): Partial<InternalSessionEntry> {
   const incrementBy = Math.max(0, params.amount ?? 1);
@@ -112,11 +102,9 @@ export function projectCompactionAccountingPatch(
   const patch: Partial<InternalSessionEntry> = {
     compactionCount: (current.compactionCount ?? 0) + incrementBy,
     updatedAt: params.now ?? Date.now(),
-    ...(params.transcriptByteLatch?.kind === "clear"
-      ? { transcriptByteCompactionLatch: undefined }
-      : params.transcriptByteLatch?.kind === "set"
-        ? { transcriptByteCompactionLatch: params.transcriptByteLatch.value }
-        : {}),
+    ...(params.transcriptByteCompactionLatch !== undefined
+      ? { transcriptByteCompactionLatch: params.transcriptByteCompactionLatch ?? undefined }
+      : {}),
     ...(incrementBy > 0 || tokensAfter !== undefined ? COMPACTION_RUN_USAGE_CLEAR_PATCH : {}),
     ...(incrementBy > 0 ? { contextBudgetStatus: undefined } : {}),
   };

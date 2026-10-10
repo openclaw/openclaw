@@ -17,7 +17,8 @@ import {
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { getReplyPayloadMetadata, isReplyPayloadTerminalContent } from "../reply-payload.js";
-import { accountAgentTurn, accountAgentTurnCompaction } from "./agent-runner-result-accounting.js";
+import { recordTurnCompaction } from "./agent-runner-compaction-accounting.js";
+import { accountAgentTurn } from "./agent-runner-result-accounting.js";
 import {
   agentAccountingPersistenceDiagnostic as diagnostic,
   createAgentAccountingPersistenceFixture,
@@ -310,47 +311,30 @@ it("accounts a completed compaction before an empty heartbeat skips reply prepar
   expect(fixture.read()?.pendingFinalDelivery).toBeUndefined();
 });
 
-const byteLatchSeed = (sessionId: string) => ({
-  activeBytes: 60_000,
-  sessionId,
-  maxBytes: 50_000,
-});
+describe.each(["ordinary", "followup"] as const)("%s byte-compaction accounting", (lane) => {
+  it.each([false, true])(
+    "preserves suppression unless host history changed (%s)",
+    async (hostCompactionCommitted) => {
+      const fixture = await createFixture();
+      const latch = { activeBytes: 60_000, sessionId: fixture.sessionId, maxBytes: 50_000 };
+      await fixture.replace({
+        ...fixture.context.activeSessionEntry!,
+        transcriptByteCompactionLatch: latch,
+      });
+      const compaction = fixture.recordCompaction({ currentContextTokens: 40 });
+      const fact = compaction.durable[0]!;
+      compaction.durable = [];
+      recordTurnCompaction(compaction, { ...fact, hostCompactionCommitted });
+      // A later native fact from the same writer must retain the prior host rewrite.
+      recordTurnCompaction(compaction, fact);
 
-it("lifts byte-preflight suppression when accounting a committed host compaction", async () => {
-  const fixture = await createFixture();
-  const compaction = fixture.recordCompaction({ currentContextTokens: 40 });
-  compaction.durable[0] = { ...compaction.durable[0]!, hostCompactionCommitted: true };
-  const entry = fixture.context.activeSessionEntry!;
-  await fixture.replace({
-    ...entry,
-    transcriptByteCompactionLatch: byteLatchSeed(entry.sessionId),
-  });
+      await fixture.account(lane, { compactionCount: 2, usage: { input: 120 } });
 
-  await accountAgentTurnCompaction({
-    compaction,
-    sessionStore: fixture.context.activeSessionStore,
-    replyOperation: fixture.context.replyOperation,
-  });
-
-  expect(fixture.read()?.transcriptByteCompactionLatch).toBeUndefined();
-});
-
-it("keeps byte-preflight suppression for native-only compaction accounting", async () => {
-  const fixture = await createFixture();
-  const compaction = fixture.recordCompaction({ currentContextTokens: 40 });
-  const entry = fixture.context.activeSessionEntry!;
-  await fixture.replace({
-    ...entry,
-    transcriptByteCompactionLatch: byteLatchSeed(entry.sessionId),
-  });
-
-  await accountAgentTurnCompaction({
-    compaction,
-    sessionStore: fixture.context.activeSessionStore,
-    replyOperation: fixture.context.replyOperation,
-  });
-
-  expect(fixture.read()?.transcriptByteCompactionLatch).toEqual(byteLatchSeed(entry.sessionId));
+      expect(fixture.read()?.transcriptByteCompactionLatch).toEqual(
+        hostCompactionCommitted ? undefined : latch,
+      );
+    },
+  );
 });
 
 it.each([

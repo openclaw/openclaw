@@ -1,4 +1,5 @@
 import path from "node:path";
+import { UPDATE_PARENT_RUNS_POST_ACTIVATION_INSPECTIONS_ENV } from "../../commands/doctor/shared/update-phase.js";
 import { resolveConfigPath } from "../../config/paths.js";
 import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint.js";
 import { resolveInstallWorkTimeoutMs } from "../../infra/install-mode-options.js";
@@ -350,6 +351,8 @@ export async function runPackageUpdateDoctor(params: PackageDoctorOptions) {
           compatibilityHostVersion: candidateHostVersion,
         }),
         [UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV]: doctorResultPath,
+        // finishUpdate runs the deferred inspections once the restarted Gateway is ready.
+        [UPDATE_PARENT_RUNS_POST_ACTIVATION_INSPECTIONS_ENV]: params.restart === false ? "0" : "1",
       },
       timeoutMs: resolveInstallWorkTimeoutMs(params.workTimeoutMs, params.timeoutMs),
       ...(runCommand ? { runCommand } : {}),

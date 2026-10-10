@@ -83,6 +83,7 @@ struct OpenClawVoiceNoteRecordingRow: View {
                 Image(systemName: "checkmark")
             }
             .buttonStyle(.borderedProminent)
+            .tint(OpenClawChatTheme.accent)
             .controlSize(.small)
             .accessibilityLabel("Finish voice note")
         }

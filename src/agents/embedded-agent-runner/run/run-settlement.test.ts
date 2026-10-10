@@ -6,6 +6,7 @@ import {
   withOpenClawTestState,
   type OpenClawTestState,
 } from "../../../test-utils/openclaw-test-state.js";
+import { createCommandCompactionAccounting } from "../../command/compaction-accounting.js";
 import type {
   CompactionAccountingFact,
   RunEmbeddedAgentParamsWithSessionFile,
@@ -355,7 +356,7 @@ describe("settleEmbeddedRun compaction identity", () => {
   });
 });
 
-describe("settleEmbeddedRun transcript-byte latch", () => {
+describe.each(["settlement", "command"] as const)("%s transcript-byte latch", (consumer) => {
   it.each([
     {
       title: "clears the latch once a committed host compaction is persisted",
@@ -382,12 +383,20 @@ describe("settleEmbeddedRun transcript-byte latch", () => {
           maxBytes: 50_000,
         },
       });
-      // Exercise the direct persistence route taken when no host captures the fact.
-      fixture.input.runInput.runParams.onCompactionAccounting = undefined;
+      const candidate = createCommandCompactionAccounting({
+        persistCounts: true,
+        onDurableFact: () => {},
+        refreshSessionEntry: () => {},
+      }).beginCandidate();
+      fixture.input.runInput.runParams.onCompactionAccounting =
+        consumer === "command" ? candidate.observe : undefined;
       if (committed) {
         await fixture.accept(fixture.target.sessionId);
       }
       await fixture.settle();
+      if (consumer === "command") {
+        await candidate.finish(fixture.loadEntry());
+      }
       const latch = fixture.loadEntry()?.transcriptByteCompactionLatch;
       if (latchedAfterSettle) {
         expect(latch).toEqual({

@@ -209,7 +209,8 @@ export async function runSessionSnapshotsHealth(ctx: DoctorHealthFlowContext): P
 
 export async function runConfigAuditScrubHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { maybeRepairLegacyRuntimeFiles } = await import("../commands/doctor-usage-cost-cache.js");
-  await maybeRepairLegacyRuntimeFiles(ctx.prompter.shouldRepair, ctx.env);
+  const warnings = await maybeRepairLegacyRuntimeFiles(ctx.prompter.shouldRepair, ctx.env);
+  recordDoctorHealthWarnings(ctx, [], warnings);
 }
 
 export async function runLegacyCronHealth(ctx: DoctorHealthFlowContext): Promise<void> {

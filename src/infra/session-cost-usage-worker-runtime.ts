@@ -23,7 +23,6 @@ import { restoreSessionColdTranscript } from "../config/sessions/session-cold-st
 import { listDurableSqliteTargetPathsForSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
 import { createMemoryTranscriptProjectionSource } from "../config/sessions/session-transcript-reconcile-memory.js";
-import { withSessionCostUsageWorkerDatabases } from "../config/sessions/session-transcript-worker-runtime.js";
 import { resolveStateDir } from "../config/state-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -60,6 +59,7 @@ import {
 } from "./session-cost-usage-pricing-context.js";
 import type { UsageCostResolver } from "./session-cost-usage-pricing.js";
 import { openUsageCostRefreshFailures } from "./session-cost-usage-refresh-health.js";
+import { withSessionCostUsageWorkerDatabases } from "./session-cost-usage-worker-scope.js";
 import {
   UsageCostWorkerReplyError,
   type UsageCostWorkerHostEffects,

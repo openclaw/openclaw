@@ -85,6 +85,7 @@ struct ExecCommandResolution {
         // Allowlist resolution must follow actual argv execution for wrappers.
         // `rawCommand` is caller-supplied display text and may be canonicalized.
         let shell = ExecShellWrapperParser.extractForAllowlist(command: command, rawCommand: rawCommand)
+        let commands: [[String]]
         if shell.isWrapper {
             // Fail closed when env modifiers precede a shell wrapper. This mirrors
             // system-run binding behavior where such invocations must stay bound to
@@ -99,27 +100,18 @@ struct ExecCommandResolution {
                 // treat this as an allowlist miss and require approval.
                 return []
             }
-            var resolutions: [ExecCommandResolution] = []
-            resolutions.reserveCapacity(segments.count)
-            for segment in segments {
-                guard let resolution = resolve(
-                    command: self.tokenizeShellWords(segment), cwd: cwd, env: env)
-                else {
-                    return []
-                }
-                resolutions.append(resolution)
-            }
-            return resolutions
+            commands = segments.map(self.tokenizeShellWords)
+        } else {
+            commands = [command]
         }
 
-        guard let resolution = resolve(
-            command: command,
-            cwd: cwd,
-            env: env)
-        else {
-            return []
+        var resolutions: [ExecCommandResolution] = []
+        resolutions.reserveCapacity(commands.count)
+        for command in commands {
+            guard let resolution = resolve(command: command, cwd: cwd, env: env) else { return [] }
+            resolutions.append(resolution)
         }
-        return [resolution]
+        return resolutions
     }
 
     static func resolveAllowAlwaysPatterns(
@@ -314,58 +306,45 @@ struct ExecCommandResolution {
             }
             unwrapped = envUnwrapped.command
         } else {
-            unwrapped = self.unwrapShellMultiplexerInvocation(command)
+            unwrapped = ExecShellMultiplexer.unwrap(command, policy: .allowlist)
         }
 
+        let children: [[String]]
+        let childRawCommand: String?
         if let unwrapped {
+            children = [unwrapped]
+            childRawCommand = rawCommand
+        } else {
+            let shell = ExecShellWrapperParser.extractForAllowlist(command: command, rawCommand: rawCommand)
+            if !shell.isWrapper {
+                guard let resolution = resolve(command: command, cwd: cwd, env: env),
+                      !self.isInterpreterLikePersistentGrantTarget(resolution),
+                      let pattern = ExecApprovalHelpers.allowlistPattern(command: command, resolution: resolution)
+                else { return }
+                let candidate = ExecAllowAlwaysPattern(
+                    pattern: pattern,
+                    argPattern: self.cwdBoundArgPattern(
+                        argv: command,
+                        cwd: cwd ?? FileManager.default.currentDirectoryPath))
+                if seen.insert(candidate).inserted { patterns.append(candidate) }
+                return
+            }
+            guard let shellCommand = shell.command,
+                  let segments = splitShellCommandChain(shellCommand) else { return }
+            children = segments.map(self.tokenizeShellWords)
+            childRawCommand = nil
+        }
+
+        for child in children {
             self.collectAllowAlwaysPatterns(
-                command: unwrapped,
+                command: child,
                 cwd: cwd,
                 env: env,
-                rawCommand: rawCommand,
+                rawCommand: childRawCommand,
                 depth: depth + 1,
                 patterns: &patterns,
                 seen: &seen)
-            return
         }
-
-        let shell = ExecShellWrapperParser.extractForAllowlist(command: command, rawCommand: rawCommand)
-        if shell.isWrapper {
-            guard let shellCommand = shell.command,
-                  let segments = splitShellCommandChain(shellCommand)
-            else {
-                return
-            }
-            for segment in segments {
-                let tokens = self.tokenizeShellWords(segment)
-                guard !tokens.isEmpty else {
-                    continue
-                }
-                self.collectAllowAlwaysPatterns(
-                    command: tokens,
-                    cwd: cwd,
-                    env: env,
-                    rawCommand: nil,
-                    depth: depth + 1,
-                    patterns: &patterns,
-                    seen: &seen)
-            }
-            return
-        }
-
-        guard let resolution = resolve(command: command, cwd: cwd, env: env),
-              !self.isInterpreterLikePersistentGrantTarget(resolution),
-              let pattern = ExecApprovalHelpers.allowlistPattern(command: command, resolution: resolution)
-        else {
-            return
-        }
-        let candidate = ExecAllowAlwaysPattern(
-            pattern: pattern,
-            argPattern: self.cwdBoundArgPattern(
-                argv: command,
-                cwd: cwd ?? FileManager.default.currentDirectoryPath))
-        guard seen.insert(candidate).inserted else { return }
-        patterns.append(candidate)
     }
 
     static func cwdBoundArgPattern(argv: [String], cwd: String) -> String {
@@ -406,45 +385,6 @@ struct ExecCommandResolution {
         "node", "nodejs", "osascript", "perl", "php", "pypy", "pypy3", "python", "python2", "python3",
         "r", "rscript", "ruby", "sed", "xargs",
     ])
-
-    private static func unwrapShellMultiplexerInvocation(_ argv: [String]) -> [String]? {
-        guard let token0 = argv.first?.trimmingCharacters(in: .whitespacesAndNewlines), !token0.isEmpty else {
-            return nil
-        }
-        let wrapper = ExecCommandToken.basenameLower(token0)
-        guard wrapper == "busybox" || wrapper == "toybox" else {
-            return nil
-        }
-
-        var appletIndex = 1
-        if appletIndex < argv.count, argv[appletIndex].trimmingCharacters(in: .whitespacesAndNewlines) == "--" {
-            appletIndex += 1
-        }
-        guard appletIndex < argv.count else {
-            return nil
-        }
-        let applet = argv[appletIndex].trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !applet.isEmpty else {
-            return nil
-        }
-
-        let normalizedApplet = ExecCommandToken.basenameLower(applet)
-        let shellWrappers = Set([
-            "ash",
-            "bash",
-            "dash",
-            "fish",
-            "ksh",
-            "powershell",
-            "pwsh",
-            "sh",
-            "zsh",
-        ])
-        guard shellWrappers.contains(normalizedApplet) else {
-            return nil
-        }
-        return Array(argv[appletIndex...])
-    }
 
     private static let unsafeReusableDispatchCarrierNames = Set([
         "arch",
