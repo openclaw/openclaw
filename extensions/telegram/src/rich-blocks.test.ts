@@ -250,6 +250,55 @@ describe("markdownToTelegramRichBlocks", () => {
     expect(blocks.some((block) => block.type === "table")).toBe(false);
   });
 
+  it("renders a table before a blockquote as a sibling block", () => {
+    const { blocks } = markdownToTelegramRichBlocks(
+      "| a | b |\n| --- | --- |\n| 1 | 2 |\n\n> quoted note",
+    );
+    expect(blocks.map((block) => block.type)).toEqual(["table", "blockquote"]);
+    const quote = blocks[1];
+    if (quote?.type !== "blockquote") {
+      return;
+    }
+    expect(quote.blocks.map((block) => block.type)).toEqual(["paragraph"]);
+  });
+
+  it("renders a table before a list as a sibling block", () => {
+    const { blocks } = markdownToTelegramRichBlocks(
+      "| a | b |\n| --- | --- |\n| 1 | 2 |\n\n- one\n- two",
+    );
+    expect(blocks.map((block) => block.type)).toEqual(["table", "list"]);
+    const list = blocks[1];
+    if (list?.type !== "list") {
+      return;
+    }
+    expect(list.items).toHaveLength(2);
+  });
+
+  it("keeps a table that opens a blockquote nested inside it", () => {
+    const { blocks } = markdownToTelegramRichBlocks(
+      "> | a | b |\n> | --- | --- |\n> | 1 | 2 |\n>\n> quoted note",
+    );
+    expect(blocks.map((block) => block.type)).toEqual(["blockquote"]);
+    const quote = blocks[0];
+    if (quote?.type !== "blockquote") {
+      return;
+    }
+    expect(quote.blocks.map((block) => block.type)).toEqual(["table", "paragraph"]);
+  });
+
+  it("keeps a table that opens a list item nested inside the list", () => {
+    const { blocks } = markdownToTelegramRichBlocks(
+      "- | a | b |\n  | --- | --- |\n  | 1 | 2 |\n- second",
+    );
+    expect(blocks.map((block) => block.type)).toEqual(["list"]);
+    const list = blocks[0];
+    if (list?.type !== "list") {
+      return;
+    }
+    expect(list.items[0]?.blocks.map((block) => block.type)).toEqual(["table"]);
+    expect(list.items[1]?.blocks.map((block) => block.type)).toEqual(["paragraph"]);
+  });
+
   it("keeps unsupported local links as visible text and wraps file refs as code", () => {
     const { blocks } = markdownToTelegramRichBlocks(
       "[scripts/yougile.py](/home/user/scripts/yougile.py#L41) and [config](./openclaw.json)",

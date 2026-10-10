@@ -1,5 +1,6 @@
 // Markdown → Bot API 10.3 InputRichBlock[] for Telegram rich messages.
 import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-contracts";
+import { getMarkdownTableSource } from "openclaw/plugin-sdk/markdown-table-runtime";
 import {
   FormatCapabilityProfile,
   isAutoLinkedFileRef,
@@ -62,9 +63,15 @@ type StructuralSegment =
   | { kind: "html"; start: number; end: number; node: Extract<HtmlNode, { kind: "element" }> }
   | { kind: "heading"; start: number; end: number; size: 1 | 2 | 3 | 4 | 5 | 6 }
   | { kind: "code_block"; start: number; end: number; language?: string }
-  | { kind: "blockquote"; start: number; end: number }
-  | { kind: "list"; start: number; end: number; source: MarkdownRichListSource }
-  | { kind: "table"; start: number; end: number; table: MarkdownTableMeta };
+  | { kind: "blockquote"; start: number; end: number; sourceLine?: number }
+  | {
+      kind: "list";
+      start: number;
+      end: number;
+      source: MarkdownRichListSource;
+      sourceLine?: number;
+    }
+  | { kind: "table"; start: number; end: number; table: MarkdownTableMeta; sourceLine?: number };
 
 const HEADING_SIZES: Partial<Record<MarkdownStyle, 1 | 2 | 3 | 4 | 5 | 6>> = {
   heading_1: 1,
@@ -321,13 +328,38 @@ function renderTableBlock(
   };
 }
 
+type IrBlockSpanSource = {
+  kind: string;
+  start: number;
+  end: number;
+  sourceStartLine?: number;
+};
+
 function collectStructuralSegments(
   ir: MarkdownIR,
   tables: readonly MarkdownTableMeta[],
   htmlNodes: readonly HtmlNode[],
+  tableSourceLine: (table: MarkdownTableMeta) => number | undefined,
 ): StructuralSegment[] {
   const segments: StructuralSegment[] = [];
   const htmlIslands = findTelegramHtmlIslands(htmlNodes);
+  // Blockquote style spans merge nested quote trees; the outermost block entry
+  // sharing the span's opening owns its source line.
+  const irBlocks = (ir as unknown as { blocks?: IrBlockSpanSource[] }).blocks ?? [];
+  const blockquoteSourceLine = (span: { start: number }): number | undefined => {
+    let owner: IrBlockSpanSource | undefined;
+    for (const block of irBlocks) {
+      if (
+        block.kind === "blockquote" &&
+        block.start <= span.start &&
+        block.end >= span.start &&
+        (owner === undefined || block.start < owner.start)
+      ) {
+        owner = block;
+      }
+    }
+    return owner?.sourceStartLine;
+  };
   for (const span of ir.styles) {
     if (span.end <= span.start) {
       continue;
@@ -347,18 +379,37 @@ function collectStructuralSegments(
       continue;
     }
     if (span.style === "blockquote") {
-      segments.push({ kind: "blockquote", start: span.start, end: span.end });
+      const sourceLine = blockquoteSourceLine(span);
+      segments.push({
+        kind: "blockquote",
+        start: span.start,
+        end: span.end,
+        ...(sourceLine !== undefined ? { sourceLine } : {}),
+      });
     }
   }
   for (const table of tables) {
     const offset = Math.max(0, Math.min(table.placeholderOffset, ir.text.length));
-    segments.push({ kind: "table", start: offset, end: offset, table });
+    const sourceLine = tableSourceLine(table);
+    segments.push({
+      kind: "table",
+      start: offset,
+      end: offset,
+      table,
+      ...(sourceLine !== undefined ? { sourceLine } : {}),
+    });
   }
   for (const source of collectMarkdownRichListSources(ir)) {
     if (htmlIslands.some((island) => source.start >= island.start && source.end <= island.end)) {
       continue;
     }
-    segments.push({ kind: "list", start: source.start, end: source.end, source });
+    segments.push({
+      kind: "list",
+      start: source.start,
+      end: source.end,
+      source,
+      ...(source.sourceStartLine !== undefined ? { sourceLine: source.sourceStartLine } : {}),
+    });
   }
   return segments;
 }
@@ -436,6 +487,14 @@ function emitSegments(
   ) => emitSegments(ir, children, start, end, degradationReasons, nodes, depth + 1);
   const containerRank = (segment: StructuralSegment) =>
     segment.kind === "blockquote" ? 0 : segment.kind === "list" ? 1 : 2;
+  // A zero-width table sharing a container's offset is its child only when the
+  // table opens at or after the container in the source; otherwise the table
+  // precedes the container and must render as a preceding sibling. Tables and
+  // containers without source lines keep the legacy owned placement.
+  const tableOwnedBy = (container: StructuralSegment, table: StructuralSegment): boolean =>
+    table.sourceLine === undefined ||
+    container.sourceLine === undefined ||
+    table.sourceLine >= container.sourceLine;
   const orderedSegments = [
     ...segments,
     ...findTelegramHtmlIslands(htmlNodes).map((node): StructuralSegment => ({
@@ -452,10 +511,18 @@ function emitSegments(
     // but Markdown quotes/lists at that offset still own their table children.
     const ownsTable = (segment: StructuralSegment) =>
       segment.kind === "blockquote" || segment.kind === "list";
-    if (left.kind === "table" && right.kind !== "table" && !ownsTable(right)) {
+    if (
+      left.kind === "table" &&
+      right.kind !== "table" &&
+      (!ownsTable(right) || !tableOwnedBy(right, left))
+    ) {
       return -1;
     }
-    if (right.kind === "table" && left.kind !== "table" && !ownsTable(left)) {
+    if (
+      right.kind === "table" &&
+      left.kind !== "table" &&
+      (!ownsTable(left) || !tableOwnedBy(left, right))
+    ) {
       return 1;
     }
     return right.end - left.end || containerRank(left) - containerRank(right);
@@ -579,7 +646,27 @@ export function markdownToTelegramRichBlocks(
 
   let degradationReasons = new Set<TelegramRichBlocksDegradationReason>();
   const htmlNodes = parseHtmlFragment(ir);
-  const segments = collectStructuralSegments(ir, tables, htmlNodes);
+  // Table source metadata carries char offsets into the parsed Markdown; ties
+  // against quote/list containers compare source lines.
+  const parsedSource = markdown ?? "";
+  const lineStarts: number[] = [0];
+  for (let index = 0; index < parsedSource.length; index += 1) {
+    if (parsedSource[index] === "\n") {
+      lineStarts.push(index + 1);
+    }
+  }
+  const tableSourceLine = (table: MarkdownTableMeta): number | undefined => {
+    const source = getMarkdownTableSource(table);
+    if (!source) {
+      return undefined;
+    }
+    let line = 0;
+    while (line + 1 < lineStarts.length && lineStarts[line + 1]! <= source.start) {
+      line += 1;
+    }
+    return line;
+  };
+  const segments = collectStructuralSegments(ir, tables, htmlNodes, tableSourceLine);
   const hasMarkdownLists = segments.some((segment) => segment.kind === "list");
   const flattenedSegments = segments.filter((segment) => segment.kind !== "list");
   let blocks = emitSegments(ir, segments, 0, ir.text.length, degradationReasons, htmlNodes);

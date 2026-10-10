@@ -14,11 +14,14 @@ export type MarkdownRichListSource = {
   start: number;
   end: number;
   items: MarkdownRichListItemSource[];
+  /** First source Markdown line owning this list, for table-placement ties. */
+  sourceStartLine?: number;
 };
 
 /** Groups exact parser-owned item spans by list identity without reparsing Markdown. */
 export function collectMarkdownRichListSources(ir: MarkdownIR): MarkdownRichListSource[] {
   const byListId = new Map<number, MarkdownRichListItemSource[]>();
+  const listLines = new Map<number, number>();
   for (const item of ir.listItems ?? []) {
     if (
       !item.listMarker ||
@@ -27,6 +30,13 @@ export function collectMarkdownRichListSources(ir: MarkdownIR): MarkdownRichList
       item.end === undefined
     ) {
       continue;
+    }
+    const sourceStartLine = (item as { sourceStartLine?: number }).sourceStartLine;
+    if (sourceStartLine !== undefined) {
+      listLines.set(
+        item.listId,
+        Math.min(listLines.get(item.listId) ?? sourceStartLine, sourceStartLine),
+      );
     }
     const markerText = ir.text.slice(item.listMarker.start, item.listMarker.end);
     const taskText = item.taskMarker
@@ -45,13 +55,18 @@ export function collectMarkdownRichListSources(ir: MarkdownIR): MarkdownRichList
     list.push(source);
     byListId.set(item.listId, list);
   }
-  return [...byListId.values()].map((items) => {
+  return [...byListId.entries()].map(([listId, items]) => {
     items.sort((left, right) => left.start - right.start);
-    return {
+    const sourceStartLine = listLines.get(listId);
+    const source: MarkdownRichListSource = {
       start: Math.min(...items.map((item) => item.start)),
       end: Math.max(...items.map((item) => item.end)),
       items,
     };
+    if (sourceStartLine !== undefined) {
+      source.sourceStartLine = sourceStartLine;
+    }
+    return source;
   });
 }
 
