@@ -94,6 +94,8 @@ export function waitForFile(file) {
     }),
   );
   write("node_modules/tsx/loader.mjs", "export {};\n");
+  // Git inventory behavior is covered by the ratchet's own repository fixtures.
+  write("scripts/check-control-ui-lit-ratchet.mts", "export function main() { return 0; }\n");
   preparedScripts ??= (async () => {
     const { bundles } = await build({
       config: false,
