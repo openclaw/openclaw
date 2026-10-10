@@ -3,7 +3,7 @@ import path from "node:path";
 import { beforeEach, expect, it } from "vitest";
 import { projectAgentToolActivity } from "../../../src/infra/agent-activity-events.js";
 import type { ApplicationContext } from "../app/context.ts";
-import type { RenderLifecycleTestHook } from "../pages/chat/render-lifecycle.ts";
+import type { notifyRenderLifecycleForTest } from "../pages/chat/render-lifecycle.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   createChatFlowE2eSuite,
@@ -98,7 +98,7 @@ type ToolProjectionProbe = {
 };
 
 type ScopedWindow = Window & {
-  __OPENCLAW_RENDER_LIFECYCLE_TEST_HOOK__?: RenderLifecycleTestHook;
+  openclawRenderLifecycleTestHook?: typeof notifyRenderLifecycleForTest;
   ocStreamPerf?: StreamPerfProbe;
   ocIdleProbe?: { longTasks: number; longTaskMs: number };
   ocBurstDone?: boolean;
@@ -196,7 +196,7 @@ async function installRenderProbe(page: ChatFlowPage) {
         ? `${name}.${location[2]}:${location[3]}:${location[4]}`
         : "unknown";
     };
-    scope.__OPENCLAW_RENDER_LIFECYCLE_TEST_HOOK__ = (host, phase) => {
+    scope.openclawRenderLifecycleTestHook = (host, phase) => {
       if (
         !(host instanceof HTMLElement) ||
         (host.localName !== "openclaw-chat-page" && host.localName !== "openclaw-chat-pane")
