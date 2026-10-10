@@ -2,6 +2,7 @@ import pMap, { pMapSkip } from "p-map";
 import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../../config/cron-limits.js";
 import { isAbortError } from "../../infra/abort-signal.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { SqliteWorkerAdmissionTimeoutError } from "../../infra/sqlite-worker-contract.js";
 import { formatTimestamp } from "../../logging/timestamps.js";
 import {
   beginGatewayRootWorkAdmissionWhenOpen,
@@ -173,6 +174,11 @@ export async function onTimer(state: CronServiceState) {
         state.deps.runSchedulerOwned ? state.deps.runSchedulerOwned(run) : run(),
       );
     }
+  } catch (error) {
+    if (!(error instanceof SqliteWorkerAdmissionTimeoutError)) {
+      throw error;
+    }
+    state.deps.log.warn({ err: String(error) }, "cron: worker admission delayed; retrying later");
   } finally {
     admission.release();
   }
