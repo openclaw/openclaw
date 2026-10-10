@@ -13,6 +13,7 @@ import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isIncognitoSessionKey, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { resolveSessionIdMatchSelection } from "../../sessions/session-id-resolution.js";
+import type { IncognitoAgentDatabaseExecution } from "../../state/openclaw-agent-execution-incognito.js";
 import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { loadGatewaySessionEntryReadOnlyInWorker } from "../session-utils-store-worker.js";
 import { loadSessionEntry } from "../session-utils.js";
@@ -118,7 +119,7 @@ export async function prepareAgentRelatedSessionSource(params: {
   const { cfg, sessionKey, fields } = params;
   const ambient = isIncognitoSessionKey(sessionKey) ? captureIncognitoSessionSource() : undefined;
   let binding = ambient;
-  let retained: Awaited<ReturnType<typeof captureOpenClawAgentDatabaseExecution>>;
+  let retained: IncognitoAgentDatabaseExecution | undefined;
   let handedOff = false;
   let active = true;
   let finishShared: (() => void) | undefined;

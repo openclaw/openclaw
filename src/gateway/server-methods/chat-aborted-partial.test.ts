@@ -9,6 +9,10 @@ import {
   FailoverError,
 } from "../../agents/failover/error.js";
 import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
+import {
   loadSessionEntry,
   loadTranscriptEvents,
   replaceSessionEntry,
@@ -136,6 +140,7 @@ it("retains the actor for a deferred partial after its abort request scope retur
     const request = new AbortController();
     let settlement: Promise<void> | undefined;
     const warn = vi.fn();
+    setRuntimeConfigSnapshot({});
     const sql = observeHostDataSql();
     try {
       await withIncognitoSessionActor(
@@ -186,6 +191,7 @@ it("retains the actor for a deferred partial after its abort request scope retur
       producer.resolve(undefined);
       await settlement;
       sql.restore();
+      clearRuntimeConfigSnapshot();
       await actor.close();
     }
   });

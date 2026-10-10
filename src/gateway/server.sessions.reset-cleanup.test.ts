@@ -28,7 +28,6 @@ import {
   runExclusiveSessionLifecycleMutation,
 } from "../sessions/session-lifecycle-admission.js";
 import { runExclusiveSessionLifecycle } from "../sessions/session-lifecycle-admission.test-support.js";
-import * as sessionStateEvents from "../sessions/session-state-events.js";
 import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { disposeSessionReadContexts } from "./server-methods/sessions-read-cache.test-support.js";
@@ -36,7 +35,6 @@ import {
   expectResetAcpState,
   resolvedAcpMeta,
 } from "./server.sessions.reset-cleanup.test-support.js";
-import { performGatewaySessionReset } from "./session-reset-service.js";
 import { embeddedRunMock, testState, writeSessionStore } from "./test-helpers.js";
 import {
   setupGatewaySessionsHandlerTestHarness,
@@ -128,6 +126,8 @@ test.each(["success", "cleanup-failure"])(
           const committed = vi.fn();
           let reset;
           if (outcome === "cleanup-failure") {
+            const sessionStateEvents = await import("../sessions/session-state-events.js");
+            const { performGatewaySessionReset } = await import("./session-reset-service.js");
             const failure = new Error("reset cleanup failed");
             const cleanup = vi
               .spyOn(sessionStateEvents, "handleSessionStateSessionDeleted")

@@ -26,6 +26,7 @@ import { isIncognitoSessionKey, resolveAgentIdFromSessionKey } from "../routing/
 import { isModelSelectionLocked } from "../sessions/model-overrides.js";
 import { waitForSessionParticipantRecording } from "../sessions/session-participant-recording.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import type { IncognitoAgentDatabaseExecution } from "../state/openclaw-agent-execution-incognito.js";
 import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
 import { readResidentUserProfileId } from "../state/user-profile-list.js";
 import type { CreateGatewaySessionParams } from "./session-create-service.types.js";
@@ -84,7 +85,7 @@ export async function prepareSessionCreateParent(input: {
 }) {
   const ambient = isIncognitoSessionKey(input.key) ? captureIncognitoSessionSource() : undefined;
   let source = ambient;
-  let retained: Awaited<ReturnType<typeof captureOpenClawAgentDatabaseExecution>>;
+  let retained: IncognitoAgentDatabaseExecution | undefined;
   let finishSource: (() => void) | undefined;
   let sourceSettlement: Promise<void> | undefined;
   let handedOff = false;

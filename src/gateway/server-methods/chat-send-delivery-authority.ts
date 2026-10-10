@@ -36,7 +36,6 @@ export function createChatSendReplyFinalizationAuthority(
   const sessionSource = captureIncognitoSessionSource({
     agentId,
     sessionKey,
-    env: sessionLoadOptions?.env,
   });
   const sessionClaim =
     sessionSource && !("kind" in sessionSource)
@@ -49,7 +48,6 @@ export function createChatSendReplyFinalizationAuthority(
       captureIncognitoSessionSource({
         ...authority,
         agentId: authority.agentId ?? agentId,
-        env: sessionLoadOptions?.env,
       })
     );
   });

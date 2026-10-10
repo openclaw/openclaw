@@ -175,7 +175,6 @@ const mcpRunEndWatcherState = resolveGlobalSingleton<McpRunEndWatcherState>(
     state.watchers.clear();
   },
 );
-const mcpRunEndWatchers = mcpRunEndWatcherState.watchers;
 
 export { emitGatewaySessionEndPluginHook, emitGatewaySessionStartPluginHook };
 
@@ -305,7 +304,7 @@ async function ensureSessionRuntimeCleanup(params: {
   // Register against the run being stopped before abort or any await allows a
   // later embedded or reply-backed run to replace it in the active registry.
   const mcpRetirementWatcher = getOrCreatePromise(
-    mcpRunEndWatchers,
+    mcpRunEndWatcherState.watchers,
     sessionId,
     async () => {
       let cancelWatcher = () => {};

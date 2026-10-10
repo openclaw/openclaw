@@ -1,3 +1,4 @@
+import path from "node:path";
 import { isPassThroughRemoteMediaSource } from "@openclaw/media-core/media-source-url";
 import { isAudioFileName } from "@openclaw/media-core/mime";
 import { isCloudWorkerPlacementState } from "../../../packages/gateway-protocol/src/schema/session-placement-state.js";
@@ -28,13 +29,17 @@ import { getMediaDir } from "../../media/store.js";
 import { resolveSendableOutboundReplyParts } from "../../plugin-sdk/reply-payload.js";
 import {
   captureChannelReadAuthority,
+  captureChannelReadScope,
   withChannelReadAuthority,
 } from "../../shared/channel-read-authority.js";
 import { IncognitoSessionMissingError } from "../../state/incognito-session-error.js";
+import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
+import { executeOpenClawStateWorker } from "../../state/openclaw-state-worker-store.js";
 import { loadSessionEntry } from "../session-utils.js";
 import { resolveSessionWorkerPlacementContext } from "../session-worker-placement-context.js";
 import { resolveSessionWorkspaceRoots } from "../session-workspace-roots.js";
 import type { WorkerSessionPlacementRecord } from "../worker-environments/placement-record.js";
+import { prepareSessionPlacementRead } from "../worker-environments/placement-turn-authority.js";
 import { formatForLog } from "../ws-log.js";
 import {
   buildAssistantReplyContentFromInputs,
@@ -69,6 +74,25 @@ type WebchatReplyMediaScope = {
   accountId?: string;
   assertCurrent?: () => void;
 };
+
+type PreparedWebchatReplyMediaScope = WebchatReplyMediaScope & {
+  sessionKey: string;
+  workspace: ReturnType<typeof resolveWebchatReplyWorkspace>;
+  assertCurrent: () => void;
+};
+
+const prepareCapturedMediaScope = Symbol("prepareCapturedMediaScope");
+type CapturedWebchatReplyMediaScope =
+  | (PreparedWebchatReplyMediaScope & { [prepareCapturedMediaScope]?: never })
+  | (WebchatReplyMediaScope & {
+      sessionKey: string;
+      workspace?: never;
+      assertCurrent: () => void;
+      [prepareCapturedMediaScope]: () => Promise<{
+        scope: PreparedWebchatReplyMediaScope;
+        release: () => void;
+      }>;
+    });
 
 function resolveRequesterPolicyContext(requester?: WebchatReplyMediaRequesterContext) {
   return {
@@ -127,11 +151,7 @@ export function captureWebchatReplyMediaScope(
     sessionKey: string;
     sessionLoadOptions?: Parameters<typeof loadSessionEntry>[1];
   },
-): WebchatReplyMediaScope & {
-  sessionKey: string;
-  workspace: ReturnType<typeof resolveWebchatReplyWorkspace>;
-  assertCurrent: () => void;
-} {
+): CapturedWebchatReplyMediaScope {
   const source = captureIncognitoSessionSource({
     agentId: params.agentId,
     sessionKey: params.sessionKey,
@@ -165,6 +185,61 @@ export function captureWebchatReplyMediaScope(
       : undefined;
   const sessionEntry = readEntry();
   const scope = { ...params, sessionEntry: sessionEntry ? { ...sessionEntry } : undefined };
+  if (source && !("kind" in source)) {
+    if (!sessionEntry) {
+      throw new IncognitoSessionMissingError();
+    }
+    const sessionId = sessionEntry.sessionId;
+    const env = params.sessionLoadOptions?.env ?? {
+      OPENCLAW_STATE_DIR: path.resolve(source.actor.path, "../../../.."),
+    };
+    const state = captureOpenClawStateWorkerContext({ env });
+    const capturedPolicy = captureWebchatReplyMediaAuthority(scope, undefined);
+    const assertCurrent = () => {
+      params.assertCurrent?.();
+      if (!capturedPolicy.matches(readEntry(), undefined)) {
+        throw new Error("Session media access changed before attachment delivery.");
+      }
+    };
+    return {
+      ...scope,
+      assertCurrent,
+      [prepareCapturedMediaScope]: async () => {
+        assertCurrent();
+        const placement = await prepareSessionPlacementRead(
+          state.admission.databasePath,
+          sessionId,
+          async () => {
+            const records = await executeOpenClawStateWorker(state, {
+              type: "workerPlacements.read",
+              input: { sessionIds: [sessionId] },
+            });
+            return records[0];
+          },
+        );
+        try {
+          assertCurrent();
+          const authority = captureWebchatReplyMediaAuthority(scope, placement.current());
+          return {
+            scope: {
+              ...scope,
+              workspace: authority.workspace,
+              assertCurrent: () => {
+                assertCurrent();
+                if (!authority.matches(readEntry(), placement.current())) {
+                  throw new Error("Session media access changed before attachment delivery.");
+                }
+              },
+            },
+            release: placement.release,
+          };
+        } catch (error) {
+          placement.release();
+          throw error;
+        }
+      },
+    };
+  }
   const authority = captureWebchatReplyMediaAuthority(scope, readPlacement(sessionEntry));
   return {
     ...scope,
@@ -205,74 +280,97 @@ export async function withPreparedWebchatReplyMedia<T>(
   prepare: (media: {
     payloads: ReplyPayload[];
     inputsByIndex: ReplyDispatchOperation[][];
+    localRoots: readonly string[];
+    assertCurrent: () => void;
     buildContent: (inputs: readonly ReplyDispatchOperation[]) => Promise<WebchatReplyContent>;
   }) => Promise<T>,
 ): Promise<T> {
-  const scope = params.scope;
-  const sourcePayloads = params.inputs.map(readChatSendReplyPayload);
-  const hasMedia = sourcePayloads.some(
-    (payload) => resolveSendableOutboundReplyParts(payload).mediaUrls.length > 0,
-  );
-  return await withChannelReadAuthority(
-    scope.assertCurrent,
-    async () => {
-      const payloads = await normalizeWebchatReplyMediaPathsForDisplay({
-        ...scope,
-        payloads: sourcePayloads,
-      });
-      const inputsByIndex = params.inputs.map((input, index) => {
-        const payload = payloads[index];
-        return payload ? replaceChatSendReplyPayload(input, payload) : [];
-      });
-      const localRoots = hasMedia
-        ? getWebchatReplyMediaLocalRoots({ ...scope, storePath: params.storePath })
-        : [];
-      return prepare({
-        payloads,
-        inputsByIndex,
-        buildContent: async (inputs) => {
-          let managedMediaPrepareFailed = false;
-          const mediaMessage = await buildWebchatAssistantMessageFromReplyPayloads(
-            inputs.map(readChatSendReplyPayload),
-            {
-              localRoots,
-              assertCurrent: captureChannelReadAuthority(),
-              onLocalAudioAccessDenied: (err) => {
-                params.logGateway?.warn(
-                  `webchat audio embedding denied local path: ${formatForLog(err)}`,
-                );
-              },
-            },
-          );
-          const content = await buildAssistantReplyContentFromInputs({
-            sessionKey: params.transcriptTarget?.sessionKey ?? scope.sessionKey,
-            agentId: params.transcriptTarget?.agentId ?? scope.agentId,
-            inputs,
-            transcriptMediaMessage: mediaMessage,
-            managedMediaLocalRoots: localRoots,
+  const prepareScope = params.scope[prepareCapturedMediaScope];
+  const prepared = prepareScope ? await prepareScope() : undefined;
+  const scope = prepared?.scope ?? params.scope;
+  let placementHandedOff = false;
+  try {
+    const sourcePayloads = params.inputs.map(readChatSendReplyPayload);
+    const hasMedia = sourcePayloads.some(
+      (payload) => resolveSendableOutboundReplyParts(payload).mediaUrls.length > 0,
+    );
+    return await withChannelReadAuthority(
+      scope.assertCurrent,
+      async () => {
+        const readScope = captureChannelReadScope();
+        if (prepared && readScope) {
+          // Parent media scopes retain the placement lease through final acceptance and cleanup.
+          readScope.registerResource({
+            key: `webchat-reply-placement:${scope.agentId}:${scope.sessionKey}`,
             assertCurrent: scope.assertCurrent,
-            abortSignal: params.abortSignal,
-            includeSensitiveMedia: params.includeSensitiveMedia,
-            includeSensitiveDisplay: params.includeSensitiveDisplay,
-            onManagedMediaPrepareError: (message) => {
-              managedMediaPrepareFailed = true;
-              params.logGateway?.warn(`webchat media embedding skipped attachment: ${message}`);
-            },
-            onSensitiveDisplayPrepareError: (message) => {
-              params.logGateway?.warn(`webchat sensitive display skipped attachment: ${message}`);
-            },
+            settle: async () => prepared.release(),
           });
-          const broadcastContent = hasAssistantDisplayMediaContent(content.assistantContent)
-            ? content.assistantContent
-            : hasAssistantDisplayMediaContent(mediaMessage?.content)
-              ? mediaMessage?.content
-              : content.assistantContent;
-          return { ...content, mediaMessage, broadcastContent, managedMediaPrepareFailed };
-        },
-      });
-    },
-    hasMedia ? params.abortSignal : undefined,
-  );
+          placementHandedOff = true;
+        }
+        const payloads = await normalizeWebchatReplyMediaPathsForDisplay({
+          ...scope,
+          payloads: sourcePayloads,
+        });
+        const inputsByIndex = params.inputs.map((input, index) => {
+          const payload = payloads[index];
+          return payload ? replaceChatSendReplyPayload(input, payload) : [];
+        });
+        const localRoots = hasMedia
+          ? getWebchatReplyMediaLocalRoots({ ...scope, storePath: params.storePath })
+          : [];
+        return prepare({
+          payloads,
+          inputsByIndex,
+          localRoots,
+          assertCurrent: scope.assertCurrent,
+          buildContent: async (inputs) => {
+            let managedMediaPrepareFailed = false;
+            const mediaMessage = await buildWebchatAssistantMessageFromReplyPayloads(
+              inputs.map(readChatSendReplyPayload),
+              {
+                localRoots,
+                assertCurrent: captureChannelReadAuthority(),
+                onLocalAudioAccessDenied: (err) => {
+                  params.logGateway?.warn(
+                    `webchat audio embedding denied local path: ${formatForLog(err)}`,
+                  );
+                },
+              },
+            );
+            const content = await buildAssistantReplyContentFromInputs({
+              sessionKey: params.transcriptTarget?.sessionKey ?? scope.sessionKey,
+              agentId: params.transcriptTarget?.agentId ?? scope.agentId,
+              inputs,
+              transcriptMediaMessage: mediaMessage,
+              managedMediaLocalRoots: localRoots,
+              assertCurrent: scope.assertCurrent,
+              abortSignal: params.abortSignal,
+              includeSensitiveMedia: params.includeSensitiveMedia,
+              includeSensitiveDisplay: params.includeSensitiveDisplay,
+              onManagedMediaPrepareError: (message) => {
+                managedMediaPrepareFailed = true;
+                params.logGateway?.warn(`webchat media embedding skipped attachment: ${message}`);
+              },
+              onSensitiveDisplayPrepareError: (message) => {
+                params.logGateway?.warn(`webchat sensitive display skipped attachment: ${message}`);
+              },
+            });
+            const broadcastContent = hasAssistantDisplayMediaContent(content.assistantContent)
+              ? content.assistantContent
+              : hasAssistantDisplayMediaContent(mediaMessage?.content)
+                ? mediaMessage?.content
+                : content.assistantContent;
+            return { ...content, mediaMessage, broadcastContent, managedMediaPrepareFailed };
+          },
+        });
+      },
+      hasMedia ? params.abortSignal : undefined,
+    );
+  } finally {
+    if (!placementHandedOff) {
+      prepared?.release();
+    }
+  }
 }
 
 export async function prepareWebchatReplyMediaForDisplay(
@@ -317,8 +415,11 @@ function resolveWebchatReplyWorkspaceOnly(params: WebchatReplyMediaScope): boole
 
 /** Trusted audio bypasses staging, but its reader must use the same session workspace. */
 export function getWebchatReplyMediaLocalRoots(
-  params: ReturnType<typeof captureWebchatReplyMediaScope> & { storePath?: string },
+  params: CapturedWebchatReplyMediaScope & { storePath?: string },
 ): readonly string[] {
+  if (!params.workspace) {
+    throw new Error("Session media workspace has not been prepared.");
+  }
   const { remote, workspaceDir } = params.workspace;
   if (remote) {
     return [getMediaDir()];
@@ -362,7 +463,7 @@ function shouldPreserveDisplayMediaUrl(payload: ReplyPayload, mediaUrl: string):
 
 /** Normalize reply media paths for webchat display without leaking sensitive media. */
 export async function normalizeWebchatReplyMediaPathsForDisplay(
-  params: ReturnType<typeof captureWebchatReplyMediaScope> & {
+  params: CapturedWebchatReplyMediaScope & {
     payloads: ReplyPayload[];
   },
 ): Promise<ReplyPayload[]> {
@@ -377,6 +478,9 @@ export async function normalizeWebchatReplyMediaPathsForDisplay(
       )
     ) {
       return params.payloads;
+    }
+    if (!params.workspace) {
+      throw new Error("Session media workspace has not been prepared.");
     }
     const { remote, workspaceDir } = params.workspace;
     if (!workspaceDir) {

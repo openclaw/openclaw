@@ -5,6 +5,10 @@ import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import {
@@ -13,8 +17,11 @@ import {
 } from "../../config/sessions/session-incognito-binding.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { withChannelReadAuthority } from "../../shared/channel-read-authority.js";
 import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleton.js";
 import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
+import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import { withEnvAsync } from "../../test-utils/env.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -23,6 +30,7 @@ import { cleanupSessionStateForTest } from "../../test-utils/session-state-clean
 import { listManagedImageRecordEntries } from "../managed-image-record-store.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { loadSessionEntry } from "../session-utils.js";
+import { createWorkerSessionPlacementStore } from "../worker-environments/placement-store.js";
 import {
   captureWebchatReplyMediaScope,
   prepareWebchatReplyMediaForDisplay,
@@ -40,10 +48,12 @@ let state: OpenClawTestState;
 
 beforeEach(async () => {
   state = await createOpenClawTestState({ layout: "state-only" });
+  setRuntimeConfigSnapshot({});
 });
 
 afterEach(async () => {
   vi.restoreAllMocks();
+  clearRuntimeConfigSnapshot();
   await cleanupSessionStateForTest({ stateDir: state.stateDir, rootPath: state.root });
   await drainGlobalSingletonLifecycleState();
   await state.cleanup();
@@ -175,76 +185,129 @@ it("preserves already-produced text after its turn is aborted", async () => {
   expect(assistantContent).toEqual([{ type: "text", text: "Completed before cancellation." }]);
 });
 
-it("retains the selected actor through media preparation and refuses a changed permission", async () => {
-  const actor = await captureOpenClawAgentDatabaseExecution({
-    kind: "ephemeral",
-    agentId: "main",
-    env: state.env,
-    authority: { assertCurrent() {} },
-  });
-  assert(actor);
-  const sessionKey = "agent:main:dashboard:incognito-media-authority";
-  const workspace = state.workspaceDir;
-  await fs.mkdir(workspace, { recursive: true });
-  const audioSource = path.join(workspace, "retained.mp3");
-  await fs.writeFile(audioSource, AUDIO_BYTES);
-  await actor.sessions.create(
-    { assertCurrent() {} },
-    {
-      sessionKey,
-      entry: {
-        sessionId: "retained-media",
-        updatedAt: 1,
-        incognito: true,
-        permissionMode: "full",
-        sessionRoot: workspace,
-      },
-    },
-  );
-  const opened = createDeferred();
-  const release = createDeferred();
-  const nativeOpen = fs.open;
-  vi.spyOn(fs, "open").mockImplementation(async (...args) => {
-    const handle = await nativeOpen(...args);
-    if (String(args[0]) === audioSource) {
-      opened.resolve();
-      await release.promise;
-    }
-    return handle;
-  });
-  const sql = observeHostDataSql();
-  try {
-    await withIncognitoSessionActor(actor, async () => {
-      const scope = captureWebchatReplyMediaScope({
-        cfg: { agents: { entries: { main: { workspace } } } },
-        agentId: "main",
-        sessionKey,
-        sessionLoadOptions: { agentId: "main", env: state.env },
-      });
-      const prepared = prepareWebchatReplyMediaForDisplay({
-        scope,
-        inputs: [{ kind: "raw", payload: { mediaUrls: [audioSource], trustedLocalMedia: true } }],
-      });
-      const settled = prepared.catch(() => undefined);
-      try {
-        await opened.promise;
-        await patchSessionEntryCore(
-          { agentId: "main", env: state.env, storePath: actor.path, sessionKey },
-          () => ({ permissionMode: "workspace" }),
-        );
-      } finally {
-        release.resolve();
-        await settled;
-      }
-      await expect(prepared).rejects.toThrow("Session media access changed");
+it.each([
+  ["permission", "read", false],
+  ["placement", "read", true],
+  ["placement", "acceptance", false],
+  ["unchanged", "acceptance", false],
+] as const)(
+  "retains the selected actor when %s is checked during media %s",
+  async (change, phase, differentRoot) => {
+    const actor = await captureOpenClawAgentDatabaseExecution({
+      kind: "ephemeral",
+      agentId: "main",
+      env: state.env,
+      authority: { assertCurrent() {} },
     });
-    expect(sql.queries).toEqual([]);
-  } finally {
-    release.resolve();
-    sql.restore();
-    await actor.close();
-  }
-});
+    assert(actor);
+    const sessionKey = "agent:main:dashboard:incognito-media-authority";
+    const workspace = state.workspaceDir;
+    await fs.mkdir(workspace, { recursive: true });
+    const mediaSource = path.join(workspace, phase === "read" ? "retained.mp3" : "retained.png");
+    await fs.writeFile(mediaSource, phase === "read" ? AUDIO_BYTES : PNG_BYTES);
+    await actor.sessions.create(
+      { assertCurrent() {} },
+      {
+        sessionKey,
+        entry: {
+          sessionId: "retained-media",
+          updatedAt: 1,
+          incognito: true,
+          permissionMode: "full",
+          sessionRoot: workspace,
+        },
+      },
+    );
+    const opened = createDeferred();
+    const release = createDeferred();
+    const nativeOpen = fs.open;
+    vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+      const handle = await nativeOpen(...args);
+      if (phase === "read" && String(args[0]) === mediaSource) {
+        opened.resolve();
+        await release.promise;
+      }
+      return handle;
+    });
+    const placements = createWorkerSessionPlacementStore({ database: openOpenClawStateDatabase() });
+    const ambient = differentRoot
+      ? await createOpenClawTestState({ layout: "state-only", applyEnv: false })
+      : undefined;
+    if (ambient) {
+      openOpenClawStateDatabase({ env: ambient.env });
+    }
+    const sql = observeHostDataSql();
+    try {
+      const run = () =>
+        withIncognitoSessionActor(actor, async () => {
+          const scope = captureWebchatReplyMediaScope({
+            cfg: { agents: { entries: { main: { workspace } } } },
+            agentId: "main",
+            sessionKey,
+            sessionLoadOptions: { agentId: "main" },
+          });
+          const changeAuthority = async () => {
+            if (change === "permission") {
+              await patchSessionEntryCore(
+                { agentId: "main", env: state.env, storePath: actor.path, sessionKey },
+                () => ({ permissionMode: "workspace" }),
+              );
+            } else if (change === "placement") {
+              await placements.startDispatch({
+                agentId: "main",
+                sessionKey,
+                sessionId: "retained-media",
+                executionMode: "worker-turn",
+              });
+            }
+          };
+          const prepared = withChannelReadAuthority(
+            () => {},
+            async () => {
+              const result = await prepareWebchatReplyMediaForDisplay({
+                scope,
+                inputs: [
+                  { kind: "raw", payload: { mediaUrls: [mediaSource], trustedLocalMedia: true } },
+                ],
+              });
+              if (phase === "acceptance") {
+                await changeAuthority();
+              }
+              return result;
+            },
+          );
+          const settled = prepared.catch(() => undefined);
+          try {
+            if (phase === "read") {
+              await opened.promise;
+              await changeAuthority();
+            }
+          } finally {
+            release.resolve();
+            await settled;
+          }
+          if (change === "unchanged") {
+            await expect(prepared).resolves.toMatchObject({
+              persistedAssistantContent: [expect.objectContaining({ type: "image" })],
+            });
+          } else {
+            await expect(prepared).rejects.toThrow("Session media access changed");
+          }
+        });
+      if (ambient) {
+        await withEnvAsync(ambient.envVars, run);
+      } else {
+        await run();
+      }
+      expect(sql.queries).toEqual([]);
+    } finally {
+      release.resolve();
+      sql.restore();
+      await actor.close();
+      await ambient?.cleanup();
+    }
+  },
+);
 
 it("keeps explicit actor absence out of native media discovery", () => {
   const sql = observeHostDataSql();
@@ -361,7 +424,7 @@ it("keeps unbound private media scope on the native owner without acquiring an a
     sessionLoadOptions: { agentId: "main", env: state.env },
   });
   expect(scope.sessionEntry?.sessionId).toBe("native-private-media");
-  expect(scope.workspace.workspaceDir).toBe(state.workspaceDir);
+  expect(scope.workspace).toEqual({ remote: false, workspaceDir: state.workspaceDir });
   expect(() => scope.assertCurrent()).not.toThrow();
   expect(captureOpenClawAgentDatabaseExecution.listIncognito(state.env)).toEqual([]);
 });
