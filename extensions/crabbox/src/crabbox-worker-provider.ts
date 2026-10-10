@@ -1,4 +1,3 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import { setTimeout as delay } from "node:timers/promises";
 import { coerceErrorMessage, toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import {
@@ -58,15 +57,15 @@ import {
 } from "./crabbox-worker-snapshot-actions.js";
 import {
   countCrabboxProvisionSetupPhases,
+  CRABBOX_COMMAND_SETTLEMENT_TIMEOUT_MS,
   CRABBOX_DESKTOP_WARMUP_TIMEOUT_MS,
   CRABBOX_SETUP_TIMEOUT_MS,
+  CRABBOX_STOP_TIMEOUT_MS,
   CRABBOX_WARMUP_TIMEOUT_MS,
   resolveCrabboxLifecycleTimeoutMs,
   resolveCrabboxNodeEnrollmentTimeoutMs,
   resolveCrabboxProvisionBaseTimeoutMs,
-  resolveCrabboxProvisionTimeoutMs,
-  resolveCrabboxDestroyTimeoutMs,
-  CRABBOX_PROJECT_PREPARATION_TIMEOUT_MS,
+  resolveCrabboxProvisionCallTimeoutMs,
   resolveCrabboxWarmImageCaptureTimeoutMs,
   WARM_IMAGE_COMMAND_ROUND_TRIP_TIMEOUT_MS,
 } from "./crabbox-worker-timeouts.js";
@@ -75,6 +74,8 @@ import type { CrabboxWarmImagePolicy } from "./crabbox-worker-warm-image-policy.
 import type { CrabboxState } from "./crabbox-worker-warm-image-store.js";
 import { createCrabboxWarmImageManager } from "./crabbox-worker-warm-image.js";
 
+// Local pack creation, two seed commands, and upload precede runtime preparation and capture.
+const CRABBOX_PROJECT_PREPARATION_TIMEOUT_MS = 4 * CRABBOX_SETUP_TIMEOUT_MS;
 type CrabboxProfile = ReturnType<typeof parseCrabboxProfile>;
 
 type LeaseHeartbeatContext = LeaseCommandContext &
@@ -98,9 +99,7 @@ export function createCrabboxWorkerProvider(
 ): WorkerProvider & { dispose: () => Promise<void>; images: CrabboxSnapshotActions } {
   const wallpaperBase64 = loadCrabboxWorkerWallpaperBase64(dependencies.wallpaperPath);
   const runCommand = dependencies.runCommand ?? runCommandWithTimeout;
-  const logHint = new AsyncLocalStorage<{ value: string }>();
-  const warn = (message: string) =>
-    dependencies.warn?.(message + (logHint.getStore()?.value ?? ""));
+  const warn = dependencies.warn ?? (() => {});
   const sleep =
     dependencies.sleep ?? ((milliseconds, signal) => delay(milliseconds, undefined, { signal }));
   const openclawRoot = dependencies.openclawRoot ?? process.cwd();
@@ -659,12 +658,32 @@ export function createCrabboxWorkerProvider(
     notePreparedDemand: async (lease, preparation) =>
       await warmImages.notePreparedDemand(lease.leaseId, preparation),
     resolveAllocation,
-    resolveProvisionTimeoutMs: (profile, { nodeBootstrapTimeoutMs } = {}) =>
-      resolveCrabboxProvisionTimeoutMs(parseCrabboxProfile(profile), nodeBootstrapTimeoutMs),
-    resolveDestroyTimeoutMs: (profile) =>
-      resolveCrabboxDestroyTimeoutMs(parseCrabboxProfile(profile)),
+    resolveProvisionTimeoutMs(profile, options) {
+      const parsed = parseCrabboxProfile(profile);
+      return (
+        resolveCrabboxProvisionCallTimeoutMs(parsed, options?.nodeBootstrapTimeoutMs) +
+        (parsed.warmImage === false
+          ? 0
+          : CRABBOX_PROJECT_PREPARATION_TIMEOUT_MS +
+            resolveCrabboxWarmImageCaptureTimeoutMs(parsed.provider))
+      );
+    },
+    resolveDestroyTimeoutMs(profile) {
+      const parsed = parseCrabboxProfile(profile);
+      // Lifecycle profiles omit placement sizing. Reserve capture unless disabled,
+      // plus separate heartbeat and stop child settlement.
+      return (
+        CRABBOX_STOP_TIMEOUT_MS +
+        2 * CRABBOX_COMMAND_SETTLEMENT_TIMEOUT_MS +
+        (parsed.warmImage === false ? 0 : resolveCrabboxWarmImageCaptureTimeoutMs(parsed.provider))
+      );
+    },
     prepareProvision,
-    provision: async (...args) => (await prepareProvision(...args))(),
+    async provision(...args) {
+      return await (
+        await prepareProvision(...args)
+      )();
+    },
     async inspect(lease): Promise<WorkerLeaseStatus> {
       const { context } = await resolveLeaseContext(lease);
       const inspected = await inspectWithContext({
@@ -686,9 +705,8 @@ export function createCrabboxWorkerProvider(
       await heartbeats.stop(lease.leaseId);
       const { context, profile } = await resolveLeaseContext(lease);
       const captureStarted = Promise.withResolvers<void>();
-      const hint = { value: "" };
-      const teardown = logHint.run(hint, async () => {
-        let captureError: unknown;
+      let capturing = false;
+      const teardown = (async () => {
         try {
           const allocation = await warmImages.lookupLease(context.id);
           const captureProfile = resolveCrabboxWarmImageProfile(
@@ -701,28 +719,25 @@ export function createCrabboxWorkerProvider(
               ...context,
               profile: captureProfile,
               onCaptureStart: () => {
-                hint.value = `; lease ${context.id}; next step: crabbox stop --provider ${context.provider} ${context.id}`;
+                capturing = true;
                 captureStarted.resolve();
               },
             });
           }
         } catch (error) {
-          captureError = error;
-        }
-        try {
-          await stopLease(context);
-        } catch (error) {
-          if (!hint.value) {
-            throw error;
-          }
-          warn(`Crabbox teardown stop failed: ${coerceErrorMessage(error)}`);
-        }
-        if (captureError) {
           warn(
-            `Crabbox warm image capture failed during teardown: ${coerceErrorMessage(captureError)}`,
+            `Crabbox warm image capture failed for lease ${context.id}: ${coerceErrorMessage(error)}; next step: crabbox stop --provider ${context.provider} ${context.id}`,
           );
         }
-      });
+        await stopLease(context).catch((error: unknown) => {
+          if (!capturing) {
+            throw error;
+          }
+          warn(
+            `Crabbox teardown stop failed for lease ${context.id}: ${coerceErrorMessage(error)}; next step: crabbox stop --provider ${context.provider} ${context.id}`,
+          );
+        });
+      })();
       // Only a claimed capture detaches. If the Gateway exits during it, OpenClaw
       // will not stop the lease; Crabbox's idle timeout / TTL reaps it.
       await Promise.race([teardown, captureStarted.promise]);

@@ -56,11 +56,9 @@ export function createProviderFixtures(defaults: Partial<ProviderDependencies> =
         ...dependencies,
         warn: (message) => {
           (dependencies.warn ?? defaults.warn)?.(message);
-          if (message.startsWith("Crabbox teardown stop failed:")) {
-            for (const [id, completion] of pending) {
-              if (message.includes(`; lease ${id};`)) {
-                completion.reject(new Error(message));
-              }
+          for (const [id, completion] of pending) {
+            if (message.startsWith(`Crabbox teardown stop failed for lease ${id}:`)) {
+              completion.reject(new Error(message));
             }
           }
         },
