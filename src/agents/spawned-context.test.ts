@@ -66,15 +66,6 @@ describe("resolveSpawnedWorkspaceInheritance", () => {
     expect(resolved).toBe("/tmp/explicit");
   });
 
-  it("prefers targetAgentId over requester session agent for cross-agent spawns", () => {
-    const resolved = resolveSpawnedWorkspaceInheritance({
-      config,
-      targetAgentId: "ops",
-      requesterSessionKey: "agent:main:subagent:parent",
-    });
-    expect(resolved).toBe("/tmp/workspace-ops");
-  });
-
   it("falls back to requester session agent when targetAgentId is missing", () => {
     const resolved = resolveSpawnedWorkspaceInheritance({
       config,

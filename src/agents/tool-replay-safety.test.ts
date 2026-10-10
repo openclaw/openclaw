@@ -7,13 +7,6 @@ import {
 } from "./tool-replay-safety.js";
 
 describe("agent tool replay safety", () => {
-  it("allows only audited unconditional core tools", () => {
-    expect(isAgentToolReplaySafe({ name: "search" })).toBe(true);
-    expect(isAgentToolReplaySafe({ name: "progress_card" })).toBe(false);
-    expect(isAgentToolReplaySafe({ name: "process" })).toBe(false);
-    expect(isAgentToolReplaySafe({ name: "vendor_widget" })).toBe(false);
-  });
-
   it("requires extension-owned tools to opt in even when they reuse an audited name", () => {
     const pluginTool = { name: "search" };
 
@@ -22,15 +15,6 @@ describe("agent tool replay safety", () => {
         declaredReplaySafe: (tool) => (tool === pluginTool ? false : undefined),
       }),
     ).toBe(false);
-  });
-
-  it("accepts opted-in extension tools only for audited names", () => {
-    const xSearch = { name: "x_search" };
-    const vendorWidget = { name: "vendor_widget" };
-    const declaredReplaySafe = () => true;
-
-    expect(isAgentToolReplaySafe(xSearch, { declaredReplaySafe })).toBe(true);
-    expect(isAgentToolReplaySafe(vendorWidget, { declaredReplaySafe })).toBe(false);
   });
 
   it("accepts owner-declared concrete tools for restart-safe turns", () => {

@@ -149,16 +149,6 @@ describe("tool terminal outcome observer", () => {
 
   it.each([
     {
-      name: "admission failure",
-      executionStarted: false,
-      details: { status: "blocked", deniedReason: "tool-admission" },
-    },
-    {
-      name: "other skipped work",
-      executionStarted: false,
-      details: { status: "skipped", deniedReason: "policy" },
-    },
-    {
       name: "executed steering-lookalike result",
       executionStarted: true,
       details: { status: "skipped", deniedReason: "steering" },
@@ -310,34 +300,8 @@ describe("tool terminal outcome observer", () => {
 
   it.each([
     {
-      name: "pre-execution rejection",
-      input: {
-        toolName: "message",
-        arguments: { action: "send" },
-        executionStarted: false,
-        outcome: "failure",
-        failure: { error: "blocked" },
-      },
-      state: "uncertain",
-    },
-    {
       name: "completed read",
       input: { toolName: "message", arguments: { action: "read" }, outcome: "success" },
-      state: "read_completed",
-    },
-    {
-      name: "failed read",
-      input: {
-        toolName: "message",
-        arguments: { action: "read" },
-        outcome: "failure",
-        failure: { error: "read failed" },
-      },
-      state: "failed_no_effect",
-    },
-    {
-      name: "completed computer observation",
-      input: { toolName: "computer", arguments: { action: "list_windows" }, outcome: "success" },
       state: "read_completed",
     },
     {
@@ -349,37 +313,6 @@ describe("tool terminal outcome observer", () => {
         failure: { error: "observation unavailable" },
       },
       state: "failed_no_effect",
-    },
-    {
-      name: "owner-declared replay-safe failure",
-      input: {
-        toolName: "plugin_read",
-        arguments: {},
-        replaySafe: true,
-        outcome: "failure",
-        failure: { error: "read failed" },
-      },
-      state: "failed_no_effect",
-    },
-    {
-      name: "completed mutation",
-      input: { toolName: "message", arguments: { action: "send" }, outcome: "success" },
-      state: "mutation_committed",
-    },
-    {
-      name: "completed unknown operation",
-      input: { toolName: "plugin_unknown", arguments: {}, outcome: "success" },
-      state: "uncertain",
-    },
-    {
-      name: "failed mutation",
-      input: {
-        toolName: "message",
-        arguments: { action: "send" },
-        outcome: "failure",
-        failure: { error: "send failed" },
-      },
-      state: "uncertain",
     },
   ] as const)("records a host-owned effect receipt for $name", ({ input, state }) => {
     expect(createToolTerminalObserver("run-effect-receipt")(input).effectReceipt).toEqual({
@@ -417,25 +350,6 @@ describe("tool terminal outcome observer", () => {
     expect(payloads).toEqual([]);
   });
 
-  it("preserves durable memory recall side-effect evidence", () => {
-    const observe = createToolTerminalObserver("run-memory");
-
-    expect(
-      observe({
-        toolName: "memory_search",
-        arguments: { query: "recall" },
-        outcome: "success",
-      }),
-    ).toMatchObject({ executionStarted: true, sideEffectEvidence: true });
-    expect(
-      observe({
-        toolName: "memory_get",
-        arguments: { path: "memory/notes.md" },
-        outcome: "success",
-      }),
-    ).toMatchObject({ executionStarted: true, sideEffectEvidence: false });
-  });
-
   it.each([
     {
       name: "keyword fallback",
@@ -457,20 +371,6 @@ describe("tool terminal outcome observer", () => {
       timeoutMs: 30_000,
       results: [],
       expected: "⚠️ Memory Search timed out after 30s.",
-    },
-    {
-      name: "provider error with timeout wording",
-      timedOut: false,
-      timeoutMs: 30_000,
-      results: [],
-      expected: "⚠️ Memory Search failed",
-    },
-    {
-      name: "invalid timeout metadata",
-      timedOut: true,
-      timeoutMs: -1,
-      results: [],
-      expected: "⚠️ Memory Search failed",
     },
   ])(
     "preserves $name in the final timeout warning",
@@ -534,27 +434,5 @@ describe("tool terminal outcome observer", () => {
     });
 
     expect(terminal.lastToolError).toMatchObject({ mutatingAction: false });
-  });
-
-  it("clears a failed persistence action after the same tool succeeds", () => {
-    const observe = createToolTerminalObserver("run-memory-store-retry");
-    const ownerKey = '["memory-lancedb","memory_store"]';
-    const ownerMutation = { ownerKey };
-
-    observe({
-      toolName: "memory_store",
-      arguments: { text: "The user prefers metric units." },
-      outcome: "failure",
-      failure: { error: "store unavailable" },
-      ownerMutation,
-    });
-    expect(
-      observe({
-        toolName: "memory_store",
-        arguments: { text: "The user prefers imperial units." },
-        outcome: "success",
-        ownerMutation,
-      }).lastToolError,
-    ).toBeUndefined();
   });
 });

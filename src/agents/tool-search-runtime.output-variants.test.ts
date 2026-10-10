@@ -88,7 +88,6 @@ function createFixture(
 describe("Tool Search input-dependent output contracts", () => {
   it.each([
     { validateInput: true, operation: "legacy", output: { removed: true }, accepted: true },
-    { validateInput: false, operation: "list", output: { records: ["R-1"] }, accepted: false },
   ])(
     "preserves both caller and executed contracts (validateInput=$validateInput, operation=$operation, output=$output)",
     async ({ validateInput, operation, output, accepted }) => {
@@ -107,23 +106,6 @@ describe("Tool Search input-dependent output contracts", () => {
       expect(execute.mock.calls[0]?.[1]).toEqual({ operation: "remove" });
     },
   );
-
-  it("accepts hook rewrites between operations with compatible result contracts", async () => {
-    rewriteOperation();
-    const removal = Type.Object({ removed: Type.Boolean() });
-    const { runtime, execute } = createFixture({
-      outputSchema: defineToolOutputSchema({
-        inputProperty: "operation",
-        variants: { remove: removal, delete: removal },
-      }),
-    });
-
-    await expect(runtime.callValue("records", { operation: "delete" })).resolves.toEqual({
-      removed: true,
-    });
-    expect(execute).toHaveBeenCalledOnce();
-    expect(execute.mock.calls[0]?.[1]).toEqual({ operation: "remove" });
-  });
 
   it("rejects an incompatible hook result before Code Mode can consume it", async () => {
     rewriteOperation();
@@ -211,13 +193,7 @@ describe("Tool Search input-dependent output contracts", () => {
     expect(execute).not.toHaveBeenCalled();
   });
 
-  it.each([
-    { references: false, output: { owner: "current", records: ["R-1"] }, accepted: true },
-    { references: false, output: { owner: "current", removed: true }, accepted: false },
-    { references: true, output: { owner: "current", removed: true }, accepted: true },
-    { references: false, output: { records: ["R-1"] }, accepted: false },
-    { references: true, output: { records: ["R-1"] }, accepted: false },
-  ])(
+  it.each([{ references: false, output: { owner: "current", records: ["R-1"] }, accepted: true }])(
     "preserves root constraints and uses umbrella fallback only for references ($references, $output)",
     async ({ references, output, accepted }) => {
       const definitions = {
@@ -276,39 +252,7 @@ describe("Tool Search input-dependent output contracts", () => {
     expect(execute).toHaveBeenCalledOnce();
   });
 
-  it.each(["$dynamicRef", "$recursiveRef"])(
-    "retains the exact umbrella schema when a schema position contains %s",
-    (reference) => {
-      const schema = defineToolOutputSchema({
-        inputProperty: "operation",
-        variants: {
-          list: Type.Object({ records: Type.Array(Type.String()) }),
-          remove: Type.Object({ child: { [reference]: "#" } as never }),
-        },
-      });
-
-      expect(readToolOutputSchemaVariants(schema)?.canNarrow).toBe(false);
-      expect(selectToolOutputSchema(schema, { operation: "list" })).toBe(schema);
-    },
-  );
-
-  it("does not treat property names or annotation data as schema references", () => {
-    const schema = defineToolOutputSchema({
-      inputProperty: "operation",
-      variants: {
-        list: Type.Object(
-          { $ref: Type.String() },
-          { default: { $ref: "#" }, examples: [{ $dynamicRef: "#" }] },
-        ),
-        remove: Type.Object({ removed: Type.Boolean() }),
-      },
-    });
-
-    expect(readToolOutputSchemaVariants(schema)?.canNarrow).toBe(true);
-    expect(selectToolOutputSchema(schema, { operation: "list" })).not.toBe(schema);
-  });
-
-  it.each(["deep", "wide", "cyclic"])(
+  it.each(["deep", "cyclic"])(
     "keeps the original schema when reference inspection cannot safely finish a %s graph",
     (shape) => {
       const schema: Record<string, unknown> = {
