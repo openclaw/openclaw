@@ -8,12 +8,10 @@ import {
   withBrowserControlStart,
 } from "./browser-control-state.js";
 import { loadBrowserConfigForRuntimeRefresh } from "./browser/config-refresh-source.js";
-import { resolveBrowserConfig, resolveProfile } from "./browser/config.js";
+import { resolveBrowserConfig } from "./browser/config.js";
 import { ensureBrowserControlAuth } from "./browser/control-auth.js";
-import {
-  getExtensionRelayModule,
-  getGatewayExtensionRelayModule,
-} from "./browser/extension-relay.runtime.js";
+import { getGatewayExtensionRelayModule } from "./browser/extension-relay.runtime.js";
+import { startControlStateExtensionRelays } from "./browser/extension-relay/control-startup.js";
 import { stopBrowserScreencasts } from "./browser/screencast/session.js";
 import type { BrowserServerState } from "./browser/server-context.js";
 import { resolveBrowserPluginEnableState } from "./plugin-enabled.js";
@@ -63,14 +61,7 @@ async function startBrowserControlServiceUnlocked(): Promise<BrowserServerState 
 
   // Extension relays listen from service start so the Chrome extension can
   // (re)connect before the first agent browser request arrives.
-  if (hasExtensionProfiles) {
-    const { startConfiguredExtensionRelays } = await getExtensionRelayModule();
-    await startConfiguredExtensionRelays(
-      state,
-      (name) => resolveProfile(resolved, name),
-      (message) => logService.warn(message),
-    );
-  }
+  await startControlStateExtensionRelays(state, (message) => logService.warn(message));
 
   logService.info(
     `Browser control service ready (profiles=${Object.keys(resolved.profiles).length})`,

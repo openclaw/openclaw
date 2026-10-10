@@ -18,7 +18,11 @@ This standalone server is opt-in — set the environment variable
 `OPENCLAW_EAGER_BROWSER_CONTROL_SERVER=1` in the gateway service environment
 and restart the gateway before the HTTP endpoints become available. Without
 this variable the browser control runtime still works through the CLI and
-agent tools, but nothing listens on the loopback control port.
+agent tools, but nothing listens on the loopback control port. When the
+variable is set, extension-driver profiles in the resolved browser config,
+including the default `chrome` profile unless it is overridden, also bind
+their existing loopback relay ports. Unsetting the variable leaves those
+relays lazy. Managed and existing-session profiles do not gain a relay listener.
 
 - Status/start/stop: `GET /`, `GET /doctor`, `POST /start`, `POST /stop`, `POST /reset-profile`
 - Profiles: `GET /profiles`, `POST /profiles/create`, `DELETE /profiles/:name`

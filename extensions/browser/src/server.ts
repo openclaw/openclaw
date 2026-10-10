@@ -1,6 +1,7 @@
 import express from "express";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
 import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { isTruthyEnvValue } from "openclaw/plugin-sdk/runtime-env";
 import {
   createBrowserControlContext,
   ensureBrowserControlRuntime,
@@ -16,6 +17,7 @@ import {
   resolveBrowserControlAuth,
   shouldAutoGenerateBrowserAuth,
 } from "./browser/control-auth.js";
+import { startControlStateExtensionRelays } from "./browser/extension-relay/control-startup.js";
 import { listenBrowserHttpServer } from "./browser/http-listen.js";
 import { registerBrowserRoutes } from "./browser/routes/index.js";
 import type { BrowserServerState } from "./browser/server-context.js";
@@ -25,6 +27,7 @@ import {
 } from "./browser/server-middleware.js";
 import { resolveBrowserPluginEnableState } from "./plugin-enabled.js";
 
+const EAGER_BROWSER_CONTROL_SERVER_ENV = "OPENCLAW_EAGER_BROWSER_CONTROL_SERVER";
 const log = createSubsystemLogger("browser");
 const logServer = log.child("server");
 
@@ -104,6 +107,18 @@ async function startBrowserControlServerUnlocked(): Promise<BrowserServerState |
     throw err;
   }
   setBridgeAuthForPort(port, browserAuth);
+
+  // Gateway boot reaches this HTTP owner only when the eager flag is set.
+  // Honor that flag here too so an HTTP start without it does not bind relay
+  // ports. Non-extension profiles never do. Relay failure must not tear down
+  // the already-bound loopback control server.
+  if (isTruthyEnvValue(process.env[EAGER_BROWSER_CONTROL_SERVER_ENV])) {
+    try {
+      await startControlStateExtensionRelays(state, (message) => logServer.warn(message));
+    } catch (err) {
+      logServer.warn(`extension relay startup failed: ${String(err)}`);
+    }
+  }
 
   const authMode = browserAuth.token ? "token" : browserAuth.password ? "password" : "off";
   logServer.info(`Browser control listening on http://127.0.0.1:${port}/ (auth=${authMode})`);
