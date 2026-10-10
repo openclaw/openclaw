@@ -38,9 +38,8 @@ export function shouldUseLmstudioApiKeyPlaceholder(params: {
 export function shouldUseLmstudioSyntheticAuth(
   providerConfig: ModelProviderConfig | undefined,
 ): boolean {
-  const hasModels = Array.isArray(providerConfig?.models) && providerConfig.models.length > 0;
   return (
-    hasModels &&
+    Boolean(providerConfig) &&
     !resolveLmstudioProviderAuthMode(providerConfig?.apiKey) &&
     !hasLmstudioAuthorizationHeader(providerConfig?.headers)
   );

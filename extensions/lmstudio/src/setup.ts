@@ -909,7 +909,6 @@ export async function discoverLmstudioProvider(
     apiKey: _apiKey,
     ...explicitWithoutHeaders
   } = explicit ?? {};
-  const hasExplicitModels = Array.isArray(explicit?.models) && explicit.models.length > 0;
   const { apiKey, discoveryApiKey, profileId } = ctx.resolveProviderApiKey(PROVIDER_ID);
   let resolvedHeaders: Record<string, string> | undefined;
   let hasAuthorizationHeader: boolean;
@@ -940,15 +939,16 @@ export async function discoverLmstudioProvider(
   const baseUrl = resolveLmstudioInferenceBase(explicit?.baseUrl);
   const quiet = !apiKey && !explicit && !resolvedDiscoveryApiKey;
   const run = async () => {
-    const models = hasExplicitModels
-      ? explicit.models
-      : await discoverLmstudioModels({
-          baseUrl,
-          apiKey: resolvedDiscoveryApiKey ?? "",
-          headers: resolvedHeaders,
-          quiet,
-          ...(!quiet && options ? options : {}),
-        });
+    const models =
+      !options && explicit?.models?.length
+        ? explicit.models
+        : await discoverLmstudioModels({
+            baseUrl,
+            apiKey: resolvedDiscoveryApiKey ?? "",
+            headers: resolvedHeaders,
+            quiet,
+            ...(!quiet && options ? options : {}),
+          });
     if (models.length === 0 && (options ? quiet : !apiKey && !explicit?.apiKey)) {
       return null;
     }
@@ -972,7 +972,7 @@ export async function discoverLmstudioProvider(
       },
     };
   };
-  return options && !hasExplicitModels
+  return options
     ? await runLiveProviderCatalog({
         providerId: PROVIDER_ID,
         profileId:

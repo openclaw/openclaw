@@ -73,6 +73,17 @@ command below and looking at the `key` field:
 curl http://localhost:1234/api/v1/models
 ```
 
+After installing another model in LM Studio, refresh OpenClaw's model list:
+
+```bash
+openclaw models list --provider lmstudio --refresh
+```
+
+In the default merge mode, refresh adds discovered models while preserving your
+configured rows and their authored metadata, including names and context limits.
+An empty configured `models` array also supports discovery on an unauthenticated
+server. `models.mode: "replace"` keeps only explicitly configured models.
+
 ## Non-interactive onboarding
 
 ```bash
