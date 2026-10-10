@@ -520,7 +520,7 @@ describe("openai-compatible generic embedding provider", () => {
     }
     expect(outcome.error).toBeInstanceOf(Error);
     expect((outcome.error as Error).message).toBe(
-      `openai-compatible embeddings failed: HTTP 502: ${EMBEDDING_ERROR_BOUNDARY_PREFIX}... [truncated]`,
+      `openai-compatible embeddings failed (model: text-embedding-bge-m3, batch size: 1): HTTP 502: ${EMBEDDING_ERROR_BOUNDARY_PREFIX}... [truncated]`,
     );
     await expect(
       withTestTimeout(
@@ -541,7 +541,7 @@ describe("openai-compatible generic embedding provider", () => {
     );
 
     await expect(provider.embed("hello")).rejects.toThrow(
-      "openai-compatible embeddings failed: JSON response exceeds 16777216 bytes",
+      "openai-compatible embeddings failed (model: text-embedding-bge-m3, batch size: 1): JSON response exceeds 16777216 bytes",
     );
     await expect(
       withTestTimeout(

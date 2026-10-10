@@ -57,6 +57,7 @@ type FrameRefresh = (name: string) => Promise<void>;
 
 type BoardWidgetFrameLifecycleHost = {
   active: () => boolean;
+  loadingCovered?: () => boolean;
   bridgeEnabled?: () => boolean;
   connected: () => boolean;
   context: () => ApplicationContext | undefined;
@@ -163,6 +164,10 @@ export class BoardWidgetFrameLifecycle {
 
   constructor(private readonly host: BoardWidgetFrameLifecycleHost) {}
 
+  get presentationReady(): boolean {
+    return this.contentVisible || this.waiting || this.renderStalled || Boolean(this.error);
+  }
+
   private gatewayAvailable(): boolean {
     const snapshot = this.host.context()?.gateway.snapshot;
     return !snapshot || isGatewayAvailable(snapshot);
@@ -253,7 +258,7 @@ export class BoardWidgetFrameLifecycle {
         <div class="board-widget__frame-pane">
           ${this.confirmation.render()}
           ${
-            this.contentVisible
+            this.contentVisible || this.host.loadingCovered?.()
               ? nothing
               : this.renderStalled
                 ? html`<div class="board-widget__notice" role="status">

@@ -28,6 +28,39 @@ function client(fetch: XFetch, dailyUsd = 100, spend = createXTestSpend({ dailyU
 }
 
 describe("X paid request budget boundary", () => {
+  it("reserves the whole username batch, then charges only the users returned", async () => {
+    const users = [
+      { id: "7", username: "alice", name: "Alice" },
+      { id: "8", username: "bob" },
+    ];
+    const fetch = vi.fn<XFetch>(async (url) => {
+      const parsed = new URL(url);
+      expect(parsed.pathname).toBe("/2/users/by");
+      expect(parsed.searchParams.get("usernames")).toBe("alice,bob,missing");
+      return Response.json({ data: users, errors: [{ resource_id: "missing" }] });
+    });
+    const api = client(fetch, 0.03);
+    await expect(api.getUsersByUsernames(["@alice", "bob", "missing"])).resolves.toEqual(users);
+    expect(await api.spend.status()).toMatchObject({ dayUsd: 0.02, cycleUsd: 0.02 });
+    await expect(api.getUsersByUsernames(["alice", "bob"])).rejects.toBeInstanceOf(
+      XBudgetExceededError,
+    );
+    expect(fetch).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    { label: "empty", usernames: [] },
+    { label: "oversized", usernames: Array.from({ length: 101 }, (_, index) => `user${index}`) },
+    { label: "comma-separated handle", usernames: ["alice,bob"] },
+    { label: "overlong handle", usernames: ["x".repeat(16)] },
+  ])("refuses a $label username batch before spending or dispatching", async ({ usernames }) => {
+    const fetch = vi.fn<XFetch>();
+    const api = client(fetch);
+    await expect(api.getUsersByUsernames(usernames)).rejects.toThrow("1–100 valid usernames");
+    expect(await api.spend.status()).toMatchObject({ dayUsd: 0, cycleUsd: 0 });
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
   it("keeps budget refusals non-retryable across separately loaded ledger modules", async () => {
     vi.resetModules();
     const { createXTestSpend: reloadedSpend } = await import("./test-support/spend.js");

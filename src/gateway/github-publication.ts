@@ -9,6 +9,7 @@ import {
 } from "../infra/kysely-sync.js";
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import type { GitHubPublicationRow as PublicationRow } from "../state/github-publication-read.types.js";
+import { githubPublicationReceipts } from "../state/github-publication-receipts.js";
 import { readGitHubPublicationSessionLifecycleInWorker } from "../state/github-publication-session-lifecycles.js";
 import {
   openOpenClawStateDatabase,
@@ -290,6 +291,7 @@ export function createGitHubPublicationCoordinator(params: {
         if (!updated) {
           throw new Error("GitHub publication accepted workspace snapshot changed.");
         }
+        githubPublicationReceipts.stageRow(db, "shared", updated);
         deferSharedGitHubPublicationChanged(db, updated);
         return updated;
       },

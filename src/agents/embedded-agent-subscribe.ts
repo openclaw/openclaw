@@ -316,6 +316,7 @@ export function subscribeEmbeddedAgentSession(input: SubscribeEmbeddedAgentSessi
     state.deterministicApprovalPromptPending = false;
     state.deterministicApprovalPromptSent = false;
     state.lastDeliveredBlockReplyText = undefined;
+    state.lastReasoningSent = undefined;
     state.toolExecutionSinceLastBlockReply = false;
     state.replayState = mergeEmbeddedRunReplayState(state.replayState, params.initialReplayState);
     state.livenessState = "working";

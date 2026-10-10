@@ -20,6 +20,10 @@ const mountXReplies: ControlUiView = (container, initialContext) => {
     style: "currency",
     currency: "USD",
   });
+  const dateTime = new Intl.DateTimeFormat(host.locale, {
+    dateStyle: "medium",
+    timeStyle: "short",
+  });
   const isCurrent = (id: number) =>
     !disposed && !context.signal.aborted && generation === id && canManage();
 
@@ -47,7 +51,7 @@ const mountXReplies: ControlUiView = (container, initialContext) => {
         username = "";
         notice = "Account added. Its mentions can now receive replies.";
       } else if (method === "x.allowlist.remove") {
-        notice = "Stored entry removed. Any config entry still applies.";
+        notice = "Stored entry removed. Any other allowlist source still applies.";
       } else if (method === "x.guests.set") {
         notice = result.guests.enabled
           ? result.guests.blockedReason
@@ -73,6 +77,7 @@ const mountXReplies: ControlUiView = (container, initialContext) => {
     if (disposed) {
       return;
     }
+    const github = snapshot?.verifiedFromGitHub;
     render(
       html`
         <section class="x-replies" aria-labelledby="x-replies-title">
@@ -303,11 +308,106 @@ const mountXReplies: ControlUiView = (container, initialContext) => {
                                       </tbody>
                                     </table>`
                                   : html`<p class="x-replies__empty">
-                                      No accounts are allowed yet. Add a maintainer above or set
+                                      No manual entries yet. Add a maintainer above or set
                                       <code>allowFrom</code> in config.
                                     </p>`
                               }
                             </div>
+                            ${
+                              github
+                                ? html`
+                                    <section
+                                      class="x-replies__github"
+                                      aria-labelledby="x-github-title"
+                                    >
+                                      <h2 id="x-github-title">From GitHub</h2>
+                                      <p>
+                                        Verified through
+                                        <a
+                                          href=${`https://github.com/${github.repo}`}
+                                          target="_blank"
+                                          rel="noreferrer"
+                                          >${github.repo}</a
+                                        >. To enable yourself, add your X handle to your GitHub
+                                        profile.
+                                        <a
+                                          href="https://docs.openclaw.ai/channels/x#enable-yourself"
+                                          target="_blank"
+                                          rel="noreferrer"
+                                          >Profile setup</a
+                                        >
+                                      </p>
+                                      <p class="x-replies__hint" role="status">
+                                        ${github.stale ? "Sync is stale. " : ""}
+                                        ${
+                                          github.lastSyncAt !== undefined
+                                            ? html`Last successful sync:
+                                                <time
+                                                  datetime=${new Date(github.lastSyncAt).toISOString()}
+                                                  >${dateTime.format(github.lastSyncAt)}</time
+                                                >.
+                                                ${github.stale ? "The last good set remains active." : ""}`
+                                            : "No successful sync yet."
+                                        }
+                                        Entries update automatically and are read-only here.
+                                      </p>
+                                      ${github.message ? html`<p class="x-replies__error" role="alert">${host.redact(github.message)}</p>` : nothing}
+                                      ${
+                                        github.unresolvedHandles.length
+                                          ? html`<p class="x-replies__hint">
+                                              Could not resolve on X:
+                                              ${github.unresolvedHandles.map((handle) => `@${handle}`).join(", ")}.
+                                              Check the declared profiles.
+                                            </p>`
+                                          : nothing
+                                      }
+                                      <div class="x-replies__list">
+                                        ${
+                                          github.entries.length
+                                            ? html`<table>
+                                                <thead>
+                                                  <tr>
+                                                    <th>X account</th>
+                                                    <th>GitHub account</th>
+                                                    <th>Permission</th>
+                                                    <th>Last sync</th>
+                                                  </tr>
+                                                </thead>
+                                                <tbody>
+                                                  ${github.entries.map(
+                                                    (entry) => html`<tr>
+                                                      <td>
+                                                        <strong>@${entry.xHandle}</strong
+                                                        ><small>${entry.xUserId}</small>
+                                                      </td>
+                                                      <td>
+                                                        <a
+                                                          href=${`https://github.com/${encodeURIComponent(entry.githubLogin)}`}
+                                                          target="_blank"
+                                                          rel="noreferrer"
+                                                          >@${entry.githubLogin}</a
+                                                        >
+                                                      </td>
+                                                      <td>${entry.permission}</td>
+                                                      <td>
+                                                        <time
+                                                          datetime=${new Date(entry.syncedAt).toISOString()}
+                                                          >${dateTime.format(entry.syncedAt)}</time
+                                                        >
+                                                      </td>
+                                                    </tr>`,
+                                                  )}
+                                                </tbody>
+                                              </table>`
+                                            : html`<p class="x-replies__empty">
+                                                No GitHub-derived accounts yet.
+                                              </p>`
+                                        }
+                                      </div>
+                                    </section>
+                                  `
+                                : nothing
+                            }
                             <p class="x-replies__hint">
                               ${
                                 snapshot.guests.enabled

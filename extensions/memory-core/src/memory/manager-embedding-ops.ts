@@ -2,7 +2,9 @@ import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import {
+  formatEmbeddingModelInput,
   isEmbeddingBatchUnavailableError,
+  resolveEmbeddingInputFormatVersion,
   type EmbeddingInput,
   type MemoryEmbeddingProviderRuntime,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
@@ -36,7 +38,7 @@ import { createMemoryEmbeddingOperationError } from "./manager-embedding-errors.
 import {
   countBatchSources,
   formatBatchSourceCounts,
-  runBatchWithTimeoutRetry,
+  runMemoryEmbeddingBatchTimeoutRetry,
   runMemoryEmbeddingBatchRetryWithSplit,
   runMemoryEmbeddingRetryLoop,
 } from "./manager-embedding-policy.js";
@@ -207,13 +209,27 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
 
     const missingChunks = missingCandidates.map((candidate) => candidate.chunk);
     const batchResult = this.batch.enabled
-      ? await runBatchWithTimeoutRetry({
+      ? await runMemoryEmbeddingBatchTimeoutRetry({
           onRetry: () =>
             log.warn(`memory embeddings: ${provider.id} batch timed out; retrying once`),
           run: () =>
             batchEmbed({
               agentId: this.agentId,
-              chunks: missingChunks,
+              chunks: resolveEmbeddingInputFormatVersion(provider.model)
+                ? missingChunks.map((chunk) => ({
+                    ...chunk,
+                    ...formatEmbeddingModelInput(chunk, provider.model, "document"),
+                    ...(chunk.embeddingInput
+                      ? {
+                          embeddingInput: formatEmbeddingModelInput(
+                            chunk.embeddingInput,
+                            provider.model,
+                            "document",
+                          ),
+                        }
+                      : {}),
+                  }))
+                : missingChunks,
               wait: this.batch.wait,
               concurrency: this.batch.concurrency,
               pollIntervalMs: this.batch.pollIntervalMs,
@@ -304,7 +320,9 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
                 message: `memory embeddings batch timed out after ${Math.round(timeoutMs / 1000)}s`,
                 run: async (signal) =>
                   await provider.embedBatch(
-                    batchItems.map((item) => item.input),
+                    batchItems.map((item) =>
+                      formatEmbeddingModelInput(item.input, provider.model, "document"),
+                    ),
                     { signal, inputType: "document" },
                   ),
               });
@@ -402,7 +420,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
         deadlineControl,
         run: (signal) =>
           this.withProviderUse(provider, () =>
-            provider.embed("ping", {
+            provider.embed(formatEmbeddingModelInput("ping", provider.model, "query"), {
               signal,
               inputType: "query",
               [MEMORY_SEARCH_DEADLINE_CONTROL]: deadlineControl,
@@ -445,7 +463,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
                 signal,
                 deadlineControl,
                 run: async (opSignal) =>
-                  await provider.embed(text, {
+                  await provider.embed(formatEmbeddingModelInput(text, provider.model, "query"), {
                     signal: opSignal,
                     inputType: "query",
                     ...(deadlineControl
@@ -491,13 +509,12 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
     return provider?.id === "ollama" ? 1 : EMBEDDING_INDEX_CONCURRENCY;
   }
 
-  /** Resolves false when retained rows drifted and the source needs a full write. */
   private async writeChunks(
     { entry, source, chunks, retained }: PreparedMemoryIndexEntry,
     generation: MemorySyncProviderGeneration | null,
     embeddings: number[][],
     vectorReady: boolean,
-  ): Promise<boolean> {
+  ): Promise<void> {
     const database = this.database;
     const sourceDatabase = generation?.database ?? this.publishedDatabase;
     const session =
@@ -507,7 +524,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
             sessionId: expectDefined(entry.sessionId, "memory index session identity"),
           }
         : undefined;
-    return await withMemoryWorkspaceLock(this.workspaceDir, async () => {
+    const retryInFull = await withMemoryWorkspaceLock(this.workspaceDir, async () => {
       const assertCurrent = () => {
         this.memoryFiles?.assertCurrent();
         if (
@@ -568,7 +585,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
       };
       const published = await database.replaceSource(createReplacement(), assertCurrent, prepare);
       if (!published) {
-        return true;
+        return false;
       }
       if (generation && database === generation.database) {
         if (published.beforeRevision !== generation.databaseRevision) {
@@ -586,8 +603,12 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
         loadError: this.vector.loadError,
         warn: (message) => log.warn(message),
       });
-      return !published.retainedDrift;
+      return published.retainedDrift;
     });
+    // A drifted delta wrote nothing; rebuild once after releasing the workspace lock.
+    if (retryInFull) {
+      await this.indexFileWithGeneration(entry, source, generation, false);
+    }
   }
 
   private async retainIndexedSessionChunks(
@@ -787,9 +808,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
       let offset = 0;
       for (const item of current) {
         const fileEmbeddings = embeddings.slice(offset, offset + item.chunks.length);
-        if (!(await this.writeChunks(item, generation, fileEmbeddings, vectorReady))) {
-          await this.indexFileWithGeneration(item.entry, item.source, generation, false);
-        }
+        await this.writeChunks(item, generation, fileEmbeddings, vectorReady);
         // Publication has settled; later files must not retain completed vectors.
         // oxlint-disable-next-line unicorn/no-array-fill-with-reference-type -- Completed slots are never read or mutated.
         embeddings.fill([], offset, offset + item.chunks.length);
@@ -854,15 +873,9 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
     const prepared = retain
       ? await this.retainIndexedSessionChunks(unplanned, generation)
       : unplanned;
-    // A drifted delta wrote nothing; one full write rebuilds the vanished rows.
-    const write = async (embeddings: number[][], vectorReady: boolean) => {
-      if (!(await this.writeChunks(prepared, generation, embeddings, vectorReady))) {
-        await this.indexFileWithGeneration(entry, source, generation, false);
-      }
-    };
     // An unchanged or truncated session has nothing to embed.
     if (generation?.kind !== "semantic" || prepared.chunks.length === 0) {
-      await write([], false);
+      await this.writeChunks(prepared, generation, [], false);
       return;
     }
 
@@ -898,7 +911,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
     }
     const sample = embeddings.find((embedding) => embedding.length > 0);
     const vectorReady = sample ? await this.ensureVectorReady(sample.length) : false;
-    await write(embeddings, vectorReady);
+    await this.writeChunks(prepared, generation, embeddings, vectorReady);
   }
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
