@@ -71,9 +71,9 @@ export function captureSessionEntrySnapshot(
         database: database.db,
         revision,
         sessionId: selected.row.current_session_id,
-        // SAFETY: The SQLite JSON subquery serializes this owner's typed scalar projection.
         row: selected.row.window_json
-          ? (JSON.parse(selected.row.window_json) as SessionEntryWindowRow)
+          ? // SAFETY: The SQLite JSON subquery serializes this owner's typed scalar projection.
+            (JSON.parse(selected.row.window_json) as SessionEntryWindowRow)
           : null,
       };
     }
