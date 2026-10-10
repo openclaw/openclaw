@@ -88,7 +88,10 @@ export class OpenClawApp extends OpenClawLightDomElement {
           this.requestUpdate();
         })
         .catch((error: unknown) => {
-          console.error("[openclaw] automation readiness could not load", error);
+          if (this.runtime === runtime) {
+            this.readinessLoad = undefined;
+            console.error("[openclaw] automation readiness could not load", error);
+          }
         });
     }
     return this.readiness?.hook;

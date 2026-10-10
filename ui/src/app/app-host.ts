@@ -172,6 +172,11 @@ class OpenClawShell
   readonly settingsSidebar = new LazyRenderer(this, () =>
     import("../components/settings-sidebar.ts").then((module) => module.renderSettingsSidebar),
   );
+  readonly debugOverlayFrame = new LazyRenderer(this, () =>
+    import("../pages/debug/debug-overlay-frame.ts").then(
+      (module) => module.renderPendingDebugOverlay,
+    ),
+  );
   private readonly sidebarUpdateCardImport = createIdleImport(
     () => import("../components/sidebar-update-card.ts"),
   );
