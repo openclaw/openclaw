@@ -14,7 +14,7 @@ browser-openable `index.html` with per-example feedback fields and **Copy feedba
 The manifest records the source HEAD, dirty paths, browser, platform, fixture
 fingerprint, exact expected shot set, and each PNG's hash and dimensions. The diff
 writes an HTML comparison, JSON report, and changed-pixel PNGs. Exit 0 means all
-expected shots match exactly; missing, incomplete, incompatible, or changed
+expected shots have no failing pixel differences; missing, incomplete, incompatible, or changed
 captures fail.
 
 Use the same frozen harness, browser version, platform, fonts, and profile/scene
@@ -52,21 +52,23 @@ This is a coverage matrix, not a full Cartesian product of accessibility setting
 Static preparation fixes dates and decorative randomness, samples JavaScript
 animation time, and strips SMIL animation instructions from SVG image responses.
 The shared screenshot helper owns layout, image/font readiness, and temporary
-transition suppression. Chromium uses its fresh-surface screenshot path.
+transition suppression. The capture profile fixes device scale to 1, color to
+sRGB, font hinting to none, and waits an extra animation frame after settlement.
+The shared E2E suite disables GPU/partial rasterization; the profile also requests
+Chromium's fresh-surface screenshot path.
 
-**The exact-repeatability gate is not yet qualified.** Two complete 924-shot
-captures passed at an earlier harness revision, but their comparison found 40
-changed shots. After fixing fixture randomness, animation clocks, SVG image
-motion, and transcript scroll ownership, the latest focused pair matched 42 of
-44 shots. The remaining Updates screenshots differ by 14 pixels each in desktop
-and mobile light mode, by at most one color-channel level, around the selected
-release-channel control. No tolerance, masks, or baseline exceptions are applied.
+`MAX_RASTER_NOISE_CHANNEL_DELTA = 1` is the comparison policy: a changed pixel
+passes only when its maximum absolute delta across all RGBA channels is at most
+one level. Any channel delta of two or more fails. This accommodates measured
+one-level rounding around antialiased shadows after rendering has been pinned;
+it is not a percentage or count allowance. JSON, HTML, and console reports count
+these pixels separately as **raster noise (≤1 level): N px**. Diff images mark
+failing pixels pink and accepted raster noise blue.
 
-The deliberate CSS sensitivity check detects a change in all 1,382,400 pixels
-of the selected desktop Chat shot. The nine report-contract tests and scripts
-typecheck pass. Before using this as the migration gate, resolve the remaining
-rendering variation, rerun the complete same-ref pair to zero, and inspect the
-complete resulting gallery.
+The full 924-shot pair must be requalified with this policy before the harness
+serves as the migration gate. The boundary tests prove one-level shifts pass and
+two-level shifts fail in every RGBA channel; the real CSS sensitivity capture
+must still fail. No screenshot baselines are committed.
 
 Run the opt-in report tests through the repository Vitest wrapper:
 

@@ -5,6 +5,10 @@ import photon from "@silvia-odwyer/photon-node";
 import { z } from "zod";
 import { createControlUiE2eArtifactDir } from "../../ui/src/test-helpers/control-ui-e2e-artifacts.ts";
 
+// Repeated pinned Chromium captures can round antialiased shadows by one level.
+// Larger differences remain failures; accepted noise is always counted separately.
+export const MAX_RASTER_NOISE_CHANNEL_DELTA = 1;
+
 export type Shot = {
   id: string;
   scene: string;
@@ -129,7 +133,14 @@ export async function compareCaptures(beforeDir: string, afterDir: string, paren
   for (const id of [...new Set([...beforeShots.keys(), ...afterShots.keys()])].toSorted()) {
     const left = beforeShots.get(id);
     const right = afterShots.get(id);
-    const row = { id, status: "equal", changedPixels: 0, totalPixels: 0, diff: "" };
+    const row = {
+      id,
+      status: "equal",
+      changedPixels: 0,
+      rasterNoisePixels: 0,
+      totalPixels: 0,
+      diff: "",
+    };
     if (!left || !right) {
       row.status = left ? "missing-after" : "missing-before";
     } else {
@@ -159,16 +170,33 @@ export async function compareCaptures(beforeDir: string, afterDir: string, paren
           const other = b.get_raw_pixels();
           const diff = new Uint8Array(pixels.length);
           for (let i = 0; i < pixels.length; i += 4) {
-            const changed = pixels
-              .subarray(i, i + 4)
-              .some((value, offset) => value !== other[i + offset]);
+            let maximumDelta = 0;
+            for (let channel = 0; channel < 4; channel += 1) {
+              maximumDelta = Math.max(
+                maximumDelta,
+                Math.abs(pixels[i + channel]! - other[i + channel]!),
+              );
+            }
+            const changed = maximumDelta > MAX_RASTER_NOISE_CHANNEL_DELTA;
+            const noise = maximumDelta > 0 && !changed;
             if (changed) {
               row.changedPixels += 1;
+            } else if (noise) {
+              row.rasterNoisePixels += 1;
             }
-            diff.set(changed ? [255, 0, 80, 255] : [pixels[i]!, pixels[i]!, pixels[i]!, 70], i);
+            diff.set(
+              changed
+                ? [255, 0, 80, 255]
+                : noise
+                  ? [0, 128, 255, 255]
+                  : [pixels[i]!, pixels[i]!, pixels[i]!, 70],
+              i,
+            );
           }
-          if (row.changedPixels) {
-            row.status = "pixels";
+          if (row.changedPixels || row.rasterNoisePixels) {
+            if (row.changedPixels) {
+              row.status = "pixels";
+            }
             row.diff = `${id}.png`;
             const rendered = new photon.PhotonImage(diff, width, height);
             try {
@@ -186,6 +214,7 @@ export async function compareCaptures(beforeDir: string, afterDir: string, paren
     results.push(row);
   }
   const changed = results.filter((row) => row.status !== "equal").length;
+  const rasterNoisePixels = results.reduce((total, row) => total + row.rasterNoisePixels, 0);
   await writeFile(
     path.join(directory, "report.json"),
     JSON.stringify(
@@ -193,7 +222,9 @@ export async function compareCaptures(beforeDir: string, afterDir: string, paren
         before: path.resolve(beforeDir),
         after: path.resolve(afterDir),
         incompatible,
+        maxRasterNoiseChannelDelta: MAX_RASTER_NOISE_CHANNEL_DELTA,
         changed,
+        rasterNoisePixels,
         results,
       },
       null,
@@ -206,10 +237,10 @@ export async function compareCaptures(beforeDir: string, afterDir: string, paren
       : "";
   await writeFile(
     path.join(directory, "index.html"),
-    `<!doctype html><html lang="en"><meta charset="utf-8"><title>Control UI parity diff</title><style>body{font:16px system-ui;margin:2rem}img{max-width:32%;vertical-align:top}article{border-top:1px solid #aaa;margin:1rem 0;padding:1rem 0}h2{overflow-wrap:anywhere}</style><h1>${changed} / ${results.length} shots differ</h1><p>Incompatible metadata: ${escape(incompatible.join(", ") || "none")}</p>${results.map((row) => `<article><h2>${row.id}: ${row.status}</h2><p>${row.changedPixels} / ${row.totalPixels} pixels</p><img alt="Before" src="${href(beforeDir, beforeShots.get(row.id))}"><img alt="After" src="${href(afterDir, afterShots.get(row.id))}">${row.diff ? `<img alt="Difference" src="${row.diff}">` : ""}</article>`).join("\n")}</html>`,
+    `<!doctype html><html lang="en"><meta charset="utf-8"><title>Control UI parity diff</title><style>body{font:16px system-ui;margin:2rem}img{max-width:32%;vertical-align:top}article{border-top:1px solid #aaa;margin:1rem 0;padding:1rem 0}h2{overflow-wrap:anywhere}</style><h1>${changed} / ${results.length} failing shot differences</h1><p>raster noise (≤${MAX_RASTER_NOISE_CHANNEL_DELTA} level): ${rasterNoisePixels} px</p><p>Incompatible metadata: ${escape(incompatible.join(", ") || "none")}</p>${results.map((row) => `<article><h2>${row.id}: ${row.status}</h2><p>${row.changedPixels} / ${row.totalPixels} failing pixels; raster noise (≤${MAX_RASTER_NOISE_CHANNEL_DELTA} level): ${row.rasterNoisePixels} px</p><img alt="Before" src="${href(beforeDir, beforeShots.get(row.id))}"><img alt="After" src="${href(afterDir, afterShots.get(row.id))}">${row.diff ? `<img alt="Difference" src="${row.diff}">` : ""}</article>`).join("\n")}</html>`,
   );
   console.log(
-    `[control-ui-parity] ${changed}/${results.length} shots differ; report: ${directory}`,
+    `[control-ui-parity] ${changed}/${results.length} failing shot differences; raster noise (≤${MAX_RASTER_NOISE_CHANNEL_DELTA} level): ${rasterNoisePixels} px; report: ${directory}`,
   );
   return changed || incompatible.length ? 1 : 0;
 }

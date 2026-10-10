@@ -1,4 +1,4 @@
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile, readdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import photon from "@silvia-odwyer/photon-node";
 import { afterEach, expect, it } from "vitest";
@@ -6,10 +6,14 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.ts";
 import { compareCaptures, hash, type Capture } from "./report.ts";
 
 const temporary = useAutoCleanupTempDirTracker(afterEach);
-async function fixture(red: number, width = 1) {
+async function fixture(pixel: number | readonly number[], width = 1) {
   const directory = temporary.make("parity-report-");
   const image = new photon.PhotonImage(
-    new Uint8Array(Array.from({ length: width }, () => [red, 0, 0, 255]).flat()),
+    new Uint8Array(
+      Array.from({ length: width }, () =>
+        typeof pixel === "number" ? [pixel, 0, 0, 255] : pixel,
+      ).flat(),
+    ),
     width,
     1,
   );
@@ -51,18 +55,48 @@ async function fixture(red: number, width = 1) {
 it("compares decoded pixels and reports the exact changed-pixel count", async () => {
   const a = await fixture(0),
     b = await fixture(0),
-    c = await fixture(1);
+    c = await fixture(2);
   const output = temporary.make("parity-output-");
   expect(await compareCaptures(a.directory, b.directory, output)).toBe(0);
   expect(await compareCaptures(a.directory, c.directory, output)).toBe(1);
-  const { readdir } = await import("node:fs/promises");
   const reports = await Promise.all(
     (await readdir(output)).map(async (name) =>
       JSON.parse(await readFile(path.join(output, name, "report.json"), "utf8")),
     ),
   );
-  expect(reports.map((report) => report.results[0].changedPixels).toSorted()).toEqual([0, 1]);
+  expect(
+    reports
+      .map((report) => report.results[0].changedPixels)
+      .toSorted((left, right) => left - right),
+  ).toEqual([0, 1]);
 });
+
+it.each([0, 1, 2, 3])(
+  "accepts one-level noise but fails two-level changes in RGBA channel %i",
+  async (channel) => {
+    const baseline = [128, 128, 128, 128];
+    const a = await fixture(baseline);
+    for (const delta of [-1, 1, -2, 2]) {
+      const b = await fixture(
+        baseline.map((value, index) => value + (index === channel ? delta : 0)),
+      );
+      const output = temporary.make("parity-boundary-");
+      const noise = Math.abs(delta) === 1;
+      expect(await compareCaptures(a.directory, b.directory, output)).toBe(noise ? 0 : 1);
+      const [name] = await readdir(output);
+      const report = JSON.parse(await readFile(path.join(output, name!, "report.json"), "utf8"));
+      expect(report.maxRasterNoiseChannelDelta).toBe(1);
+      expect(report.rasterNoisePixels).toBe(noise ? 1 : 0);
+      expect(report.results[0]).toMatchObject({
+        changedPixels: noise ? 0 : 1,
+        rasterNoisePixels: noise ? 1 : 0,
+      });
+      expect(await readFile(path.join(output, name!, "index.html"), "utf8")).toContain(
+        `raster noise (≤1 level): ${noise ? 1 : 0} px`,
+      );
+    }
+  },
+);
 
 it("reports changed image dimensions without attempting a mismatched pixel comparison", async () => {
   const a = await fixture(0),
