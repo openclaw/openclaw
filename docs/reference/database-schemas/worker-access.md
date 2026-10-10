@@ -442,7 +442,18 @@ the destination and any same-plugin namespace conditions in one synchronous
 worker transaction. An explicit conflict requires fresh preparation. Neither an
 unknown outcome nor a failed worker request selects a native fallback.
 
-Native binding deletion normally joins the
+Native harness ownership prepares through the awaited harness hook. Descriptive
+session rows retain exact keyed-state read dependencies through acceptance and
+invalidate on matching committed receipts or unknown settlement. Pending writes
+do not change committed descriptive truth. Unrelated keys leave those rows valid;
+this projection never replaces a final authority check. Legacy hooks with opaque
+storage retain refresh-on-dirty behavior. Unbound incognito retains its existing
+native acquisition contract.
+
+The native catalogue's upsert/link functions are transaction kernels called by
+entry writes or `conversation.register` in the agent worker. Reply audit capture
+uses the existing fenced transcript event worker command. Its private native
+Promise wrapper has been removed. Native binding deletion normally joins the
 existing durable worker transaction; initialization, incognito, or a mixed
 released participant can explicitly select the existing native atomic settlement
 before dispatch. This compatibility selection is never a recovery fallback.
@@ -527,6 +538,18 @@ behavior are unchanged; published updaters need no migration for these
 process-local facts.
 
 ### Approval, placement, and workspace receipts
+
+Ordinary turn preparation retains workspace snapshots, conversation bindings,
+skill-library queries, workshop changes, GitHub attribution, node catalogs, and
+exec policy in bounded process-local caches. Their existing owning writers
+invalidate the retained facts on commit or uncertain settlement. Binding expiry
+still invokes its pruning owner; workspace recovery predicates and explicit
+snapshot reads retain their existing database paths. Unchanged workspace
+preparation does not dispatch another registration transaction. Workshop reads
+filter the existing per-agent retained history in memory. Caller-visible mutable
+results are copied. Final execution and credential-use checks retain their
+current authority owners; prepared policy is not permission to execute.
+These caches change no schema, persisted data, retention, or update behavior.
 
 Managed approval and exec writers capture exact row postimages and deletion
 facts in their mutation statements. Approval expiry and corrupt-row repair are

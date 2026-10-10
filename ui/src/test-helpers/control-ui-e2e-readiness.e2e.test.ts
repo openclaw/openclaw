@@ -127,6 +127,9 @@ suite.define(() => {
         }
         expect(requests).toEqual([]);
 
+        if (!offline) {
+          await navigateToControlUiSession(page, key);
+        }
         await page.waitForFunction(() => window.openclawControlUi?.snapshot().ready === true);
         const snapshot = await page.evaluate(() => window.openclawControlUi?.snapshot());
         expect(snapshot).toMatchObject({
