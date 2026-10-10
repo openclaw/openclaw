@@ -665,6 +665,28 @@ describe("restart health", () => {
       "invalid credentials",
     ],
     [
+      "definitive probe failure during unlabeled startup grace",
+      {
+        lifecycle: "starting",
+        running: true,
+        lastStartAt: Date.now(),
+        probe: { ok: false, error: "invalid credentials" },
+      },
+      "invalid credentials",
+    ],
+    [
+      "definitive probe failure during unlabeled reconnect grace",
+      {
+        lifecycle: "recovering",
+        running: true,
+        connected: false,
+        lastStartAt: Date.now() - 120_001,
+        lastDisconnect: { at: Date.now(), error: "socket closed" },
+        probe: { ok: false, error: "invalid credentials" },
+      },
+      "invalid credentials",
+    ],
+    [
       "definitive probe failure during restart handoff",
       {
         healthState: "not-running",
@@ -751,6 +773,14 @@ describe("restart health", () => {
   });
   it.each([
     { healthState: "starting", lifecycle: "starting", running: true },
+    { lifecycle: "starting", running: true },
+    {
+      lifecycle: "recovering",
+      running: true,
+      connected: false,
+      lastStartAt: Date.now() - 120_001,
+      lastDisconnect: { at: Date.now(), error: "socket closed" },
+    },
     { healthState: "starting", running: true },
     { healthState: "reconnecting", lifecycle: "recovering", running: false },
     {
@@ -792,13 +822,16 @@ describe("restart health", () => {
         );
       inspectPortUsage.mockResolvedValue(ownedPortUsage);
       const { waitForGatewayHealthyRestart } = await import("./restart-health.js");
+      const observations: boolean[] = [];
       const snapshot = await waitForGatewayHealthyRestart({
         service: makeGatewayService({ status: "running", pid: 8000 }),
         port: 18789,
         expectedVersion: "2026.4.24",
         attempts: 3,
         delayMs: 10,
+        onObservation: (observed) => observations.push(observed.healthy),
       });
+      expect(observations[0]).toBe(false);
       expect(snapshot.healthy).toBe(true);
       expect(snapshot.waitOutcome).toBe("healthy");
       expect(sleep).toHaveBeenCalled();
@@ -836,39 +869,45 @@ describe("restart health", () => {
     expect(snapshot.waitOutcome).toBe("channel-errors");
     expect(sleep).not.toHaveBeenCalled();
   });
-  it("does not report recovery when the restart deadline expires during channel grace", async () => {
-    callGateway.mockImplementation(
-      gatewayHealthResponse({
-        server: { version: "2026.4.24", connId: "new" },
-        health: {
-          ok: true,
-          channels: {
-            whatsapp: {
-              configured: true,
-              healthState: "starting",
-              lifecycle: "starting",
-              running: true,
-              lastStartAt: Date.now(),
-              probe: { ok: true },
+  it.each([
+    { label: "labeled", healthState: "starting", expectedError: "starting" },
+    { label: "unlabeled", healthState: undefined, expectedError: "startup-connect-grace" },
+  ])(
+    "does not report recovery when the restart deadline expires during $label channel grace",
+    async ({ healthState, expectedError }) => {
+      callGateway.mockImplementation(
+        gatewayHealthResponse({
+          server: { version: "2026.4.24", connId: "new" },
+          health: {
+            ok: true,
+            channels: {
+              whatsapp: {
+                configured: true,
+                ...(healthState ? { healthState } : {}),
+                lifecycle: "starting",
+                running: true,
+                lastStartAt: Date.now(),
+                probe: { ok: true },
+              },
             },
           },
-        },
-      }),
-    );
-    inspectPortUsage.mockResolvedValue(ownedPortUsage);
-    const { waitForGatewayHealthyRestart } = await import("./restart-health.js");
-    const snapshot = await waitForGatewayHealthyRestart({
-      service: makeGatewayService({ status: "running", pid: 8000 }),
-      port: 18789,
-      expectedVersion: "2026.4.24",
-      attempts: 2,
-      delayMs: 10,
-    });
-    expect(snapshot.healthy).toBe(false);
-    expect(snapshot.waitOutcome).toBe("timeout");
-    expect(snapshot.channelProbeErrors).toEqual([
-      { id: "whatsapp", error: "starting", retryable: true },
-    ]);
-    expect(sleep).toHaveBeenCalled();
-  });
+        }),
+      );
+      inspectPortUsage.mockResolvedValue(ownedPortUsage);
+      const { waitForGatewayHealthyRestart } = await import("./restart-health.js");
+      const snapshot = await waitForGatewayHealthyRestart({
+        service: makeGatewayService({ status: "running", pid: 8000 }),
+        port: 18789,
+        expectedVersion: "2026.4.24",
+        attempts: 2,
+        delayMs: 10,
+      });
+      expect(snapshot.healthy).toBe(false);
+      expect(snapshot.waitOutcome).toBe("timeout");
+      expect(snapshot.channelProbeErrors).toEqual([
+        { id: "whatsapp", error: expectedError, retryable: true },
+      ]);
+      expect(sleep).toHaveBeenCalled();
+    },
+  );
 });

@@ -247,47 +247,49 @@ function readChannelProbeFailures(health: unknown) {
       const definitiveProbeFailure = probe?.timedOut === true ? undefined : probeFailure;
       const lastError = typeof account?.lastError === "string" ? account.lastError.trim() : "";
       const healthState = typeof account?.healthState === "string" ? account.healthState : "";
+      const lifecycle =
+        account?.lifecycle === "starting" ||
+        account?.lifecycle === "ready" ||
+        account?.lifecycle === "recovering" ||
+        account?.lifecycle === "blocked" ||
+        account?.lifecycle === "stopped"
+          ? account.lifecycle
+          : undefined;
+      const lastDisconnect = asOptionalRecord(account?.lastDisconnect);
+      const recoveryReason = evaluateChannelHealth(
+        {
+          lifecycle,
+          running: account?.running === true,
+          connected:
+            account?.connected === true ? true : account?.connected === false ? false : undefined,
+          lastDisconnect:
+            typeof lastDisconnect?.at === "number" ? { at: lastDisconnect.at } : undefined,
+          terminalDisconnect: account?.terminalDisconnect === true,
+          ingressUnavailable: account?.ingressUnavailable === true ? true : undefined,
+          linked: account?.linked === false ? false : undefined,
+          lastStartAt: typeof account?.lastStartAt === "number" ? account.lastStartAt : undefined,
+        },
+        {
+          channelId,
+          now: Date.now(),
+          channelConnectGraceMs: DEFAULT_CHANNEL_CONNECT_GRACE_MS,
+          staleEventThresholdMs: DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS,
+        },
+      ).reason;
+      const recoveryGrace =
+        recoveryReason === "startup-connect-grace" || recoveryReason === "reconnect-grace";
       // A successful credential probe does not prove that the channel process is running.
       // Keep an intentionally stopped account without a recorded failure non-blocking.
+      // Channels can omit their health label during grace, so runtime facts still keep it pending.
       if (
-        healthState &&
-        healthState !== "healthy" &&
-        (healthState !== "not-running" || lastError || account?.restartPending === true)
+        (!healthState && recoveryGrace) ||
+        (healthState &&
+          healthState !== "healthy" &&
+          (healthState !== "not-running" || lastError || account?.restartPending === true))
       ) {
-        const lifecycle =
-          account?.lifecycle === "starting" ||
-          account?.lifecycle === "ready" ||
-          account?.lifecycle === "recovering" ||
-          account?.lifecycle === "blocked" ||
-          account?.lifecycle === "stopped"
-            ? account.lifecycle
-            : undefined;
-        const lastDisconnect = asOptionalRecord(account?.lastDisconnect);
-        const recoveryReason = evaluateChannelHealth(
-          {
-            lifecycle,
-            running: account?.running === true,
-            connected:
-              account?.connected === true ? true : account?.connected === false ? false : undefined,
-            lastDisconnect:
-              typeof lastDisconnect?.at === "number" ? { at: lastDisconnect.at } : undefined,
-            terminalDisconnect: account?.terminalDisconnect === true,
-            ingressUnavailable: account?.ingressUnavailable === true ? true : undefined,
-            linked: account?.linked === false ? false : undefined,
-            lastStartAt: typeof account?.lastStartAt === "number" ? account.lastStartAt : undefined,
-          },
-          {
-            channelId,
-            now: Date.now(),
-            channelConnectGraceMs: DEFAULT_CHANNEL_CONNECT_GRACE_MS,
-            staleEventThresholdMs: DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS,
-          },
-        ).reason;
         if (recoveryReason === "unmanaged") {
           continue;
         }
-        const recoveryGrace =
-          recoveryReason === "startup-connect-grace" || recoveryReason === "reconnect-grace";
         const restartHandoff =
           (healthState === "not-running" || healthState === "ingress-unavailable") &&
           isChannelHealthRestartHandoff(
@@ -302,7 +304,7 @@ function readChannelProbeFailures(health: unknown) {
         }
         errors.push({
           id,
-          error: definitiveProbeFailure?.error ?? (lastError || healthState),
+          error: definitiveProbeFailure?.error ?? (lastError || healthState || recoveryReason),
           ...((recoveryGrace || restartHandoff) && !definitiveProbeFailure
             ? { retryable: true }
             : {}),
