@@ -1,8 +1,20 @@
 openclaw-chat-details {
-  position: absolute;
-  top: 8px;
-  right: 12px;
-  z-index: 5;
+  display: block;
+  min-width: 0;
+}
+
+/* One gutter owns both controls so suggestions cannot cover the Details trigger. */
+.chat-gutter-stack--details {
+  max-height: calc(100cqh - var(--chat-mobile-pane-header-height, 0px) - 20px);
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.chat-gutter-stack--details .task-suggestions {
+  min-height: 0;
+}
+
+.chat-gutter-stack--details .task-suggestion {
+  max-height: 100%;
 }
 openclaw-chat-details-session,
 openclaw-chat-details-progress {

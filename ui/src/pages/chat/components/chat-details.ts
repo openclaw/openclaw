@@ -49,7 +49,8 @@ export class ChatDetails extends OpenClawLightDomElement {
         bounds.bottom,
         (viewport?.offsetTop ?? 0) + (viewport?.height ?? window.innerHeight),
       ) - 8;
-    const top = Math.max(minimumTop, Math.min(minimumTop + 34, bottom - 120));
+    const triggerBottom = this.trigger?.getBoundingClientRect().bottom ?? minimumTop + 28;
+    const top = Math.max(minimumTop, Math.min(triggerBottom + 6, bottom - 120));
     panel.style.left = `${Math.max(left, right - 352)}px`;
     panel.style.top = `${top}px`;
     panel.style.width = `${Math.max(0, Math.min(352, right - left))}px`;

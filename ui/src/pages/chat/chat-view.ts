@@ -491,9 +491,14 @@ export function renderChat(props: ChatProps) {
   );
   const taskSuggestionTray = renderChatTaskSuggestionTray(props);
   const gutterStack =
-    taskSuggestionTray === nothing
+    !props.detailsEnabled && taskSuggestionTray === nothing
       ? nothing
-      : html`<div class="chat-gutter-stack">${taskSuggestionTray}</div>`;
+      : html`<div
+          class="chat-gutter-stack ${props.detailsEnabled ? "chat-gutter-stack--details" : ""}"
+        >
+          ${props.detailsEnabled ? html`<openclaw-chat-details .props=${props} .presented=${livePresentation(props.transcriptVisible ?? props.progressCardVisibility ?? props.presented ?? true)}></openclaw-chat-details>` : nothing}
+          ${taskSuggestionTray}
+        </div>`;
   // Keep the affordance mounted so visibility changes can finish their exit transition.
   const scrollToBottomButton = props.onScrollToBottom
     ? html`
@@ -615,7 +620,6 @@ export function renderChat(props: ChatProps) {
                 ${renderChatTopbarNotices(props)} ${renderContributions("header")}
                 ${renderTranscriptSearch(props.paneId, requestUpdate)}
                 <div class="chat-main__conversation-frame">
-                  ${props.detailsEnabled ? html`<openclaw-chat-details .props=${props} .presented=${livePresentation(props.transcriptVisible ?? props.progressCardVisibility ?? props.presented ?? true)}></openclaw-chat-details>` : nothing}
                   <!-- Chromium can crash when DevTools inspects a blocking Lit object listener. -->
                   <div
                     class="chat-main__conversation"
