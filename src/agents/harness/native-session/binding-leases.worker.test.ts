@@ -5,6 +5,7 @@ import { sqliteWorkerOwnerProbe as probe } from "../../../infra/sqlite-worker-ow
 import {
   createPluginStateKeyedStoreV2,
   createPluginStateSyncKeyedStore,
+  type PluginStateActionAuthority,
 } from "../../../plugin-state/plugin-state-store.js";
 import { resolveOpenClawStateSqlitePath } from "../../../state/openclaw-state-db.paths.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
@@ -28,7 +29,9 @@ function bindingStores(env: NodeJS.ProcessEnv) {
   });
   const syncState = createPluginStateSyncKeyedStore<TestBindingRecord>("binding-proof", options);
   const state = {
-    withCurrent: asyncState.withCurrent.bind(asyncState),
+    withCurrent(authority: PluginStateActionAuthority) {
+      return createPluginStateKeyedStoreV2<TestBindingRecord>("binding-proof", options, authority);
+    },
     assertLeaseCurrent(key: string, token: string) {
       const lease = syncState.lookup(key)?.lease;
       if (lease?.token !== token || lease.expiresAt <= Date.now()) {
