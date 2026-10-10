@@ -18,6 +18,7 @@ export type AcpPendingPrompt = {
   reject: (err: Error) => void;
   sentText?: string;
   sentPreambles?: Map<string, string>;
+  preambleNeedsSeparator?: boolean;
   preamblePreview?: { itemId: string; text: string; sent: string };
   sentThought?: string;
   streamMessage?: unknown;

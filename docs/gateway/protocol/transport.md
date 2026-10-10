@@ -84,9 +84,10 @@ Canonical `agent` events with `stream: "item"` and `data.kind: "preamble"`
 include optional `preamble` metadata. When the item replaces a live preview,
 `preamble.retainedText` supplies the producer's remaining answer projection,
 including an empty string when no answer prefix remains. An empty `preamble`
-object identifies narration that had no preview to retire. Append-only clients
-can preserve a preview they already delivered while rebasing their final-answer
-state. Chat and raw assistant
+object means this event carries no new retirement projection. Earlier preview
+credit can still cover later item IDs and completion echoes. Append-only clients
+can preserve a preview they already delivered, carry its credit across those
+identities, and rebase their final-answer state. Chat and raw assistant
 frames are paced independently; their arrival order and payload sequence numbers
 are not a reclassification identity. Older clients can ignore this additive
 metadata. ACP commentary reconciliation requires an updated Gateway and bridge.

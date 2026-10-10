@@ -12,9 +12,28 @@ import {
 // mock-isolation: Command discovery loads unrelated plugins outside this event delivery contract.
 vi.mock("./commands.js", () => ({ getAvailableCommands: () => [] }));
 
-it.each([false, true])(
-  "delivers generic commentary once through Gateway and ACP (batchedPreview=%s)",
-  async (batchedPreview) => {
+it.each([
+  {
+    name: "no preview",
+    batchedPreview: false,
+    separator: "",
+    expected: "Checking files.\nReading config.\nChecking files.Done.",
+  },
+  {
+    name: "preview without line breaks",
+    batchedPreview: true,
+    separator: "",
+    expected: "Checking files.Reading config.Checking files.Done.",
+  },
+  {
+    name: "preview with line breaks",
+    batchedPreview: true,
+    separator: "\n",
+    expected: "Checking files.\nReading config.\nChecking files.Done.",
+  },
+])(
+  "delivers generic commentary once through Gateway and ACP ($name)",
+  async ({ batchedPreview, separator, expected }) => {
     const sent = createDeferred<string>();
     const request = vi.fn().mockImplementation(async (method, params) => {
       if (method === "chat.send") {
@@ -46,7 +65,11 @@ it.each([false, true])(
     };
     try {
       source.emit({ type: "message_start", message });
-      const narrations = ["Checking files.", "Reading config.", "Checking files."];
+      const narrations = [
+        "Checking files.",
+        `${separator}Reading config.`,
+        `${separator}Checking files.`,
+      ];
       if (batchedPreview) {
         for (const [contentIndex, text] of narrations.entries()) {
           message.content.push({ type: "text", text });
@@ -116,9 +139,8 @@ it.each([false, true])(
           .flatMap(([{ update }]) =>
             update.sessionUpdate === "agent_message_chunk" ? [update.content.text] : [],
           )
-          .join("")
-          .replaceAll("\n", ""),
-      ).toBe("Checking files.Reading config.Checking files.Done.");
+          .join(""),
+      ).toBe(expected);
     } finally {
       source.subscription.unsubscribe();
       await unsubscribe();

@@ -80,16 +80,17 @@ export class AcpTranslatorAgentEvents {
       }
       const itemId = normalizeOptionalString(data.itemId) ?? "";
       const preambles = (pending.sentPreambles ??= new Map());
+      const isNewPreamble = !preambles.has(itemId);
       let sent = preambles.get(itemId) ?? "";
       let preceding = "";
       const previous = pending.preamblePreview;
-      if (!preambles.has(itemId) && previous) {
+      if (isNewPreamble && previous) {
         // One retired preview can contain several subsequently identified items.
         sent = previous.sent.slice(previous.text.length).replace(/^\n+/, "");
         preambles.set(previous.itemId, previous.text);
         pending.preamblePreview = undefined;
       }
-      if (!preambles.has(itemId) && typeof projection.retainedText === "string") {
+      if (isNewPreamble && typeof projection.retainedText === "string") {
         sent = "";
         const retained = projection.retainedText.trimEnd();
         const answer = pending.sentText ?? "";
@@ -118,13 +119,21 @@ export class AcpTranslatorAgentEvents {
         pending.preamblePreview = undefined;
       }
       if (!preceding && !delta) {
+        if (isNewPreamble) {
+          pending.preambleNeedsSeparator = true;
+        }
         return;
       }
+      const separator =
+        isNewPreamble && !sent && pending.preambleNeedsSeparator && !delta.startsWith("\n")
+          ? "\n"
+          : "";
+      pending.preambleNeedsSeparator = true;
       update = {
         sessionUpdate: "agent_message_chunk",
         content: {
           type: "text",
-          text: preceding && delta ? `${preceding}\n\n${delta}` : preceding + delta,
+          text: preceding && delta ? `${preceding}\n\n${delta}` : separator + preceding + delta,
         },
       };
     } else {
@@ -177,6 +186,7 @@ export class AcpTranslatorAgentEvents {
       } else {
         return;
       }
+      pending.preambleNeedsSeparator = false;
     }
     await this.sessionUpdates.emit({
       sessionId: pending.sessionId,
