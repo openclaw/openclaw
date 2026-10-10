@@ -139,6 +139,7 @@ describe("outbox receipt attention", () => {
     });
     admitHostQueueItems(host);
     onTestFinished(chatOutboxOwner(host).subscribe(host));
+    const reader = createStoredChatOutboxReader();
     const recovering = resumeStoredChatOutboxes(host);
     await started.promise;
     if (condition === "edited") {
@@ -151,6 +152,10 @@ describe("outbox receipt attention", () => {
     expect(listStoredChatOutboxes(host)[0]?.queue.map((item) => item.id)).toEqual(
       condition === "cancelled" ? ["uncertain"] : ["uncertain", "later"],
     );
+    if (condition === "pending" || condition === "pending-with-transcript") {
+      expect(listStoredChatOutboxes(host)[0]?.queue[1]?.sendState).toBe("waiting-idle");
+      expect(reader.read(host).attentionCountForSession(sessionKey)).toBe(1);
+    }
     expect(requestCalls(host.request, "chat.send")).toEqual([]);
   });
 

@@ -113,9 +113,12 @@ export function buildOllamaModelsConfig(
       return [];
     }
     return [
-      buildOllamaModelDefinition(name, discovered?.contextWindow, discovered?.capabilities, {
-        showInspectionFailed: discovered?.showInspectionFailed,
-      }),
+      buildOllamaModelDefinition(
+        name,
+        discovered?.contextWindow,
+        discovered?.capabilities,
+        discovered,
+      ),
     ];
   });
 }

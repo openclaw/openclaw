@@ -81,8 +81,12 @@ Durably admitted inputs from `sessions_send` or the Gateway `agent` method
 appear separately in `pendingInputs`, not in transcript `messages`. Each row
 records `queued`, `cancelled`, or `interrupted`.
 Cancelled and interrupted inputs are retained for inspection and never run
-automatically. Use `pendingBefore` with the page's `nextBefore` to read older
-inputs; `limit` bounds both pages. Pending previews share a 4 KB budget within
+automatically. Built-in and CLI agent turns also receive bounded text previews of recent
+visible interrupted inputs as historical context, even when session-history tools
+are unavailable. These previews do not consume input, restore old permissions, or
+resume work without a current request. Queued, cancelled, hidden, and
+context-excluded inputs are not included. Use `pendingBefore` with the page's
+`nextBefore` to read older inputs; `limit` bounds both pages. Pending previews share a 4 KB budget within
 the overall 80 KB response budget, so use a smaller `limit` for richer previews.
 
 `pendingInputs.total` counts retained, unconsumed inputs in the current physical

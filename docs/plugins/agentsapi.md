@@ -99,6 +99,16 @@ for provider and per-agent model settings.
 
 ### 3. Start a conversation and try a task
 
+In the Control UI, open **New session → Environments** and select
+**OpenAI (Agents API)** under **Hosted workspaces**. The option uses the Gateway’s
+configured model/runtime choices and API-key availability. If another runtime
+should remain your default, add `pickerRuntimes: ["agentsapi"]` to the exact
+model entry instead of changing its `agentRuntime`. See
+[model runtime choices](/concepts/models#choose-the-same-model-with-different-runtimes).
+The hosted choice does not copy your selected local folder, project, or worktree;
+send input files as chat attachments. Switching back restores your local draft
+choices and requires an available compatible host runtime.
+
 Apply the configuration through your usual Gateway workflow. In your chat
 channel, send `/new`, then try:
 

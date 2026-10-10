@@ -24,7 +24,7 @@ function showImmutableService(unit: string, properties: string) {
   return execSystemctl(["--system", "show", unit, `--property=${properties}`], undefined, 5_000);
 }
 
-async function readImmutableService(
+export async function readImmutableService(
   service: ImmutableInstallDescriptor["service"],
   root: string,
   generationPath: string,
