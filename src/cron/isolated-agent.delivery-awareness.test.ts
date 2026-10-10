@@ -133,9 +133,11 @@ describe("isolated cron delivery awareness", () => {
         },
       },
       (result, deps) => {
-        expect(result.status).toBe("error");
-        expect(result.error).toContain("shared agent-main session bucket");
-        expect(result.delivered).toBeFalsy();
+        expect(result.status).toBe("ok");
+        expect(result.error).toBeUndefined();
+        expect(result.deliveryError).toContain("shared agent-main session bucket");
+        expect(result.deliveryState?.status).toBe("not-delivered");
+        expect(result.delivered).toBe(false);
         expect(deps.telegram).not.toHaveBeenCalled();
         expect(peekSystemEvents("agent:main:main")).toStrictEqual([]);
       },
