@@ -20,7 +20,8 @@ export function selectBoundedModelRequests(
     ({ entry }) => entry.type === "compaction" || entry.type === "reset",
   );
   const candidates = requests.filter((request) => request !== boundary);
-  const sizingCandidates = candidates.slice(-limits.maxEvents);
+  const candidateLimit = limits.maxEvents - (boundary ? 1 : 0);
+  const sizingCandidates = candidateLimit > 0 ? candidates.slice(-candidateLimit) : [];
   const sizes = readSizes(boundary ? [boundary, ...sizingCandidates] : sizingCandidates);
   let bytes = boundary ? sizes.get(boundary.entry)! : 0;
   let events = boundary ? 1 : 0;
@@ -95,7 +96,10 @@ export function selectBoundedModelRequests(
     }
   }
   // A large newest atomic frame may consume the headroom without exceeding the hard cap.
-  let selected = candidates.slice(cut === candidates.length ? fallbackCut : cut);
+  const latestTurnStart = turnStarts.at(-1) ?? candidates.length;
+  let selected = candidates.slice(
+    cut === candidates.length || cut > latestTurnStart ? fallbackCut : cut,
+  );
   if (selected.length === 0 && limits.toolResultOverflow === "omit") {
     // Retain the newest historical request and close its suffix over displaced results.
     // The currently admitted user is supplied separately by native runtime callers.
