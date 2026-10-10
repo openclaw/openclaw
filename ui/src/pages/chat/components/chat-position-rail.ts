@@ -6,6 +6,7 @@ import {
   renderChatPositionRailView,
   syncPositionRailPreview,
   syncPositionRailTabStop,
+  syncPositionRailVisibility,
   type PositionRailAssistant,
 } from "./chat-position-rail-view.ts";
 import {
@@ -254,6 +255,7 @@ class ChatPositionRailDirective extends AsyncDirective {
   private disconnectVisibility() {
     this.stopTranscriptScroll?.();
     this.stopTranscriptScroll = undefined;
+    this.scrollElement?.closest(".chat-position-rail")?.removeAttribute("data-overflow");
     this.intersectionObserver?.disconnect();
     this.mutationObserver?.disconnect();
     this.transcriptElement?.removeEventListener("scroll", this.observeLayout);
@@ -393,6 +395,13 @@ class ChatPositionRailDirective extends AsyncDirective {
   }
 
   private syncReaderViewport(measured: TranscriptViewportMeasurement) {
+    const overflowing =
+      measured.clientHeight > 0 && measured.scrollHeight - measured.clientHeight > 1;
+    if (syncPositionRailVisibility(this.scrollElement, overflowing) && !overflowing) {
+      // Guarded marker callbacks retain this object while the rail is hidden.
+      Object.assign(this.interaction, initialInteraction());
+      this.refreshWindow();
+    }
     const { state, scheduleLayout } = resolvePositionRailReaderViewport(
       this.reader,
       measured,

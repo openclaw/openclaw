@@ -130,10 +130,10 @@ export function bindSqliteWorkerBackend(
   return {
     execute(command) {
       assertOpen();
+      if (command.type === "count") {
+        return readSessionEntryCount(database);
+      }
       return runSqliteDeferredTransactionSync(database.db, () => {
-        if (command.type === "count") {
-          return readSessionEntryCount(database);
-        }
         if (command.type === "prepare") {
           const input = command.input;
           const store = readSessionEntryStore(database, {

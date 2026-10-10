@@ -1,7 +1,10 @@
 import path from "node:path";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { resolveAgentSessionDirsFromAgentsDirSync } from "../../agents/session-dirs.js";
-import { assertExistingDatabaseIdentity } from "../../infra/sqlite-worker-identity.js";
+import {
+  assertDatabasePathIdentity,
+  assertExistingDatabaseIdentity,
+} from "../../infra/sqlite-worker-identity.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import {
   OPENCLAW_AGENT_SCHEMA_VERSION,
@@ -28,6 +31,9 @@ import {
 } from "./session-sqlite-target.js";
 import {
   captureSessionStoreReadCandidate,
+  captureSessionStoreCandidateIdentities,
+  qualifyAbsentSessionStoreReadCandidate,
+  isSessionStoreReadCandidateCurrent,
   assertSessionStoreReadCandidate,
   type CapturedSessionStorePaths,
   type SessionStoreReadCandidate,
@@ -129,23 +135,53 @@ export function readSessionStoreTargetResult(
   }
 }
 
-export function captureSessionStoreReadCandidates(storePath: string): SessionStoreReadCandidate[] {
+function captureSessionStoreCandidateInventory(storePath: string) {
   const target = resolveUnsuffixedSqliteTargetFromSessionStorePath(storePath);
   const candidates = [captureSessionStoreReadCandidate(target.path)];
   if (target.agentId || target.shared) {
-    return candidates;
+    return { candidates, familyListingComplete: false };
   }
   candidates.unshift(captureSessionStoreReadCandidate(target.path, "sibling-family"));
+  let familyListingComplete = false;
   try {
     for (const candidate of listSqliteTargetCandidatePathsForSessionStorePath(storePath)) {
       if (candidate !== target.path) {
         candidates.push(captureSessionStoreReadCandidate(candidate));
       }
     }
+    familyListingComplete = true;
   } catch {
     // The worker refuses an unreadable or changed target outside this captured family.
   }
-  return candidates;
+  return { candidates, familyListingComplete };
+}
+
+export function captureSessionStoreReadCandidates(storePath: string): SessionStoreReadCandidate[] {
+  return captureSessionStoreCandidateInventory(storePath).candidates;
+}
+
+/** A complete initial listing proves absence for a later-selected sibling without predicting ownership. */
+export function captureSessionStoreWriteCandidates(storePath: string) {
+  const captured = captureSessionStoreCandidateInventory(storePath);
+  const identities = captureSessionStoreCandidateIdentities(captured.candidates);
+  const assertCurrent = () => {
+    if (!captured.candidates.every(isSessionStoreReadCandidateCurrent)) {
+      throw new Error("Session database selector changed during discovery");
+    }
+  };
+  return {
+    assertCurrent,
+    resolveIdentity(pathname: string) {
+      assertCurrent();
+      const physicalPath = assertSessionStoreReadCandidate(pathname, captured.candidates);
+      const identity = identities.get(physicalPath);
+      if (identity) {
+        assertDatabasePathIdentity(pathname, identity);
+        return identity;
+      }
+      return qualifyAbsentSessionStoreReadCandidate(pathname, captured);
+    },
+  };
 }
 
 export type SessionStoreTargetInventoryRequest = {

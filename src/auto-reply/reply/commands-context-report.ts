@@ -14,6 +14,8 @@ import {
 import { estimateMessageChars } from "../../agents/embedded-agent-runner/tool-result-char-estimator.js";
 import type { AgentMessage } from "../../agents/runtime/index.js";
 import { buildSystemPromptReport } from "../../agents/system-prompt-report.js";
+import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
+import { resolveProjectedSessionContextTokens } from "../../config/sessions/context-token-provenance.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
 import {
   resolveFreshSessionTotalTokens,
@@ -175,7 +177,24 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
     totalTokensFresh: targetSessionEntry ? cachedContextUsageTokens !== undefined : null,
     inputTokens: targetSessionEntry?.inputTokens ?? null,
     outputTokens: targetSessionEntry?.outputTokens ?? null,
-    contextTokens: params.contextTokens ?? null,
+    contextTokens:
+      resolveProjectedSessionContextTokens({
+        entry: targetSessionEntry,
+        provider: params.provider,
+        model: params.model,
+        agentHarnessId: resolveEffectiveAgentRuntime({
+          cfg: params.cfg,
+          agentId: resolveContextReportAgentId(params),
+          sessionKey: params.sessionKey,
+          sessionEntry: targetSessionEntry,
+          provider: params.provider,
+          modelId: params.model,
+        }),
+        resolvedContextTokens: params.contextTokenProjection?.contextTokens,
+        authoredContextTokens: params.contextTokenProjection?.authoredContextTokens,
+      }) ??
+      params.contextTokens ??
+      null,
   } as const;
 
   if (sub === "map") {

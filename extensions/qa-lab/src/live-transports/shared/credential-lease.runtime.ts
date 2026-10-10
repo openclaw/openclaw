@@ -13,6 +13,7 @@ import {
   normalizeQaCredentialConvexSiteUrl,
   normalizeQaCredentialEndpointPrefix,
   parseQaCredentialPositiveIntegerEnv,
+  parseQaCredentialResponsePayload,
   QA_CREDENTIALS_DEFAULT_ENDPOINT_PREFIX,
 } from "../../qa-credentials-common.runtime.js";
 import { captureQaLeaseClock, createQaLeaseHealth } from "./credential-lease-health.js";
@@ -282,16 +283,7 @@ async function postConvexBroker(
     maxBytes:
       endpoint === "payloadChunk" ? config.payloadMaxBytes : CONVEX_BROKER_RESPONSE_MAX_BYTES,
   });
-  const payload: unknown = (() => {
-    if (!text.trim()) {
-      return undefined;
-    }
-    try {
-      return JSON.parse(text) as unknown;
-    } catch {
-      return text;
-    }
-  })();
+  const payload = parseQaCredentialResponsePayload(text);
 
   const brokerError = toBrokerError({
     payload,

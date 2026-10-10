@@ -192,11 +192,7 @@ export abstract class MemoryManagerEmbeddingCacheOps extends MemoryManagerSyncOp
     embeddings: number[][],
     generation: MemorySemanticProviderGeneration,
   ): Promise<void> {
-    if (
-      !this.cache.enabled ||
-      candidates.length === 0 ||
-      !this.canWriteEmbeddingCache(generation)
-    ) {
+    if (candidates.length === 0 || !this.canWriteEmbeddingCache(generation)) {
       return;
     }
     // Validate the whole provider response before retaining any vectors. Index
@@ -207,6 +203,7 @@ export abstract class MemoryManagerEmbeddingCacheOps extends MemoryManagerSyncOp
       !embeddings.every((embedding) => isValidMemoryEmbedding(embedding, dimensions))
     ) {
       if (
+        this.cache.enabled &&
         generation.embeddingDimensions !== undefined &&
         embeddings.some(
           (embedding) =>
@@ -228,11 +225,30 @@ export abstract class MemoryManagerEmbeddingCacheOps extends MemoryManagerSyncOp
           }
         });
       }
+      const position = embeddings.findIndex(
+        (embedding) => !isValidMemoryEmbedding(embedding, dimensions),
+      );
+      const embedding = embeddings[position];
+      let condition = `expected ${candidates.length} vectors, got ${embeddings.length}`;
+      if (embeddings.length === candidates.length) {
+        if (!Array.isArray(embedding)) {
+          condition = `missing embedding array at position ${position}`;
+        } else if (embedding.length === 0) {
+          condition = `empty embedding at position ${position}`;
+        } else if (embedding.length !== dimensions) {
+          condition = `expected ${dimensions} dimensions, got ${embedding.length} at position ${position}`;
+        } else {
+          condition = `non-finite or non-numeric coordinate at position ${position}`;
+        }
+      }
       throw new Error(
-        "memory embeddings: malformed vector response (count, dimensions, or coordinates)",
+        `${generation.provider.id} embeddings failed (model: ${generation.provider.model}, batch size: ${candidates.length}): ${condition}`,
       );
     }
     generation.embeddingDimensions = dimensions;
+    if (!this.cache.enabled) {
+      return;
+    }
     await withMemoryWorkspaceLock(this.workspaceDir, async () => {
       if (!this.canWriteEmbeddingCache(generation)) {
         return;

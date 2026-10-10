@@ -71,14 +71,9 @@ beforeEach(() => {
   sessionStoreMocks.loadSessionStoreEntry
     .mockReset()
     .mockImplementation(() => sessionStoreMocks.currentEntry);
-  sessionStoreMocks.loadSessionStore.mockReset().mockReturnValue({});
-  sessionStoreMocks.readSessionEntry
-    .mockReset()
-    .mockImplementation(() => sessionStoreMocks.currentEntry);
   sessionStoreMocks.resolveSessionStorePathCore
     .mockReset()
     .mockReturnValue("/tmp/mock-sessions.json");
-  sessionStoreMocks.resolveSessionStoreEntry.mockReset().mockReturnValue({ existing: undefined });
   sessionStoreMocks.updateSessionEntry.mockClear();
 });
 
@@ -576,9 +571,6 @@ describe("accepted continuation status delivery", () => {
       sessionKey: "agent:test:session",
       pendingFinalDelivery: pendingFinalDelivery("durable reply", "intent-89115"),
     };
-    sessionStoreMocks.resolveSessionStoreEntry.mockReturnValue({
-      existing: sessionStoreMocks.currentEntry,
-    });
     const abortController = new AbortController();
     const deliver = vi.fn().mockResolvedValue(undefined);
     const dispatcher = createReplyDispatcher({ deliver });

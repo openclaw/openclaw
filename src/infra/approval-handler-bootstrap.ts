@@ -65,11 +65,9 @@ export async function startChannelApprovalHandlerBootstrap(params: {
   let activeHandler: ChannelApprovalHandler | null = null;
   let retryJob: GatewayScheduledJob | undefined;
   const invalidateActiveHandler = () => {
-    activeGeneration += 1;
-  };
-  const cancelRetry = () => {
     retryJob?.cancel();
     retryJob = undefined;
+    activeGeneration += 1;
   };
 
   const stopHandler = async () => {
@@ -158,7 +156,6 @@ export async function startChannelApprovalHandlerBootstrap(params: {
   };
 
   const startForContext = (context: unknown) => {
-    cancelRetry();
     invalidateActiveHandler();
     spawn(
       "failed to start native approval handler",
@@ -177,7 +174,6 @@ export async function startChannelApprovalHandlerBootstrap(params: {
           startForContext(event.context);
           return;
         }
-        cancelRetry();
         invalidateActiveHandler();
         spawn("failed to stop native approval handler", stopHandler());
       },
@@ -195,7 +191,6 @@ export async function startChannelApprovalHandlerBootstrap(params: {
 
   return async () => {
     unsubscribe();
-    cancelRetry();
     invalidateActiveHandler();
     await stopHandler();
   };

@@ -1,3 +1,4 @@
+import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import { type FastMode, normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentDir } from "../agents/agent-scope.js";
 import type { ModelCatalogSnapshot } from "../agents/model-catalog.types.js";
@@ -5,6 +6,25 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { shouldPreserveSessionAuthProfileOverride } from "../sessions/auth-profile-preservation.js";
 import { resolveSessionPatchModelSelection } from "./server-methods/sessions-patch-model-selection.js";
+
+/** Creation can adopt a key, but only an explicit settings mutation can replace its policy. */
+export function sessionCreatePolicyAdoptionError(
+  existing: SessionEntry | undefined,
+  projected: SessionEntry,
+  requested: Pick<Partial<SessionEntry>, "toolOverrides" | "communication">,
+): string | undefined {
+  if (existing) {
+    for (const field of ["toolOverrides", "communication"] as const) {
+      if (
+        requested[field] !== undefined &&
+        stableStringify(existing[field]) !== stableStringify(projected[field])
+      ) {
+        return "sessions.create " + field + " requires a new session";
+      }
+    }
+  }
+  return undefined;
+}
 
 export async function existingSessionSelectionWouldChange(params: {
   agentId: string;

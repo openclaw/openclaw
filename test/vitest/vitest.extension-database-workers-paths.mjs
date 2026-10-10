@@ -6,6 +6,10 @@ export const databaseWorkerExtensionTestRoots = [
 ];
 
 export const databaseWorkerExtensionTestFiles = [
+  "extensions/codex/src/conversation-binding.test.ts",
+  "extensions/codex/src/conversation-control.test.ts",
+  "extensions/codex/src/app-server/native-execution-policy.incognito.test.ts",
+  "extensions/codex/src/app-server/model-catalog.process.test.ts",
   "extensions/codex/src/app-server/transcript-mirror.user-idempotency.test.ts",
   "extensions/slack/src/conversation-bindings.test.ts",
   "extensions/a2a/src/inbound.test.ts",

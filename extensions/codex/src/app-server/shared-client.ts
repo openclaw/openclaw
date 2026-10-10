@@ -33,6 +33,7 @@ import { resolveCodexAppServerUserHomeDir } from "./auth-start-options.js";
 import type * as codexAuth from "./auth-types.js";
 import {
   ensureCodexAppServerClientRuntime,
+  hasCodexAppServerThreadOwnership,
   recordCodexAppServerAuthHandoff,
 } from "./client-runtime.js";
 import {
@@ -68,6 +69,7 @@ import {
   notifyDesktopGenerationDrainChecks,
   retainSharedClientEntry,
   releaseSharedClientEntry,
+  refreshSharedClientIdleRetirement,
   createCodexAppServerStartupLifetime,
   getCurrentSharedClientEntry,
   getOrCreateSharedClientEntry,
@@ -800,9 +802,12 @@ function createSharedCodexAppServerClientStartup(
       (client) => {
         const state = getSharedCodexAppServerClientState();
         params.entry.client = client;
+        params.entry.hasOwnedThreads = () => hasCodexAppServerThreadOwnership(client);
         // Unsupported managed candidates close before fallback starts. Only the
         // ready client's closure may remove the shared acquisition entry.
         client.addCloseHandler((closedClient) => {
+          clearTimeout(params.entry.idleTimer);
+          params.entry.idleTimer = undefined;
           const entry = getCurrentSharedClientEntry(closedClient);
           if (entry) {
             state.clients.delete(entry.key);
@@ -1071,17 +1076,21 @@ async function startInitializedCodexAppServerClientOnce(
           throw new Error("Codex app-server runtime artifact does not match verified inference");
         }
       }
-      ensureCodexAppServerClientRuntime(client, {
-        agentDir: params.agentDir,
-        authProfileId: params.authProfileId ?? undefined,
-        authMode:
-          params.preparedAuth?.kind === "api-key" || isCodexResponsesOAuth(params.preparedAuth)
-            ? "prepared-api-key"
-            : "profile",
-        ...(params.authProfileStore ? { authProfileStore: params.authProfileStore } : {}),
-        config: params.config,
-        onAuthRefreshFailure: () => retireSharedCodexAppServerClientIfCurrent(client),
-      });
+      ensureCodexAppServerClientRuntime(
+        client,
+        {
+          agentDir: params.agentDir,
+          authProfileId: params.authProfileId ?? undefined,
+          authMode:
+            params.preparedAuth?.kind === "api-key" || isCodexResponsesOAuth(params.preparedAuth)
+              ? "prepared-api-key"
+              : "profile",
+          ...(params.authProfileStore ? { authProfileStore: params.authProfileStore } : {}),
+          config: params.config,
+          onAuthRefreshFailure: () => retireSharedCodexAppServerClientIfCurrent(client),
+        },
+        () => refreshSharedClientIdleRetirement(client),
+      );
 
       assertStartupCurrent();
       observeAcquire(params, { boundary: "auth-handoff" });

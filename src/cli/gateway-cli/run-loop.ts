@@ -899,7 +899,7 @@ export async function runGatewayLoop(params: {
               reason: isRestart ? "gateway restarting" : "gateway stopping",
               restartExpectedMs: isRestart ? 1500 : null,
               ...(isRestart ? { drainTimeoutMs: drainBudget.closeDrainTimeoutMs() } : {}),
-              ...loopExit.interruptedShutdownExitOptions({
+              ...loopExit.shutdownExitOptions({
                 request: acceptedRequest,
                 drainCutShort,
                 ownsProcessLifecycle: params.ownsProcessLifecycle,

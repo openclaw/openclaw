@@ -16,7 +16,7 @@ Every model has a context window: the maximum number of tokens it can process. W
 
 OpenClaw keeps assistant tool calls paired with their matching `toolResult` entries when it picks a compaction split point. If the point lands inside a tool block, OpenClaw moves the boundary so the pair stays together and the current unsummarized tail is preserved.
 
-The built-in summarizer accounts for Chinese, Japanese, and Korean (CJK) characters in both message text and tool arguments when estimating chunk sizes. These budgets are approximate; a tool call and its results stay together even when that group exceeds a chunk target.
+Built-in compaction summarizes the older history in one model request, whatever the size of the session or the context window. A split turn adds one request for the turn prefix, and a failed safeguard quality audit adds one request per corrective attempt. Each request's conversation input is capped at 160,000 characters (about 40,000 tokens), or less when the summarizer's own context window is smaller. A larger history is filled in this order: the newest messages verbatim, in half of that budget; your older messages, which carry the asks, decisions and corrections, in a quarter, each trimmed to at most 2,000 characters and spread evenly across the history when they do not all fit; the oldest messages, in a tenth; and evenly spaced runs of the remaining messages, trimmed to 6,000 characters each. Each gap is marked with the number of messages left out, and the summarizer is told not to guess their content and to keep the previous summary's facts. Chinese, Japanese, and Korean (CJK) characters count by their approximate token weight. The bound applies to the summarizer input only; the transcript keeps every message.
 
 The full conversation history stays on disk. Compaction only changes what the model sees on the next turn.
 
@@ -42,6 +42,8 @@ Auto-compaction is on by default. It runs when the session nears the context lim
 If the provider rejects a request after tool calls have completed, the built-in runtime can compact and continue from their recorded results. It keeps the current model and account, preserves the original request, and does not replay completed actions. This recovery requires settled tool results; pending tools, approvals, cancellation, and a tool that intentionally ended the turn retain their normal handling. If a Gateway restart later interrupts that continuing run, recovery preserves the accepted input even when compaction has summarized it.
 
 Overflow recovery trims tool results within the current model-context window. Older messages and reset boundaries remain in retained history without being copied into new transcript entries.
+
+If overflow recovery cannot make the prompt fit, the failed reply suggests `/reset`, `/new`, or a larger-context model. The Control UI shows this guidance in Details and keeps it in saved chat history. For a single oversized prompt, shorten the prompt before resending it in a new session.
 
 Stopping or timing out a run also stops its overflow or timeout recovery. The built-in OpenClaw runtime does not start further recovery hooks, maintenance, transcript truncation, or retries after cancellation. Cancellation is not rollback: a compaction that already completed remains in the transcript and is still counted, without sending a late reply. The context estimate follows the latest model or compaction observation; billing totals remain separate.
 
@@ -184,6 +186,10 @@ essential details from omitted history. The bound applies to selected history,
 not the fixed instructions, tool definitions, or current request.
 
 Suppressed byte-compaction retries still use a bounded view on subsequent turns.
+Native compaction that leaves the host transcript unchanged preserves retry
+suppression. Host compaction clears or refreshes it; changing the session or
+limit, falling below the limit, or growing by another full threshold also rearms
+the guard.
 Retained history remains available on disk and may continue growing; this is not
 a storage-retention limit. For Codex
 app-server sessions, the same threshold caps native rollout transcripts and
@@ -193,6 +199,30 @@ oversized native threads restart fresh.
 The byte guard applies to the active SQLite transcript history. Legacy JSONL
 checkpoint artifacts are not the active compaction target.
 </Warning>
+
+### History hydration byte limit
+
+The embedded runtime also bounds the history it loads for model replay, independently
+of token-based compaction and `maxActiveTranscriptBytes`. Its byte cap is eight times
+the effective context token budget, with a 1 KiB minimum and 64 MiB maximum. This is
+a resource bound on serialized model-context events, not a token count. Private
+transcript metadata and tool-result details are excluded, but event envelopes and
+other content can still reach the byte cap before the model's token budget is full.
+
+When this cap is exceeded, the history loader advances the omitted prefix in
+quarter-cap steps. It prefers complete turns, keeps tool calls with their results,
+and reserves the latest compaction summary. The retained history starts near 75%
+of the available byte capacity, subject to event and turn sizes, then grows toward
+the cap. Its existing prefix stays unchanged between steps, including across
+worker or process restarts. An independent event-count limit can still shorten
+unusually dense histories.
+
+This selection does not delete saved history, create a summary, run a memory
+flush, or trigger compaction notifications. Older context can therefore remain
+outside the model's view while the token budget has room. Chunking trades some
+immediate history for prefix-cache reuse; it does not solve that byte/token
+mismatch. Use `/compact` when you want semantic summarization. The normal
+compaction triggers and the opt-in active-transcript byte guard are unchanged.
 
 ### Compaction notices
 

@@ -118,6 +118,7 @@ import {
 import {
   maybeRetireLegacyMainDeliveryRoute,
   resolveSessionDeliveryRoute,
+  resolveSessionInputDeliveryKey,
 } from "./session-delivery.js";
 import { createReplySessionEntryHandle } from "./session-entry-handle.js";
 import {
@@ -199,6 +200,7 @@ async function resolveInitSessionStateAttemptContext(
   });
   return {
     agentId,
+    inputDeliveryKey: resolveSessionInputDeliveryKey(ctx),
     conversationBinding,
     conversationBindingContext,
     isSystemEvent,
@@ -280,16 +282,11 @@ async function initSessionStateAttempt(params: InitSessionStateParams): Promise<
     }
   }
   params.signal?.throwIfAborted();
-  const { snapshot, parentSessionKey } = await prepareReplySessionInitialization(
-    params,
-    attemptContext,
-  );
-  // Creation hooks, parent forks, and legacy-main retirement can touch other sessions.
+  const parentSessionKey = await prepareReplySessionInitialization(params, attemptContext);
+  // Parent forks and legacy-main retirement can touch other sessions.
   const storeWriterIdentity =
-    snapshot.currentEntry &&
-    params.newlyCreatedSessionId !== snapshot.currentEntry.sessionId &&
     !parentSessionKey &&
-    (params.cfg.session?.dmScope ?? "main") === "main"
+    ((params.cfg.session?.dmScope ?? "main") === "main" || !attemptContext.inputDeliveryKey)
       ? attemptContext.sessionKey
       : undefined;
   // Guarded revision checks only serialize correctly when the snapshot and
@@ -303,7 +300,7 @@ async function initSessionStateAttempt(params: InitSessionStateParams): Promise<
       async () =>
         await initSessionStateAttemptLocked(
           params,
-          { ...attemptContext, storeWriterIdentity: writerIdentity },
+          attemptContext,
           false,
           lifecycleMutationIdentity,
         ),
@@ -482,16 +479,9 @@ async function initSessionStateAttemptLocked(
     agentId,
     mainKey,
     isGroup,
-    ctx,
+    inputDeliveryKey: attemptContext.inputDeliveryKey,
   });
   const entry = initializationSnapshot.currentEntry;
-  if (
-    attemptContext.storeWriterIdentity &&
-    (!entry || params.newlyCreatedSessionId === entry.sessionId)
-  ) {
-    // Reacquire store-wide before a newly observed creation can invoke arbitrary hooks.
-    throw new ReplySessionInitConflictError(sessionKey);
-  }
   const parentSessionKey = normalizeOptionalString(ctx.ParentSessionKey);
   const parentForkSourceEntry =
     parentSessionKey && parentSessionKey !== sessionKey
@@ -751,7 +741,7 @@ async function initSessionStateAttemptLocked(
     snoozedUntil: isSystemEvent ? entry?.snoozedUntil : undefined,
     snoozedAt: isSystemEvent ? entry?.snoozedAt : undefined,
     systemSent,
-    abortedLastRun: recoveredTerminalEntry ? undefined : abortedLastRun,
+    abortedLastRun: recoveredTerminalEntry ? recoveredTerminalEntry.abortedLastRun : abortedLastRun,
     usageFamilyKey,
     usageFamilySessionIds,
     delivery,

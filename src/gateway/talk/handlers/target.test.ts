@@ -401,7 +401,7 @@ describe("Talk target preparation through Gateway authorization", () => {
     { name: "missing voice id", params: { sessionKey: "main" } },
     { name: "relay origin", params: { sessionKey: "main", voiceSessionId: "relay-call" } },
   ])("rejects a client close with $name without changing the voice record", async ({ params }) => {
-    clientVoiceSession.createOrResumeClientVoiceSession({
+    await clientVoiceSession.createOrResumeClientVoiceSession({
       agentId: "voice",
       sessionKey: "main",
       voiceSessionId: "relay-call",
@@ -617,7 +617,7 @@ describe("Talk target preparation through Gateway authorization", () => {
   });
 
   it.each(["owner", "sharing", "incognito", "replacement"] as const)(
-    "rechecks %s after the guarded ensure settles and before publishing the call",
+    "rechecks %s after session preparation and before committing the voice call",
     async (change) => {
       if (change === "sharing") {
         await replaceSessionEntry(
@@ -630,30 +630,36 @@ describe("Talk target preparation through Gateway authorization", () => {
           },
         );
       }
-      const ensure = clientVoiceSession.ensureClientVoiceAgentSessionEntry;
-      let changedAfterEnsure = false;
-      vi.spyOn(clientVoiceSession, "ensureClientVoiceAgentSessionEntry").mockImplementationOnce(
+      const createVoice = clientVoiceSession.createOrResumeClientVoiceSession;
+      let changedBeforeVoiceCommit = false;
+      vi.spyOn(clientVoiceSession, "createOrResumeClientVoiceSession").mockImplementationOnce(
         async (params) => {
-          const sessionId = await ensure(params);
+          const scope = {
+            agentId: params.agentId,
+            sessionKey: params.sessionKey,
+            storePath: params.source?.storePath,
+          };
+          const sessionId = loadSessionEntry(scope)?.sessionId;
+          expect(sessionId).toBeTruthy();
           if (change === "owner") {
             config = { ...config, talk: { agentId: "primary" } };
           } else {
-            await replaceSessionEntry(params, {
-              sessionId: change === "replacement" ? "replacement-session" : sessionId,
+            await replaceSessionEntry(scope, {
+              sessionId: change === "replacement" ? "replacement-session" : sessionId!,
               updatedAt: 2,
               createdActor: { type: "human", source: "profile", id: "another-person" },
               ...(change === "incognito" ? { incognito: true } : { visibility: "read-only" }),
             });
           }
-          changedAfterEnsure = true;
-          return sessionId;
+          changedBeforeVoiceCommit = true;
+          return createVoice(params);
         },
       );
       const respond = await dispatch("talk.client.create", {
         ...createParams,
         voiceSessionId: "provisional",
       });
-      expect(changedAfterEnsure).toBe(true);
+      expect(changedBeforeVoiceCommit).toBe(true);
       expect(respond).toHaveBeenCalledWith(
         false,
         undefined,

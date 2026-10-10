@@ -20,7 +20,7 @@ import {
   type MemorySyncParams,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
-import { listMemorySessionTombstones } from "../memory-entry-origins.js";
+import { findForgottenMemorySessionIds } from "../memory-entry-origins.js";
 import { readMemoryTranscriptStatsInWorker } from "./manager-cpu-worker-runtime.js";
 import {
   isMemorySessionIndexable,
@@ -70,28 +70,40 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
     }
   }
 
-  protected async listSessionCorpusEntries(): Promise<SessionTranscriptCorpusEntry[]> {
-    const readOnly = this.database.readOnly;
-    const entries = await listSessionTranscriptCorpusEntriesForAgent(this.agentId, {
+  protected async listSessionCorpusEntries(
+    targets?: Pick<MemorySyncParams, "sessions" | "archiveFiles">,
+  ): Promise<SessionTranscriptCorpusEntry[]> {
+    let entries = await listSessionTranscriptCorpusEntriesForAgent(this.agentId, {
       includeContentRevision: false,
-      readOnly,
+      readOnly: this.database.readOnly,
     });
-    const forgottenSessions = new Set(
-      (
-        await listMemorySessionTombstones({
-          agentId: this.agentId,
-          sessionIds: entries.map((entry) => entry.sessionId),
-        })
-      ).map((entry) => entry.sessionId),
-    );
-    return entries.filter((entry) => {
+    entries = entries.filter((entry) => {
       const archivedSessionKey =
         entry.artifactKind === "archive-artifact" ? entry.sessionKey : undefined;
-      return (
-        !forgottenSessions.has(entry.sessionId) &&
-        isMemorySessionIndexable(entry, archivedSessionKey)
-      );
+      return isMemorySessionIndexable(entry, archivedSessionKey);
     });
+    if (targets) {
+      const files = new Set([
+        ...(this.normalizeTargetArchiveFiles(targets.archiveFiles, entries) ?? []),
+        ...this.resolveArchiveFilesForSyncTargets(targets.sessions, entries),
+      ]);
+      const sessionIds = new Set(
+        entries
+          .filter(
+            (entry) =>
+              files.has(entry.sessionFile) ||
+              (entry.transcriptSource !== "sqlite" && files.has(path.resolve(entry.sessionFile))),
+          )
+          .map((entry) => entry.sessionId),
+      );
+      // Archive cleanup needs active counterparts from the same discovery snapshot.
+      entries = entries.filter((entry) => sessionIds.has(entry.sessionId));
+    }
+    const forgottenSessions = await findForgottenMemorySessionIds({
+      agentId: this.agentId,
+      sessionIds: entries.map((entry) => entry.sessionId),
+    });
+    return entries.filter((entry) => !forgottenSessions.has(entry.sessionId));
   }
 
   protected sessionPathForCorpusEntry(entry: SessionTranscriptCorpusEntry): string {
@@ -155,14 +167,10 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
 
   private async scheduleCorpusSessionFileDirty(sessionFile: string): Promise<void> {
     const resolvedSessionFile = path.resolve(sessionFile);
-    const corpusEntries = await this.listSessionCorpusEntries();
-    if (
-      corpusEntries.some(
-        (entry) =>
-          entry.transcriptSource !== "sqlite" &&
-          path.resolve(entry.sessionFile) === resolvedSessionFile,
-      )
-    ) {
+    const corpusEntries = await this.listSessionCorpusEntries({
+      archiveFiles: [resolvedSessionFile],
+    });
+    if (corpusEntries.length > 0) {
       this.scheduleSessionDirty(resolvedSessionFile);
     }
   }
@@ -326,7 +334,10 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
     const pendingTargets = Array.from(this.sessionPendingTargets.values());
     this.sessionPendingFiles.clear();
     this.sessionPendingTargets.clear();
-    pending.push(...Array.from(await this.resolveArchiveFilesForSyncTargets(pendingTargets)));
+    if (pendingTargets.length > 0) {
+      const plan = await this.resolveTargetSessionSyncPlan({ sessions: pendingTargets });
+      pending.push(...(plan?.targetArchiveFiles ?? []));
+    }
     for (const sessionFile of pending) {
       this.sessionsDirtyFiles.add(sessionFile);
     }
@@ -390,16 +401,12 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
     return normalized.size > 0 ? normalized : null;
   }
 
-  private async resolveArchiveFilesForSyncTargets(
-    sessions?: Iterable<MemorySessionSyncTarget> | null,
-    knownCorpusEntries?: readonly SessionTranscriptCorpusEntry[],
-  ): Promise<Set<string>> {
+  private resolveArchiveFilesForSyncTargets(
+    sessions: Iterable<MemorySessionSyncTarget> | undefined,
+    corpusEntries: readonly SessionTranscriptCorpusEntry[],
+  ): Set<string> {
     const files = new Set<string>();
     const targets = Array.from(sessions ?? []);
-    if (targets.length === 0) {
-      return files;
-    }
-    const corpusEntries = knownCorpusEntries ?? (await this.listSessionCorpusEntries());
     const normalizedAgentId = normalizeAgentId(this.agentId);
     let entriesBySessionId: Map<string, SessionTranscriptCorpusEntry[]> | undefined;
     if (targets.length > 1) {
@@ -443,10 +450,10 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
     sessions?: MemorySessionSyncTarget[];
     archiveFiles?: string[];
   }) {
-    const corpusEntries = await this.listSessionCorpusEntries();
+    const corpusEntries = await this.listSessionCorpusEntries(params);
     const files = new Set([
       ...(this.normalizeTargetArchiveFiles(params.archiveFiles, corpusEntries) ?? []),
-      ...(await this.resolveArchiveFilesForSyncTargets(params.sessions, corpusEntries)),
+      ...this.resolveArchiveFilesForSyncTargets(params.sessions, corpusEntries),
     ]);
     return files.size > 0 ? { corpusEntries, targetArchiveFiles: files } : null;
   }
