@@ -234,6 +234,8 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
       }),
   );
   const { activeSession, setActiveSessionSystemPrompt, settingsManager } = preparedAgentSession;
+  // Replay authority follows live delivery's trust set; refreshTools updates it in place.
+  sessionManager.setTrustedLocalMediaToolNames?.(preparedAgentSession.trustedLocalMediaToolNames);
   const recordCurrentTurnImageFailure = (count: number) => {
     state.currentTurnImageFailureCount = Math.max(state.currentTurnImageFailureCount, count);
   };

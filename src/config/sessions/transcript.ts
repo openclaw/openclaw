@@ -65,6 +65,10 @@ import {
   type SessionTranscriptDeliveryMirror,
 } from "./transcript-mirror.js";
 import {
+  groundRecentConversationRows,
+  selectRecentConversationRows,
+} from "./transcript-recent-grounding.js";
+import {
   isWithinTranscriptWindow,
   normalizeRecentTranscriptLimit,
   normalizeTranscriptTimestamp,
@@ -127,6 +131,11 @@ type ReadRecentSessionConversationTextOptions = {
   minTimestampMs?: number;
   role?: "user" | "assistant";
   preferUpstreamUserText?: boolean;
+  /**
+   * Channel replay only: clamp each entry to 32 KiB and the whole read to 128 KiB. Provenance
+   * readers such as session-upstream-monitor.ts compare complete text and leave this unset.
+   */
+  boundReplayBytes?: boolean;
 };
 
 type ReadRecentSessionConversationTextParams = ReadRecentSessionConversationTextOptions & {
@@ -239,39 +248,23 @@ async function readRecentUserAssistantTextFromSqliteTranscript(
   options: ReadRecentSessionConversationTextOptions = {},
 ): Promise<SessionRecentConversationText[]> {
   const limit = normalizeRecentTranscriptLimit(options.limit);
-  const pageSize = 250;
   try {
-    const { readSessionTranscriptBoundedMessageTailPageAsync } =
-      await import("../../gateway/session-transcript-readers.js");
     const { readRestoredSessionTranscript } = await import("./session-cold-storage-read.js");
-    return await readRestoredSessionTranscript(
+    // Rows and their same-turn provenance come from one transcript state; a cold-storage restore
+    // retries the selection, and grounding runs after it on what was selected.
+    const rows = await readRestoredSessionTranscript(
       scope,
-      async () => {
-        const recent: SessionRecentConversationText[] = [];
-        for (let offset = 0; recent.length < limit; offset += pageSize) {
-          const page = await readSessionTranscriptBoundedMessageTailPageAsync(scope, {
-            maxMessages: pageSize,
-            // Preserve the existing message-count-only bound for this text projection.
-            maxBytes: Number.MAX_SAFE_INTEGER,
-            offset,
-          });
-          if (page.events.length === 0) {
-            break;
-          }
-          for (const event of page.events.toReversed()) {
-            const entry = extractRecentConversationText(event.event, options);
-            if (entry && isWithinTranscriptWindow(entry.timestamp, options)) {
-              recent.push(entry);
-              if (recent.length >= limit) {
-                break;
-              }
-            }
-          }
-        }
-        return recent.toReversed();
-      },
+      () =>
+        selectRecentConversationRows(scope, limit, (event) => {
+          const entry = extractRecentConversationText(event, options);
+          return entry && isWithinTranscriptWindow(entry.timestamp, options) ? entry : undefined;
+        }),
       { assertCurrent },
     );
+    return await groundRecentConversationRows(rows, {
+      limit,
+      boundReplayBytes: options.boundReplayBytes === true,
+    });
   } catch (error) {
     if (isSessionTranscriptProjectionUnavailableError(error)) {
       return [];

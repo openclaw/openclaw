@@ -75,6 +75,9 @@ function createFixture() {
   const sessionManager = {
     kind: "manager",
     getBranch: () => [activeMarker],
+    setTrustedLocalMediaToolNames: vi.fn((_names: ReadonlySet<string>) => {
+      order.push("trust-handoff");
+    }),
     getToolResultProjectionEntries: () => [activeMarker],
     getEntries: () => [activeMarker, { ...activeMarker, data: "sibling" }],
   };
@@ -89,6 +92,7 @@ function createFixture() {
     clientToolDefs: [{ name: "read" }, { name: "write" }],
     setActiveSessionSystemPrompt,
     settingsManager,
+    trustedLocalMediaToolNames: new Set(["read"]),
   };
   const boundary = { setCurrentUserTimestampOverride: vi.fn() };
   const promptState = { toolResults: { projected: true } };
@@ -588,6 +592,7 @@ describe("prepareEmbeddedAttemptSessionRuntime", () => {
       "own-user-transcript-contexts",
       "agent-session",
       "own-session",
+      "trust-handoff",
       "owned-boundary",
       "boundary",
       "settle-tracker",
@@ -602,6 +607,11 @@ describe("prepareEmbeddedAttemptSessionRuntime", () => {
       "own-trajectory",
       "transport",
     ]);
+    // The guard must hold live delivery's own Set: refreshTools mutates it in place.
+    expect(fixture.sessionManager.setTrustedLocalMediaToolNames).toHaveBeenCalledOnce();
+    expect(fixture.sessionManager.setTrustedLocalMediaToolNames.mock.calls[0]?.[0]).toBe(
+      fixture.agentSession.trustedLocalMediaToolNames,
+    );
     expect(result).toEqual(
       expect.objectContaining({
         anthropicPayloadLogger: fixture.anthropicPayloadLogger,

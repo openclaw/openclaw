@@ -128,6 +128,7 @@ export async function mergeSessionTranscriptContext(params: {
     sessionKey: params.sessionKey,
     storePath: params.storePath,
     limit,
+    boundReplayBytes: true,
     ...(windows.length === 0 && options?.chatWindow === true
       ? { includeCronDirectDeliveryContext: true }
       : {}),
