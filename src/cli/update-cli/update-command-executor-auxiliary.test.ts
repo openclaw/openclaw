@@ -269,27 +269,25 @@ it("keeps B extra-child custody after partial preflight release without reactiva
   await once(child, "message");
   assert(child.pid);
   try {
-    await expect(
-      withUpdateCommandExecutor(randomUUID(), async (executor) => {
-        const fence = await executor.enter(root, { serviceRoot, preflight: true });
-        const store = createManagedHandoffLeaseStore();
-        const acquired = store.acquire(`${root}/.openclaw-update-child-extra`, "extra-child", {
-          kind: "update",
-        });
-        assert(acquired.kind === "acquired");
-        const registered = store.bind(acquired.lease, child.pid!);
-        assert(registered);
-        expect(() => releaseUpdateCommandPreflightForHandoff(fence)).toThrow("release failed");
-        expect(() => fence.assertCurrent()).toThrow("no longer current");
-        expect(() => releaseUpdateCommandPreflightForHandoff(fence)).toThrow("not current");
-        expect(store.read(serviceRoot)).toEqual({ kind: "absent" });
-        expect(store.acquire(root, "contender", { kind: "update" }).kind).toBe("busy");
-        expect(store.current(registered)).toBe(true);
-        child.kill("SIGTERM");
-        await exited;
-        expect(store.release(registered)).toBe(true);
-      }),
-    ).rejects.toThrow();
+    await withUpdateCommandExecutor(randomUUID(), async (executor) => {
+      const fence = await executor.enter(root, { serviceRoot, preflight: true });
+      const store = createManagedHandoffLeaseStore();
+      const acquired = store.acquire(`${root}/.openclaw-update-child-extra`, "extra-child", {
+        kind: "update",
+      });
+      assert(acquired.kind === "acquired");
+      const registered = store.bind(acquired.lease, child.pid!);
+      assert(registered);
+      expect(() => releaseUpdateCommandPreflightForHandoff(fence)).toThrow("release failed");
+      expect(() => fence.assertCurrent()).toThrow("no longer current");
+      expect(() => releaseUpdateCommandPreflightForHandoff(fence)).toThrow("not current");
+      expect(store.read(serviceRoot)).toEqual({ kind: "absent" });
+      expect(store.acquire(root, "contender", { kind: "update" }).kind).toBe("busy");
+      expect(store.current(registered)).toBe(true);
+      child.kill("SIGTERM");
+      await exited;
+      expect(store.release(registered)).toBe(true);
+    });
   } finally {
     if (child.exitCode === null && child.signalCode === null) {
       child.kill("SIGTERM");
