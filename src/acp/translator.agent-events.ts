@@ -82,7 +82,15 @@ export class AcpTranslatorAgentEvents {
       const preambles = (pending.sentPreambles ??= new Map());
       let sent = preambles.get(itemId) ?? "";
       let preceding = "";
+      const previous = pending.preamblePreview;
+      if (!preambles.has(itemId) && previous) {
+        // One retired preview can contain several subsequently identified items.
+        sent = previous.sent.slice(previous.text.length).replace(/^\n+/, "");
+        preambles.set(previous.itemId, previous.text);
+        pending.preamblePreview = undefined;
+      }
       if (!preambles.has(itemId) && typeof projection.retainedText === "string") {
+        sent = "";
         const retained = projection.retainedText.trimEnd();
         const answer = pending.sentText ?? "";
         if (answer.startsWith(retained)) {
@@ -104,6 +112,11 @@ export class AcpTranslatorAgentEvents {
           ? text.slice(sent.length)
           : text;
       preambles.set(itemId, sent.startsWith(text) ? sent : text);
+      if (sent.startsWith(text) && sent.length > text.length) {
+        pending.preamblePreview = { itemId, text, sent };
+      } else if (pending.preamblePreview?.itemId === itemId) {
+        pending.preamblePreview = undefined;
+      }
       if (!preceding && !delta) {
         return;
       }
@@ -123,6 +136,7 @@ export class AcpTranslatorAgentEvents {
       }
 
       if (phase === "start") {
+        pending.preamblePreview = undefined;
         pending.sentPreambles?.delete("");
         pending.toolCalls ??= new Map();
         if (pending.toolCalls.has(toolCallId)) {
