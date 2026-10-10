@@ -1,12 +1,10 @@
 import { isDeepStrictEqual } from "node:util";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 // Maintains config metadata fields written alongside user config.
 import { VERSION } from "../version.js";
 import { getConfigValueAtPath, unsetConfigValueAtPath } from "./config-paths.js";
-import { mutateConfigState } from "./config-state-mutation.js";
-import type { NormalizedConfigIoDeps } from "./io.read.types.js";
 import { materializeModelPolicyAllowlist } from "./model-policy-allowlist-migration.js";
-import { resolveStateDir } from "./paths.js";
 import { cloneConfigWithResolutionFacts } from "./resolution-facts.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 import { materializeUtilityModelSeparation } from "./utility-model-separation-migration.js";
@@ -83,21 +81,6 @@ export function stampConfigWriteMetadata(
 }
 
 /** Persist machine-owned metadata only after the matching config file commit succeeds. */
-export async function recordConfigWriteMetadata(
-  {
-    deps,
-    configPath,
-  }: { deps: Pick<NormalizedConfigIoDeps, "env" | "homedir">; configPath: string },
-  assertCurrent?: () => void,
-  now: string = new Date().toISOString(),
-): Promise<void> {
-  await mutateConfigState(
-    { kind: "metadata", now },
-    {
-      ...deps.env,
-      OPENCLAW_STATE_DIR: resolveStateDir(deps.env, deps.homedir),
-      OPENCLAW_CONFIG_PATH: configPath,
-    },
-    assertCurrent,
-  );
+export function recordConfigWriteMetadata(now: string = new Date().toISOString()): void {
+  writeConfigMachineState("config.lastTouchedAt", now);
 }

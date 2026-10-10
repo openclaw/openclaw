@@ -15,10 +15,7 @@ const native = require("node:sqlite");
 const memoryStatements = new WeakSet();
 const eventsPath = ${JSON.stringify(path.join(control, "sql-observation.jsonl"))};
 const ownerPath = ${JSON.stringify(ownerPath)};
-// Inspection subprocesses inherit this preload and must retain earlier worker events.
-const rootPid = process.env.OPENCLAW_TEST_ADMIN_SQL_OBSERVER_PID ??= String(process.pid);
-const isRootProcess = isMainThread && rootPid === String(process.pid);
-if (isRootProcess) fs.writeFileSync(eventsPath, "");
+if (isMainThread) fs.writeFileSync(eventsPath, "");
 if (process.versions.bun) {
   const OriginalWorker = workerThreads.Worker;
   const preload = process.env.OPENCLAW_TEST_SQLITE_WORKER_PRELOAD;
@@ -71,7 +68,7 @@ for (const method of ["get", "all", "run", "iterate"]) {
   });
 }
 syncBuiltinESMExports();
-if (isRootProcess) process.on("exit", () => {
+if (isMainThread) process.on("exit", () => {
   const events = fs.readFileSync(eventsPath, "utf8").trim().split("\\n").filter(Boolean).map(JSON.parse);
   fs.writeFileSync(${JSON.stringify(path.join(control, "sql-observation.json"))}, JSON.stringify({
     pid: process.pid,

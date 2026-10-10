@@ -141,20 +141,17 @@ current policy, pending canonical validation, and current-row reads remain
 with the reader. When physical admission is already known, the first canonical
 read enters its snapshot before policy reads, avoiding discarded probes.
 
-## Config ancillary writes
+## Config CLI ownership
 
-Authored configuration stays in its existing file publication and rollback owner.
-Its machine timestamp, diagnostic audit, fingerprinted snapshot slot, and async
-config-health patches route through `config.state.mutate` when a local Gateway
-holds the state root. The admin request binds the expected process owner and
-rechecks current requester authority at worker write admission. Without a serving
-Gateway, the same operation holds exclusive offline ownership through worker
-settlement. A transport failure never replays locally.
+Config set, patch, and unset commands require exclusive offline ownership. Stop
+the Gateway through its service owner before editing config with these commands.
+Basic agent creation uses the existing `agents.create` Gateway method; advanced
+agent setup holds the same exclusive offline owner.
 
-Snapshot and config-health writes preserve their existing compare-and-set bases,
-including absence and rollback. Audit and journal failures retain their existing
-best-effort semantics; metadata failures remain warnings after the file commit.
-No database schema, retention, durability, or update migration changes are needed.
+Config loading and in-process writes retain their existing worker paths. They do
+not acquire CLI ownership or route ancillary effects back through the Gateway.
+Authored config files, compare-and-set checks, rollback, audit, and metadata
+semantics are unchanged.
 
 ## Committed facts and completeness
 

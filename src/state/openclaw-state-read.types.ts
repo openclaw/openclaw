@@ -194,7 +194,6 @@ export type OpenClawStateReadCommand =
   | { type: "config.snapshot.read" }
   | { type: "claws.packageOwnership"; agentId?: string; includeInstalls: boolean }
   | { type: "doctor.gatewayOwnerLease.read" }
-  | { type: "gatewayOwnerLease.read" }
   | AcpSessionReadCommand
   | SqliteWorkerCommand<McpOAuthReadOnlyOperations>
   | { type: "conversationBindings.inspect"; conversation: ConversationRef }
@@ -338,7 +337,6 @@ export type OpenClawStateReadResult =
       orphanWorkspace: ClawOrphanWorkspace | undefined;
     }
   | { type: "doctor.gatewayOwnerLease.read"; lease: GatewayOwnerLeaseIdentity | undefined }
-  | { type: "gatewayOwnerLease.read"; lease: GatewayOwnerLeaseIdentity | undefined }
   | { type: "preparedPoolPresence.read"; demand: PreparedPoolPresenceDemand | undefined }
   | {
       type: "tui.lastSession.read";

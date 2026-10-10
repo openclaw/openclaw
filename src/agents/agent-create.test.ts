@@ -23,15 +23,6 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("node:fs/promises", () => ({ default: { mkdir: mocks.mkdir } }));
 
-// mock-isolation: This virtual-filesystem fixture tests creation; process custody has real CLI proof.
-vi.mock("../cli/local-state-owner.js", () => ({
-  runWithLocalStateOwner: ({
-    runLocal,
-  }: {
-    runLocal: (scope: { assertCurrent: () => void }) => Promise<unknown>;
-  }) => runLocal({ assertCurrent: () => {} }),
-}));
-
 vi.mock("../config/config.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../config/config.js")>();
   return {

@@ -12,8 +12,6 @@ vi.mock("../../cli/local-state-owner.js", () => ({
       config: mocks.getConfig(),
       signal: new AbortController().signal,
       assertCurrent() {},
-      assertSettlementCurrent() {},
-      runSettlement: async (run) => await run(),
     }),
 }));
 vi.mock("../../model-catalog/remote-refresh.js", () => ({

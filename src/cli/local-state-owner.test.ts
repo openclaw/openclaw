@@ -98,38 +98,3 @@ it("refuses an ambient state/config switch during offline admission before creat
     await expect(fs.access(config.worktreeRoot)).rejects.toMatchObject({ code: "ENOENT" });
   }
 });
-
-it("refuses an explicit nested target override before admitting the second root", async () => {
-  const root = roots.make("openclaw-routing-nested-");
-  const selected = {
-    ...process.env,
-    OPENCLAW_STATE_DIR: path.join(root, "selected"),
-    OPENCLAW_CONFIG_PATH: path.join(root, "selected", "openclaw.json"),
-  };
-  const replacement = {
-    ...selected,
-    OPENCLAW_STATE_DIR: path.join(root, "replacement"),
-    OPENCLAW_CONFIG_PATH: path.join(root, "replacement", "openclaw.json"),
-  };
-  const nestedMutation = vi.fn(async () => {});
-  await expect(
-    runWithLocalStateOwner({
-      env: selected,
-      method: "fixture.outer",
-      params: {},
-      target: "selected root",
-      runLocal: async () => {
-        await Promise.resolve();
-        return await runWithLocalStateOwner({
-          env: replacement,
-          method: "fixture.nested",
-          params: {},
-          target: "replacement root",
-          runLocal: nestedMutation,
-        });
-      },
-    }),
-  ).rejects.toThrow("Nested operation changed the selected state root or config path");
-  expect(nestedMutation).not.toHaveBeenCalled();
-  await expect(fs.access(replacement.OPENCLAW_STATE_DIR)).rejects.toMatchObject({ code: "ENOENT" });
-});

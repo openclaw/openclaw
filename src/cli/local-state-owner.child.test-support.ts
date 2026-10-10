@@ -135,18 +135,18 @@ try {
         withConsoleLogsRoutedToStderrForJson(
           process.argv,
           async () => {
-            if (process.argv[2] === "native-agent-create") {
-              const { createAgent } = await import("../agents/agent-create.js");
-              const result = await createAgent({ name: "native", workspace: process.argv[3] });
-              process.stdout.write(`${JSON.stringify(result)}\n`);
-              return;
-            }
-            if (process.argv[2] === "onboard-workspace") {
-              const { ensureWorkspaceAndSessions } = await import("../commands/onboard-helpers.js");
-              const { defaultRuntime } = await import("../runtime.js");
-              await ensureWorkspaceAndSessions(process.argv[3]!, defaultRuntime, {
-                agentId: "main",
-              });
+            if (process.argv[2] === "config-unset-route") {
+              const { tryRouteCli } = await import("./route.js");
+              const routed = await tryRouteCli([
+                process.argv[0]!,
+                process.argv[1]!,
+                "config",
+                "unset",
+                ...process.argv.slice(3),
+              ]);
+              if (!routed) {
+                throw new Error("Config unset route was not selected");
+              }
               return;
             }
             if (process.argv[2] === "ownership-claim-direct") {
@@ -163,12 +163,23 @@ try {
               registerSandboxCli(program);
             } else if (process.argv[2] === "agents") {
               const { registerAgentsCommands } = await import("./program/register.agent.js");
+              const { registerPreActionHooks } = await import("./program/preaction.js");
+              registerPreActionHooks(program, "test");
               registerAgentsCommands(program);
             } else if (process.argv[2] === "setup") {
               const { registerSetupCommand } = await import("./program/register.setup.js");
+              const { registerPreActionHooks } = await import("./program/preaction.js");
+              registerPreActionHooks(program, "test");
               registerSetupCommand(program);
+            } else if (process.argv[2] === "onboard") {
+              const { registerOnboardCommand } = await import("./program/register.onboard.js");
+              const { registerPreActionHooks } = await import("./program/preaction.js");
+              registerPreActionHooks(program, "test");
+              registerOnboardCommand(program);
             } else if (process.argv[2] === "config") {
               const { registerConfigCli } = await import("./config-cli.js");
+              const { registerPreActionHooks } = await import("./program/preaction.js");
+              registerPreActionHooks(program, "test");
               registerConfigCli(program);
             } else if (process.argv[2] === "migrate") {
               const { registerMigrateCommand } = await import("./program/register.migrate.js");

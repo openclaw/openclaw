@@ -28,6 +28,11 @@ vi.mock("./auth-choice-prompt.js", () => ({
 }));
 
 vi.mock("../agents/auth-profiles.runtime.js", () => ({ ensureAuthProfileStore }));
+// Flow fixtures replace state writes; the CLI process suite owns physical custody coverage.
+vi.mock("../cli/local-state-owner.js", () => ({
+  runWithLocalStateOwner: async ({ runLocal }: { runLocal: () => Promise<unknown> }) =>
+    await runLocal(),
+}));
 vi.mock("../plugins/provider-setup-availability.js", () => ({
   detectAvailableSetupProviderIds,
 }));

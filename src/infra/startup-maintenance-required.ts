@@ -1,4 +1,3 @@
-import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { collectNestedErrorCandidates } from "./error-graph-internal.js";
 
 export const GATEWAY_STARTUP_MAINTENANCE_REQUIRED_REASON = "gateway.maintenance_required";
@@ -18,28 +17,22 @@ export function isStartupMaintenanceKind(value: unknown): value is keyof typeof 
   return typeof value === "string" && Object.hasOwn(maintenanceReasons, value);
 }
 
-// Retained owners and newly loaded callers must recognize the same maintenance refusal.
-export const StartupMaintenanceRequiredError = resolveGlobalSingleton(
-  Symbol.for("openclaw.startupMaintenanceRequiredError"),
-  () =>
-    class MaintenanceRequiredError extends Error {
-      readonly code = GATEWAY_STARTUP_MAINTENANCE_REQUIRED_REASON;
+export class StartupMaintenanceRequiredError extends Error {
+  readonly code = GATEWAY_STARTUP_MAINTENANCE_REQUIRED_REASON;
 
-      constructor(
-        readonly kind: keyof typeof maintenanceReasons,
-        message: string,
-        options?: ErrorOptions,
-      ) {
-        super(message, options);
-        this.name = "StartupMaintenanceRequiredError";
-      }
+  constructor(
+    readonly kind: keyof typeof maintenanceReasons,
+    message: string,
+    options?: ErrorOptions,
+  ) {
+    super(message, options);
+    this.name = "StartupMaintenanceRequiredError";
+  }
 
-      get reason(): string {
-        return maintenanceReasons[this.kind];
-      }
-    },
-);
-export type StartupMaintenanceRequiredError = InstanceType<typeof StartupMaintenanceRequiredError>;
+  get reason(): string {
+    return maintenanceReasons[this.kind];
+  }
+}
 
 export function findStartupMaintenanceRequiredError(
   error: unknown,

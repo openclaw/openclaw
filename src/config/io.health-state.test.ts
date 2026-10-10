@@ -3,7 +3,6 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { acquireGatewayLock } from "../infra/gateway-lock.js";
 import { findStartupMaintenanceRequiredError } from "../infra/startup-maintenance-required.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { isStateDatabaseReadAdmissionInvalidatedError as retainedReadAdmissionInvalidated } from "../state/openclaw-state-db-async-lifecycle.js";
@@ -41,26 +40,46 @@ it("preserves typed maintenance errors for a reloaded caller after broker reuse"
   }
   await closeOpenClawStateDatabaseAsync();
   vi.resetModules();
-  const [health, errors] = await Promise.all([
+  const [health, errors, worker] = await Promise.all([
     import("./io.health-state.js"),
     import("../infra/startup-maintenance-required.js"),
+    import("../state/openclaw-state-worker-store.js"),
   ]);
   const deps = createHealthDeps();
   makeNewerSchema(deps);
-  using store = health.captureConfigHealthStateStore(deps, "/config.json");
-  const previous = await readCurrent(store);
-  let failure: unknown;
+  let incoming: unknown;
+  const execute = worker.runOpenClawStateWorkerOperation;
+  const spy = vi.spyOn(worker, "runOpenClawStateWorkerOperation").mockImplementation(
+    new Proxy(execute, {
+      async apply(target, receiver, args) {
+        try {
+          return await Reflect.apply(target, receiver, args);
+        } catch (error) {
+          incoming = error;
+          throw error;
+        }
+      },
+    }),
+  );
   try {
-    await store.update({ lastObservedSuspiciousSignature: "observed" }, previous);
-  } catch (error) {
-    failure = error;
+    using store = health.captureConfigHealthStateStore(deps, "/config.json");
+    const previous = await readCurrent(store);
+    let failure: unknown;
+    try {
+      await store.update({ lastObservedSuspiciousSignature: "observed" }, previous);
+    } catch (error) {
+      failure = error;
+    }
+    expect(incoming).toBeInstanceOf(errors.StartupMaintenanceRequiredError);
+    expect(failure).toBe(incoming);
+    expect(errors.findStartupMaintenanceRequiredError(failure)).toMatchObject({
+      kind: "newer-schema",
+    });
+    expect(deps.logger.warn).not.toHaveBeenCalled();
+  } finally {
+    spy.mockRestore();
+    await closeOpenClawStateDatabaseAsync();
   }
-  expect(failure).toBeInstanceOf(errors.StartupMaintenanceRequiredError);
-  expect(errors.findStartupMaintenanceRequiredError(failure)).toMatchObject({
-    kind: "newer-schema",
-  });
-  expect(findStartupMaintenanceRequiredError(failure)).toBe(failure);
-  expect(deps.logger.warn).not.toHaveBeenCalled();
 });
 
 function createHealthDeps(warn = vi.fn()) {
@@ -213,31 +232,22 @@ describe("config health-state warnings", () => {
 
   it("deduplicates write failures across fresh sync and async config reads", async () => {
     const { deps, configPath, options } = configFixture();
-    const owner = await acquireGatewayLock({ env: deps.env, allowInTests: true, timeoutMs: 0 });
-    expect(owner).not.toBeNull();
-    try {
-      // Retain the warmed worker while injecting a write failure into its admitted database.
-      using store = captureConfigHealthStateStore(deps, configPath);
-      const previous = await readCurrent(store);
-      await store.update({ lastObservedSuspiciousSignature: "seed" }, previous);
-      openOpenClawStateDatabase(deps).db.exec(`
+    using store = captureConfigHealthStateStore(deps, configPath);
+    const previous = await readCurrent(store);
+    await store.update({ lastObservedSuspiciousSignature: "seed" }, previous);
+    openOpenClawStateDatabase(deps).db.exec(`
       CREATE TRIGGER reject_async_health_write BEFORE INSERT ON config_health_entries
       BEGIN SELECT RAISE(ABORT, 'health write rejected'); END;
     `);
 
-      for (let i = 0; i < 3; i++) {
-        expect(createConfigIO(options).loadConfig().gateway?.mode).toBe("local");
-        expect((await createConfigIO(options).readConfigFileSnapshot()).valid).toBe(true);
-      }
-
-      expect(deps.logger.warn).toHaveBeenCalledExactlyOnceWith(
-        expect.stringContaining("health write rejected"),
-      );
-    } finally {
-      await closeOpenClawStateDatabaseAsync();
-      closeOpenClawStateDatabaseForTest();
-      await owner?.release();
+    for (let i = 0; i < 3; i++) {
+      expect(createConfigIO(options).loadConfig().gateway?.mode).toBe("local");
+      expect((await createConfigIO(options).readConfigFileSnapshot()).valid).toBe(true);
     }
+
+    expect(deps.logger.warn).toHaveBeenCalledExactlyOnceWith(
+      expect.stringContaining("health write rejected"),
+    );
   });
 
   it("propagates audit migration required from health writes and config snapshots", async () => {

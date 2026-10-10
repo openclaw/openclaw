@@ -7,9 +7,10 @@ title: "Configure"
 
 # `openclaw configure`
 
-Workspace provisioning requires the local Gateway to be stopped. Stop it through
-its service owner before selecting the workspace section, then rerun configure.
-The provisioning owner retains exclusive access until workspace state has settled.
+Configure requires the local Gateway to be stopped. Stop it through its service
+owner, then rerun configure. The command holds exclusive ownership while changing
+configuration and its database state. Finish configure before installing or
+starting the Gateway with `openclaw gateway install` and `openclaw gateway start`.
 
 Interactive prompts for targeted changes to an existing setup: credentials, devices, agent defaults, gateway, channels, plugins, skills, and health checks.
 
@@ -27,18 +28,24 @@ This comparison also applies when `OPENCLAW_HOME` relocates the CLI's default st
 
 `--section <section>`: repeatable section filter. Available sections:
 
-`workspace`, `model`, `web`, `gateway`, `daemon`, `channels`, `plugins`, `skills`, `health`
+`workspace`, `model`, `web`, `gateway`, `channels`, `plugins`, `skills`, `health`
+
+`--section daemon` is refused before any writes. The interactive Daemon choice
+shows the separate install/start commands, so it cannot start the Gateway while
+configure still owns its databases.
 
 ```bash
 openclaw configure
 openclaw configure --section web
 openclaw configure --section model --section channels
-openclaw configure --section gateway --section daemon
+openclaw configure --section gateway
+openclaw gateway install
+openclaw gateway start
 ```
 
-Selecting `gateway`, `daemon`, or `health` (or running the full wizard with no `--section`) prompts where the Gateway runs and updates `gateway.mode`. Section filters that skip all three go straight to the requested setup with no gateway-mode prompt. Picking remote gateway mode writes the remote config and exits immediately. It does not run local-only steps like plugin installs.
+Selecting `gateway` or `health` (or running the full wizard with no `--section`) prompts where the Gateway runs and updates `gateway.mode`. Other section filters go straight to the requested setup with no gateway-mode prompt. Picking remote gateway mode writes the remote config and exits immediately. It does not run local-only steps like plugin installs.
 
-Gateway, daemon, health, and web settings do not require an agent owner. Workspace, model, plugin, skill, and channel setup use the configured System Agent in an explicit fleet. If none is configured, the wizard asks which existing agent to use. That selection applies to the remaining agent-scoped sections without changing the System Agent setting. Channel setup uses the selected workspace for plugin discovery. Removing channel configuration does not require an agent selection.
+Gateway, health, and web settings do not require an agent owner. Workspace, model, plugin, skill, and channel setup use the configured System Agent in an explicit fleet. If none is configured, the wizard asks which existing agent to use. That selection applies to the remaining agent-scoped sections without changing the System Agent setting. Channel setup uses the selected workspace for plugin discovery. Removing channel configuration does not require an agent selection.
 
 <Note>
 `openclaw configure` requires an interactive terminal (both stdin and stdout must be TTYs). Without one it prints the equivalent non-interactive `openclaw config get|set|patch|validate` commands and exits with an error instead of partially running.
@@ -85,10 +92,8 @@ When configure starts from a provider auth choice, the default-model and model-p
 - Gateway reconfiguration preserves existing `gateway.auth.allowTailscale`, `gateway.auth.rateLimit`, and `gateway.auth.identityScopes` policies. The selected auth mode replaces its credentials or trusted-proxy settings and removes fields belonging to other auth modes.
 - After local config writes, configure installs selected downloadable plugins when the chosen setup path requires them. Remote gateway config does not install local plugin packages.
 - Channel-oriented services (Slack/Discord/Matrix/Microsoft Teams) prompt for channel/room allowlists during setup. You can enter names or IDs. The wizard resolves names to IDs when possible.
-- Choosing **Reinstall** keeps the existing Gateway service in place while you select its runtime and configure validates authentication and prepares the replacement. Cancelling or failing during preparation leaves the existing service installed.
-- After successful daemon setup, the final Gateway status uses the same platform-specific startup grace period as onboarding before reporting reachability. Service installation and Gateway reachability are separate outcomes. If the Gateway is still not detected, run `openclaw health` to check it again.
-- If you run the daemon install step, token auth requires a token. If `gateway.auth.token` is SecretRef-managed, configure validates the SecretRef. It does not persist resolved plaintext token values into supervisor service environment metadata. If the SecretRef is unresolved, configure blocks daemon install with actionable remediation guidance.
-- If both `gateway.auth.token` and `gateway.auth.password` are configured and `gateway.auth.mode` is unset, configure blocks daemon install until you set the mode explicitly.
+- After starting the Gateway separately, run `openclaw health` to check it. Local health checks during configure report the stopped Gateway; remote Gateway checks remain available.
+- Gateway service installation validates token SecretRefs without persisting their resolved plaintext values into supervisor service environment metadata. Resolve missing credentials or an ambiguous `gateway.auth.mode` before running `openclaw gateway install`.
 
 ## Related
 

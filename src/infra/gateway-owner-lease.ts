@@ -8,7 +8,6 @@ import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
 import type { OpenClawStateSchemaReadAdmission } from "../state/openclaw-state-db-contract.js";
 import {
-  executeExistingOpenClawStateRead,
   withExistingOpenClawStateDatabaseCurrentReadOnly,
   withExistingOpenClawStateDatabaseReadOnly,
 } from "../state/openclaw-state-db-readonly.js";
@@ -199,26 +198,11 @@ export async function assertGatewayOwnerLeaseStopped(
     );
     return;
   }
-  // Acquisition holds physical custody, but async config loading must not open
-  // a host reader or inherit an observation snapshot for this authority check.
-  const reply = await executeExistingOpenClawStateRead(
+  withExistingOpenClawStateDatabaseCurrentReadOnly(
+    ({ db }) => {
+      resolveStoppedGatewayOwnerLease(readGatewayOwnerLeaseFromDatabase(db));
+    },
     { env },
-    { type: "gatewayOwnerLease.read" },
-    { live: true, signal: getAsyncWorkSignal() },
-  );
-  if (!reply) {
-    return;
-  }
-  if (!reply.ok || reply.type !== "gatewayOwnerLease.read") {
-    throw new Error("Unexpected Gateway owner lease inspection result");
-  }
-  resolveStoppedGatewayOwnerLease(
-    reply.lease
-      ? {
-          ...reply.lease,
-          state: readStateLeaseProcessOwnerStatus(reply.lease, reply.lease.heartbeatAt),
-        }
-      : undefined,
   );
 }
 

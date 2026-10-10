@@ -15,13 +15,9 @@ import { getReplyFromConfig } from "../auto-reply/reply/get-reply.js";
 import * as sessionEventHandoff from "../auto-reply/reply/session-event-handoff.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { resolveMainSessionKeyFromConfig } from "../config/sessions.js";
-import { acquireGatewayLock } from "../infra/gateway-lock.js";
-import { captureGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import { DEFAULT_WEBHOOK_MAX_BODY_BYTES } from "../infra/http-body.js";
 import { drainSystemEvents, peekSystemEventEntries } from "../infra/system-events.js";
-import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { gatewayFixtureLifetime } from "./gateway-fixture-lifetime.test-support.js";
 import {
   connectWebchatClient,
   createGatewaySuiteHarness,
@@ -32,7 +28,6 @@ import {
   testState,
   withGatewayServer,
 } from "./test-helpers.js";
-import { closeGatewayTestHomeDatabases } from "./test-helpers.server-storage.js";
 
 // mock-isolation: Both Gateway barrel instances share this inference boundary; admission stays real.
 vi.mock("../agents/embedded-agent-runner/run.js", () => ({ runEmbeddedAgent: vi.fn() }));
@@ -120,9 +115,6 @@ async function patchHooksConfig(
   socket: Parameters<typeof rpcReq>[0],
   hooks: Record<string, unknown>,
 ): Promise<void> {
-  const databasePath = resolveOpenClawStateSqlitePath();
-  const stateOwner = captureGatewayStateOwner(databasePath);
-  expect(stateOwner?.role).toBe("gateway");
   const current = await rpcReq<{ hash: string }>(socket, "config.get", {});
   expect(current.ok, current.error?.message).toBe(true);
   const changed = await rpcReq(socket, "config.patch", {
@@ -130,8 +122,6 @@ async function patchHooksConfig(
     baseHash: current.payload?.hash,
   });
   expect(changed.ok, changed.error?.message).toBe(true);
-  stateOwner?.assertCurrent();
-  expect(captureGatewayStateOwner(databasePath)?.ownerId).toBe(stateOwner?.ownerId);
 }
 
 async function waitForHookStatus(params: {
@@ -279,23 +269,7 @@ function withRevokedHook(
         ],
       });
       await withEnvAsync({ OPENCLAW_TEST_MINIMAL_GATEWAY: "0" }, async () => {
-        const ownership = await fixtureLifetime.acquire(async () => {
-          const home = process.env.HOME;
-          assert(home, "expected Gateway fixture home");
-          const lock = await acquireGatewayLock({ allowInTests: true, timeoutMs: 0 });
-          assert(lock, "expected Gateway state ownership");
-          return {
-            lock,
-            async cleanup() {
-              gatewayFixtureLifetime.assertReleased();
-              await closeGatewayTestHomeDatabases(home);
-              await lock.release();
-            },
-          };
-        });
-        const gateway = await createGatewaySuiteHarness({
-          serverOptions: { gatewayStateOwner: ownership.lock },
-        });
+        const gateway = await createGatewaySuiteHarness();
         try {
           const { port, server } = gateway;
           await server.startupSettled;

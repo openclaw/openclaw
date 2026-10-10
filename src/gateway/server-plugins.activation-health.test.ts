@@ -3,7 +3,6 @@ import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { recordPersistedContextEngineQuarantine } from "../context-engine/quarantine-health.js";
-import { captureGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import * as pluginStateWorker from "../plugin-state/plugin-state-worker-client.js";
 import { getPluginRegistryGatewayOwner } from "../plugins/registry-lifecycle.js";
@@ -266,8 +265,6 @@ it.each([false, true])(
         failedAt: new Date(123),
       });
       const databasePath = resolveOpenClawStateSqlitePath();
-      const stateOwner = captureGatewayStateOwner(databasePath);
-      expect(stateOwner?.role).toBe("gateway");
       expect(readPersistedCount(databasePath, engineId)).toEqual({ count: 1 });
       if (publicationRefuses) {
         commit = vi
@@ -311,8 +308,6 @@ it.each([false, true])(
       expect(reloadSettled).toBe(false);
       release.resolve();
       const result = await reload;
-      stateOwner?.assertCurrent();
-      expect(captureGatewayStateOwner(databasePath)?.ownerId).toBe(stateOwner?.ownerId);
       expect(result.ok).toBe(!publicationRefuses);
       if (publicationRefuses) {
         expect(result.error?.message).toContain("fixture publication refused before commit");

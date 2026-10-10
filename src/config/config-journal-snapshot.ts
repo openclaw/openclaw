@@ -3,10 +3,15 @@ import { createHmac, randomBytes } from "node:crypto";
 import fs from "node:fs";
 import { homedir as defaultHomedir } from "node:os";
 import path from "node:path";
+import { prepareSqliteAuditRecord } from "../infra/sqlite-audit-record.kernel.js";
 import { executeExistingOpenClawStateRead } from "../state/openclaw-state-db-readonly.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
-import type { ConfigSnapshotAuditRecord } from "./config-journal-snapshot.kernel.js";
-import { mutateConfigState } from "./config-state-mutation.js";
+import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
+import {
+  CONFIG_SNAPSHOT_SCOPE,
+  CONFIG_SNAPSHOT_KEY,
+  type ConfigSnapshotAuditRecord,
+} from "./config-journal-snapshot.kernel.js";
 import { resolveStateDir } from "./paths.js";
 
 const CONFIG_JOURNAL_FINGERPRINT_KEY_FILENAME = "config-journal-fingerprint.key";
@@ -207,11 +212,25 @@ async function writeConfigSnapshotAuditRecord(
   assertCurrent?.();
   try {
     const env = resolveConfigAuditStoreEnv(resolveConfigAuditStoreContext(params));
-    const written = await mutateConfigState(
-      { kind: "snapshot", snapshot: params.snapshot, expectedSnapshot: params.expectedSnapshot },
-      env,
-      assertCurrent,
+    const context = captureOpenClawStateWorkerContext({ env });
+    const input = {
+      record:
+        params.snapshot === null
+          ? null
+          : prepareSqliteAuditRecord(CONFIG_SNAPSHOT_SCOPE, {
+              key: CONFIG_SNAPSHOT_KEY,
+              value: params.snapshot,
+              createdAt: Date.now(),
+            }),
+      expectedPayloadJson:
+        params.expectedSnapshot === null ? null : JSON.stringify(params.expectedSnapshot),
+    };
+    const written = await runOpenClawStateWorkerOperation(
+      context,
+      (store) => store.execute({ type: "config.snapshot.upsert", input }),
+      { assertCurrent },
     );
+    context.admission.assertCurrent();
     assertCurrent?.();
     return written;
   } catch {

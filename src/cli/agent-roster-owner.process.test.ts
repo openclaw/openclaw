@@ -59,9 +59,24 @@ describe("agent roster offline ownership", () => {
   });
 
   it.each([
-    ["native creation", ["native-agent-create", "WORKSPACE"]],
-    ["onboarding workspace", ["onboard-workspace", "WORKSPACE"]],
     ["setup", ["setup", "--baseline", "--workspace", "WORKSPACE", "--json"]],
+    [
+      "onboarding",
+      [
+        "onboard",
+        "--non-interactive",
+        "--accept-risk",
+        "--agent-name",
+        "offline-probe",
+        "--workspace",
+        "WORKSPACE",
+        "--skip-skills",
+        "--skip-channels",
+        "--skip-ui",
+        "--skip-health",
+        "--json",
+      ],
+    ],
     [
       "advanced creation",
       ["agents", "add", "advanced", "--role", "researcher", "--workspace", "WORKSPACE", "--json"],
@@ -112,6 +127,39 @@ describe("agent roster offline ownership", () => {
     );
     expect((await fs.stat(workspace)).isDirectory()).toBe(true);
     const successor = await acquireGatewayLock({ env, allowInTests: true, timeoutMs: 0 });
+    expect(successor).not.toBeNull();
+    await successor?.release();
+  });
+
+  it("completes offline onboarding and releases ownership for Gateway startup", async () => {
+    const home = roots.make("openclaw-onboard-offline-");
+    const offline = environment(home);
+    const workspace = path.join(home, "workspace");
+    const result = await runCliProcessChild({
+      nodeArgs: [
+        ...entrypoint,
+        "onboard",
+        "--non-interactive",
+        "--accept-risk",
+        "--agent-name",
+        "first",
+        "--workspace",
+        workspace,
+        "--auth-choice",
+        "skip",
+        "--skip-skills",
+        "--skip-channels",
+        "--skip-ui",
+        "--skip-health",
+        "--json",
+      ],
+      env: offline,
+    });
+    expect(result.code, result.stderr).toBe(0);
+    expect((await fs.stat(workspace)).isDirectory()).toBe(true);
+    const saved = JSON.parse(await fs.readFile(offline.OPENCLAW_CONFIG_PATH!, "utf8"));
+    expect(saved.agents.entries.first).toBeDefined();
+    const successor = await acquireGatewayLock({ env: offline, allowInTests: true, timeoutMs: 0 });
     expect(successor).not.toBeNull();
     await successor?.release();
   });

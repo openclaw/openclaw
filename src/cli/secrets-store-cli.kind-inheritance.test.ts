@@ -32,8 +32,6 @@ vi.mock("./local-state-owner.js", () => ({
       config: {},
       signal: new AbortController().signal,
       assertCurrent() {},
-      assertSettlementCurrent() {},
-      runSettlement: async (settle) => await settle(),
     }),
 }));
 vi.mock("./secrets-store-input.js", async (importOriginal) => {

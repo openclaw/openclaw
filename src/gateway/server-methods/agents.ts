@@ -67,12 +67,17 @@ import {
   readConfigFileSnapshotForWrite,
   withConfigMutationExclusive,
 } from "../../config/config.js";
+import {
+  attachRuntimeConfigWriteApplication,
+  createRuntimeConfigWriteApplication,
+} from "../../config/runtime-write-application.js";
 import { purgeAgentSessionStoreEntries } from "../../config/sessions.js";
 import { resolveSessionTranscriptsDirForAgent } from "../../config/sessions/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isMissingPathError } from "../../infra/errors.js";
 import { withAgentExecApprovalsRemoved } from "../../infra/exec-approvals.js";
 import { isPathInside } from "../../infra/path-guards.js";
+import { captureGatewayRootWorkAdmissionContinuationScope } from "../../process/gateway-work-admission.js";
 import { normalizeAgentIdStrict } from "../../routing/session-key.js";
 import {
   readAgentDeletionJournalAsync,
@@ -85,7 +90,6 @@ import { captureGatewayClientUploadCommitGuard } from "../upload-policy.js";
 import {
   AgentConfigPreconditionError,
   AgentModelSelectionError,
-  createAgentConfigApplication,
   createAgentConfigEntry,
   deleteAgentConfigEntry,
   isConfiguredAgent,
@@ -117,6 +121,31 @@ import { assertValidParams } from "./validation.js";
 
 function respondAgentNotFound(respond: RespondFn, agentId: string): void {
   respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, `agent "${agentId}" not found`));
+}
+
+function createAgentConfigApplication(respond: RespondFn) {
+  const application = createRuntimeConfigWriteApplication(
+    captureGatewayRootWorkAdmissionContinuationScope()?.run,
+  );
+  return {
+    attach: <T extends object>(options: T) =>
+      attachRuntimeConfigWriteApplication(options, application),
+    confirm: async () => {
+      const outcome = application.claimed ? await application.result : "unclaimed";
+      if (outcome === "applied") {
+        return true;
+      }
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.UNAVAILABLE,
+          `Agent configuration was saved but its application to the active Gateway was not confirmed (${outcome}); run config.get, then apply the saved config or restart the Gateway.`,
+        ),
+      );
+      return false;
+    },
+  };
 }
 
 type AgentDeleteRemovedPath = NonNullable<AgentsDeleteResult["removed"]>[number];

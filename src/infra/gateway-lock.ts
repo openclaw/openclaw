@@ -555,37 +555,6 @@ export async function acquireGatewayLock(
               projection = previousOwner.retainProjection();
             }
             await assertHistoricalGatewayOwnerStopped(paths, opts, projection);
-            owner.assertCurrent();
-            // Shipped Gateways discover this PID sidecar before starting. Synchronous
-            // schema work retains the same fs-safe owner through its final reference.
-            const shouldReclaim = (previous: LockPayload | null) =>
-              shouldReclaimGatewayLock({
-                lockPath: paths.stateLockPath,
-                payload: previous,
-                staleMs: opts.staleMs ?? 30_000,
-                now: Date.now,
-                platform: opts.platform ?? process.platform,
-                readProcessCmdline: opts.readProcessCmdline,
-                readProcessStartTime: opts.readProcessStartTime,
-              });
-            if (!projection) {
-              projection = createGatewayStateProjection(
-                acquireFileLockSync(paths.stateLockPath, {
-                  lockPath: paths.stateLockPath,
-                  timeoutMs: 0,
-                  retry: { retries: 0 },
-                  staleRecovery: "remove-if-unchanged",
-                  reentrantOwner: payload.ownerId,
-                  payload: () =>
-                    role === "gateway" ? payload : { ...payload, role: "agent-embedded" },
-                  parsePayload: parseGatewayLockPayload,
-                  shouldReclaim: ({ payload: previous }) =>
-                    shouldReclaim(previous as LockPayload | null),
-                  shouldRemoveStaleLock: ({ payload: previous }) =>
-                    shouldReclaim(previous as LockPayload | null),
-                }),
-              );
-            }
             await owner.run(() =>
               assertGatewayOwnerLeaseStopped(
                 env,
@@ -680,6 +649,35 @@ export async function acquireGatewayLock(
   let ownerLease: GatewayOwnerLease | undefined;
   try {
     assertStateOwnerCurrent(opts.assertCurrent);
+    // Shipped Gateways discover this PID sidecar before starting. Synchronous
+    // schema work retains the same fs-safe owner through its final reference.
+    const shouldReclaim = (previous: LockPayload | null) =>
+      shouldReclaimGatewayLock({
+        lockPath: paths.stateLockPath,
+        payload: previous,
+        staleMs: opts.staleMs ?? 30_000,
+        now: Date.now,
+        platform: opts.platform ?? process.platform,
+        readProcessCmdline: opts.readProcessCmdline,
+        readProcessStartTime: opts.readProcessStartTime,
+      });
+    if (!borrowedOwner && !projection) {
+      projection = createGatewayStateProjection(
+        acquireFileLockSync(paths.stateLockPath, {
+          lockPath: paths.stateLockPath,
+          timeoutMs: 0,
+          retry: { retries: 0 },
+          staleRecovery: "remove-if-unchanged",
+          reentrantOwner: payload.ownerId,
+          payload: () => (role === "gateway" ? payload : { ...payload, role: "agent-embedded" }),
+          parsePayload: parseGatewayLockPayload,
+          shouldReclaim: ({ payload: previous }) => shouldReclaim(previous as LockPayload | null),
+          shouldRemoveStaleLock: ({ payload: previous }) =>
+            shouldReclaim(previous as LockPayload | null),
+        }),
+      );
+    }
+    assertStateOwnerCurrent();
     if (role === "gateway" && opts.listenerMode && opts.port) {
       ownerLease = acquireGatewayOwnerLease({
         env,

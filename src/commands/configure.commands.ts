@@ -1,4 +1,5 @@
 import { formatCliCommand } from "../cli/command-format.js";
+import { runWithLocalStateOwner } from "../cli/local-state-owner.js";
 import { isTerminalInteractive } from "../cli/terminal-interactivity.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
@@ -33,6 +34,13 @@ export async function configureCommandFromSectionsArg(
     runtime.exit(1);
     return;
   }
+  if (sections.includes("daemon")) {
+    runtime.error(
+      "Configure writes require the Gateway to remain stopped. Run configure without --section daemon, then run `openclaw gateway install` and `openclaw gateway start`.",
+    );
+    runtime.exit(1);
+    return;
+  }
 
   // Both configure and bare config share this guard before entering the wizard.
   if (!(options?.interactive ?? isTerminalInteractive())) {
@@ -42,5 +50,15 @@ export async function configureCommandFromSectionsArg(
   }
 
   // Omission opens the full chooser; an empty array means no selected changes to the runner.
-  await runConfigureWizard(sections.length > 0 ? { sections } : {}, runtime);
+  await runWithLocalStateOwner({
+    method: "configure",
+    params: {},
+    target: "configuration",
+    onForeignOwner: "refuse",
+    runLocal: () =>
+      runConfigureWizard(
+        { ...(sections.length > 0 ? { sections } : {}), deferGatewayStart: true },
+        runtime,
+      ),
+  });
 }

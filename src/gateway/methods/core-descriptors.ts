@@ -729,5 +729,4 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["users.background.upload", "users", "operator.write", "2026.9"],
   ["users.background.remove", "users", "operator.write", "2026.9"],
   ["debugProxy.capture", "debug-proxy", "operator.admin", "2026.9"],
-  ["config.state.mutate", "config-state", "operator.admin", "2026.9"],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];

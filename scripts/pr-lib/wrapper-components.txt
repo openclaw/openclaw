@@ -37,7 +37,6 @@ packages/gateway-protocol/src/schema/worker-protocol-primitives.ts
 packages/gateway-protocol/src/schema/worker-session-tools.ts
 packages/gateway-protocol/src/schema/worktrees.ts
 packages/gateway-protocol/src/secret-ref-contract.ts
-packages/gateway-protocol/src/server-capabilities.ts
 packages/gateway-protocol/src/session-agent-status.ts
 packages/gateway-protocol/src/session-communication.ts
 packages/gateway-protocol/src/svg-image.ts
@@ -400,7 +399,6 @@ src/channels/registry-normalize.ts
 src/channels/registry.ts
 src/cli/command-format.ts
 src/cli/daemon-cli/restart-health.types.ts
-src/cli/local-state-owner.ts
 src/cli/parse-bytes.ts
 src/cli/parse-duration.ts
 src/cli/profile-utils.ts
@@ -486,7 +484,6 @@ src/config/config-journal-snapshot.kernel.ts
 src/config/config-journal-snapshot.ts
 src/config/config-path-mutation.ts
 src/config/config-paths.ts
-src/config/config-state-mutation.ts
 src/config/config-write-guard.ts
 src/config/config.ts
 src/config/defaults.ts
@@ -504,7 +501,6 @@ src/config/github-identity-profile-id.ts
 src/config/implicit-agent-roster.ts
 src/config/include-write-boundary.ts
 src/config/includes.ts
-src/config/io.audit-policy.ts
 src/config/io.audit.ts
 src/config/io.clobber-snapshot.ts
 src/config/io.context.ts

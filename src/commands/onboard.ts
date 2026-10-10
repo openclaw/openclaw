@@ -6,6 +6,7 @@
  */
 import path from "node:path";
 import { formatCliCommand } from "../cli/command-format.js";
+import { runWithLocalStateOwner } from "../cli/local-state-owner.js";
 import { readConfigFileSnapshot, resolveGatewayPort } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -525,6 +526,12 @@ export async function setupWizardCommand(
     reject(t("wizard.guided.ttyRequired"));
     return;
   }
+  if (normalizedOpts.installDaemon === true) {
+    reject(
+      "Onboarding writes require the Gateway to remain stopped. Run onboarding without --install-daemon, then run `openclaw gateway install` and `openclaw gateway start`.",
+    );
+    return;
+  }
 
   if (process.platform === "win32") {
     runtime.log(
@@ -537,6 +544,20 @@ export async function setupWizardCommand(
     );
   }
 
+  const guidedSetup =
+    !normalizedOpts.nonInteractive && !wantsClassicInteractiveSetup(normalizedOpts);
+  const offlineOpts = {
+    ...normalizedOpts,
+    installDaemon: false,
+    ...(!guidedSetup ? { skipHealth: true, skipUi: true } : {}),
+  };
+  const nextStep =
+    "Onboarding will keep the Gateway stopped while writing setup state. Install the background service afterward with `openclaw gateway install` and `openclaw gateway start`. Classic and non-interactive setup defer automatic health checks and browser launch.";
+  if (normalizedOpts.json) {
+    runtime.error(nextStep);
+  } else {
+    runtime.log(nextStep);
+  }
   const runSetup = normalizedOpts.nonInteractive
     ? (await import("./onboard-non-interactive.js")).runNonInteractiveSetup
     : wantsClassicInteractiveSetup(normalizedOpts)
@@ -625,7 +646,25 @@ export async function setupWizardCommand(
       await handleReset(resetScope, workspaceDir, runtime);
     }
 
-    await runSetup(normalizedOpts, runtime);
+    if (!guidedSetup) {
+      await runSetup(offlineOpts, runtime);
+    }
+    return true;
   };
-  await withSetupMigrationTargetLock(resolveStateDir(), runSetupAfterOptionalReset);
+  await withSetupMigrationTargetLock(resolveStateDir(), async () => {
+    const ready =
+      guidedSetup && !normalizedOpts.reset
+        ? true
+        : await runWithLocalStateOwner({
+            method: "onboard",
+            params: {},
+            target: "onboarding configuration and agent state",
+            onForeignOwner: "refuse",
+            runLocal: runSetupAfterOptionalReset,
+          });
+    if (ready && guidedSetup) {
+      // Guided onboarding releases its write owner before starting its chat or Gateway handoff.
+      await runSetup(offlineOpts, runtime);
+    }
+  });
 }

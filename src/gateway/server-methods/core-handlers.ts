@@ -46,10 +46,6 @@ const CORE_GATEWAY_HANDLER_MODULES = {
     })),
   commands: () => import("./commands.js").then((module) => module.commandsHandlers),
   computer: () => import("./computer.js").then((module) => module.computerHandlers),
-  "config-state": () =>
-    import("./config-state-mutation.js").then((module) => ({
-      "config.state.mutate": module.configStateMutationHandler,
-    })),
   config: () => import("./config.js").then((module) => module.configHandlers),
   conversations: () => import("./conversations.js").then((module) => module.conversationHandlers),
   connect: () => import("./connect.js").then((module) => module.connectHandlers),

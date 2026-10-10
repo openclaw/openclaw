@@ -124,6 +124,14 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     exact: true,
     policy: { configGuard: "skip", loadPlugins: "never" },
   },
+  ...[
+    ["agents", "add"],
+    ["agents", "team", "create"],
+  ].map((commandPath): CliCommandCatalogEntry => ({
+    commandPath,
+    exact: true,
+    policy: { configGuard: "defer", loadPlugins: "never" },
+  })),
   ...["unbind", "set-identity", "delete"].map((subcommand): CliCommandCatalogEntry => ({
     commandPath: ["agents", subcommand],
     exact: true,
@@ -256,9 +264,20 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
   {
     commandPath: ["config", "unset"],
     exact: true,
-    policy: { configGuard: "run", ensureCliPath: false, networkProxy: "bypass" },
+    policy: {
+      configGuard: "defer",
+      loadPlugins: "never",
+      ensureCliPath: false,
+      networkProxy: "bypass",
+    },
     route: { id: "config-unset" },
   },
+  ...["set", "patch"].map((subcommand): CliCommandCatalogEntry => ({
+    commandPath: ["config", subcommand],
+    exact: true,
+    // The command acquires state ownership before config validation can write ancillary state.
+    policy: { configGuard: "defer", loadPlugins: "never", networkProxy: "bypass" },
+  })),
   {
     commandPath: ["models"],
     exact: true,
@@ -494,7 +513,7 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
   {
     commandPath: ["onboard"],
     exact: true,
-    policy: { loadPlugins: "never" },
+    policy: { configGuard: "defer", loadPlugins: "never" },
   },
   ...[["recommendations"], ["recommendations", "acknowledge"], ["recommendations", "refresh"]].map(
     (path): CliCommandCatalogEntry => ({

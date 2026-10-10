@@ -2,7 +2,6 @@
 import fs, { promises as fsPromises } from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import { acquireGatewayLock } from "../infra/gateway-lock.js";
 import { createSqliteAuditRecordStore } from "../infra/sqlite-audit-record-store.js";
 import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
@@ -194,7 +193,6 @@ describe("config journal snapshots", () => {
     const env = { OPENCLAW_STATE_DIR: path.join(home, ".openclaw") };
     const context = { env, homedir: () => home };
     const configPath = path.join(home, ".openclaw", "openclaw.json");
-    const owner = await acquireGatewayLock({ env, allowInTests: true, timeoutMs: 0 });
     const sql = observeMainThreadSql();
     sql.calibrate();
     try {
@@ -222,7 +220,6 @@ describe("config journal snapshots", () => {
       sql.expectIdle();
     } finally {
       sql.restore();
-      await owner?.release();
     }
   });
 
