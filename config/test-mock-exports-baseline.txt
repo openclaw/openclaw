@@ -7963,7 +7963,6 @@
 ["src/gateway/server-startup-early.test.ts","../agents/context.js","3903be02582e6932ac1d1ad7b4f4e6a2e89be5e12992d3393b5e582285e33ae1",1]
 ["src/gateway/server-startup-early.test.ts","../cron/maintenance.js","401f36abe20f9a50e020dda3d1177c316ca881075784a9377f9c0acb7bd12a7b",1]
 ["src/gateway/server-startup-early.test.ts","../infra/machine-name.js","3498c1fece616c2957882b8005057dc03f616a6bd620a7bcc62cf8a458ab9fd2",1]
-["src/gateway/server-startup-early.test.ts","../skills/runtime/refresh.js","3a0f5ae3cefafc39bcfcc8d9ee17630bafc9eb206c21d4c48cb1f0d0d1102cc2",1]
 ["src/gateway/server-startup-early.test.ts","../skills/runtime/remote.js","e3607af3fc8e8716c39e6e4212b0248bc166942ea7db4d82301f04f3b16dd225",1]
 ["src/gateway/server-startup-early.test.ts","./server-discovery-runtime.js","e563d37d7d3e0b3796e80baabac8a3ceebaa4098f907cf8920a1875a77debed2",1]
 ["src/gateway/server-startup-early.test.ts","./server-maintenance.js","23f7b3bfcf2d0e49c7c75e00853bbc535b1ab709643bec3cb80b74bdd25955f2",1]
