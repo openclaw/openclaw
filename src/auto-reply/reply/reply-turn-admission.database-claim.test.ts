@@ -109,8 +109,8 @@ it("retains the native incognito owner until accepted actor work drains", async 
       expect(fs.existsSync(storePath)).toBe(false);
 
       const entered = createDeferred();
-      phase = actor.withPhase("native-reply-admission", authority, async ({ patch }) => {
-        patch([{ kind: "activity", updatedAt: 543 }]);
+      phase = actor.withPhase("native-reply-admission", authority, async (currentPhase) => {
+        currentPhase.patch([{ kind: "activity", updatedAt: 543 }]);
         entered.resolve();
         await release.promise;
       });
