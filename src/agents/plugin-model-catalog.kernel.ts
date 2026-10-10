@@ -1,19 +1,14 @@
 import type { DatabaseSync } from "node:sqlite";
 import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
   sqliteStringSet,
 } from "../infra/kysely-sync.js";
-import { normalizePluginProviderBaseUrl } from "../plugins/plugin-metadata-provider-facts.js";
 import { OpenClawAgentDatabaseReadOnlyScope } from "../state/openclaw-agent-db-readonly-scope.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
-import {
-  isGeneratedPluginModelCatalog,
-  stripPluginModelCatalogCredentials,
-} from "./plugin-model-catalog-repair.js";
+import { stripPluginModelCatalogCredentials } from "./plugin-model-catalog-repair.js";
 import {
   createPluginModelCatalogReadOperations,
   type PersistedPluginModelCatalog,
@@ -145,67 +140,6 @@ export function replacePluginModelCatalogEntriesInDatabase(params: {
           .deleteFrom("cache_entries")
           .where("scope", "=", PLUGIN_MODEL_CATALOG_CACHE_SCOPE)
           .where("key", "=", pluginId),
-      );
-      changed = true;
-    }
-  }
-  return changed;
-}
-
-/** Apply removal-time endpoint facts to the current rows inside the writer transaction. */
-export function pruneRemovedProviderCatalogEntriesInDatabase(params: {
-  database: DatabaseSync;
-  removedProviderBaseUrls: Readonly<Record<string, string>>;
-  updatedAt: number;
-}): boolean {
-  const removedProviders = Object.entries(params.removedProviderBaseUrls).flatMap(
-    ([providerId, baseUrl]) => {
-      const normalized = normalizePluginProviderBaseUrl(baseUrl);
-      return normalized ? [[providerId, normalized] as const] : [];
-    },
-  );
-  const kysely = getNodeSqliteKysely<PluginModelCatalogDatabase>(params.database);
-  const rows = executeSqliteQuerySync(
-    params.database,
-    kysely
-      .selectFrom("cache_entries")
-      .select(["key", "value_json"])
-      .where("scope", "=", PLUGIN_MODEL_CATALOG_CACHE_SCOPE),
-  ).rows;
-  let changed = false;
-  for (const row of rows) {
-    if (row.value_json === null) {
-      continue;
-    }
-    let catalog: unknown;
-    try {
-      catalog = JSON.parse(row.value_json);
-    } catch {
-      continue;
-    }
-    if (!isGeneratedPluginModelCatalog(catalog) || !isRecord(catalog.providers)) {
-      continue;
-    }
-    let removed = false;
-    for (const [providerId, normalizedBaseUrl] of removedProviders) {
-      const provider = catalog.providers[providerId];
-      if (
-        isRecord(provider) &&
-        typeof provider.baseUrl === "string" &&
-        normalizePluginProviderBaseUrl(provider.baseUrl) === normalizedBaseUrl
-      ) {
-        delete catalog.providers[providerId];
-        removed = true;
-      }
-    }
-    if (removed) {
-      executeSqliteQuerySync(
-        params.database,
-        kysely
-          .updateTable("cache_entries")
-          .set({ value_json: JSON.stringify(catalog), updated_at: params.updatedAt })
-          .where("scope", "=", PLUGIN_MODEL_CATALOG_CACHE_SCOPE)
-          .where("key", "=", row.key),
       );
       changed = true;
     }
