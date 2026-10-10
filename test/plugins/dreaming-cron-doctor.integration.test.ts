@@ -227,6 +227,7 @@ async function runRegisteredDreamingService(
   scheduler: ReturnType<typeof createTestGatewayScheduler>,
 ) {
   const registry = createEmptyPluginRegistry();
+  const startFailures: unknown[] = [];
   memoryCore.register(
     createTestPluginApi({
       id: "memory-core",
@@ -234,12 +235,20 @@ async function runRegisteredDreamingService(
       logger,
       runtime: createPluginRuntimeMock({ config: { current: () => config } }),
       registerService(service) {
+        const start = service.start.bind(service);
         registry.services.push({
           pluginId: "memory-core",
           origin: "bundled",
           source: "memory-core/index.ts",
           id: service.id,
-          service,
+          service: {
+            ...service,
+            // Boot-path starts log failures instead of rejecting; surface them here.
+            start: (ctx) =>
+              Promise.resolve(start(ctx)).catch((error: unknown) => {
+                startFailures.push(error);
+              }),
+          },
         });
       },
     }),
@@ -249,16 +258,17 @@ async function runRegisteredDreamingService(
   }
   let services: PluginServicesHandle | undefined;
   try {
+    // Gateway boot starts services without the hot-reload candidate deadline.
     services = await startPluginServices({
       scheduler,
       registry,
       config,
       getCronService: () => cron,
-      throwOnStartError: true,
       onHandle(handle) {
         services = handle;
       },
     });
+    expect(startFailures).toEqual([]);
     expect(logger.error).not.toHaveBeenCalled();
   } finally {
     await services?.stop({ strict: true });
