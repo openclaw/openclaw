@@ -189,10 +189,14 @@ options, and provider setup.
 
 ## Memory engines
 
-<CardGroup cols={3}>
+<CardGroup cols={2}>
 <Card title="Builtin (default)" icon="database" href="/concepts/memory-builtin">
 SQLite-based. Works out of the box with keyword search, vector similarity, and
 hybrid search. No extra dependencies.
+</Card>
+<Card title="AtMem" icon="shield" href="https://github.com/aetna000/atmem">
+Local governed memory with reviewable admission, source-linked recall, audit
+evidence, and reversible activation. Externally managed integration.
 </Card>
 <Card title="Honcho" icon="brain" href="/concepts/memory-honcho">
 AI-native cross-session memory with user modeling, semantic search, and
@@ -203,6 +207,36 @@ LanceDB-backed memory with OpenAI-compatible embeddings, auto-recall,
 auto-capture, and local Ollama embedding support. Plugin install.
 </Card>
 </CardGroup>
+
+### AtMem managed setup
+
+AtMem owns the installation transaction for its external memory integration.
+After installing the Python package, one command installs the matching
+`openclaw-memory-atmem` bridge, discovers agents and workspaces, copies native
+memory into AtMem, restarts the Gateway, and verifies the connection:
+
+```bash
+python -m pip install --upgrade "atmem==2.3.8"
+atmem openclaw install
+atmem control verify
+```
+
+Setup starts in shadow mode, so AtMem can capture and evaluate memory without
+injecting context. Review the result before enabling governed context:
+
+```bash
+atmem control status
+atmem control activate
+```
+
+Use `atmem control restore` to return to the saved OpenClaw memory
+configuration. Install and upgrade through the AtMem CLI rather than installing
+the npm bridge directly; the CLI keeps both package versions aligned and rolls
+back a failed verification.
+
+AtMem 2.3.8 has a fail-closed compatibility matrix covering OpenClaw
+2026.7.1-2, 2026.8.1, 2026.9.2 through 2026.9.6, and 2026.9.9. An unqualified
+host version remains in shadow mode until its hook surface has been reviewed.
 
 ## Knowledge wiki layer
 
