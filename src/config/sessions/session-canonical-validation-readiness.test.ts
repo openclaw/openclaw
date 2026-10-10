@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { renameSync } from "node:fs";
-import { DatabaseSync, StatementSync } from "node:sqlite";
+import { backup, DatabaseSync, StatementSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
 import {
@@ -8,7 +8,10 @@ import {
   resolveRuntimeWorkerUrl,
 } from "../../infra/runtime-worker-url.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { closeOpenClawAgentDatabases } from "../../state/openclaw-agent-db-lifecycle.js";
+import {
+  closeOpenClawAgentDatabaseByPathAsync,
+  closeOpenClawAgentDatabases,
+} from "../../state/openclaw-agent-db-lifecycle.js";
 import {
   hasOpenClawAgentCanonicalValidation,
   invalidateOpenClawAgentDatabaseValidation,
@@ -107,13 +110,16 @@ it.each(["pending rows", "revoked receipt"] as const)(
   },
 );
 
-it("refuses drifted triggers at a new canonical admission", async () => {
+it("refuses replacement schema drift before reusing a warm canonical readiness receipt", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const { options, database } = seedPendingRows(0);
     expect(hasOpenClawAgentCanonicalValidation(database)).toBe(true);
     expect(hasPendingCanonicalSessionValidation(database)).toBe(false);
     await certifySessionCanonicalValidationPending(options);
-    const peer = new DatabaseSync(database.path);
+    const replacement = `${database.path}.replacement`;
+    await backup(database.db, replacement);
+    await closeOpenClawAgentDatabaseByPathAsync(database.path);
+    const peer = new DatabaseSync(replacement);
     try {
       peer.exec(
         "CREATE TRIGGER unexpected_session_trigger AFTER INSERT ON session_nodes BEGIN SELECT 1; END",
@@ -121,9 +127,9 @@ it("refuses drifted triggers at a new canonical admission", async () => {
     } finally {
       peer.close();
     }
-    invalidateOpenClawAgentDatabaseValidation(database.path);
+    renameSync(replacement, database.path);
     await expect(certifySessionCanonicalValidationPending(options)).rejects.toThrow(
-      /unexpected trigger unexpected_session_trigger.*openclaw doctor --fix/u,
+      /unexpected_session_trigger.*openclaw doctor --fix/u,
     );
   });
 });
@@ -222,8 +228,8 @@ it("drains a large backlog in one retained worker while admitting foreground wri
     const createWorker = archiveWorker.createSqliteTranscriptArchiveWorker;
     const started = vi
       .spyOn(archiveWorker, "createSqliteTranscriptArchiveWorker")
-      .mockImplementation((data) => {
-        const worker = createWorker(data);
+      .mockImplementation((data, nativeLocations) => {
+        const worker = createWorker(data, nativeLocations);
         worker.on("message", (message: { type: string }) => {
           if (message.type !== "reclaimed") {
             return;
@@ -262,28 +268,30 @@ it.each(["row changed", "receipt revoked", "startup revoked"] as const)(
       let changed = false;
       let markerRetainedAfterFirstBatch = false;
       const createWorker = archiveWorker.createSqliteTranscriptArchiveWorker;
-      vi.spyOn(archiveWorker, "createSqliteTranscriptArchiveWorker").mockImplementation((data) => {
-        const worker = createWorker(data);
-        worker.on("message", (message: { type: string }) => {
-          if (message.type === "admission-request" && !changed) {
-            if (change === "row changed") {
-              changed = true;
-              database.db.exec(
-                "UPDATE session_nodes SET parent_session_key = 'agent:main:changed'",
-              );
-            } else if (change === "startup revoked") {
-              changed = true;
+      vi.spyOn(archiveWorker, "createSqliteTranscriptArchiveWorker").mockImplementation(
+        (data, nativeLocations) => {
+          const worker = createWorker(data, nativeLocations);
+          worker.on("message", (message: { type: string }) => {
+            if (message.type === "admission-request" && !changed) {
+              if (change === "row changed") {
+                changed = true;
+                database.db.exec(
+                  "UPDATE session_nodes SET parent_session_key = 'agent:main:changed'",
+                );
+              } else if (change === "startup revoked") {
+                changed = true;
+              }
+            } else if (message.type === "reclaimed") {
+              if (change === "row changed") {
+                markerRetainedAfterFirstBatch = hasPendingCanonicalSessionValidation(database);
+              } else if (change === "receipt revoked") {
+                invalidateOpenClawAgentDatabaseValidation(database.path);
+              }
             }
-          } else if (message.type === "reclaimed") {
-            if (change === "row changed") {
-              markerRetainedAfterFirstBatch = hasPendingCanonicalSessionValidation(database);
-            } else if (change === "receipt revoked") {
-              invalidateOpenClawAgentDatabaseValidation(database.path);
-            }
-          }
-        });
-        return worker;
-      });
+          });
+          return worker;
+        },
+      );
       const assertCurrentOwner =
         change === "startup revoked"
           ? () => {
@@ -383,23 +391,25 @@ it("shares active runtime certification without retaining success or failure", a
     let resume: (() => void) | undefined;
     const jobs = vi.fn();
     const createWorker = archiveWorker.createSqliteTranscriptArchiveWorker;
-    vi.spyOn(archiveWorker, "createSqliteTranscriptArchiveWorker").mockImplementation((data) => {
-      const worker = createWorker(data);
-      const post = worker.postMessage.bind(worker);
-      vi.spyOn(worker, "postMessage").mockImplementation((message: unknown, ...args) => {
-        if (isRecord(message) && message.type === "canonical-validation") {
-          jobs();
-          if (holdNext) {
-            holdNext = false;
-            resume = () => post(message, ...args);
-            entered.resolve();
-            return;
+    vi.spyOn(archiveWorker, "createSqliteTranscriptArchiveWorker").mockImplementation(
+      (data, nativeLocations) => {
+        const worker = createWorker(data, nativeLocations);
+        const post = worker.postMessage.bind(worker);
+        vi.spyOn(worker, "postMessage").mockImplementation((message: unknown, ...args) => {
+          if (isRecord(message) && message.type === "canonical-validation") {
+            jobs();
+            if (holdNext) {
+              holdNext = false;
+              resume = () => post(message, ...args);
+              entered.resolve();
+              return;
+            }
           }
-        }
-        post(message, ...args);
-      });
-      return worker;
-    });
+          post(message, ...args);
+        });
+        return worker;
+      },
+    );
     await certifySessionCanonicalValidationPending(options);
     jobs.mockClear();
     const dirty = () => {

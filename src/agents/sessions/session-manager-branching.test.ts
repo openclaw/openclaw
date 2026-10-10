@@ -9,10 +9,10 @@ import {
   loadSessionEntry,
   loadTranscriptEvents,
   onSessionIdentityMutation,
-  replaceTranscriptEventsSync,
   updateSessionEntry,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import { replaceTranscriptEventsSync } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import {
   SessionTranscriptWriterClaimReboundError,
   withOwnedSessionTranscriptWrites,

@@ -157,11 +157,15 @@ it("preserves cold serialization and snapshot revisions for synchronous SDK comm
         skipMaintenance: true,
         assertCommitAllowed: () => expect(f.database.db.isTransaction).toBe(true),
       });
-    await patch({ label: "metadata only" });
+    await patch({ label: "metadata only", sidebarRoot: true });
     expect(serializedColdFields()).toBe(0);
     expect(snapshots()).toEqual(saved);
     expect(revision()).toBe(initialRevision);
-    expect(f.read()?.label).toBe("metadata only");
+    expect(f.read()).toMatchObject({ label: "metadata only", sidebarRoot: true });
+    await patch({ sidebarRoot: undefined });
+    expect(f.read()?.sidebarRoot).toBeUndefined();
+    expect(snapshots()).toEqual(saved);
+    expect(revision()).toBe(initialRevision);
 
     stringify.mockClear();
     const changedSkills = { ...cold.skillsSnapshot, prompt: "changed instructions" };

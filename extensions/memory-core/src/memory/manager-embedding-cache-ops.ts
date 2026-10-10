@@ -192,11 +192,7 @@ export abstract class MemoryManagerEmbeddingCacheOps extends MemoryManagerSyncOp
     embeddings: number[][],
     generation: MemorySemanticProviderGeneration,
   ): Promise<void> {
-    if (
-      !this.cache.enabled ||
-      candidates.length === 0 ||
-      !this.canWriteEmbeddingCache(generation)
-    ) {
+    if (candidates.length === 0 || !this.canWriteEmbeddingCache(generation)) {
       return;
     }
     // Validate the whole provider response before retaining any vectors. Index
@@ -207,6 +203,7 @@ export abstract class MemoryManagerEmbeddingCacheOps extends MemoryManagerSyncOp
       !embeddings.every((embedding) => isValidMemoryEmbedding(embedding, dimensions))
     ) {
       if (
+        this.cache.enabled &&
         generation.embeddingDimensions !== undefined &&
         embeddings.some(
           (embedding) =>
@@ -249,6 +246,9 @@ export abstract class MemoryManagerEmbeddingCacheOps extends MemoryManagerSyncOp
       );
     }
     generation.embeddingDimensions = dimensions;
+    if (!this.cache.enabled) {
+      return;
+    }
     await withMemoryWorkspaceLock(this.workspaceDir, async () => {
       if (!this.canWriteEmbeddingCache(generation)) {
         return;

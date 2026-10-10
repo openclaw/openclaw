@@ -9,15 +9,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
-import {
-  ensureSessionEntrySync,
-  replaceTranscriptEvents,
-} from "../config/sessions/session-accessor.js";
+import { ensureSessionEntrySync } from "../config/sessions/session-accessor.js";
 import {
   publishEncodedSessionTranscriptArchive,
   resolveSqliteTranscriptArchivePath,
 } from "../config/sessions/session-accessor.sqlite-archive-artifact.js";
 import { rewriteSqliteTranscriptEventRowsInTransaction } from "../config/sessions/session-accessor.sqlite-transcript-store.js";
+import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import {
   runWithSessionTranscriptReadFence,
   SessionTranscriptReadFenceError,

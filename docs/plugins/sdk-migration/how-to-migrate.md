@@ -298,11 +298,87 @@ deprecation is recorded in TypeScript and the compatibility registry without
 runtime warnings. This migration changes no schema, stored data, retention, or
 update behavior.
 
+## Prepare session entry changes
+
+Use `prepareSessionEntryPatch` or `applySessionEntryPatch` from
+`openclaw/plugin-sdk/session-store-runtime`. The agent runtime exposes
+`api.runtime.agent.session.prepareSessionEntryPatch` with the calling plugin's
+lifetime and session ownership checks bound by the host.
+
+```ts
+// Legacy callback adapter: retained with its original transaction guard.
+await patchSessionEntry({
+  ...target,
+  update: async (entry) => ({ displayName: await chooseTitle(entry) }),
+  assertCommitAllowed: assertLegacyOwner,
+});
+
+// Prepare outside SQLite; commit only if the captured entry is unchanged.
+await prepareSessionEntryPatch({
+  ...target,
+  prepare: async (entry) => ({ displayName: await chooseTitle(entry) }),
+  authority: { kind: "host", assertCurrent: assertLiveOwner },
+});
+
+// Already prepared data needs only one worker mutation command.
+await applySessionEntryPatch({
+  ...target,
+  expected: { sessionId, lifecycleRevision },
+  patch: { displayName: title },
+  preserveActivity: true,
+});
+```
+
+Preparation runs once outside the database transaction. Returning `null`
+suppresses the write and retains the existing result behavior. The worker checks
+the exact captured entry before committing; a conflict rejects without replaying
+the callback. `applySessionEntryPatch` checks its optional expected session and
+lifecycle in the committing transaction; `expected: null` requires absence.
+Use `fallbackEntry` when creating an absent row, and `replaceEntry: true` only
+when the supplied patch is a complete replacement.
+
+A `host` authority checks live ownership or cancellation without database access.
+It is rechecked after preparation and at worker admission and commit. Pass an
+existing host-provided source assertion as
+`authority: { kind: "source", source }` when storage predicates are involved;
+wrapping it in a database-reading callback loses its prepared-source contract.
+Ordinary direct SDK CRUD retains its existing optional-authority contract.
+
+`patchSessionEntry`, `updateSessionStoreEntry`, and the
+`updateLastRoute.assertCommitAllowed` option are deprecated and will be removed
+in the next Plugin SDK major. Use `updateLastRouteWithAuthority` for guarded
+route updates. Legacy guards retain their original native transaction visibility.
+New preparation does not serialize closures or promise that visibility. The
+shared warning budget is once per plugin and session-store family per process.
+
+`upsertSessionEntry` and `updateAmbientTranscriptWatermark` keep their names and
+results; their existing reducers now execute in the owning worker. Awaited
+completion includes committed-fact installation. No schema, stored-byte,
+retention, or update migration is introduced.
+
+Unbound incognito sessions retain their native owner until the incognito actor
+cutover. Cross-store source assertions retain their existing native
+adapter until the typed cross-store entry writer is available. These explicit
+routes are not worker-only; neither route retries a failed worker mutation.
+
 ## Await locked transcript preparation
 
 Replace `withSessionTranscriptWriteLock` with `withSessionTranscriptWrite` from
 `openclaw/plugin-sdk/session-transcript-runtime`. Pass message preparation and
-the host's prepared source authority in `preparation`:
+the host's prepared source authority in `preparation`.
+
+The legacy form runs opaque preparation inside the native transaction:
+
+```ts
+await withSessionTranscriptWriteLock(target, async (transcript) => {
+  await transcript.appendMessage({
+    message,
+    prepareMessageAfterIdempotencyCheck: redactMessageSync,
+  });
+});
+```
+
+The replacement awaits preparation outside that transaction:
 
 ```ts
 await withSessionTranscriptWrite(target, async (transcript) => {

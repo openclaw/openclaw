@@ -352,6 +352,14 @@ function shouldHideProjectedHistoryMessage(
   if (!roleContent) {
     return false;
   }
+  const provenance = normalizeInputProvenance(message.provenance);
+  if (
+    roleContent.role === "user" &&
+    provenance?.kind === "internal_system" &&
+    provenance.sourceTool === "exec"
+  ) {
+    return true;
+  }
   if (roleContent.role === "user" && isCompletionReportInputProvenance(message.provenance)) {
     return true;
   }

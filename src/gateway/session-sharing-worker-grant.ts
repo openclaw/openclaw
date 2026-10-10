@@ -271,32 +271,27 @@ export async function prepareSessionSharingWorkerGrant(params: {
         if (retained.database.db.isTransaction) {
           throw changed(expected.sessionKey);
         }
-        runSqliteReadOperationSync(
-          retained.database.db,
-          () => {
-            assertAdmission();
-            const entry = readExactSessionEntryRow(
-              retained.database,
-              target.storeKey,
-              "list",
-              "canonical",
-            )?.entry;
-            params.consume(
-              expected,
-              cfg,
-              {
-                target: entry ? { ...target, storeKeys: [target.storeKey], entry } : null,
-                storageTarget: target,
-                members: [],
-                isMember: (id) =>
-                  hasSessionMemberInDatabase(retained.database, target.storeKey, id),
-                assertCurrent: assertSource,
-              },
-              profiles,
-            );
-          },
-          "fresh",
-        );
+        runSqliteReadOperationSync(retained.database.db, () => {
+          assertAdmission();
+          const entry = readExactSessionEntryRow(
+            retained.database,
+            target.storeKey,
+            "list",
+            "canonical",
+          )?.entry;
+          params.consume(
+            expected,
+            cfg,
+            {
+              target: entry ? { ...target, storeKeys: [target.storeKey], entry } : null,
+              storageTarget: target,
+              members: [],
+              isMember: (id) => hasSessionMemberInDatabase(retained.database, target.storeKey, id),
+              assertCurrent: assertSource,
+            },
+            profiles,
+          );
+        });
         assertSource();
       });
     }

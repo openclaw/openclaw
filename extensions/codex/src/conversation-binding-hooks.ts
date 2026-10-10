@@ -111,16 +111,6 @@ export async function handleCodexConversationInboundClaim(
     void pendingExpected.catch(() => {});
     const result = await withCodexConversationThreadActivity(data.bindingId, async () => {
       const expected = await pendingExpected;
-      const { resolveCodexNativeExecutionBlock } = await import("./app-server/sandbox-guard.js");
-      const nativeExecutionBlock = resolveCodexNativeExecutionBlock({
-        config: options.config,
-        sessionKey,
-        agentId: data.agentId,
-        surface: "Codex app-server conversation binding",
-      });
-      if (nativeExecutionBlock) {
-        return { text: nativeExecutionBlock };
-      }
       const { runBoundTurnWithMissingThreadRecovery } = await import("./conversation-binding.js");
       const current = options.bindingStore.read(identity);
       if (

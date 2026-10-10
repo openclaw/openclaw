@@ -530,7 +530,7 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
         }
       }
     },
-    register(resource: OpenClawStateDatabaseAsyncResource): () => void {
+    register(this: void, resource: OpenClawStateDatabaseAsyncResource): () => void {
       resources.add(resource);
       for (const attempt of attempts.values()) {
         attempt.queue?.add(resource);
