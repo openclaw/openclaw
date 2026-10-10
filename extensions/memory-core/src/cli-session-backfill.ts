@@ -31,9 +31,13 @@ export async function runMemorySessionBackfillCli(
       },
       target: "memory session backfill",
       recoveryCommand: "openclaw memory session-backfill --json",
-      ...(operationOwnerId ? { onNoOwner: "refuse" as const } : {}),
       ...(opts.rem || opts.archiveFiles?.length ? { onForeignOwner: "refuse" as const } : {}),
       runLocal: async () => {
+        if (operationOwnerId) {
+          throw new Error(
+            "The selected Gateway is no longer running; inspect the operation before retrying.",
+          );
+        }
         const runtime = await import("./cli.runtime.js");
         await runtime.runMemorySessionBackfill(opts, hostOptions);
         return null;

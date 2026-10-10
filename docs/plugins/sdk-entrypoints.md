@@ -319,8 +319,8 @@ exclusive offline ownership through resource settlement. It never replays an
 uncertain Gateway mutation locally. Use `onForeignOwner: "refuse"` for commands
 that require an offline Gateway. Optional `scopes` preserves the command's
 existing authorization contract; the default is `operator.admin`.
-Use `onNoOwner: "refuse"` after a multi-request operation has started on the
-Gateway, so later requests cannot acquire offline custody or load local config.
+After a multi-request operation has started on the Gateway, reject `runLocal`
+before accessing config or performing local work if a later request loses its owner.
 
 Gateway handlers can use `captureLocalStateMutationGuard` from
 `openclaw/plugin-sdk/gateway-runtime` to bind the expected owner and current
