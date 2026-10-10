@@ -3186,6 +3186,14 @@ describe("runReplyAgent pending final delivery capture", () => {
       sessionId: "session",
       resetTriggered: false,
     });
+    await using actor = createReplyRecoveryActorFixture({
+      agentId: "main",
+      sessionKey: "main",
+      storePath,
+      getSessionId: () => replyOperation.sessionId,
+      operation: replyOperation,
+    });
+    await actor.bind();
     replyOperation.setPhase("running");
     state.runEmbeddedAgentMock.mockImplementationOnce(async () => {
       expect(replyOperation.abortByUser()).toBe(true);

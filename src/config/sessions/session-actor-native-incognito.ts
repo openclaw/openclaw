@@ -6,7 +6,6 @@ import { assertTransactionUsable } from "../../infra/sqlite-transaction.js";
 import type { SqliteWorkerCommand } from "../../infra/sqlite-worker-contract.js";
 import type { SqliteWorkerNativeSettlement } from "../../infra/sqlite-worker-operation-settlement.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
-import { isIncognitoSessionKey } from "../../shared/incognito-session-key.js";
 import type {
   OpenClawAgentDatabase,
   OpenClawAgentDatabaseOptions,
@@ -50,10 +49,7 @@ export function captureNativeIncognitoSessionActorTarget(params: {
   database: Options;
   sessionKey: string;
 }): NativeTarget | undefined {
-  if (
-    !isIncognitoSessionKey(params.sessionKey) ||
-    !isIncognitoOpenClawAgentSqlitePath(params.database.path, params.database)
-  ) {
+  if (!isIncognitoOpenClawAgentSqlitePath(params.database.path, params.database)) {
     return undefined;
   }
   const database = getOpenClawAgentDatabaseIfOpen(params.database);
