@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { CONTROL_UI_BOOTSTRAP_CONFIG_ATTRIBUTE } from "../../../src/gateway/control-ui-bootstrap-contract.js";
 import { createApplicationConfigCapability } from "../app/config.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import {
@@ -13,9 +14,9 @@ import { ControlUiPluginRuntime } from "./control-ui-runtime.ts";
 
 vi.mock("./control-ui-loader.ts", () => ({ initializeControlUiPlugin: vi.fn() }));
 
-it.each([false, true])(
-  "preloads authorized config assets before connection (already published: %s)",
-  async (published) => {
+it.each(["document", "published", "listener"] as const)(
+  "preloads authorized config assets before connection from %s config",
+  async (source) => {
     const prefix = "/__openclaw__/plugins/control-ui/review/one/";
     const descriptor = {
       pluginId: "review",
@@ -28,24 +29,28 @@ it.each([false, true])(
     let modules = [descriptor];
     let granted = true;
     vi.stubGlobal("isSecureContext", true);
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () =>
-        Response.json({
-          pluginControlUiModules: modules,
-          pluginAssetsRequireAuth: true,
-          pluginFrameGrants: granted
-            ? [
-                {
-                  pluginId: "review",
-                  path: "/__openclaw__/plugins/control-ui/review/",
-                  match: "prefix",
-                },
-              ]
-            : [],
-        }),
-      ),
-    );
+    const bootstrap = () => ({
+      basePath: "",
+      pluginControlUiModules: modules,
+      pluginAssetsRequireAuth: true,
+      pluginFrameGrants: granted
+        ? [
+            {
+              pluginId: "review",
+              path: "/__openclaw__/plugins/control-ui/review/",
+              match: "prefix",
+            },
+          ]
+        : [],
+    });
+    const fetchMock = vi.fn(async () => Response.json(bootstrap()));
+    vi.stubGlobal("fetch", fetchMock);
+    if (source === "document") {
+      document.documentElement.setAttribute(
+        CONTROL_UI_BOOTSTRAP_CONFIG_ATTRIBUTE,
+        JSON.stringify(bootstrap()),
+      );
+    }
     const config = createApplicationConfigCapability({ resourceBasePath: "" });
     const context = {
       config,
@@ -61,12 +66,15 @@ it.each([false, true])(
       ...document.head.querySelectorAll<HTMLLinkElement>(`link[href*="${prefix}"]`),
     ];
     try {
-      if (published) {
+      if (source === "published") {
         await config.refresh();
       }
       runtime.start();
-      if (!published) {
+      if (source === "listener") {
         await config.refresh();
+      }
+      if (source === "document") {
+        expect(fetchMock).not.toHaveBeenCalled();
       }
       const first = links();
       expect(first.map((link) => [new URL(link.href).pathname, link.rel])).toEqual([
@@ -98,6 +106,7 @@ it.each([false, true])(
       await config.refresh();
     } finally {
       runtime.dispose();
+      document.documentElement.removeAttribute(CONTROL_UI_BOOTSTRAP_CONFIG_ATTRIBUTE);
       vi.unstubAllGlobals();
     }
     expect(links()).toEqual([]);

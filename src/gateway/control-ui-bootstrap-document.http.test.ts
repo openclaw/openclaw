@@ -7,6 +7,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { escapeHtml } from "../shared/html-escape.js";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_ATTRIBUTE } from "./control-ui-bootstrap-contract.js";
+import * as pluginAssets from "./control-ui-plugin-assets.js";
 import { handleControlUiHttpRequest } from "./control-ui.js";
 import { makeMockHttpResponse } from "./test-http-response.js";
 
@@ -14,6 +15,18 @@ const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
 
 it("embeds the endpoint payload only in admitted documents, with safe attributes and private caching", async () => {
+  const plugin = {
+    pluginId: "review",
+    name: "Review",
+    revision: "one",
+    entryUrl: "/control/__openclaw__/plugins/control-ui/review/one/index.js",
+    styles: ["/control/__openclaw__/plugins/control-ui/review/one/index.css"],
+    imports: ["/control/__openclaw__/plugins/control-ui/review/one/chunk.js"],
+  };
+  vi.spyOn(pluginAssets, "listControlUiPluginCatalog").mockResolvedValue({
+    plugins: [plugin],
+    diagnostics: [],
+  });
   const root = dirs.make("bootstrap-document-");
   fs.writeFileSync(
     path.join(root, "index.html"),
@@ -51,6 +64,7 @@ it("embeds the endpoint payload only in admitted documents, with safe attributes
     assistantName: name,
     assistantAvatar: "🔭",
     terminalEnabled: false,
+    pluginControlUiModules: [plugin],
   });
   const document = await request("/control/chat/main/topic", true, true);
   expect(document.res.statusCode).toBe(200);
