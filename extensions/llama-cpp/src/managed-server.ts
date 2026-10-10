@@ -256,6 +256,50 @@ async function resolveModelArtifact(source: string, signal?: AbortSignal): Promi
   throw new Error(`Unsupported remote model URI: ${source}`);
 }
 
+async function resolveCachedModelArtifact(
+  source: string,
+  cacheDir: string,
+  signal?: AbortSignal,
+): Promise<ModelArtifact> {
+  const key = `${path.resolve(cacheDir)}\0${source}`;
+  const artifact = resolvedModelArtifacts.get(key) ?? (await resolveModelArtifact(source, signal));
+  resolvedModelArtifacts.set(key, artifact);
+  return artifact;
+}
+
+export async function resolveLlamaCppModelDownloadSize(
+  source: string,
+  cacheDir: string,
+  signal?: AbortSignal,
+): Promise<number | undefined> {
+  const artifact = await resolveCachedModelArtifact(source, cacheDir, signal);
+  if (artifact.expectedSize !== undefined) {
+    return artifact.expectedSize;
+  }
+  // HEAD is advisory setup metadata; cached model reuse stays offline-capable.
+  const result = await fetchWithSsrFGuard({
+    url: artifact.url,
+    init: { method: "HEAD" },
+    signal,
+    requireHttps: true,
+    policy: ssrfPolicyFromHttpBaseUrlAllowedOrigin(artifact.url),
+    auditContext: "llama-cpp-model-resolve",
+  }).catch(() => {
+    signal?.throwIfAborted();
+    return undefined;
+  });
+  if (!result) {
+    return undefined;
+  }
+  const { response, release } = result;
+  try {
+    const size = response.ok ? Number(response.headers.get("content-length")) : 0;
+    return Number.isSafeInteger(size) && size > 0 ? size : undefined;
+  } finally {
+    await release();
+  }
+}
+
 export async function ensureLlamaCppModel(params: {
   source: string;
   cacheDir: string;
@@ -271,11 +315,7 @@ export async function ensureLlamaCppModel(params: {
     await assertGguf(localPath);
     return localPath;
   }
-  const artifactCacheKey = `${path.resolve(params.cacheDir)}\0${localSource}`;
-  const artifact =
-    resolvedModelArtifacts.get(artifactCacheKey) ??
-    (await resolveModelArtifact(localSource, params.signal));
-  resolvedModelArtifacts.set(artifactCacheKey, artifact);
+  const artifact = await resolveCachedModelArtifact(localSource, params.cacheDir, params.signal);
   const destination = path.join(params.cacheDir, artifact.fileName);
   const load =
     modelPromises.get(destination) ??

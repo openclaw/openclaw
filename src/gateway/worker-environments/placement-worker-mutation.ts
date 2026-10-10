@@ -1,5 +1,6 @@
 import {
   createSqliteWorkerOperationAdmission,
+  observeSqliteWorkerCommittedFacts,
   type SqliteWorkerAdmissionRequest,
   type SqliteWorkerOperationAdmission,
 } from "../../infra/sqlite-worker-operation-admission.js";
@@ -30,13 +31,24 @@ export function createPlacementWorkerMutation<Receipt>(params: {
   let publication: Publication | undefined;
   let transactionGranted = false;
   let commitGranted = false;
+  let published = false;
+  let installed = false;
   const check = () => {
     params.context.admission.assertCurrent();
     params.assertCurrent?.();
   };
+  const install = () => {
+    if (!installed) {
+      publication?.commit();
+      installed = true;
+    }
+  };
   const publish = (receipt: Receipt) => {
-    publication?.commit();
-    params.publish?.(receipt);
+    install();
+    if (!published) {
+      published = true;
+      params.publish?.(receipt);
+    }
     return receipt;
   };
   return {
@@ -77,6 +89,16 @@ export function createPlacementWorkerMutation<Receipt>(params: {
                 transactionGranted ||= request.stage === "transaction";
                 commitGranted ||= request.stage === "commit";
                 stage = "commit";
+              });
+              observeSqliteWorkerCommittedFacts(admission, ({ facts }) => {
+                const receipt = params.readReceipt(facts, publication);
+                if (receipt === undefined) {
+                  publication?.invalidate();
+                  throw new Error(`${params.label} committed receipt is invalid`);
+                }
+                // Settlement-dependent waiters must not enqueue work on a transport whose reply
+                // can still fail; committed authority itself is already available to consumers.
+                install();
               });
               return { nativeLocations: [params.nativeLocation], admission };
             },

@@ -67,6 +67,7 @@ const stopReasons = new Map<string, StopReason>(
   Object.entries({
     STOP: "stop",
     MAX_TOKENS: "length",
+    CONTINUATION: "length",
     BLOCKLIST: "error",
     PROHIBITED_CONTENT: "error",
     SPII: "error",
@@ -344,7 +345,7 @@ export async function consumeGoogleGenerateContentStream(params: {
           { code: candidate.finishReason, type: "google_generation_failed" },
         );
       }
-      // MAX_TOKENS can leave a complete-looking partial call. Only a normal
+      // Token limits can leave a complete-looking partial call. Only a normal
       // Google stop may promote parsed calls into an executable tool-use turn.
       if (
         params.output.stopReason === "stop" &&
