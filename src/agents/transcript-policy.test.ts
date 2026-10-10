@@ -563,7 +563,7 @@ describe("resolveTranscriptPolicy", () => {
       modelApi: "ollama",
     });
     expect(policy.preserveSignatures).toBe(false);
-    expect(policy.appendOnlyRuntimeContext).toBe(false);
+    expect(policy.appendOnlyRuntimeContext).toBe(true);
   });
 
   it.each([
