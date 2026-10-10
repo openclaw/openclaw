@@ -306,7 +306,12 @@ describe("searchSessionTranscripts", () => {
   it("ignores standalone punctuation and symbol words that the index never stores", async () => {
     await appendUserMessage("deploy", "agent:main:deploy", "Rollback plan: deploy - staging");
 
-    for (const query of ["deploy - staging", "deploy & staging", "deploy -> staging"]) {
+    for (const query of [
+      "deploy - staging",
+      "deploy & staging",
+      "deploy -> staging",
+      "deploy \u2192 staging",
+    ]) {
       expect(
         search(query).hits.map((hit) => hit.sessionId),
         query,

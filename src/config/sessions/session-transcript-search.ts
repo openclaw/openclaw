@@ -12,7 +12,6 @@ import {
   getNodeSqliteKysely,
   sqliteStringSet,
 } from "../../infra/kysely-sync.js";
-import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import {
   getSqliteReadOperationRevision,
   runSqliteReadOperationSync,
@@ -92,30 +91,27 @@ export function isSessionTranscriptSearchCurrentSync(
   return result.found && result.value;
 }
 
-type TokenProbeDatabase = {
-  probe: { t: string };
-  probe_vocab: { term: string };
-};
-let tokenProbe: DatabaseSync | undefined;
+// unicode61 classifies with fixed Unicode 6.1 tables and indexes code points that 6.1 left
+// unassigned. Inside these ranges the current Unicode categories match those tables exactly,
+// so only symbols here are proven separators; anything outside may be a newer indexed symbol.
+const FTS_SEPARATOR_PROVEN_RANGES: ReadonlyArray<readonly [number, number]> = [
+  [0x0000, 0x02ff],
+  [0x2000, 0x2065],
+  [0x2190, 0x22ff],
+  [0x1f600, 0x1f640],
+  [0x1f680, 0x1f6c5],
+];
 
-// unicode61 classifies with fixed Unicode 6.1 tables, so ask SQLite instead of a JS regex.
-function isIndexedTerm(term: string): boolean {
-  if (/[\p{L}\p{N}\p{Co}]/u.test(term)) {
-    return true;
-  }
-  if (!tokenProbe) {
-    tokenProbe = openNodeSqliteDatabase(":memory:");
-    // sqlite-allow-raw -- Private in-memory FTS5 tokenizer probe; mirrors session_transcript_fts.
-    tokenProbe.exec(`CREATE VIRTUAL TABLE probe USING fts5(t, tokenize = 'unicode61 remove_diacritics 2');
-      CREATE VIRTUAL TABLE probe_vocab USING fts5vocab(probe, 'row');`);
-  }
-  const db = getNodeSqliteKysely<TokenProbeDatabase>(tokenProbe);
-  executeSqliteQuerySync(tokenProbe, db.deleteFrom("probe"));
-  executeSqliteQuerySync(tokenProbe, db.insertInto("probe").values({ t: term }));
+function isProvenFtsSeparator(char: string): boolean {
+  const codePoint = char.codePointAt(0) ?? 0;
   return (
-    executeSqliteQueryTakeFirstSync(tokenProbe, db.selectFrom("probe_vocab").select("term")) !==
-    undefined
+    !/[\p{L}\p{N}\p{Co}\p{Cn}]/u.test(char) &&
+    FTS_SEPARATOR_PROVEN_RANGES.some(([low, high]) => codePoint >= low && codePoint <= high)
   );
+}
+
+function isIndexedTerm(term: string): boolean {
+  return !Array.from(term).every(isProvenFtsSeparator);
 }
 
 function toFtsQuery(query: string, match: SessionTranscriptSearchParams["match"]): string {
