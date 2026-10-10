@@ -1,14 +1,16 @@
 import { Value } from "typebox/value";
 import { afterEach, describe, expect, it, vi } from "vitest";
-// @vitest-environment node
-// Control UI tests cover localized update and recovery status copy.
 import {
   UpdateAvailableSchema,
   UpdateScheduleStateSchema,
 } from "../../../packages/gateway-protocol/src/schema/config.js";
-import type { GatewayHelloOk } from "../api/gateway.ts";
+// @vitest-environment node
+// Control UI tests cover localized update and recovery status copy.
+import { createDeferred as deferred } from "../../../test/helpers/promise.js";
+import type { GatewayBrowserClient, GatewayHelloOk } from "../api/gateway.ts";
 import { i18n } from "../i18n/index.ts";
 import {
+  createUpdateStatusRefresher,
   projectUpdateSentinel,
   projectUpdateStatusResponse,
   resolveUpdateStatusBanner,
@@ -24,6 +26,51 @@ import { formatUpdateCampaignLabel } from "./update-schedule-projection.ts";
 
 afterEach(() => {
   vi.restoreAllMocks();
+});
+
+describe("update status refresh ownership", () => {
+  it("projects checkout guidance while newer progress owns the schedule", async () => {
+    const checkout = deferred<unknown>();
+    const progress = deferred<unknown>();
+    let requestCount = 0;
+    const client = {
+      request: vi.fn(() => {
+        requestCount += 1;
+        if (requestCount === 1) {
+          return checkout.promise;
+        }
+        if (requestCount === 2) {
+          return progress.promise;
+        }
+        return new Promise(() => {});
+      }),
+    } as unknown as GatewayBrowserClient;
+    const statuses: unknown[] = [];
+    const refresh = createUpdateStatusRefresher({
+      getClient: () => client,
+      getEpoch: () => 1,
+      getAuthorization: () => undefined,
+      canRefresh: () => true,
+      isCurrent: () => true,
+      onRefreshing: () => {},
+      onStatus: (status) => statuses.push(status),
+      onError: () => {},
+    });
+    const externalSupervisorGuidance = {
+      version: 1 as const,
+      action: "update" as const,
+      name: "Example Fleet",
+      command: "fleet update example",
+    };
+
+    const manualRefresh = refresh();
+    progress.resolve({});
+    await progress.promise;
+    checkout.resolve({ externalSupervisorGuidance });
+    await expect(manualRefresh).resolves.toBe(true);
+
+    expect(statuses.at(-1)).toEqual({ externalSupervisorGuidance });
+  });
 });
 
 describe("update schedule hydration", () => {

@@ -256,6 +256,7 @@ export function createUpdateStatusRefresher(params: {
       if (response && isCurrent()) {
         if (refreshCheckout) {
           params.onError(null, "manual");
+          // Supervisor guidance is current deployment metadata, independent of run progress.
           params.onStatus(response);
           // Discovery may finish after the fast read captured an empty schedule.
           // Let that read settle before reconciling, without extending the button's lifetime.
