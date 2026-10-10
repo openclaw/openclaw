@@ -21,6 +21,7 @@ import {
   type SecretsStoreState,
 } from "../../lib/secrets-store/index.ts";
 import { defineSolidBridge } from "../../lit/solid-bridge.ts";
+import { PageLayout } from "../page-layout.tsx";
 import { SecretsStore, type SecretsDialogMode } from "./view.tsx";
 
 const MAX_VALUE_BYTES = 64 * 1024;
@@ -299,7 +300,7 @@ class SecretsPageState {
   }
 }
 
-export function SecretsPage() {
+function SecretsPageContent() {
   const context = useApplication();
   const [revision, setRevision] = createSignal(0);
   const model = new SecretsPageState(context, () => setRevision((value) => value + 1));
@@ -377,4 +378,12 @@ export function SecretsPage() {
   );
 }
 
-defineSolidBridge("openclaw-secrets-page", SecretsPage);
+export const SecretsPage = defineSolidBridge(
+  "openclaw-secrets-page",
+  (_props, host) => (
+    <PageLayout host={host}>
+      <SecretsPageContent />
+    </PageLayout>
+  ),
+  { properties: {} },
+);

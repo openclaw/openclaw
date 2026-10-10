@@ -6,13 +6,14 @@ import { projectGateway } from "../../lib/reactive/application.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { defineSolidBridge } from "../../lit/solid-bridge.ts";
+import { PageLayout } from "../page-layout.tsx";
 import { AboutView, type AboutCommitCopyState } from "./view.tsx";
 
 const COPY_RESULT_VISIBLE_MS = 1800;
 // Mirrors about-clawd-wave so the next poke can replay the settled animation.
 const CLAWD_WAVE_MS = 1400;
 
-export function AboutPage() {
+function AboutPageContent() {
   const context = useApplication();
   const gateway = projectGateway(context.gateway);
   createEffect(
@@ -101,4 +102,12 @@ export function AboutPage() {
   );
 }
 
-defineSolidBridge("openclaw-about-page", AboutPage);
+export const AboutPage = defineSolidBridge(
+  "openclaw-about-page",
+  (_props, host) => (
+    <PageLayout host={host}>
+      <AboutPageContent />
+    </PageLayout>
+  ),
+  { properties: {} },
+);

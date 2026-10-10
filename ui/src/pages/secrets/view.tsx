@@ -154,7 +154,7 @@ function SecretsTable(props: SecretsStoreViewProps) {
           fallback={
             <div class="secrets-store__empty">
               <SettingsEmpty message={t("tabs.secrets")} />
-              <DocsLink url={DOCS_URL} label={t("common.docs")} />
+              <DocsLink url={DOCS_URL}>{t("common.docs")}</DocsLink>
             </div>
           }
         >

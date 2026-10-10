@@ -10,10 +10,11 @@ import { projectLobsterdex } from "../../lib/reactive/events-browser.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { projectSource } from "../../lib/reactive/projection.ts";
 import { defineSolidBridge } from "../../lit/solid-bridge.ts";
+import { PageLayout } from "../page-layout.tsx";
 import { LobsterdexView, type LobsterdexCopyFeedback } from "./view.tsx";
 import "../../styles/settings.css";
 
-export function LobsterdexPage() {
+function LobsterdexPageContent() {
   const context = useApplication();
   const branding = projectSource(context.theme, {
     read: (theme) => theme.branding,
@@ -128,4 +129,12 @@ export function LobsterdexPage() {
   );
 }
 
-defineSolidBridge("openclaw-lobsterdex-page", LobsterdexPage);
+export const LobsterdexPage = defineSolidBridge(
+  "openclaw-lobsterdex-page",
+  (_props, host) => (
+    <PageLayout host={host}>
+      <LobsterdexPageContent />
+    </PageLayout>
+  ),
+  { properties: {} },
+);

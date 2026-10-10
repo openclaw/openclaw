@@ -20,6 +20,7 @@ import { useApplication } from "../../lib/reactive/context.ts";
 import { projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { defineSolidBridge } from "../../lit/solid-bridge.ts";
+import { PageLayout } from "../page-layout.tsx";
 import {
   labFeatureMergePatch,
   labFeatureResetPatch,
@@ -28,7 +29,7 @@ import {
   type LabFeature,
 } from "./labs-registry.ts";
 
-export function LabsPage() {
+function LabsPageContent() {
   const context = useApplication();
   const config = projectRuntimeConfig(context.runtimeConfig);
   const lifecycle = createGatewayConnectionLifecycle(context.gateway.snapshot);
@@ -308,4 +309,12 @@ export function LabsPage() {
   );
 }
 
-defineSolidBridge("openclaw-labs-page", LabsPage);
+export const LabsPage = defineSolidBridge(
+  "openclaw-labs-page",
+  (_props, host) => (
+    <PageLayout host={host}>
+      <LabsPageContent />
+    </PageLayout>
+  ),
+  { properties: {} },
+);
