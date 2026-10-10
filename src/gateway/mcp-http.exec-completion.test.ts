@@ -1,4 +1,6 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
+import fs from "node:fs/promises";
+import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterAll, beforeAll, expect, it, vi } from "vitest";
 import { withinTest } from "../../test/helpers/promise.js";
@@ -22,10 +24,11 @@ import { prewarmConfigDrivenReplyRuntime } from "../auto-reply/reply/get-reply-f
 import * as sessionEvents from "../auto-reply/reply/session-event-handoff.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
-import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import { replaceSessionEntry, updateSessionEntry } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { getProcessSupervisor } from "../process/supervisor/index.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import {
   createOpenClawTestState,
@@ -35,7 +38,7 @@ import { closeMcpLoopbackServer, ensureMcpLoopbackServer } from "./mcp-http.js";
 import { getActiveMcpLoopbackRuntime } from "./mcp-http.loopback-runtime.js";
 
 type McpResponse = {
-  result: {
+  result?: {
     tools?: Array<{ name: string }>;
     content?: Array<{ type: string; text?: string }>;
     isError?: boolean;
@@ -141,7 +144,11 @@ function connectPreparedTurn(context: PreparedCliRunContext, signal: AbortSignal
     captureKey,
     createCliRunCurrentAssertion(context.params),
   );
-  return async (method: "tools/list" | "tools/call", args?: Record<string, unknown>) => {
+  return async (
+    method: "tools/list" | "tools/call",
+    args?: Record<string, unknown>,
+    toolName = "exec",
+  ) => {
     const response = await fetch(`http://127.0.0.1:${runtime.port}/mcp`, {
       method: "POST",
       signal,
@@ -154,19 +161,19 @@ function connectPreparedTurn(context: PreparedCliRunContext, signal: AbortSignal
         jsonrpc: "2.0",
         id: 1,
         method,
-        ...(method === "tools/call" ? { params: { name: "exec", arguments: args } } : {}),
+        ...(method === "tools/call" ? { params: { name: toolName, arguments: args } } : {}),
       }),
     });
-    expect(response.status).toBe(200);
-    return (await response.json()) as McpResponse;
+    return { status: response.status, body: (await response.json()) as McpResponse };
   };
 }
 
 async function readToolSurface(context: PreparedCliRunContext, signal: AbortSignal) {
   const response = await connectPreparedTurn(context, signal)("tools/list");
+  expect(response.status).toBe(200);
   return {
     native: context.params.cliToolAvailability?.native,
-    mcp: expectDefined(response.result.tools, "MCP catalog")
+    mcp: expectDefined(response.body.result?.tools, "MCP catalog")
       .map((tool) => tool.name)
       .toSorted(),
   } satisfies ToolSurface;
@@ -176,7 +183,7 @@ it.for([
   { name: "unrestricted native tools", toolsAllow: undefined },
   { name: "a finite caller cap", toolsAllow: ["exec", "process", "session_status"] },
 ])(
-  "keeps the source CLI tool surface after background exec with $name",
+  "retains the CLI surface and enforces completion effects with $name",
   async (source, { signal }) => {
     const sessionId = source.toolsAllow ? "exec-capped" : "exec-full";
     const sessionKey = `agent:main:${sessionId}`;
@@ -237,6 +244,51 @@ it.for([
         expect(wake.params.sessionKey).toBe(sessionKey);
         expect(wake.params.prompt).toContain("exec-completion-proof");
         completionSurfaces.push(await readToolSurface(wake, signal));
+        const call = connectPreparedTurn(wake, signal);
+        const launches = vi.spyOn(getProcessSupervisor(), "spawn");
+        const allowedName = `allowed-${sessionId}.txt`;
+        const deniedName = `denied-${sessionId}.txt`;
+        try {
+          const allowed = await call("tools/call", {
+            command: `node -e "require('node:fs').writeFileSync('${allowedName}', 'allowed')"`,
+          });
+          expect(allowed.status).toBe(200);
+          expect(allowed.body.result?.isError).toBe(false);
+          expect(await fs.readFile(path.join(state.workspaceDir, allowedName), "utf8")).toBe(
+            "allowed",
+          );
+          expect(launches).toHaveBeenCalledOnce();
+          launches.mockClear();
+          if (source.toolsAllow) {
+            const forbidden = await call(
+              "tools/call",
+              { input: `*** Begin Patch\n*** Add File: ${deniedName}\n+forbidden\n*** End Patch` },
+              "apply_patch",
+            );
+            expect(forbidden.status).toBe(200);
+            expect(forbidden.body.result).toMatchObject({
+              isError: true,
+              content: [{ type: "text", text: "Tool not available: apply_patch" }],
+            });
+            await expect(fs.stat(path.join(state.workspaceDir, deniedName))).rejects.toMatchObject({
+              code: "ENOENT",
+            });
+            await updateSessionEntry({ agentId: "main", sessionKey }, () => ({
+              permissionMode: "read-only",
+            }));
+            const revoked = await call("tools/call", {
+              command: `node -e "require('node:fs').writeFileSync('${deniedName}', 'forbidden')"`,
+            });
+            expect(revoked.status).toBe(401);
+            expect(revoked.body).toEqual({ error: "unauthorized" });
+            expect(launches).not.toHaveBeenCalled();
+            await expect(fs.stat(path.join(state.workspaceDir, deniedName))).rejects.toMatchObject({
+              code: "ENOENT",
+            });
+          }
+        } finally {
+          launches.mockRestore();
+        }
         return { text: "Completion observed." };
       });
     const receiptIndex = receipts.length;
@@ -245,7 +297,8 @@ it.for([
         command: "echo exec-completion-proof",
         background: true,
       });
-      expect(response.result).toMatchObject({
+      expect(response.status).toBe(200);
+      expect(response.body.result).toMatchObject({
         isError: false,
         content: [
           expect.objectContaining({ text: expect.stringContaining("Command still running") }),
