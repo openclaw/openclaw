@@ -89,6 +89,7 @@ async function loadOcPathFile(
   absPath: string,
   fileName: string,
   mode: OutputMode,
+  params: { requireUtf8?: boolean } = {},
 ): Promise<OcAst | null> {
   const kind = inferKind(fileName);
   // A blocking open can hang on a FIFO before stat can reject it. O_NONBLOCK
@@ -120,10 +121,16 @@ async function loadOcPathFile(
       process.exitCode = 2;
       return null;
     }
-    // Every verb parses this file as text and `set` re-emits it in full, so
-    // replacement decoding would rewrite untouched bytes as U+FFFD on write.
-    if (!isUtf8(bytes)) {
-      emitError(mode, `input is not valid UTF-8: ${absPath}`, "OC_PATH_INPUT_NOT_UTF8");
+    // Only the editing verb re-emits the whole file, so only it asks for strict
+    // admission: replacement decoding there would rewrite bytes the edit never
+    // touched. The read-only verbs keep their existing decode contract.
+    if (params.requireUtf8 === true && !isUtf8(bytes)) {
+      emitError(
+        mode,
+        `input is not valid UTF-8; the file was left unchanged: ${absPath}. ` +
+          `Convert or repair a backed-up copy as UTF-8, then retry.`,
+        "OC_PATH_INPUT_NOT_UTF8",
+      );
       process.exitCode = 2;
       return null;
     }
@@ -263,7 +270,7 @@ async function pathSetCommand(
     return;
   }
   const fsPath = resolveFsPath(ocPath, options);
-  const ast = await loadOcPathFile(fsPath, ocPath.file, mode);
+  const ast = await loadOcPathFile(fsPath, ocPath.file, mode, { requireUtf8: true });
   if (ast === null) {
     return;
   }

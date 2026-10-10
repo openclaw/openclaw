@@ -288,11 +288,13 @@ describe("openclaw path CLI", () => {
       expect(out.resolved).toBe(false);
     });
 
-    it("CLI-R05 rejects an undecodable file before parsing", async () => {
+    it("CLI-R05 keeps reading a file whose undecodable byte is outside the resolved leaf", async () => {
+      // Strict admission is limited to the editing verb, so read-only inspection
+      // keeps its existing contract for files that are not valid UTF-8.
       const workspaceDir = tempDirs.make("oc-path-cli-");
       const filePath = join(workspaceDir, "gateway.jsonc");
       const before = Buffer.concat([
-        Buffer.from('{ "version": "a'),
+        Buffer.from('{ "version": "1.0", "note": "a'),
         Buffer.from([0xff]),
         Buffer.from('b" }'),
       ]);
@@ -300,8 +302,8 @@ describe("openclaw path CLI", () => {
       const rt = createTestRuntime();
       await pathResolveCommand("oc://gateway.jsonc/version", { cwd: workspaceDir, json: true }, rt);
 
-      expect(rt.exitCode).toBe(2);
-      expect(stderrText(rt)).toContain("OC_PATH_INPUT_NOT_UTF8");
+      expect(rt.exitCode).toBe(0);
+      expect(JSON.parse(stdoutText(rt)).match.valueText).toBe("1.0");
       expect(readFileSync(filePath)).toEqual(before);
     });
 
@@ -439,6 +441,7 @@ describe("openclaw path CLI", () => {
 
       expect(rt.exitCode).toBe(2);
       expect(stderrText(rt)).toContain("OC_PATH_INPUT_NOT_UTF8");
+      expect(stderrText(rt)).toContain("the file was left unchanged");
       expect(readFileSync(filePath)).toEqual(before);
     });
 
