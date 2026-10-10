@@ -247,6 +247,20 @@ describe("Lit to Solid conversion contracts", () => {
     expect(run.stdout).toContain("compiled runtime:");
   });
 
+  it("keeps retained Lit type imports type-only", () => {
+    const result = expectConversion(
+      'import {html} from "lit"; import type {TemplateResult,CSSResult} from "lit"; declare const styles:CSSResult; function view():TemplateResult{return fixture;} const fixture=html`<p>ok</p>`;',
+      '<><p>{"ok"}</p></>',
+    );
+    const source = parser.parseSourceFile("imports.tsx", result.code);
+    const retained = source.statements.find(
+      (node) => ts.isImportDeclaration(node) && node.getText(source).includes("CSSResult"),
+    );
+    expect(
+      retained && ts.isImportDeclaration(retained) && retained.importClause?.phaseModifier,
+    ).toBe(ts.SyntaxKind.TypeKeyword);
+  });
+
   it("preserves narrowing with a Show accessor", () => {
     expectConversion(
       'import {html,nothing} from "lit"; declare const user:{name:string}|undefined; const fixture=html`${user ? user.name : nothing}`;',

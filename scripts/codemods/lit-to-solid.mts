@@ -43,7 +43,7 @@ function tsxText(node: ts.Node, source: ts.SourceFile): string {
     !node.typeParameters.hasTrailingComma
   ) {
     const parameter = node.typeParameters[0]!;
-    if (!parameter.constraint && !parameter.default) {
+    if (!parameter.constraint && !parameter.defaultType) {
       edits.push({ start: parameter.end, end: parameter.end, text: "," });
     }
   }
@@ -208,7 +208,7 @@ function bindingNames(name: ts.BindingName): ts.Identifier[] {
     return [name];
   }
   return name.elements.flatMap((element) =>
-    ts.isBindingElement(element) ? bindingNames(element.name) : [],
+    ts.isBindingElement(element) && element.name ? bindingNames(element.name) : [],
   );
 }
 
@@ -653,7 +653,13 @@ export function convertLitToSolid(
         if (name && ts.isNewExpression(receiver)) {
           const declaration = classDeclarations.get(receiver.expression.getText(source));
           const member = declaration?.members.find(
-            (item) => item.name && item.name.getText(source) === name,
+            (item) =>
+              (ts.isPropertyDeclaration(item) ||
+                ts.isMethodDeclaration(item) ||
+                ts.isGetAccessorDeclaration(item) ||
+                ts.isSetAccessorDeclaration(item) ||
+                ts.isAccessorDeclaration(item)) &&
+              staticPropertyName(item.name) === name,
           );
           if (member && (ts.isGetAccessorDeclaration(member) || ts.isMethodDeclaration(member))) {
             return member;
@@ -664,12 +670,7 @@ export function convertLitToSolid(
         }
         if (name && ts.isObjectLiteralExpression(receiver)) {
           const property = receiver.properties.find(
-            (entry) =>
-              entry.name &&
-              (ts.isIdentifier(entry.name) ||
-                ts.isStringLiteral(entry.name) ||
-                ts.isNumericLiteral(entry.name)) &&
-              entry.name.text === name,
+            (entry) => !ts.isSpreadAssignment(entry) && staticPropertyName(entry.name) === name,
           );
           if (
             property &&
@@ -680,7 +681,11 @@ export function convertLitToSolid(
           if (property && ts.isPropertyAssignment(property)) {
             return localValue(property.initializer, seen);
           }
-          if (property && ts.isShorthandPropertyAssignment(property)) {
+          if (
+            property &&
+            ts.isShorthandPropertyAssignment(property) &&
+            ts.isIdentifier(property.name)
+          ) {
             return localValue(property.name, seen);
           }
         }
@@ -815,11 +820,9 @@ export function convertLitToSolid(
             ts.isObjectLiteralExpression(argument) &&
             argument.properties.some(
               (property) =>
-                property.name &&
+                !ts.isSpreadAssignment(property) &&
                 ["once", "capture", "passive", "handleEvent"].includes(
-                  ts.isIdentifier(property.name) || ts.isStringLiteral(property.name)
-                    ? property.name.text
-                    : property.name.getText(source),
+                  staticPropertyName(property.name) ?? "",
                 ),
             ),
         )
@@ -994,7 +997,7 @@ export function convertLitToSolid(
           return `${context.reads.get(binding)}()`;
         }
       }
-      if (ts.isShorthandPropertyAssignment(node)) {
+      if (ts.isShorthandPropertyAssignment(node) && ts.isIdentifier(node.name)) {
         const shorthandNarrowing = context.narrowed?.find(
           (entry) => node.name.text === entry.text && resolve(node.name) === entry.binding,
         );
@@ -1346,7 +1349,7 @@ export function convertLitToSolid(
         !node.typeParameters.hasTrailingComma
       ) {
         const parameter = node.typeParameters[0]!;
-        if (!parameter.constraint && !parameter.default) {
+        if (!parameter.constraint && !parameter.defaultType) {
           edits.push({ start: parameter.end, end: parameter.end, text: "," });
         }
       }
@@ -1413,9 +1416,8 @@ export function convertLitToSolid(
       if (ts.isTypeLiteralNode(type) || ts.isInterfaceDeclaration(type)) {
         const member = type.members.find(
           (entry) =>
-            entry.name &&
-            (ts.isIdentifier(entry.name) || ts.isStringLiteral(entry.name)) &&
-            entry.name.text === name,
+            (ts.isPropertySignatureDeclaration(entry) || ts.isMethodSignatureDeclaration(entry)) &&
+            staticPropertyName(entry.name) === name,
         );
         if (member && ts.isMethodSignatureDeclaration(member)) {
           return member;
@@ -1626,7 +1628,9 @@ export function convertLitToSolid(
       const value = localValue(expression);
       if (
         ts.isObjectLiteralExpression(value) &&
-        value.properties.some((item) => staticPropertyName(item.name) === "then")
+        value.properties.some(
+          (item) => !ts.isSpreadAssignment(item) && staticPropertyName(item.name) === "then",
+        )
       ) {
         return true;
       }
@@ -2349,7 +2353,8 @@ export function convertLitToSolid(
             ts.isSpreadAssignment(property) ||
             ts.isMethodDeclaration(property) ||
             (ts.isPropertyAssignment(property) && functionValue(property.initializer, seen)) ||
-            (ts.isShorthandPropertyAssignment(property) && functionValue(property.name, seen)),
+            (ts.isShorthandPropertyAssignment(property) &&
+              (!ts.isIdentifier(property.name) || functionValue(property.name, seen))),
         );
       }
       if (ts.isConditionalExpression(value)) {
@@ -2703,7 +2708,7 @@ export function convertLitToSolid(
         continue;
       }
       const text = kept.length
-        ? `import ${statement.importClause?.isTypeOnly ? "type " : ""}{ ${kept.map((item) => item.getText(converted)).join(", ")} } from ${statement.moduleSpecifier.getText(converted)};`
+        ? `import ${statement.importClause?.phaseModifier === ts.SyntaxKind.TypeKeyword ? "type " : ""}{ ${kept.map((item) => item.getText(converted)).join(", ")} } from ${statement.moduleSpecifier.getText(converted)};`
         : "";
       // Default imports are not owned by this mechanical pass.
       if (!statement.importClause?.name) {
