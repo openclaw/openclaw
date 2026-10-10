@@ -2,12 +2,13 @@ import { randomUUID } from "node:crypto";
 import { triageAfterFailure } from "../../commands/triage-failure.js";
 import { sanitizeTriageUpdateFailure } from "../../commands/triage-update.js";
 import { resolveStateDir } from "../../config/paths.js";
+import { collectNestedErrorCandidates } from "../../infra/error-graph-internal.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { readControlPlaneUpdateSentinelMeta } from "../../infra/update-control-plane-sentinel.js";
 import { preparePublicUpdateFailureIdentifiers } from "../../infra/update-failure-public-identifiers.js";
 import { writeTriageUpdateFailure } from "../../infra/update-failure-report-artifact.js";
 import { POST_CORE_UPDATE_ENV } from "../../infra/update-post-core-context.js";
-import type { UpdateRunResult } from "../../infra/update-runner.js";
+import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import type { UpdateTriageTarget as TriageTarget } from "../../infra/update-triage.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -74,11 +75,16 @@ export async function prepareUpdateCommandFailureTriage(
     if (hasCommandProcessCleanupError(error)) {
       throw error;
     }
-    if (error instanceof UpdateCommandFinalizedRecoveryFailure) {
-      return exitCliAfterOutput(defaultRuntime, error.exitCode);
+    const causes = collectNestedErrorCandidates(error);
+    const finalized = causes.find(
+      (cause) => cause instanceof UpdateCommandFinalizedRecoveryFailure,
+    );
+    if (finalized) {
+      return exitCliAfterOutput(defaultRuntime, finalized.exitCode);
     }
-    if (error instanceof UpdateCommandPendingRecoveryFailure) {
-      return reportUpdateCommandPendingRecovery(error, opts);
+    const pending = causes.find((cause) => cause instanceof UpdateCommandPendingRecoveryFailure);
+    if (pending) {
+      return reportUpdateCommandPendingRecovery(pending, opts);
     }
     const reportedFailure = error instanceof UpdateCommandFailure;
     if (reportedFailure && error.result.reason === "invalid-dev-target") {

@@ -28,6 +28,28 @@ import { flushPendingSessionsChangedEvents } from "./session-change-event.js";
 import { initializeSessionReadContext } from "./sessions-read-cache.test-support.js";
 import type { GatewayClient } from "./types.js";
 
+const fixedNow = vi.hoisted(() => 1_800_000_000_000);
+
+vi.mock("../../infra/worker-cpu.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../infra/worker-cpu.js")>();
+  // The same-version claim regression needs one clock across the host and real workers.
+  const preload = `Date.now = () => ${fixedNow};`;
+  return {
+    ...actual,
+    createCpuTrackedWorker(...args: Parameters<typeof actual.createCpuTrackedWorker>) {
+      const [filename, options] = args;
+      return actual.createCpuTrackedWorker(filename, {
+        ...options,
+        execArgv: [
+          ...(options?.execArgv ?? []),
+          "--import",
+          `data:text/javascript,${encodeURIComponent(preload)}`,
+        ],
+      });
+    },
+  };
+});
+
 const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
 const client: GatewayClient = {
   connId: "created-thinking-proof",
@@ -70,7 +92,7 @@ test.each(["later-read", "delivered-event", "ui-patch"])(
     const order: string[] = [];
     const key = "agent:main:dashboard:created-thinking-proof";
     const scope = { agentId: "main", sessionKey: key, storePath };
-    const clock = vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
+    const clock = vi.spyOn(Date, "now").mockReturnValue(fixedNow);
     const runModel = vi
       .spyOn(embeddedAgent, "runEmbeddedAgent")
       .mockRejectedValue(new Error("pure thinking directive must not invoke a model"));
@@ -124,6 +146,7 @@ test.each(["later-read", "delivered-event", "ui-patch"])(
       }
       return response.payload;
     });
+    const requests = vi.spyOn(gatewayClient, "request");
     const { gateway, emitEvent } = createGatewayHarness(gatewayClient);
     const sessions = createTestSessionCapability(gateway);
     try {
@@ -197,7 +220,9 @@ test.each(["later-read", "delivered-event", "ui-patch"])(
         expect(sessions.think(key, "main")).toBe("low");
       } else if (mode === "ui-patch") {
         const patched = sessions.patch(key, { thinkingLevel: "low" }, { agentId: "main" });
-        await vi.waitFor(() => expect(sessions.think(key, "main")).toBeUndefined());
+        // Observe the real PATCH acknowledgement, not a polling deadline before it settles.
+        await requests.mock.results.at(-1)?.value;
+        expect(sessions.think(key, "main")).toBeUndefined();
         releaseFirstList.resolve(undefined);
         await patched;
       }
@@ -221,6 +246,7 @@ test.each(["later-read", "delivered-event", "ui-patch"])(
         await settleWorkspaceRuns(context, storePath, key, true);
       } finally {
         sessions.dispose();
+        requests.mockRestore();
         gatewayReplyMock.mockReset();
         runModel.mockRestore();
         clock.mockRestore();

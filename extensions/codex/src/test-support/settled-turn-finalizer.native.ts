@@ -59,6 +59,11 @@ async function createNativeFixture(
     });
     const respond = async () => {
       try {
+        if (request.url === "/v1/responses" && request.method === "GET") {
+          // Codex selects HTTP immediately on 426 instead of retrying this SSE-only fixture.
+          response.writeHead(426).end();
+          return;
+        }
         if (request.url !== "/v1/responses" || request.method !== "POST") {
           response.writeHead(404).end();
           return;

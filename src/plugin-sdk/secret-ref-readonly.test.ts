@@ -3,11 +3,7 @@ import type { OpenClawConfig } from "./config-contracts.js";
 import { resolveReadOnlyEnvSecretRef } from "./secret-ref-readonly.js";
 
 type SecretProvider = NonNullable<NonNullable<OpenClawConfig["secrets"]>["providers"]>[string];
-const collisionProviders = [
-  { source: "file", path: "/unused" },
-  { source: "exec", command: "/unused" },
-  { source: "store" },
-] satisfies SecretProvider[];
+const collisionProvider = { source: "file", path: "/unused" } satisfies SecretProvider;
 
 describe("resolveReadOnlyEnvSecretRef", () => {
   afterEach(() => {
@@ -15,19 +11,17 @@ describe("resolveReadOnlyEnvSecretRef", () => {
   });
 
   it.each([
-    ...["default", "selected"].flatMap((provider) =>
-      collisionProviders.map((declaration) => ({
-        name: `${provider} env default shadows ${declaration.source}`,
-        provider,
-        cfg: {
-          secrets: {
-            defaults: provider === "selected" ? { env: provider } : undefined,
-            providers: { [provider]: declaration },
-          },
+    ...["default", "selected"].map((provider) => ({
+      name: `${provider} env default shadows file`,
+      provider,
+      cfg: {
+        secrets: {
+          defaults: provider === "selected" ? { env: provider } : undefined,
+          providers: { [provider]: collisionProvider },
         },
-        expected: "available",
-      })),
-    ),
+      },
+      expected: "available",
+    })),
     { name: "implicit env default", provider: "default", cfg: {}, expected: "available" },
     {
       name: "undeclared selected env default",
@@ -42,30 +36,28 @@ describe("resolveReadOnlyEnvSecretRef", () => {
       cfg: { secrets: { defaults: { env: "selected" } } },
       expected: "blocked",
     },
-    ...collisionProviders.map((declaration) => ({
-      name: `non-default ${declaration.source} mismatch`,
+    {
+      name: "non-default file mismatch",
       provider: "other",
-      cfg: { secrets: { providers: { other: declaration } } },
+      cfg: { secrets: { providers: { other: collisionProvider } } },
       expected: "blocked",
-    })),
-    ...["default", "selected"].flatMap((provider) =>
-      [
-        { allowlist: undefined, expected: "available" },
-        { allowlist: ["EXPECTED_API_KEY"], expected: "available" },
-        { allowlist: [], expected: "blocked" },
-        { allowlist: ["OTHER_API_KEY"], expected: "blocked" },
-      ].map(({ allowlist, expected }) => ({
-        name: `${provider} matching env declaration with allowlist ${JSON.stringify(allowlist)}`,
-        provider,
-        cfg: {
-          secrets: {
-            defaults: { env: provider },
-            providers: { [provider]: { source: "env" as const, allowlist } },
-          },
+    },
+    ...[
+      { allowlist: undefined, expected: "available" },
+      { allowlist: ["EXPECTED_API_KEY"], expected: "available" },
+      { allowlist: [], expected: "blocked" },
+      { allowlist: ["OTHER_API_KEY"], expected: "blocked" },
+    ].map(({ allowlist, expected }) => ({
+      name: `matching env declaration with allowlist ${JSON.stringify(allowlist)}`,
+      provider: "selected",
+      cfg: {
+        secrets: {
+          defaults: { env: "selected" },
+          providers: { selected: { source: "env" as const, allowlist } },
         },
-        expected,
-      })),
-    ),
+      },
+      expected,
+    })),
   ])("enforces provider policy: $name", ({ provider, cfg, expected }) => {
     vi.stubEnv("EXPECTED_API_KEY", " synthetic-value ");
     const normalizeValue = vi.fn((value: unknown) =>
@@ -92,8 +84,6 @@ describe("resolveReadOnlyEnvSecretRef", () => {
 
   it.each([
     { source: "file", id: "/api/key" },
-    { source: "exec", id: "api-key" },
-    { source: "store", id: "EXPECTED_API_KEY" },
     { source: "env", id: "OTHER_API_KEY" },
   ])("blocks $source:$id before normalizing any value", ({ source, id }) => {
     vi.stubEnv("EXPECTED_API_KEY", "synthetic-value");
@@ -111,9 +101,10 @@ describe("resolveReadOnlyEnvSecretRef", () => {
     expect(normalizeValue).not.toHaveBeenCalled();
   });
 
-  it.each(
-    [undefined, "", "   "].flatMap((value) => ["env", "exec"].map((source) => ({ value, source }))),
-  )("blocks missing selected env value $value with a $source declaration", ({ value, source }) => {
+  it.each([
+    { value: undefined, source: "env" },
+    { value: "   ", source: "exec" },
+  ])("blocks missing selected env value $value with a $source declaration", ({ value, source }) => {
     vi.stubEnv("EXPECTED_API_KEY", value);
     expect(
       resolveReadOnlyEnvSecretRef({

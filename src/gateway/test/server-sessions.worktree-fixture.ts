@@ -2,14 +2,21 @@ import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
-import { expect, onTestFinished } from "vitest";
-import { getRegistryWorktree } from "../../agents/worktrees/registry.js";
+import { expect, onTestFinished, vi } from "vitest";
+import { getRegistryWorktree } from "../../agents/worktrees/registry.test-support.js";
 import { managedWorktrees } from "../../agents/worktrees/service.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../../test-utils/gateway-scheduler-clock.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { disposeSessionReadContexts } from "../server-methods/sessions-read-cache.test-support.js";
 import { testState } from "../test-helpers.js";
+import { startWorktreeMaintenance } from "../worktree-maintenance.js";
 import {
   directSessionReq,
+  getGatewayConfigModule,
   seedLinearSessionTranscript,
   setupGatewaySessionsHandlerTestHarness,
 } from "./server-sessions.test-helpers.js";
@@ -76,7 +83,17 @@ export function setupGatewaySessionsWorktreeTestHarness() {
       { client: { connect: { scopes: ["operator.admin"] } } as never },
     );
     const worktreeId = created.payload?.worktree.id;
+    const clock = createGatewaySchedulerClock();
+    const scheduler = createTestGatewayScheduler(clock.clock);
+    const maintenance = startWorktreeMaintenance({
+      scheduler,
+      getRuntimeConfig: (await getGatewayConfigModule()).getRuntimeConfig,
+      onComplete: vi.fn(),
+      onError: vi.fn(),
+    });
     onTestFinished(async () => {
+      await maintenance.stop();
+      await scheduler.stop();
       const record = worktreeId ? getRegistryWorktree(process.env, worktreeId) : undefined;
       if (record && record.removedAt === undefined) {
         await managedWorktrees.remove({
@@ -85,7 +102,7 @@ export function setupGatewaySessionsWorktreeTestHarness() {
           allowSnapshotLoss: true,
         });
       }
-      closeOpenClawStateDatabaseForTest();
+      await disposeSessionReadContexts();
       testState.agentConfig = undefined;
       await state.cleanup();
     });
@@ -96,7 +113,23 @@ export function setupGatewaySessionsWorktreeTestHarness() {
       ...transcriptScope,
       contents: ["Preserve this conversation."],
     });
-    return { key, sessionId, storePath, transcriptScope, worktree, workspace };
+    const tickWorktreeMaintenance = async () => {
+      await clock.advanceBy(0);
+    };
+    const cleanupWorktrees = async () => {
+      maintenance.request();
+      await tickWorktreeMaintenance();
+    };
+    return {
+      key,
+      sessionId,
+      storePath,
+      transcriptScope,
+      worktree,
+      workspace,
+      cleanupWorktrees,
+      tickWorktreeMaintenance,
+    };
   }
 
   return {

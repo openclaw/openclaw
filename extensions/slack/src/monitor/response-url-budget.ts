@@ -8,12 +8,6 @@ const SLACK_RESPONSE_URL_MAX_CALLS = 5;
 
 export class SlackResponseAlreadyReportedError extends Error {}
 
-export function isSlackResponseAlreadyReportedError(
-  error: unknown,
-): error is SlackResponseAlreadyReportedError {
-  return error instanceof SlackResponseAlreadyReportedError;
-}
-
 /** Count every response_url attempt, including requests Slack rejects. */
 export function createSlackResponseUrlBudget<TPayload>(
   respond: (payload: TPayload) => Promise<unknown>,

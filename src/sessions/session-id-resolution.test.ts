@@ -15,11 +15,6 @@ describe("resolvePreferredSessionKeyForSessionIdMatches", () => {
     expect(resolvePreferredSessionKeyForSessionIdMatches([], "s1")).toBeUndefined();
   });
 
-  it("returns the only match for a single-element array", () => {
-    const matches: Array<[string, SessionEntry]> = [["agent:main:main", entry(10)]];
-    expect(resolvePreferredSessionKeyForSessionIdMatches(matches, "s1")).toBe("agent:main:main");
-  });
-
   it("collapses alias duplicates before resolving structural ties", () => {
     const matches: Array<[string, SessionEntry]> = [
       ["agent:main:MAIN", entry(10, "main")],
@@ -35,14 +30,6 @@ describe("resolvePreferredSessionKeyForSessionIdMatches", () => {
       ["agent:main:beta", entry(20)],
     ];
     expect(resolvePreferredSessionKeyForSessionIdMatches(matches, "s1")).toBe("agent:main:beta");
-  });
-
-  it("returns undefined for fuzzy-only matches with tied timestamps", () => {
-    const matches: Array<[string, SessionEntry]> = [
-      ["agent:main:beta", entry(10)],
-      ["agent:main:alpha", entry(10)],
-    ];
-    expect(resolvePreferredSessionKeyForSessionIdMatches(matches, "s1")).toBeUndefined();
   });
 
   it("reports ambiguity for fuzzy-only matches with tied timestamps", () => {

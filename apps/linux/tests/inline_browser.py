@@ -378,6 +378,7 @@ class GatewayFixture(ThreadingHTTPServer):
             # WebKit 2.52 exposes "button"; older supported WebKit uses "push button".
             button = wait(label, ("button", "push button"))
             component = button.get_component_iface()
+            component.scroll_to(Atspi.ScrollType.ANYWHERE)
             rect = component.get_extents(Atspi.CoordType.SCREEN)
             if rect.width <= 0 or rect.height <= 0:
                 raise RuntimeError("Native fixture button has no screen bounds")

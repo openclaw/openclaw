@@ -186,7 +186,6 @@ export class DiscordRealtimePlayback<TState> {
       this.retainedSpeechClosed = true;
       this.speechSuccessor = undefined;
       this.queuedExactSpeechMessages = [];
-      this.retireExactSpeech();
     }
     this.clearOutputAudio("session-close");
     this.directOutput?.close();
@@ -210,8 +209,7 @@ export class DiscordRealtimePlayback<TState> {
       );
       return false;
     }
-    const outputActive = this.hasInterruptibleOutputAudio();
-    if (!outputActive) {
+    if (!this.hasInterruptibleOutputAudio()) {
       logger.info(
         `discord voice: realtime barge-in ignored reason=${reason} outputActive=false guild=${this.params.entry.guildId} channel=${this.params.entry.channelId} playbackChunks=${this.params.harness.outputActivity.snapshot().chunks}`,
       );
@@ -426,17 +424,12 @@ export class DiscordRealtimePlayback<TState> {
     if (!text.trim()) {
       return false;
     }
-    const retainedMessages =
-      this.queuedExactSpeechMessages.length + (this.exactSpeechState.status === "active" ? 1 : 0);
-    const retainedBytes =
-      this.queuedExactSpeechMessages.reduce(
-        (total, message) => total + Buffer.byteLength(message, "utf8"),
-        0,
-      ) +
-      Buffer.byteLength(
-        this.exactSpeechState.status === "active" ? this.exactSpeechState.message : "",
-        "utf8",
-      );
+    const retained = this.retainedExactSpeechTexts();
+    const retainedMessages = retained.length;
+    const retainedBytes = retained.reduce(
+      (total, message) => total + Buffer.byteLength(message, "utf8"),
+      0,
+    );
     const incomingBytes = Buffer.byteLength(text, "utf8");
     if (
       retainedMessages >= DISCORD_REALTIME_MAX_RETAINED_RESPONSES ||
@@ -583,7 +576,7 @@ export class DiscordRealtimePlayback<TState> {
       speech.direct &&
       Atomics.exchange(speech.direct.clock, DISCORD_CONTINUOUS_EXACT_SPEECH, 0n) ===
         -speech.direct.epoch;
-    if (preserveUnplayed && !directStarted && !speech.output?.activity.snapshot().playbackStarted) {
+    if (preserveUnplayed && !directStarted && !speech.output?.hasStarted()) {
       this.queuedExactSpeechMessages.unshift(speech.message);
     }
   }
@@ -614,7 +607,6 @@ export class DiscordRealtimePlayback<TState> {
     this.speechSuccessor = undefined;
     this.params.stopTerminally();
     this.queuedExactSpeechMessages = [];
-    this.retireExactSpeech();
     this.clearOutputAudio(reason);
     this.params.onTerminalError(error);
   }
@@ -623,7 +615,6 @@ export class DiscordRealtimePlayback<TState> {
     const logContext = `guild=${this.params.entry.guildId} channel=${this.params.entry.channelId}`;
     const output = new DiscordRealtimeOutput({
       player: this.params.player,
-      logContext,
       continuous: this.isContinuousOutput(),
       onStart: () => {
         this.params.harness.outputActivity.markPlaybackStarted();

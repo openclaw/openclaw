@@ -7,7 +7,10 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 import postcss, { type Rule } from "postcss";
 import selectorParser, { type ClassName, type Selector } from "postcss-selector-parser";
-import ts from "typescript";
+import * as ts from "typescript/unstable/ast";
+import { groupBy } from "./lib/group-by.mts";
+import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
+import { getPropertyNameText, unwrapExpression } from "./lib/ts-guard-utils.mts";
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(SCRIPT_DIR, "..");
@@ -16,41 +19,17 @@ const UI_SOURCE_ROOT = path.join(UI_ROOT, "src");
 const CLASS_TOKEN_PATTERN = /[-_A-Za-z][-_A-Za-z0-9]*/gu;
 const CLASS_STEM_PATTERN = /(?:^|[\s"'`=])([-_A-Za-z][-_A-Za-z0-9]*)$/u;
 
-type ExternalClassFamily = {
-  matches: (className: string) => boolean;
-  producer: string;
-};
-
 // These classes are emitted by dependencies rather than written literally in ui/src.
-const EXTERNAL_CLASS_FAMILIES: ExternalClassFamily[] = [
+const EXTERNAL_CLASS_PREFIXES = [
   // highlight.js emits language token spans during markdown rendering.
-  {
-    matches: (className) => className === "hljs" || className.startsWith("hljs-"),
-    producer: "highlight.js via ui/src/components/markdown-code-blocks.ts",
-  },
+  "hljs-",
   // CodeMirror owns cm-* editor DOM; its Lezer highlighter owns tok-* spans.
-  {
-    matches: (className) => className.startsWith("cm-") || className.startsWith("tok-"),
-    producer:
-      "CodeMirror and @lezer/highlight via ui/src/pages/chat/components/file-editor-view.ts",
-  },
+  "cm-",
+  "tok-",
   // Web Awesome owns wa-* classes inside its component implementation.
-  {
-    matches: (className) => className.startsWith("wa-"),
-    producer: "Web Awesome custom-element internals",
-  },
+  "wa-",
   // ProseMirror owns the editor-root and state classes it adds to its DOM.
-  {
-    matches: (className) => className.startsWith("ProseMirror"),
-    producer: "ProseMirror editor DOM",
-  },
-  // markdown-it-task-lists emits these two classes from parsed markdown.
-  {
-    matches: (className) =>
-      className === "task-list-item" || className === "task-list-item-checkbox",
-    producer:
-      "markdown-it-task-lists via ui/src/components/markdown-parser.ts (the contains-task-list class is removed there)",
-  },
+  "ProseMirror",
 ];
 
 type SourceReferences = {
@@ -83,20 +62,6 @@ type DeadClassFinding = {
   startLine: number;
   testOnlyFiles: string[];
 };
-
-function groupBy<T, K>(values: Iterable<T>, keyFor: (value: T) => K): Map<K, T[]> {
-  const groups = new Map<K, T[]>();
-  for (const value of values) {
-    const key = keyFor(value);
-    const group = groups.get(key);
-    if (group) {
-      group.push(value);
-    } else {
-      groups.set(key, [value]);
-    }
-  }
-  return groups;
-}
 
 function walkFiles(rootDir: string, accepts: (fileName: string) => boolean): string[] {
   const files: string[] = [];
@@ -152,24 +117,57 @@ function classMapPropertyName(node: ts.ObjectLiteralElementLike): string | null 
   if (!ts.isPropertyAssignment(node) && !ts.isShorthandPropertyAssignment(node)) {
     return null;
   }
-  const name = node.name;
-  if (ts.isIdentifier(name) || ts.isStringLiteral(name) || ts.isNumericLiteral(name)) {
-    return name.text;
-  }
-  return null;
+  return getPropertyNameText(node.name);
 }
 
-/** Collect literal class tokens and dynamic class stems from TypeScript source. */
-export function collectControlUiClassReferences(
-  source: string,
-  fileName = "source.ts",
-): SourceReferences {
+export function collectControlUiClassReferences(sourceFile: ts.SourceFile): SourceReferences {
   const literalClasses = new Set<string>();
   const stems = new Set<string>();
-  const sourceFile = ts.createSourceFile(fileName, source, ts.ScriptTarget.Latest, true);
+
+  function collectClassKeys(expression: ts.Expression): void {
+    const value = unwrapExpression(expression);
+    if (ts.isObjectLiteralExpression(value)) {
+      for (const property of value.properties) {
+        if (ts.isSpreadAssignment(property)) {
+          collectClassKeys(property.expression);
+          continue;
+        }
+        const name = classMapPropertyName(property);
+        if (name) {
+          addLiteralClassTokens(name, literalClasses);
+        }
+      }
+    } else if (ts.isArrayLiteralExpression(value)) {
+      for (const element of value.elements) {
+        collectClassKeys(ts.isSpreadElement(element) ? element.expression : element);
+      }
+    } else if (ts.isConditionalExpression(value)) {
+      collectClassKeys(value.whenTrue);
+      collectClassKeys(value.whenFalse);
+    } else if (ts.isBinaryExpression(value)) {
+      if (value.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken) {
+        collectClassKeys(value.right);
+      } else if (
+        value.operatorToken.kind === ts.SyntaxKind.BarBarToken ||
+        value.operatorToken.kind === ts.SyntaxKind.QuestionQuestionToken
+      ) {
+        collectClassKeys(value.left);
+        collectClassKeys(value.right);
+      }
+    }
+  }
 
   function visit(node: ts.Node): void {
-    if (ts.isStringLiteralLike(node)) {
+    if (
+      ts.isJsxAttribute(node) &&
+      node.name.getText(sourceFile) === "class" &&
+      node.initializer &&
+      ts.isJsxExpression(node.initializer) &&
+      node.initializer.expression
+    ) {
+      collectClassKeys(node.initializer.expression);
+    }
+    if (ts.isStringLiteralLikeNode(node)) {
       addLiteralClassTokens(node.text, literalClasses);
     } else if (ts.isTemplateExpression(node)) {
       addLiteralClassTokens(node.head.text, literalClasses);
@@ -211,7 +209,7 @@ export function collectControlUiClassReferences(
       }
     }
 
-    ts.forEachChild(node, visit);
+    node.forEachChild(visit);
   }
 
   visit(sourceFile);
@@ -219,8 +217,10 @@ export function collectControlUiClassReferences(
 }
 
 function declarationName(node: ts.FunctionLikeDeclaration): string | null {
-  if (node.name && (ts.isIdentifier(node.name) || ts.isStringLiteral(node.name))) {
-    return node.name.text;
+  const name =
+    ts.isArrowFunction(node) || ts.isConstructorDeclaration(node) ? undefined : node.name;
+  if (name && (ts.isIdentifier(name) || ts.isStringLiteral(name))) {
+    return name.text;
   }
   if (
     (ts.isArrowFunction(node) || ts.isFunctionExpression(node)) &&
@@ -230,18 +230,6 @@ function declarationName(node: ts.FunctionLikeDeclaration): string | null {
     return node.parent.name.text;
   }
   return null;
-}
-
-function isFunctionLikeDeclaration(node: ts.Node): node is ts.FunctionLikeDeclaration {
-  return (
-    ts.isFunctionDeclaration(node) ||
-    ts.isMethodDeclaration(node) ||
-    ts.isGetAccessorDeclaration(node) ||
-    ts.isSetAccessorDeclaration(node) ||
-    ts.isConstructorDeclaration(node) ||
-    ts.isFunctionExpression(node) ||
-    ts.isArrowFunction(node)
-  );
 }
 
 function callName(node: ts.CallExpression): string | null {
@@ -280,14 +268,10 @@ function classBuilderSuffix(
   };
 }
 
-function collectDynamicClassBuilderData(
-  source: string,
-  fileName: string,
-): {
+function collectDynamicClassBuilderData(sourceFile: ts.SourceFile): {
   builders: DynamicClassBuilder[];
   calls: DynamicClassBuilderCall[];
 } {
-  const sourceFile = ts.createSourceFile(fileName, source, ts.ScriptTarget.Latest, true);
   const builders: DynamicClassBuilder[] = [];
   const calls: DynamicClassBuilderCall[] = [];
 
@@ -302,7 +286,7 @@ function collectDynamicClassBuilderData(
       }
     }
 
-    if (isFunctionLikeDeclaration(node) && node.body) {
+    if (ts.isFunctionLikeDeclaration(node) && node.body) {
       const name = declarationName(node);
       if (name) {
         const builderName: string = name;
@@ -334,13 +318,13 @@ function collectDynamicClassBuilderData(
               precedingText = span.literal.text;
             }
           }
-          ts.forEachChild(bodyNode, visitBody);
+          bodyNode.forEachChild(visitBody);
         }
         visitBody(node.body);
       }
     }
 
-    ts.forEachChild(node, visit);
+    node.forEachChild(visit);
   }
 
   visit(sourceFile);
@@ -382,29 +366,35 @@ function collectSourceReferenceFiles(): {
   production: SourceReferences;
   tests: SourceReferenceFile[];
 } {
-  const sourceFiles = walkFiles(UI_SOURCE_ROOT, (fileName) => fileName.endsWith(".ts"));
+  const sourceFiles = walkFiles(UI_SOURCE_ROOT, (fileName) => /\.tsx?$/u.test(fileName)).map(
+    (fileName) => ({ fileName, text: fs.readFileSync(fileName, "utf8") }),
+  );
   const productionFiles: SourceReferenceFile[] = [];
   const testFiles: SourceReferenceFile[] = [];
   const builders: DynamicClassBuilder[] = [];
   const calls: DynamicClassBuilderCall[] = [];
-  for (const filePath of sourceFiles) {
-    const source = fs.readFileSync(filePath, "utf8");
-    const entry = {
-      file: relativeToRepo(filePath),
-      ...collectControlUiClassReferences(source, filePath),
-    };
-    const isTestSupport =
-      filePath.endsWith(".test.ts") ||
-      filePath.endsWith(".test-support.ts") ||
-      filePath.split(path.sep).includes("test-helpers");
-    if (isTestSupport) {
-      testFiles.push(entry);
-    } else {
-      productionFiles.push(entry);
-      const builderData = collectDynamicClassBuilderData(source, filePath);
-      builders.push(...builderData.builders);
-      calls.push(...builderData.calls);
+  const parser = createNativeTypeScriptParser({ cwd: REPO_ROOT });
+  try {
+    for (const sourceFile of parser.parseSourceFiles(sourceFiles)) {
+      const filePath = sourceFile.fileName;
+      const entry = {
+        file: relativeToRepo(filePath),
+        ...collectControlUiClassReferences(sourceFile),
+      };
+      const isTestSupport =
+        /\.(?:test|test-support)\.tsx?$/u.test(filePath) ||
+        filePath.split(path.sep).includes("test-helpers");
+      if (isTestSupport) {
+        testFiles.push(entry);
+      } else {
+        productionFiles.push(entry);
+        const builderData = collectDynamicClassBuilderData(sourceFile);
+        builders.push(...builderData.builders);
+        calls.push(...builderData.calls);
+      }
     }
+  } finally {
+    parser.close();
   }
 
   const indexHtml = fs.readFileSync(path.join(UI_ROOT, "index.html"), "utf8");
@@ -431,8 +421,10 @@ function isReferenced(className: string, references: SourceReferences): boolean 
   );
 }
 
-function externalProducer(className: string): string | null {
-  return EXTERNAL_CLASS_FAMILIES.find((family) => family.matches(className))?.producer ?? null;
+function isExternallyProducedClass(className: string): boolean {
+  return (
+    className === "hljs" || EXTERNAL_CLASS_PREFIXES.some((prefix) => className.startsWith(prefix))
+  );
 }
 
 function selectorClasses(selector: Selector): ClassName[] {
@@ -485,7 +477,7 @@ function auditStylesheet(
       }
       const classNames = [...new Set(classes.map((classNode) => classNode.value))];
       const keptAlive = classNames.some(
-        (className) => externalProducer(className) || isReferenced(className, references),
+        (className) => isExternallyProducedClass(className) || isReferenced(className, references),
       );
       if (keptAlive) {
         continue;

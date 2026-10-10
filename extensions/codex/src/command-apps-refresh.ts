@@ -1,7 +1,3 @@
-import {
-  renderMessagePresentationFallbackText,
-  type MessagePresentation,
-} from "openclaw/plugin-sdk/interactive-runtime";
 import type { PluginCommandResult } from "openclaw/plugin-sdk/plugin-entry";
 import { defaultCodexAppInventoryCache } from "./app-server/app-inventory-cache.js";
 import {
@@ -18,6 +14,7 @@ import {
   readCodexHostedAppsSupport,
 } from "./command-plugins-readiness.js";
 import type { CodexPluginCommandContext } from "./command-plugins-runtime.js";
+import { buildCodexPresentationReply } from "./command-presentation.js";
 
 /** Refreshes hosted app inventory for the current account/runtime. */
 export async function refreshCodexHostedApps(
@@ -58,7 +55,7 @@ export async function refreshCodexHostedApps(
       text: `${reason} Run /codex plugins refresh to retry for the current Codex account/runtime. Previous inventory was not confirmed; no conversation policy was changed.`,
     };
   }
-  const presentation: MessagePresentation = {
+  return buildCodexPresentationReply({
     title: "Hosted app refresh",
     blocks: [
       {
@@ -74,10 +71,5 @@ export async function refreshCodexHostedApps(
         text: "Use /codex plugins list to find configured plugins, then /codex plugins status <name>@<marketplace> to inspect one.",
       },
     ],
-  };
-  return {
-    text: renderMessagePresentationFallbackText({ presentation }),
-    presentation,
-    presentationTextMode: "fallback",
-  };
+  });
 }

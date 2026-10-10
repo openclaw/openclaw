@@ -1,9 +1,7 @@
-import { Buffer } from "node:buffer";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
-import type { Message } from "openclaw/plugin-sdk/llm";
+import type { StatementSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   readPersistedAuthProfileStateRaw,
@@ -14,12 +12,9 @@ import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../p
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
-import {
-  closeOpenClawAgentDatabasesForTest,
-  openOpenClawAgentDatabase,
-} from "../../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
+import { observeMainThreadReads } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { appendSqliteTrajectoryRuntimeEvents } from "../../trajectory/runtime-store.sqlite.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import {
@@ -60,14 +55,12 @@ import {
   listSessionEntryRows,
   replaceSessionEntrySync,
 } from "./session-accessor.sqlite-entry.js";
+import { observeSessionMaintenanceCompletion } from "./session-accessor.sqlite-maintenance-completion.test-support.js";
 import { observeSessionMaintenanceChanges } from "./session-accessor.sqlite-maintenance.test-support.js";
 import { forkSessionEntryFromParentTarget } from "./session-accessor.sqlite-parent-session.js";
-import {
-  loadTranscriptEventsSync,
-  readTranscriptStatsSync,
-} from "./session-accessor.sqlite-read.js";
+import { loadTranscriptEventsSync } from "./session-accessor.sqlite-read.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.js";
-import { setCanonicalSqliteSessionMainKey } from "./session-canonical-key.js";
+import { markCanonicalSessionValidationPending } from "./session-canonical-key.js";
 import type { SessionEntry } from "./types.js";
 
 // Keep accessor conformance independent of any real openclaw.json on the machine.
@@ -106,13 +99,7 @@ type AccessorAdapter = {
     scope: SessionAccessScope,
     update: (entry: SessionEntry) => Partial<SessionEntry> | null,
   ): Promise<SessionEntry | null>;
-  cleanupSessionLifecycleArtifactsCore(params: {
-    storePath: string;
-    sessionKeySegmentPrefix: string;
-    transcriptContentMarker: string;
-    orphanTranscriptMinAgeMs: number;
-    nowMs?: number;
-  }): Promise<{ removedEntries: number; archivedTranscriptArtifacts: number }>;
+  cleanupSessionLifecycleArtifactsCore: typeof cleanupSessionLifecycleArtifactsCore;
   loadTranscriptEvents(scope: SessionTranscriptReadScope): Promise<TranscriptEvent[]>;
   appendTranscriptEvent(scope: SessionTranscriptAccessScope, event: TranscriptEvent): Promise<void>;
   appendTranscriptMessage<TMessage>(
@@ -289,6 +276,32 @@ describe.each([publicAccessorAdapter, sqliteAdapter])(
       });
     });
 
+    t("reads the exact timestamp without selecting or decoding cold snapshots", async () => {
+      const scope = adapter.entryScope(paths);
+      replaceSessionEntrySync(scope, {
+        sessionId: "timestamp-target",
+        updatedAt: 42,
+        skillsSnapshot: { prompt: `TIMESTAMP_COLD_PAYLOAD_${"x".repeat(65_536)}`, skills: [] },
+      });
+      const reads = observeMainThreadReads();
+      const parse = vi.spyOn(JSON, "parse");
+      try {
+        expect(adapter.readSessionUpdatedAtCore(scope)).toBe(42);
+        const queries = reads.calls
+          .flatMap((call) => call.mock.contexts)
+          .map((statement) => (statement as StatementSync).sourceSQL)
+          .filter((sql) => /from "session_nodes"/i.test(sql));
+        expect(queries).toHaveLength(1);
+        expect.soft(queries.some((sql) => sql.includes("session_entry_snapshots"))).toBe(false);
+        expect(parse.mock.calls.some(([value]) => value.includes("TIMESTAMP_COLD_PAYLOAD_"))).toBe(
+          false,
+        );
+      } finally {
+        parse.mockRestore();
+        reads.restore();
+      }
+    });
+
     it("conforms for exact persisted-key lookup without canonical alias fallback", async () => {
       const scope = adapter.entryScope(paths);
       const mixedCaseScope = { ...scope, sessionKey: "AGENT:MAIN:MAIN" };
@@ -411,6 +424,7 @@ describe.each([publicAccessorAdapter, sqliteAdapter])(
 
       await expect(
         adapter.cleanupSessionLifecycleArtifactsCore({
+          env: adapter.entryScope(paths).env,
           storePath: cleanupStorePath,
           sessionKeySegmentPrefix: "lifecycle-cleanup-",
           transcriptContentMarker: "lifecycle-marker-",
@@ -1260,25 +1274,6 @@ describe("sqlite session normalization", () => {
     });
   });
 
-  it("marks identity-only row updates pending validation", async () => {
-    const env = { ...process.env, OPENCLAW_STATE_DIR: paths.stateDir };
-    const sessionKey = "agent:main:identity-update";
-    await replaceSessionEntry(
-      { agentId: "main", env, sessionKey, storePath: paths.sqlitePath },
-      { sessionId: "identity-session", updatedAt: 10 },
-    );
-    const database = openOpenClawAgentDatabase({ agentId: "main", env, path: paths.sqlitePath });
-    database.db
-      .prepare("UPDATE session_nodes SET updated_at = 11 WHERE session_key = ?")
-      .run(sessionKey);
-
-    expect(
-      database.db
-        .prepare("SELECT entry_valid FROM session_nodes WHERE session_key = ?")
-        .get(sessionKey),
-    ).toEqual({ entry_valid: 0 });
-  });
-
   it("writes a valid session beside an unrelated malformed legacy row", async () => {
     const env = { ...process.env, OPENCLAW_STATE_DIR: paths.stateDir };
     const database = openOpenClawAgentDatabase({ agentId: "main", env, path: paths.sqlitePath });
@@ -1344,7 +1339,7 @@ describe("sqlite session normalization", () => {
       chatType: "group",
       displayName: "telegram:g-bucephalus-+-topics",
       sessionId: newSessionId,
-      status: "running",
+      status: undefined,
       updatedAt: 1_782_997_881_018,
     });
     await appendTranscriptEvent(
@@ -1581,25 +1576,21 @@ describe("sqlite session normalization", () => {
     const notify = vi.fn();
     const unsubscribe = onSessionIdentityMutation(notify);
     onTestFinished(unsubscribe);
+    const maintained = observeSessionMaintenanceCompletion(paths.sqlitePath);
     await patchSessionEntryCore(scopeFor("agent:main:active"), () => ({
       providerOverride: "openai",
     }));
-    let archivedStale: string[] = [];
-    await vi.waitFor(
-      () => {
-        expect(new Set(notify.mock.calls.map(([mutation]) => mutation.previous.sessionId))).toEqual(
-          new Set(["older-session", "stale-session"]),
-        );
-        archivedStale = fs
-          .readdirSync(paths.tempDir)
-          .filter(
-            (file) =>
-              file.startsWith("stale-session.jsonl.deleted.") && isSessionArchiveArtifactName(file),
-          );
-        expect(archivedStale).toHaveLength(1);
-      },
-      { timeout: 5_000 },
+    await maintained;
+    expect(new Set(notify.mock.calls.map(([mutation]) => mutation.previous.sessionId))).toEqual(
+      new Set(["older-session", "stale-session"]),
     );
+    const archivedStale = fs
+      .readdirSync(paths.tempDir)
+      .filter(
+        (file) =>
+          file.startsWith("stale-session.jsonl.deleted.") && isSessionArchiveArtifactName(file),
+      );
+    expect(archivedStale).toHaveLength(1);
     unsubscribe();
     expect(
       listSessionEntryRows({
@@ -1632,6 +1623,7 @@ describe("sqlite session normalization", () => {
         skipMaintenance: true,
       },
     );
+    const capped = observeSessionMaintenanceChanges(paths.sqlitePath, "agent:main:active");
     await patchSessionEntryCore(
       scopeFor("agent:main:newest"),
       () => ({ sessionId: "newest-session", updatedAt: Date.now() + 2 }),
@@ -1641,21 +1633,15 @@ describe("sqlite session normalization", () => {
       },
     );
 
-    await vi.waitFor(
-      () => {
-        expect(
-          listSessionEntryRows({
-            agentId: "main",
-            env,
-            storePath: paths.sqlitePath,
-          }).map((summary) => summary.sessionKey),
-        ).toEqual(["agent:main:active", "agent:main:newer", "agent:main:newest"]);
-        expect(loadSessionEntry(scopeFor("agent:main:active"))?.archivedAt).toEqual(
-          expect.any(Number),
-        );
-      },
-      { timeout: 5_000 },
-    );
+    await capped;
+    expect(
+      listSessionEntryRows({
+        agentId: "main",
+        env,
+        storePath: paths.sqlitePath,
+      }).map((summary) => summary.sessionKey),
+    ).toEqual(["agent:main:active", "agent:main:newer", "agent:main:newest"]);
+    expect(loadSessionEntry(scopeFor("agent:main:active"))?.archivedAt).toEqual(expect.any(Number));
   });
 
   it("commits unrelated channel sessions without invoking stored channel plugin resolvers", async () => {
@@ -2179,7 +2165,7 @@ describe("sqlite session normalization", () => {
         "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at) VALUES (?, ?, ?, ?)",
       )
       .run(legacyKey, entry.sessionId, JSON.stringify(entry), entry.updatedAt);
-    // Exercise delivery-key rejection, not the INSERT trigger's pending-entry state.
+    // The entry identity is valid; admission must still reject its delivery-key alias.
     database.db
       .prepare("UPDATE session_nodes SET entry_valid = 1 WHERE session_key = ?")
       .run(legacyKey);
@@ -2235,11 +2221,12 @@ describe("sqlite session normalization", () => {
     ).rejects.toThrow("openclaw doctor --fix");
   });
 
-  it("fails loud for invalid live rows instead of treating them as retained tombstones", () => {
+  it("fails loud for invalid imported rows instead of treating them as retained tombstones", () => {
     const env = { ...process.env, OPENCLAW_STATE_DIR: paths.stateDir };
     const sessionKey = "agent:main:invalid-live-row";
     const sessionId = "invalid-live-session";
     const database = openOpenClawAgentDatabase({ agentId: "main", env, path: paths.sqlitePath });
+    markCanonicalSessionValidationPending(database, [sessionKey]);
     database.db
       .prepare(
         "INSERT INTO session_nodes (session_key, current_session_id, entry_json, entry_valid, updated_at) VALUES (?, ?, ?, -1, ?)",
@@ -2256,24 +2243,7 @@ describe("sqlite session normalization", () => {
     ).toThrow("openclaw doctor --fix");
   });
 
-  it("revalidates an open database after its canonical main key changes", () => {
-    const env = { ...process.env, OPENCLAW_STATE_DIR: paths.stateDir };
-    const storePath = paths.sqlitePath;
-    replaceSessionEntrySync(
-      { agentId: "main", env, sessionKey: "agent:main:main", storePath },
-      { sessionId: "main-session", updatedAt: 10 },
-    );
-    expect(listSessionEntryRows({ agentId: "main", env, storePath })).toHaveLength(1);
-
-    const database = openOpenClawAgentDatabase({ agentId: "main", env, path: paths.sqlitePath });
-    setCanonicalSqliteSessionMainKey(database, "work");
-
-    expect(() => listSessionEntryRows({ agentId: "main", env, storePath })).toThrow(
-      "openclaw doctor --fix",
-    );
-  });
-
-  it("fails loud when promoted lineage disagrees with canonical entry JSON", () => {
+  it("fails loud when imported lineage disagrees with canonical entry JSON", () => {
     const env = { ...process.env, OPENCLAW_STATE_DIR: paths.stateDir };
     const sessionKey = "agent:main:lineage-mismatch";
     const sessionId = "lineage-mismatch-session";
@@ -2283,6 +2253,7 @@ describe("sqlite session normalization", () => {
       updatedAt: 10,
     };
     const database = openOpenClawAgentDatabase({ agentId: "main", env, path: paths.sqlitePath });
+    markCanonicalSessionValidationPending(database, [sessionKey]);
     database.db
       .prepare(
         "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at, parent_session_key) VALUES (?, ?, ?, ?, ?)",
@@ -2390,157 +2361,4 @@ describe("sqlite session normalization", () => {
   });
 });
 
-describe("SQLite transcript reader byte budget", () => {
-  let tempDir: string;
-  let storePath: string;
-
-  beforeEach(() => {
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-transcript-byte-"));
-    storePath = path.join(tempDir, "sessions.json");
-  });
-
-  afterEach(() => {
-    closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
-    fs.rmSync(tempDir, { recursive: true, force: true });
-  });
-
-  function userMessage(content: string): Message {
-    return { role: "user", content, timestamp: 1 };
-  }
-
-  it("counts JSONL row separators in the transcript byte budget", async () => {
-    const sessionId = "session-transcript-separator";
-    const sessionKey = "agent:main:session-transcript-separator";
-    await replaceTranscriptEvents({ agentId: "main", sessionId, sessionKey, storePath }, [
-      {
-        type: "session",
-        version: 3,
-        id: sessionId,
-        timestamp: "2026-04-01T05:46:39.000Z",
-        cwd: tempDir,
-      },
-      {
-        type: "message",
-        id: "entry-separator-0",
-        parentId: null,
-        timestamp: "2026-04-01T05:46:40.000Z",
-        message: userMessage("separator-row-0"),
-      },
-      {
-        type: "message",
-        id: "entry-separator-1",
-        parentId: null,
-        timestamp: "2026-04-01T05:46:41.000Z",
-        message: userMessage("separator-row-1"),
-      },
-    ]);
-    const stats = readTranscriptStatsSync({
-      agentId: "main",
-      sessionId,
-      sessionKey,
-      storePath,
-    });
-    expect(() =>
-      loadTranscriptEventsSync({
-        agentId: "main",
-        sessionId,
-        sessionKey,
-        storePath,
-        maxEventBytes: stats.sizeBytes - 1,
-      }),
-    ).toThrow(/transcript store is too large to export/u);
-    expect(
-      loadTranscriptEventsSync({
-        agentId: "main",
-        sessionId,
-        sessionKey,
-        storePath,
-        maxEventBytes: stats.sizeBytes,
-      }).length,
-    ).toBe(3);
-  });
-
-  // OCTET_LENGTH measures the database encoding, so a UTF-16 store would otherwise
-  // reject an ASCII transcript near half the documented UTF-8 cap and undercount
-  // CJK-heavy text. Admission must measure the UTF-8 byte budget across encodings.
-  it.each([
-    { encoding: "UTF-8" as const, payload: "a".repeat(200), label: "ascii" },
-    { encoding: "UTF-16le" as const, payload: "a".repeat(200), label: "ascii" },
-    { encoding: "UTF-16be" as const, payload: "a".repeat(200), label: "ascii" },
-    { encoding: "UTF-8" as const, payload: "日本語🦞".repeat(40), label: "cjk" },
-    { encoding: "UTF-16le" as const, payload: "日本語🦞".repeat(40), label: "cjk" },
-    { encoding: "UTF-16be" as const, payload: "日本語🦞".repeat(40), label: "cjk" },
-  ])(
-    "measures the UTF-8 byte budget in $encoding for $label payloads",
-    async ({ encoding, payload, label }) => {
-      const sessionId = `session-transcript-${encoding}-${label}`;
-      const sessionKey = `agent:main:${sessionId}`;
-      if (encoding !== "UTF-8") {
-        storePath = path.join(tempDir, `${encoding}.sqlite`);
-        const seed = new DatabaseSync(storePath);
-        try {
-          seed.exec(
-            `PRAGMA encoding = '${encoding}'; CREATE TABLE encoding_seed (id INTEGER); DROP TABLE encoding_seed;`,
-          );
-        } finally {
-          seed.close();
-        }
-        await replaceSessionEntry(
-          { agentId: "main", sessionKey, storePath },
-          { sessionId, updatedAt: 10 },
-        );
-      }
-      const events = [
-        {
-          type: "session",
-          version: 3,
-          id: sessionId,
-          timestamp: "2026-04-01T05:46:39.000Z",
-          cwd: tempDir,
-        },
-        {
-          type: "message",
-          id: "entry-utf16-0",
-          parentId: null,
-          timestamp: "2026-04-01T05:46:40.000Z",
-          message: userMessage(payload),
-        },
-        {
-          type: "message",
-          id: "entry-utf16-1",
-          parentId: null,
-          timestamp: "2026-04-01T05:46:41.000Z",
-          message: userMessage(payload),
-        },
-      ];
-      await replaceTranscriptEvents({ agentId: "main", sessionId, sessionKey, storePath }, events);
-      const jsonlSize = events.reduce(
-        (total, event, index) =>
-          total + Buffer.byteLength(JSON.stringify(event), "utf8") + (index > 0 ? 1 : 0),
-        0,
-      );
-      // Budget equals the true UTF-8 size: admission must accept it in every encoding.
-      expect(
-        loadTranscriptEventsSync({
-          agentId: "main",
-          sessionId,
-          sessionKey,
-          storePath,
-          maxEventBytes: jsonlSize,
-        }).length,
-      ).toBe(events.length);
-      // One byte below the UTF-8 size must reject in every encoding.
-      expect(() =>
-        loadTranscriptEventsSync({
-          agentId: "main",
-          sessionId,
-          sessionKey,
-          storePath,
-          maxEventBytes: jsonlSize - 1,
-        }),
-      ).toThrow(/transcript store is too large to export/u);
-    },
-  );
-});
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

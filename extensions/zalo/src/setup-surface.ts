@@ -1,4 +1,3 @@
-// Zalo plugin module implements setup surface behavior.
 import {
   buildSingleChannelSecretPromptState,
   createStandardChannelSetupStatus,
@@ -155,37 +154,16 @@ export const zaloSetupWizard: ChannelSetupWizard = {
         }
       })();
 
-      let webhookSecretResult = await promptSingleChannelSecretInput({
-        cfg: next,
-        prompter,
-        providerHint: "zalo-webhook",
-        credentialLabel: t("wizard.zalo.webhookSecret"),
-        secretInputMode: options?.secretInputMode,
-        ...buildSingleChannelSecretPromptState({
-          accountConfigured: hasConfiguredSecretInput(resolvedAccount.config.webhookSecret),
-          hasConfigToken: hasConfiguredSecretInput(resolvedAccount.config.webhookSecret),
-          allowEnv: false,
-        }),
-        envPrompt: "",
-        keepPrompt: t("wizard.zalo.webhookSecretKeep"),
-        inputPrompt: t("wizard.zalo.webhookSecretInput"),
-        preferredEnvVar: "ZALO_WEBHOOK_SECRET",
-      });
-      while (
-        webhookSecretResult.action === "set" &&
-        typeof webhookSecretResult.value === "string" &&
-        (webhookSecretResult.value.length < 8 || webhookSecretResult.value.length > 256)
-      ) {
-        await prompter.note(t("wizard.zalo.webhookSecretLength"), t("wizard.zalo.webhookTitle"));
-        webhookSecretResult = await promptSingleChannelSecretInput({
+      const promptWebhookSecret = (hasWebhookSecret: boolean) =>
+        promptSingleChannelSecretInput({
           cfg: next,
           prompter,
           providerHint: "zalo-webhook",
           credentialLabel: t("wizard.zalo.webhookSecret"),
           secretInputMode: options?.secretInputMode,
           ...buildSingleChannelSecretPromptState({
-            accountConfigured: false,
-            hasConfigToken: false,
+            accountConfigured: hasWebhookSecret,
+            hasConfigToken: hasWebhookSecret,
             allowEnv: false,
           }),
           envPrompt: "",
@@ -193,6 +171,16 @@ export const zaloSetupWizard: ChannelSetupWizard = {
           inputPrompt: t("wizard.zalo.webhookSecretInput"),
           preferredEnvVar: "ZALO_WEBHOOK_SECRET",
         });
+      let webhookSecretResult = await promptWebhookSecret(
+        hasConfiguredSecretInput(resolvedAccount.config.webhookSecret),
+      );
+      while (
+        webhookSecretResult.action === "set" &&
+        typeof webhookSecretResult.value === "string" &&
+        (webhookSecretResult.value.length < 8 || webhookSecretResult.value.length > 256)
+      ) {
+        await prompter.note(t("wizard.zalo.webhookSecretLength"), t("wizard.zalo.webhookTitle"));
+        webhookSecretResult = await promptWebhookSecret(false);
       }
       const webhookSecret =
         webhookSecretResult.action === "set"

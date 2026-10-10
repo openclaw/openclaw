@@ -8,14 +8,23 @@ import type { ConfigFileSnapshot, OpenClawConfig } from "../../config/types.open
 import type { RestartSentinelPayload } from "../../infra/restart-sentinel.js";
 import type { RespawnSupervisor } from "../../infra/supervisor-markers.js";
 import type { UpdateChannel } from "../../infra/update-channels.js";
+import {
+  createGatewayUpdateLifecycle,
+  type UpdateCheckLifecycle,
+} from "../../infra/update-check-lifecycle.js";
 import { getUpdateRun } from "../../infra/update-run-ledger.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../../test-utils/temp-home.js";
+import type { GatewayRequestHandlerOptions } from "./types.js";
 
 let ledgerHome: TempHomeEnv | undefined;
+let lifecycle: UpdateCheckLifecycle;
 beforeEach(async () => {
   ledgerHome = await createTempHomeEnv("openclaw-update-rpc-");
+  lifecycle = createGatewayUpdateLifecycle(createTestGatewayScheduler());
 });
 afterEach(async () => {
+  await lifecycle.stop();
   await ledgerHome?.restore();
   ledgerHome = undefined;
 });
@@ -23,6 +32,7 @@ afterEach(async () => {
 export const sentinelState: {
   capturedPayload?: RestartSentinelPayload;
   restartSentinelWriteError: Error | null;
+  onSentinelWrite?: () => void;
 } = { restartSentinelWriteError: null };
 export const resolveUpdateInstallSurfaceMock =
   vi.fn<
@@ -279,6 +289,7 @@ vi.mock("../../infra/restart-sentinel.js", async () => {
         throw sentinelState.restartSentinelWriteError;
       }
       sentinelState.capturedPayload = payload;
+      sentinelState.onSentinelWrite?.();
     },
   };
 });
@@ -318,12 +329,29 @@ vi.mock("../../infra/update-install-status.js", () => ({
 }));
 
 vi.mock("../../infra/update-startup.js", () => ({
+  getUpdateEffectiveChannel: async () => "stable",
+}));
+
+vi.mock("../../infra/update-status-schedule.js", () => ({
+  getGatewayUpdateSchedule: () => getUpdateScheduleMock(),
   refreshGatewayUpdateStatus: refreshGatewayUpdateStatusMock,
 }));
 
-vi.mock("../../infra/update-campaign.js", () => ({
-  gatewayUpdateCampaign: { adopt: adoptUpdateCampaignMock },
-}));
+vi.mock("../../infra/update-check-lifecycle.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../infra/update-check-lifecycle.js")>();
+  return {
+    ...actual,
+    currentUpdateCheckLifecycle: () => ({
+      ...actual.currentUpdateCheckLifecycle(),
+      campaign: {
+        adopt: adoptUpdateCampaignMock,
+        bindRun: vi.fn(),
+        getRunId: () => undefined,
+        reconcileRun: () => {},
+      },
+    }),
+  };
+});
 
 vi.mock("../../infra/update-runner-install-surface.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../infra/update-runner-install-surface.js")>()),
@@ -357,10 +385,11 @@ vi.mock("../../../packages/gateway-protocol/src/index.js", async () => {
   };
 });
 
-vi.mock("../server-restart-sentinel.js", () => ({
+vi.mock("../server-update-sentinel.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../server-update-sentinel.js")>()),
   getLatestUpdateRestartSentinel: getLatestUpdateRestartSentinelMock,
   recordLatestUpdateRestartSentinel: recordLatestUpdateRestartSentinelMock,
-  refreshLatestUpdateRestartSentinel: refreshLatestUpdateRestartSentinelMock,
+  prepareLatestUpdateRestartSentinel: refreshLatestUpdateRestartSentinelMock,
 }));
 
 vi.mock("./restart-request.js", () => ({
@@ -398,6 +427,7 @@ beforeEach(() => {
   resolveGatewayLifecycleNoticeRouteMock.mockClear();
   sentinelState.capturedPayload = undefined;
   sentinelState.restartSentinelWriteError = null;
+  sentinelState.onSentinelWrite = undefined;
   isRestartEnabledMock.mockReset();
   isRestartEnabledMock.mockReturnValue(true);
   readPackageVersionMock.mockClear();
@@ -485,6 +515,10 @@ export async function invokeUpdateRun(
     commands: { ownerAllowFrom: ["slack:C0123ABC", "slack:C0456DEF"] },
   },
   contextOverrides: Record<string, unknown> = {},
+  authority: Pick<
+    GatewayRequestHandlerOptions,
+    "sessionMutationCommitGuard" | "hasCurrentClientAuthority"
+  > = {},
 ) {
   const { updateHandlers } = await import("./update.js");
   const onRespond = respond ?? (() => {});
@@ -493,6 +527,7 @@ export async function invokeUpdateRun(
     'updateHandlers["update.run"] test invariant',
   )({
     params,
+    ...authority,
     respond: onRespond as never,
     context: { getRuntimeConfig: () => runtimeConfig, ...contextOverrides },
   } as never);
@@ -529,17 +564,17 @@ export async function captureUpdateRunPayload(
   return payload;
 }
 
-export function mockGlobalInstallSurface() {
+export function mockGlobalInstallSurface(root = "/tmp/openclaw-global") {
   resolveStartupInstallStatusMock.mockResolvedValueOnce({
-    root: "/tmp/openclaw-global",
-    status: { root: "/tmp/openclaw-global", installKind: "package", packageManager: "npm" },
+    root,
+    status: { root, installKind: "package", packageManager: "npm" },
     installReceipt: null,
   });
   resolveUpdateInstallSurfaceMock.mockResolvedValueOnce({
     kind: "global",
     mode: "npm",
-    root: "/tmp/openclaw-global",
-    packageRoot: "/tmp/openclaw-global",
+    root,
+    packageRoot: root,
   });
 }
 

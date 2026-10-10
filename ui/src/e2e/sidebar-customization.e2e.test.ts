@@ -8,14 +8,17 @@ import {
   takeControlUiViewportScreenshot,
 } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
+  controlUiBundledSettingsStorageKey,
   controlUiSessionPath,
   controlUiSessionUrl,
   installMockGateway,
   waitForControlUiRoute,
   waitForControlUiSettingsTakeover,
 } from "../test-helpers/control-ui-e2e.ts";
+import { workboardUi } from "../test-helpers/control-ui-workboard-fixture.ts";
 import { compactCronJobFixture } from "../test-helpers/cron.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { openSidebarMoreMenu } from "./sidebar-customization.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI sidebar customization mocked Gateway E2E",
@@ -89,6 +92,105 @@ async function setThemeMode(page: Page, mode: "dark" | "light") {
 }
 
 suite.define(() => {
+  it.each(
+    [1440, 390].flatMap((width) => [
+      { width, entry: "route:systems", label: "Systems", route: "chat" },
+      { width, entry: "plugin:workboard/workboard", label: "Workboard", route: "workboard/ops" },
+    ]),
+  )(
+    "keeps $label nav controls aligned and separated at $width px",
+    async ({ width, entry, label, route }) => {
+      await suite.withPage(
+        { locale: "en-US", serviceWorkers: "block", viewport: { height: 900, width } },
+        async ({ page }) => {
+          const boards = [
+            { id: "default", total: 0, active: 0, archived: 0, byStatus: {} },
+            { id: "ops", name: "Operations", total: 0, active: 0, archived: 0, byStatus: {} },
+          ];
+          await installMockGateway(page, {
+            ...workboardUi,
+            methodResponses: {
+              "workboard.boards.list": { boards },
+              "workboard.cards.list": { boards, cards: [], statuses: ["todo", "done"] },
+            },
+          });
+          await page.addInitScript(
+            ({ key, leadEntry }) =>
+              localStorage.setItem(
+                key,
+                JSON.stringify({
+                  sidebarAgentsMode: "roster",
+                  sidebarEntries: ["route:agents-home", leadEntry, "route:cron"],
+                }),
+              ),
+            { key: controlUiBundledSettingsStorageKey(suite.server.baseUrl), leadEntry: entry },
+          );
+          await page.goto(`${suite.server.baseUrl}${route}`);
+          if (label === "Workboard") {
+            await page.locator(".workboard-page-title", { hasText: "Operations" }).waitFor();
+          }
+          if (width < 900) {
+            await visibleDrawerButton(page).click();
+          }
+          const sidebar = page.locator("openclaw-app-sidebar");
+          const row = sidebar.locator(`[data-sidebar-entry="${entry}"]`);
+          if (label === "Workboard") {
+            await expect.poll(() => row.locator(".nav-item--child:visible").count()).toBe(2);
+          }
+          const originalBox = await row.boundingBox();
+          expect(originalBox).not.toBeNull();
+          const grip = row.getByRole("button", { name: `Reorder ${label}`, exact: true });
+          await row.hover();
+          await grip.click();
+          await page.getByRole("menuitem", { name: "Move up", exact: true }).click();
+          await expect
+            .poll(() =>
+              sidebar.locator(".sidebar-zone-entry").first().getAttribute("data-sidebar-entry"),
+            )
+            .toBe(entry);
+          const editor = sidebar.getByRole("button", { name: "Edit pinned items", exact: true });
+          await row.hover();
+          await expect
+            .poll(() => editor.evaluate((element) => getComputedStyle(element).opacity))
+            .toBe("1");
+          await expect
+            .poll(() => grip.evaluate((element) => getComputedStyle(element).opacity))
+            .toBe("1");
+          const [gripBox, editorBox, iconBox, rowBox, linkBox] = await Promise.all([
+            grip.boundingBox(),
+            editor.boundingBox(),
+            row.locator(".nav-item__icon").first().boundingBox(),
+            row.boundingBox(),
+            row.locator(".nav-item").first().boundingBox(),
+          ]);
+          expect(gripBox).not.toBeNull();
+          expect(editorBox).not.toBeNull();
+          expect(iconBox).not.toBeNull();
+          expect(rowBox).not.toBeNull();
+          expect(linkBox).not.toBeNull();
+          if (captureUiProofEnabled) {
+            await page.locator(".shell-nav").screenshot({
+              animations: "disabled",
+              path: path.join(suite.artifactDir, `lead-${label}-${width}.png`),
+            });
+          }
+          expect(rowBox!.height).toBe(originalBox!.height);
+          expect(
+            Math.abs(editorBox!.y + editorBox!.height / 2 - (linkBox!.y + linkBox!.height / 2)),
+          ).toBeLessThanOrEqual(1);
+          expect(gripBox!.x).toBeGreaterThanOrEqual(rowBox!.x);
+          if (width < 900) {
+            expect(editorBox!.x + editorBox!.width).toBeLessThanOrEqual(gripBox!.x);
+            expect(iconBox!.x + iconBox!.width).toBeLessThanOrEqual(gripBox!.x);
+          } else {
+            expect(gripBox!.x + gripBox!.width).toBeLessThanOrEqual(editorBox!.x);
+            expect(gripBox!.x + gripBox!.width).toBeLessThanOrEqual(iconBox!.x);
+          }
+        },
+      );
+    },
+  );
+
   it("uses catalog labels in the hidden-section recovery rows", async () => {
     const context = await suite.browser.newContext({
       locale: "en-US",
@@ -491,10 +593,10 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}chat`);
       await captureUiProof(page, "01-default-pinned.png");
 
-      const moreButton = sidebar.locator(".sidebar-nav__head-action");
+      const moreButton = sidebar.getByRole("button", { name: "Edit pinned items", exact: true });
       const moreMenu = sidebar.locator("wa-dropdown.sidebar-more-menu");
       await expect.poll(() => moreButton.getAttribute("aria-expanded")).toBe("false");
-      await moreButton.click();
+      await openSidebarMoreMenu(page);
       await expect.poll(() => moreButton.getAttribute("aria-expanded")).toBe("true");
       // Enabled plugin tabs render directly in the sidebar body (#111995),
       // not inside the More menu.
@@ -519,8 +621,8 @@ suite.define(() => {
       await expect
         .poll(() => trimmedTextContents(menu.getByRole("menuitemcheckbox")))
         .not.toContain("Workboard");
-      const tasksItem = menu.getByRole("menuitemcheckbox", { name: "Tasks" });
-      await expect.poll(() => tasksItem.getAttribute("aria-checked")).toBe("false");
+      const usageItem = menu.getByRole("menuitemcheckbox", { name: "Usage" });
+      await expect.poll(() => usageItem.getAttribute("aria-checked")).toBe("false");
       // Ask OpenClaw moved to Settings (#111686): custodian is not a sidebar
       // nav route anymore, so the pin editor does not offer it.
       await expect
@@ -528,17 +630,17 @@ suite.define(() => {
         .toBe(0);
       await captureUiProof(page, "02-customize-menu.png", menu.locator('[part="menu"]'));
 
-      await tasksItem.click();
+      await usageItem.click();
       await expect
         .poll(() => trimmedTextContents(pinnedItems))
-        .toEqual(["Agents", "Dashboards", "Systems", "Automations", "Plugins", "Tasks"]);
+        .toEqual(["Agents", "Dashboards", "Systems", "Automations", "Plugins", "Usage"]);
       await page.reload();
       await expect
         .poll(() => trimmedTextContents(pinnedItems))
-        .toEqual(["Agents", "Dashboards", "Systems", "Automations", "Plugins", "Tasks"]);
+        .toEqual(["Agents", "Dashboards", "Systems", "Automations", "Plugins", "Usage"]);
       // The More menu is transient: closed after reload, unpinned routes inside.
       await expect.poll(() => moreButton.getAttribute("aria-expanded")).toBe("false");
-      await moreButton.click();
+      await openSidebarMoreMenu(page);
       await expect.poll(() => moreButton.getAttribute("aria-expanded")).toBe("true");
       const editPersistedPinnedItems = moreMenu.getByRole("menuitem", {
         name: "Edit pinned items",
@@ -546,7 +648,7 @@ suite.define(() => {
       await expect.poll(() => editPersistedPinnedItems.isVisible()).toBe(true);
       await expect
         .poll(() => trimmedTextContents(moreMenu.getByRole("menuitem")))
-        .not.toContain("Tasks");
+        .not.toContain("Usage");
       await captureUiProof(
         page,
         "03-persisted-customization.png",
@@ -694,7 +796,7 @@ suite.define(() => {
     );
   });
 
-  it("moves Home activity clear of the aligned Pages editor", async () => {
+  it("reserves the Pages editor slot without moving Home activity on hover", async () => {
     await suite.withPage(
       {
         locale: "en-US",
@@ -735,11 +837,16 @@ suite.define(() => {
             requestUpdate(): void;
             updateComplete: Promise<unknown>;
           };
-          // The shell refreshes this callback whenever its lazy outbox runtime
+          // The shell refreshes this snapshot whenever its lazy outbox runtime
           // loads. Keep the warning fixture stable until geometry is measured.
-          Object.defineProperty(host, "outboxAttentionCountForSession", {
+          const storedOutboxes = {
+            total: 1,
+            attentionCountForSession: () => 1,
+            hasSessionDraft: () => false,
+          };
+          Object.defineProperty(host, "storedOutboxes", {
             configurable: true,
-            get: () => () => 1,
+            get: () => storedOutboxes,
             set: () => undefined,
           });
           host.requestUpdate();
@@ -747,7 +854,7 @@ suite.define(() => {
         });
 
         const activity = home.locator(".sidebar-home-session-states");
-        const editor = sidebar.locator(".sidebar-nav__head-action");
+        const editor = sidebar.getByRole("button", { name: "Edit pinned items", exact: true });
         await expect
           .poll(() => home.locator(".session-glyph--running .session-glyph__ring").count())
           .toBe(1);
@@ -775,10 +882,10 @@ suite.define(() => {
               centerDelta: Math.abs(
                 editorBox.y + editorBox.height / 2 - (homeBox.y + homeBox.height / 2),
               ),
-              gap: Math.round(editorBox.x - (activityBox.x + activityBox.width)),
+              clearOfEditor: activityBox.x + activityBox.width <= editorBox.x,
             };
           })
-          .toEqual({ activityShift: 25, centerDelta: 0, gap: 4 });
+          .toEqual({ activityShift: 0, centerDelta: 0, clearOfEditor: true });
         await captureUiProof(page, "07-home-activity-editor.png");
       },
     );

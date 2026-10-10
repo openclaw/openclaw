@@ -22,7 +22,13 @@ const sourceModes = new Set(["100644", "100755", "120000"]);
 const maxEntries = 100_000;
 const maxMetadataBytes = 64 * 1024 * 1024;
 const maxSourceBytes = 8 * 1024 * 1024 * 1024;
-const verificationBudgetMs = 120_000;
+// fsck --connectivity-only enumerates every stored object and walks the ref's full history,
+// so cost follows object-store size (~126 s for a 19 GiB, 1,679-pack store on current hardware).
+// 30 s per GiB leaves ~5x headroom for slower hosts. Automatic recovery runs before a
+// successful wrapper command exits, so it keeps the base bound; explicit recovery scales.
+const baseBudgetMs = 120_000;
+const budgetPerGiBMs = 30_000;
+const maxBudgetMs = 30 * 60_000;
 
 function gitEnvironment(): NodeJS.ProcessEnv {
   return {
@@ -53,10 +59,16 @@ const gitOptions = [
   "core.multiPackIndex=false",
 ];
 
+function workBudgetExceeded() {
+  return new Error(
+    "source witness verification exceeded its work budget; retry later, repack the witness repository, or choose another --witness-repo/--witness-ref",
+  );
+}
+
 function remainingTime(deadline: number) {
   const remaining = deadline - Date.now();
   if (remaining <= 0) {
-    throw new Error("source witness verification exceeded its work budget");
+    throw workBudgetExceeded();
   }
   return remaining;
 }
@@ -65,7 +77,11 @@ function gitRead(
   location: string[],
   args: string[],
   deadline: number,
-  options: { absent?: boolean; quiet?: boolean } = {},
+  options: {
+    absent?: boolean;
+    quiet?: boolean;
+    failure?: (status: number) => string | undefined;
+  } = {},
 ): Buffer | undefined {
   const result = spawnSync("git", [...gitOptions, ...location, ...args], {
     env: gitEnvironment(),
@@ -77,8 +93,15 @@ function gitRead(
   if (!result.error && options.absent && result.status === 1) {
     return undefined;
   }
+  if (result.error && "code" in result.error && result.error.code === "ETIMEDOUT") {
+    throw workBudgetExceeded();
+  }
   if (result.error || result.status !== 0) {
-    throw new Error(`source witness Git ${args[0]} could not verify local objects`);
+    const reason =
+      !result.error && typeof result.status === "number"
+        ? options.failure?.(result.status)
+        : undefined;
+    throw new Error(reason ?? `source witness Git ${args[0]} could not verify local objects`);
   }
   return result.stdout ?? Buffer.alloc(0);
 }
@@ -247,6 +270,7 @@ function validateSource(source: FrozenSource) {
 function storageIdentity(gitDir: string, payloadRoot: string, ref: string, deadline: number) {
   const digest = createHash("sha256");
   let count = 0;
+  let objectBytes = 0n;
   const record = (path: string) => {
     remainingTime(deadline);
     const stat = lstatSync(path, { bigint: true, throwIfNoEntry: false });
@@ -323,11 +347,13 @@ function storageIdentity(gitDir: string, payloadRoot: string, ref: string, deadl
       }
       if (stat.isDirectory()) {
         walk(path, depth + 1);
+      } else if (stat.isFile()) {
+        objectBytes += stat.size > 4096n ? stat.size : 4096n;
       }
     }
   };
   walk(join(gitDir, "objects"), 0);
-  return digest.digest("hex");
+  return { identity: digest.digest("hex"), objectBytes };
 }
 
 async function verifyBlobs(
@@ -419,11 +445,31 @@ async function verifyBlobs(
   }
 }
 
+function fsckFailure(status: number): string | undefined {
+  // ERROR_OBJECT/ERROR_REACHABLE/ERROR_PACK use 0o7; ERROR_REFS uses 0o10; >=128 overlaps fatal/usage exits.
+  if (status < 128 && (status & 0o7) !== 0) {
+    return "source witness Git fsck found missing, corrupt, or unconnected objects; choose a complete --witness-repo/--witness-ref";
+  }
+  if (status === 0o10) {
+    return "source witness Git reference database has errors; repair its refs or choose another --witness-repo/--witness-ref";
+  }
+  return undefined;
+}
+
+function supportsNoReferences(location: string[], deadline: number) {
+  const version = /^git version (\d+)\.(\d+)/u.exec(gitText(location, ["version"], deadline));
+  return (
+    version !== null &&
+    (Number(version[1]) > 2 || (Number(version[1]) === 2 && Number(version[2]) >= 50))
+  );
+}
+
 /** Read-only proof of another retained copy; the stage owner still owns disposal. */
 export async function verifySourceWitness(params: {
   source: FrozenSource;
   witness: SourceWitness;
   payloadRoot: string;
+  automatic?: boolean;
   signal?: AbortSignal;
 }): Promise<SourceWitnessResult> {
   try {
@@ -433,11 +479,19 @@ export async function verifySourceWitness(params: {
     if (!objectId.test(commit) || !retainedRef(refName)) {
       throw new Error("source witness needs an exact commit and named non-staging ref");
     }
-    const deadline = Date.now() + verificationBudgetMs;
+    const started = Date.now();
     const payloadRoot = realpathSync(params.payloadRoot);
     const gitDir = realpathSync(params.witness.gitDir);
     const location = [`--git-dir=${gitDir}`];
-    const before = storageIdentity(gitDir, payloadRoot, refName, deadline);
+    const before = storageIdentity(gitDir, payloadRoot, refName, started + baseBudgetMs);
+    const deadline =
+      started +
+      (params.automatic
+        ? baseBudgetMs
+        : Math.min(
+            maxBudgetMs,
+            baseBudgetMs + Math.ceil((Number(before.objectBytes) / 1024 ** 3) * budgetPerGiBMs),
+          ));
     const unsupported = gitRead(
       location,
       [
@@ -459,12 +513,23 @@ export async function verifySourceWitness(params: {
     }
     const ref = resolveRef(location, refName, deadline);
     gitRead(location, ["merge-base", "--is-ancestor", commit, ref.commit], deadline);
+    // Git 2.50 added fsck ref-database checks that judge unrelated refs (e.g. Finder .DS_Store
+    // under refs/); older Git never checks refs for explicit objects, so omitting the flag keeps the same proof.
+    const noReferences = supportsNoReferences(location, deadline);
     // No history object-ID list is buffered. Promisor/alternate routing was rejected above.
     gitRead(
       location,
-      ["fsck", "--connectivity-only", "--no-dangling", "--no-reflogs", "--no-progress", ref.oid],
+      [
+        "fsck",
+        "--connectivity-only",
+        "--no-dangling",
+        "--no-reflogs",
+        "--no-progress",
+        ...(noReferences ? ["--no-references"] : []),
+        ref.oid,
+      ],
       deadline,
-      { quiet: true },
+      { quiet: true, failure: fsckFailure },
     );
     const listing = gitRead(
       location,
@@ -504,9 +569,15 @@ export async function verifySourceWitness(params: {
     );
     const revalidate = () => {
       params.signal?.throwIfAborted();
-      const currentStorage = storageIdentity(gitDir, payloadRoot, refName, deadline);
-      const after = resolveRef(location, refName, deadline);
-      if (currentStorage !== before || after.oid !== ref.oid || after.commit !== ref.commit) {
+      // Automatic rechecks share the original bound so post-command cleanup never exceeds it.
+      const revalidationDeadline = params.automatic ? deadline : Date.now() + baseBudgetMs;
+      const currentStorage = storageIdentity(gitDir, payloadRoot, refName, revalidationDeadline);
+      const after = resolveRef(location, refName, revalidationDeadline);
+      if (
+        currentStorage.identity !== before.identity ||
+        after.oid !== ref.oid ||
+        after.commit !== ref.commit
+      ) {
         throw new Error("source witness changed while preservation was being verified");
       }
     };

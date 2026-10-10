@@ -1,5 +1,5 @@
+import type { AgentToolSurfacePresentation } from "../../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
 import { messageToolOwnsVisibleReply } from "../../auto-reply/source-reply-delivery-mode.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { finalizeAgentToolAvailability } from "../agent-tool-availability.js";
 import type { HookContext } from "../agent-tools.before-tool-call.js";
 import {
@@ -19,9 +19,14 @@ import { TOOL_SEARCH_CONTROL_TOOL_NAMES } from "../tool-search-types.js";
 import {
   clearToolSearchCatalog,
   createToolSearchCatalogRef,
+  createToolSearchTools,
   type ToolSearchCatalogToolExecutor,
 } from "../tool-search.js";
-import { applyAgentToolSurfaceCatalog, resolveAgentToolSurfacePlan } from "../tool-surface-plan.js";
+import {
+  applyAgentToolSurfaceCatalog,
+  resolveAgentToolSurfacePlan,
+  type AgentToolSurfacePlanParams,
+} from "../tool-surface-plan.js";
 import type { AnyAgentTool } from "../tools/common.js";
 import { createAgentHarnessPromptToolPolicy } from "./prompt-tool-policy.js";
 
@@ -32,51 +37,53 @@ type PreparedToolSurface = Pick<
   "abortSignal" | "executeTool" | "forceRestartSafeTools" | "toolExecutionAllow" | "codeModeSkills"
 > & { preserveToolNames: Iterable<string> };
 
-export function createAgentHarnessToolSurfaceRuntimeCore(params: {
-  abortSignal?: AbortSignal;
-  agentId?: string;
-  config?: OpenClawConfig;
-  disableTools?: boolean;
-  executeTool: ToolSearchCatalogToolExecutor;
-  forceMessageTool?: boolean;
-  isRawModelRun?: boolean;
-  /** Prepared model row carrying catalog compat; required for `"auto"` code-mode resolution. */
-  model?: { compat?: unknown; contextWindow?: number; toolSearchMode?: "tools" | false };
-  contextTokenBudget?: number;
-  modelId?: string;
-  modelProvider?: string;
-  codeModeOverride?: boolean | "auto";
-  disableToolSearch?: true;
-  forceCodeModeControls?: boolean;
-  modelToolsEnabled: boolean;
-  /** False when the harness cannot dispatch an unregistered catalog name directly. */
-  supportsDeferredToolCalls?: boolean;
-  prompt?: string;
-  runId?: string;
-  runtimeToolAllowlist?: readonly string[];
-  sessionId?: string;
-  sessionKey?: string;
-  scheduledToolPolicy?: ScheduledToolPolicyContext;
-  sourceReplyDeliveryMode?: string;
-  toolsAllow?: readonly string[];
-}) {
-  const forceDirectMessageTool = messageToolOwnsVisibleReply(params);
-  const plan = resolveAgentToolSurfacePlan({
-    config: params.config,
-    agentId: params.agentId,
-    sessionKey: params.sessionKey,
-    forceDirectMessageTool,
-    model: params.model,
-    modelProvider: params.modelProvider,
-    modelId: params.modelId,
-    codeModeOverride: params.codeModeOverride,
-    disableToolSearch: params.disableToolSearch,
-    toolsEnabled: params.modelToolsEnabled,
-    disableTools: params.disableTools,
-    isRawModelRun: params.isRawModelRun === true,
-    toolsAllow: params.toolsAllow,
-    forceCodeModeControls: params.forceCodeModeControls,
-  });
+export function createAgentHarnessToolSurfaceRuntimeCore(
+  input: Omit<
+    AgentToolSurfacePlanParams,
+    "forceDirectMessageTool" | "toolsEnabled" | "isRawModelRun"
+  > & {
+    abortSignal?: AbortSignal;
+    executeTool?: ToolSearchCatalogToolExecutor;
+    presentation?: AgentToolSurfacePresentation;
+    forceMessageTool?: boolean;
+    isRawModelRun?: boolean;
+    model?: { contextWindow?: number };
+    contextTokenBudget?: number;
+    modelToolsEnabled: boolean;
+    /** False when the harness cannot dispatch an unregistered catalog name directly. */
+    supportsDeferredToolCalls?: boolean;
+    prompt?: string;
+    runId?: string;
+    runtimeToolAllowlist?: readonly string[];
+    sessionId?: string;
+    scheduledToolPolicy?: ScheduledToolPolicyContext;
+    sourceReplyDeliveryMode?: string;
+  },
+) {
+  const presentation = input.presentation;
+  const params = presentation
+    ? {
+        ...input,
+        config: { tools: { codeMode: presentation.codeMode, toolSearch: presentation.toolSearch } },
+      }
+    : input;
+  const forceDirectMessageTool =
+    presentation?.forceDirectMessageTool ?? messageToolOwnsVisibleReply(params);
+  // Placement facts cannot restore general execution on a persistence-only turn.
+  const plan =
+    presentation && params.trigger !== "memory"
+      ? {
+          codeModeControlsEnabled: presentation.codeMode.enabled,
+          toolSearchControlsEnabled: presentation.toolSearch.enabled,
+          toolSearchConfig: presentation.toolSearch,
+          toolSearchRuntimeConfig: params.config,
+        }
+      : resolveAgentToolSurfacePlan({
+          ...params,
+          forceDirectMessageTool,
+          toolsEnabled: params.modelToolsEnabled,
+          isRawModelRun: params.isRawModelRun === true,
+        });
   if (params.supportsDeferredToolCalls === false && plan.toolSearchConfig.mode === "directory") {
     plan.toolSearchConfig = { ...plan.toolSearchConfig, mode: "tools" };
     plan.toolSearchRuntimeConfig = {
@@ -136,55 +143,51 @@ export function createAgentHarnessToolSurfaceRuntimeCore(params: {
       prepared || options.localModelLeanApplied
         ? tools
         : filterLocalModelLeanTools({
+            ...params,
             tools,
-            config: params.config,
-            agentId: params.agentId,
-            sessionKey: params.sessionKey,
             preserveToolNames,
           });
     let effectiveTools = prepared
       ? projectedUncompactedTools
       : filterRuntimeCompatibleTools(projectedUncompactedTools).tools;
-    const codeModeTools = codeModeControlsEnabled
-      ? createCodeModeTools({
-          config: params.config,
-          runtimeConfig: params.config,
+    const codeModeSkills = prepared?.codeModeSkills ?? presentation?.skills;
+    const createControls = codeModeControlsEnabled
+      ? createCodeModeTools
+      : toolSearchControlsEnabled &&
+          !effectiveTools.some((tool) => TOOL_SEARCH_CONTROL_TOOL_NAMES.has(tool.name))
+        ? createToolSearchTools
+        : undefined;
+    const controls = createControls
+      ? createControls({
+          ...params,
+          runtimeConfig: codeModeControlsEnabled ? params.config : toolSearchRuntimeConfig,
           modelContextWindowTokens: params.contextTokenBudget ?? params.model?.contextWindow,
-          agentId: params.agentId,
-          sessionKey: params.sessionKey,
-          sessionId: params.sessionId,
-          runId: params.runId,
           catalogRef: toolSearchCatalogRef,
           abortSignal: prepared?.abortSignal ?? params.abortSignal,
           executeTool: prepared?.executeTool ?? params.executeTool,
           forceRestartSafeTools: prepared?.forceRestartSafeTools,
           toolExecutionAllow: prepared?.toolExecutionAllow,
-          codeModeSkills: prepared?.codeModeSkills,
+          codeModeSkills,
         })
       : [];
     const compacted = applyAgentToolSurfaceCatalog({
-      tools: [...codeModeTools, ...effectiveTools],
-      config: params.config,
+      ...params,
+      tools: [...controls, ...effectiveTools],
       toolSearchRuntimeConfig,
       codeModeControlsEnabled,
       toolSearchConfig,
       forceDirectMessageTool,
-      sessionId: params.sessionId,
-      sessionKey: params.sessionKey,
-      agentId: params.agentId,
-      runId: params.runId,
       catalogRef: toolSearchCatalogRef,
       toolHookContext: options.hookContext,
       toolExecutionAllow: prepared?.toolExecutionAllow,
-      codeModeSkills: prepared?.codeModeSkills,
+      codeModeSkills,
     });
     const projectedCompactedTools =
       !prepared && options.localModelLeanApplied
         ? compacted.tools
         : filterLocalModelLeanTools({
+            ...params,
             tools: compacted.tools,
-            config: params.config,
-            agentId: params.agentId,
             sessionKey: prepared ? undefined : params.sessionKey,
             preserveToolNames,
           });
@@ -222,15 +225,7 @@ export function createAgentHarnessToolSurfaceRuntimeCore(params: {
     runtimeToolAllowlist,
     toolSearchCatalogRef,
     toolSearchControlsEnabled,
-    cleanup: () => {
-      clearToolSearchCatalog({
-        sessionId: params.sessionId,
-        sessionKey: params.sessionKey,
-        agentId: params.agentId,
-        runId: params.runId,
-        catalogRef: toolSearchCatalogRef,
-      });
-    },
+    cleanup: () => clearToolSearchCatalog({ catalogRef: toolSearchCatalogRef }),
     toolSearchCatalogExecutor,
   };
 }

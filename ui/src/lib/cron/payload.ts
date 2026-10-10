@@ -18,10 +18,7 @@ function isCronPayload(value: unknown): value is CronPayload {
   if (value.kind === "script") {
     return typeof value.script === "string";
   }
-  if (isSystemOwnedCronPayloadKind(value.kind)) {
-    return true;
-  }
-  return false;
+  return isSystemOwnedCronPayloadKind(value.kind);
 }
 
 export function getCronJobPayload(job: CronJob): CronPayload | null {

@@ -1,10 +1,9 @@
-/** Boundary-safe workspace reads and the source identity of the bytes returned. */
 import { createHash } from "node:crypto";
 import syncFs from "node:fs";
 import path from "node:path";
+import { sameFileIdentity, type FileIdentityStat } from "@openclaw/fs-safe/advanced";
 import { openRootFile } from "../infra/boundary-file-read.js";
 import { hasErrnoCode } from "../infra/errno.js";
-import { sameFileIdentity, type FileIdentityStat } from "../infra/fs-safe-advanced.js";
 import { retryAsync } from "../infra/retry.js";
 import { getAgentWorkspaceAccess } from "./workspace-access.js";
 import {
@@ -26,9 +25,6 @@ type WorkspaceFileSourceIdentity = readonly [
 // Loader-owned records retain the pinned-open identity through final session filtering.
 const workspaceFileSourceIdentities = new WeakMap<object, WorkspaceFileSourceIdentity>();
 
-/**
- * Read workspace files via boundary-safe open and cache by inode/dev/size/mtime/ctime identity.
- */
 type WorkspaceGuardedReadResult =
   | { ok: true; content: string; sourceIdentity: WorkspaceFileSourceIdentity }
   | { ok: false; reason: "path" | "validation" | "io"; error?: unknown };
@@ -46,24 +42,20 @@ export function setWorkspaceFileSourceIdentity(
   workspaceFileSourceIdentities.set(file, sourceIdentity);
 }
 
-function getWorkspaceFileSourceIdentity(file: object): WorkspaceFileSourceIdentity | undefined {
-  return workspaceFileSourceIdentities.get(file);
-}
-
 /** Remote source recorded by the successful read, unavailable on hook-created copies. */
 export function getWorkspaceFileSourceRelativePath(file: object): string | undefined {
-  return getWorkspaceFileSourceIdentity(file)?.[3];
+  return workspaceFileSourceIdentities.get(file)?.[3];
 }
 
 export function workspaceFileSourceIdentitiesMatch(left: object, right: object): boolean {
-  const leftIdentity = getWorkspaceFileSourceIdentity(left);
-  const rightIdentity = getWorkspaceFileSourceIdentity(right);
+  const leftIdentity = workspaceFileSourceIdentities.get(left);
+  const rightIdentity = workspaceFileSourceIdentities.get(right);
   return leftIdentity?.[2] === rightIdentity?.[2];
 }
 
 export function workspaceFilesShareSourceIdentity(left: object, right: object): boolean {
-  const leftIdentity = getWorkspaceFileSourceIdentity(left);
-  const rightIdentity = getWorkspaceFileSourceIdentity(right);
+  const leftIdentity = workspaceFileSourceIdentities.get(left);
+  const rightIdentity = workspaceFileSourceIdentities.get(right);
   if (!leftIdentity || !rightIdentity) {
     return false;
   }
@@ -79,6 +71,8 @@ export async function readWorkspaceFileWithGuards(params: {
   filePath: string;
   workspaceDir: string;
   useCache?: boolean;
+  /** Identity-scoped files must not alias another profile through parent symlinks. */
+  rejectAliases?: boolean;
 }): Promise<WorkspaceGuardedReadResult> {
   const access = getAgentWorkspaceAccess(params.workspaceDir);
   if (access) {
@@ -99,6 +93,9 @@ export async function readWorkspaceFileWithGuards(params: {
         },
       );
       assertCurrent();
+      if (params.rejectAliases && workspaceRelativePath !== filePath.replaceAll(path.sep, "/")) {
+        return { ok: false, reason: "validation" };
+      }
       if (data.length > MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES) {
         throw new RangeError(`Workspace bootstrap file exceeds its read bound: ${filePath}`);
       }
@@ -133,7 +130,7 @@ export async function readWorkspaceFileWithGuards(params: {
           absolutePath: params.filePath,
           rootPath: params.workspaceDir,
           boundaryLabel: "workspace root",
-          symlinks: "follow-parents-within-root",
+          symlinks: params.rejectAliases ? "reject" : "follow-parents-within-root",
         });
         if (!opened.ok) {
           // Boundary resolution can report transient IO as "validation", while
@@ -149,14 +146,9 @@ export async function readWorkspaceFileWithGuards(params: {
         const sourceIdentity = [opened.path, opened.stat, identity] as const;
         const cached =
           params.useCache === false ? undefined : readWorkspaceFileCache(opened.path, identity);
-        if (cached !== undefined) {
-          syncFs.closeSync(opened.fd);
-          return { ok: true, content: cached, sourceIdentity };
-        }
-
         try {
-          const content = await readWorkspaceBootstrapFile(opened.fd);
-          if (params.useCache !== false) {
+          const content = cached ?? (await readWorkspaceBootstrapFile(opened.fd));
+          if (cached === undefined && params.useCache !== false) {
             writeWorkspaceFileCache({ filePath: opened.path, content, identity });
           }
           return { ok: true, content, sourceIdentity };

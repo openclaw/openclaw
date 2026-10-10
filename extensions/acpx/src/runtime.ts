@@ -19,8 +19,8 @@ import {
   type AcpRuntimeStatus,
   type AcpRuntimeTurnResult,
 } from "acpx/runtime";
-import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import { redactSensitiveText } from "openclaw/plugin-sdk/security-runtime";
+import { normalizeOptionalLowercaseString as normalizeAgentName } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   AcpRuntimeError,
@@ -33,7 +33,6 @@ import {
   isClaudeAcpCommand,
   isCodexAcpCommand,
   isOpenClawBridgeCommand,
-  normalizeAgentName,
   resolveAgentCommand,
   splitCommandParts,
   type AcpxAgentCommand,
@@ -53,9 +52,9 @@ import {
 import {
   cleanupOpenClawOwnedAcpxPendingLease,
   isOpenClawLeaseAwareAcpxProcessCommand,
-  type AcpxProcessCleanupDeps,
 } from "./process-reaper.js";
 import { AcpxGenerationRegistry } from "./runtime-generations.js";
+import { AcpxRuntimeProbe } from "./runtime-probe.js";
 import { prepareAcpxProcessCleanup } from "./runtime-process-cleanup.js";
 import type { CompleteAcpRuntime, CompleteAcpRuntimeTurn } from "./runtime-proxy.js";
 import {
@@ -82,15 +81,13 @@ import {
 
 type BaseAcpxRuntimeTestOptions = ConstructorParameters<typeof BaseAcpxRuntime>[1];
 type OpenClawAcpxRuntimeOptions = AcpRuntimeOptions & {
+  getProbeAgent?: () => string | undefined;
   openclawLegacyBareSessionKeys?: ReadonlySet<string>;
   openclawWrapperRoot?: string;
   openclawGatewayInstanceId?: string;
   openclawProcessLeaseStore?: AcpxProcessLeaseStore;
   pluginToolsMcpBridgeEnabled?: boolean;
   openclawToolsMcpBridgeEnabled?: boolean;
-};
-type AcpxRuntimeTestOptions = Record<string, unknown> & {
-  openclawProcessCleanup?: AcpxProcessCleanupDeps;
 };
 type OpenClawRuntimeTurnInput = Parameters<NonNullable<AcpRuntime["startTurn"]>>[0] &
   Pick<Parameters<BaseAcpxRuntime["startTurn"]>[0], "onPermissionRequest" | "assertActive">;
@@ -393,23 +390,18 @@ export class AcpxRuntime implements CompleteAcpRuntime {
   private readonly delegate: BaseAcpxRuntime;
   private readonly generationRegistry: AcpxGenerationRegistry;
   private readonly sessionScope = new AsyncLocalStorage<BridgeSession | null>();
-  private readonly probeQueue = new KeyedAsyncQueue();
-  private readonly probeAgent: string;
-  private readonly probeCommand: AcpxAgentCommand | undefined;
+  private readonly probe: AcpxRuntimeProbe;
   private readonly pluginToolsMcpBridgeEnabled: boolean;
   private readonly openclawToolsMcpBridgeEnabled: boolean;
   private readonly managedToolsMcpBridgeEnabled: boolean;
-  private readonly processCleanupDeps: AcpxProcessCleanupDeps | undefined;
   private readonly wrapperRoot: string | undefined;
   private readonly gatewayInstanceId: string | undefined;
   private readonly processLeaseStore: AcpxProcessLeaseStore | undefined;
   private readonly launchLeaseScope = new AsyncLocalStorage<AcpxLaunchLeaseContext | undefined>();
   private readonly cwd: string;
 
-  constructor(options: OpenClawAcpxRuntimeOptions, testOptions?: AcpxRuntimeTestOptions) {
+  constructor(options: OpenClawAcpxRuntimeOptions, testOptions?: Record<string, unknown>) {
     this.legacyBareSessionKeys = new Set(options.openclawLegacyBareSessionKeys);
-    const { openclawProcessCleanup, ...delegateTestOptions } = testOptions ?? {};
-    this.processCleanupDeps = openclawProcessCleanup;
     this.wrapperRoot = options.openclawWrapperRoot;
     this.gatewayInstanceId = options.openclawGatewayInstanceId;
     this.processLeaseStore = options.openclawProcessLeaseStore;
@@ -434,10 +426,11 @@ export class AcpxRuntime implements CompleteAcpRuntime {
       },
       list: () => this.agentRegistry.list(),
     };
-    const createDelegate = () =>
+    const createDelegate = (probeAgent = options.probeAgent) =>
       new BaseAcpxRuntime(
         {
           ...options,
+          probeAgent,
           sessionStore: this.sessionStore,
           agentRegistry: this.scopedAgentRegistry,
           sessionPermissions: (context) => {
@@ -494,7 +487,7 @@ export class AcpxRuntime implements CompleteAcpRuntime {
             onExit: options.processLifecycle?.onExit,
           },
         },
-        delegateTestOptions as BaseAcpxRuntimeTestOptions,
+        testOptions as BaseAcpxRuntimeTestOptions,
       );
     this.delegate = createDelegate();
     this.generationRegistry = new AcpxGenerationRegistry(
@@ -502,10 +495,19 @@ export class AcpxRuntime implements CompleteAcpRuntime {
       this.delegate,
       createDelegate,
     );
-    this.probeAgent = normalizeAgentName(options.probeAgent) ?? "codex";
-    this.probeCommand = resolveAgentCommand({
-      agentName: this.probeAgent,
-      agentRegistry: this.agentRegistry,
+    this.probe = new AcpxRuntimeProbe({
+      getAgent: () =>
+        normalizeAgentName(options.getProbeAgent?.() ?? options.probeAgent) ?? "codex",
+      createRuntime: createDelegate,
+      assertRunning: () => this.generationRegistry.assertRunning(),
+      runWithLease: (agent, run) =>
+        this.runWithLaunchLease({
+          agent,
+          sessionKey: ACPX_PROBE_LEASE_SESSION_KEY,
+          command: resolveAgentCommand({ agentName: agent, agentRegistry: this.agentRegistry }),
+          finalizeCompletedProbe: true,
+          run,
+        }),
     });
   }
 
@@ -757,7 +759,6 @@ export class AcpxRuntime implements CompleteAcpRuntime {
         gatewayInstanceId: launch.gatewayInstanceId,
         wrapperRoot: launch.wrapperRoot,
         wrapperPath: extractGeneratedWrapperPath(leasedCommand),
-        deps: this.processCleanupDeps,
       });
     }
     return result;
@@ -843,11 +844,9 @@ export class AcpxRuntime implements CompleteAcpRuntime {
     });
   }
 
-  async findSession(input: {
-    sessionKey: string;
-    agent: string;
-    agentId?: string;
-  }): Promise<OpenClawRuntimeHandle | undefined> {
+  async findSession(
+    input: Parameters<CompleteAcpRuntime["findSession"]>[0],
+  ): Promise<OpenClawRuntimeHandle | undefined> {
     const resource = assertAcpxSessionOwnerLocator(input, this.legacyBareSessionKeys);
     const generation = this.generationRegistry.currentGeneration(resource);
     return this.runInGeneration(input, { generation }, async () => {
@@ -856,6 +855,8 @@ export class AcpxRuntime implements CompleteAcpRuntime {
         agent: input.agent,
       });
       this.generationRegistry.assertCurrentGeneration(generation);
+      // Returned handles keep their reset fence, including closed persisted history.
+      generation.admitted ||= Boolean(handle);
       return handle
         ? {
             ...handle,
@@ -868,35 +869,21 @@ export class AcpxRuntime implements CompleteAcpRuntime {
   }
 
   async shutdown(): Promise<void> {
-    await this.generationRegistry.shutdown();
+    const [sessions] = await Promise.allSettled([
+      this.generationRegistry.shutdown(),
+      this.probe.shutdown(),
+    ]);
+    if (sessions.status === "rejected") {
+      throw sessions.reason;
+    }
   }
 
   isHealthy(): boolean {
-    return this.delegate.isHealthy();
-  }
-
-  async probeAvailability(): Promise<void> {
-    await this.probeQueue.enqueue(this.probeAgent, () =>
-      this.runWithLaunchLease({
-        agent: this.probeAgent,
-        sessionKey: ACPX_PROBE_LEASE_SESSION_KEY,
-        command: this.probeCommand,
-        finalizeCompletedProbe: true,
-        run: () => this.delegate.probeAvailability(),
-      }),
-    );
+    return this.probe.isHealthy();
   }
 
   async doctor(): Promise<AcpRuntimeDoctorReport> {
-    return await this.probeQueue.enqueue(this.probeAgent, () =>
-      this.runWithLaunchLease({
-        agent: this.probeAgent,
-        sessionKey: ACPX_PROBE_LEASE_SESSION_KEY,
-        command: this.probeCommand,
-        finalizeCompletedProbe: true,
-        run: () => this.delegate.doctor(),
-      }),
-    );
+    return await this.probe.doctor();
   }
 
   async ensureSession(input: OpenClawRuntimeEnsureInput): Promise<OpenClawRuntimeHandle> {
@@ -1298,7 +1285,6 @@ export class AcpxRuntime implements CompleteAcpRuntime {
           gatewayInstanceId: this.gatewayInstanceId,
           wrapperRoot: this.wrapperRoot,
           leaseStore: this.processLeaseStore,
-          deps: this.processCleanupDeps,
         }).catch((error: unknown) => async () => {
           throw error;
         });

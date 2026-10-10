@@ -91,6 +91,8 @@ vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => {
     rebasePluginMetadataSnapshotManifestRegistry,
     resolvePluginMetadataSnapshot: () =>
       createPluginMetadataSnapshot({ manifestRegistry: { plugins: [], diagnostics: [] } }),
+    resolvePluginMetadataSnapshotAsync: async () =>
+      createPluginMetadataSnapshot({ manifestRegistry: { plugins: [], diagnostics: [] } }),
   };
 });
 
@@ -172,7 +174,7 @@ vi.mock("./auth-profiles/store-runtime.js", async () => {
 
 vi.mock("../acp/control-plane/manager.js", () => ({
   getAcpSessionManager: () => ({
-    resolveSession: () => null,
+    resolveSessionAsync: async () => null,
   }),
 }));
 

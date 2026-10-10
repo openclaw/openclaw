@@ -1,9 +1,9 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import { once } from "node:events";
+import { EventEmitter, once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, expect, it, vi } from "vitest";
-import { withTestTimeout } from "../../../test/helpers/promise.js";
+import { afterEach, expect, it } from "vitest";
+import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   resolveRuntimeWorkerArgv,
@@ -19,24 +19,21 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
         child.kill("SIGKILL");
       }
     }
-    await withTestTimeout(
-      Promise.all(children.values()),
-      5_000,
-      "cron restart children did not close",
-    );
+    await Promise.all(children.values());
     children.clear();
     cleanup();
   }),
 );
 const fixture = resolveRuntimeWorkerUrl(gatewayDirectStopEntrypoints.forcedCronFixture);
 
-it.skipIf(process.platform === "win32").each([
+it.skipIf(process.platform === "win32").for([
   { signal: "SIGUSR2", mode: "force" },
   { signal: "SIGTERM", mode: "force" },
   { signal: "SIGUSR2", mode: "timeout" },
 ] as const)(
-  "cancels active cron work and joins cleanup before $signal $mode restart",
-  async ({ signal, mode }) => {
+  "settles admitted cron work before $signal $mode restart",
+  { timeout: 60_000 },
+  async ({ signal, mode }, { signal: testSignal }) => {
     const root = tempDirs.make("openclaw-forced-cron-");
     const home = path.join(root, "home");
     fs.mkdirSync(home);
@@ -56,23 +53,45 @@ it.skipIf(process.platform === "win32").each([
     children.set(child, closed);
     void closed.catch(() => {});
     let output = "";
-    child.stdout?.on("data", (chunk: Buffer) => {
+    const changes = new EventEmitter();
+    const recordOutput = (chunk: Buffer) => {
       output += chunk.toString();
-    });
-    child.stderr?.on("data", (chunk: Buffer) => {
-      output += chunk.toString();
-    });
-    const waitForOutput = (text: string, timeout = 5_000) =>
-      vi.waitFor(
-        () => {
-          expect(output).toContain(text);
-        },
-        { timeout, interval: 25 },
-      );
-    await waitForOutput("process proof: ready:1", 45_000);
+      changes.emit("output");
+    };
+    child.stdout?.on("data", recordOutput);
+    child.stderr?.on("data", recordOutput);
+    const waitForOutput = async (text: string) => {
+      let inspect: () => void = () => {};
+      try {
+        await withinTest(
+          awaitGateBeforeSettlement(
+            new Promise<void>((resolve) => {
+              inspect = () => {
+                if (output.includes(text)) {
+                  resolve();
+                }
+              };
+              changes.on("output", inspect);
+              inspect();
+            }),
+            closed,
+            `Missing ${text}: ${output}`,
+          ),
+          testSignal,
+        );
+      } finally {
+        changes.off("output", inspect);
+      }
+    };
+    await waitForOutput("process proof: ready:1");
     expect(child.kill(signal)).toBe(true);
-    await waitForOutput("process proof: cron-cancelled:Gateway restarting.");
-    await waitForOutput("process proof: close-entered");
+    if (mode === "timeout") {
+      await waitForOutput("process proof: cron-cancelled:Gateway restarting.");
+      await waitForOutput("process proof: close-entered");
+    } else {
+      await waitForOutput("draining active work before");
+      expect(output).not.toContain("process proof: close-entered");
+    }
     child.send("inspect");
     await waitForOutput("process proof: held:starts=1:pending=true");
     expect(fs.existsSync(path.join(root, "cleanup.txt"))).toBe(false);
@@ -81,15 +100,17 @@ it.skipIf(process.platform === "win32").each([
     expect(child.exitCode).toBeNull();
     child.send("release");
     if (signal === "SIGUSR2") {
-      await waitForOutput("process proof: ready:2", 15_000);
+      await waitForOutput("process proof: ready:2");
       expect(child.kill("SIGINT")).toBe(true);
     }
-    expect(await withTestTimeout(closed, 5_000, output)).toEqual([0, null]);
+    const outcome = await withinTest(closed, testSignal).catch((cause: unknown) => {
+      throw new Error(output, { cause });
+    });
+    expect(outcome).toEqual([0, null]);
     expect(fs.readFileSync(path.join(root, "cleanup.txt"), "utf8")).toBe("settled\n");
     expect(output.indexOf("process proof: cron-cleanup-settled")).toBeLessThan(
       output.indexOf("process proof: close-completed"),
     );
     expect(output).not.toContain("shutdown deadline reached");
   },
-  60_000,
 );

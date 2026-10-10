@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -13,6 +14,49 @@ import { waitForChatAbortControllerRemoval } from "./chat-abort-lifecycle-intern
 import type { ChatAbortControllerEntry } from "./chat-abort.js";
 
 const execFileAsync = promisify(execFile);
+
+async function addWorkspaceOrigin(workspace: string): Promise<void> {
+  const remote = `${workspace}.git`;
+  await execFileAsync("git", ["clone", "--bare", workspace, remote]);
+  await execFileAsync("git", ["-C", workspace, "remote", "add", "origin", remote]);
+  await execFileAsync("git", ["-C", workspace, "fetch", "origin"]);
+  await execFileAsync("git", ["-C", workspace, "remote", "set-head", "origin", "main"]);
+}
+
+export async function createGitWorkspace(root: string): Promise<string> {
+  const workspace = path.join(root, "workspace");
+  await fs.mkdir(workspace, { recursive: true });
+  await execFileAsync("git", ["-C", workspace, "init", "-b", "main"]);
+  await fs.writeFile(path.join(workspace, "README.md"), "base\n");
+  await execFileAsync("git", ["-C", workspace, "add", "README.md"]);
+  await execFileAsync("git", [
+    "-c",
+    "user.name=OpenClaw Test",
+    "-c",
+    "user.email=openclaw-test@example.invalid",
+    "-C",
+    workspace,
+    "commit",
+    "-m",
+    "initial",
+  ]);
+  await addWorkspaceOrigin(workspace);
+  return await fs.realpath(workspace);
+}
+
+export async function copyGitWorkspace(template: string, root: string): Promise<string> {
+  const workspace = path.join(root, "workspace");
+  await fs.cp(template, workspace, {
+    recursive: true,
+    mode: fsConstants.COPYFILE_FICLONE,
+  });
+  await fs.cp(`${template}.git`, `${workspace}.git`, {
+    recursive: true,
+    mode: fsConstants.COPYFILE_FICLONE,
+  });
+  await execFileAsync("git", ["-C", workspace, "remote", "set-url", "origin", `${workspace}.git`]);
+  return await fs.realpath(workspace);
+}
 
 export const controlUiClient = {
   client: {
@@ -37,6 +81,7 @@ export async function initializeRepository(root: string, name: string): Promise<
   await fs.writeFile(path.join(repo, "README.md"), `${name}\n`);
   await execFileAsync("git", ["-C", repo, "add", "README.md"]);
   await execFileAsync("git", ["-C", repo, "commit", "-m", "initial"]);
+  await addWorkspaceOrigin(repo);
   return await fs.realpath(repo);
 }
 

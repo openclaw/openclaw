@@ -58,6 +58,29 @@ only while its dashboard is focused. Quick Chat keeps the separate global
 `Cmd+Shift+Space` or `Ctrl+Shift+Space` shortcut, including when another app is
 in front.
 
+## Chrome setup bridge
+
+The selected main dashboard can explicitly inspect, install, or verify Chrome
+setup on the computer running the companion, including when the dashboard's
+Gateway is remote. Loading the dashboard does not run setup. Chrome retains its
+extension installation approval; the companion does not ask for a pairing key.
+
+The dashboard adapter is
+`window.webkit.messageHandlers.openclawDeviceSettings.postMessage({type: "chrome-extension-setup", action})`,
+where `action` is `inspect`, `install`, or `verify`. Its Promise resolves directly
+to the canonical CLI setup JSON, including pending and blocked results, and
+rejects on transport, invalid-action, or CLI execution errors. It shares the
+existing native browser document token, origin/path, and generation checks;
+reading tabs and other dashboard windows do not receive this bridge.
+
+The adapter invokes only
+`openclaw browser extension setup --action ACTION --json --wait-ms 1000`
+through the companion's local CLI owner. Profile selection is left to the CLI so
+a saved profile is not overridden. Callers cannot choose commands, paths,
+profiles, or URLs. Platform bootstrap support comes from the CLI result rather
+than the app platform: a Windows app build alone does not establish that native
+host bootstrap is supported or verified.
+
 ## Omarchy
 
 The optional Omarchy 4 bar plugin provides agents, sessions, and quick prompts.
@@ -71,7 +94,7 @@ Debian and Ubuntu development packages:
 
 ```bash
 sudo apt update
-sudo apt install libwebkit2gtk-4.1-dev build-essential curl wget file \
+sudo apt install libwebkit2gtk-4.1-dev build-essential curl wget file unzip \
   libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev \
   patchelf xdg-utils
 ```
@@ -110,6 +133,7 @@ before building:
 
 ```bash
 pnpm install
+node apps/linux/scripts/stage-runtime.mjs
 cd apps/linux/src-tauri
 cargo run
 cargo build
@@ -128,6 +152,11 @@ test to real credentials to silence the notice. For an installed app, quit and
 reopen it from Finder to use the normal login environment. If the configured
 keychain is still unavailable, check its configuration in Keychain Access before
 attempting any repair.
+
+For real managed-service smoke tests, use a disposable OS account with its
+canonical account `HOME`. Core deliberately denies native-service authority
+when `HOME` or the profile's state directory is relocated. A temporary `HOME`
+alone therefore cannot prove Gateway installation or runtime switching.
 
 ### Inline browser live regression on Linux
 
@@ -219,15 +248,19 @@ Use `--gateway-onboarding` in place of `--gateway-switch` to exercise local
 installation with a synthetic installer, leave Model Setup, and verify native
 window controls and Gateway actions under a non-root Gateway path. This scenario
 uses the same isolated fixtures and also runs in the Linux App workflow.
+Stage the verified runtime with `node apps/linux/scripts/stage-runtime.mjs`
+before `cargo build --locked`. The driver copies the compiled app's runtime
+resources into its private Cargo layout and exercises the real Bun launcher
+against a synthetic CLI/service, including explicit runtime activation.
 
 ## First-run setup
 
 The welcome screen explains what OpenClaw can do and asks where your assistant
 should live:
 
-- **On this computer** installs the CLI and managed Node runtime when needed,
-  then starts the Gateway as a systemd user service. Release builds install the
-  stable channel automatically; development builds ask for a release channel
+- **On this computer** installs the CLI when needed and, on Linux, runs fresh installations
+  on the bundled OpenClaw Bun fork, then starts the Gateway as a systemd user
+  service. Release builds install their matching stable version; development builds ask for a release channel
   and preselect Development.
 - **On another computer** connects to an existing Gateway without installing or
   starting a local Gateway service. Select a nearby discovered Gateway, enter a
@@ -247,6 +280,12 @@ OpenSSH configuration and host-key verification; keep the remote Gateway bound
 to loopback when possible. See the
 [remote access guide](https://docs.openclaw.ai/gateway/remote) for Gateway
 authentication and network requirements.
+
+The remote **Primary Gateway** dashboard uses the native app's approved operator
+identity and granted permissions, so it does not require a second device approval.
+The native connection must be ready before its dashboard can authenticate. Saved
+Gateways that are not Primary keep their independent browser sign-in; local
+Gateways continue to use the CLI's dashboard sign-in handoff.
 
 Use **Connection Settings** in the native tray menu to edit a remote connection.
 Opening settings reads only the saved address and transport settings; it does not
@@ -331,9 +370,42 @@ For OpenAI, **ChatGPT Login** uses a ChatGPT or Codex subscription, while
 its browser callback is not reachable, choose **ChatGPT Device Pairing** from
 the additional sign-in options.
 
+## Gateway runtime
+
+On Linux, fresh local setup installs the Gateway on the bundled OpenClaw Bun
+fork through the canonical CLI. The install carries an `--expected-runtime-pin`
+guard with `definition: null`, so it refuses if a service has appeared since
+setup observed no service. The app records an informational marker; it never uses
+that marker as permission to change a service automatically.
+
+**Use bundled runtime…** appears in the tray whenever the existing Gateway uses
+another runtime, including Node, an older bundled Bun, or an operator-selected
+runtime. The action shows the current runtime and asks for confirmation. It
+passes that observation's service definition and runtime pin to the CLI's
+`--expected-runtime-pin` guard, which refuses an intervening service or pin
+change. The CLI also rechecks that an existing service is running after acquiring
+its mutation lock. A paused or stopped Gateway stays stopped; choose **Start
+Gateway** before switching runtimes.
+
+After the install, the app checks Gateway health. A failed health check shows
+the error and a CLI command to return to the previous runtime; it does not
+automatically reinstall it. To return to Node, install a supported Node version
+if needed, then run `openclaw gateway install --force --runtime node`. To select
+a particular previous executable, use
+`openclaw gateway install --force --runtime-path /absolute/path/to/node-or-bun`.
+
+Startup and desktop updates leave existing Gateway services and runtime pins
+unchanged, including services previously installed by the app. After an app
+update provides a newer Bun, choose **Use bundled runtime…** again to switch.
+The CLI owns service installation. These runtime actions are Linux-only; macOS
+Tauri keeps its existing behavior, separate from the native macOS app.
+Switching an existing Gateway's runtime leaves its CLI launcher unchanged.
+
 ## Updates
 
 The companion checks the latest GitHub release shortly after launch and from **Check for Updates** in the tray menu. AppImage installs download and verify the signed update in place, then wait for **Restart to update**. Package-managed installs such as `.deb` stay owned by the system package manager and link to the release download page instead of replacing installed files. The macOS and Windows test builds use a separate opt-in desktop-test update channel; macOS self-updates like the AppImage build, while Windows downloads the update first and runs its installer only after **Restart to update**.
+
+If the Windows installer cannot launch, the companion stays open, reports the error, and keeps the downloaded update available for another **Restart to update** attempt.
 
 While a newer Gateway release waits for its Linux app, the latest release keeps
 the previous published Linux updater manifest. Its original version, signature,
@@ -411,9 +483,35 @@ Quick Chat advertises the Gateway `inline-widgets` capability and renders hosted
 
 Retrying an unchanged Quick Chat draft after a connection error reuses its original idempotency key while the Gateway and agent remain unchanged. If the Gateway confirms the turn already completed, Quick Chat attempts to recover the matching reply from bounded session history instead of resending it. Unavailable or incomplete history produces an error; further retries of that unchanged draft on the same configured Gateway only retry recovery. Widget previews can refresh access after reconnecting to the same configured Gateway, but switching Gateways prevents old previews from using the new connection's access, even after switching back to the original URL.
 
+Quick Chat pins its native request identity before sending, so activity from other runs cannot evict its buffered reply while the acknowledgment is pending. If an earlier retry prefix was already lost, a complete snapshot or recovered history can restore it; otherwise Quick Chat reports incomplete text instead of silently completing an empty reply.
+
 ## Installer resource
 
-`tauri.conf.json` bundles the repository's canonical `scripts/install-cli.sh` directly as `install-cli.sh`. The app never keeps a forked copy. Stable, beta, and dev installs select `latest`, `beta`, and a managed Git `main` checkout respectively, always under `~/.openclaw`.
+The Rust build assembles the repository's `scripts/install-cli.sh` and shared `scripts/install-policy.sh` into the standalone `install-cli.sh` resource. The app never keeps a forked copy. Fresh release installs select the app version. Existing unmarked stable installs, beta installs, and development installs retain `latest`, `beta`, and the managed Git `main` checkout respectively, under `~/.openclaw`.
+
+Tauri build/dev hooks stage the runtime through `scripts/stage-openclaw-bun.sh`
+and the shared `scripts/lib/openclaw-bun.json` pin. Linux x64/arm64 use the same
+admitted fork release as the native macOS app and CI. Build-time downloads
+verify the release checksums, committed hashes, executable architecture, and fork
+revision. The app copies verified resource bytes to an immutable directory under
+`~/.openclaw/tools/desktop-runtime`; services never reference a temporary AppImage
+mount. Immutable runtime directories are retained, including every directory
+referenced by an existing service. Node remains installation/build tooling.
+Fresh local setup also selects bundled Bun for the app-installed CLI launcher.
+
+Linux resources carry a fixed `OPENCLAW-BUN-RUNTIME-V1` header so linuxdeploy
+cannot rewrite the pinned ELF executable. Installation strips that header and
+verifies the original executable hash. The packaged ABI scanner also decodes
+the resource and checks its architecture and symbol versions against the
+AppImage's existing compatibility floor.
+
+macOS Tauri keeps its existing runtime behavior; its native macOS sibling owns
+the Mac's bundled runtime. Windows retains its existing runtime behavior and
+unavailable CLI auto-install in test builds. No Windows Bun payload ships until
+a signed fork build exists;
+the unsigned dry-run is not eligible. See
+[Bun compatibility](https://docs.openclaw.ai/install/bun-compatibility) for runtime
+admission and the shared pin's repin gates.
 
 ## Icons
 
@@ -486,8 +584,8 @@ Regular stable publication automatically requests Linux bundles after the
 GitHub release becomes visible. `OpenClaw Release Publish` and `OpenClaw Release
 Button` both use the same Linux release owner; the request can finish before
 the build, signing, and publication do. Their summaries report Linux as pending
-until its own assets verify. Beta and alpha prereleases, and extended-stable
-publication, do not request Linux bundles.
+until its own assets verify. Beta prereleases and extended-stable publication do
+not request Linux bundles.
 
 For independent recovery, manually dispatch `Linux App Release Request` from `main`. Provide the existing
 stable release tag in `tag`; prerelease tags are rejected because their semver
@@ -519,7 +617,7 @@ Core finalization remains independent of Linux readiness. After finalization,
 a detached mirror-only request catches up the legacy endpoint. A dispatch is
 not a successful mirror: cancellation, queue overflow, timeout, or readback
 failure leaves a visible degraded result for reconciliation. See the
-[Linux publication contract](https://docs.openclaw.ai/reference/RELEASING#linux-companion-publication).
+[Linux publication contract](https://github.com/openclaw/openclaw/blob/main/.agents/skills/release-openclaw-maintainer/references/platform-publication.md#linux).
 
 The website selects desktop assets at build time. After publication, rebuild
 `openclaw.ai` through its existing deployment owner and verify the deployed Apps

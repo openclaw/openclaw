@@ -1,13 +1,19 @@
 // Synthetic native boundary only: real Node helpers, IPC, leases and descendants.
 import { spawn } from "node:child_process";
-import { readFileSync, readdirSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { createInterface } from "node:readline";
 import { DatabaseSync } from "node:sqlite";
-import { vi } from "vitest";
-import { inspectManagedProcessGroup } from "../../scripts/lib/managed-child-process.mts";
+import { afterAll, beforeAll, vi } from "vitest";
+import type { FixtureAcquisitionRollback } from "../../test/helpers/fixture-lifetime.js";
+import {
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+  type FixtureReceiptChannel,
+} from "../../test/helpers/fixture-receipts.js";
+import { withinTest } from "../../test/helpers/promise.js";
+import { withRuntimePreload } from "../../test/helpers/runtime-preload.js";
 import { resolveServiceManagerEnv } from "../daemon/service-process-env.js";
 import { resolveSystemdUnitPath } from "../daemon/systemd-service-files.js";
 import { buildCliRespawnPlan } from "../entry.respawn.js";
@@ -15,6 +21,11 @@ import { getFileLockProcessStartTime, isPidAlive } from "../shared/pid-alive.js"
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import { setSqliteBusyTimeout } from "./sqlite-busy-timeout.js";
+import { cleanupTriageBoundary } from "./triage-boundary-cleanup.test-support.js";
+import {
+  triageLeaseFixtureLifetime,
+  triageRuntimePreloadEnv,
+} from "./triage-lease-fixture.test-support.js";
 import {
   triageTestRuntimeEntrypoints,
   triageMaintenanceRuntimeEntrypoints,
@@ -28,6 +39,13 @@ import { stageManagedHandoffRuntime } from "./update-managed-service-handoff-run
 import { startManagedServiceUpdateHandoff } from "./update-managed-service-handoff.js";
 
 const testNodeExecPath = resolveTestNodeExecPath();
+let receipts: FixtureReceiptChannel;
+beforeAll(async () => {
+  receipts = await openFixtureReceiptChannel();
+});
+afterAll(async () => {
+  await receipts?.close();
+});
 
 // Readers may inspect either unit while another native controller publishes its state.
 const nativeStatePublisher = `function publishState(file, value) {
@@ -36,14 +54,20 @@ const nativeStatePublisher = `function publishState(file, value) {
   fs.renameSync(temporary, file);
 }`;
 
-export function triageRuntimeNodeOptions(): string {
-  // Prepared JavaScript does not need a source loader in every fixing descendant.
-  return resolveRuntimeWorkerUrl(triageTestRuntimeEntrypoints.continuation).pathname.endsWith(".ts")
-    ? `--import ${path.resolve("scripts/tsx.mjs")}`
-    : "";
+export function createTriageBoundary(
+  mode: "startup" | "update" = "startup",
+  fault?: "scope" | "placement" | "unit",
+  maintenance?: "active" | "inactive",
+  beforeStart?: (root: string, env: NodeJS.ProcessEnv) => Promise<void>,
+  switchRoot?: true | string,
+) {
+  return triageLeaseFixtureLifetime.acquire((rejectAfterCleanup) =>
+    acquireTriageBoundary(rejectAfterCleanup, mode, fault, maintenance, beforeStart, switchRoot),
+  );
 }
 
-export async function createTriageBoundary(
+async function acquireTriageBoundary(
+  rejectAfterCleanup: FixtureAcquisitionRollback,
   mode: "startup" | "update" = "startup",
   fault?: "scope" | "placement" | "unit",
   maintenance?: "active" | "inactive",
@@ -56,8 +80,7 @@ export async function createTriageBoundary(
     // No actor exists yet if the package's fallible source closure cannot be staged.
     runtimeFiles = stageManagedHandoffRuntime(root);
   } catch (error) {
-    await fs.rm(root, { recursive: true, force: true });
-    throw error;
+    return rejectAfterCleanup(error, () => fs.rm(root, { recursive: true, force: true }));
   }
   const installRoot = switchRoot ? path.join(root, "package") : root;
   const candidateRoot = switchRoot === true ? path.join(root, "checkout") : switchRoot || root;
@@ -98,12 +121,14 @@ export async function createTriageBoundary(
     scopeFile,
     JSON.stringify({ name: mode === "startup" ? scope : updateScope, active: true }),
   );
+  const receiptClient = fixtureReceiptClientSource(receipts.endpoint);
   const common = `const fs = require('node:fs');
+${receiptClient.replace('import { createConnection as connectFixtureReceipts } from "node:net";', 'const { createConnection: connectFixtureReceipts } = require("node:net");')}
 ${nativeStatePublisher}
 const root = ${JSON.stringify(root)};
 const scopeFile = ${JSON.stringify(scopeFile)};
 const primaryFile = ${JSON.stringify(primaryFile)};
-const event = (kind, data = {}) => fs.appendFileSync(${JSON.stringify(events)}, JSON.stringify({kind, pid:process.pid, handoff:process.env.OPENCLAW_UPDATE_RUN_HANDOFF ?? null, sentinel:process.env.OPENCLAW_CONTROL_PLANE_UPDATE_SENTINEL_META ?? null, ...data})+'\\n');
+const event = (kind, data = {}) => { fs.appendFileSync(${JSON.stringify(events)}, JSON.stringify({kind, pid:process.pid, handoff:process.env.OPENCLAW_UPDATE_RUN_HANDOFF ?? null, sentinel:process.env.OPENCLAW_CONTROL_PLANE_UPDATE_SENTINEL_META ?? null, ...data})+'\\n'); sendReceipt(root, kind); };
 `;
   // HOME does not fence macOS's gui/UID namespace if a service mock misses.
   await fs.writeFile(
@@ -154,11 +179,22 @@ fs.readFileSync = function(file, ...args) {
       common +
       `
 const args = process.argv.slice(2);
+if (args.length === 2 && args[0] === '--system' && args[1] === 'is-system-running') {
+  event('system-manager-probe', {state:'running'});
+  process.stdout.write('running\\n');
+  return;
+}
 const action = args.find(x => ['show','start','stop','restart','reset-failed'].includes(x));
+if (!action) {
+  event('unexpected-native', {command:'systemctl',args});
+  console.error('Unexpected synthetic systemctl invocation: '+JSON.stringify(args));
+  process.exitCode=97;
+  return;
+}
 const name = args[args.indexOf(action)+1];
 const scope = JSON.parse(fs.readFileSync(scopeFile,'utf8'));
 let primary = JSON.parse(fs.readFileSync(primaryFile,'utf8'));
-event(action, {name});
+event(action ?? 'probe', {name, args});
 if (action === 'show') {
   // A stopped scope retains its cgroup until its registered processes have exited.
   const populated = !scope.active && name.endsWith('.scope') && fs.readdirSync(root+'/members').some(member => {
@@ -226,7 +262,8 @@ import { buildCliRespawnPlan } from ${JSON.stringify(resolveRuntimeWorkerUrl(tri
 if (buildCliRespawnPlan()) throw new Error('Installed child would respawn and lose its IPC claim');
 import fs from 'node:fs';
 import { spawn } from 'node:child_process';
-const event=(kind,data={})=>fs.appendFileSync(${JSON.stringify(events)},JSON.stringify({kind,pid:process.pid,handoff:process.env.OPENCLAW_UPDATE_RUN_HANDOFF ?? null,sentinel:process.env.OPENCLAW_CONTROL_PLANE_UPDATE_SENTINEL_META ?? null,...data})+'\\n');
+${receiptClient}
+const event=(kind,data={})=>{fs.appendFileSync(${JSON.stringify(events)},JSON.stringify({kind,pid:process.pid,handoff:process.env.OPENCLAW_UPDATE_RUN_HANDOFF ?? null,sentinel:process.env.OPENCLAW_CONTROL_PLANE_UPDATE_SENTINEL_META ?? null,...data})+'\\n');sendReceipt(${JSON.stringify(root)},kind);};
 const admission=await acceptTriageContinuation();
 if (!admission) throw new Error('No live triage admission');
 event('fixer', {failure:admission.failure});
@@ -240,7 +277,7 @@ if (${Boolean(maintenance)}) {
   const exit=await new Promise(resolve=>child.once('exit',(code,signal)=>resolve({code,signal})));
   event('maintenance-exit',exit);
 }
-const branch=spawn(process.execPath,['-e',${JSON.stringify(common + "event('descendant', {stateDir:process.env.OPENCLAW_STATE_DIR, workspace:process.env.OPENCLAW_WORKSPACE_DIR, shell:process.env.OPENCLAW_SHELL, compileCache:process.env.NODE_DISABLE_COMPILE_CACHE}); const {spawn}=require('node:child_process'); spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore'}); setInterval(()=>{},1000)")}],{detached:true,stdio:'ignore'});
+const branch=spawn(process.execPath,['-e',${JSON.stringify(common + "event('descendant', {stateDir:process.env.OPENCLAW_STATE_DIR, workspace:process.env.OPENCLAW_WORKSPACE_DIR, shell:process.env.OPENCLAW_SHELL, compileCache:process.env.NODE_DISABLE_COMPILE_CACHE}); const {spawn}=require('node:child_process'); spawn(process.execPath,['-e'," + JSON.stringify(common + "event('family-ready'); setInterval(()=>{},1000)") + "],{stdio:'ignore'}); setInterval(()=>{},1000)")}],{detached:true,stdio:'ignore'});
 event('branch',{child:branch.pid});
 admission.signal.addEventListener('abort',()=>{event('cancelled');void admission.finish("uncertain");process.exitCode=1;});
 await new Promise(resolve=>admission.signal.addEventListener('abort',resolve,{once:true}));
@@ -296,7 +333,7 @@ process.stdout.write(JSON.stringify({status:'error',reason:'original failure'})+
     OPENCLAW_CONTROL_PLANE_UPDATE_SENTINEL_META: metaPath,
     PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`,
     TSX_TSCONFIG_PATH: path.resolve("tsconfig.json"),
-    NODE_OPTIONS: [triageRuntimeNodeOptions(), `--require ${preload}`].filter(Boolean).join(" "),
+    ...withRuntimePreload(triageRuntimePreloadEnv(), preload),
   };
   const commandArgv = [
     testNodeExecPath,
@@ -325,6 +362,7 @@ process.stdout.write(JSON.stringify({status:'error',reason:'original failure'})+
         PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`,
       }),
       nodeExecArgv,
+      runtimeArgs: [],
       action: mode === "startup" ? "triage" : "update",
       failure: mode === "startup" ? { ...failure, kind: "gateway-startup" } : undefined,
       parentPid,
@@ -354,10 +392,11 @@ process.stdout.write(JSON.stringify({status:'error',reason:'original failure'})+
     await beforeStart?.(root, env);
   } catch (error) {
     // The caller cannot register cleanup until this fixture returns.
-    parent.kill("SIGKILL");
-    await parentExit;
-    await fs.rm(root, { recursive: true, force: true });
-    throw error;
+    return rejectAfterCleanup(error, async () => {
+      parent.kill("SIGKILL");
+      await parentExit;
+      await fs.rm(root, { recursive: true, force: true });
+    });
   }
   const helper = spawn(testNodeExecPath, [helperFile, paramsFile], {
     env,
@@ -401,6 +440,32 @@ process.stdout.write(JSON.stringify({status:'error',reason:'original failure'})+
       .split("\n")
       .filter(Boolean)
       .map((line) => JSON.parse(line));
+  const waitForEvent = (kind: string, signal: AbortSignal, allowAfterExit = false) =>
+    withinTest(
+      (async () => {
+        const recorded = () =>
+          readEvents().then((entries) => entries.some((event) => event.kind === kind));
+        if (await recorded()) {
+          return;
+        }
+        const received = receipts.waitFor(root, kind);
+        // Separate receipt and exit pipes are unordered. Events are appended before
+        // reporting or exiting, so the durable record decides when exit wins the race.
+        await (allowAfterExit
+          ? received
+          : Promise.race([
+              received,
+              exit.then(async () => {
+                if (!(await recorded())) {
+                  throw new Error(
+                    `Handoff exited before ${kind}: ${await fs.readFile(log, "utf8").catch(() => stderr)}; Events: ${JSON.stringify(await readEvents())}`,
+                  );
+                }
+              }),
+            ]));
+      })(),
+      signal,
+    );
   return {
     root,
     installRoot,
@@ -420,6 +485,9 @@ process.stdout.write(JSON.stringify({status:'error',reason:'original failure'})+
     helper,
     parent,
     exit,
+    waitForEvent,
+    waitForBranch: (signal: AbortSignal) =>
+      Promise.all([waitForEvent("branch", signal), waitForEvent("family-ready", signal)]),
     readEvents,
     output: () => output,
     stderr: () => stderr,
@@ -501,91 +569,17 @@ process.stdout.write(JSON.stringify({status:'error',reason:'original failure'})+
         })),
       ),
     cleanup: async () => {
-      const deadline = Date.now() + 5000;
-      // Close descendant admission before taking the census. Controllers inherit
-      // their creator's group, including children still starting before registration.
-      const closingGroups = path.join(root, "closing-groups");
-      await fs.rename(groups, closingGroups);
-      const groupIds = new Set([helper.pid!]);
-      const failures: unknown[] = [];
-      try {
-        await vi.waitFor(
-          () => {
-            const pending: string[] = [];
-            for (const entry of readdirSync(closingGroups)) {
-              const value = readFileSync(path.join(closingGroups, entry), "utf8");
-              if (!/^\d+$/u.test(value)) {
-                pending.push(entry);
-              } else if (Number(value) > 0) {
-                groupIds.add(Number(value));
-              }
-            }
-            if (pending.length) {
-              throw new Error(
-                `detached fixture launches have not published: ${pending.join(", ")}`,
-              );
-            }
-          },
-          { timeout: Math.max(1, deadline - Date.now()), interval: 20 },
-        );
-      } catch (error) {
-        failures.push(error);
-      }
-      // An unpublished launch retains the files, but known actors still need joining.
-      for (const pid of groupIds) {
-        try {
-          process.kill(-pid, "SIGKILL");
-        } catch (error) {
-          if ((error as NodeJS.ErrnoException).code !== "ESRCH") {
-            failures.push(error);
-          }
-        }
-      }
-      for (const child of [helper, parent]) {
-        try {
-          if (child.exitCode === null && child.signalCode === null) {
-            child.kill("SIGKILL");
-          }
-        } catch (error) {
-          failures.push(error);
-        }
-      }
-      await Promise.all([exit, parentExit]);
-      try {
-        await vi.waitFor(
-          () => {
-            for (const pid of groupIds) {
-              if (
-                inspectManagedProcessGroup(
-                  { pid, exitCode: 0 },
-                  { errorPolicy: "indeterminate" },
-                ) !== "dead"
-              ) {
-                throw new Error(`native fixture process group ${pid} has not exited`);
-              }
-            }
-          },
-          { timeout: Math.max(1, deadline - Date.now()), interval: 20 },
-        );
-      } catch (error) {
-        failures.push(error);
-      }
-      lines.close();
-      if (failures.length) {
-        throw new AggregateError(failures, "Could not join all native fixture process groups");
-      }
-      const finalEvents = await readEvents();
-      const db = new DatabaseSync(databasePath);
-      try {
-        setSqliteBusyTimeout(db, 5000);
-        db.prepare("DELETE FROM managed_update_handoffs WHERE owner = ?").run(root);
-      } finally {
-        db.close();
-      }
-      await fs.rm(root, { recursive: true, force: true });
-      if (finalEvents.some((event) => event.kind === "unexpected-native")) {
-        throw new Error("Triage fixture attempted an unexpected native service command");
-      }
+      await cleanupTriageBoundary({
+        root,
+        groups,
+        helper,
+        parent,
+        exit,
+        parentExit,
+        lines,
+        readEvents,
+        databasePath,
+      });
     },
   };
 }

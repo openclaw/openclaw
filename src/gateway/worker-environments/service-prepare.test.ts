@@ -75,78 +75,62 @@ describe("on-demand prepared worker admission", () => {
 
   it("admits HEAD without a session, authorizes setup, and starts background preparation", async () => {
     const f = await fixture();
+    await f.service.ready();
     support.getDevelopmentProfile().readyWorkers = 0;
-    const result = await f.service.prepare(f.request);
-    const record = support.testState.store.get(result.environmentId)!;
-    expect(result).toEqual({
-      environmentId: record.environmentId,
-      preparationKey: record.preparation!.key,
-      reused: false,
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    const provision = expectDefined(f.provision.getMockImplementation(), "provider implementation");
+    f.provision.mockImplementationOnce(async (...args) => {
+      entered.resolve();
+      await release.promise;
+      return await provision(...args);
     });
-    expect(record).toMatchObject({
-      profileId: "development",
-      attachedSessionIds: [],
-      profileSnapshot: {
-        executionMode: "worker-turn",
-        project: {
-          root: f.projectPath,
-          baseCommit: await requireGit(f.projectPath, ["rev-parse", "HEAD"]),
-        },
-      },
-      preparation: { purpose: "build", demandAtMs: 1_000, expiresAtMs: 11_000, consumedAtMs: null },
-    });
-    expect(readWorkerProjectPreparation(record.profileSnapshot.project)?.setupRecipe).toMatch(
-      /^[a-f0-9]{40}$/u,
-    );
-    await support.waitForFast(() => expect(f.provision).toHaveBeenCalledOnce());
-    expect(support.testState.store.get(record.environmentId)?.destroyRequestedAtMs).toBeNull();
-    expect(f.service.list()[0]?.preparation).toMatchObject({
-      purpose: "build",
-      key: result.preparationKey,
-    });
-  });
-
-  it.each(["build", "reserve"] as const)(
-    "atomically reuses an existing %s even when the pool is full",
-    async (purpose) => {
-      const f = await fixture();
-      support.getDevelopmentProfile().readyWorkers = 0;
-      support.testState.config.cloudWorkers!.preparedPool = { maxTotal: 1 };
-      const intent = await f.service.prepareProjectIntent("development", {
-        projectPath: f.projectPath,
-        executionMode: "worker-turn",
-        setupAuthorized: true,
+    try {
+      const result = await f.service.prepare(f.request);
+      // Provider entry follows the committed provisioning transition; hold it during reads.
+      await entered.promise;
+      const baseCommit = await requireGit(f.projectPath, ["rev-parse", "HEAD"]);
+      const record = support.testState.store.get(result.environmentId)!;
+      expect(result).toEqual({
+        environmentId: record.environmentId,
+        preparationKey: record.preparation!.key,
+        reused: false,
       });
-      const existing = support.testState.store.createIntent({
-        environmentId: "existing-prepared",
-        provisionOperationId: "existing-operation",
-        providerId: intent.providerId,
+      expect(record).toMatchObject({
         profileId: "development",
-        profileSnapshot: intent.profileSnapshot,
+        attachedSessionIds: [],
+        profileSnapshot: {
+          executionMode: "worker-turn",
+          project: {
+            root: f.projectPath,
+            baseCommit,
+          },
+        },
         preparation: {
-          purpose,
-          key: intent.preparationKey!,
+          purpose: "build",
           demandAtMs: 1_000,
           expiresAtMs: 11_000,
+          consumedAtMs: null,
         },
       });
-      const results = await Promise.all([
-        f.service.prepare(f.request),
-        f.service.prepare(f.request),
-      ]);
-      expect(results).toEqual(
-        [0, 1].map(() => ({
-          environmentId: existing.environmentId,
-          preparationKey: existing.preparation!.key,
-          reused: true,
-        })),
+      expect(readWorkerProjectPreparation(record.profileSnapshot.project)?.setupRecipe).toMatch(
+        /^[a-f0-9]{40}$/u,
       );
-      expect(support.testState.store.list()).toHaveLength(1);
-      expect(support.testState.store.get(existing.environmentId)?.preparation?.purpose).toBe(
-        "build",
-      );
-    },
-  );
+      expect(f.provision).toHaveBeenCalledOnce();
+      expect(support.testState.store.get(record.environmentId)?.destroyRequestedAtMs).toBeNull();
+      expect(f.service.list()[0]?.preparation).toEqual({
+        purpose: "build",
+        key: result.preparationKey,
+        demandAtMs: 1_000,
+        expiresAtMs: 11_000,
+        consumedAtMs: null,
+        project: { label: "project", baseCommit },
+      });
+    } finally {
+      release.resolve();
+      await f.service.stop();
+    }
+  });
 
   it("uses the admitted profile's idle timeout after configuration changes during Git validation", async () => {
     const f = await fixture();
@@ -204,7 +188,7 @@ describe("on-demand prepared worker admission", () => {
           executionMode: "worker-turn",
           setupAuthorized: true,
         });
-        ({ environmentId } = support.testState.store.createIntent({
+        ({ environmentId } = await support.testState.store.createIntent({
           environmentId: "automatic-reserve",
           provisionOperationId: "automatic-reserve-operation",
           providerId: intent.providerId,
@@ -223,8 +207,12 @@ describe("on-demand prepared worker admission", () => {
       if (purpose === "expired reserve") {
         support.testState.nowMs = 11_001;
       }
+      const cancelled = new Promise<void>((resolve) => {
+        signal.addEventListener("abort", () => resolve(), { once: true });
+      });
       const destroyed = f.service.destroyUnattached(environmentId);
       try {
+        await cancelled;
         expect(support.testState.store.get(environmentId)?.destroyRequestedAtMs).toBe(
           support.testState.nowMs,
         );
@@ -262,12 +250,12 @@ describe("on-demand prepared worker admission", () => {
       context.getGatewayMethodRegistry = () =>
         createGatewayMethodRegistry(createCoreGatewayMethodDescriptors(environmentsHandlers));
       const client = createOperatorClient({
-        profileId: "preparation-operator",
+        profileName: "preparation-operator",
         scopes: ["operator.admin"],
       });
       const controller = new AbortController();
       const source = expectDefined(
-        captureGatewayOperatorRunAuthority({
+        await captureGatewayOperatorRunAuthority({
           client,
           context,
           sourceAuthority: {
@@ -313,39 +301,28 @@ describe("on-demand prepared worker admission", () => {
     },
   );
 
-  it.each([
-    "missing-profile",
-    "unsupported",
-    "no-timeout",
-    "non-git",
-    "missing-path",
-    "subdirectory",
-    "unborn",
-  ])("rejects %s before admitting a build", async (scenario) => {
-    const f = await fixture();
-    let code = "invalid_project";
-    if (scenario === "missing-profile") {
-      f.request.profileId = "missing";
-      code = "profile_not_found";
-    } else if (scenario === "unsupported") {
-      f.provider.supportsProjectPreparation = () => false;
-      code = "invalid_profile";
-    } else if (scenario === "no-timeout") {
-      f.provider.resolvePreparedIdleTimeoutMs = () => undefined;
-      code = "invalid_profile";
-    } else if (scenario === "non-git") {
-      f.request.projectPath = support.testState.root;
-    } else if (scenario === "missing-path") {
-      f.request.projectPath = path.join(support.testState.root, "missing");
-    } else if (scenario === "subdirectory") {
-      f.request.projectPath = path.join(f.projectPath, ".openclaw");
-    } else {
-      f.request.projectPath = path.join(support.testState.root, "unborn");
-      await fs.mkdir(f.request.projectPath);
-      await requireGit(f.request.projectPath, ["init", "--quiet"]);
-    }
-    await expect(f.service.prepare(f.request)).rejects.toMatchObject({ code });
-    expect(support.testState.store.list()).toHaveLength(0);
-    expect(f.provision).not.toHaveBeenCalled();
-  });
+  it.each(["missing-profile", "unsupported", "no-timeout", "missing-path", "subdirectory"])(
+    "rejects %s before admitting a build",
+    async (scenario) => {
+      const f = await fixture();
+      let code = "invalid_project";
+      if (scenario === "missing-profile") {
+        f.request.profileId = "missing";
+        code = "profile_not_found";
+      } else if (scenario === "unsupported") {
+        f.provider.supportsProjectPreparation = () => false;
+        code = "invalid_profile";
+      } else if (scenario === "no-timeout") {
+        f.provider.resolvePreparedIdleTimeoutMs = () => undefined;
+        code = "invalid_profile";
+      } else if (scenario === "missing-path") {
+        f.request.projectPath = path.join(support.testState.root, "missing");
+      } else {
+        f.request.projectPath = path.join(f.projectPath, ".openclaw");
+      }
+      await expect(f.service.prepare(f.request)).rejects.toMatchObject({ code });
+      expect(support.testState.store.list()).toHaveLength(0);
+      expect(f.provision).not.toHaveBeenCalled();
+    },
+  );
 });

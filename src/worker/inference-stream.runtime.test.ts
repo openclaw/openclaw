@@ -28,7 +28,7 @@ import {
   WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE,
 } from "./transcript-message.js";
 import { createWorkerConnection } from "./worker-connection.js";
-import { WorkerInferenceProxyClient } from "./worker-rpc-clients.js";
+import { WorkerInferenceProxyClient } from "./worker-rpc-inference-client.js";
 
 const modelRef: WorkerInferenceModelRef = { provider: "test", model: "test-model" };
 const usage: Usage = {
@@ -39,21 +39,6 @@ const usage: Usage = {
   totalTokens: 3,
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 };
-
-it("keeps an already fitting image projection by reference", () => {
-  const messages: WorkerInferenceContext["messages"] = [
-    {
-      role: "user",
-      content: [{ type: "image", data: "aGVsbG8=", mimeType: "image/png" }],
-      timestamp: 1,
-    },
-  ];
-  expect(
-    fitWorkerReplayImages(messages, (candidate) =>
-      Buffer.byteLength(JSON.stringify(candidate), "utf8"),
-    ),
-  ).toBe(messages);
-});
 
 function createClient() {
   return new WorkerInferenceProxyClient(

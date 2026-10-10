@@ -11,9 +11,18 @@ import type {
 } from "../../sessions/user-turn-transcript.types.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import { isSameOpenClawAgentDatabasePath } from "../../state/openclaw-agent-db.paths.js";
 import type { SessionTranscriptRuntimeTarget } from "./session-accessor.types.js";
+import { SessionTranscriptReadFenceError } from "./session-transcript-read-fence-error.js";
+import { transcriptEventNavigationSql } from "./transcript-payload.js";
+
+export { SessionTranscriptReadFenceError };
 
 const transcriptReadFenceStorage = new AsyncLocalStorage<UserTurnTranscriptAdmissionReceipt>();
+
+function isSameTranscriptStore(left: string, right: string): boolean {
+  return left === right || isSameOpenClawAgentDatabasePath(left, right);
+}
 
 type QuestionAnswerScope = {
   recorder: UserTurnTranscriptRecorder | undefined;
@@ -42,7 +51,7 @@ export function withSessionTranscriptQuestionAnswers<T>(
         input.agentId === original.agentId &&
         input.sessionId === original.sessionId &&
         input.sessionKey === original.sessionKey &&
-        input.storePath === original.storePath &&
+        isSameTranscriptStore(input.storePath, original.storePath) &&
         input.generation === original.generation
       ) {
         scope.inputs.set(input.entryId, input);
@@ -59,7 +68,12 @@ export function resolveSessionTranscriptQuestionAnswer(
 ): UserTurnTranscriptAdmissionReceipt | undefined {
   const scope = questionAnswerStorage.getStore();
   const input = scope?.inputs.get(entryId);
-  if (!scope || !input || input.storePath !== database.path || input.sessionId !== sessionId) {
+  if (
+    !scope ||
+    !input ||
+    !isSameTranscriptStore(input.storePath, database.path) ||
+    input.sessionId !== sessionId
+  ) {
     return undefined;
   }
   scope.assertActive();
@@ -70,18 +84,11 @@ export function resolveSessionTranscriptQuestionAnswer(
     original.agentId === input.agentId &&
     original.sessionId === input.sessionId &&
     original.sessionKey === input.sessionKey &&
-    original.storePath === input.storePath &&
+    isSameTranscriptStore(original.storePath, input.storePath) &&
     original.generation === input.generation &&
     (admittedUserId === undefined || original.entryId === admittedUserId)
     ? input
     : undefined;
-}
-
-export class SessionTranscriptReadFenceError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "SessionTranscriptReadFenceError";
-  }
 }
 
 type SessionTranscriptReadFence = Readonly<{
@@ -140,7 +147,7 @@ export function resolveSqliteSessionTranscriptReadFence(params: {
       `Current-turn transcript admission is not a user message: ${receipt.entryId}`,
     );
   }
-  if (params.database.path !== receipt.storePath) {
+  if (!isSameTranscriptStore(params.database.path, receipt.storePath)) {
     throw new SessionTranscriptReadFenceError(
       "Current-turn transcript admission belongs to a different transcript store",
     );
@@ -182,9 +189,13 @@ export function resolveSqliteSessionTranscriptReadFence(params: {
         "active.message_position",
         "rewrite.generation",
         /* kysely-allow-raw: validate the admission role without acquiring its private payload. */
-        sql<string>`json_extract(event.event_json, '$.type')`.as("event_type"),
+        sql<string>`json_extract(${transcriptEventNavigationSql("event")}, '$.type')`.as(
+          "event_type",
+        ),
         /* kysely-allow-raw: admission validation needs the exact role, not the message body. */
-        sql<string>`json_extract(event.event_json, '$.message.role')`.as("message_role"),
+        sql<string>`json_extract(${transcriptEventNavigationSql("event")}, '$.message.role')`.as(
+          "message_role",
+        ),
       ])
       .where("identity.session_id", "=", params.sessionId)
       .where("identity.event_id", "=", receipt.entryId)

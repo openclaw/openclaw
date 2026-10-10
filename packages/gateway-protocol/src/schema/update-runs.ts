@@ -1,5 +1,6 @@
 import { Type, type Static } from "typebox";
 import {
+  UPDATE_NPM_ERROR_CODES,
   UPDATE_RUN_DRIVER_LIMIT,
   UPDATE_RUN_PHASES,
   UPDATE_RUN_STATUSES,
@@ -10,10 +11,10 @@ import { closedObject } from "./closed-object.js";
 
 const text = Type.String({ maxLength: 1024 });
 const timestamp = Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER });
-// Match the ledger's RFC 9562 UUID contract, including nil/max UUIDs.
+// Native rows retain UUID identities; OCM's opaque job IDs stay in their own namespace.
 const runId = Type.String({
   pattern:
-    "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+    "^(ocm:[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
 });
 const phase = Type.Enum(UPDATE_RUN_PHASES);
 const status = Type.Enum(UPDATE_RUN_STATUSES);
@@ -32,6 +33,36 @@ const snapshotLocation = closedObject({
   directory: text,
 });
 const snapshotBytes = Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER });
+const admissionCheck = closedObject({
+  name: text,
+  status: Type.Enum(["ok", "warn", "refuse"]),
+  detail: Type.Optional(text),
+});
+const admissionChecks = Type.Array(admissionCheck, { maxItems: 32 });
+const admission = closedObject({
+  owner: Type.Enum(["candidate", "installed"]),
+  protocol: Type.Optional(Type.Literal(1)),
+  candidateVersion: Type.Optional(text),
+  checks: Type.Optional(admissionChecks),
+  fallbackReason: Type.Optional(text),
+});
+const candidateAdmission = closedObject({
+  protocol: Type.Literal(1),
+  verdict: Type.Enum(["admit", "refuse"]),
+  reasons: Type.Array(
+    closedObject({ code: text, message: text, nextAction: Type.Optional(text) }),
+    { maxItems: 32 },
+  ),
+  warnings: Type.Array(closedObject({ code: text, message: text }), { maxItems: 32 }),
+  facts: closedObject({
+    candidateVersion: text,
+    installedVersion: Type.Union([text, Type.Null()]),
+    nodeEngines: Type.Optional(text),
+    checks: admissionChecks,
+  }),
+});
+const destinationPath = Type.String({ maxLength: 240 });
+const nullableDestinationPath = Type.Union([destinationPath, Type.Null()]);
 
 /** Wire projection of the canonical update ledger record. */
 export const UpdateRunRecordSchema = closedObject({
@@ -42,7 +73,10 @@ export const UpdateRunRecordSchema = closedObject({
   phase,
   status,
   reason: Type.Union([text, Type.Null()]),
+  admission: Type.Optional(admission),
   origin: closedObject({
+    admission: Type.Optional(admission),
+    candidateAdmission: Type.Optional(candidateAdmission),
     driver: Type.Optional(driver),
     previousDrivers: Type.Optional(Type.Array(driver, { maxItems: UPDATE_RUN_DRIVER_LIMIT - 1 })),
     requester: Type.Optional(
@@ -50,6 +84,7 @@ export const UpdateRunRecordSchema = closedObject({
         channel: Type.Optional(text),
         accountId: Type.Optional(text),
         senderId: Type.Optional(text),
+        authorizationSource: Type.Optional(text),
       }),
     ),
     sessionKey: Type.Optional(text),
@@ -73,7 +108,14 @@ export const UpdateRunRecordSchema = closedObject({
     sha: Type.Optional(text),
     installationMethod: Type.Optional(
       Type.Union([
-        Type.Enum(["git-checkout", "npm-global", "pnpm-global", "bun-global", "managed-service"]),
+        Type.Enum([
+          "git-checkout",
+          "npm-global",
+          "pnpm-global",
+          "bun-global",
+          "managed-service",
+          "ocm",
+        ]),
         Type.Null(),
       ]),
     ),
@@ -87,6 +129,9 @@ export const UpdateRunRecordSchema = closedObject({
       startedAtMs: Type.Optional(timestamp),
       endedAtMs: Type.Optional(timestamp),
       exitCode: Type.Optional(Type.Union([Type.Integer(), Type.Null()])),
+      termination: Type.Optional(Type.Enum(["exit", "timeout", "no-output-timeout", "signal"])),
+      signal: Type.Optional(Type.Union([Type.String({ maxLength: 32 }), Type.Null()])),
+      stderrTail: Type.Optional(Type.String({ maxLength: 8192 })),
       detail: Type.Optional(text),
       failureFacts: Type.Optional(
         Type.Array(
@@ -94,10 +139,31 @@ export const UpdateRunRecordSchema = closedObject({
             check: Type.String({ maxLength: 128 }),
             code: Type.String({ maxLength: 80 }),
             message: Type.Optional(Type.String({ maxLength: 200 })),
+            npmErrorCode: Type.Optional(Type.Enum(UPDATE_NPM_ERROR_CODES)),
+            packageSpec: Type.Optional(Type.String({ maxLength: 200 })),
             affectedKey: Type.Optional(Type.String({ maxLength: 128 })),
             pluginId: Type.Optional(Type.String({ maxLength: 80 })),
             errorName: Type.Optional(Type.Union([Type.String({ maxLength: 80 }), Type.Null()])),
             location: Type.Optional(Type.Union([Type.String({ maxLength: 160 }), Type.Null()])),
+            destination: Type.Optional(
+              closedObject({
+                ownership: Type.Enum(["foreign", "unknown"]),
+                cause: Type.Enum([
+                  "package-mismatch",
+                  "launcher-mismatch",
+                  "permission",
+                  "probe-failure",
+                  "unreadable-layout",
+                ]),
+                destinationKind: Type.Enum(["npm-global", "unknown"]),
+                prefix: nullableDestinationPath,
+                packageRoot: nullableDestinationPath,
+                runningRoot: destinationPath,
+                runningPrefix: nullableDestinationPath,
+                launcher: nullableDestinationPath,
+                launcherTarget: nullableDestinationPath,
+              }),
+            ),
           }),
           { maxItems: 5 },
         ),

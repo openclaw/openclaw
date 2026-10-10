@@ -15,7 +15,6 @@ import { setZalouserRuntime } from "./runtime.js";
 import {
   clearStoredZaloCredentials,
   loadStoredZaloCredentials,
-  loadStoredZaloCredentialsAsync,
   refreshStoredZaloCredentials,
   type StoredZaloCredentials,
 } from "./session-state.js";
@@ -305,13 +304,12 @@ export function createSendHarness(options: { mediaFixture?: boolean } = {}): Sen
     userAgent: "synthetic-user-agent",
     createdAt: "2026-01-01T00:00:00.000Z",
   };
-  vi.mocked(loadStoredZaloCredentials).mockReturnValue(stored);
-  vi.mocked(loadStoredZaloCredentialsAsync).mockResolvedValue(stored);
+  vi.mocked(loadStoredZaloCredentials).mockResolvedValue(stored);
   vi.mocked(refreshStoredZaloCredentials).mockImplementation(async (_profile, credentials) => ({
     ...stored,
     ...credentials,
   }));
-  vi.mocked(clearStoredZaloCredentials).mockReturnValue(true);
+  vi.mocked(clearStoredZaloCredentials).mockResolvedValue(true);
   if (options.mediaFixture !== false) {
     vi.mocked(loadOutboundMediaFromUrl).mockResolvedValue({
       buffer: Buffer.from("fixture"),

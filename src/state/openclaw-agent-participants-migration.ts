@@ -2,7 +2,6 @@ import type { DatabaseSync } from "node:sqlite";
 import { assertSqliteSchemaContains } from "../infra/sqlite-schema-contract.js";
 import { withoutCanonicalSessionValidationSchema } from "./openclaw-agent-canonical-validation-schema.js";
 import { sessionParticipantsSchemaSql } from "./openclaw-agent-session-participants-schema.js";
-import { withoutTranscriptFtsRowSchema } from "./openclaw-agent-transcript-fts-schema.js";
 import { tableExists, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
 
 const LEGACY_PARTICIPANTS_SCHEMA = `CREATE TABLE IF NOT EXISTS session_participants (
@@ -24,7 +23,7 @@ export const LEGACY_PARTICIPANT_OPTIONAL_COLUMNS = [
 
 /** Historical structural/media validation must not require a future identity key. */
 export function withLegacySessionParticipantsSchema(sql: string): string {
-  return withoutCanonicalSessionValidationSchema(withoutTranscriptFtsRowSchema(sql)).replace(
+  return withoutCanonicalSessionValidationSchema(sql).replace(
     sessionParticipantsSchemaSql().trim(),
     LEGACY_PARTICIPANTS_SCHEMA,
   );

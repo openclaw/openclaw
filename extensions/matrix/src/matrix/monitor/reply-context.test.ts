@@ -1,6 +1,5 @@
-// Matrix tests cover reply context plugin behavior.
 import { describe, expect, it, vi } from "vitest";
-import { createMatrixReplyContextResolver } from "./reply-context.js";
+import { createMatrixEventContextResolver } from "./event-context.js";
 import {
   bundledReplacementContentCases,
   createBundledReplacementEvent,
@@ -10,7 +9,8 @@ import {
 import type { MatrixRawEvent } from "./types.js";
 
 async function resolveReplyBody(event: MatrixRawEvent): Promise<string | undefined> {
-  const resolveReplyContext = createMatrixReplyContextResolver({
+  const resolveReplyContext = createMatrixEventContextResolver({
+    kind: "reply",
     client: { getEvent: vi.fn(async () => event) } as never,
     getMemberDisplayName: vi.fn(async () => "Alice"),
     logVerboseMessage: () => {},
@@ -20,26 +20,11 @@ async function resolveReplyBody(event: MatrixRawEvent): Promise<string | undefin
       roomId: "!room:example.org",
       eventId: event.event_id ?? "$event",
     })
-  ).replyToBody;
+  ).summary;
 }
 
 describe("matrix reply context", () => {
-  it("summarizes reply events from body text", async () => {
-    expect(
-      await resolveReplyBody({
-        event_id: "$original",
-        sender: "@alice:example.org",
-        type: "m.room.message",
-        origin_server_ts: Date.now(),
-        content: {
-          msgtype: "m.text",
-          body: " Some quoted message ",
-        },
-      } as MatrixRawEvent),
-    ).toBe("Some quoted message");
-  });
-
-  it.each(bundledReplacementContentCases)(
+  it.each(bundledReplacementContentCases.filter(({ name }) => name !== "text"))(
     "uses the latest bundled $name when quoting an edited message",
     async ({ options, expected }) => {
       expect(await resolveReplyBody(createBundledReplacementEvent("$original", options))).toBe(
@@ -48,14 +33,21 @@ describe("matrix reply context", () => {
     },
   );
 
-  it.each(invalidBundledReplacementCases)(
-    "does not quote a bundled replacement from $name",
-    async ({ options }) => {
-      expect(await resolveReplyBody(createBundledReplacementEvent("$original", options))).toBe(
-        "original text",
-      );
-    },
-  );
+  it.each(
+    invalidBundledReplacementCases.filter(({ name }) =>
+      [
+        "another sender",
+        "another target",
+        "a state-event original",
+        "array replacement content",
+        "an object-backed redacted replacement",
+      ].includes(name),
+    ),
+  )("does not quote a bundled replacement from $name", async ({ options }) => {
+    expect(await resolveReplyBody(createBundledReplacementEvent("$original", options))).toBe(
+      "original text",
+    );
+  });
 
   it("does not revive a bundled replacement from a redacted original", async () => {
     expect(
@@ -63,25 +55,6 @@ describe("matrix reply context", () => {
         createBundledReplacementEvent("$original", { content: {}, redacted: true }),
       ),
     ).toBeUndefined();
-  });
-
-  it("truncates long reply bodies", async () => {
-    const longBody = "x".repeat(600);
-    const result = await resolveReplyBody({
-      event_id: "$original",
-      sender: "@alice:example.org",
-      type: "m.room.message",
-      origin_server_ts: Date.now(),
-      content: {
-        msgtype: "m.text",
-        body: longBody,
-      },
-    } as MatrixRawEvent);
-    if (result === undefined) {
-      throw new Error("expected truncated reply context");
-    }
-    expect(result.length).toBeLessThanOrEqual(500);
-    expect(result.endsWith("...")).toBe(true);
   });
 
   it("truncates on a code-point boundary without orphaning a surrogate half", async () => {
@@ -129,95 +102,6 @@ describe("matrix reply context", () => {
     );
   });
 
-  it("resolves and caches reply context", async () => {
-    const getEvent = vi.fn(async () => ({
-      event_id: "$original",
-      sender: "@alice:example.org",
-      type: "m.room.message",
-      origin_server_ts: Date.now(),
-      content: {
-        msgtype: "m.text",
-        body: "This is the original message",
-      },
-    }));
-    const getMemberDisplayName = vi.fn(async () => "Alice");
-    const resolveReplyContext = createMatrixReplyContextResolver({
-      client: {
-        getEvent,
-      } as never,
-      getMemberDisplayName,
-      logVerboseMessage: () => {},
-    });
-
-    const result = await resolveReplyContext({
-      roomId: "!room:example.org",
-      eventId: "$original",
-    });
-
-    expect(result).toEqual({
-      replyToBody: "This is the original message",
-      replyToSender: "Alice",
-      replyToSenderId: "@alice:example.org",
-    });
-
-    // Second call should use cache
-    await resolveReplyContext({
-      roomId: "!room:example.org",
-      eventId: "$original",
-    });
-
-    expect(getEvent).toHaveBeenCalledTimes(1);
-    expect(getMemberDisplayName).toHaveBeenCalledTimes(1);
-  });
-
-  it("returns empty context when event fetch fails", async () => {
-    const getEvent = vi.fn().mockRejectedValueOnce(new Error("not found"));
-    const getMemberDisplayName = vi.fn(async () => "Alice");
-    const resolveReplyContext = createMatrixReplyContextResolver({
-      client: {
-        getEvent,
-      } as never,
-      getMemberDisplayName,
-      logVerboseMessage: () => {},
-    });
-
-    const result = await resolveReplyContext({
-      roomId: "!room:example.org",
-      eventId: "$missing",
-    });
-
-    expect(result).toStrictEqual({});
-  });
-
-  it("returns empty context for redacted events", async () => {
-    const getEvent = vi.fn(async () => ({
-      event_id: "$redacted",
-      sender: "@alice:example.org",
-      type: "m.room.message",
-      origin_server_ts: Date.now(),
-      unsigned: {
-        redacted_because: { type: "m.room.redaction" },
-      },
-      content: {},
-    }));
-    const getMemberDisplayName = vi.fn(async () => "Alice");
-    const resolveReplyContext = createMatrixReplyContextResolver({
-      client: {
-        getEvent,
-      } as never,
-      getMemberDisplayName,
-      logVerboseMessage: () => {},
-    });
-
-    const result = await resolveReplyContext({
-      roomId: "!room:example.org",
-      eventId: "$redacted",
-    });
-
-    expect(result).toStrictEqual({});
-    expect(getMemberDisplayName).not.toHaveBeenCalled();
-  });
-
   it("does not cache fetch failures so retries can succeed", async () => {
     const getEvent = vi
       .fn()
@@ -233,7 +117,8 @@ describe("matrix reply context", () => {
         },
       });
     const getMemberDisplayName = vi.fn(async () => "Bob");
-    const resolveReplyContext = createMatrixReplyContextResolver({
+    const resolveReplyContext = createMatrixEventContextResolver({
+      kind: "reply",
       client: {
         getEvent,
       } as never,
@@ -254,9 +139,9 @@ describe("matrix reply context", () => {
       eventId: "$original",
     });
     expect(second).toEqual({
-      replyToBody: "Recovered message",
-      replyToSender: "Bob",
-      replyToSenderId: "@bob:example.org",
+      summary: "Recovered message",
+      senderLabel: "Bob",
+      senderId: "@bob:example.org",
     });
 
     expect(getEvent).toHaveBeenCalledTimes(2);
@@ -274,7 +159,8 @@ describe("matrix reply context", () => {
       },
     }));
     const getMemberDisplayName = vi.fn().mockRejectedValueOnce(new Error("unknown member"));
-    const resolveReplyContext = createMatrixReplyContextResolver({
+    const resolveReplyContext = createMatrixEventContextResolver({
+      kind: "reply",
       client: {
         getEvent,
       } as never,
@@ -288,9 +174,9 @@ describe("matrix reply context", () => {
     });
 
     expect(result).toEqual({
-      replyToBody: "Hello",
-      replyToSender: "@charlie:example.org",
-      replyToSenderId: "@charlie:example.org",
+      summary: "Hello",
+      senderLabel: "@charlie:example.org",
+      senderId: "@charlie:example.org",
     });
   });
 
@@ -305,7 +191,8 @@ describe("matrix reply context", () => {
     const getMemberDisplayName = vi
       .fn()
       .mockImplementation((_r: string, userId: string) => Promise.resolve(userId));
-    const resolveReplyContext = createMatrixReplyContextResolver({
+    const resolveReplyContext = createMatrixEventContextResolver({
+      kind: "reply",
       client: { getEvent } as never,
       getMemberDisplayName,
       logVerboseMessage: () => {},

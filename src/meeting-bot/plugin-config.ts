@@ -70,10 +70,6 @@ function resolvePositiveNumber(value: unknown, fallback: number): number {
   return asPositiveFiniteNumber(value) ?? fallback;
 }
 
-function resolveTimer(value: unknown, fallback: number): number {
-  return resolvePositiveTimerTimeoutMs(resolvePositiveNumber(value, fallback), fallback);
-}
-
 function resolveMode(value: unknown): MeetingPluginMode {
   const normalized = normalizeOptionalLowercaseString(value);
   return normalized === "agent" || normalized === "bidi" || normalized === "transcribe"
@@ -130,36 +126,6 @@ export function createMeetingPluginConfigSchema(options: MeetingPluginConfigOpti
     DEFAULT_AUDIO_FORMAT,
     DEFAULT_AUDIO_BUFFER_BYTES,
   );
-  const defaults: MeetingPluginConfig = {
-    enabled: true,
-    defaultMode: "agent",
-    chrome: {
-      audioBackend: "auto",
-      audioFormat: DEFAULT_AUDIO_FORMAT,
-      audioBufferBytes: DEFAULT_AUDIO_BUFFER_BYTES,
-      launch: true,
-      guestName: "OpenClaw Agent",
-      reuseExistingTab: true,
-      autoJoin: true,
-      joinTimeoutMs: 30_000,
-      waitForInCallMs: 60_000,
-      audioInputCommand: defaultAudioRuntime.inputCommand,
-      audioOutputCommand: defaultAudioRuntime.outputCommand,
-      bargeInRmsThreshold: 650,
-      bargeInPeakThreshold: 2_500,
-      bargeInCooldownMs: 900,
-    },
-    chromeNode: {},
-    realtime: {
-      strategy: "agent",
-      provider: "openai",
-      transcriptionProvider: "openai",
-      instructions: options.defaultRealtimeInstructions,
-      introMessage: "Say exactly: I'm here and listening.",
-      toolPolicy: "safe-read-only",
-      providers: {},
-    },
-  };
   const resolveConfig = (input: unknown): MeetingPluginConfig => {
     const raw = asRecord(input);
     const chrome = asRecord(raw.chrome);
@@ -176,58 +142,46 @@ export function createMeetingPluginConfigSchema(options: MeetingPluginConfigOpti
     const audioOutputCommandOverride = normalizeOptionalTrimmedStringList(
       chrome.audioOutputCommand,
     );
-    const provider = normalizeOptionalString(realtime.provider) ?? defaults.realtime.provider;
     return {
-      enabled: resolveBoolean(raw.enabled, defaults.enabled),
+      enabled: resolveBoolean(raw.enabled, true),
       defaultMode: resolveMode(raw.defaultMode),
       chrome: {
         audioBackend,
         audioFormat,
         audioBufferBytes,
-        launch: resolveBoolean(chrome.launch, defaults.chrome.launch),
+        launch: resolveBoolean(chrome.launch, true),
         browserProfile: normalizeOptionalString(chrome.browserProfile),
-        guestName: normalizeOptionalString(chrome.guestName) ?? defaults.chrome.guestName,
-        reuseExistingTab: resolveBoolean(chrome.reuseExistingTab, defaults.chrome.reuseExistingTab),
-        autoJoin: resolveBoolean(chrome.autoJoin, defaults.chrome.autoJoin),
-        joinTimeoutMs: resolveTimer(chrome.joinTimeoutMs, defaults.chrome.joinTimeoutMs),
-        waitForInCallMs: resolveTimer(chrome.waitForInCallMs, defaults.chrome.waitForInCallMs),
+        guestName: normalizeOptionalString(chrome.guestName) ?? "OpenClaw Agent",
+        reuseExistingTab: resolveBoolean(chrome.reuseExistingTab, true),
+        autoJoin: resolveBoolean(chrome.autoJoin, true),
+        joinTimeoutMs: resolvePositiveTimerTimeoutMs(chrome.joinTimeoutMs, 30_000),
+        waitForInCallMs: resolvePositiveTimerTimeoutMs(chrome.waitForInCallMs, 60_000),
         audioInputCommand: audioInputCommandOverride ?? generatedCommands.inputCommand,
         audioOutputCommand: audioOutputCommandOverride ?? generatedCommands.outputCommand,
         audioInputCommandOverride,
         audioOutputCommandOverride,
         bargeInInputCommand: normalizeOptionalTrimmedStringList(chrome.bargeInInputCommand),
-        bargeInRmsThreshold: resolvePositiveNumber(
-          chrome.bargeInRmsThreshold,
-          defaults.chrome.bargeInRmsThreshold,
-        ),
-        bargeInPeakThreshold: resolvePositiveNumber(
-          chrome.bargeInPeakThreshold,
-          defaults.chrome.bargeInPeakThreshold,
-        ),
-        bargeInCooldownMs: resolveTimer(
-          chrome.bargeInCooldownMs,
-          defaults.chrome.bargeInCooldownMs,
-        ),
+        bargeInRmsThreshold: resolvePositiveNumber(chrome.bargeInRmsThreshold, 650),
+        bargeInPeakThreshold: resolvePositiveNumber(chrome.bargeInPeakThreshold, 2_500),
+        bargeInCooldownMs: resolvePositiveTimerTimeoutMs(chrome.bargeInCooldownMs, 900),
       },
       chromeNode: { node: normalizeOptionalString(chromeNode.node) },
       realtime: {
         strategy: normalizeOptionalLowercaseString(realtime.strategy) === "bidi" ? "bidi" : "agent",
-        provider,
-        transcriptionProvider:
-          normalizeOptionalString(realtime.transcriptionProvider) ??
-          defaults.realtime.transcriptionProvider,
+        provider: normalizeOptionalString(realtime.provider) ?? "openai",
+        transcriptionProvider: normalizeOptionalString(realtime.transcriptionProvider) ?? "openai",
         voiceProvider: normalizeOptionalString(realtime.voiceProvider),
         model: normalizeOptionalString(realtime.model),
         instructions:
-          normalizeOptionalString(realtime.instructions) ?? defaults.realtime.instructions,
+          normalizeOptionalString(realtime.instructions) ?? options.defaultRealtimeInstructions,
         introMessage:
           typeof realtime.introMessage === "string"
             ? realtime.introMessage.trim()
-            : defaults.realtime.introMessage,
+            : "Say exactly: I'm here and listening.",
         agentId: normalizeOptionalString(realtime.agentId),
         toolPolicy: resolveRealtimeVoiceAgentConsultToolPolicy(
           realtime.toolPolicy,
-          defaults.realtime.toolPolicy,
+          "safe-read-only",
         ),
         providers: resolveProviders(realtime.providers),
       },

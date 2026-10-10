@@ -1,56 +1,6 @@
 {
-  "$schema": "https://mintlify.com/docs.json",
   "name": "OpenClaw",
   "description": "Self-hosted gateway that connects Discord, Google Chat, iMessage, Matrix, Microsoft Teams, Signal, Slack, Telegram, WhatsApp, Zalo, and more to AI coding agents. Run one Gateway process on your own machine and message your AI assistant from anywhere.",
-  "theme": "mint",
-  "icons": {
-    "library": "lucide"
-  },
-  "logo": {
-    "light": "/assets/pixel-lobster.svg",
-    "dark": "/assets/pixel-lobster.svg"
-  },
-  "fonts": {
-    "body": {
-      "family": "Fragment Mono"
-    },
-    "heading": {
-      "family": "DM Sans"
-    }
-  },
-  "favicon": "/assets/pixel-lobster.svg",
-  "colors": {
-    "primary": "#D84A31",
-    "dark": "#E05540",
-    "light": "#F5654A"
-  },
-  "styling": {
-    "codeblocks": {
-      "theme": {
-        "dark": "min-dark",
-        "light": "min-light"
-      }
-    }
-  },
-  "navbar": {
-    "links": [
-      {
-        "label": "GitHub",
-        "href": "https://github.com/openclaw/openclaw",
-        "icon": "github"
-      },
-      {
-        "label": "Releases",
-        "href": "https://github.com/openclaw/openclaw/releases",
-        "icon": "package"
-      },
-      {
-        "label": "Discord",
-        "href": "https://discord.com/invite/clawd",
-        "icon": "discord"
-      }
-    ]
-  },
   "redirects": [
     {
       "source": "/cli/commitments",
@@ -886,7 +836,11 @@
     },
     {
       "source": "/showcase",
-      "destination": "/start/showcase"
+      "destination": "https://openclaw.ai/showcase"
+    },
+    {
+      "source": "/start/showcase",
+      "destination": "https://openclaw.ai/showcase"
     },
     {
       "source": "/signal",
@@ -903,6 +857,34 @@
     {
       "source": "/tools/skills-workshop",
       "destination": "/tools/skill-workshop"
+    },
+    {
+      "source": "/tools/skill-workshop/how-it-works",
+      "destination": "/tools/skill-workshop"
+    },
+    {
+      "source": "/tools/skill-workshop/collection-review",
+      "destination": "/tools/skill-workshop#unused-skill-cleanup"
+    },
+    {
+      "source": "/tools/skill-workshop/authoring",
+      "destination": "/tools/skill-workshop#learn"
+    },
+    {
+      "source": "/tools/skill-workshop/proposals",
+      "destination": "/tools/skill-workshop#upgrading-from-earlier-releases"
+    },
+    {
+      "source": "/tools/skill-workshop/configuration",
+      "destination": "/tools/skill-workshop#configuration"
+    },
+    {
+      "source": "/tools/skill-workshop/reference",
+      "destination": "/tools/skill-workshop#operator-surfaces"
+    },
+    {
+      "source": "/tools/skill-workshop/troubleshooting",
+      "destination": "/tools/skill-workshop#troubleshooting"
     },
     {
       "source": "/skills-config",
@@ -1109,10 +1091,6 @@
       "destination": "/gateway/trusted-proxy-auth"
     },
     {
-      "source": "/automation/clawflow",
-      "destination": "/automation/taskflow"
-    },
-    {
       "source": "/automation/poll",
       "destination": "/cli/message"
     },
@@ -1135,10 +1113,6 @@
     {
       "source": "/automation/gmail-pubsub",
       "destination": "/automation/cron-jobs#gmail-pubsub-integration"
-    },
-    {
-      "source": "/cli/flows",
-      "destination": "/cli/tasks#flow"
     },
     {
       "source": "/concepts/memory-qmd",
@@ -1331,6 +1305,22 @@
     {
       "source": "/ci/runner-backend-modes",
       "destination": "/ci/runners#runner-backend-modes"
+    },
+    {
+      "source": "/automation/tasks",
+      "destination": "/automation#background-execution-and-workflows"
+    },
+    {
+      "source": "/automation/taskflow",
+      "destination": "/tools/lobster"
+    },
+    {
+      "source": "/cli/tasks",
+      "destination": "/automation#background-execution-and-workflows"
+    },
+    {
+      "source": "/plugins/webhooks",
+      "destination": "/automation#background-execution-and-workflows"
     }
   ],
   "navigation": {
@@ -1345,7 +1335,6 @@
                 "group": "Overview",
                 "pages": [
                   "index",
-                  "start/showcase",
                   "start/why-openclaw",
                   "start/why-openclaw/the-trust-boundary",
                   "start/why-openclaw/policy-as-code",
@@ -1601,7 +1590,8 @@
                       "channels/telegram/troubleshooting"
                     ]
                   },
-                  "channels/whatsapp"
+                  "channels/whatsapp",
+                  "channels/x"
                 ]
               },
               {
@@ -1685,6 +1675,7 @@
                 "pages": [
                   "concepts/agent-workspace",
                   "concepts/managed-worktrees",
+                  "concepts/storage-locations",
                   "concepts/oauth",
                   "start/bootstrapping",
                   "concepts/experimental-features"
@@ -1778,6 +1769,7 @@
               {
                 "group": "Plugin guides",
                 "pages": [
+                  "plugins/agentsapi",
                   {
                     "group": "Codex",
                     "pages": [
@@ -1821,6 +1813,7 @@
                         ]
                       },
                       "plugins/teams-meetings",
+                      "plugins/slack-huddles",
                       "plugins/voice-call",
                       {
                         "group": "Voice call",
@@ -1858,11 +1851,11 @@
                     "pages": [
                       "plugins/admin-http-rpc",
                       "plugins/beam",
+                      "plugins/cloudflare",
                       "plugins/geolocation",
                       "plugins/logbook",
                       "plugins/oc-path",
                       "plugins/session-share",
-                      "plugins/webhooks",
                       "plugins/workboard",
                       "plugins/zalouser"
                     ]
@@ -1921,19 +1914,7 @@
                   "tools/skills",
                   "tools/custodian-skills",
                   "tools/skill-workshop",
-                  {
-                    "group": "Skill Workshop",
-                    "pages": [
-                      "tools/skill-workshop/personal-library",
-                      "tools/skill-workshop/how-it-works",
-                      "tools/skill-workshop/collection-review",
-                      "tools/skill-workshop/authoring",
-                      "tools/skill-workshop/proposals",
-                      "tools/skill-workshop/configuration",
-                      "tools/skill-workshop/reference",
-                      "tools/skill-workshop/troubleshooting"
-                    ]
-                  },
+                  "tools/skill-workshop/personal-library",
                   "tools/self-learning",
                   "tools/creating-skills",
                   "tools/skills-config",
@@ -1960,8 +1941,6 @@
                     ]
                   },
                   "automation/imap",
-                  "automation/tasks",
-                  "automation/taskflow",
                   "automation/standing-orders",
                   "automation/hooks",
                   {
@@ -2024,6 +2003,7 @@
                         "group": "Code Mode",
                         "pages": [
                           "tools/code-mode/quickstart",
+                          "tools/code-mode/executors",
                           "tools/code-mode/configuration",
                           "tools/code-mode/tool-surface",
                           "tools/code-mode/guest-api",
@@ -2072,6 +2052,7 @@
                           "tools/browser/existing-session",
                           "tools/browser/configuration",
                           "tools/browser/remote",
+                          "tools/browser/lightweight",
                           "tools/browser/security",
                           "tools/browser/isolation",
                           "tools/browser/agent-tools",
@@ -2194,6 +2175,7 @@
                 "group": "Concepts and configuration",
                 "pages": [
                   "concepts/models",
+                  "concepts/recommended-models",
                   "concepts/decision-models",
                   "concepts/model-providers",
                   {
@@ -2246,6 +2228,7 @@
                         "group": "OpenAI",
                         "pages": [
                           "providers/openai/setup",
+                          "providers/openai/authentication",
                           "providers/openai/models",
                           "providers/openai/runtimes",
                           "providers/openai/coverage-and-cost",
@@ -2263,6 +2246,7 @@
                       "providers/radius",
                       "providers/stepfun",
                       "providers/synthetic",
+                      "providers/telnyx",
                       "providers/tencent",
                       "providers/together",
                       "providers/venice",
@@ -2289,6 +2273,7 @@
                     "pages": [
                       "providers/comfy",
                       "providers/fal",
+                      "providers/kie",
                       "providers/pixverse",
                       "providers/runway",
                       "providers/vydra"
@@ -2552,11 +2537,11 @@
                           "gateway/cloud-workers/session-lifecycle",
                           "gateway/cloud-workers/desktop",
                           "gateway/cloud-workers/security-model",
+                          "gateway/cloud-workers/native-inference",
                           "gateway/cloud-workers/troubleshooting"
                         ]
                       },
-                      "gateway/multiple-gateways",
-                      "gateway/multi-tenant-hosting"
+                      "gateway/multiple-gateways"
                     ]
                   },
                   {
@@ -2656,7 +2641,8 @@
                   "gateway/remote",
                   "gateway/stable-https-url",
                   "gateway/tailscale",
-                  "gateway/cloudflare-access"
+                  "gateway/cloudflare-access",
+                  "gateway/team-server"
                 ]
               },
               {
@@ -2765,7 +2751,6 @@
                     "group": "Running the service",
                     "pages": [
                       "cli/daemon",
-                      "cli/fleet",
                       "cli/gateway",
                       {
                         "group": "Gateway",
@@ -2791,6 +2776,7 @@
                       "cli/openclaw",
                       "cli/reset",
                       "cli/setup",
+                      "cli/storage",
                       "cli/uninstall",
                       "cli/update",
                       {
@@ -2835,7 +2821,6 @@
                       "cli/models",
                       "cli/promos",
                       "cli/sessions",
-                      "cli/tasks",
                       "cli/transcripts",
                       "cli/wiki"
                     ]
@@ -2856,6 +2841,7 @@
                       "cli/directory",
                       "cli/pairing",
                       "cli/qr",
+                      "cli/users",
                       "cli/voicecall"
                     ]
                   },
@@ -3158,7 +3144,8 @@
                       "reference/session-management-compaction/maintenance",
                       "reference/session-management-compaction/schema",
                       "reference/session-management-compaction/compaction",
-                      "reference/session-management-compaction/housekeeping"
+                      "reference/session-management-compaction/housekeeping",
+                      "reference/session-management-compaction/resident-history"
                     ]
                   },
                   "reference/transcript-hygiene",
@@ -3206,6 +3193,10 @@
                 "group": "Release notes",
                 "pages": [
                   "releases/index",
+                  "releases/2026.9.9",
+                  "releases/2026.9.8",
+                  "releases/2026.9.7",
+                  "releases/2026.9.6",
                   "releases/2026.9.5",
                   "releases/2026.9.4",
                   "releases/2026.9.3",

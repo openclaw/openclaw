@@ -18,7 +18,7 @@ class HoverMarqueeDirective extends AsyncDirective {
   private observer?: ResizeObserver;
   private contentObserver?: MutationObserver;
   private visibilityObserver?: IntersectionObserver;
-  private visible = true;
+  private visible = false;
   private motion?: MediaQueryList;
   private timer?: number;
   private readyToScroll = false;
@@ -57,13 +57,11 @@ class HoverMarqueeDirective extends AsyncDirective {
       marqueeFrame = undefined;
     }
     this.stop();
-    this.observer?.disconnect();
-    this.observer = undefined;
-    this.contentObserver?.disconnect();
-    this.contentObserver = undefined;
-    this.visibilityObserver?.disconnect();
-    this.visibilityObserver = undefined;
-    this.visible = true;
+    for (const key of ["observer", "contentObserver", "visibilityObserver"] as const) {
+      this[key]?.disconnect();
+      this[key] = undefined;
+    }
+    this.visible = false;
     this.motion?.removeEventListener("change", this.schedule);
     for (const event of ["pointerenter", "pointerleave", "focusin", "focusout"]) {
       this.host?.removeEventListener(event, this.schedule);
@@ -95,6 +93,20 @@ class HoverMarqueeDirective extends AsyncDirective {
   private readonly measure = () => {
     const label = this.label;
     if (!this.isConnected || !label?.isConnected) {
+      return undefined;
+    }
+    if ((!this.host || this.options.loop) && !this.visibilityObserver) {
+      // Defer geometry and resize/content observers until first visibility.
+      // Looping names keep this observer to stop when a drawer moves offscreen.
+      this.visibilityObserver = new IntersectionObserver((entries) => {
+        for (const entry of entries) {
+          this.visible = entry.isIntersecting;
+        }
+        this.schedule();
+      });
+      this.visibilityObserver.observe(label);
+    }
+    if (!this.host && !this.visible) {
       return undefined;
     }
     if (!this.host) {
@@ -135,44 +147,33 @@ class HoverMarqueeDirective extends AsyncDirective {
         attributeFilter: ["dir"],
       });
     }
-    if (this.options.loop && !this.visibilityObserver) {
-      // Mobile drawers move offscreen without resizing their names or
-      // reliably clearing touch hover. Stop their loops while hidden.
-      this.visibilityObserver = new IntersectionObserver((entries) => {
-        for (const entry of entries) {
-          this.visible = entry.isIntersecting;
-        }
-        this.schedule();
-      });
-      this.visibilityObserver.observe(label);
-    } else if (!this.options.loop && this.visibilityObserver) {
+    if (!this.options.loop && this.visibilityObserver) {
       this.visibilityObserver.disconnect();
       this.visibilityObserver = undefined;
       this.visible = true;
     }
+    const width = label.clientWidth;
+    if (width <= 0) {
+      return () => this.clearOverflow(label);
+    }
     const text = this.text!;
     const style = getComputedStyle(label);
     const padding = Number.parseFloat(style.paddingLeft) + Number.parseFloat(style.paddingRight);
-    const overflow =
-      style.whiteSpace === "nowrap" && label.clientWidth > 0
-        ? text.scrollWidth + padding - label.clientWidth
-        : 0;
+    const overflow = style.whiteSpace === "nowrap" ? text.scrollWidth + padding - width : 0;
     const clipped = overflow > (this.options.loop ? 0 : 1);
+    if (!clipped) {
+      return () => this.clearOverflow(label);
+    }
     const active =
       this.host.matches(":hover, :focus-visible") ||
       Boolean(this.host.querySelector(":focus-visible")) ||
       // Touch opens the existing identity menu; its trigger keeps revealing
       // the name while focus moves into the portaled menu.
       (this.options.loop && this.host.getAttribute("aria-expanded") === "true");
-    if (!clipped || !active || !this.visible || this.motion?.matches) {
+    if (!active || !this.visible || this.motion?.matches) {
       return () => {
         label.classList.toggle("hover-marquee--overflowing", clipped);
         this.stop();
-        if (!clipped) {
-          label.style.removeProperty("--hover-marquee-shift");
-          label.style.removeProperty("--hover-marquee-duration");
-          this.shift = 0;
-        }
       };
     }
     const fade = Number.parseFloat(style.getPropertyValue("--hover-marquee-fade-width"));
@@ -208,6 +209,14 @@ class HoverMarqueeDirective extends AsyncDirective {
       }
     };
   };
+
+  private clearOverflow(label: HTMLElement) {
+    label.classList.toggle("hover-marquee--overflowing", false);
+    this.stop();
+    label.style.removeProperty("--hover-marquee-shift");
+    label.style.removeProperty("--hover-marquee-duration");
+    this.shift = 0;
+  }
 
   private stop() {
     window.clearTimeout(this.timer);

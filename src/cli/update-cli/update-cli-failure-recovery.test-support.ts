@@ -1,15 +1,18 @@
 import { EventEmitter } from "node:events";
+import fsSync from "node:fs";
 import path from "node:path";
 import { expect, it, vi, type Mock } from "vitest";
 import type { readConfigFileSnapshot as ReadConfigFileSnapshot } from "../../config/config.js";
-import type { UpdateRunResult } from "../../infra/update-runner.js";
+import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import type { runUpdateFailureTriage as RunUpdateFailureTriage } from "../../infra/update-triage.js";
 import type {
   defaultRuntime as DefaultRuntime,
   ExitError as ExitErrorType,
 } from "../../runtime.js";
 import { withEnvAsync } from "../../test-utils/env.js";
+import type { TempHomeEnv } from "../../test-utils/temp-home.js";
 import { VERSION } from "../../version.js";
+import type { updateFinalizeCommand as UpdateFinalizeCommand } from "./update-command-finalize.js";
 import type { updateCommand as UpdateCommand } from "./update-command.js";
 
 export async function mockUnbuiltRecoveryFixture(): Promise<void> {
@@ -94,7 +97,18 @@ export function registerForegroundFailureRecoveryTests({
           readyz: true,
           settled: true,
         },
-        steps: [recoveryVerificationStep(undefined, root)],
+        steps: [
+          expect.objectContaining({ name: "updater-runtime-retention", exitCode: 0 }),
+          recoveryVerificationStep(undefined, root),
+          {
+            name: "update",
+            command: "openclaw update",
+            cwd: root,
+            durationMs: 0,
+            exitCode: null,
+            failureFacts: [{ check: "update", code: "update-failed" }],
+          },
+        ],
       });
       expect(updateNpmInstalledPlugins).not.toHaveBeenCalled();
     },
@@ -104,13 +118,15 @@ export function registerForegroundFailureRecoveryTests({
 export function registerFailureSelectorTests({
   updateCommand,
   updateFinalizeCommand,
+  updateGitCheckout,
   readConfigFileSnapshot,
   profileStateDir,
   runUpdateFailureTriage,
   expectSelectorTriageFailure,
 }: {
   updateCommand: typeof UpdateCommand;
-  updateFinalizeCommand: typeof UpdateCommand;
+  updateFinalizeCommand: typeof UpdateFinalizeCommand;
+  updateGitCheckout: typeof import("../../infra/update-runner-git.js").updateGitCheckout;
   readConfigFileSnapshot: typeof ReadConfigFileSnapshot;
   profileStateDir: () => string;
   runUpdateFailureTriage: typeof RunUpdateFailureTriage;
@@ -122,8 +138,13 @@ export function registerFailureSelectorTests({
   ])(
     "$name pins relative installation selectors before failed-update triage",
     async ({ name, run }) => {
-      const failure = new Error("Config snapshot failed");
-      vi.mocked(readConfigFileSnapshot).mockRejectedValueOnce(failure);
+      const failure = new Error(name === "update" ? "Git update failed" : "Config snapshot failed");
+      if (name === "update") {
+        // Target selection reads config before an admitted update installs failure triage.
+        vi.mocked(updateGitCheckout).mockRejectedValueOnce(failure);
+      } else {
+        vi.mocked(readConfigFileSnapshot).mockRejectedValueOnce(failure);
+      }
       const cwd = process.cwd();
       const selectors = {
         OPENCLAW_STATE_DIR: path.relative(cwd, profileStateDir()),
@@ -140,23 +161,42 @@ export function registerFailureSelectorTests({
           expectSelectorTriageFailure(error, triageCall?.failure, failure, true);
         } else {
           expect(error).toBe(failure);
+          const failedStep = {
+            name: "update",
+            command: "openclaw update",
+            cwd,
+            durationMs: expect.any(Number),
+            exitCode: 1,
+            failureFacts: [
+              {
+                check: "update",
+                code: "Error",
+                errorName: "Error",
+                message: failure.message,
+                location: expect.any(String),
+              },
+            ],
+          };
           expect(triageCall?.failure).toEqual({
             error: failure.message,
             result: {
               status: "error",
               mode: "unknown",
               root: cwd,
+              reason: "update-failed",
               durationMs: expect.any(Number),
               recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
               rollbackOutcome: undefined,
               verification: {},
+              failedStep,
               steps: [
+                failedStep,
                 recoveryVerificationStep([
                   {
                     check: "gateway-recovery",
                     code: "gateway-probe-failed",
                     message:
-                      "service management skipped: non-default state dir or config path. Rerun with HOME set to the OS account home, without OPENCLAW_HOME, and with OPENCLAW_STATE_DIR and OPENCLAW_CONFIG_PATH either unset o",
+                      "service management skipped: non-default state dir or config path. Rerun with HOME set to the OS account home, OPENCLAW_HOME either unset or pointing at that same home, and OPENCLAW_STATE_DIR and OPENC",
                   },
                 ]),
               ],
@@ -171,4 +211,58 @@ export function registerFailureSelectorTests({
       });
     },
   );
+}
+
+export function reportUpdateCliHomeCleanupFailure(temporary: TempHomeEnv | undefined): void {
+  // Preserve a bounded fixture inventory before outer teardown removes it.
+  try {
+    const home = temporary?.home;
+    if (home) {
+      const inspect = (name: string) => {
+        try {
+          const stat = fsSync.lstatSync(path.join(home, name));
+          return {
+            name,
+            type: stat.isSymbolicLink() ? "symlink" : stat.isDirectory() ? "directory" : "file",
+            mode: (stat.mode & 0o7777).toString(8),
+            size: stat.size,
+            mtimeMs: stat.mtimeMs,
+            ctimeMs: stat.ctimeMs,
+          };
+        } catch (readError) {
+          return { name, error: String(readError) };
+        }
+      };
+      const root = inspect(".");
+      const entries: ReturnType<typeof inspect>[] = [];
+      let truncated = false;
+      if (root.type === "directory") {
+        const directory = fsSync.opendirSync(home);
+        try {
+          for (let index = 0; index <= 32; index++) {
+            const entry = directory.readSync();
+            if (!entry) {
+              break;
+            }
+            if (index === 32) {
+              truncated = true;
+              break;
+            }
+            entries.push(inspect(entry.name));
+          }
+        } finally {
+          directory.closeSync();
+        }
+      }
+      console.error("Update CLI HOME cleanup failed", {
+        home,
+        capturedAt: Date.now(),
+        root,
+        entries,
+        truncated,
+      });
+    }
+  } catch {
+    // Diagnostics cannot replace the original cleanup failure.
+  }
 }

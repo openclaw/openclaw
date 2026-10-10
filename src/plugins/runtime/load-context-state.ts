@@ -6,6 +6,7 @@ export type PluginRuntimeLoadContextState = {
   controlPlaneFingerprint: string;
   registrationConfigKey: string;
   loaderCacheIdentity?: Readonly<{ requestKey: string; resolvedKey: string }>;
+  preferBuiltPluginArtifacts?: boolean;
   declaredProviderOwners: DeclaredProviderOwnerIndex;
 };
 

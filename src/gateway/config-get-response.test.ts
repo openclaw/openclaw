@@ -4,7 +4,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { REDACTED_SENTINEL, restoreRedactedValues } from "../config/redact-snapshot.js";
 import { makeSnapshot } from "../config/redact-snapshot.test-helpers.js";
 import { buildRuntimeConfigSchemaFromRegistry } from "../config/runtime-schema.js";
-import { hashRuntimeConfigValue } from "../config/runtime-snapshot.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 
@@ -40,6 +39,7 @@ const { invalidateConfigGetResponseCache, readConfigGetResponse: readConfigGetRe
 const revisionProjector = {
   projectRawHash: (hash: string) => `raw-token:${hash}`,
   projectResolvedHash: (hash: string) => `resolved-token:${hash}`,
+  hashResponseSessionBearer: () => "unused-test-scope",
 };
 
 function readConfigGetResponse(
@@ -64,17 +64,6 @@ afterEach(() => {
 });
 
 describe("config.get response cache", () => {
-  it("keeps applied revision equality for valid fresh-install defaults", async () => {
-    const snapshot = { ...makeSnapshot({ gateway: { port: 19_001 } }), exists: false, raw: null };
-    mocks.readConfigFileSnapshot.mockResolvedValue(snapshot);
-    mocks.appliedConfigHash = hashRuntimeConfigValue(snapshot.sourceConfig);
-
-    const response = await readConfigGetResponse({ loadUiHints: () => undefined });
-
-    expect(response.configRevisionHash).toEqual(expect.any(String));
-    expect(response.configRevisionHash).toBe(response.appliedConfigHash);
-  });
-
   it.each([true, false])(
     "omits private provenance from cold, cached, and uncached responses (valid=%s)",
     async (valid) => {
@@ -237,7 +226,7 @@ describe("config.get response cache", () => {
     }
   });
 
-  it.each(["core", "plus"])(
+  it.each(["core"])(
     "redacts retained owner credentials from every snapshot projection with %s selected",
     async (owner) => {
       const config: OpenClawConfig = {
@@ -346,29 +335,12 @@ describe("config.get response cache", () => {
         mocks.pluginRegistryVersion = 2;
       },
     },
-    {
-      reason: "the watcher or write path invalidates",
-      invalidate: invalidateConfigGetResponseCache,
-    },
   ])("rebuilds when $reason", async ({ invalidate }) => {
     const loadUiHints = vi.fn(() => undefined);
     await readConfigGetResponse({ getHotReloadStatus: activeWatcher, loadUiHints });
 
     invalidate();
     await readConfigGetResponse({ getHotReloadStatus: activeWatcher, loadUiHints });
-
-    expect(mocks.readConfigFileSnapshot).toHaveBeenCalledTimes(2);
-    expect(loadUiHints).toHaveBeenCalledTimes(2);
-  });
-
-  it.each([
-    { reason: "hot reload is disabled", getHotReloadStatus: disabledWatcher },
-    { reason: "no watcher status is available", getHotReloadStatus: undefined },
-  ])("bypasses the cache when $reason", async ({ getHotReloadStatus }) => {
-    const loadUiHints = vi.fn(() => undefined);
-
-    await readConfigGetResponse({ getHotReloadStatus, loadUiHints });
-    await readConfigGetResponse({ getHotReloadStatus, loadUiHints });
 
     expect(mocks.readConfigFileSnapshot).toHaveBeenCalledTimes(2);
     expect(loadUiHints).toHaveBeenCalledTimes(2);

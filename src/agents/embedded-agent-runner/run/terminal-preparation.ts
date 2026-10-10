@@ -5,11 +5,12 @@ import { estimateAggregateUsageCost } from "../../../utils/usage-format.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import type { AgentRunTerminalReceipt } from "../../agent-run-terminal-receipt.js";
 import type { AuthProfileStore } from "../../auth-profiles.js";
+import { sanitizeAssistantVisibleStreamText } from "../../embedded-agent-utils.js";
 import type { PreparedProviderFailoverOwner } from "../../failover/provider-patterns.js";
 import { isProviderModelRerouted } from "../../provider-model-route.js";
 import type { ReplyDeliveryState } from "../../reply-completion.js";
 import { getCoreTtsAttemptResultMediaUrls } from "../../tools/tts-tool-result-provenance.js";
-import type { NormalizedUsage, UsageLike } from "../../usage.js";
+import type { NormalizedUsage } from "../../usage.js";
 import {
   hasMessagingToolDeliveryEvidence,
   resolveSourceReplyDelivery,
@@ -22,6 +23,7 @@ import type { EmbeddedRunAttemptWithReceiptEvidence } from "./attempt-result.js"
 import type { EmbeddedRunContextRecoveryState } from "./context-recovery-state.js";
 import {
   buildUsageAgentMetaFields,
+  normalizeAssistantUsageForContext,
   resolveFinalAssistantRawText,
   resolveFinalAssistantVisibleText,
   resolveReportedModelRef,
@@ -56,28 +58,13 @@ export function prepareEmbeddedRunTerminal(input: {
   authProfileId?: string;
   sessionIdUsed: string;
   sessionFileUsed?: string;
-  outerContextTokenMeta: { contextTokens?: number };
+  outerContextTokenMeta: { contextTokens?: number; contextTokensSource?: "resolved-v1" };
   usageAccumulator: UsageAccumulator;
   lastRunPromptUsage?: NormalizedUsage;
   contextRecoveryState: EmbeddedRunContextRecoveryState;
   resolvedToolResultFormat: NonNullable<RunEmbeddedAgentParams["toolResultFormat"]>;
   terminalState: EmbeddedRunTerminalState;
-}): {
-  agentMeta: EmbeddedAgentMeta;
-  replyDeliveryState: ReplyDeliveryState;
-  reportedModelRef: { provider: string; model: string };
-  finalAssistantVisibleText: string | undefined;
-  finalAssistantRawText: string | undefined;
-  payloads: ReturnType<typeof buildEmbeddedRunPayloads>;
-  payloadsWithToolMedia: ReturnType<typeof mergeAttemptToolMediaPayloads>;
-  timedOutDuringPrompt: boolean;
-  recoveredFinalAssistantPayloadsAfterPromptTimeout: EmbeddedAgentRunResult["payloads"];
-  hasSuccessfulFinalAssistantAfterPromptTimeout: boolean;
-  hasPartialAssistantTextAfterPromptTimeout: boolean;
-  attemptToolSummary: ReturnType<typeof buildTraceToolSummary>;
-  failureSignal: ReturnType<typeof resolveEmbeddedRunFailureSignal>;
-  terminalToolFailure: ReturnType<typeof resolveEmbeddedRunTerminalToolFailure>;
-} {
+}) {
   const { runParams, attempt } = input;
   const { timedOutDuringCompaction, timedOutDuringToolExecution } = projectAgentRunAttemptTerminal(
     attempt.terminal,
@@ -92,18 +79,22 @@ export function prepareEmbeddedRunTerminal(input: {
   const terminalAssistant = input.currentAttemptCompletedAssistant;
   const usageMeta = buildUsageAgentMetaFields({
     usageAccumulator: input.usageAccumulator,
-    latestUsage: terminalAssistant?.usage as UsageLike | undefined,
+    latestUsage: normalizeAssistantUsageForContext(terminalAssistant),
     lastRunPromptUsage: input.lastRunPromptUsage,
   });
   // A runtime can observe its model without emitting message_end. That scoped
   // attribution is useful here, but is not completed text or usage evidence.
   const attributionAssistant = terminalAssistant ?? attempt.currentAttemptAssistant;
+  const requestedModelRef = { provider: input.provider, model: input.model };
   const reportedModelRef = resolveReportedModelRef({
-    ...(attempt.runtimeModelSelection ?? { provider: input.provider, model: input.model }),
+    ...(attempt.runtimeModelSelection ?? requestedModelRef),
     assistant: attributionAssistant,
   });
   const responseModel = attributionAssistant?.responseModel?.trim() || reportedModelRef.model;
-  const finalAssistantStopReason = (terminalAssistant?.stopReason ?? "").trim().toLowerCase();
+  const effectiveModelRef = { ...reportedModelRef, responseModel };
+  // The turn's answer: an earlier completed answer the terminal message kept, else the terminal.
+  const answerAssistant = attempt.keptAnswer?.assistant ?? terminalAssistant;
+  const finalAssistantStopReason = (answerAssistant?.stopReason ?? "").trim().toLowerCase();
   const terminalAssistantCanOwnFinalText =
     finalAssistantStopReason !== "error" && finalAssistantStopReason !== "aborted";
   const costUsd = estimateAggregateUsageCost({
@@ -117,6 +108,12 @@ export function prepareEmbeddedRunTerminal(input: {
   // into the accumulator, so read it directly instead of re-adding the attempt.
   const runAssistantTurns = input.usageAccumulator.assistantTurns;
   const contextTokens = attempt.contextTokens ?? input.outerContextTokenMeta.contextTokens;
+  // The outer window was resolved for the prepared model. A different reported identity is
+  // persisted next to it, so only the prepared model may carry its trusted provenance.
+  const outerContextTokensSource =
+    reportedModelRef.provider === input.provider && reportedModelRef.model === input.model
+      ? (input.outerContextTokenMeta.contextTokensSource ?? "resolved")
+      : "resolved";
   const agentMeta: EmbeddedAgentMeta = {
     sessionId: input.sessionIdUsed,
     sessionFile: input.sessionFileUsed,
@@ -128,7 +125,7 @@ export function prepareEmbeddedRunTerminal(input: {
           contextTokensSource:
             attempt.contextTokens !== undefined
               ? (attempt.contextTokensSource ?? "resolved")
-              : "resolved",
+              : outerContextTokensSource,
         }
       : {}),
     agentHarnessId: attempt.agentHarnessId,
@@ -158,13 +155,14 @@ export function prepareEmbeddedRunTerminal(input: {
     ...(costUsd !== undefined ? { costUsd } : {}),
   };
   const attemptFinalText = attempt.assistantTexts
+    .map((text) => sanitizeAssistantVisibleStreamText(text))
     .findLast((text) => text.trim().length > 0)
     ?.trim();
   const finalAssistantVisibleText = terminalAssistantCanOwnFinalText
-    ? (resolveFinalAssistantVisibleText(terminalAssistant) ?? attemptFinalText)
+    ? (resolveFinalAssistantVisibleText(answerAssistant) ?? attemptFinalText)
     : undefined;
   const finalAssistantRawText = terminalAssistantCanOwnFinalText
-    ? (resolveFinalAssistantRawText(terminalAssistant) ?? attemptFinalText)
+    ? (resolveFinalAssistantRawText(answerAssistant) ?? attemptFinalText)
     : undefined;
   const terminalTurnId = (attempt as { terminalTurnId?: string }).terminalTurnId;
   Object.assign(agentMeta, {
@@ -172,43 +170,35 @@ export function prepareEmbeddedRunTerminal(input: {
       runId: runParams.runId,
       sessionId: input.sessionIdUsed,
       turnId: terminalTurnId?.trim() || runParams.runId,
-      requested: { provider: input.provider, model: input.model },
-      effective: {
-        provider: reportedModelRef.provider,
-        model: reportedModelRef.model,
-        responseModel,
-      },
+      requested: requestedModelRef,
+      effective: effectiveModelRef,
       successfulToolNames: resolveSuccessfulToolNames(attempt),
       assistantTranscriptIdempotencyKey: attempt.assistantTranscriptIdempotencyKey,
       sourceReplyDelivered: resolveSourceReplyDelivery(attempt) === "delivered" ? true : undefined,
-      rerouted: isProviderModelRerouted(
-        { provider: input.provider, model: input.model },
-        { ...reportedModelRef, responseModel },
-      ),
+      rerouted: isProviderModelRerouted(requestedModelRef, effectiveModelRef),
     } satisfies Omit<AgentRunTerminalReceipt, "terminalDisposition">,
   });
-  // A yielded attempt ends before message_end. Its aborted tool-call assistant,
-  // not an earlier completed cycle, owns paused-turn classification.
-  const payloadAssistant = attempt.yieldDetected
-    ? attempt.lastAssistant
-    : input.currentAttemptCompletedAssistant;
+  const cleanYield = attempt.yieldDetected && input.terminalState.outcome.status === "ok";
+  // Yield cleanup can abort the tool-call assistant before message_end. The
+  // canonical successful pause owns that outcome, not the cleanup error text
+  // or an earlier completed cycle. Keep this attempt's streamed text below.
+  const payloadAssistant = cleanYield
+    ? undefined
+    : attempt.yieldDetected
+      ? attempt.lastAssistant
+      : input.currentAttemptCompletedAssistant;
   const payloads = buildEmbeddedRunPayloads({
-    assistantTexts: attempt.assistantTexts,
-    answerSegments: attempt.answerSegments,
+    ...attempt,
     assistantMessageIndex: attempt.lastAssistantTextMessageIndex,
-    assistantTranscriptOwned: attempt.assistantTranscriptOwned,
-    assistantTranscriptIdempotencyKey: attempt.assistantTranscriptIdempotencyKey,
     lastAssistant: payloadAssistant,
     currentAssistant: attempt.yieldDetected ? null : (payloadAssistant ?? null),
     // A clean yield is a handoff, not a terminal tool failure. Keep the error
     // on the attempt for diagnostics without turning the pause into a warning.
-    lastToolError:
-      attempt.yieldDetected && input.terminalState.outcome.status === "ok"
-        ? undefined
-        : attempt.lastToolError,
+    lastToolError: cleanYield ? undefined : attempt.lastToolError,
     config: runParams.config,
     isCronTrigger: runParams.trigger === "cron",
-    isHeartbeatTrigger: runParams.trigger === "heartbeat",
+    // A conversation's continuation keeps conversational silence and failure reporting.
+    isHeartbeatTrigger: runParams.trigger === "heartbeat" && !runParams.continuesConversation,
     sessionKey: runParams.sessionKey ?? runParams.sessionId,
     provider: input.activeErrorContext.provider,
     providerOwner: input.providerOwner,
@@ -220,10 +210,7 @@ export function prepareEmbeddedRunTerminal(input: {
     reasoningLevel: runParams.reasoningLevel,
     thinkingLevel: runParams.thinkLevel,
     toolResultFormat: input.resolvedToolResultFormat,
-    didSendViaMessagingTool: attempt.didSendViaMessagingTool,
     didDeliverSourceReplyViaMessageTool: resolveSourceReplyDelivery(attempt) === "delivered",
-    messagingToolSentTargets: attempt.messagingToolSentTargets,
-    messagingToolSourceReplyPayloads: attempt.messagingToolSourceReplyPayloads,
     sourceReplyDeliveryMode: runParams.sourceReplyDeliveryMode,
     agentId: runParams.agentId,
     runId: runParams.runId,
@@ -234,8 +221,6 @@ export function prepareEmbeddedRunTerminal(input: {
     runStopReason: input.terminalState.outcome.stopReason,
     deferAssistantTimeoutError:
       timedOutDuringPrompt && (!hasMessagingToolDeliveryEvidence(attempt) || timeoutFinal),
-    didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,
-    heartbeatToolResponse: attempt.heartbeatToolResponse,
   }).map((payload) => applyPreparedReplyMedia(payload, attempt.preparedReplyMedia ?? []));
   const mergeToolMedia = input.mergeToolMedia ?? mergeAttemptToolMediaPayloads;
   const payloadsWithToolMedia = mergeToolMedia(
@@ -295,10 +280,7 @@ export function prepareEmbeddedRunTerminal(input: {
     !attempt.didSendDeterministicApprovalPrompt &&
     !attempt.lastToolError &&
     (attempt.toolMetas?.length ?? 0) === 0;
-  const attemptToolSummary = buildTraceToolSummary({
-    toolMetas: attempt.toolMetas,
-    lastToolError: attempt.lastToolError,
-  });
+  const attemptToolSummary = buildTraceToolSummary(attempt);
   const failureSignal = resolveEmbeddedRunFailureSignal({
     trigger: runParams.trigger,
     lastToolError: attempt.lastToolError,
@@ -344,9 +326,6 @@ function replacePartialAssistantPayload(input: {
       typeof payload.text === "string" &&
       assistantTextSignatures.has(payload.text.trim()),
   );
-  if (partialPayloadIndex < 0) {
-    return [...payloads, { text: input.recoveredText }];
-  }
   const partialPayload = payloads[partialPayloadIndex];
   if (!partialPayload) {
     return [...payloads, { text: input.recoveredText }];

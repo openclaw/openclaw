@@ -24,6 +24,14 @@ function renderConflictCopyAction(text: string, label: string) {
   );
 }
 
+function renderRemainingConflictPaths(count: number) {
+  return count > 0
+    ? html`<div class="chat-workspace-conflict-more">
+        ${t("chat.workspaceConflict.morePaths", { count: String(count) })}
+      </div>`
+    : nothing;
+}
+
 export function renderWorkspaceConflictNotice(props: {
   conflict?: WorkspaceResultConflict;
   onDismiss?: () => void;
@@ -95,13 +103,7 @@ export function renderWorkspaceConflictNotice(props: {
             </li>`;
           })}
         </ul>
-        ${
-          visible.remaining > 0
-            ? html`<div class="chat-workspace-conflict-more">
-                ${t("chat.workspaceConflict.morePaths", { count: String(visible.remaining) })}
-              </div>`
-            : nothing
-        }
+        ${renderRemainingConflictPaths(visible.remaining)}
         <details class="chat-workspace-conflict-commands-disclosure">
           <summary>${t("chat.workspaceConflict.showCommands")}</summary>
           <div class="chat-workspace-conflict-ref">
@@ -115,22 +117,18 @@ export function renderWorkspaceConflictNotice(props: {
           ${
             commands
               ? html`<div class="chat-workspace-conflict-commands">
-                    <div>
-                      <span>${t("chat.workspaceConflict.inspectCloud")}</span>
-                      <code>${commands.inspect}</code>
-                      ${renderCopyButton(
-                        commands.inspect,
-                        t("chat.workspaceConflict.copyInspectCommand"),
-                      )}
-                    </div>
-                    <div>
-                      <span>${t("chat.workspaceConflict.takeCloud")}</span>
-                      <code>${commands.takeCloud}</code>
-                      ${renderCopyButton(
-                        commands.takeCloud,
-                        t("chat.workspaceConflict.copyTakeCommand"),
-                      )}
-                    </div>
+                    ${(
+                      [
+                        [commands.inspect, "inspectCloud", "copyInspectCommand"],
+                        [commands.takeCloud, "takeCloud", "copyTakeCommand"],
+                      ] as const
+                    ).map(
+                      ([command, labelKey, copyKey]) => html`<div>
+                        <span>${t(`chat.workspaceConflict.${labelKey}`)}</span>
+                        <code>${command}</code>
+                        ${renderCopyButton(command, t(`chat.workspaceConflict.${copyKey}`))}
+                      </div>`,
+                    )}
                   </div>
                   <p class="chat-workspace-conflict-command-help">
                     ${t("chat.workspaceConflict.commandHelp")}
@@ -177,13 +175,7 @@ export function renderWorkspaceConflictTranscriptMessage(
               html`<li><code>${workspaceConflictPathForDisplay(entryPath)}</code></li>`,
           )}
         </ul>
-        ${
-          visible.remaining > 0
-            ? html`<div class="chat-workspace-conflict-more">
-                ${t("chat.workspaceConflict.morePaths", { count: String(visible.remaining) })}
-              </div>`
-            : nothing
-        }
+        ${renderRemainingConflictPaths(visible.remaining)}
         <div class="chat-workspace-conflict-ref">
           <span>${t("chat.workspaceConflict.stagedResult")}</span>
           <code>${conflict.stagedResultRef}</code>

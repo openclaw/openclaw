@@ -4,7 +4,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { resolveBuildInfo } from "../write-build-info.ts";
-import { createManagedHandoffBuildConfig } from "./managed-handoff-build-config.mts";
+import { createManagedHandoffBuildConfigs } from "./managed-handoff-build-config.mts";
 import { collectRuntimeImportClosure } from "./runtime-import-closure.mts";
 import {
   sharedRuntimeProcessBuildEntries,
@@ -18,7 +18,8 @@ import {
   type VitestWorkerManifest,
 } from "./vitest-worker-artifacts.mts";
 import {
-  legacyFinalizerBuildSources,
+  preservedModuleBuildAssets,
+  preservedModuleBuildSources,
   vitestWorkerBuildEntries,
 } from "./vitest-worker-build-entries.mts";
 import { useVitestWorkerCache } from "./vitest-worker-cache-policy.mts";
@@ -154,6 +155,18 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
     ] satisfies NonNullable<Parameters<typeof build>[0]>["plugins"];
   };
   const commonPlugins = createInputPlugins("");
+  const maintenanceModuleBoundaries = new Map([
+    [path.join(root, "src/daemon/service.ts"), "triage-maintenance/service.js"],
+    [
+      path.join(root, "src/daemon/service-process-membership.ts"),
+      "daemon/service-process-membership.js",
+    ],
+    [path.join(root, "src/daemon/systemd-maintenance.ts"), "daemon/systemd-maintenance.js"],
+    [
+      path.join(root, "src/cli/update-cli/update-command-service-drain.ts"),
+      "cli/update-cli/update-command-service-drain.js",
+    ],
+  ]);
   const config: NonNullable<Parameters<typeof build>[0]> = {
     config: false,
     cwd: root,
@@ -170,9 +183,42 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
       // Runtime entries share bundled query builders; other root dependencies stay external.
       alwaysBundle: (id) =>
         shouldBundleWorkspaceDependency(id) || shouldBundleRuntimeSqliteDependency(id),
+      // Installed tooling resolves native bindings and assets from its own package directory.
+      neverBundle: [/^(?:vitest|vite|tsdown|rolldown|esbuild|typescript)(?:\/|$)/u],
     },
     logLevel: "warn",
     plugins: [
+      {
+        name: "openclaw:message-command-boundary",
+        resolveId: {
+          filter: [
+            {
+              kind: "include",
+              expr: {
+                kind: "importerId",
+                pattern: /[\\/]src[\\/]cli[\\/]program[\\/]message[\\/]helpers\.ts$/,
+                params: { cleanUrl: false },
+              },
+            },
+          ],
+          handler(id, importer) {
+            // Preserve the broadcast fixture's exact native command substitution.
+            if (
+              importer &&
+              path.normalize(importer) === path.join(root, "src/cli/program/message/helpers.ts") &&
+              id.startsWith(".") &&
+              path.resolve(path.dirname(importer), id).replace(/\.js$/u, ".ts") ===
+                path.join(root, "src/commands/message.ts")
+            ) {
+              return {
+                id: pathToFileURL(path.join(outDir, "commands/message.js")).href,
+                external: "absolute",
+              };
+            }
+            return null;
+          },
+        },
+      },
       {
         name: "openclaw:maintenance-service-boundary",
         resolveId: {
@@ -183,26 +229,52 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
               expr: {
                 kind: "or",
                 args: [
-                  { kind: "id", pattern: /service\.[jt]s/, params: { cleanUrl: false } },
-                  { kind: "importerId", pattern: /service\.[jt]s/, params: { cleanUrl: false } },
+                  {
+                    kind: "id",
+                    pattern:
+                      /(?:service(?:-process-membership|-drain)?|systemd-maintenance)\.[jt]s/,
+                    params: { cleanUrl: false },
+                  },
+                  {
+                    kind: "importerId",
+                    pattern:
+                      /(?:service(?:-process-membership|-drain)?|systemd-maintenance)\.[jt]s/,
+                    params: { cleanUrl: false },
+                  },
                 ],
               },
             },
           ],
           handler(id, importer) {
-            if (
-              importer &&
-              id.startsWith(".") &&
-              path.resolve(path.dirname(importer), id).replace(/\.js$/u, ".ts") ===
-                path.join(root, "src/daemon/service.ts")
-            ) {
-              return {
-                id: pathToFileURL(path.join(outDir, "triage-maintenance/service.js")).href,
-                external: "absolute",
-              };
+            if (!importer || !id.startsWith(".")) {
+              return null;
             }
-            return null;
+            const source = path.resolve(path.dirname(importer), id).replace(/\.js$/u, ".ts");
+            const boundary = maintenanceModuleBoundaries.get(source);
+            return boundary
+              ? {
+                  id: pathToFileURL(path.join(outDir, boundary)).href,
+                  external: "absolute",
+                }
+              : null;
           },
+        },
+      },
+      {
+        name: "openclaw:quickjs-package-boundary",
+        resolveId(id, importer) {
+          if (
+            id !== "quickjs-wasi" ||
+            !importer ||
+            path.resolve(importer) !==
+              path.join(root, "extensions/code-mode-quickjs/src/code-mode.worker.ts")
+          ) {
+            return null;
+          }
+          // Native snapshot fixtures patch this same package instance before loading the worker.
+          const dependency = createRequire(importer).resolve(id);
+          recordInput(dependency);
+          return { id: pathToFileURL(dependency).href, external: "absolute" };
         },
       },
       {
@@ -227,7 +299,10 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
   const compileShared = async () => {
     await build(config);
     reportPhase("shared entries compiled");
-    for (const [name, source] of Object.entries(standaloneRuntimeProcessBuildEntries)) {
+    for (const [name, source] of Object.entries(entry)) {
+      if (!Object.hasOwn(standaloneRuntimeProcessBuildEntries, name)) {
+        continue;
+      }
       await build({
         ...config,
         entry: { [name]: source },
@@ -235,25 +310,27 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
       });
     }
     reportPhase("standalone workers compiled");
-    await build({
-      ...createManagedHandoffBuildConfig(),
-      config: false,
-      cwd: root,
-      outDir,
-      clean: false,
-      logLevel: config.logLevel,
-      plugins: config.plugins,
-    });
+    for (const sealedConfig of createManagedHandoffBuildConfigs()) {
+      await build({
+        ...sealedConfig,
+        config: false,
+        cwd: root,
+        outDir,
+        clean: false,
+        logLevel: config.logLevel,
+        plugins: config.plugins,
+      });
+    }
     reportPhase("managed handoff compiled");
   };
-  const compileLegacy = async () => {
+  const compilePreservedModules = async () => {
     const fixtureBoundaries = new Set(
-      legacyFinalizerBuildSources.map((source) => path.join(root, source)),
+      preservedModuleBuildSources.map((source) => path.join(root, source)),
     );
     await build({
       ...config,
       // Array entries honor root; object entries infer src/ and break import.meta paths.
-      entry: legacyFinalizerBuildSources,
+      entry: preservedModuleBuildSources,
       outDir: path.join(outDir, "legacy-finalizer"),
       root,
       // Load hooks forward the complete original namespaces through query imports.
@@ -261,7 +338,7 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
       treeshake: false,
       inputOptions: { preserveEntrySignatures: "strict" },
       outputOptions: { entryFileNames: "[name].js", chunkFileNames: "[name].js" },
-      // Hooked service and authority owners must stay in this single preserved graph.
+      // Hooked owners must stay in this single preserved graph.
       plugins: [
         {
           name: "openclaw:fixture-module-boundaries",
@@ -269,7 +346,9 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
             if (!importer || !id.startsWith(".")) {
               return null;
             }
-            const source = path.resolve(path.dirname(importer), id).replace(/\.js$/u, ".ts");
+            const source = path
+              .resolve(path.dirname(importer), id)
+              .replace(/\.([cm]?)js$/u, ".$1ts");
             if (!fixtureBoundaries.has(source)) {
               return null;
             }
@@ -279,7 +358,7 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
                 path.join(
                   outDir,
                   legacyOutputPrefix,
-                  path.relative(root, source).replace(/\.ts$/u, ".js"),
+                  path.relative(root, source).replace(/\.[cm]?ts$/u, ".js"),
                 ),
               ).href,
               external: "absolute",
@@ -289,32 +368,38 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
         ...createInputPlugins(legacyOutputPrefix),
       ],
     });
-    reportPhase("legacy finalizers compiled");
+    reportPhase("preserved fixture modules compiled");
   };
   // Serial preparation measured about 3 GiB RSS; leave headroom for both graphs.
   if (cache && process.availableMemory() >= 8 * 1024 ** 3) {
     // These outputs occupy separate subtrees. Join both writers even if one fails.
-    const completed = await Promise.allSettled([compileShared(), compileLegacy()]);
+    const completed = await Promise.allSettled([compileShared(), compilePreservedModules()]);
     const failed = completed.find((result) => result.status === "rejected");
     if (failed?.status === "rejected") {
       throw failed.reason;
     }
   } else {
     await compileShared();
-    await compileLegacy();
+    await compilePreservedModules();
   }
-  for (const source of legacyFinalizerBuildSources) {
-    fs.accessSync(path.join(outDir, legacyOutputPrefix, source.replace(/\.ts$/u, ".js")));
+  for (const source of preservedModuleBuildSources) {
+    fs.accessSync(path.join(outDir, legacyOutputPrefix, source.replace(/\.[cm]?ts$/u, ".js")));
   }
   for (const name of Object.keys(entry)) {
     fs.accessSync(path.join(directory, "dist", `${name}.js`));
   }
-  for (const asset of vitestWorkerRuntimeAssets) {
+  for (const [asset, relativeDestination] of [
+    ...vitestWorkerRuntimeAssets.map((sourceAsset) => [sourceAsset, sourceAsset] as const),
+    ...preservedModuleBuildAssets.map(
+      (sourceAsset) => [sourceAsset, path.join("dist", legacyOutputPrefix, sourceAsset)] as const,
+    ),
+  ]) {
     const source = path.join(root, asset);
-    const destination = path.join(directory, asset);
+    const destination = path.join(directory, relativeDestination);
     const contents = fs.readFileSync(source);
     const hash = hashVitestWorkerArtifact(contents);
     inputs[source] ??= hash;
+    fs.mkdirSync(path.dirname(destination), { recursive: true });
     fs.writeFileSync(destination, contents, { flag: "wx" });
     // Output paths stay relative to dist, including package-root runtime assets.
     outputs[path.relative(outDir, destination).replaceAll("\\", "/")] = hash;

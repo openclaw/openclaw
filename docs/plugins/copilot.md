@@ -37,7 +37,7 @@ For the broader model/provider/runtime split, start with
   `~/.openclaw/agents/<agentId>/copilot`.
 
 `openclaw doctor` runs the plugin's [doctor contract](#doctor) for
-session-state ownership and future config migrations. It does not probe the
+session-state ownership and future config migrations. It does not check the
 Copilot CLI environment.
 
 ## Install
@@ -261,11 +261,6 @@ unvalidated so the next run creates a fresh SDK session instead of trusting a
 partial transcript. Only the post-append transcript update notification is
 best-effort and logged.
 
-Native subagent task updates retain their original completion or failure result
-when task persistence fails. A later terminal event or parent cleanup retries
-that same result instead of replacing it with cancellation. Bookkeeping is
-retired only after the tracked task is durably terminal or no longer exists.
-
 ## Side questions (`/btw`)
 
 `/btw` is **not** native on this harness. `createCopilotAgentHarness()`
@@ -310,7 +305,7 @@ Permission enforcement for bridged OpenClaw tools happens **inside the tool
 wrapper**, not via the SDK's `onPermissionRequest` callback. The same
 `wrapToolWithBeforeToolCallHook` that PI uses
 (`src/agents/agent-tools.before-tool-call.ts`) is applied by
-`createOpenClawCodingTools` to every coding tool: loop detection, trusted
+`createOpenClawCodingToolsAsync` to every coding tool: loop detection, trusted
 plugin policies, before-tool-call hooks, and two-phase plugin approvals via
 the gateway (`plugin.approval.request`) all run through the exact same code
 path as native PI attempts.
@@ -345,7 +340,7 @@ and the device allowed to review approvals. This keeps those facts intact
 when selecting a backend or recovering a turn. The Copilot bridge in
 `extensions/copilot/src/tool-bridge.ts` adds its own session and workspace
 mapping, authentication, model context, and execution callbacks before
-calling `createOpenClawCodingTools`.
+awaiting `hostCapabilities.createToolSurfaceAsync`.
 `runAttempt` resolves sandbox context through the shared
 `resolveSandboxContext` seam, passes the SDK an effective working directory,
 and forwards `sandbox` plus the subagent-spawn workspace into the tool

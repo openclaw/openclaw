@@ -14,20 +14,12 @@ import {
   restoreDiscordAudioError,
   type DiscordAudioEvent,
 } from "./audio-worker-protocol.js";
+import { resolveDiscordOutputAudioDelta } from "./output-activity.js";
 import type { DiscordRealtimePlayer } from "./realtime-player.js";
 
 /** Main retains provider item identity; physical output state belongs to the worker. */
 export class DiscordRealtimeOutput {
-  private readonly activityTracker = createRealtimeVoiceOutputActivityTracker();
-  get activity() {
-    if (
-      Atomics.load(this.clock, DISCORD_AUDIO_STARTED) !== 0n &&
-      !this.activityTracker.snapshot().playbackStarted
-    ) {
-      this.activityTracker.markPlaybackStarted();
-    }
-    return this.activityTracker;
-  }
+  private readonly activity = createRealtimeVoiceOutputActivityTracker();
   private readonly clock = new BigInt64Array(new SharedArrayBuffer(DISCORD_AUDIO_CLOCK_BYTES));
   private readonly id: number;
   private readonly unregister: () => void;
@@ -89,7 +81,6 @@ export class DiscordRealtimeOutput {
   constructor(
     private readonly params: {
       player: DiscordRealtimePlayer;
-      logContext: string;
       continuous: boolean;
       onStart: () => void;
       onClose: (output: DiscordRealtimeOutput, reason: string) => void;
@@ -111,6 +102,12 @@ export class DiscordRealtimeOutput {
 
   private playedBytes(): number {
     return Number(Atomics.load(this.clock, DISCORD_AUDIO_PLAYED_BYTES));
+  }
+  hasStarted(): boolean {
+    return (
+      Atomics.load(this.clock, DISCORD_AUDIO_STARTED) !== 0n ||
+      this.activity.snapshot().playbackStarted
+    );
   }
   pendingBytes(): number {
     return this.closed
@@ -168,8 +165,8 @@ export class DiscordRealtimeOutput {
       return true;
     }
     const previous = this.activity.snapshot();
-    const sinkBytes = Math.floor((previous.sourceAudioBytes + audio.length) / 2) * 8;
-    const audioMs = (sinkBytes - previous.sinkAudioBytes) / 192;
+    const delta = resolveDiscordOutputAudioDelta(previous, audio.length);
+    const { audioMs } = delta;
     if (item) {
       const last = this.spans.at(-1);
       if (last?.item === item && last.endMs === previous.audioMs) {
@@ -178,11 +175,7 @@ export class DiscordRealtimeOutput {
         this.spans.push({ item, startMs: previous.audioMs, endMs: previous.audioMs + audioMs });
       }
     }
-    this.activity.markAudio({
-      audioMs,
-      sourceAudioBytes: audio.length,
-      sinkAudioBytes: sinkBytes - previous.sinkAudioBytes,
-    });
+    this.activity.markAudio(delta);
     this.params.player.audio.send({ type: "output-audio", id: this.id, audio, audible });
     return true;
   }

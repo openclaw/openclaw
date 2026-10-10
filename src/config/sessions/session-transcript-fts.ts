@@ -1,179 +1,95 @@
 import type { DatabaseSync } from "node:sqlite";
-import type { ColumnType, Generated } from "kysely";
 import {
   executeSqliteQuerySync,
-  executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
   prepareSqliteQuerySync,
   sqliteStringSet,
 } from "../../infra/kysely-sync.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
 
-type FtsDatabase = Pick<DB, "session_transcript_fts_rows" | "session_transcript_index_state"> & {
+type TranscriptFtsDatabase = Pick<DB, "session_transcript_fts_rows"> & {
   session_transcript_fts: Omit<DB["session_transcript_fts"], "timestamp"> & {
-    rowid: Generated<number>;
-    timestamp: ColumnType<string | number | null, string | number | null, string | number | null>;
+    rowid: number;
+    timestamp: number | string | null;
   };
 };
-type FtsRow = Omit<DB["session_transcript_fts"], "session_id" | "timestamp"> & {
-  timestamp: string | number | null;
+
+type TranscriptFtsEntry = {
+  messageId: string | null;
+  text: string | null;
+  role: string | null;
+  timestamp: number | string | null;
 };
 
-/** FTS5 RETURNING does not expose the assigned rowid; capture last_insert_rowid immediately. */
+/** Insert both projection records in the caller's synchronous write transaction. */
 export function createSessionTranscriptFtsInserter(db: DatabaseSync, sessionId: string) {
-  const kysely = getNodeSqliteKysely<FtsDatabase>(db);
-  const insert = prepareSqliteQuerySync<FtsRow>(db, (parameter) =>
-    kysely.insertInto("session_transcript_fts").values({
+  const kysely = getNodeSqliteKysely<TranscriptFtsDatabase>(db);
+  const insertIdentity = prepareSqliteQuerySync<TranscriptFtsEntry>(db, (parameter) =>
+    kysely.insertInto("session_transcript_fts_rows").values({
       session_id: sessionId,
-      text: parameter((row) => row.text),
-      message_id: parameter((row) => row.message_id),
-      role: parameter((row) => row.role),
-      timestamp: parameter((row) => row.timestamp),
+      message_id: parameter((entry) => entry.messageId),
     }),
   );
-  const record = kysely
-    .insertInto("session_transcript_fts_rows")
-    .values({
+  const insertContent = prepareSqliteQuerySync<TranscriptFtsEntry>(db, (parameter) =>
+    kysely.insertInto("session_transcript_fts").values({
+      // Keep the allocated 64-bit identity inside SQLite, including above JS's safe integer range.
+      rowid: kysely.fn<number>("last_insert_rowid", []),
+      text: parameter((entry) => entry.text),
       session_id: sessionId,
-      fts_rowid: kysely.fn<number>("last_insert_rowid", []),
-    })
-    .compile();
-  const increment = kysely
-    .updateTable("session_transcript_index_state")
-    .set((eb) => ({ fts_row_count: eb("fts_row_count", "+", 1) }))
-    .where("session_id", "=", sessionId)
-    .compile();
-  return (row: FtsRow): void => {
-    insert(row);
-    executeSqliteQuerySync(db, { compile: () => record });
-    executeSqliteQuerySync(db, { compile: () => increment });
+      message_id: parameter((entry) => entry.messageId),
+      role: parameter((entry) => entry.role),
+      timestamp: parameter((entry) => entry.timestamp),
+    }),
+  );
+  return (entry: TranscriptFtsEntry): void => {
+    insertIdentity(entry);
+    insertContent(entry);
   };
 }
 
-export function hasCompleteSessionTranscriptFtsRows(db: DatabaseSync, sessionId: string): boolean {
-  const kysely = getNodeSqliteKysely<FtsDatabase>(db);
-  const state = executeSqliteQueryTakeFirstSync(
-    db,
-    kysely
-      .selectFrom("session_transcript_index_state")
-      .select([
-        "fts_row_count",
-        (eb) =>
-          eb
-            .selectFrom("session_transcript_fts_rows")
-            .select((count) => count.fn.countAll<number>().as("count"))
-            .where("session_id", "=", sessionId)
-            .as("mapped_count"),
-      ])
-      .where("session_id", "=", sessionId),
-  );
-  return (
-    state !== undefined &&
-    state.fts_row_count !== null &&
-    state.fts_row_count === state.mapped_count
-  );
-}
-
-/** Keeps exact row ownership and its completeness fact in the caller's write transaction. */
-export function deleteSessionTranscriptFtsRows(
+/** Indexed identities select the work; their delete trigger removes the matching FTS rows. */
+export function deleteSessionTranscriptFtsRowsInTransaction(
   db: DatabaseSync,
-  sessionId: string,
-  options: { limit?: number; messageIds?: readonly string[]; mappingComplete?: boolean } = {},
+  sessionIds: string | readonly string[],
+  options: { messageIds?: readonly string[]; maxRows?: number } = {},
 ): number {
-  const kysely = getNodeSqliteKysely<FtsDatabase>(db);
-  const complete = options.mappingComplete ?? hasCompleteSessionTranscriptFtsRows(db, sessionId);
-  if (!complete && options.limit === undefined && options.messageIds === undefined) {
-    return deleteLegacySessionTranscriptFtsRows(db, [sessionId]);
-  }
-  let mapped = kysely
-    .selectFrom("session_transcript_fts_rows")
-    .select("fts_rowid")
-    .where("session_id", "=", sessionId);
-  if (options.limit !== undefined && options.messageIds === undefined) {
-    // Bound the IN input too: an outer LIMIT alone materializes every mapped rowid.
-    mapped = mapped.limit(options.limit);
-  }
-  let query = kysely.selectFrom("session_transcript_fts").select("rowid");
-  query = complete ? query.where("rowid", "in", mapped) : query.where("session_id", "=", sessionId);
+  const kysely = getNodeSqliteKysely<TranscriptFtsDatabase>(db);
+  let selected = kysely.selectFrom("session_transcript_fts_rows").select("id");
+  selected =
+    typeof sessionIds === "string"
+      ? selected.where("session_id", "=", sessionIds)
+      : selected.where("session_id", "in", sqliteStringSet(sessionIds));
   if (options.messageIds) {
-    query = query.where(
+    selected = selected.where(
       "message_id",
       "in",
       options.messageIds.length <= 400 ? options.messageIds : sqliteStringSet(options.messageIds),
     );
   }
-  if (options.limit !== undefined) {
-    query = query.limit(options.limit);
+  if (options.maxRows !== undefined) {
+    selected = selected.limit(options.maxRows);
   }
-  const partial = options.limit !== undefined || options.messageIds !== undefined;
-  // Materialize only bounded chunks/suffixes: deleting FTS rows would otherwise change
-  // the selection used to remove their mappings. Whole-session deletes need no row array.
-  const rowids = partial
-    ? complete && options.messageIds === undefined
-      ? executeSqliteQuerySync(db, mapped).rows.map((row) => row.fts_rowid)
-      : executeSqliteQuerySync(db, query).rows.map((row) => row.rowid)
-    : undefined;
-  const deletion = kysely.deleteFrom("session_transcript_fts");
-  const removeMappings = kysely
-    .deleteFrom("session_transcript_fts_rows")
-    .where("session_id", "=", sessionId);
-  let consumed: number;
-  if (rowids) {
-    // Large suffixes must stay below both SQLite's variable and JS argument limits.
-    for (let offset = 0; offset < rowids.length; offset += 400) {
-      const batch = rowids.slice(offset, offset + 400);
-      executeSqliteQuerySync(db, deletion.where("rowid", "in", batch));
-      executeSqliteQuerySync(db, removeMappings.where("fts_rowid", "in", batch));
-    }
-    // Consume dangling mappings too, so worker progress survives missing FTS content.
-    consumed = rowids.length;
-  } else {
-    consumed = Number(
-      executeSqliteQuerySync(
-        db,
-        complete
-          ? deletion.where("rowid", "in", mapped)
-          : deletion.where("session_id", "=", sessionId),
-      ).numAffectedRows ?? 0n,
-    );
-  }
-  const exhausted = !partial || (options.limit !== undefined && consumed < options.limit);
-  if (exhausted) {
-    executeSqliteQuerySync(db, removeMappings);
-  }
-  executeSqliteQuerySync(
-    db,
-    kysely
-      .updateTable("session_transcript_index_state")
-      .set((eb) => ({
-        fts_row_count: exhausted ? 0 : complete ? eb("fts_row_count", "-", consumed) : null,
-      }))
-      .where("session_id", "=", sessionId),
+  return Number(
+    executeSqliteQuerySync(
+      db,
+      kysely.deleteFrom("session_transcript_fts_rows").where("id", "in", selected),
+    ).numAffectedRows ?? 0n,
   );
-  return consumed;
 }
 
-/** Migrated cold-archive batches retain one fallback scan for all unknown sessions. */
-export function deleteLegacySessionTranscriptFtsRows(
-  db: DatabaseSync,
-  sessionIds: readonly string[],
-): number {
-  const kysely = getNodeSqliteKysely<FtsDatabase>(db);
-  const ids = sessionIds.length <= 400 ? sessionIds : sqliteStringSet(sessionIds);
-  const deleted = executeSqliteQuerySync(
-    db,
-    kysely.deleteFrom("session_transcript_fts").where("session_id", "in", ids),
-  );
-  executeSqliteQuerySync(
-    db,
-    kysely.deleteFrom("session_transcript_fts_rows").where("session_id", "in", ids),
-  );
-  executeSqliteQuerySync(
-    db,
-    kysely
-      .updateTable("session_transcript_index_state")
-      .set({ fts_row_count: 0 })
-      .where("session_id", "in", ids),
-  );
-  return Number(deleted.numAffectedRows ?? 0n);
+/** Stream only one session's FTS content without scanning other sessions' payloads. */
+export function selectSessionTranscriptFtsRows(db: DatabaseSync, sessionId: string) {
+  const kysely = getNodeSqliteKysely<TranscriptFtsDatabase>(db);
+  return kysely
+    .selectFrom("session_transcript_fts")
+    .select(["text", "message_id", "role", "timestamp"])
+    .where(
+      "rowid",
+      "in",
+      kysely
+        .selectFrom("session_transcript_fts_rows")
+        .select("id")
+        .where("session_id", "=", sessionId),
+    )
+    .orderBy("rowid");
 }

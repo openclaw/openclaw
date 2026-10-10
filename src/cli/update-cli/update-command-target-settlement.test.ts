@@ -1,17 +1,20 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { collectNestedErrorCandidates } from "../../infra/error-graph-internal.js";
-import { createUpdateRun } from "../../infra/update-run-ledger.js";
+import { SqliteReadOnlyInspectionContentionError } from "../../infra/sqlite-readonly-worker-protocol.js";
+import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import {
   resolveCommandProcessSignal,
   retainCommandProcessCleanup,
   withCommandProcessScope,
 } from "../../process/exec-spawn.js";
+import { defaultRuntime } from "../../runtime.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
+import * as channelConfig from "./update-command-config.js";
 import { UnreportedUpdateAdmissionOutcome } from "./update-command-result.js";
 import { resolveUpdateCommandTarget } from "./update-command-target.js";
 
@@ -32,8 +35,73 @@ beforeEach(async () => {
 });
 afterEach(async () => {
   await state.cleanup();
+  vi.restoreAllMocks();
   vi.resetAllMocks();
 });
+
+it.each(["recovered", "busy", "corrupt"] as const)(
+  "continues target inspection only after a successful contention reinspection (%s)",
+  async (outcome) => {
+    const config = await channelConfig.readUpdateChannelConfig(false);
+    const contention = new SqliteReadOnlyInspectionContentionError(
+      "SQLite read-only inspection: database is locked",
+    );
+    const corruption = Object.assign(new Error("database disk image is malformed"), {
+      errcode: 11,
+    });
+    const read = vi.spyOn(channelConfig, "readUpdateChannelConfig");
+    if (outcome === "recovered") {
+      read.mockResolvedValue(config).mockRejectedValueOnce(contention);
+    } else {
+      read.mockRejectedValue(outcome === "busy" ? contention : corruption);
+    }
+    const warning = vi.spyOn(defaultRuntime, "error").mockImplementation(() => undefined);
+    const run = {
+      runId: createUpdateRun({ trigger: "cli" }, { env: state.env }).runId,
+      env: state.env,
+    };
+    const enter = vi.fn(async () => ({ assertCurrent: () => {} }));
+    const target = resolveUpdateCommandTarget(
+      { json: true, dryRun: true, sourceUpdate: { root: state.root }, run },
+      { triageTarget: { root: state.root, env: state.env } },
+      undefined,
+      {
+        startedAt: Date.now(),
+        postCoreUpdateResume: false,
+        postCoreUpdateChannel: undefined,
+        timeoutMs: 1000,
+        shouldRestart: false,
+        requestedChannel: null,
+        devTarget: undefined,
+        controlPlaneUpdateSentinelMeta: null,
+        discoveredRoot: state.root,
+        installKind: "git",
+        servicePlan: undefined,
+        pkgOwnership: { assertUnowned: boundary.inspect, assertEntryUnowned: vi.fn() },
+      },
+      { enter },
+      1000,
+    );
+    if (outcome === "recovered") {
+      await expect(target).resolves.toMatchObject({ updateInstallKind: "git", channel: "dev" });
+      expect(warning).toHaveBeenCalledWith(expect.stringContaining("continuing the update"));
+      expect(getUpdateRun(run.runId, { env: state.env })?.steps).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            step: "warning:installation-inspection",
+            status: "completed",
+            detail: expect.stringContaining(contention.message),
+          }),
+        ]),
+      );
+    } else {
+      await expect(target).rejects.toBe(outcome === "busy" ? contention : corruption);
+      expect(warning).not.toHaveBeenCalled();
+    }
+    expect(read).toHaveBeenCalledTimes(outcome === "corrupt" ? 1 : 2);
+    expect(enter).not.toHaveBeenCalled();
+  },
+);
 
 it.each(["forced", "uncertain"] as const)(
   "settles target inspection before reporting preflight refusal (%s)",

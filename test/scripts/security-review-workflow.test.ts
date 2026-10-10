@@ -1,6 +1,6 @@
-import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { execFileSync, spawnSync } from "node:child_process";
+import { cpSync, existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { runInNewContext } from "node:vm";
 import ignore from "ignore";
 import { afterEach, describe, expect, it } from "vitest";
@@ -9,7 +9,9 @@ import { pnpmLockfileDocuments } from "../../scripts/lib/pnpm-lockfile-documents
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 type WorkflowStep = {
+  name?: string;
   "continue-on-error"?: boolean;
+  "timeout-minutes"?: number;
   env?: Record<string, string>;
   if?: string;
   id?: string;
@@ -28,6 +30,8 @@ type Workflow = {
     string,
     {
       if?: string;
+      needs?: string | string[];
+      outputs?: Record<string, string>;
       permissions?: Record<string, string>;
       env?: Record<string, string>;
       concurrency?: { group: string; "cancel-in-progress": boolean };
@@ -54,7 +58,101 @@ const runtimeAction = parse(readFileSync(`${runtimeActionPath}/action.yml`, "utf
 };
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
+function materializeJobSources(
+  workspace: string,
+  name: "resolve" | "review",
+  checkoutId = "checkout",
+) {
+  const checkout = readWorkflow("security-review").jobs[name]!.steps.find(
+    (step) => step.id === checkoutId,
+  );
+  const sparse = checkout?.with?.["sparse-checkout"];
+  const checkoutPath = checkout?.with?.path;
+  if (typeof sparse !== "string" || typeof checkoutPath !== "string") {
+    throw new Error(`Missing ${name} sparse checkout selection`);
+  }
+  const source = join(workspace, checkoutPath);
+  for (const pattern of sparse.trim().split(/\s+/u)) {
+    expect(pattern).toMatch(/^\/[^*?[\]!]+$/u);
+    const relativePath = pattern.slice(1);
+    expect(relativePath.split("/")).not.toContain("..");
+    const destination = join(source, relativePath);
+    mkdirSync(dirname(destination), { recursive: true });
+    cpSync(resolve(relativePath), destination, { recursive: true });
+  }
+  return source;
+}
+
+function stageJobSources(workspace: string, name: "resolve" | "review", recovered = false) {
+  const stage = readWorkflow("security-review").jobs[name]!.steps.find(
+    (step) => step.id === "sources",
+  );
+  expect(stage).toBeDefined();
+  const env = Object.fromEntries(
+    Object.entries(stage!.env ?? {}).map(([key, expression]) => [
+      key,
+      String(
+        runInNewContext(expression.replace(/^\$\{\{|\}\}$/gu, ""), {
+          steps: { checkout: { outcome: recovered ? "failure" : "success" } },
+        }),
+      ),
+    ]),
+  );
+  execFileSync("bash", ["-e", "-c", stage!.run!], {
+    cwd: workspace,
+    env: { PATH: process.env.PATH, ...env },
+  });
+}
+
+function runSelectedEntry(workspace: string, entry: string) {
+  return spawnSync(process.execPath, [join(workspace, "scripts/github", entry)], {
+    cwd: workspace,
+    env: {},
+    encoding: "utf8",
+  });
+}
+
 describe("security review workflow trust boundaries", () => {
+  it.each([
+    { name: "resolve", recovered: false },
+    { name: "resolve", recovered: true },
+    { name: "review", recovered: true },
+  ] as const)("stages trusted $name sources (recovered=$recovered)", ({ name, recovered }) => {
+    const workspace = tempDirs.make("openclaw-security-checkout-retry-");
+    const failedSource = materializeJobSources(workspace, name);
+    if (recovered) {
+      mkdirSync(join(failedSource, ".git"), { recursive: true });
+      writeFileSync(join(failedSource, ".git/index.lock"), "failed checkout lock");
+      materializeJobSources(workspace, name, "checkout_retry");
+      // A timed-out checkout must not change the scripts selected by recovery.
+      writeFileSync(
+        join(failedSource, "scripts/github/guard-shared.mjs"),
+        'throw new Error("late write from failed checkout");',
+      );
+    }
+    stageJobSources(workspace, name, recovered);
+    if (name === "resolve") {
+      const result = runSelectedEntry(workspace, "security-review-event.mjs");
+      expect(result.status).toBe(1);
+      expect(result.stderr.trim()).toBe(
+        "GitHub token, event, event name, and repository are required.",
+      );
+    }
+    const probe = spawnSync(
+      process.execPath,
+      ["--input-type=module", "-e", 'import "./scripts/github/guard-shared.mjs"'],
+      { cwd: workspace, env: {}, encoding: "utf8" },
+    );
+    expect(probe.stderr).toBe("");
+    expect(probe.status).toBe(0);
+    expect(existsSync(join(workspace, ".git/index.lock"))).toBe(false);
+    if (name === "review") {
+      expect(readFileSync(join(workspace, runtimeActionPath, "action.yml"), "utf8")).toBe(
+        readFileSync(`${runtimeActionPath}/action.yml`, "utf8"),
+      );
+    }
+  });
+
   it("executes trusted scripts and limits comment writes to the serialized review job", () => {
     const workflow = readWorkflow("security-review");
     expect(workflow.permissions).toEqual({
@@ -77,10 +175,19 @@ describe("security review workflow trust boundaries", () => {
       OPENCLAW_SECURITY_REVIEW_PR_NUMBER: "${{ matrix.pr }}",
       OPENCLAW_SECURITY_REVIEW_HEAD_SHA: "${{ matrix.head }}",
     });
-    for (const [name, job] of Object.entries(workflow.jobs)) {
+    for (const name of ["resolve", "review"]) {
+      const job = workflow.jobs[name]!;
       const checkouts = job.steps.filter((step) => step.uses?.startsWith("actions/checkout@"));
-      expect(checkouts).toHaveLength(1);
+      expect(checkouts).toHaveLength(2);
+      expect(checkouts[1]?.with).toEqual({
+        ...checkouts[0]?.with,
+        path: "security-review-retry",
+      });
+      expect(checkouts[1]?.uses).toBe(checkouts[0]?.uses);
+      expect(checkouts[1]?.["timeout-minutes"]).toBe(5);
+      expect(checkouts[0]?.["timeout-minutes"]).toBe(5);
       expect(checkouts[0]?.with).toMatchObject({
+        path: "security-review-primary",
         "persist-credentials": false,
       });
       for (const input of ["ref", "repository", "allow-unsafe-pr-checkout"]) {
@@ -88,14 +195,18 @@ describe("security review workflow trust boundaries", () => {
       }
       const runtime = job.steps.filter((step) => step.uses === `./${runtimeActionPath}`);
       expect(runtime).toHaveLength(name === "review" ? 1 : 0);
+      if (runtime.length > 0) {
+        expect(runtime[0]?.["timeout-minutes"]).toBe(3);
+      }
       const bootstrap = job.steps.filter((step) => step.uses?.startsWith("actions/setup-node@"));
       expect(bootstrap).toEqual(
         name === "resolve"
           ? [
               {
                 name: "Setup supported Node runtime",
+                "timeout-minutes": 3,
                 uses: "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
-                with: { "node-version": "24.19.0", "package-manager-cache": false },
+                with: { "node-version": "24.21.0", "package-manager-cache": false },
               },
             ]
           : [],
@@ -105,15 +216,27 @@ describe("security review workflow trust boundaries", () => {
         expect(bootstrapIndex).toBeGreaterThan(
           job.steps.findIndex((step) => step === checkouts[0]),
         );
-        expect(bootstrapIndex).toBeLessThan(job.steps.findIndex((step) => step.run));
+        expect(bootstrapIndex).toBeLessThan(
+          job.steps.findIndex((step) => step.run?.startsWith("node ")),
+        );
       }
       for (const step of job.steps) {
         if (step.uses && step.uses !== `./${runtimeActionPath}` && step !== bootstrap[0]) {
           expect(step.uses).toMatch(
-            /^actions\/(?:checkout|create-github-app-token)@[a-f0-9]{40}$/u,
+            /^actions\/(?:checkout|create-github-app-token|github-script)@[a-f0-9]{40}$/u,
           );
         }
         if (step.run) {
+          if (step.id === "sources") {
+            continue;
+          }
+          if (step.name === "Report checkout infrastructure retry") {
+            expect(step.if).toBe("${{ !cancelled() && steps.checkout.outcome == 'failure' }}");
+            expect(step.run).toBe(
+              'echo "::warning::Trusted workflow checkout failed; retrying GitHub source transport once."',
+            );
+            continue;
+          }
           expect(step.run).toBe(
             `node scripts/github/security-review${name === "resolve" ? "-event" : ""}.mjs`,
           );
@@ -125,11 +248,125 @@ describe("security review workflow trust boundaries", () => {
     expect(existsSync(".github/workflows/dependency-guard.yml")).toBe(false);
   });
 
-  it("uses automatic PR, command, revocation, and CI completion events only", () => {
+  it.each([
+    { failures: 0, attempts: 1, jobFailed: false, cancelled: false },
+    { failures: 1, attempts: 2, jobFailed: false, cancelled: false },
+    { failures: 2, attempts: 2, jobFailed: true, cancelled: false },
+    { failures: 1, attempts: 1, jobFailed: false, cancelled: true },
+  ])(
+    "bounds checkout recovery ($failures failures, cancelled=$cancelled)",
+    ({ failures, attempts, jobFailed, cancelled }) => {
+      for (const name of ["resolve", "review"]) {
+        const job = readWorkflow("security-review").jobs[name]!;
+        const steps: Record<string, { outcome: string }> = {};
+        let failed = false;
+        let executed = 0;
+        for (const step of job.steps.filter((candidate) =>
+          candidate.uses?.startsWith("actions/checkout@"),
+        )) {
+          const allowed: boolean = step.if
+            ? Boolean(
+                runInNewContext(step.if.replace(/^\$\{\{|\}\}$/gu, ""), {
+                  steps,
+                  cancelled: () => cancelled,
+                }),
+              )
+            : !failed;
+          const outcome: "skipped" | "failure" | "success" = !allowed
+            ? "skipped"
+            : ++executed <= failures
+              ? "failure"
+              : "success";
+          if (step.id) {
+            steps[step.id] = { outcome };
+          }
+          failed ||= outcome === "failure" && step["continue-on-error"] !== true;
+        }
+        expect(executed).toBe(attempts);
+        expect(failed).toBe(jobFailed);
+      }
+    },
+  );
+
+  it.each([
+    { state: "open", sameHead: true, publish: true },
+    { state: "closed", sameHead: true, publish: false },
+    { state: "open", sameHead: false, publish: false },
+  ])(
+    "reports bootstrap failure only for the current open head ($state, sameHead=$sameHead)",
+    async ({ state, sameHead, publish }) => {
+      const reporter = readWorkflow("security-review").jobs.review!.steps.find((step) =>
+        step.uses?.startsWith("actions/github-script@"),
+      );
+      expect(reporter).toBeDefined();
+      const sha = "a".repeat(40);
+      const writes: unknown[] = [];
+      await runInNewContext(`(async () => { ${String(reporter!.with!.script)} })()`, {
+        process: {
+          env: { OPENCLAW_SECURITY_REVIEW_PR_NUMBER: "42", OPENCLAW_SECURITY_REVIEW_HEAD_SHA: sha },
+        },
+        context: {
+          repo: { owner: "example", repo: "project" },
+          runId: 123,
+          serverUrl: "https://github.com",
+        },
+        core: { info: () => {} },
+        github: {
+          rest: {
+            pulls: {
+              get: async () => ({
+                data: { state, head: { sha: sameHead ? sha : "b".repeat(40) } },
+              }),
+            },
+            repos: {
+              createCommitStatus: async (status: unknown) => {
+                writes.push(status);
+              },
+            },
+          },
+        },
+      });
+      expect(writes).toEqual(
+        publish
+          ? [
+              {
+                owner: "example",
+                repo: "project",
+                sha,
+                context: "openclaw/ci-gate",
+                state: "failure",
+                description: "PR #42: Security review setup failed; see workflow details",
+                target_url: "https://github.com/example/project/actions/runs/123",
+              },
+            ]
+          : [],
+      );
+      for (const [failed, runtime, cancelled, allowed] of [
+        [true, "failure", false, true],
+        [true, "skipped", false, true],
+        [false, "success", false, false],
+        [true, "success", false, false],
+        [true, "skipped", true, false],
+      ] as const) {
+        expect(
+          Boolean(
+            runInNewContext(reporter!.if!.replace(/^\$\{\{|\}\}$/gu, ""), {
+              steps: { runtime: { outcome: runtime } },
+              failure: () => failed,
+              cancelled: () => cancelled,
+            }),
+          ),
+        ).toBe(allowed);
+      }
+    },
+  );
+
+  it("uses PR, command, revocation, CI completion, and reconciliation events", () => {
     const workflow = readWorkflow("security-review");
     expect(Object.keys(workflow.on).toSorted()).toEqual([
       "issue_comment",
       "pull_request_target",
+      "schedule",
       "workflow_run",
     ]);
     expect(workflow.on.pull_request_target?.types).toEqual(
@@ -144,9 +381,55 @@ describe("security review workflow trust boundaries", () => {
     );
     expect(workflow.on.issue_comment?.types).toEqual(["created", "edited", "deleted"]);
     expect(workflow.on.workflow_run).toEqual({ workflows: ["CI"], types: ["completed"] });
+    expect(workflow.on.schedule).toEqual([{ cron: "4-59/10 * * * *" }]);
+    const concurrency = workflow.jobs.resolve!.concurrency!;
+    expect(concurrency["cancel-in-progress"]).toBe(false);
+    const group = concurrency.group.replace(/^\$\{\{|\}\}$/gu, "");
+    for (const eventName of Object.keys(workflow.on)) {
+      for (const runId of [123, 456]) {
+        expect(
+          runInNewContext(group, {
+            github: { event_name: eventName, run_id: runId },
+            format: (template: string, value: number) => template.replace("{0}", String(value)),
+          }),
+        ).toBe(
+          eventName === "schedule"
+            ? "security-review-reconcile"
+            : `security-review-resolve-${runId}`,
+        );
+      }
+    }
     const condition = workflow.jobs.resolve!.if!.replace(/^\$\{\{|\}\}$/gu, "");
     for (const event of [
       { eventName: "pull_request_target", allowed: true },
+      { eventName: "pull_request_target", action: "synchronize", allowed: true },
+      { eventName: "pull_request_target", action: "closed", allowed: true },
+      {
+        eventName: "pull_request_target",
+        action: "edited",
+        changes: { title: { from: "Previous title" } },
+        allowed: false,
+      },
+      {
+        eventName: "pull_request_target",
+        action: "edited",
+        changes: { body: { from: "Previous body" } },
+        allowed: false,
+      },
+      {
+        eventName: "pull_request_target",
+        action: "edited",
+        changes: { body: { from: "" }, base: { ref: { from: "release" } } },
+        allowed: true,
+      },
+      {
+        eventName: "pull_request_target",
+        action: "edited",
+        changes: { maintainer_can_modify: { from: false } },
+        allowed: true,
+      },
+      { eventName: "pull_request_target", action: "edited", changes: {}, allowed: true },
+      { eventName: "schedule", allowed: true },
       { eventName: "workflow_run", sourceEvent: "pull_request", allowed: true },
       { eventName: "workflow_run", sourceEvent: "push", allowed: false },
       { eventName: "workflow_run", sourceEvent: "workflow_dispatch", allowed: true },
@@ -177,21 +460,50 @@ describe("security review workflow trust boundaries", () => {
           event: {
             action: event.action,
             comment: { body: event.body ?? "" },
-            changes: { body: { from: event.previousBody ?? "" } },
+            changes:
+              event.changes ??
+              (event.eventName === "pull_request_target"
+                ? {}
+                : { body: { from: event.previousBody ?? "" } }),
             issue: { pull_request: event.issue ? null : {} },
             workflow_run: { event: event.sourceEvent },
           },
         },
         contains: (value: string, search: string) =>
           value.toLowerCase().includes(search.toLowerCase()),
+        startsWith: (value: unknown, prefix: string) => String(value).startsWith(prefix),
+        vars: { OPENCLAW_RELEASE_PRIORITY_RUN: "" },
       });
       expect(Boolean(result), JSON.stringify(event)).toBe(event.allowed);
     }
   });
 
+  it("fails a truncated reconciliation after the selected reviews finish", () => {
+    const workflow = readWorkflow("security-review");
+    expect(workflow.jobs.resolve!.outputs?.truncated).toBe("${{ steps.event.outputs.truncated }}");
+    const backlog = workflow.jobs["reconcile-backlog"]!;
+    expect(backlog.needs).toEqual(["resolve", "review"]);
+    expect(backlog.if).toBe("${{ always() && needs.resolve.outputs.truncated == 'true' }}");
+    expect(backlog.permissions).toEqual({});
+    for (const truncated of ["true", "false", undefined]) {
+      expect(
+        runInNewContext(backlog.if!.replace(/^\$\{\{|\}\}$/gu, ""), {
+          always: () => true,
+          needs: { resolve: { outputs: { truncated } } },
+        }),
+      ).toBe(truncated === "true");
+    }
+    const result = spawnSync("bash", ["-e", "-c", backlog.steps[0]!.run!], {
+      env: {},
+      encoding: "utf8",
+    });
+    expect(result.status, result.stderr).toBe(1);
+    expect(result.stdout).toContain("next scheduled pass continues from the same window");
+  });
+
   it("limits autoscrub writes to PR events and always enforces after failures", () => {
     const steps = readWorkflow("security-review").jobs.review!.steps;
-    const commands = steps.filter((step) => step.run);
+    const commands = steps.filter((step) => step.run?.startsWith("node "));
     expect(commands.map((step) => step.env?.OPENCLAW_SECURITY_REVIEW_MODE)).toEqual([
       "detect",
       "autoscrub",
@@ -218,7 +530,21 @@ describe("security review workflow trust boundaries", () => {
     expect(commands[1]?.if).toBe(
       "github.event_name == 'pull_request_target' && github.event.action != 'closed' && matrix.pr == github.event.pull_request.number && steps.detect.outputs.autoscrub == 'true'",
     );
-    expect(commands[2]?.if).toBe("always()");
+    for (const [runtime, cancelled, allowed] of [
+      ["success", false, true],
+      ["failure", false, false],
+      ["skipped", false, false],
+      ["success", true, false],
+    ] as const) {
+      expect(
+        Boolean(
+          runInNewContext(commands[2]!.if!.replace(/^\$\{\{|\}\}$/gu, ""), {
+            steps: { runtime: { outcome: runtime } },
+            cancelled: () => cancelled,
+          }),
+        ),
+      ).toBe(allowed);
+    }
     const tokenSteps = steps.filter((step) =>
       step.uses?.startsWith("actions/create-github-app-token@"),
     );
@@ -267,6 +593,14 @@ describe("security review workflow trust boundaries", () => {
       for (const directory of [workspace, runnerTemp, bin]) {
         mkdirSync(directory, { recursive: true });
       }
+      materializeJobSources(workspace, "review");
+      stageJobSources(workspace, "review");
+      const selectedRuntimePath = join(workspace, runtimeActionPath);
+      const selectedRuntime = parse(
+        readFileSync(join(selectedRuntimePath, "action.yml"), "utf8"),
+      ) as {
+        runs: { steps: WorkflowStep[] };
+      };
       const installLog = join(root, "install.json");
       const packages = Object.fromEntries(
         ["yaml", "minimatch"].map((name) => [name, realpathSync(`node_modules/${name}`)]),
@@ -291,13 +625,13 @@ for (const [name, target] of Object.entries(${JSON.stringify(packages)})) {
 `,
         { mode: 0o700 },
       );
-      const installSteps = runtimeAction.runs.steps.filter((step) => step.run);
+      const installSteps = selectedRuntime.runs.steps.filter((step) => step.run);
       expect(installSteps).toHaveLength(1);
       expect(installSteps[0]?.shell).toBe("bash");
       execFileSync("bash", ["-c", installSteps[0]!.run!], {
         env: {
           PATH: `${bin}:${process.env.PATH ?? ""}`,
-          GITHUB_ACTION_PATH: resolve(runtimeActionPath),
+          GITHUB_ACTION_PATH: selectedRuntimePath,
           GITHUB_WORKSPACE: workspace,
           RUNNER_TEMP: runnerTemp,
         },
@@ -319,12 +653,17 @@ for (const [name, target] of Object.entries(${JSON.stringify(packages)})) {
       const probe = join(workspace, "scripts/github/probe.mjs");
       writeFileSync(
         probe,
-        'import { parse } from "yaml"; import { minimatch } from "minimatch"; console.log(JSON.stringify([parse("category: secrets").category, minimatch("src/secrets/.store/key", "src/secrets/**", { dot: true })]));',
+        'import { parse } from "yaml"; import { minimatch } from "minimatch"; import { loadSecurityReviewPolicy } from "./security-review-policy.mjs"; console.log(JSON.stringify([parse("category: secrets").category, minimatch("src/secrets/.store/key", "src/secrets/**", { dot: true }), loadSecurityReviewPolicy().isDependencyManifest("package.json")]));',
       );
-      expect(JSON.parse(execFileSync(process.execPath, [probe], { encoding: "utf8" }))).toEqual([
-        "secrets",
-        true,
-      ]);
+      expect(
+        JSON.parse(execFileSync(process.execPath, [probe], { env: {}, encoding: "utf8" })),
+      ).toEqual(["secrets", true, true]);
+      const entry = "security-review.mjs";
+      const loaded = runSelectedEntry(workspace, entry);
+      expect(loaded.status).toBe(1);
+      expect(loaded.stderr.trim()).toBe(
+        "GITHUB_TOKEN, GITHUB_EVENT_PATH, and GITHUB_REPOSITORY are required.",
+      );
     },
   );
 
@@ -395,41 +734,35 @@ function ownersFor(path: string) {
 
 describe("security review ownership", () => {
   it.each([
-    ".github/CODEOWNERS",
-    "SECURITY.md",
-    ".github/codeql/codeql-core-auth-secrets-critical-security.yml",
-    ".github/codeql/openclaw-boundary/queries/managed-proxy-runtime-mutation.ql",
-    ".github/workflows/codeql-macos-critical-security.yml",
-    ".github/workflows/security-review.yml",
-    ".github/security-review-policy.yml",
-    ".github/actions/setup-security-review/action.yml",
-    ".github/actions/setup-security-review/package.json",
-    ".github/actions/setup-security-review/package-lock.json",
-    "scripts/github/security-review-policy.mjs",
-    "scripts/github/security-review-event.mjs",
-    "scripts/github/security-review.mjs",
-    "scripts/github/security-review-rollout.mjs",
-    "scripts/github/guard-review.mjs",
-    "scripts/github/guard-shared.mjs",
-    "scripts/lib/bounded-response.mjs",
-  ])("requires SecOps alone for %s", (path) => {
-    expect(ownersFor(path)).toEqual(["@openclaw/openclaw-secops"]);
-  });
-
-  it.each([
-    "src/gateway/auth.ts",
-    "src/secrets/store/secret-store.ts",
-    "src/agents/sandbox.ts",
-    "pnpm-lock.yaml",
-    ".gitignore",
-    "docs/gateway/secrets.md",
-  ])("leaves maintainer review authority for %s", (path) => {
-    expect(ownersFor(path)).toEqual([]);
-  });
-
-  it("preserves separate release-manager ownership", () => {
-    expect(ownersFor(".github/workflows/openclaw-npm-release.yml")).toEqual([
-      "@openclaw/openclaw-release-managers",
-    ]);
+    ...[
+      ".github/CODEOWNERS",
+      "SECURITY.md",
+      ".github/codeql/openclaw-boundary/queries/managed-proxy-runtime-mutation.ql",
+      ".github/workflows/codeql-macos-critical-security.yml",
+      ".github/workflows/security-review.yml",
+      ".github/security-review-policy.yml",
+      ".github/actions/setup-security-review/action.yml",
+      "scripts/github/security-review-policy.mjs",
+      "scripts/github/security-review-event.mjs",
+      "scripts/github/security-review.mjs",
+      "scripts/github/security-review-rollout.mjs",
+      "scripts/github/guard-review.mjs",
+      "scripts/github/guard-shared.mjs",
+      "scripts/lib/bounded-response.mjs",
+    ].map((path) => ({ path, owners: ["@openclaw/openclaw-secops"] })),
+    ...[
+      "src/gateway/auth.ts",
+      "src/secrets/store/secret-store.ts",
+      "src/agents/sandbox.ts",
+      "pnpm-lock.yaml",
+      ".gitignore",
+      "docs/gateway/secrets.md",
+    ].map((path) => ({ path, owners: [] })),
+    {
+      path: ".github/workflows/openclaw-npm-release.yml",
+      owners: ["@openclaw/openclaw-release-managers"],
+    },
+  ])("keeps the designated review authority for $path", ({ path, owners }) => {
+    expect(ownersFor(path)).toEqual(owners);
   });
 });

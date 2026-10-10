@@ -3,11 +3,16 @@ import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import type { MessagePort } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { sleepWithAbort } from "@openclaw/retry";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../../infra/kysely-sync-cache-state.js";
+import { sqliteReaderDatabasePathKey } from "../../infra/sqlite-reader-lifecycle.js";
+import { onSqliteWalCheckpoint } from "../../infra/sqlite-wal-checkpoint.js";
+import { assertExistingDatabaseIdentity } from "../../infra/sqlite-worker-identity.js";
 import { cancelWorkerIdleGc, scheduleWorkerIdleGc } from "../../infra/worker-idle-gc.js";
 import { recordOpenClawAgentCanonicalValidation } from "../../state/openclaw-agent-canonical-validation-receipt.js";
 import {
   createOpenClawAgentDatabaseClaim,
+  readOpenClawAgentDatabaseIdentity,
   type OpenClawAgentDatabaseClaim,
 } from "../../state/openclaw-agent-db-identity.js";
 import {
@@ -18,41 +23,45 @@ import { readOpenClawAgentDatabaseWorkerLeaseReceipt } from "../../state/opencla
 import { withFreshOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly-open.js";
 import {
   getOpenClawAgentDatabaseValidation,
+  markOpenClawAgentCanonicalValidation,
   type OpenClawAgentDatabaseValidation,
 } from "../../state/openclaw-agent-db-validation-cache.js";
 import {
   borrowOpenClawAgentDatabase,
   settleOpenClawAgentDatabaseWorkerClose,
   runOpenClawAgentWriteTransaction,
-  withOpenClawAgentDatabaseAdmission,
-  type OpenClawAgentDatabase,
-  type OpenClawAgentDatabaseOptions,
   type OpenClawAgentDatabaseWorkerCloseResult,
-  type OpenClawAgentDatabaseWriteAdmission,
 } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseByPath } from "../../state/openclaw-state-db-cache.js";
 import type { CanonicalSessionValidationResult } from "./session-accessor.sqlite-contract.js";
+import { assertSessionSubagentRunsCurrent } from "./session-accessor.sqlite-descendant-basis.js";
 import type { SqliteSessionReclamationPlan } from "./session-accessor.sqlite-lifecycle-types.js";
 import {
   markSqliteReclamationSettled,
+  SqliteReclamationRequestRefusedError,
   waitForSqliteReclamationCommit,
 } from "./session-accessor.sqlite-reclamation-commit.js";
 import type {
   SqliteCanonicalValidationWorkerRequest,
   SqliteReclamationWorkerRequest,
+  SqliteReclamationPrepareRequest,
+  SqliteReclamationPreparation,
   SqliteReclamationWorkerCloseRequest,
   SqliteReclamationWorkerMessage,
-} from "./session-accessor.sqlite-reclamation-worker.js";
+} from "./session-accessor.sqlite-reclamation-worker.types.js";
+import { withWorkerWriteAdmission } from "./session-accessor.sqlite-worker-admission.runtime.js";
 import {
   runWithSqliteMutationWorkerCoordination,
   type SqliteMutationWorkerCoordination,
 } from "./session-accessor.sqlite-worker-coordination.js";
 import type { SqliteMutationWorkerMessage } from "./session-accessor.sqlite-worker-request.js";
 import type { ValidatedCanonicalSessionValidationBatch } from "./session-canonical-validation.js";
-import type {
-  SessionColdWorkerData,
-  SessionColdMutationResult,
-} from "./session-cold-storage-worker.js";
+import {
+  prepareSessionColdSourceGuard,
+  SessionColdSourceRefusedError,
+} from "./session-cold-storage-source-guard.worker.js";
+import type { SessionColdWorkerData } from "./session-cold-storage-worker.js";
+import type { SessionColdMutationResult } from "./session-cold-storage.types.js";
 
 const WORKER_CLOSE_MAX_ATTEMPTS = 3;
 
@@ -68,80 +77,26 @@ async function settleReclamationDatabase(
       break;
     }
     if (attempt + 1 < WORKER_CLOSE_MAX_ATTEMPTS) {
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 25 * 2 ** attempt);
-      });
+      await sleepWithAbort(25 * 2 ** attempt);
     }
   }
   return { cleanupWarnings: [...warnings], settled: outcome.settled };
 }
 
-function withWorkerWriteAdmission<T>(
-  port: MessagePort,
-  operationId: number,
-  databaseOptions: OpenClawAgentDatabaseOptions,
-  operation: (database: OpenClawAgentDatabase) => T | Promise<T>,
-): Promise<T> {
-  let admissionId = 0;
-  let finalAdmission = false;
-  const withAdmission: OpenClawAgentDatabaseWriteAdmission = async (run) => {
-    const requestedId = ++admissionId;
-    const admission = await new Promise<{
-      allowed: boolean;
-      validation?: OpenClawAgentDatabaseValidation;
-    }>((resolve, reject) => {
-      const receive = (admissionMessage: {
-        type: string;
-        operationId: number;
-        admissionId: number;
-        allowed: boolean;
-        validation?: OpenClawAgentDatabaseValidation;
-      }) => {
-        cleanup();
-        if (
-          admissionMessage.type !== "admission" ||
-          admissionMessage.operationId !== operationId ||
-          admissionMessage.admissionId !== requestedId
-        ) {
-          reject(new Error("SQLite reclamation Worker received invalid write admission"));
-          return;
-        }
-        resolve(admissionMessage);
-      };
-      const closed = () => {
-        cleanup();
-        reject(new Error("SQLite reclamation parent closed during database admission"));
-      };
-      const cleanup = () => {
-        port.off("message", receive);
-        port.off("close", closed);
-      };
-      port.on("message", receive);
-      port.once("close", closed);
-      port.postMessage({
-        type: "admission-request",
-        operationId,
-        admissionId: requestedId,
-      });
-    });
-    const value = await run(() => {
-      if (!admission.allowed) {
-        throw new Error("SQLite reclamation database admission was revoked");
-      }
-    }, admission.validation);
-    if (!finalAdmission) {
-      port.postMessage({
-        type: "admission-release",
-        operationId,
-        admissionId: requestedId,
-      });
-    }
-    return value;
-  };
-  return withOpenClawAgentDatabaseAdmission(databaseOptions, withAdmission, (database) => {
-    finalAdmission = true;
-    return operation(database);
-  });
+function throwReclamationFailure(
+  error: unknown,
+  cleanup: Awaited<ReturnType<typeof settleReclamationDatabase>>,
+  commitGate: SharedArrayBuffer | undefined,
+): never {
+  if (!cleanup.settled) {
+    throw new AggregateError(
+      [error, ...cleanup.cleanupWarnings.map((warning) => new Error(warning))],
+      "SQLite session reclamation failed and Worker cleanup is incomplete; restart OpenClaw before deleting the owning agent",
+      { cause: error },
+    );
+  }
+  markSqliteReclamationSettled(commitGate);
+  throw error;
 }
 
 export async function runColdMutationWorkerPort(
@@ -172,12 +127,16 @@ export async function runColdMutationWorkerPort(
 async function runColdMutationWorker(port: MessagePort, data: SessionColdWorkerData) {
   const { mutateSessionColdTranscriptInWorker, prepareSessionColdRestoreInWorker } =
     await import("./session-cold-storage-worker.js");
-  const { reclaimSqliteFreePages } = await import("./session-history-archive-pruning.js");
   // Restore materialization must finish before requesting any write admission.
   const coldRecords =
     data.plan.kind === "cold-restore"
       ? await prepareSessionColdRestoreInWorker(data.plan)
       : undefined;
+  using sourceGuard = prepareSessionColdSourceGuard(
+    data.plan.databaseOptions,
+    data.plan.kind === "cold-restore" ? data.plan.guard?.sources : undefined,
+    data.sourceMatches,
+  );
   const commitGate = data.commitGate;
   let result: SessionColdMutationResult;
   let validation: OpenClawAgentDatabaseValidation | undefined;
@@ -189,22 +148,41 @@ async function runColdMutationWorker(port: MessagePort, data: SessionColdWorkerD
       async (openedDatabase) => {
         let transactionDatabase: DatabaseSync | undefined;
         try {
-          const changed = mutateSessionColdTranscriptInWorker(
+          return mutateSessionColdTranscriptInWorker(
             data.plan,
             coldRecords,
-            (database) => {
+            (database, sourceValidation) => {
               transactionDatabase = database.db;
+              // Native admission can service the grant before its message arrives.
+              for (const { index, matches } of data.sourceMatches ?? []) {
+                const match = sourceValidation?.conversationMatches.find(
+                  (value) => value.index === index,
+                );
+                if (!match) {
+                  throw new Error("Cold restoration omitted its source alternatives");
+                }
+                for (const alternative of match.alternatives) {
+                  Atomics.store(matches, alternative + 1, 1);
+                }
+                Atomics.store(matches, 0, 1);
+              }
               waitForSqliteReclamationCommit(commitGate, () =>
                 port.postMessage({ type: "commit-request", operationId: 0 }),
               );
             },
+            sourceGuard,
           );
-          // The parent joins the cold transaction, not the subsequent bounded page drain.
-          markSqliteReclamationSettled(commitGate);
-          if (data.plan.kind !== "cold-restore") {
-            await reclaimSqliteFreePages(data.plan.databaseOptions, undefined, { maxPasses: 64 });
+        } catch (error) {
+          // The native transaction has rolled back before a post-grant refusal is returned.
+          if (error instanceof SessionColdSourceRefusedError) {
+            return {
+              archivedTranscripts: 0,
+              externalizedTranscripts: 0,
+              restored: false,
+              refusedSource: error.refusal,
+            };
           }
-          return changed;
+          throw error;
         } finally {
           validation = getOpenClawAgentDatabaseValidation(openedDatabase);
           if (
@@ -218,16 +196,7 @@ async function runColdMutationWorker(port: MessagePort, data: SessionColdWorkerD
     );
   } catch (error) {
     const cleanup = await settleReclamationDatabase(data.plan.databaseOptions.path);
-    if (cleanup.settled) {
-      markSqliteReclamationSettled(commitGate);
-    } else {
-      throw new AggregateError(
-        [error, ...cleanup.cleanupWarnings.map((warning) => new Error(warning))],
-        "SQLite session reclamation failed and Worker cleanup is incomplete; restart OpenClaw before deleting the owning agent",
-        { cause: error },
-      );
-    }
-    throw error;
+    throwReclamationFailure(error, cleanup, commitGate);
   }
   const cleanup = await settleReclamationDatabase(data.plan.databaseOptions.path);
   const workerResult = {
@@ -256,7 +225,19 @@ export async function runReclamationWorkerPort(
   let commitGate: SharedArrayBuffer | undefined;
   let operationId = pooledTask?.operationId ?? 0;
   let failureCleanup: Awaited<ReturnType<typeof settleReclamationDatabase>> | undefined;
+  let checkpointResultOwnedByRequest = false;
+  const checkpointPath = sqliteReaderDatabasePathKey(databaseOptions.path);
+  const stopCheckpointRelay = onSqliteWalCheckpoint(({ databasePath, ...snapshot }) => {
+    if (!checkpointResultOwnedByRequest && databasePath === checkpointPath && claim?.isCurrent()) {
+      port.postMessage({
+        type: "checkpoint",
+        operationId,
+        snapshot,
+      } satisfies SqliteReclamationWorkerMessage);
+    }
+  });
   const closeDatabase = async () => {
+    checkpointResultOwnedByRequest = false;
     const cleanup = await settleReclamationDatabase(databaseOptions.path);
     claim?.release();
     claim = undefined;
@@ -267,6 +248,7 @@ export async function runReclamationWorkerPort(
       // SAFETY: only the typed private parent sends on this port.
       const request = message as
         | SqliteReclamationWorkerRequest
+        | SqliteReclamationPrepareRequest
         | SqliteCanonicalValidationWorkerRequest
         | SqliteReclamationWorkerCloseRequest
         | { type: "admission" };
@@ -278,7 +260,7 @@ export async function runReclamationWorkerPort(
       const requestDatabaseOptions =
         request.type === "close"
           ? databaseOptions
-          : request.type === "canonical-validation"
+          : request.type === "canonical-validation" || request.type === "prepare"
             ? request.databaseOptions
             : request.plan.databaseOptions;
       if (
@@ -310,7 +292,7 @@ export async function runReclamationWorkerPort(
               ...cleanup,
             } satisfies SqliteReclamationWorkerMessage;
           }
-          commitGate = request.commitGate;
+          commitGate = request.type === "prepare" ? undefined : request.commitGate;
           try {
             claim?.assertCurrent();
             if (request.type === "reclaim") {
@@ -347,12 +329,22 @@ export async function runReclamationWorkerPort(
                 prepared = opened.value;
               }
             }
+            const assertExpectedSource =
+              request.type === "prepare"
+                ? () =>
+                    assertExistingDatabaseIdentity(
+                      options.path,
+                      request.expectedSource.key,
+                      request.expectedSource.birthtime,
+                    )
+                : undefined;
             let validation: OpenClawAgentDatabaseValidation | undefined;
             const result = await withWorkerWriteAdmission(
               port,
               operationId,
               options,
               (database) => {
+                const nativeIdentity = readOpenClawAgentDatabaseIdentity(database);
                 const openedForRequest = !claim;
                 if (!claim) {
                   const borrowed = borrowOpenClawAgentDatabase(options);
@@ -370,14 +362,41 @@ export async function runReclamationWorkerPort(
                   throw new Error("SQLite session reclamation database owner is no longer current");
                 }
                 assertOpenClawAgentDatabaseLease(lease.leaseId, options);
+                if (
+                  request.type === "prepare" &&
+                  (typeof nativeIdentity.identity !== "string" ||
+                    `file:${nativeIdentity.identity}` !== request.expectedSource.key ||
+                    (request.expectedSource.birthtime !== undefined &&
+                      nativeIdentity.birthtime !== request.expectedSource.birthtime))
+                ) {
+                  throw new Error(
+                    "SQLite reclamation native source differs from its opening expectation",
+                  );
+                }
                 try {
-                  const authorizeCommit = () =>
+                  if (request.type === "prepare") {
+                    if (typeof nativeIdentity.identity !== "string") {
+                      throw new Error("SQLite reclamation requires an admitted file source");
+                    }
+                    return {
+                      source: { ...nativeIdentity, identity: nativeIdentity.identity },
+                      validation: getOpenClawAgentDatabaseValidation(database),
+                    } satisfies SqliteReclamationPreparation;
+                  }
+                  // Deferred periodic work outside this synchronous page unit still needs its relay.
+                  checkpointResultOwnedByRequest =
+                    request.type === "reclaim" && request.plan.kind === "maintenance-pages";
+                  const authorizeCommit = () => {
                     waitForSqliteReclamationCommit(request.commitGate, () =>
                       port.postMessage({
                         type: "commit-request",
                         operationId,
                       } satisfies SqliteReclamationWorkerMessage),
                     );
+                    if (request.type === "reclaim") {
+                      assertSessionSubagentRunsCurrent(request.plan, options.env);
+                    }
+                  };
                   const reclaimed =
                     request.type === "canonical-validation"
                       ? runOpenClawAgentWriteTransaction(
@@ -386,42 +405,36 @@ export async function runReclamationWorkerPort(
                             if (!canonical) {
                               throw new Error("Canonical validation lost its prepared batch");
                             }
+                            const counts = { validatedRows: 0, certifiedRows: 0, oversizedRows: 0 };
                             if (request.initializeCanonicalValidation) {
                               // The parent may have revoked proof this fresh worker still sees on disk.
                               canonical.seedCanonicalSessionValidation(transactionDatabase);
-                              const hasMore =
-                                canonical.hasPendingCanonicalSessionValidation(transactionDatabase);
-                              authorizeCommit();
-                              if (!hasMore) {
-                                recordOpenClawAgentCanonicalValidation(transactionDatabase);
+                            } else {
+                              if (!prepared) {
+                                throw new Error("Canonical validation lost its prepared batch");
                               }
-                              return {
-                                validatedRows: 0,
-                                certifiedRows: 0,
-                                hasMore,
-                                oversizedRows: 0,
-                              } satisfies CanonicalSessionValidationResult;
+                              counts.certifiedRows =
+                                canonical.compareAndCertifyCanonicalSessionValidationBatch(
+                                  transactionDatabase,
+                                  prepared,
+                                );
+                              counts.validatedRows = prepared.rows.length;
+                              counts.oversizedRows = prepared.oversizedRows;
                             }
-                            if (!prepared) {
-                              throw new Error("Canonical validation lost its prepared batch");
-                            }
-                            const batch = prepared;
-                            const certifiedRows =
-                              canonical.compareAndCertifyCanonicalSessionValidationBatch(
-                                transactionDatabase,
-                                batch,
-                              );
                             const hasMore =
                               canonical.hasPendingCanonicalSessionValidation(transactionDatabase);
                             authorizeCommit();
                             if (!hasMore) {
                               recordOpenClawAgentCanonicalValidation(transactionDatabase);
+                              if (!markOpenClawAgentCanonicalValidation(transactionDatabase)) {
+                                throw new Error("Canonical validation lost its admitted owner");
+                              }
                             }
                             return {
-                              validatedRows: batch.rows.length,
-                              certifiedRows,
+                              validatedRows: counts.validatedRows,
+                              certifiedRows: counts.certifiedRows,
                               hasMore,
-                              oversizedRows: batch.oversizedRows,
+                              oversizedRows: counts.oversizedRows,
                             } satisfies CanonicalSessionValidationResult;
                           },
                           options,
@@ -432,6 +445,7 @@ export async function runReclamationWorkerPort(
                           {
                             beforeMutation: currentClaim.assertCurrent,
                             onCommit: authorizeCommit,
+                            afterCommit: () => markSqliteReclamationSettled(request.commitGate),
                           },
                         );
                   // Warm results must not revive proof invalidated by the parent between requests.
@@ -440,12 +454,14 @@ export async function runReclamationWorkerPort(
                   }
                   return reclaimed;
                 } finally {
+                  checkpointResultOwnedByRequest = false;
                   if (!database.db.isOpen || !database.db.isTransaction) {
                     markSqliteReclamationSettled(commitGate);
                   }
                   clearNodeSqliteKyselyCacheForDatabase(database.db);
                 }
               },
+              assertExpectedSource,
             );
             return {
               type: "reclaimed",
@@ -455,17 +471,23 @@ export async function runReclamationWorkerPort(
               validation,
             } satisfies SqliteMutationWorkerMessage<typeof result>;
           } catch (error) {
-            failureCleanup = await closeDatabase();
-            if (failureCleanup.settled) {
+            // Canonical validation retains its scoped native-failure/drain contract.
+            if (
+              (request.type === "reclaim" || request.type === "prepare") &&
+              !pooledTask &&
+              error instanceof SqliteReclamationRequestRefusedError &&
+              ((!claim && !retainedDatabase) ||
+                (claim?.isCurrent() && retainedDatabase?.isOpen && !retainedDatabase.isTransaction))
+            ) {
               markSqliteReclamationSettled(commitGate);
-            } else {
-              throw new AggregateError(
-                [error, ...failureCleanup.cleanupWarnings.map((warning) => new Error(warning))],
-                "SQLite session reclamation failed and Worker cleanup is incomplete; restart OpenClaw before deleting the owning agent",
-                { cause: error },
-              );
+              return {
+                type: "refused",
+                operationId,
+                settled: true,
+              } satisfies SqliteReclamationWorkerMessage;
             }
-            throw error;
+            failureCleanup = await closeDatabase();
+            return throwReclamationFailure(error, failureCleanup, commitGate);
           }
         },
       );
@@ -502,6 +524,7 @@ export async function runReclamationWorkerPort(
     }
     throw error;
   } finally {
+    stopCheckpointRelay();
     claim?.release();
   }
 }

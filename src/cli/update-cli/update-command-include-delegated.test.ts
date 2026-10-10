@@ -1,11 +1,15 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
+import { formatErrorMessage } from "../../infra/errors.js";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../infra/runtime-worker-url.js";
 import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
-import { createUpdateRun } from "../../infra/update-run-ledger.js";
 import { runUtf8CommandWithTimeout } from "../../process/exec.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { updateExecutorNativeEntrypoints } from "./update-command-executor-native-runtime.test-support.js";
@@ -15,16 +19,11 @@ import {
 } from "./update-command-executor.js";
 
 afterEach(() => vi.restoreAllMocks());
-const executor = resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.executor);
-const caller = resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.commandConfig);
-const config = resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.config);
-const sourceArgs = executor.pathname.endsWith(".ts")
-  ? ["--import", path.resolve("scripts/tsx.mjs")]
-  : [];
+const receiverUrl = resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.includeDelegated);
 
-it.each(["healthy", "original-owner-replaced", "include-parent-replaced"] as const)(
+it.for(["healthy", "original-owner-replaced", "include-parent-replaced"] as const)(
   "delegated candidate include effect retains original owner and directory: %s",
-  async (fault) => {
+  async (fault, { onTestFailed }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const control = state.path("control");
       const root = state.path("install");
@@ -49,63 +48,95 @@ it.each(["healthy", "original-owner-replaced", "include-parent-replaced"] as con
         candidate: string;
       }>();
       let stdout = "";
-      const receiver = `
-        import fs from 'node:fs';
-        import fsp from 'node:fs/promises';
-        import {setTimeout} from 'node:timers/promises';
-        import {withDelegatedUpdateCommandExecutor} from ${JSON.stringify(executor.href)};
-        import {persistRequestedUpdateChannel} from ${JSON.stringify(caller.href)};
-        import {readConfigFileSnapshot} from ${JSON.stringify(config.href)};
-        const {grant,proceed}=JSON.parse(fs.readFileSync(0,'utf8'));
-        const open=fsp.open;
-        let announced=false;
-        fsp.open=async(...args)=>{
-          const handle=await open(...args);
-          if(!announced && String(args[0]).includes('openclaw-config-backup')) {
-            announced=true;
-            process.stdout.write(JSON.stringify({ready:true,pid:process.pid,parentPid:grant.parent.executor.pid,parentOwner:grant.parent.owner,candidate:${JSON.stringify(caller.href)}})+'\\n');
-            while(!fs.existsSync(proceed)) await setTimeout(10);
-          }
-          return handle;
-        };
-        try {
-          await withDelegatedUpdateCommandExecutor(grant,grant.runId,grant.root,async fence=>{
-            const snapshot=await readConfigFileSnapshot({skipPluginValidation:true,observe:false});
-            const result=await persistRequestedUpdateChannel({configSnapshot:snapshot,requestedChannel:'beta',assertCurrent:fence.assertCurrent});
-            process.stdout.write(JSON.stringify({result:'published',channel:result.config.update.channel,pid:process.pid})+'\\n');
-          });
-        } catch(error) {
-          process.stdout.write(JSON.stringify({result:'refused',error:String(error),pid:process.pid})+'\\n');
-          process.exitCode=1;
-        }
-      `;
-      const run = createUpdateRun({ trigger: "cli" }, { env: state.env });
+      const runId = randomUUID();
       let boundPid: number | undefined;
-      const work = withUpdateCommandExecutor(run.runId, async (owner) => {
-        const fence = await owner.enter(root);
-        const pending = withUpdateCommandExecutorChild(fence, root, (grant, bindChild) =>
-          runUtf8CommandWithTimeout(
-            [process.execPath, ...sourceArgs, "--input-type=module", "-e", receiver],
-            {
-              input: JSON.stringify({ grant, proceed }),
-              env: state.env,
-              beforeInput: (pid) => {
-                boundPid = pid;
-                bindChild(pid);
-              },
-              timeoutMs: 30_000,
-              killProcessTree: true,
-              requireProcessTreeExtinction: true,
-              onOutputChunk: (chunk) => {
-                stdout += String(chunk);
-                const line = stdout.split("\n").find((value) => value.startsWith('{"ready":true'));
-                if (line) {
-                  ready.resolve(JSON.parse(line));
+      const startedAt = performance.now();
+      const timingsMs: Record<string, number> = { admissionStarted: 0 };
+      const mark = (phase: string) => {
+        timingsMs[phase] ??= performance.now() - startedAt;
+      };
+      let commandResult: Awaited<ReturnType<typeof runUtf8CommandWithTimeout>> | undefined;
+      let commandError: unknown;
+      let outcome:
+        | { value: Awaited<ReturnType<typeof runUtf8CommandWithTimeout>> }
+        | { error: unknown }
+        | undefined = undefined;
+      onTestFailed(() => {
+        console.error(
+          JSON.stringify({
+            fault,
+            boundPid,
+            parentPid: process.pid,
+            candidate: receiverUrl.href,
+            timingsMs,
+            command: commandResult
+              ? {
+                  code: commandResult.code,
+                  signal: commandResult.signal,
+                  termination: commandResult.termination,
+                  timedOut:
+                    commandResult.termination === "timeout" ||
+                    commandResult.termination === "no-output-timeout",
+                  killed: commandResult.killed,
+                  cleanup: commandResult.cleanup,
+                  stderr: commandResult.stderr,
                 }
-              },
-            },
-          ),
+              : undefined,
+            commandError: commandError === undefined ? undefined : formatErrorMessage(commandError),
+            error:
+              outcome !== undefined && "error" in outcome
+                ? formatErrorMessage(outcome.error)
+                : undefined,
+            stdout,
+          }),
         );
+      });
+      const work = withUpdateCommandExecutor(runId, async (owner) => {
+        const fence = await owner.enter(root);
+        mark("executorAdmitted");
+        const pending = withUpdateCommandExecutorChild(fence, root, async (grant, bindChild) => {
+          mark("childLaunchRequested");
+          try {
+            const result = await runUtf8CommandWithTimeout(
+              [process.execPath, ...resolveRuntimeWorkerArgv(receiverUrl)],
+              {
+                input: JSON.stringify({ grant, proceed }),
+                env: state.env,
+                beforeInput: (pid) => {
+                  mark("childSpawnObserved");
+                  boundPid = pid;
+                  bindChild(pid);
+                  mark("childBound");
+                },
+                timeoutMs: 30_000,
+                killProcessTree: true,
+                requireProcessTreeExtinction: true,
+                onOutputChunk: (chunk) => {
+                  stdout += String(chunk);
+                  const lines = stdout.split("\n");
+                  const line = lines.find((value) => value.startsWith('{"ready":true'));
+                  if (line) {
+                    const binding = JSON.parse(line);
+                    mark("readyReceived");
+                    ready.resolve(binding);
+                  }
+                  if (
+                    lines.slice(0, -1).some((value) => value.startsWith('{"result":"published"'))
+                  ) {
+                    mark("writeReturned");
+                  }
+                },
+              },
+            );
+            commandResult = result;
+            mark("commandReturned");
+            return result;
+          } catch (error) {
+            commandError = error;
+            mark("commandRejected");
+            throw error;
+          }
+        });
         try {
           const binding = await Promise.race([
             ready.promise,
@@ -116,7 +147,7 @@ it.each(["healthy", "original-owner-replaced", "include-parent-replaced"] as con
           expect(binding.pid).toBe(boundPid);
           expect(binding.pid).not.toBe(process.pid);
           expect(binding.parentPid).toBe(process.pid);
-          expect(binding.candidate).toBe(caller.href);
+          expect(binding.candidate).toBe(receiverUrl.href);
           expect(binding.parentOwner.length).toBeGreaterThan(0);
           if (fault === "original-owner-replaced") {
             const db = new DatabaseSync(path.join(control, "managed-update-handoffs.sqlite"));
@@ -135,17 +166,17 @@ it.each(["healthy", "original-owner-replaced", "include-parent-replaced"] as con
             fs.writeFileSync(fragment, original);
           }
         } finally {
+          mark("releaseStarted");
           fs.writeFileSync(proceed, "go");
+          mark("released");
         }
         return await pending;
       });
-      const outcome = await work.then(
+      outcome = await work.then(
         (value) => ({ value }),
         (error: unknown) => ({ error }),
       );
-      console.log(
-        JSON.stringify({ fault, boundPid, parentPid: process.pid, candidate: caller.href, stdout }),
-      );
+      mark("completed");
       if (fault === "healthy") {
         expect("value" in outcome && outcome.value.code === 0, stdout).toBe(true);
         expect(JSON.parse(fs.readFileSync(fragment, "utf8")).channel).toBe("beta");

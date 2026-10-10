@@ -6,7 +6,7 @@ import {
 import type { OpenClawStateDatabaseOptions } from "../../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
-import type { CronRunReceiptHandle } from "./run-receipt-store.js";
+import type { CronRunReceiptHandle } from "./run-receipt.types.js";
 
 /** Binds the exact admitted execution without changing the receipt lifecycle. */
 export async function bindCronRunReceiptExecution(params: {

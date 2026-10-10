@@ -1,44 +1,56 @@
-import type { SqliteWorkerCommand } from "../infra/sqlite-worker-contract.js";
-import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
-import type { NodeWorkerJournalWorkerOperations } from "./node-worker-journal.worker-contract.js";
+import type {
+  WorkerOperationContext,
+  WorkerOperationHandlers,
+} from "../state/worker-operation-registry.js";
 import { NodeWorkerLaunchKernel } from "./node-worker-launch-store.kernel.js";
+import { NodeWorkerPreparedWorkspaceKernel } from "./node-worker-prepared-workspace-store.kernel.js";
 import { NodeWorkerTurnKernel } from "./node-worker-turn-store.kernel.js";
 
-export function executeNodeWorkerJournalCommand(
-  command: SqliteWorkerCommand<NodeWorkerJournalWorkerOperations>,
-  options: OpenClawStateDatabaseOptions & {
-    database: NonNullable<OpenClawStateDatabaseOptions["database"]>;
-  },
-): NodeWorkerJournalWorkerOperations[keyof NodeWorkerJournalWorkerOperations]["output"] {
-  switch (command.type) {
-    case "nodeWorker.launch.claimObservation":
-      return new NodeWorkerLaunchKernel(options).claimObservation(...command.input);
-    case "nodeWorker.launch.claim":
-      return new NodeWorkerLaunchKernel(options).claim(...command.input);
-    case "nodeWorker.launch.listNonterminal":
-      return new NodeWorkerLaunchKernel(options).listNonterminal(...command.input);
-    case "nodeWorker.launch.nonterminalCount":
-      return new NodeWorkerLaunchKernel(options).nonterminalCount(...command.input);
-    case "nodeWorker.launch.pruneExpiredTerminal":
-      return new NodeWorkerLaunchKernel(options).pruneExpiredTerminal(...command.input);
-    case "nodeWorker.launch.get":
-      return new NodeWorkerLaunchKernel(options).get(...command.input);
-    case "nodeWorker.launch.getMatching":
-      return new NodeWorkerLaunchKernel(options).getMatching(...command.input);
-    case "nodeWorker.launch.cleanupBinding":
-      return new NodeWorkerLaunchKernel(options).cleanupBinding(...command.input);
-    case "nodeWorker.launch.finishCancelled":
-      return new NodeWorkerLaunchKernel(options).finishCancelled(...command.input);
-    case "nodeWorker.launch.markRunning":
-      return new NodeWorkerLaunchKernel(options).markRunning(...command.input);
-    case "nodeWorker.launch.finish":
-      return new NodeWorkerLaunchKernel(options).finish(...command.input);
-    case "nodeWorker.turn.claim":
-      return new NodeWorkerTurnKernel(options).claim(...command.input);
-    case "nodeWorker.turn.get":
-      return new NodeWorkerTurnKernel(options).get(...command.input);
-    case "nodeWorker.turn.finish":
-      return new NodeWorkerTurnKernel(options).finish(...command.input);
-  }
-  throw new Error("Unsupported node worker journal command");
+function journalKernel<Kernel>(create: (context: WorkerOperationContext) => Kernel) {
+  return <Input extends unknown[], Output>(
+    select: (kernel: Kernel) => (...input: Input) => Output,
+  ) =>
+    (input: Input, context: WorkerOperationContext): Output =>
+      select(create(context))(...input);
 }
+
+const preparedRead = journalKernel(
+  ({ stateOptions }) => new NodeWorkerPreparedWorkspaceKernel(stateOptions()),
+);
+const preparedWrite = journalKernel(
+  ({ stateOptions, open }) =>
+    new NodeWorkerPreparedWorkspaceKernel({ ...stateOptions(), database: open() }),
+);
+const launch = journalKernel(
+  ({ stateOptions, open }) => new NodeWorkerLaunchKernel({ ...stateOptions(), database: open() }),
+);
+const turn = journalKernel(
+  ({ stateOptions, open }) => new NodeWorkerTurnKernel({ ...stateOptions(), database: open() }),
+);
+
+export const nodeWorkerJournalOperations = {
+  "nodeWorker.prepared.find": preparedRead((kernel) => kernel.find.bind(kernel)),
+  "nodeWorker.prepared.list": preparedRead((kernel) => kernel.list.bind(kernel)),
+  "nodeWorker.prepared.register": preparedWrite((kernel) => kernel.register.bind(kernel)),
+  "nodeWorker.prepared.bind": preparedWrite((kernel) => kernel.bind.bind(kernel)),
+  "nodeWorker.prepared.retire": preparedWrite((kernel) => kernel.retire.bind(kernel)),
+  "nodeWorker.prepared.completeMutation": preparedWrite((kernel) =>
+    kernel.completeMutation.bind(kernel),
+  ),
+  "nodeWorker.launch.claimObservation": launch((kernel) => kernel.claimObservation.bind(kernel)),
+  "nodeWorker.launch.claim": launch((kernel) => kernel.claim.bind(kernel)),
+  "nodeWorker.launch.listNonterminal": launch((kernel) => kernel.listNonterminal.bind(kernel)),
+  "nodeWorker.launch.nonterminalCount": launch((kernel) => kernel.nonterminalCount.bind(kernel)),
+  "nodeWorker.launch.pruneExpiredTerminal": launch((kernel) =>
+    kernel.pruneExpiredTerminal.bind(kernel),
+  ),
+  "nodeWorker.launch.get": launch((kernel) => kernel.get.bind(kernel)),
+  "nodeWorker.launch.getMatching": launch((kernel) => kernel.getMatching.bind(kernel)),
+  "nodeWorker.launch.cleanupBinding": launch((kernel) => kernel.cleanupBinding.bind(kernel)),
+  "nodeWorker.launch.finishCancelled": launch((kernel) => kernel.finishCancelled.bind(kernel)),
+  "nodeWorker.launch.markRunning": launch((kernel) => kernel.markRunning.bind(kernel)),
+  "nodeWorker.launch.finish": launch((kernel) => kernel.finish.bind(kernel)),
+  "nodeWorker.turn.claim": turn((kernel) => kernel.claim.bind(kernel)),
+  "nodeWorker.turn.get": turn((kernel) => kernel.get.bind(kernel)),
+  "nodeWorker.turn.finish": turn((kernel) => kernel.finish.bind(kernel)),
+} satisfies WorkerOperationHandlers;

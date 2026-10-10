@@ -3,48 +3,74 @@ import path from "node:path";
 import type { Worker } from "node:worker_threads";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, afterEach, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
+import { encodeSessionArchiveContent } from "../config/sessions/archive-compression.js";
 import {
   replaceSessionEntry,
   replaceTranscriptEvents,
   waitForSessionTranscriptProjection,
 } from "../config/sessions/session-accessor.js";
+import { patchSessionEntryCore } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { readSessionColdTranscript } from "../config/sessions/session-cold-storage-state.js";
 import { runSessionColdStorageMaintenance } from "../config/sessions/session-cold-storage.js";
 import {
   createSessionColdStorageFixture,
   maintenanceConfig,
 } from "../config/sessions/session-cold-storage.test-support.js";
+import { readSessionHistoryPageInWorker } from "../config/sessions/session-history-worker-runtime.js";
+import {
+  historyClearTimeout,
+  historyLane,
+  maintenanceLane,
+  rotateDatabaseWorkers,
+  targetDiscoveryLane,
+} from "../config/sessions/session-transcript-worker-resources.js";
 import {
   prepareSessionEntryPresenceRead,
+  prewarmSessionHistoryWorker,
   withSessionHistoryWorkerDatabase,
 } from "../config/sessions/session-transcript-worker-runtime.js";
+import { getSqliteRuntimeCapabilities } from "../infra/bun-sqlite-library.js";
 import { DEFAULT_WORKER_PENDING_BYTES } from "../infra/worker-task-capacity.js";
-import { KeyedAsyncQueue } from "../plugin-sdk/keyed-async-queue.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../state/openclaw-agent-db-lifecycle.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
-import { captureOpenClawAgentDatabaseRegistration } from "../state/openclaw-agent-db-registry-listing.js";
+import {
+  captureOpenClawAgentDatabaseRegistration,
+  invalidateRegisteredAgentDatabasesMemo,
+} from "../state/openclaw-agent-db-registry-listing.js";
 import { registerOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
 import {
   resolveIncognitoOpenClawAgentSqlitePath,
   resolveOpenClawAgentSqlitePath,
 } from "../state/openclaw-agent-db.paths.js";
-import { captureOpenClawStateDatabaseReadAdmission } from "../state/openclaw-state-db-cache.js";
+import {
+  captureOpenClawStateDatabaseReadAdmission,
+  closeOpenClawStateDatabaseAsync,
+} from "../state/openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import * as stateReadWorker from "../state/openclaw-state-read-worker.js";
 import {
   withOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { readChatHistoryPage } from "./server-methods/chat-history-pages.js";
+import { createArchivedSessionTranscriptSource } from "./session-end-transcript-reader.js";
 import { readChatHistoryMessageId } from "./session-history-tail.js";
 
 const observed = vi.hoisted(() => ({
   timers: vi.spyOn(globalThis, "setTimeout"),
   workers: [] as Worker[],
+  idleCloseKeepsWorker: new WeakMap<Worker, boolean>(),
   dispatch: undefined as ((message: unknown) => void) | undefined,
   restoration: undefined as
-    | { sessionId: string; entered: () => void; wait: Promise<void> }
+    | {
+        sessionId: string;
+        phase: "before restoration" | "queued restoration";
+        entered: () => void;
+        wait: Promise<void>;
+      }
     | undefined,
 }));
 vi.mock("node:worker_threads", async (importOriginal) => {
@@ -52,10 +78,17 @@ vi.mock("node:worker_threads", async (importOriginal) => {
   return {
     ...actual,
     Worker: class extends actual.Worker {
+      constructor(...args: ConstructorParameters<typeof actual.Worker>) {
+        const { explicitSqliteCloseReleasesNativeResources } = getSqliteRuntimeCapabilities();
+        super(...args);
+        // Match the decision this generation inherits, before any later admission.
+        observed.idleCloseKeepsWorker.set(this, explicitSqliteCloseReleasesNativeResources);
+      }
+
       override postMessage(...args: Parameters<Worker["postMessage"]>): void {
         const kind = asOptionalRecord(asOptionalRecord(args[0])?.input)?.kind;
         if (
-          (kind === "history-page" || kind === "session-row-presence") &&
+          (kind === "prewarm" || kind === "history-page" || kind === "session-row-presence") &&
           !observed.workers.includes(this)
         ) {
           observed.workers.push(this);
@@ -75,27 +108,54 @@ vi.mock("../config/sessions/session-cold-storage-read.js", async (importOriginal
       ...args: Parameters<typeof actual.readRestoredSessionTranscript>
     ) => {
       const held = observed.restoration;
-      if (args[0].sessionId === held?.sessionId) {
+      if (!held || args[0].sessionId !== held.sessionId) {
+        return actual.readRestoredSessionTranscript(...args);
+      }
+      if (held.phase === "before restoration") {
         held.entered();
         await held.wait;
+        return actual.readRestoredSessionTranscript(...args);
       }
-      return actual.readRestoredSessionTranscript(...args);
+      const [scope, read, options] = args;
+      const coldRead = options?.coldRead;
+      if (!coldRead) {
+        throw new Error("Queued restoration fixture requires prepared cold metadata");
+      }
+      return actual.readRestoredSessionTranscript(scope, read, {
+        ...options,
+        coldRead: {
+          ...coldRead,
+          readMetadata: async (phase) => {
+            if (phase === "queued") {
+              held.entered();
+              await held.wait;
+            }
+            return coldRead.readMetadata(phase);
+          },
+        },
+      });
     },
   };
 });
 
 afterAll(() => observed.timers.mockRestore());
 
-afterEach(() => {
+afterEach(async () => {
   observed.dispatch = undefined;
   observed.restoration = undefined;
+  await Promise.all(
+    [historyLane, maintenanceLane, targetDiscoveryLane].map(async (lane) => {
+      historyClearTimeout(lane.idleTimer);
+      await rotateDatabaseWorkers(lane);
+    }),
+  );
   for (const worker of observed.workers.splice(0)) {
     expect(worker.threadId).toBe(-1);
   }
 });
 
 it.each([false, true])(
-  "reads exact row presence without creating a database (incognito=%s)",
+  "reads exact row presence from its captured target without creating a database (incognito=%s)",
   async (incognito) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const target = {
@@ -104,7 +164,7 @@ it.each([false, true])(
           ? "agent:main:dashboard:incognito-presence"
           : "agent:main:dashboard:presence",
         storePath: path.join(state.agentDir(), "presence.sqlite"),
-        env: state.env,
+        env: { ...state.env },
       };
       const databasePath = incognito
         ? resolveIncognitoOpenClawAgentSqlitePath(target)
@@ -132,27 +192,84 @@ it.each([false, true])(
         expect(fs.existsSync(databasePath)).toBe(false);
       } else {
         expect(observed.workers.length).toBeGreaterThan(workersBefore);
+        target.storePath = path.join(state.agentDir(), "replacement.sqlite");
+        target.env.OPENCLAW_STATE_DIR = state.path("different-state");
+        expect(await read()).toBe(true);
+        expect(await prepareSessionEntryPresenceRead(target).read()).toBe(false);
+        expect(fs.existsSync(target.storePath)).toBe(false);
       }
     });
   },
 );
 
-it("retains the prepared metadata target when caller scope and environment change", async () => {
+it("reads an exact ended-session archive in the history worker", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const target = {
+    const sessionId = "deleted-session-archive";
+    const fixture = await seed(state, "main", sessionId);
+    const content = [
+      { type: "session", version: 3, id: sessionId },
+      {
+        type: "message",
+        id: "archived-message",
+        parentId: null,
+        message: { role: "user", content: "archived content" },
+      },
+    ]
+      .map((event) => JSON.stringify(event))
+      .join("\n");
+    const encoded = encodeSessionArchiveContent(`${content}\n`);
+    const archivePath = state.path(
+      `deleted.jsonl.deleted.2026-09-29T00-00-00.000Z${encoded.suffix}`,
+    );
+    fs.writeFileSync(archivePath, encoded.bytes);
+    const source = createArchivedSessionTranscriptSource({
       agentId: "main",
-      sessionKey: "agent:main:dashboard:captured-presence",
-      storePath: path.join(state.agentDir(), "captured.sqlite"),
-      env: { ...state.env },
-    };
-    await replaceSessionEntry(target, { sessionId: "captured-row", updatedAt: 1 });
-    const { read } = prepareSessionEntryPresenceRead(target);
-    target.storePath = path.join(state.agentDir(), "replacement.sqlite");
-    target.env.OPENCLAW_STATE_DIR = state.path("different-state");
-    expect(await read()).toBe(true);
-    expect(await prepareSessionEntryPresenceRead(target).read()).toBe(false);
-    expect(fs.existsSync(target.storePath)).toBe(false);
+      archivedPath: archivePath,
+      sessionId,
+      storePath: fixture.target.storePath,
+    });
+    if (!source.available) {
+      throw new Error("expected an available archive source");
+    }
+    const workersBefore = observed.workers.length;
+
+    await expect(source.readTail({ maxBytes: 64 * 1_024, maxMessages: 10 })).resolves.toMatchObject(
+      {
+        messages: [expect.objectContaining({ role: "user", content: "archived content" })],
+        totalMessages: 1,
+      },
+    );
+
+    expect(observed.workers.length).toBeGreaterThan(workersBefore);
+    expect(observed.workers.at(-1)?.threadId).toBeGreaterThan(0);
   });
+});
+
+it("keeps fresh fixture roots isolated while reusing idle reader execution", async () => {
+  let previousWorker: Worker | undefined;
+  for (const sessionId of ["first-fixture", "second-fixture"]) {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const fixture = await seed(state, "main", sessionId);
+      await prewarmSessionHistoryWorker({ agentId: "main", path: fixture.path, env: state.env });
+      const prewarmedWorker = observed.workers.at(-1);
+      expect((await fixture.read()).messages.map(readChatHistoryMessageId)).toEqual([
+        `${sessionId}-message`,
+      ]);
+      const worker = observed.workers.at(-1)!;
+      expect(worker).toBe(prewarmedWorker);
+      if (previousWorker) {
+        if (observed.idleCloseKeepsWorker.get(previousWorker) !== true) {
+          expect(previousWorker.threadId).toBe(-1);
+          expect(worker).not.toBe(previousWorker);
+        } else {
+          expect(worker).toBe(previousWorker);
+        }
+      }
+      previousWorker = worker;
+    });
+  }
+  await closeOpenClawStateDatabaseAsync();
+  expect(previousWorker?.threadId).toBe(-1);
 });
 
 it("joins native worker exit when metadata-read custody is revoked during dispatch", async () => {
@@ -186,7 +303,12 @@ async function seed(state: OpenClawTestState, agentId: string, sessionId: string
     storePath: path.join(state.sessionsDir(agentId), "sessions.json"),
   };
   const entry = { sessionId, updatedAt: 1 };
-  await replaceSessionEntry(target, entry);
+  // Seed reader lifecycle fixtures without queueing unrelated automatic maintenance.
+  await patchSessionEntryCore(target, () => entry, {
+    fallbackEntry: entry,
+    replaceEntry: true,
+    skipMaintenance: true,
+  });
   await replaceTranscriptEvents(target, [
     { type: "session", version: 3, id: sessionId },
     {
@@ -211,46 +333,185 @@ async function seed(state: OpenClawTestState, agentId: string, sessionId: string
     messageId: undefined,
   };
   return {
+    target,
     path: resolveOpenClawAgentSqlitePath({ agentId, env: state.env }),
     read: () => readChatHistoryPage(params),
   };
 }
 
-it.each(["no-commit", "metadata-refresh"] as const)(
-  "keeps history readable across unchanged sibling registration (%s)",
-  async (mode) => {
+it("settles cancelled message reads before reuse and closes their database handles", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const fixture = await seed(state, "main", "cancel-message-read");
+    await closeOpenClawAgentDatabaseByPathAsync(fixture.path, "main");
+    const controller = new AbortController();
+    const cancelled = new Error("history consumer closed");
+    let dispatched = false;
+    observed.dispatch = (message) => {
+      const input = asOptionalRecord(asOptionalRecord(message)?.input);
+      if (asOptionalRecord(input?.request)?.kind === "message-by-id") {
+        observed.dispatch = undefined;
+        dispatched = true;
+        controller.abort(cancelled);
+      }
+    };
+    const pending = readSessionHistoryPageInWorker(
+      {
+        kind: "message-by-id",
+        params: { target: fixture.target, messageId: "cancel-message-read-message" },
+      },
+      controller.signal,
+    );
+    await expect(pending).rejects.toBe(cancelled);
+    expect(dispatched).toBe(true);
+    const worker = observed.workers.at(-1)!;
+    const threadId = worker.threadId;
+    expect((await fixture.read()).messages.map(readChatHistoryMessageId)).toEqual([
+      "cancel-message-read-message",
+    ]);
+    expect(observed.workers.at(-1)).toBe(worker);
+    const keepsWorker = observed.idleCloseKeepsWorker.get(worker) === true;
+    await closeOpenClawAgentDatabaseByPathAsync(fixture.path, "main");
+    expect(worker.threadId).toBe(keepsWorker ? threadId : -1);
+    expect((await fixture.read()).messages.map(readChatHistoryMessageId)).toEqual([
+      "cancel-message-read-message",
+    ]);
+    if (!keepsWorker) {
+      expect(observed.workers.at(-1)).not.toBe(worker);
+    } else {
+      expect(observed.workers.at(-1)).toBe(worker);
+    }
+  });
+});
+
+it("rejects a completed native message reply after primary file replacement", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const sessionId = "replaced-primary-read";
+    const fixture = await seed(state, "main", sessionId);
+    await closeOpenClawAgentDatabaseByPathAsync(fixture.path, "main");
+    fs.copyFileSync(fixture.path, `${fixture.path}.replacement`);
+    const originalInode = fs.statSync(fixture.path, { bigint: true }).ino;
+    const nativeReply = createDeferredCore<unknown>();
+    const releaseReply = createDeferredCore();
+    const run = targetDiscoveryLane.pool.run.bind(targetDiscoveryLane.pool);
+    const read = vi.spyOn(targetDiscoveryLane.pool, "run").mockImplementation(async (...args) => {
+      const reply = await run(...args);
+      if (reply.ok && asOptionalRecord(reply.value)?.kind === "message-by-id") {
+        nativeReply.resolve(reply.value);
+        await releaseReply.promise;
+      }
+      return reply;
+    });
+    const pending = readSessionHistoryPageInWorker({
+      kind: "message-by-id",
+      params: { target: fixture.target, messageId: `${sessionId}-message` },
+    });
+    try {
+      const completed = await Promise.race([
+        nativeReply.promise,
+        pending.then(() => {
+          throw new Error("History read completed before its native reply was released");
+        }),
+      ]);
+      expect(completed).toMatchObject({
+        kind: "message-by-id",
+        result: { found: true, message: { role: "user", content: sessionId } },
+      });
+      // Release the settled native reader for Windows replacement without revoking host custody.
+      await targetDiscoveryLane.pool.closeResources(JSON.stringify([{ path: fixture.path }]));
+      fs.renameSync(fixture.path, `${fixture.path}.previous`);
+      fs.renameSync(`${fixture.path}.replacement`, fixture.path);
+      expect(fs.statSync(fixture.path, { bigint: true }).ino).not.toBe(originalInode);
+      releaseReply.resolve();
+      await expect(pending).rejects.toThrow(
+        "Session store changed while preparing its metadata. Retry the request.",
+      );
+    } finally {
+      releaseReply.resolve();
+      await pending.catch(() => undefined);
+      read.mockRestore();
+    }
+  });
+});
+
+it.each([
+  { phase: "discovery", mode: "no-commit" },
+  { phase: "discovery", mode: "metadata-refresh" },
+  { phase: "revalidation", mode: "no-commit" },
+  { phase: "revalidation", mode: "metadata-refresh" },
+])(
+  "keeps history readable across unchanged sibling registration during $phase ($mode)",
+  async ({ phase, mode }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const a = await seed(state, "main", "registration-a");
       const b = await seed(state, "other", "registration-b");
       await a.read();
       await b.read();
-      let dispatched = false;
+      const registryPath = openOpenClawStateDatabase().path;
+      const registration = captureOpenClawAgentDatabaseRegistration({
+        agentId: "other",
+        agentPath: b.path,
+        admission: captureOpenClawStateDatabaseReadAdmission(registryPath),
+      });
+      invalidateRegisteredAgentDatabasesMemo({ path: registryPath });
+      let started = false;
+      let finished = false;
       observed.dispatch = (message) => {
         const input = asOptionalRecord(asOptionalRecord(message)?.input);
         const params = asOptionalRecord(asOptionalRecord(input?.request)?.params);
-        if (params?.sessionId !== "registration-a") {
+        const registryRead =
+          asOptionalRecord(input?.command)?.type === "agentDatabaseRegistry.read";
+        if (!started) {
+          if (phase === "discovery" ? registryRead : params?.sessionId === "registration-a") {
+            started = true;
+            registration.begin();
+          }
+          return;
+        }
+        if (!registryRead) {
           return;
         }
         observed.dispatch = undefined;
-        dispatched = true;
-        const registration = captureOpenClawAgentDatabaseRegistration({
-          agentId: "other",
-          agentPath: b.path,
-          admission: captureOpenClawStateDatabaseReadAdmission(openOpenClawStateDatabase().path),
-        });
-        registration.begin();
         if (mode === "metadata-refresh") {
           registerOpenClawAgentDatabase(
             { agentId: "other", path: b.path, env: state.env },
-            (receipt) => registration.recordCommitted(receipt),
+            { committed: (receipt) => registration.recordCommitted(receipt) },
           );
         }
         registration.finish();
+        finished = true;
       };
-      expect((await a.read()).messages.map(readChatHistoryMessageId)).toEqual([
-        "registration-a-message",
-      ]);
-      expect(dispatched).toBe(true);
+      const captureSource = stateReadWorker.captureOpenClawStateReadSource;
+      const registryReads = vi
+        .spyOn(stateReadWorker, "captureOpenClawStateReadSource")
+        .mockImplementation(() => {
+          const source = captureSource();
+          return {
+            ...source,
+            createTransport(command) {
+              const transport = source.createTransport(command);
+              if (command.type !== "agentDatabaseRegistry.read") {
+                return transport;
+              }
+              return {
+                ...transport,
+                startRead(...args) {
+                  observed.dispatch?.({ input: { command } });
+                  return transport.startRead(...args);
+                },
+              };
+            },
+          };
+        });
+      try {
+        expect((await a.read()).messages.map(readChatHistoryMessageId)).toEqual([
+          "registration-a-message",
+        ]);
+        expect(started && finished).toBe(true);
+      } finally {
+        observed.dispatch = undefined;
+        registryReads.mockRestore();
+        registration.finish();
+      }
     });
   },
 );
@@ -291,14 +552,16 @@ it.each(["new-agent", "new-path", "schema", "physical-replacement"] as const)(
   },
 );
 
-it("closes A through native exit while active and queued B pages survive, then reopens replaced A", async () => {
+it("closes idle A while active and queued B pages survive, then reads replaced A", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const a = await seed(state, "main", "close-a");
     const b = await seed(state, "other", "active-b");
     const c = await seed(state, "other", "queued-b");
-    await a.read();
+    expect((await a.read()).messages.map(readChatHistoryMessageId)).toEqual(["close-a-message"]);
     await b.read();
     const oldWorker = observed.workers.at(-1)!;
+    const threadId = oldWorker.threadId;
+    const keepsWorker = observed.idleCloseKeepsWorker.get(oldWorker) === true;
     let closing: Promise<boolean> | undefined;
     observed.dispatch = (message) => {
       const input = asOptionalRecord(asOptionalRecord(message)?.input);
@@ -315,12 +578,24 @@ it("closes A through native exit while active and queued B pages survive, then r
       ["active-b-message"],
       ["queued-b-message"],
     ]);
-    expect(oldWorker.threadId).toBe(-1);
+    expect(oldWorker.threadId).toBe(keepsWorker ? threadId : -1);
     // This also exercises Windows replacement while the unrelated agent remains usable.
     fs.copyFileSync(a.path, `${a.path}.replacement`);
     fs.renameSync(a.path, `${a.path}.previous`);
     fs.renameSync(`${a.path}.replacement`, a.path);
-    expect((await a.read()).messages.map(readChatHistoryMessageId)).toEqual(["close-a-message"]);
+    await replaceTranscriptEvents(a.target, [
+      { type: "session", version: 3, id: "close-a" },
+      {
+        type: "message",
+        id: "replacement-a-message",
+        parentId: null,
+        message: { role: "user", content: "replacement content" },
+      },
+    ]);
+    await waitForSessionTranscriptProjection(a.target);
+    expect((await a.read()).messages.map(readChatHistoryMessageId)).toEqual([
+      "replacement-a-message",
+    ]);
     expect((await b.read()).messages.map(readChatHistoryMessageId)).toEqual(["active-b-message"]);
   });
 });
@@ -348,54 +623,36 @@ it("evicts the least recently used of 64 retained targets without charging missi
       expect(fs.existsSync(target.storePath)).toBe(false);
     }
     await targets[64]!.read();
-    // Only the confirmed eviction releases custody without retiring this worker.
-    await closeOpenClawAgentDatabaseByPathAsync(targets[1]!.path, "retained-1");
-    expect(worker.threadId).toBe(threadId);
-    await closeOpenClawAgentDatabaseByPathAsync(targets[0]!.path, "retained-0");
-    expect(worker.threadId).toBe(-1);
+    const keepsWorker = observed.idleCloseKeepsWorker.get(worker) === true;
+    const closeResources = vi.spyOn(historyLane.pool, "closeResources");
+    try {
+      // The evicted target has no retained native custody; the hot target still does.
+      await closeOpenClawAgentDatabaseByPathAsync(targets[1]!.path, "retained-1");
+      expect(worker.threadId).toBe(threadId);
+      expect(closeResources).not.toHaveBeenCalled();
+      await closeOpenClawAgentDatabaseByPathAsync(targets[0]!.path, "retained-0");
+      expect(worker.threadId).toBe(keepsWorker ? threadId : -1);
+      if (keepsWorker) {
+        expect(closeResources).toHaveBeenCalledWith(JSON.stringify([{ path: targets[0]!.path }]));
+      }
+    } finally {
+      closeResources.mockRestore();
+    }
     expect((await targets[64]!.read()).messages.map(readChatHistoryMessageId)).toEqual([
       "history-64-message",
     ]);
   });
 });
 
-it("rejects the captured generation when A closes during restoration before worker admission", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const a = await seed(state, "main", "restoring-a");
-    const b = await seed(state, "other", "unrelated-b");
-    await b.read();
-    const entered = createDeferredCore();
-    const gate = createDeferredCore();
-    observed.restoration = {
-      sessionId: "restoring-a",
-      entered: entered.resolve,
-      wait: gate.promise,
-    };
-    const pending = a.read();
-    const failure = expect(pending).rejects.toThrow("revoked");
-    try {
-      await entered.promise;
-      await closeOpenClawAgentDatabaseByPathAsync(a.path, "main");
-      expect((await b.read()).messages.map(readChatHistoryMessageId)).toEqual([
-        "unrelated-b-message",
-      ]);
-    } finally {
-      observed.restoration = undefined;
-      gate.resolve();
-    }
-    await failure;
-    expect((await a.read()).messages.map(readChatHistoryMessageId)).toEqual([
-      "restoring-a-message",
-    ]);
-  });
-});
-
-it.each(["before restoration", "queued restoration"])(
+it.for(["before restoration", "queued restoration"] as const)(
   "does not restore a replacement database for a revoked history read (%s)",
-  async (phase) => {
+  async (phase, { signal }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const databasePath = resolveOpenClawAgentSqlitePath({ agentId: "main", env: state.env });
       const fixture = await createSessionColdStorageFixture(databasePath);
+      const unrelated =
+        phase === "before restoration" ? await seed(state, "other", "unrelated-b") : undefined;
+      await unrelated?.read();
       expect(
         await runSessionColdStorageMaintenance({ config: maintenanceConfig(databasePath) }),
       ).toEqual({ archivedTranscripts: 1, externalizedTranscripts: 0 });
@@ -419,67 +676,59 @@ it.each(["before restoration", "queued restoration"])(
       });
       const entered = createDeferredCore();
       const gate = createDeferredCore();
-      if (phase === "before restoration") {
-        observed.restoration = {
-          sessionId: fixture.scope.sessionId,
-          entered: entered.resolve,
-          wait: gate.promise,
-        };
-      }
-      let pauseQueue = phase === "queued restoration";
-      // oxlint-disable-next-line typescript/unbound-method -- The observer preserves the queue receiver.
-      const enqueue = KeyedAsyncQueue.prototype.enqueue;
-      const queueObservation = vi
-        .spyOn(KeyedAsyncQueue.prototype, "enqueue")
-        .mockImplementation(function <T>(
-          this: KeyedAsyncQueue,
-          ...args: Parameters<typeof enqueue<T>>
-        ): Promise<T> {
-          const enqueueTask = enqueue<T>;
-          const [key, task, hooks] = args;
-          if (key !== databasePath || !pauseQueue) {
-            return enqueueTask.call(this, ...args);
-          }
-          pauseQueue = false;
-          return enqueueTask.call(
-            this,
-            key,
-            async () => {
-              entered.resolve();
-              await gate.promise;
-              return await task();
-            },
-            hooks,
-          );
-        });
-      const pending = readChatHistoryPage({
-        entry: undefined,
-        provider: undefined,
+      observed.restoration = {
         sessionId: fixture.scope.sessionId,
-        storePath: databasePath,
-        sessionAgentId: fixture.scope.agentId,
-        canonicalKey: fixture.scope.sessionKey,
-        max: 20,
-        maxHistoryBytes: 100_000,
-        effectiveMaxChars: 8000,
-        offset: undefined,
-        messageId: undefined,
-      });
+        phase,
+        entered: entered.resolve,
+        wait: gate.promise,
+      };
+      const read = () =>
+        readChatHistoryPage({
+          entry: undefined,
+          provider: undefined,
+          sessionId: fixture.scope.sessionId,
+          storePath: databasePath,
+          sessionAgentId: fixture.scope.agentId,
+          canonicalKey: fixture.scope.sessionKey,
+          max: 20,
+          maxHistoryBytes: 100_000,
+          effectiveMaxChars: 8000,
+          offset: undefined,
+          messageId: undefined,
+        });
+      const pending = read();
       const failure = expect(pending).rejects.toThrow("revoked");
       try {
-        await entered.promise;
+        await withinTest(
+          awaitGateBeforeSettlement(
+            entered.promise,
+            pending,
+            "History read settled before reaching the restoration boundary",
+          ),
+          signal,
+        );
         await closeOpenClawAgentDatabaseByPathAsync(databasePath, "main");
+        if (unrelated) {
+          expect((await unrelated.read()).messages.map(readChatHistoryMessageId)).toEqual([
+            "unrelated-b-message",
+          ]);
+        }
         fs.copyFileSync(databasePath, `${databasePath}.replacement`);
         fs.renameSync(databasePath, `${databasePath}.previous`);
         fs.renameSync(`${databasePath}.replacement`, databasePath);
         expect(readStoredTranscript()).toEqual(before);
       } finally {
-        queueObservation.mockRestore();
         observed.restoration = undefined;
         gate.resolve();
         await failure;
       }
       expect(readStoredTranscript()).toEqual(before);
+      if (unrelated) {
+        expect((await read()).messages.map(readChatHistoryMessageId)).toEqual([
+          "history-user",
+          "history-assistant",
+        ]);
+      }
     });
   },
 );

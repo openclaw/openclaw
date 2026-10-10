@@ -1,14 +1,14 @@
 import { generateUUID } from "../../../lib/uuid.ts";
 
-export function pickerMenu(target: EventTarget | null): HTMLElement | null {
+function pickerMenu(target: EventTarget | null): HTMLElement | null {
   return target instanceof Element
     ? target.closest<HTMLElement>(".chat-controls__model-menu")
     : null;
 }
 
-function visibleModelRows(root: HTMLElement): HTMLButtonElement[] {
+function selectableModelRows(root: HTMLElement): HTMLButtonElement[] {
   return [...root.querySelectorAll<HTMLButtonElement>("[data-chat-model-option]")]
-    .filter((row) => !row.hidden)
+    .filter((row) => !row.hidden && isSelectableModelRow(row))
     .toSorted(
       (left, right) =>
         Number(left.dataset.chatModelRank ?? left.dataset.chatModelIndex ?? 0) -
@@ -18,10 +18,6 @@ function visibleModelRows(root: HTMLElement): HTMLButtonElement[] {
 
 function isSelectableModelRow(row: HTMLButtonElement): boolean {
   return !row.disabled && row.getAttribute("aria-disabled") !== "true";
-}
-
-function selectableModelRows(root: HTMLElement): HTMLButtonElement[] {
-  return visibleModelRows(root).filter(isSelectableModelRow);
 }
 
 function ensureModelPickerIds(menu: HTMLElement): void {
@@ -37,7 +33,11 @@ function ensureModelPickerIds(menu: HTMLElement): void {
     listbox.id = `${prefix}-listbox-${index}`;
     listbox
       .closest("section")
-      ?.querySelector("[data-chat-model-group-toggle]")
+      ?.querySelector(
+        listbox.hasAttribute("data-chat-model-more")
+          ? "[data-chat-model-more-toggle]"
+          : "[data-chat-model-group-toggle]",
+      )
       ?.setAttribute("aria-controls", listbox.id);
   });
   menu.querySelectorAll<HTMLButtonElement>("[data-chat-model-option]").forEach((row, index) => {
@@ -47,7 +47,7 @@ function ensureModelPickerIds(menu: HTMLElement): void {
   input.setAttribute("aria-expanded", details.open ? "true" : "false");
 }
 
-export function highlightModelRow(menu: HTMLElement, row: HTMLButtonElement | undefined): void {
+function highlightModelRow(menu: HTMLElement, row: HTMLButtonElement | undefined): void {
   menu.querySelectorAll<HTMLElement>("[data-chat-model-option]").forEach((candidate) => {
     candidate.toggleAttribute("data-chat-model-highlighted", candidate === row);
   });
@@ -56,6 +56,14 @@ export function highlightModelRow(menu: HTMLElement, row: HTMLButtonElement | un
     input?.setAttribute("aria-activedescendant", row.id);
   } else {
     input?.removeAttribute("aria-activedescendant");
+  }
+}
+
+export function handleModelOptionMouseEnter(event: MouseEvent): void {
+  const row = event.currentTarget;
+  const menu = pickerMenu(row);
+  if (row instanceof HTMLButtonElement && menu) {
+    highlightModelRow(menu, row);
   }
 }
 
@@ -95,7 +103,15 @@ function modelMatchRank(row: HTMLButtonElement, query: string): number | null {
   if (provider.startsWith(query)) {
     return 3;
   }
-  return provider.includes(query) ? 4 : null;
+  if (provider.includes(query)) {
+    return 4;
+  }
+  const reference = row.dataset.chatModelTarget ?? row.dataset.chatModelOption ?? "";
+  return reference.toLocaleLowerCase().includes(query) ? 5 : null;
+}
+
+function isDisclosureCollapsed(section: Element | null, toggleSelector: string): boolean {
+  return section?.querySelector(toggleSelector)?.getAttribute("aria-expanded") === "false";
 }
 
 export function updateModelSearch(input: HTMLInputElement, preserveHighlight = false): void {
@@ -106,14 +122,22 @@ export function updateModelSearch(input: HTMLInputElement, preserveHighlight = f
   ensureModelPickerIds(menu);
   const query = input.value.trim().toLocaleLowerCase();
   menu.toggleAttribute("data-chat-model-filtering", Boolean(query));
+  // Search reaches every model, so the "All models" disclosure only applies while browsing.
+  // Expanding it is one-way: the row disappears and its models continue the group.
+  menu.querySelectorAll<HTMLElement>("[data-chat-model-more-toggle]").forEach((toggle) => {
+    toggle.hidden =
+      Boolean(query) ||
+      toggle.getAttribute("aria-expanded") === "true" ||
+      isDisclosureCollapsed(toggle.closest("section"), "[data-chat-model-group-toggle]");
+  });
   const rows = [...menu.querySelectorAll<HTMLButtonElement>("[data-chat-model-option]")];
   const matches: Array<{ row: HTMLButtonElement; score: number; index: number }> = [];
   rows.forEach((row, index) => {
+    const section = row.closest("section");
     const collapsed =
-      row
-        .closest("section")
-        ?.querySelector("[data-chat-model-group-toggle]")
-        ?.getAttribute("aria-expanded") === "false";
+      isDisclosureCollapsed(section, "[data-chat-model-group-toggle]") ||
+      (row.closest("[data-chat-model-more]") !== null &&
+        isDisclosureCollapsed(section, "[data-chat-model-more-toggle]"));
     const score = query ? modelMatchRank(row, query) : collapsed ? null : 0;
     row.hidden = score === null;
     row.style.removeProperty("--chat-model-rank");
@@ -148,9 +172,6 @@ export function updateModelSearch(input: HTMLInputElement, preserveHighlight = f
 }
 
 export function resetModelSearch(details: HTMLDetailsElement): void {
-  details.querySelectorAll("[data-chat-model-provider-toggle]").forEach((toggle) => {
-    toggle.setAttribute("aria-expanded", "false");
-  });
   const input = details.querySelector<HTMLInputElement>("[data-chat-model-search]");
   if (!input) {
     return;
@@ -161,12 +182,23 @@ export function resetModelSearch(details: HTMLDetailsElement): void {
 
 export function toggleModelProviderGroup(event: MouseEvent): void {
   event.stopPropagation();
-  // SAFETY: Bound only to provider group buttons.
+  // SAFETY: Bound only to provider group and "All models" disclosure buttons.
   const toggle = event.currentTarget as HTMLButtonElement;
+  const hadFocus = toggle.ownerDocument.activeElement === toggle;
   toggle.setAttribute("aria-expanded", String(toggle.getAttribute("aria-expanded") !== "true"));
   const input = pickerMenu(toggle)?.querySelector<HTMLInputElement>("[data-chat-model-search]");
   if (input) {
     updateModelSearch(input, true);
+  }
+  // An expanded "All models" row hides itself; keep keyboard focus inside the revealed models.
+  if (hadFocus && toggle.hidden) {
+    (
+      toggle
+        .closest("section")
+        ?.querySelector<HTMLElement>(
+          "[data-chat-model-more] [data-chat-model-option]:not([hidden]):not(:disabled)",
+        ) ?? input
+    )?.focus({ preventScroll: true });
   }
 }
 

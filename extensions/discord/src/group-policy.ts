@@ -8,11 +8,7 @@ import {
 } from "openclaw/plugin-sdk/channel-policy";
 import type { DiscordConfig } from "openclaw/plugin-sdk/config-contracts";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { normalizeAtHashSlug } from "openclaw/plugin-sdk/string-normalization-runtime";
-
-function normalizeDiscordSlug(value?: string | null) {
-  return normalizeAtHashSlug(value);
-}
+import { normalizeAtHashSlug as normalizeDiscordSlug } from "openclaw/plugin-sdk/string-normalization-runtime";
 
 // Length-prefixed segments keep arbitrary config keys, including slashes, collision-free.
 const guildScopeKey = (guildKey: string) => scopeKey(["guild", guildKey]);
@@ -63,29 +59,7 @@ function resolveDiscordChannelKey(
   if (channelSlug && channelEntries[`#${channelSlug}`]) {
     return `#${channelSlug}`;
   }
-  const normalizedGroupChannel = groupChannel ? normalizeDiscordSlug(groupChannel) : undefined;
-  return normalizedGroupChannel !== undefined && channelEntries[normalizedGroupChannel]
-    ? normalizedGroupChannel
-    : undefined;
-}
-
-function buildDiscordPolicyTree(guilds: DiscordConfig["guilds"]): ScopeTree {
-  const scopes: ScopeTree["scopes"] = {};
-  for (const [guildKey, guild] of Object.entries(guilds ?? {})) {
-    scopes[guildScopeKey(guildKey)] = {
-      requireMention: guild.requireMention,
-      tools: guild.tools,
-      toolsBySender: guild.toolsBySender,
-    };
-    for (const [channelKey, channel] of Object.entries(guild.channels ?? {})) {
-      scopes[channelScopeKey(guildKey, channelKey)] = {
-        requireMention: channel.requireMention,
-        tools: channel.tools,
-        toolsBySender: channel.toolsBySender,
-      };
-    }
-  }
-  return { scopes };
+  return groupChannel && channelEntries[channelSlug] ? channelSlug : undefined;
 }
 
 function resolveDiscordPolicyScope(params: ChannelGroupContext) {
@@ -93,7 +67,13 @@ function resolveDiscordPolicyScope(params: ChannelGroupContext) {
     (params.accountId
       ? params.cfg.channels?.discord?.accounts?.[params.accountId]?.guilds
       : undefined) ?? params.cfg.channels?.discord?.guilds;
-  const tree = buildDiscordPolicyTree(guilds);
+  const tree: ScopeTree = { scopes: {} };
+  for (const [guildKey, guild] of Object.entries(guilds ?? {})) {
+    tree.scopes[guildScopeKey(guildKey)] = guild;
+    for (const [channelKey, channel] of Object.entries(guild.channels ?? {})) {
+      tree.scopes[channelScopeKey(guildKey, channelKey)] = channel;
+    }
+  }
   // Guild "*" is selected only after every guild candidate misses; matched guilds hide it.
   // Within the selected guild, channel fields still cascade to guild fields.
   const guildKey = resolveDiscordGuildKey(guilds, params.groupSpace);

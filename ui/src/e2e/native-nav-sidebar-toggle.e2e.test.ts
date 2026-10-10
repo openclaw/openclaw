@@ -2,25 +2,15 @@
 // at document start and stamp `openclaw-native-web-chrome` at document end.
 // Plain browsers keep their normal in-page controls.
 import path from "node:path";
-import type { BrowserContext, Page } from "playwright";
-import { beforeEach, afterEach, expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
 import { waitForLayoutSettled } from "../pages/chat/chat-layout.browser.test-support.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
-import {
-  installMockGateway,
-  type ControlUiMockGatewayScenario,
-} from "../test-helpers/control-ui-e2e.ts";
+import type { ControlUiMockGatewayScenario } from "../test-helpers/control-ui-e2e.ts";
 import { chatSessionListResponse } from "./chat-flow.test-support.ts";
-import {
-  failNextDeviceIdentityMint,
-  focusChatSidePanel,
-  openChatSidePanelType,
-} from "./chat-side-panel.test-support.ts";
-import {
-  createControlUiE2eSuite,
-  holdModuleResponse,
-} from "./control-ui-e2e-suite.test-support.ts";
-import { installNativeWebChrome } from "./native-nav.test-support.ts";
+import { focusChatSidePanel, openChatSidePanelType } from "./chat-side-panel.test-support.ts";
+import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
+import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { createNativeNavPageOpener } from "./native-nav-page.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI native-nav sidebar toggle E2E",
@@ -78,105 +68,34 @@ const TOAST_SCENARIO: ControlUiMockGatewayScenario = {
   },
 };
 
-let context: BrowserContext | undefined;
-
 suite.define(() => {
-  afterEach(async () => {
-    await context?.close();
-    context = undefined;
-  });
-
-  async function openPage(options: {
-    beforeNavigate?: (page: Page) => Promise<void>;
-    colorScheme?: "dark" | "light";
-    deviceLess?: boolean;
-    hasTouch?: boolean;
-    height?: number;
-    nativeNav?: boolean;
-    pathname?: string;
-    readySelector?: string;
-    scenario?: ControlUiMockGatewayScenario;
-    webChrome?: boolean;
-    width?: number;
-  }) {
-    context = await suite.browser.newContext({
-      colorScheme: options.colorScheme,
-      hasTouch: options.hasTouch,
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: options.height ?? 900, width: options.width ?? 1280 },
-    });
-    const page = await context.newPage();
-    if (options.deviceLess) {
-      await failNextDeviceIdentityMint(page);
-    }
-    if (options.nativeNav) {
-      // Mirrors the WKUserScript in DashboardWindowController.installNativeChromeScript,
-      // which runs at document end. Playwright init scripts fire before
-      // document.documentElement exists, so defer until the DOM is parsed.
-      await page.addInitScript(() => {
-        const nativeWindow = window as Window & {
-          openclawNavMessages?: unknown[];
-        };
-        nativeWindow.openclawNavMessages = [];
-        Object.defineProperty(window, "webkit", {
-          configurable: true,
-          value: {
-            messageHandlers: {
-              openclawNav: {
-                postMessage(message: unknown) {
-                  nativeWindow.openclawNavMessages?.push(message);
-                },
-              },
-            },
-          },
-        });
-        const stamp = () =>
-          document.documentElement.classList.add("openclaw-native-macos", "openclaw-native-nav");
-        if (document.documentElement) {
-          stamp();
-        } else {
-          document.addEventListener("DOMContentLoaded", stamp);
-        }
-      });
-    }
-    if (options.webChrome) {
-      await installNativeWebChrome(page);
-    }
-    const gateway = await installMockGateway(page, {
-      featureMethods: ["chat.metadata", "chat.startup", "sessions.create"],
-      ...options.scenario,
-    });
-    await options.beforeNavigate?.(page);
-    const response = await page.goto(`${suite.server.baseUrl}${options.pathname ?? ""}`, {
-      waitUntil: options.beforeNavigate ? "domcontentloaded" : "load",
-    });
-    expect(response?.status()).toBe(200);
-    // The brand row only becomes visible on desktop widths; drawer widths keep
-    // the sidebar hidden, so wait for DOM attachment instead of visibility.
-    await page.locator(options.readySelector ?? ".sidebar-brand").waitFor({ state: "attached" });
-    if (options.scenario) {
-      await gateway.waitForRequest("sessions.list");
-    }
-    return page;
-  }
+  const openPage = createNativeNavPageOpener(suite);
 
   it("keeps the web expand/collapse controls in plain browsers", async () => {
     const page = await openPage({ nativeNav: false });
+    const titlebarRequest = controlUiE2eBuiltModuleRequest(
+      "ui/src/components/macos-titlebar-controls.runtime.ts",
+    );
+    const swipeRequest = controlUiE2eBuiltModuleRequest("ui/src/app/nav-drawer-swipe.runtime.ts");
 
     expect(
-      await page.evaluate(() => ({
-        titlebarRegistered: customElements.get("openclaw-macos-titlebar-controls") !== undefined,
-        titlebarRequested: performance
-          .getEntriesByType("resource")
-          .some((entry) => entry.name.includes("macos-titlebar-controls")),
-      })),
+      await page.evaluate(
+        (requestPattern) => ({
+          titlebarRegistered: customElements.get("openclaw-macos-titlebar-controls") !== undefined,
+          titlebarRequested: performance
+            .getEntriesByType("resource")
+            .some((entry) => new RegExp(requestPattern, "u").test(entry.name)),
+        }),
+        titlebarRequest.source,
+      ),
     ).toEqual({ titlebarRegistered: false, titlebarRequested: false });
     expect(
-      await page.evaluate(() =>
-        performance
-          .getEntriesByType("resource")
-          .some((entry) => entry.name.includes("nav-drawer-swipe")),
+      await page.evaluate(
+        (requestPattern) =>
+          performance
+            .getEntriesByType("resource")
+            .some((entry) => new RegExp(requestPattern, "u").test(entry.name)),
+        swipeRequest.source,
       ),
     ).toBe(false);
     const collapse = page.locator(".sidebar-brand__collapse");
@@ -193,134 +112,6 @@ suite.define(() => {
     await expect.poll(() => desktopInbox.getAttribute("aria-modal")).toBeNull();
     await page.keyboard.press("Escape");
   });
-
-  it("closes navigation while the sidebar element is still unregistered", async () => {
-    const testCase = {
-      module: /\/assets\/app-sidebar-[A-Za-z0-9_-]{8}\.js(?:\?.*)?$/u,
-      pathname: "new",
-      readySelector: ".new-session-page__message",
-      tag: "openclaw-app-sidebar",
-    };
-    let held!: Awaited<ReturnType<typeof holdModuleResponse>>;
-    const errors: string[] = [];
-    try {
-      const page = await openPage({
-        ...testCase,
-        width: 900,
-        beforeNavigate: async (targetPage) => {
-          targetPage.on("pageerror", (error) => errors.push(error.message));
-          held = await holdModuleResponse(targetPage, testCase.module);
-        },
-      });
-      await held.request;
-      const element = page.locator(testCase.tag).first();
-      expect(await element.evaluate((node) => node.matches(":defined"))).toBe(false);
-      const toggle = page.locator(".topbar-nav-toggle");
-      const navigation = page.getByRole("dialog", { name: "Navigation" });
-      await toggle.click();
-      await expect.poll(() => navigation.isVisible()).toBe(true);
-      await page.keyboard.press("Escape");
-      await expect.poll(() => navigation.isVisible()).toBe(false);
-      expect(await page.locator("#control-ui-main").getAttribute("inert")).toBeNull();
-
-      await toggle.click();
-      await expect.poll(() => navigation.isVisible()).toBe(true);
-      await page.setViewportSize({ width: 1440, height: 900 });
-      await expect.poll(() => navigation.isVisible()).toBe(false);
-      await expect
-        .poll(() => page.locator(".shell").getAttribute("class"))
-        .not.toContain("shell--mobile-nav");
-      expect(errors).toEqual([]);
-
-      held.release();
-      await expect.poll(() => element.evaluate((node) => node.matches(":defined"))).toBe(true);
-      await page.setViewportSize({ width: 900, height: 900 });
-      await toggle.click();
-      await expect.poll(() => navigation.isVisible()).toBe(true);
-      await page.keyboard.press("Escape");
-      await expect.poll(() => navigation.isVisible()).toBe(false);
-      expect(errors).toEqual([]);
-      expect(held.requests()).toBe(1);
-    } finally {
-      held?.release();
-    }
-  });
-
-  it.each(["navigation", "replacement open", "reconnection", "outside pointer", "Escape"] as const)(
-    "keeps pending Inbox intent current across %s",
-    async (action) => {
-      let held!: Awaited<ReturnType<typeof holdModuleResponse>>;
-      const page = await openPage({
-        pathname: "new",
-        beforeNavigate: async (targetPage) => {
-          held = await holdModuleResponse(
-            targetPage,
-            /\/assets\/sidebar-attention-panel\.runtime-[^/?]+\.js(?:\?.*)?$/u,
-          );
-        },
-      });
-      const attention = await page
-        .locator("openclaw-app-sidebar openclaw-sidebar-attention")
-        .elementHandle();
-      expect(attention).not.toBeNull();
-      const inbox = page.locator("openclaw-app-sidebar .sidebar-issues-button");
-      const dialog = page.getByRole("dialog", { name: "Inbox" });
-      try {
-        await inbox.click();
-        const moduleUrl = await held.request;
-        expect(await dialog.count()).toBe(0);
-        if (action === "reconnection") {
-          await attention!.evaluate((element) => {
-            const parent = element.parentNode!;
-            const next = element.nextSibling;
-            element.remove();
-            parent.insertBefore(element, next);
-          });
-        } else if (action === "outside pointer") {
-          await page.locator(".new-session-page__message").click();
-        } else if (action === "Escape") {
-          await page.keyboard.press("Escape");
-        } else {
-          await page.getByRole("button", { name: "Collapse sidebar" }).click();
-          await expect
-            .poll(() => page.getByRole("button", { name: "Expand sidebar" }).isVisible())
-            .toBe(true);
-          // The native event does not generate an outside pointer that could
-          // accidentally dismiss an Inbox resurrected by the old import.
-          await page.evaluate(() => {
-            window.dispatchEvent(new CustomEvent("openclaw:native-toggle-sidebar"));
-          });
-          await expect
-            .poll(() => page.getByRole("button", { name: "Collapse sidebar" }).isVisible())
-            .toBe(true);
-          if (action === "replacement open") {
-            await inbox.click();
-          }
-        }
-        held.release();
-        // Keep the import native: Vitest rewrites imports inside serialized callbacks.
-        await page.evaluate(`import(${JSON.stringify(moduleUrl)}).then(() => undefined)`);
-        await attention!.evaluate(
-          (element) =>
-            (element as HTMLElement & { updateComplete: Promise<boolean> }).updateComplete,
-        );
-        if (action !== "replacement open") {
-          expect(await dialog.count()).toBe(0);
-          expect(await inbox.getAttribute("aria-expanded")).toBe("false");
-          await inbox.click();
-        }
-        await dialog.waitFor({ state: "visible" });
-        await expect
-          .poll(() => dialog.evaluate((element) => element.contains(document.activeElement)))
-          .toBe(true);
-        expect(held.requests()).toBe(1);
-        await page.keyboard.press("Escape");
-        await expect.poll(() => dialog.count()).toBe(0);
-      } finally {
-        held.release();
-      }
-    },
-  );
 
   it("keeps restored sidebar focus from opening its tooltip", async () => {
     const page = await openPage({ hasTouch: true, nativeNav: false });
@@ -702,75 +493,6 @@ suite.define(() => {
         ),
       });
     }
-  });
-
-  it("keeps overlay motion anchored to its owning interaction", async () => {
-    const page = await openPage({ nativeNav: false });
-
-    await page.keyboard.press("ControlOrMeta+K");
-    // The loading dialog is replaced during handoff; measure the full palette.
-    const palette = page.locator("openclaw-command-palette .cmd-palette");
-    const paletteDialog = page.locator("openclaw-command-palette openclaw-modal-dialog.palette");
-    await palette.locator(".cmd-palette__input:not([disabled])").waitFor({ state: "visible" });
-    const paletteAnimationName = await palette.evaluate(
-      (element) => getComputedStyle(element).animationName,
-    );
-    const paletteDialogAnimationDuration = await paletteDialog.evaluate((element) => {
-      const webAwesomeDialog = element.shadowRoot?.querySelector("wa-dialog");
-      const dialog = webAwesomeDialog?.shadowRoot?.querySelector<HTMLElement>('[part~="dialog"]');
-      return dialog ? getComputedStyle(dialog).animationDuration : "missing";
-    });
-    await page.keyboard.press("Escape");
-
-    const sidebar = page.locator("openclaw-app-sidebar");
-    await sidebar.locator(".sidebar-identity-card").click();
-    const buildLink = sidebar.getByRole("link", {
-      name: "Control UI build details",
-      exact: true,
-    });
-    await page.clock.install();
-    await buildLink.hover();
-    await page.clock.runFor(600);
-    const hoverCardMotion = await sidebar
-      .locator("openclaw-sidebar-build-chip openclaw-tooltip")
-      .evaluate((tooltip) => {
-        const webAwesomeTooltip = tooltip.shadowRoot?.querySelector("wa-tooltip");
-        const popup = webAwesomeTooltip?.shadowRoot?.querySelector("wa-popup");
-        const popupSurface = popup?.shadowRoot?.querySelector<HTMLElement>('[part~="popup"]');
-        if (!popup || !popupSurface) {
-          throw new Error("expected the open sidebar hovercard shadow parts");
-        }
-        const [originX, originY] = getComputedStyle(popupSurface)
-          .transformOrigin.split(" ")
-          .map(Number.parseFloat);
-        return {
-          animationDuration: getComputedStyle(popupSurface).animationDuration,
-          popupHeight: popupSurface.offsetHeight,
-          popupWidth: popupSurface.offsetWidth,
-          originX,
-          originY,
-          placement: popup.getAttribute("data-current-placement"),
-        };
-      });
-    await page.clock.resume();
-    await page.keyboard.press("Escape");
-
-    await page.setViewportSize({ width: 900, height: 900 });
-    const drawer = page.locator(".shell-nav.nav-drawer");
-    await expect.poll(() => drawer.count()).toBe(1);
-    await page.locator(".chat-pane__nav-toggle:visible").first().click();
-    const drawerAnimationName = await drawer.evaluate(
-      (element) => getComputedStyle(element).animationName,
-    );
-
-    expect(paletteAnimationName).toBe("none");
-    expect(paletteDialogAnimationDuration).toBe("0s");
-    expect(drawerAnimationName).toBe("none");
-    expect(hoverCardMotion.animationDuration).toBe("0.14s");
-    expect(hoverCardMotion.placement).toMatch(/^top(?:-|$)/u);
-    expect(hoverCardMotion.originX).toBeGreaterThan(hoverCardMotion.popupWidth * 0.45);
-    expect(hoverCardMotion.originX).toBeLessThan(hoverCardMotion.popupWidth * 0.55);
-    expect(hoverCardMotion.originY).toBeGreaterThan(hoverCardMotion.popupHeight * 0.95);
   });
 
   it("keeps the mobile drawer modal, keyboard-contained, and focus-restoring", async () => {

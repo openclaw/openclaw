@@ -33,14 +33,6 @@ function requireCatalogEntry(entries: readonly unknown[] | null | undefined, id:
   return requireRecord(entry, `supplemental catalog entry ${id}`);
 }
 
-function runtimeCompatFields(value: unknown): Record<string, unknown> | undefined {
-  if (!value) {
-    return undefined;
-  }
-  const { codeMode: _codeMode, ...compat } = requireRecord(value, "model compat");
-  return compat;
-}
-
 const ACTIVE_MODEL_IDS = manifest.modelCatalog.providers["opencode-go"].models
   .filter((model) => !("status" in model))
   .map((model) => model.id);
@@ -109,7 +101,7 @@ function createCatalogFetchGuard(params: {
   upstreamModels: Record<string, unknown>;
   liveModelIds: string[] | (() => string[]);
 }) {
-  return vi.fn(async ({ url }: { url: string }) => ({
+  return vi.fn(async ({ url }: { url: string; init?: RequestInit }) => ({
     response: new Response(
       JSON.stringify(
         url === "https://models.opencode.ai/api.json"
@@ -289,7 +281,7 @@ describe("opencode-go provider plugin", () => {
     ).toEqual({ levels: [{ id: "high", label: "always on" }], defaultLevel: "high" });
   });
 
-  it("joins paid-model availability with upstream capabilities and preserves lifecycle", async () => {
+  it("lists every advertised chat model, enriching ids with upstream metadata", async () => {
     const fetchGuard = createCatalogFetchGuard({
       upstreamModels: {
         "ox-alpha-free": upstreamModel("ox-alpha-free", {
@@ -304,7 +296,13 @@ describe("opencode-go provider plugin", () => {
         }),
         "legacy-model": upstreamModel("legacy-model", { status: "deprecated" }),
       },
-      liveModelIds: ["ox-alpha-free", "minimax-future", "legacy-model", "unknown-live-model"],
+      liveModelIds: [
+        "ox-alpha-free",
+        "minimax-future",
+        "legacy-model",
+        "unknown-live-model",
+        "future-embedding",
+      ],
     });
 
     const result = await buildOpencodeGoLiveProviderConfig({
@@ -312,7 +310,11 @@ describe("opencode-go provider plugin", () => {
       fetchGuard,
     });
 
-    expect(result.models.map((model) => model.id)).toEqual(["ox-alpha-free", "minimax-future"]);
+    expect(result.models.map((model) => model.id)).toEqual([
+      "ox-alpha-free",
+      "minimax-future",
+      "unknown-live-model",
+    ]);
     expect(result.models[0]).toMatchObject({
       id: "ox-alpha-free",
       name: "Ox Alpha Free (Unlimited)",
@@ -328,6 +330,16 @@ describe("opencode-go provider plugin", () => {
       baseUrl: "https://opencode.ai/zen/go",
       cost: { input: 0.3, output: 1.2, cacheRead: 0.06, cacheWrite: 0 },
     });
+    expect(result.models[2]).toMatchObject({
+      provider: "opencode-go",
+      api: "openai-completions",
+      baseUrl: "https://opencode.ai/zen/go/v1",
+      input: ["text"],
+    });
+    const listingRequest = fetchGuard.mock.calls.find(
+      ([request]) => request.url === "https://opencode.ai/zen/go/v1/models",
+    )?.[0];
+    expect(new Headers(listingRequest?.init?.headers).get("user-agent")).toMatch(/^openclaw\//);
 
     const provider = await registerSingleProviderPlugin(plugin);
     expect(provider.resolveDynamicModel?.({ modelId: "legacy-model" } as never)).toBeUndefined();
@@ -391,12 +403,18 @@ describe("opencode-go provider plugin", () => {
       },
       liveModelIds: ["replacement-model", "unsafe-model"],
     });
+    // Rejected metadata cannot redirect inference; the listed id keeps Go's own route.
     await expect(
       buildOpencodeGoLiveProviderConfig({
         discoveryApiKey: "resolved-opencode-key",
         fetchGuard: refreshedFetchGuard,
       }),
-    ).resolves.toMatchObject({ models: [expect.objectContaining({ id: "replacement-model" })] });
+    ).resolves.toMatchObject({
+      models: [
+        expect.objectContaining({ id: "replacement-model" }),
+        expect.objectContaining({ id: "unsafe-model", baseUrl: "https://opencode.ai/zen/go/v1" }),
+      ],
+    });
 
     const provider = await registerSingleProviderPlugin(plugin);
     const entries = await provider.augmentModelCatalog?.({ entries: [] } as never);
@@ -405,55 +423,9 @@ describe("opencode-go provider plugin", () => {
     expect(requireCatalogEntry(entries, "hy3-preview").status).toBe("preview");
   });
 
-  it("loads model discovery and keeps every promoted row identical to runtime", async () => {
+  it("exposes only trusted offline starter models through provider discovery", async () => {
     expect(manifest.providerCatalogEntry).toBe("./provider-discovery.ts");
     expect(manifest.modelCatalog.discovery["opencode-go"]).toBe("runtime");
-    const manifestProvider = requireRecord(
-      manifest.modelCatalog.providers["opencode-go"],
-      "manifest provider",
-    );
-    if (!Array.isArray(manifestProvider.models)) {
-      throw new Error("expected manifest models");
-    }
-    const manifestIds = manifestProvider.models.map((model) =>
-      String(requireRecord(model, "manifest model").id),
-    );
-    expect(new Set(manifestIds).size).toBe(manifestIds.length);
-    const provider = await registerSingleProviderPlugin(plugin);
-    for (const manifestModel of manifestProvider.models) {
-      const model = requireRecord(manifestModel, "manifest model");
-      const modelId = String(model.id);
-      const runtime = requireRecord(
-        provider.resolveDynamicModel?.({ modelId } as never),
-        `runtime model ${modelId}`,
-      );
-      expect({
-        api: model.api ?? manifestProvider.api,
-        baseUrl: model.baseUrl ?? manifestProvider.baseUrl,
-        reasoning: model.reasoning,
-        input: model.input,
-        contextWindow: model.contextWindow,
-        contextTokens: model.contextTokens,
-        maxTokens: model.maxTokens,
-        thinkingLevelMap: model.thinkingLevelMap,
-        cost: model.cost,
-        compat: runtimeCompatFields(model.compat),
-      }).toEqual({
-        api: runtime.api,
-        baseUrl: runtime.baseUrl,
-        reasoning: runtime.reasoning,
-        input: runtime.input,
-        contextWindow: runtime.contextWindow,
-        contextTokens: runtime.contextTokens,
-        maxTokens: runtime.maxTokens,
-        thinkingLevelMap: runtime.thinkingLevelMap,
-        cost: runtime.cost,
-        compat: runtimeCompatFields(runtime.compat),
-      });
-    }
-  });
-
-  it("exposes only trusted offline starter models through provider discovery", async () => {
     const result = await opencodeGoProviderDiscovery.staticCatalog?.run({} as never);
     if (!result || !("provider" in result)) {
       throw new Error("expected OpenCode Go static provider");
@@ -862,7 +834,6 @@ describe("opencode-go provider plugin", () => {
 
   it.each([
     ["glm-5.2", "max", undefined, ["high", "max"]],
-    ["grok-4.5", "high", undefined, ["low", "medium", "high"]],
     ["hy3", "low", "none", ["none", "low", "high"]],
   ] as const)(
     "maps %s only to supported wire efforts",

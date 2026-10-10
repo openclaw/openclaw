@@ -2,12 +2,10 @@ import { spawn } from "node:child_process";
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { setTimeout as sleep } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { build as esbuild } from "esbuild";
+import { awaitGateBeforeSettlement, withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, beforeAll, expect, it } from "vitest";
-
-const CHILD_TIMEOUT_MS = 3_000;
 let bundleRoot: string | undefined;
 let interruptsModuleUrl: string;
 
@@ -34,40 +32,13 @@ afterAll(async () => {
   }
 });
 
-async function waitForMarker(readOutput: () => string, marker: string): Promise<void> {
-  const deadlineAt = Date.now() + CHILD_TIMEOUT_MS;
-  while (Date.now() < deadlineAt) {
-    if (readOutput().includes(marker)) {
-      return;
-    }
-    await sleep(10);
-  }
-  throw new Error(`timeout waiting for child marker: ${marker}`);
-}
-
-async function withTimeout<T>(promise: Promise<T>, message: string): Promise<T> {
-  let timer: ReturnType<typeof globalThis.setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      promise,
-      new Promise<never>((_, reject) => {
-        timer = globalThis.setTimeout(() => reject(new Error(message)), CHILD_TIMEOUT_MS);
-      }),
-    ]);
-  } finally {
-    if (timer !== undefined) {
-      globalThis.clearTimeout(timer);
-    }
-  }
-}
-
-it.skipIf(process.platform === "win32").each([
+it.skipIf(process.platform === "win32").concurrent.for([
   { signal: "SIGINT", code: 130 },
   { signal: "SIGTERM", code: 143 },
   { signal: "SIGHUP", code: 129 },
 ] as const)(
   "keeps repeated $signal ownership until Mantis cleanup completes",
-  async ({ signal, code }) => {
+  async ({ signal, code }, { signal: testSignal }) => {
     const script = `
       import { writeSync } from "node:fs";
       import { runWithMantisCliInterrupts } from ${JSON.stringify(interruptsModuleUrl)};
@@ -92,10 +63,18 @@ it.skipIf(process.platform === "win32").each([
       env: { ...process.env, VITEST: undefined },
       stdio: ["pipe", "pipe", "pipe"],
     });
+    const ready = Promise.withResolvers<void>();
+    const cleanupStarted = Promise.withResolvers<void>();
     let stdout = "";
     let stderr = "";
     child.stdout.setEncoding("utf8").on("data", (chunk: string) => {
       stdout += chunk;
+      if (stdout.includes("ready\n")) {
+        ready.resolve();
+      }
+      if (stdout.includes("cleanup-started\n")) {
+        cleanupStarted.resolve();
+      }
     });
     child.stderr.setEncoding("utf8").on("data", (chunk: string) => {
       stderr += chunk;
@@ -111,12 +90,22 @@ it.skipIf(process.platform === "win32").each([
     void closed.catch(() => undefined);
 
     try {
-      await waitForMarker(() => stdout, "ready\n");
+      await withinTest(
+        awaitGateBeforeSettlement(ready.promise, closed, "timeout waiting for child marker: ready"),
+        testSignal,
+      );
       expect(child.kill(signal)).toBe(true);
-      await waitForMarker(() => stdout, "cleanup-started\n");
+      await withinTest(
+        awaitGateBeforeSettlement(
+          cleanupStarted.promise,
+          closed,
+          "timeout waiting for child marker: cleanup-started",
+        ),
+        testSignal,
+      );
       expect(child.kill(signal)).toBe(true);
       child.stdin.end("release cleanup\n");
-      const outcome = await withTimeout(closed, "timeout waiting for Mantis signal child");
+      const outcome = await withinTest(closed, testSignal);
       const diagnostics = JSON.stringify({ outcome, stderr, stdout }, null, 2);
 
       expect(stdout, diagnostics).toContain("cleanup-complete\n");
@@ -126,7 +115,7 @@ it.skipIf(process.platform === "win32").each([
       if (child.exitCode === null && child.signalCode === null) {
         child.kill("SIGKILL");
       }
-      await withTimeout(closed, "timeout joining Mantis signal child cleanup");
+      await closed;
     }
   },
 );

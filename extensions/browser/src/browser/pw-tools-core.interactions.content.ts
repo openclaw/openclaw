@@ -1,14 +1,17 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { detectMime } from "openclaw/plugin-sdk/media-mime";
+import { getImageMetadata } from "openclaw/plugin-sdk/media-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { withTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
+import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
 import type { FileChooser, Locator, Page } from "playwright-core";
-import { getImageMetadata } from "../media/media-services.js";
 import { ACT_MAX_WAIT_TIME_MS, resolveActWaitTimeoutMs } from "./act-policy.js";
 import {
   DEFAULT_BROWSER_DOWNLOAD_TIMEOUT_MS,
   DEFAULT_BROWSER_SCREENSHOT_TIMEOUT_MS,
+  EXTENSION_RELAY_MAX_PAYLOAD_BYTES,
 } from "./constants.js";
 import { normalizeBrowserEvaluateFunctionSource } from "./evaluate-source.js";
 import { resolveStrictExistingUploadPaths } from "./paths.js";
@@ -26,7 +29,6 @@ import {
   type GuardedInteractionOptions,
   type InteractionTargetOptions,
   interactionNavigationPolicy,
-  type NavigationTargetOptions,
   reconcileRemoteDialogAfterActionSettled,
   resolveBoundedDelayMs,
   runCancellablePageInteraction,
@@ -47,15 +49,19 @@ import {
 
 const DEFAULT_UPLOAD_MIME_TYPE = "application/octet-stream";
 const PLAYWRIGHT_FILE_PAYLOAD_SIZE_LIMIT_BYTES = 50 * 1024 * 1024;
+/**
+ * Aggregate upload size below which the byte-payload branch is known to fit a
+ * single extension-relay WebSocket message. Playwright delivers file payloads to
+ * CDP-attached browsers as base64 inside an evaluate command, so the relay-safe
+ * bound is three quarters of the relay's message cap, minus headroom for JSON
+ * framing. Extension uploads at or above this bound take the local path handoff
+ * so a file that the relay could not carry as bytes still uploads for extensions
+ * with local file access.
+ */
+const PLAYWRIGHT_RELAY_SAFE_PAYLOAD_SIZE_BYTES =
+  Math.floor((EXTENSION_RELAY_MAX_PAYLOAD_BYTES * 3) / 4) - 1024 * 1024;
 
-type PlaywrightFilePayload = {
-  name: string;
-  mimeType: string;
-  buffer: Buffer;
-  lastModifiedMs?: number;
-};
-
-async function toPlaywrightFilePayloads(paths: string[]): Promise<PlaywrightFilePayload[]> {
+async function toPlaywrightFilePayloads(paths: string[]) {
   const stats = await Promise.all(paths.map(async (filePath) => await fs.stat(filePath)));
   const totalSize = stats.reduce((size, stat) => size + stat.size, 0);
   if (totalSize >= PLAYWRIGHT_FILE_PAYLOAD_SIZE_LIMIT_BYTES) {
@@ -76,30 +82,35 @@ async function toPlaywrightFilePayloads(paths: string[]): Promise<PlaywrightFile
   );
 }
 
-function shouldUsePlaywrightFilePayloads(
-  opts: Pick<NavigationTargetOptions, "browserFilesystemLocal" | "ssrfPolicy">,
-): boolean {
-  return Boolean(opts.ssrfPolicy) && opts.browserFilesystemLocal !== true;
+async function measureExistingUploadPathsSize(paths: string[]): Promise<number> {
+  const stats = await Promise.all(paths.map(async (filePath) => await fs.stat(filePath)));
+  return stats.reduce((size, stat) => size + stat.size, 0);
 }
 
 async function resolvePlaywrightUploadFiles(opts: GuardedInteractionOptions & { paths: string[] }) {
-  const { abortPromise, cleanup } = createAbortPromiseWithListener(opts.signal);
-  try {
-    return await awaitActionWithAbort(
-      (async () => {
-        const resolved = await resolveStrictExistingUploadPaths({ requestedPaths: opts.paths });
-        if (!resolved.ok) {
-          throw new Error(resolved.error);
-        }
-        return shouldUsePlaywrightFilePayloads(opts)
-          ? await toPlaywrightFilePayloads(resolved.paths)
-          : resolved.paths;
-      })(),
-      abortPromise,
-    );
-  } finally {
-    cleanup();
-  }
+  return await racePromiseWithAbortSignal(
+    (async () => {
+      const resolved = await resolveStrictExistingUploadPaths({ requestedPaths: opts.paths });
+      if (!resolved.ok) {
+        throw new Error(resolved.error);
+      }
+      if (!(opts.ssrfPolicy && opts.browserFilesystemLocal !== true)) {
+        return resolved.paths;
+      }
+      if (
+        opts.uploadPathsFallbackOnPayloadLimit === true &&
+        (await measureExistingUploadPathsSize(resolved.paths)) >=
+          PLAYWRIGHT_RELAY_SAFE_PAYLOAD_SIZE_BYTES
+      ) {
+        // Preserve path handoff for extensions with local file access when the
+        // payload would exceed the relay limit.
+        return resolved.paths;
+      }
+      return await toPlaywrightFilePayloads(resolved.paths);
+    })(),
+    opts.signal,
+    ({ reason }) => toErrorObject(reason ?? new Error("aborted"), "Non-Error rejection"),
+  );
 }
 
 type BrowserWaitPredicateState = {
@@ -155,7 +166,6 @@ export async function waitForViaPlaywright(
   },
 ): Promise<void> {
   const page = await getPageForTargetId(opts);
-  ensurePageState(page);
   const timeout = resolveActWaitTimeoutMs(opts.timeoutMs);
   const fn = normalizeOptionalString(opts.fn) ?? "";
   const predicateSource = fn ? normalizeBrowserEvaluateFunctionSource(fn) : "";
@@ -180,21 +190,12 @@ export async function waitForViaPlaywright(
         ),
       );
     }
-    if (opts.text) {
-      await waitFor(
-        page.getByText(opts.text).first().waitFor({
-          state: "visible",
-          timeout,
-        }),
-      );
-    }
-    if (opts.textGone) {
-      await waitFor(
-        page.getByText(opts.textGone).first().waitFor({
-          state: "hidden",
-          timeout,
-        }),
-      );
+    for (const field of ["text", "textGone"] as const) {
+      const text = opts[field];
+      if (text) {
+        const state = field === "text" ? "visible" : "hidden";
+        await waitFor(page.getByText(text).first().waitFor({ state, timeout }));
+      }
     }
     if (opts.selector) {
       const selector = normalizeOptionalString(opts.selector) ?? "";
@@ -213,15 +214,19 @@ export async function waitForViaPlaywright(
     }
     if (fn) {
       if (opts.assertCurrent) {
-        await assertInteractionCurrent(opts);
+        const assertion = assertInteractionCurrent(opts);
+        if (assertion) {
+          await assertion;
+        }
         throwIfInteractionAborted(opts.signal);
       }
       // Passing the live document handle makes Playwright fail instead of
       // recreating this predicate in a replacement execution context.
       const documentHandle = await page.evaluateHandle(() => globalThis.document);
       try {
-        if (opts.assertCurrent) {
-          await assertInteractionCurrent(opts);
+        const assertion = assertInteractionCurrent(opts);
+        if (assertion) {
+          await assertion;
         }
         throwIfInteractionAborted(opts.signal);
         await waitFor(
@@ -594,7 +599,6 @@ export async function setInputFilesViaPlaywright(
   },
 ): Promise<void> {
   const page = await getPageForTargetId(opts);
-  ensurePageState(page);
   restoreRoleRefsForTarget({ cdpUrl: opts.cdpUrl, targetId: opts.targetId, page });
   if (!opts.paths.length) {
     throw new Error("paths are required");

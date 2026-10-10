@@ -5,6 +5,11 @@ export const cliRecoveryEntrypoints = {
     sourceWorkerName: "../entry",
     distWorkerPath: "entry.js",
   },
+  daemon: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "daemon-cli",
+    distWorkerPath: "cli/daemon-cli.js",
+  },
   sessionAccessor: {
     currentModuleUrl: import.meta.url,
     sourceWorkerName: "../config/sessions/session-accessor",
@@ -20,6 +25,11 @@ export const cliRecoveryEntrypoints = {
     sourceWorkerName: "../commands/doctor-lint-process",
     distWorkerPath: "commands/doctor-lint-process.js",
   },
+  doctorHealth: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "../../extensions/memory-core/doctor-health-api",
+    distWorkerPath: "extensions/memory-core/doctor-health-api.js",
+  },
   signalExitBarrier: {
     currentModuleUrl: import.meta.url,
     sourceWorkerName: "signal-exit-barrier",
@@ -29,6 +39,82 @@ export const cliRecoveryEntrypoints = {
     currentModuleUrl: import.meta.url,
     sourceWorkerName: "../process/output-drain",
     distWorkerPath: "process/output-drain.js",
+  },
+} as const;
+
+// Keep the message action and its native command stub in the same prepared graph.
+export const cliMessageExitEntrypoints = {
+  helpers: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "program/message/helpers",
+    distWorkerPath: "cli/program/message/helpers.js",
+  },
+  command: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "../commands/message",
+    distWorkerPath: "commands/message.js",
+  },
+  oneShotExit: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "one-shot-exit",
+    distWorkerPath: "cli/one-shot-exit.js",
+  },
+} as const;
+
+// Report producers remain hookable inside the prepared CLI graph.
+export const doctorOutputEntrypoints = {
+  maintenance: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "program/register.maintenance",
+    distWorkerPath: "legacy-finalizer/src/cli/program/register.maintenance.js",
+  },
+  oneShotExit: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "one-shot-exit",
+    distWorkerPath: "legacy-finalizer/src/cli/one-shot-exit.js",
+  },
+} as const;
+
+// Import guards need physical module boundaries in the prepared fixture graph.
+export const mcpImportBoundaryEntrypoints = {
+  cli: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "mcp-cli",
+    distWorkerPath: "legacy-finalizer/src/cli/mcp-cli.js",
+  },
+  catalog: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "../agents/agent-bundle-mcp-materialize",
+    distWorkerPath: "legacy-finalizer/src/agents/agent-bundle-mcp-materialize.js",
+  },
+  metadata: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "../plugins/tool-metadata",
+    distWorkerPath: "legacy-finalizer/src/plugins/tool-metadata.js",
+  },
+} as const;
+
+// Preserve module boundaries so a child can retire only its own cleanup source copies.
+export const cliCleanupRetirementEntrypoints = {
+  scope: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "runtime-cleanup-scope",
+    distWorkerPath: "legacy-finalizer/src/cli/runtime-cleanup-scope.js",
+  },
+  cleanup: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "runtime-cleanup",
+    distWorkerPath: "legacy-finalizer/src/cli/runtime-cleanup.js",
+  },
+  database: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "../state/openclaw-state-db-cache",
+    distWorkerPath: "legacy-finalizer/src/state/openclaw-state-db-cache.js",
+  },
+  workers: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "../infra/worker-native-lifecycle",
+    distWorkerPath: "legacy-finalizer/src/infra/worker-native-lifecycle.js",
   },
 } as const;
 
@@ -57,6 +143,18 @@ export const stateDirGatewayFixtureEntrypoint = {
   currentModuleUrl: import.meta.url,
   sourceWorkerName: "state-dir-gateway-check.server-fixture.test-support",
   distWorkerPath: "cli/state-dir-gateway-check.server-fixture.test-support.js",
+} as const;
+
+export const localStateOwnerFixtureEntrypoint = {
+  currentModuleUrl: import.meta.url,
+  sourceWorkerName: "local-state-owner.child.test-support",
+  distWorkerPath: "cli/local-state-owner.child.test-support.js",
+} as const;
+
+export const adminStateOwnerFixtureEntrypoint = {
+  currentModuleUrl: import.meta.url,
+  sourceWorkerName: "admin-state-owner.child.test-support",
+  distWorkerPath: "cli/admin-state-owner.child.test-support.js",
 } as const;
 
 export const updateFinalizationOutputEntrypoint = {
@@ -121,6 +219,66 @@ export const gatewayDirectStopEntrypoints = {
 
 // Extra update roots share the native fixture generation.
 export const updateExecutorEntrypoints = {
+  gatewayLock: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "../infra/gateway-lock",
+    distWorkerPath: "infra/gateway-lock.js",
+  },
+  gatewayOwnerLease: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "../infra/gateway-owner-lease",
+    distWorkerPath: "infra/gateway-owner-lease.js",
+  },
+  boundaryPath: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "../infra/boundary-path",
+    distWorkerPath: "infra/boundary-path.js",
+  },
+  statePaths: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "../state/openclaw-state-db.paths",
+    distWorkerPath: "state/openclaw-state-db.paths.js",
+  },
+  sealedRegistry: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "../infra/sealed-runtime-registry",
+    distWorkerPath: "infra/sealed-runtime-registry.js",
+  },
+  ledger: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "../infra/update-run-ledger",
+    distWorkerPath: "infra/update-run-ledger.js",
+  },
+  handoff: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "../infra/update-managed-service-handoff",
+    distWorkerPath: "infra/update-managed-service-handoff.js",
+  },
+  sentinel: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "../infra/update-control-plane-sentinel",
+    distWorkerPath: "infra/update-control-plane-sentinel.js",
+  },
+  packageSteps: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "../infra/package-update-steps",
+    distWorkerPath: "infra/package-update-steps.js",
+  },
+  packageFixture: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "../infra/package-update-steps.test-support",
+    distWorkerPath: "infra/package-update-steps.test-support.js",
+  },
+  inventory: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "../../scripts/lib/package-dist-inventory",
+    distWorkerPath: "scripts/lib/package-dist-inventory.js",
+  },
+  exec: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "../process/exec",
+    distWorkerPath: "process/exec.js",
+  },
   lease: {
     currentModuleUrl: import.meta.url,
     sourceWorkerName: "../infra/update-managed-service-handoff-lease",

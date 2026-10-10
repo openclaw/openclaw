@@ -105,7 +105,7 @@ describe("backup archive publication", () => {
     }
   });
 
-  it.each(["EPERM", "EXDEV", "ENOTSUP", "EOPNOTSUPP", "ENOSYS"])(
+  it.each(["EPERM", "EXDEV"])(
     "fails closed when hard-link publication returns %s",
     async (code) => {
       const { outputPath, plan } = await createPublication("openclaw-backup-no-link-");

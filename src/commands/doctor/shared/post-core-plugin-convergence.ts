@@ -22,11 +22,14 @@ import {
 import { pruneStaleLocalBundledPluginInstallRecords } from "../../../plugins/stale-local-bundled-plugin-install-records.js";
 import type { PluginUpdateOutcome } from "../../../plugins/update.js";
 import { resolveUserPath } from "../../../utils.js";
-import { VERSION } from "../../../version.js";
 // Link mandatory repairs before a package swap can remove this updater's old chunks.
 import { maybeRepairStaleManagedNpmBundledPlugins } from "../../doctor-plugin-registry.js";
+import {
+  recoverInstalledPluginConfigIds,
+  type InstalledPluginIdRecovery,
+} from "./installed-plugin-id-recovery.js";
 import { repairMissingConfiguredPluginInstalls } from "./missing-configured-plugin-install.js";
-import { UPDATE_POST_CORE_CONVERGENCE_ENV } from "./update-phase.js";
+import { resolvePostCoreConvergenceEnv } from "./update-phase.js";
 
 type PostCoreConvergenceWarning = {
   kind?: "load" | "repair";
@@ -37,6 +40,9 @@ type PostCoreConvergenceWarning = {
 };
 
 type PostCoreConvergenceResult = {
+  config: OpenClawConfig;
+  configChanges: string[];
+  installedPluginIdRecovery: InstalledPluginIdRecovery;
   changes: string[];
   notices?: PostCoreConvergenceWarning[];
   warnings: PostCoreConvergenceWarning[];
@@ -44,22 +50,17 @@ type PostCoreConvergenceResult = {
   repairedPluginIds?: string[];
   errored: boolean;
   smokeFailures: PluginPayloadSmokeFailure[];
-  /**
-   * Final install-record map after convergence: this is the
-   * `baselineInstallRecords` the caller passed in (their in-memory state
-   * including any sync/npm mutations that happened earlier in the
-   * post-core flow) WITH convergence's repair mutations layered on top.
-   * Convergence has already persisted this map to the installed-plugin
-   * index, so the caller's subsequent commit MUST seed its write from
-   * these records — otherwise the stale pre-convergence snapshot will
-   * overwrite both the sync/npm mutations AND the fresh repairs.
-   */
+  /** Persisted baseline plus repairs; subsequent commits must use this map to avoid lost updates. */
   installRecords: Record<string, PluginInstallRecord>;
 };
 
 const REPAIR_GUIDANCE = "Run `openclaw update repair` to retry plugin repair.";
 const inspectGuidance = (pluginId: string) =>
   `Run \`openclaw plugins inspect ${pluginId} --runtime --json\` for details.`;
+
+function convergenceNotice(message: string, guidance: string[]): PostCoreConvergenceWarning {
+  return { reason: message, message, guidance };
+}
 
 function smokeFailureGuidance(failure: PluginPayloadSmokeFailure): string[] {
   if (failure.reason !== "unreadable-package-json") {
@@ -98,6 +99,9 @@ async function repairInstalledOpenClawHostLinks(params: {
         }
       }
     : undefined;
+  const onPackageReadError = (error: unknown, packageDir: string) => {
+    packageReadFailures.push({ error, packageDir });
+  };
   try {
     const npmRoots = await listManagedPluginNpmRoots(resolveDefaultPluginNpmDir(params.env));
     const results = await Promise.allSettled(
@@ -106,9 +110,7 @@ async function repairInstalledOpenClawHostLinks(params: {
           npmRoot,
           beforePersistentApply: beforePersistentEffect,
           logger: {},
-          onPackageReadError: (error, packageDir) => {
-            packageReadFailures.push({ error, packageDir });
-          },
+          onPackageReadError,
         }),
       ),
     );
@@ -124,16 +126,14 @@ async function repairInstalledOpenClawHostLinks(params: {
       }
       repaired += result.value.repaired;
     }
-    // Registered npm and ClawHub installs also live under extensions/, outside managed npm roots.
+    // Registered npm, ClawHub, and archive installs also live under extensions/, outside managed npm roots.
     const registeredRepair = await reconcileRegisteredOpenClawHostLinks({
       installRecords: params.installRecords,
       extensionsDir: resolveDefaultPluginExtensionsDir(params.env),
       env: params.env,
       mode: "repair",
       beforePersistentApply: beforePersistentEffect,
-      onPackageReadError: (error, packageDir) => {
-        packageReadFailures.push({ error, packageDir });
-      },
+      onPackageReadError,
     });
     return {
       changes: [
@@ -154,16 +154,9 @@ async function repairInstalledOpenClawHostLinks(params: {
       throw effectFailure.error;
     }
     beforePersistentEffect?.();
-    const message = `Failed to repair installed OpenClaw host peer links: ${err instanceof Error ? err.message : String(err)}`;
     return {
       changes: [],
-      warnings: [
-        {
-          reason: message,
-          message,
-          guidance: [REPAIR_GUIDANCE],
-        },
-      ],
+      warnings: [formatPeerLinkPackageReadWarning({ error: err })],
       packageReadFailures,
     };
   }
@@ -171,11 +164,7 @@ async function repairInstalledOpenClawHostLinks(params: {
 
 function formatPeerLinkPackageReadWarning(failure: { error: unknown }): PostCoreConvergenceWarning {
   const message = `Failed to repair installed OpenClaw host peer links: ${failure.error instanceof Error ? failure.error.message : String(failure.error)}`;
-  return {
-    reason: message,
-    message,
-    guidance: [REPAIR_GUIDANCE],
-  };
+  return convergenceNotice(message, [REPAIR_GUIDANCE]);
 }
 
 /**
@@ -201,6 +190,8 @@ export async function runPostCorePluginConvergence(params: {
    * map is what gets persisted and returned via `installRecords`.
    */
   baselineInstallRecords?: Record<string, PluginInstallRecord>;
+  /** Only a config-writing caller may plan recovery before smoke-checking that candidate. */
+  configPersistence?: "caller";
   onCapabilityConsent?: PluginCapabilityConsentHandler;
   beforePersistentEffect?: () => void;
 }): Promise<PostCoreConvergenceResult> {
@@ -217,11 +208,7 @@ export async function runPostCorePluginConvergence(params: {
 async function runPostCorePluginConvergenceWithLease(
   params: Parameters<typeof runPostCorePluginConvergence>[0],
 ): Promise<PostCoreConvergenceResult> {
-  const env: NodeJS.ProcessEnv = {
-    ...params.env,
-    OPENCLAW_COMPATIBILITY_HOST_VERSION: params.compatibilityHostVersion ?? VERSION,
-    [UPDATE_POST_CORE_CONVERGENCE_ENV]: "1",
-  };
+  const env = resolvePostCoreConvergenceEnv(params.env, params.compatibilityHostVersion);
   // Retire obsolete managed shadows before relinking or smoke-checking them. A package that
   // became bundled with the new core must not survive into the next startup's contract graph.
   params.beforePersistentEffect?.();
@@ -267,24 +254,28 @@ async function runPostCorePluginConvergenceWithLease(
   });
   params.beforePersistentEffect?.();
   warnings.push(...peerLinkRepair.warnings);
-  const notices: PostCoreConvergenceWarning[] = (repair.notices ?? []).map((message) => ({
-    reason: message,
-    message,
-    guidance: [],
-  }));
+  const notices = (repair.notices ?? []).map((message) => convergenceNotice(message, []));
 
   const records: Record<string, PluginInstallRecord> = repair.records;
+  const recovered =
+    params.configPersistence === "caller"
+      ? await recoverInstalledPluginConfigIds(params.cfg, env)
+      : { config: params.cfg, changes: [], notices: [], recovery: new Map() };
+  params.beforePersistentEffect?.();
+  notices.push(
+    ...recovered.notices.map((message) => convergenceNotice(message, [REPAIR_GUIDANCE])),
+  );
   // Filter the smoke-check input to active records ONLY: configured /
   // enabled plugins, plus trusted-source-linked official sync targets
   // selected by `filterRecordsToActive`. Without this filter, a stale install
   // record for an inactive plugin could block the update even though the
   // gateway will never load it.
   const smoke = await runActivePluginPayloadSmokeCheck({
-    cfg: params.cfg,
+    cfg: recovered.config,
     records,
     env,
   });
-  const smokeRecords = filterRecordsToActive({ cfg: params.cfg, records, env });
+  const smokeRecords = filterRecordsToActive({ cfg: recovered.config, records, env });
   const resolveInstallRecordPaths = (
     installRecords: Record<string, PluginInstallRecord>,
   ): Set<string> =>
@@ -325,6 +316,9 @@ async function runPostCorePluginConvergenceWithLease(
   }
 
   return {
+    config: recovered.config,
+    configChanges: recovered.changes,
+    installedPluginIdRecovery: recovered.recovery,
     changes: [
       ...(staleManagedNpmBundledPluginRepair?.removedPluginIds.map(
         (pluginId) => `Removed stale managed install record for bundled plugin "${pluginId}".`,

@@ -1,5 +1,4 @@
 import type { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
-// Voice Call plugin module implements context behavior.
 import type { VoiceCallConfig, VoiceCallCoreSessionConfig } from "../config.js";
 import type { VoiceCallProvider } from "../providers/base.js";
 import type { VoiceCallStateRuntime } from "../runtime-state.js";
@@ -14,24 +13,18 @@ type TranscriptWaiter = {
   turnToken?: string;
 };
 
-type CallManagerRuntimeState = {
+export type CallManagerContext = {
   activeCalls: Map<CallId, CallRecord>;
   providerCallIdMap: Map<string, CallId>;
   processedEventIds: Set<string>;
   /** Provider call IDs reserved for reject hangup; avoids duplicate hangup calls. */
   rejectedProviderCallIds: Map<string, symbol>;
-};
-
-type CallManagerRuntimeDeps = {
   provider: VoiceCallProvider | null;
   config: VoiceCallConfig;
   coreSession?: VoiceCallCoreSessionConfig;
   storePath: string;
   stateRuntime?: VoiceCallStateRuntime["state"];
   webhookUrl: string | null;
-};
-
-type CallManagerTransientState = {
   mutationQueue: KeyedAsyncQueue;
   pendingCallAdmissions: Set<CallId>;
   trackCallWork: (work: Promise<unknown>) => void;
@@ -42,6 +35,13 @@ type CallManagerTransientState = {
   maxDurationTimers: Map<CallId, NodeJS.Timeout>;
   notifyHangupTimers: Map<CallId, NodeJS.Timeout>;
   initialMessageInFlight: Set<CallId>;
+  onCallUpdated?: (call: CallRecord) => void | Promise<void>;
+  beforeCallEnd?: (call: CallRecord) => Promise<void>;
+  playRealtimeVoicemail?: (callId: CallId, instructions: string) => Promise<void> | undefined;
+  beforeCarrierPlayback?: (callId: CallId) => Promise<void>;
+  onCallAnswered?: (call: CallRecord) => void;
+  onCallerSpeech?: (call: CallRecord) => void;
+  streamSessionIssuer?: StreamSessionIssuer;
 };
 
 export type StreamSessionIssuer = (request: {
@@ -51,14 +51,3 @@ export type StreamSessionIssuer = (request: {
   to?: string;
   direction: "inbound" | "outbound";
 }) => { token: string; streamUrl: string } | undefined;
-
-type CallManagerHooks = {
-  onCallAnswered?: (call: CallRecord) => void;
-  onCallerSpeech?: (call: CallRecord) => void;
-  streamSessionIssuer?: StreamSessionIssuer;
-};
-
-export type CallManagerContext = CallManagerRuntimeState &
-  CallManagerRuntimeDeps &
-  CallManagerTransientState &
-  CallManagerHooks;

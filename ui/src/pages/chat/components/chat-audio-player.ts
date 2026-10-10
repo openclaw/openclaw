@@ -9,9 +9,10 @@ import {
   openAttachmentCardFromClick,
   renderAttachmentCardHeader,
   renderCompactAttachmentCard,
+  type AttachmentCardHeaderOptions,
 } from "./chat-attachment-card.ts";
 import { safeMediaAttachmentHref } from "./chat-attachment-href.ts";
-import { observeChatAttachmentViewport } from "./chat-attachment-viewport.ts";
+import { ChatAttachmentViewportRef } from "./chat-attachment-viewport.ts";
 import {
   canResumeChatAudioPlayback,
   claimChatAudioPlayback,
@@ -19,7 +20,6 @@ import {
 } from "./chat-audio-coordinator.ts";
 import {
   cacheAndRetainChatAudioBlob,
-  canDecodeChatAudioWaveform,
   CHAT_AUDIO_WAVEFORM_MAX_BYTES,
   CHAT_AUDIO_WAVEFORM_SAMPLE_RATE,
   computeChatAudioWaveformPeaks,
@@ -28,7 +28,7 @@ import {
   type CachedChatAudioBlob,
 } from "./chat-audio-waveform.ts";
 import { buildChatMediaFetchHeaders, type ChatMediaPlaybackMode } from "./chat-media-playback.ts";
-import { ChatMediaSourceController } from "./chat-media-source.ts";
+import { chatMediaSourceChanged, ChatMediaSourceController } from "./chat-media-source.ts";
 import { readResponseBytesWithinLimit } from "./chat-response-bytes.ts";
 
 const SEEK_STEP_SECONDS = 5;
@@ -78,8 +78,10 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
   private waveformController: AbortController | null = null;
   private waveformAttempted = false;
   private waveformVisible = false;
-  private viewportElement: HTMLElement | null = null;
-  private stopObservingViewport: (() => void) | undefined;
+  private readonly viewport = new ChatAttachmentViewportRef(() => {
+    this.waveformVisible = true;
+    void this.prepareWaveformAudio().catch(() => undefined);
+  });
 
   override connectedCallback(): void {
     super.connectedCallback();
@@ -87,9 +89,7 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
   }
 
   override disconnectedCallback(): void {
-    this.stopObservingViewport?.();
-    this.stopObservingViewport = undefined;
-    this.viewportElement = null;
+    this.viewport.disconnect();
     this.sourceController.cancel();
     this.releaseWaveformBlob?.();
     this.releaseWaveformBlob = undefined;
@@ -111,10 +111,7 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
   protected override willUpdate(changedProperties: PropertyValues<this>): void {
     if (
       this.sourceController.readiness === "unavailable" &&
-      (changedProperties.has("src") ||
-        changedProperties.has("sourceIdentity") ||
-        changedProperties.has("playback") ||
-        changedProperties.has("authToken"))
+      chatMediaSourceChanged(changedProperties)
     ) {
       this.releaseWaveformBlob?.();
       this.releaseWaveformBlob = undefined;
@@ -124,10 +121,7 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
 
   override updated(changedProperties: PropertyValues<this>): void {
     if (
-      changedProperties.has("src") ||
-      changedProperties.has("sourceIdentity") ||
-      changedProperties.has("playback") ||
-      changedProperties.has("authToken") ||
+      chatMediaSourceChanged(changedProperties) ||
       changedProperties.has("sizeBytes") ||
       changedProperties.has("serverDurationMs")
     ) {
@@ -167,23 +161,6 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
       this.media.muted = this.muted;
     }
     this.syncSource();
-  };
-
-  private setViewportElement = (element: Element | undefined) => {
-    const viewportElement = element instanceof HTMLElement ? element : null;
-    if (this.viewportElement === viewportElement) {
-      return;
-    }
-    this.stopObservingViewport?.();
-    this.stopObservingViewport = undefined;
-    this.viewportElement = viewportElement;
-    if (!viewportElement) {
-      return;
-    }
-    this.stopObservingViewport = observeChatAttachmentViewport(viewportElement, () => {
-      this.waveformVisible = true;
-      void this.prepareWaveformAudio().catch(() => undefined);
-    });
   };
 
   private setWaveform = (element: Element | undefined) => {
@@ -351,7 +328,7 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
     const blobUrl = URL.createObjectURL(blob);
     let peaks: readonly number[] | undefined;
     let acceptedDecodedDuration: number | undefined;
-    if (canDecodeChatAudioWaveform({ sizeBytes: bytes.byteLength, durationSeconds })) {
+    if (shouldFetchChatAudioWaveform({ sizeBytes: bytes.byteLength, durationSeconds })) {
       let context: AudioContext | null = null;
       try {
         // Duration is trusted only from the server-side ffprobe metadata.
@@ -398,22 +375,20 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
       this.adoptPreparedAudioForPlayback();
       claimChatAudioPlayback(media, this.cancelPendingResume);
       const playback = media.play();
+      const failed = () => {
+        releaseChatAudioPlayback(media);
+        this.playing = false;
+      };
       if (!this.playRequest) {
         // Invoke play in the click task so strict browser media policies retain user activation.
         this.playRequest = playback
           .then(() => this.prepareWaveformAudio().catch(() => undefined))
-          .catch(() => {
-            releaseChatAudioPlayback(media);
-            this.playing = false;
-          })
+          .catch(failed)
           .finally(() => {
             this.playRequest = null;
           });
       } else {
-        void playback.catch(() => {
-          releaseChatAudioPlayback(media);
-          this.playing = false;
-        });
+        void playback.catch(failed);
       }
     } else {
       media.pause();
@@ -438,17 +413,22 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
   }
 
   private handlePlayerKeydown(event: KeyboardEvent): void {
-    if (event.target !== event.currentTarget) {
+    const seekTarget = event.target instanceof HTMLInputElement && event.target.type === "range";
+    if (event.target !== event.currentTarget && !seekTarget) {
       return;
     }
-    if (event.key === " ") {
+    if (!seekTarget && event.key === " ") {
       event.preventDefault();
       this.togglePlayback();
       return;
     }
-    if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+    if (
+      event.key === "ArrowLeft" ||
+      event.key === "ArrowRight" ||
+      (seekTarget && (event.key === "ArrowDown" || event.key === "ArrowUp"))
+    ) {
       event.preventDefault();
-      const direction = event.key === "ArrowLeft" ? -1 : 1;
+      const direction = event.key === "ArrowLeft" || event.key === "ArrowDown" ? -1 : 1;
       this.seekTo(this.currentTime + direction * SEEK_STEP_SECONDS);
     }
   }
@@ -476,6 +456,7 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
       step="0.01"
       .value=${String(Math.min(this.currentTime, this.duration || this.currentTime))}
       aria-label=${t("chat.mediaPlayer.seek")}
+      aria-valuetext=${`${formatChatMediaTime(this.currentTime)} / ${formatChatMediaTime(this.duration)}`}
       style=${styleMap({
         "--chat-audio-progress": `${progress * 100}%`,
         "--chat-audio-buffered": `${Math.max(progress, this.buffered) * 100}%`,
@@ -536,22 +517,23 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
         </div>
       </div>`;
     }
+    const card: AttachmentCardHeaderOptions = {
+      kind: "audio",
+      label: this.label,
+      mimeType: this.mimeType,
+      sizeBytes: this.sizeBytes,
+      downloadHref,
+      onExpand: this.onExpand,
+      voiceNote: this.voiceNote,
+    };
     if (failed) {
-      return renderCompactAttachmentCard({
-        kind: "audio",
-        label: this.label,
-        mimeType: this.mimeType,
-        sizeBytes: this.sizeBytes,
-        downloadHref,
-        onExpand: this.onExpand,
-        voiceNote: this.voiceNote,
-      });
+      return renderCompactAttachmentCard(card);
     }
     const timeLabel = `${formatChatMediaTime(this.currentTime)} / ${formatChatMediaTime(this.duration)}`;
     return html`
       <div
         class="chat-assistant-attachment-card chat-assistant-attachment-card--audio ${this.voiceNote ? "chat-assistant-attachment-card--voice-note" : ""}"
-        ${ref(this.setViewportElement)}
+        ${ref(this.viewport.setElement)}
         ?data-openable=${!this.voiceNote && Boolean(this.onExpand)}
         @click=${(event: MouseEvent) => openAttachmentCardFromClick(event, this.voiceNote ? undefined : this.onExpand)}
       >
@@ -559,14 +541,8 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
           this.voiceNote
             ? nothing
             : renderAttachmentCardHeader({
-                kind: "audio",
-                label: this.label,
-                mimeType: this.mimeType,
-                sizeBytes: this.sizeBytes,
-                downloadHref,
-                onExpand: this.onExpand,
+                ...card,
                 visualMode: "preview-with-favicon",
-                voiceNote: this.voiceNote,
               })
         }
         ${
@@ -600,7 +576,6 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
                   type="button"
                   class="chat-audio-player__volume"
                   aria-label=${t(this.muted ? "chat.mediaPlayer.unmute" : "chat.mediaPlayer.mute")}
-                  aria-pressed=${this.muted ? "true" : "false"}
                   @click=${() => this.toggleMuted()}
                 >
                   ${this.muted ? icons.volumeX : icons.volume2}

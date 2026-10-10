@@ -1,4 +1,3 @@
-import { createServer } from "node:http";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
@@ -10,6 +9,7 @@ import {
   createOperatorWsClient,
 } from "./server/ws-connection/authenticated-request-dispatch.test-support.js";
 import { handleToolsInvokeHttpRequest } from "./tools-invoke-http.js";
+import { createToolsInvokeHttpTestServer } from "./tools-invoke-http.test-support.js";
 
 const runtime = vi.hoisted(() => {
   const execute = vi.fn(async () => ({ ok: true }));
@@ -20,7 +20,7 @@ const runtime = vi.hoisted(() => {
       blocked: false as const,
       params,
     })),
-    createTools: vi.fn(() =>
+    createTools: vi.fn(async () =>
       ["session_status", "plugin_doctor"].map((name) => ({
         name,
         parameters: { type: "object", properties: {} },
@@ -34,43 +34,25 @@ const runtime = vi.hoisted(() => {
 vi.mock("../config/config.js", () => ({ getRuntimeConfig: () => runtime.cfg }));
 vi.mock("../config/io.js", () => ({ getRuntimeConfig: () => runtime.cfg }));
 vi.mock("./auth.js", () => ({ authorizeHttpGatewayConnect: runtime.authorize }));
-vi.mock("../agents/openclaw-tools.js", () => ({ createOpenClawTools: runtime.createTools }));
+// mock-isolation: Keep execution inert while exercising HTTP and WebSocket authorization.
+vi.mock("../agents/openclaw-tools.js", () => ({ createOpenClawToolsAsync: runtime.createTools }));
 vi.mock("../agents/agent-tools.js", () => ({ resolveToolLoopDetectionConfig: () => ({}) }));
 vi.mock("../agents/agent-tools.before-tool-call.js", () => ({
   runBeforeToolCallHook: runtime.beforeHook,
 }));
 
 let sharedPort = 0;
-const server = createServer((req, res) => {
-  void handleToolsInvokeHttpRequest(req, res, {
-    auth: { mode: "none", allowTailscale: false },
-  }).catch((error: unknown) => {
-    res.statusCode = 500;
-    res.end(String(error));
-  });
-});
+const server = createToolsInvokeHttpTestServer({ handleToolsInvoke: handleToolsInvokeHttpRequest });
 
 beforeAll(async () => {
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("expected loopback HTTP server address");
-  }
-  sharedPort = address.port;
+  sharedPort = await server.listen();
 });
 
-afterAll(async () => {
-  server.closeAllConnections();
-  await new Promise<void>((resolve, reject) => {
-    server.close((error) => (error ? reject(error) : resolve()));
-  });
-});
+afterAll(() => server.close());
 
 beforeEach(() => {
   vi.clearAllMocks();
+  server.resetContext();
 });
 
 const gatewayAuthHeaders = () => ({ "x-openclaw-scopes": "operator.write" });

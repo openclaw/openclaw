@@ -29,6 +29,10 @@ const SESSION_INGESTION_RELATIVE_PATH = path.join("memory", ".dreams", "session-
 const REPAIR_ARCHIVE_RELATIVE_DIR = path.join(".openclaw-repair", "dreaming");
 const DREAMING_NARRATIVE_RUN_PREFIX = "dreaming-narrative-";
 const DREAMING_NARRATIVE_PROMPT_PREFIX = "Write a dream diary entry from these memory fragments";
+const SESSION_INGESTION_NAMESPACES = [
+  DREAMING_SESSION_INGESTION_FILES_NAMESPACE,
+  DREAMING_SESSION_INGESTION_SEEN_NAMESPACE,
+] as const;
 
 function requireAbsoluteWorkspaceDir(rawWorkspaceDir: string): string {
   const trimmed = rawWorkspaceDir.trim();
@@ -69,19 +73,11 @@ async function listSessionCorpusFiles(
 
 function isSuspiciousSessionCorpusLine(line: string): boolean {
   return (
-    line.includes(DREAMING_NARRATIVE_PROMPT_PREFIX) &&
-    (line.includes(DREAMING_NARRATIVE_RUN_PREFIX) || line.includes("dreaming-narrative-"))
+    line.includes(DREAMING_NARRATIVE_PROMPT_PREFIX) && line.includes(DREAMING_NARRATIVE_RUN_PREFIX)
   );
 }
 
-function buildArchiveTimestamp(now: Date): string {
-  return now.toISOString().replace(/[:.]/g, "-");
-}
-
-async function ensureArchivablePath(
-  workspaceDir: string,
-  targetPath: string,
-): Promise<"file" | "dir" | null> {
+async function ensureArchivablePath(workspaceDir: string, targetPath: string): Promise<boolean> {
   const stat = await inspectWorkspaceFile(workspaceDir, targetPath, false).catch((err: unknown) => {
     if (extractErrorCode(err) === "ENOENT") {
       return null;
@@ -89,47 +85,15 @@ async function ensureArchivablePath(
     throw err;
   });
   if (!stat) {
-    return null;
+    return false;
   }
   if (stat.isSymbolicLink()) {
     throw new Error(`Refusing to archive symlinked path: ${targetPath}`);
   }
-  if (stat.isDirectory()) {
-    return "dir";
-  }
-  if (stat.isFile()) {
-    return "file";
+  if (stat.isDirectory() || stat.isFile()) {
+    return true;
   }
   throw new Error(`Refusing to archive non-file artifact: ${targetPath}`);
-}
-
-async function moveToArchive(params: {
-  workspaceDir: string;
-  targetPath: string;
-  archiveDir: string;
-}): Promise<string | null> {
-  const kind = await ensureArchivablePath(params.workspaceDir, params.targetPath);
-  if (!kind) {
-    return null;
-  }
-  await makeWorkspaceDirectory(params.workspaceDir, params.archiveDir);
-  const baseName = path.basename(params.targetPath);
-  const destination = path.join(params.archiveDir, `${baseName}.${randomUUID()}`);
-  await renameWorkspacePath(params.workspaceDir, params.targetPath, destination);
-  return destination;
-}
-
-async function clearSessionIngestionState(workspaceDir: string): Promise<void> {
-  await Promise.all([
-    clearMemoryCoreWorkspaceNamespace({
-      namespace: DREAMING_SESSION_INGESTION_FILES_NAMESPACE,
-      workspaceDir,
-    }),
-    clearMemoryCoreWorkspaceNamespace({
-      namespace: DREAMING_SESSION_INGESTION_SEEN_NAMESPACE,
-      workspaceDir,
-    }),
-  ]);
 }
 
 export async function auditDreamingArtifacts(params: {
@@ -144,21 +108,31 @@ export async function auditDreamingArtifacts(params: {
   let suspiciousSessionCorpusFileCount = 0;
   let suspiciousSessionCorpusLineCount = 0;
   let sessionIngestionExists = false;
+  const inspect = async (
+    artifact: "diary" | "session-corpus" | "session-ingestion",
+    label: string,
+    run: () => Promise<void>,
+  ) => {
+    try {
+      await run();
+    } catch (err) {
+      // A diary found above must remain accessible; absent derived artifacts are normal.
+      if (artifact === "diary" || extractErrorCode(err) !== "ENOENT") {
+        issues.push({
+          severity: "error",
+          code: `dreaming-${artifact}-unreadable`,
+          message: `${label} could not be inspected: ${extractErrorCode(err) ?? "error"}.`,
+          fixable: false,
+        });
+      }
+    }
+  };
 
   if (dreamsPath) {
-    try {
-      await accessWorkspacePath(workspaceDir, dreamsPath);
-    } catch (err) {
-      issues.push({
-        severity: "error",
-        code: "dreaming-diary-unreadable",
-        message: `Dream diary could not be inspected: ${extractErrorCode(err) ?? "error"}.`,
-        fixable: false,
-      });
-    }
+    await inspect("diary", "Dream diary", () => accessWorkspacePath(workspaceDir, dreamsPath));
   }
 
-  try {
+  await inspect("session-corpus", "Dreaming session corpus", async () => {
     const corpusFiles = await listSessionCorpusFiles(workspaceDir, sessionCorpusDir);
     sessionCorpusFileCount = corpusFiles.length;
     for (const corpusFile of corpusFiles) {
@@ -172,41 +146,19 @@ export async function auditDreamingArtifacts(params: {
         suspiciousSessionCorpusLineCount += suspiciousLines.length;
       }
     }
-  } catch (err) {
-    if (extractErrorCode(err) !== "ENOENT") {
-      issues.push({
-        severity: "error",
-        code: "dreaming-session-corpus-unreadable",
-        message: `Dreaming session corpus could not be inspected: ${extractErrorCode(err) ?? "error"}.`,
-        fixable: false,
-      });
-    }
-  }
+  });
 
-  try {
+  await inspect("session-ingestion", "Dreaming session-ingestion state", async () => {
     await accessWorkspacePath(workspaceDir, sessionIngestionPath);
     sessionIngestionExists = true;
-  } catch (err) {
-    if (extractErrorCode(err) !== "ENOENT") {
-      issues.push({
-        severity: "error",
-        code: "dreaming-session-ingestion-unreadable",
-        message: `Dreaming session-ingestion state could not be inspected: ${extractErrorCode(err) ?? "error"}.`,
-        fixable: false,
-      });
-    }
-  }
+  });
 
   // Fall back to SQLite plugin state when the legacy JSON file was archived by migration.
   if (!sessionIngestionExists) {
     try {
       // Daily ingestion tracks memory/*.md independently; session repair must not
       // report or clear that healthy bookkeeping when rebuilding the session corpus.
-      const ingestionNamespaces = [
-        DREAMING_SESSION_INGESTION_FILES_NAMESPACE,
-        DREAMING_SESSION_INGESTION_SEEN_NAMESPACE,
-      ] as const;
-      for (const namespace of ingestionNamespaces) {
+      for (const namespace of SESSION_INGESTION_NAMESPACES) {
         const entries = await readMemoryCoreWorkspaceEntries({
           namespace,
           workspaceDir,
@@ -252,46 +204,43 @@ export async function repairDreamingArtifacts(params: {
   const archivedPaths: string[] = [];
   let archiveDir: string | undefined;
   let archivedDreamsDiary = false;
-  let archivedSessionCorpus = false;
-  let archivedSessionIngestion = false;
 
-  const ensureArchiveDir = () => {
-    archiveDir ??= path.join(
-      workspaceDir,
-      REPAIR_ARCHIVE_RELATIVE_DIR,
-      buildArchiveTimestamp(params.now ?? new Date()),
-    );
-    return archiveDir;
-  };
-
-  const archivePathIfPresent = async (targetPath: string): Promise<string | null> => {
+  const archivePathIfPresent = async (targetPath: string): Promise<boolean> => {
     try {
-      return await moveToArchive({ workspaceDir, targetPath, archiveDir: ensureArchiveDir() });
+      archiveDir ??= path.join(
+        workspaceDir,
+        REPAIR_ARCHIVE_RELATIVE_DIR,
+        (params.now ?? new Date()).toISOString().replace(/[:.]/g, "-"),
+      );
+      if (!(await ensureArchivablePath(workspaceDir, targetPath))) {
+        return false;
+      }
+      await makeWorkspaceDirectory(workspaceDir, archiveDir);
+      const destination = path.join(archiveDir, `${path.basename(targetPath)}.${randomUUID()}`);
+      await renameWorkspacePath(workspaceDir, targetPath, destination);
+      archivedPaths.push(destination);
+      return true;
     } catch (err) {
       warnings.push(err instanceof Error ? err.message : String(err));
-      return null;
+      return false;
     }
   };
 
-  const sessionCorpusDestination = await archivePathIfPresent(
+  const archivedSessionCorpus = await archivePathIfPresent(
     path.join(workspaceDir, SESSION_CORPUS_RELATIVE_DIR),
   );
-  if (sessionCorpusDestination) {
-    archivedSessionCorpus = true;
-    archivedPaths.push(sessionCorpusDestination);
-  }
 
-  const sessionIngestionDestination = await archivePathIfPresent(
+  const archivedSessionIngestion = await archivePathIfPresent(
     path.join(workspaceDir, SESSION_INGESTION_RELATIVE_PATH),
   );
-  if (sessionIngestionDestination) {
-    archivedSessionIngestion = true;
-    archivedPaths.push(sessionIngestionDestination);
-  }
 
-  if (sessionCorpusDestination || sessionIngestionDestination) {
+  if (archivedSessionCorpus || archivedSessionIngestion) {
     try {
-      await clearSessionIngestionState(workspaceDir);
+      await Promise.all(
+        SESSION_INGESTION_NAMESPACES.map((namespace) =>
+          clearMemoryCoreWorkspaceNamespace({ namespace, workspaceDir }),
+        ),
+      );
     } catch (err) {
       warnings.push(
         `Failed clearing dreaming session-ingestion SQLite state: ${
@@ -304,11 +253,7 @@ export async function repairDreamingArtifacts(params: {
   if (params.archiveDiary) {
     const dreamsPath = await resolveExistingDreamsPath(workspaceDir);
     if (dreamsPath) {
-      const dreamsDestination = await archivePathIfPresent(dreamsPath);
-      if (dreamsDestination) {
-        archivedDreamsDiary = true;
-        archivedPaths.push(dreamsDestination);
-      }
+      archivedDreamsDiary = await archivePathIfPresent(dreamsPath);
     }
   }
 

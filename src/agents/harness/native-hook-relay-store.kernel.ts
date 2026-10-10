@@ -64,36 +64,36 @@ function sameNativeHookRelayBridgeSnapshot(
   );
 }
 
+function nativeHookRelayBridgeRow({
+  record,
+  updatedAtMs,
+}: {
+  record: NativeHookRelayBridgeRecord;
+  updatedAtMs: number;
+}): NativeHookRelayBridgeRow {
+  return {
+    relay_id: record.relayId,
+    pid: record.pid,
+    hostname: record.hostname,
+    port: record.port,
+    token: record.token,
+    expires_at_ms: record.expiresAtMs,
+    updated_at_ms: updatedAtMs,
+  };
+}
+
 export function writeNativeHookRelayBridgeRecordInDatabase(
   database: { db: DatabaseSync },
   params: { record: NativeHookRelayBridgeRecord; updatedAtMs: number },
 ): void {
-  const { record, updatedAtMs } = params;
-  const { token } = record;
+  const { relay_id, ...fields } = nativeHookRelayBridgeRow(params);
   const db = getNodeSqliteKysely<NativeHookRelayBridgeDatabase>(database.db);
   executeSqliteQuerySync(
     database.db,
     db
       .insertInto("native_hook_relay_bridges")
-      .values({
-        relay_id: record.relayId,
-        pid: record.pid,
-        hostname: record.hostname,
-        port: record.port,
-        token,
-        expires_at_ms: record.expiresAtMs,
-        updated_at_ms: updatedAtMs,
-      })
-      .onConflict((conflict) =>
-        conflict.column("relay_id").doUpdateSet({
-          pid: record.pid,
-          hostname: record.hostname,
-          port: record.port,
-          token,
-          expires_at_ms: record.expiresAtMs,
-          updated_at_ms: updatedAtMs,
-        }),
-      ),
+      .values({ relay_id, ...fields })
+      .onConflict((conflict) => conflict.column("relay_id").doUpdateSet(fields)),
   );
 }
 
@@ -113,15 +113,7 @@ export function renewOrRestoreNativeHookRelayBridgeRecordInDatabase(
       database.db,
       db
         .insertInto("native_hook_relay_bridges")
-        .values({
-          relay_id: record.relayId,
-          pid: record.pid,
-          hostname: record.hostname,
-          port: record.port,
-          token,
-          expires_at_ms: record.expiresAtMs,
-          updated_at_ms: updatedAtMs,
-        })
+        .values(nativeHookRelayBridgeRow(params))
         .onConflict((conflict) => conflict.column("relay_id").doNothing()),
     );
     return result.numAffectedRows === 1n;

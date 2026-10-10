@@ -2,7 +2,6 @@
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../../shared/assistant-error-format.js";
 import { makeAssistantMessageFixture } from "../test-helpers/assistant-message-fixtures.js";
 import { formatAssistantErrorText, formatUserFacingAssistantErrorText } from "./error-text.js";
 
@@ -30,15 +29,6 @@ describe("formatAssistantErrorText streaming JSON parse classification", () => {
       content: [{ type: "text", text: errorMessage }],
     });
 
-  it("suppresses transport-classified malformed streaming fragments", () => {
-    // Transport JSON fragmentation is not user-authored content and should get
-    // stable retry copy instead of raw parser text.
-    const msg = makeAssistantError(MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE);
-    expect(formatAssistantErrorText(msg)).toBe(
-      "LLM streaming response contained a malformed fragment. Please try again.",
-    );
-  });
-
   it("does not suppress unclassified JSON.parse text", () => {
     const msg = makeAssistantError(
       "Expected ',' or '}' after property value in JSON at position 334 (line 1 column 335)",
@@ -47,6 +37,19 @@ describe("formatAssistantErrorText streaming JSON parse classification", () => {
       "Expected ',' or '}' after property value in JSON at position 334 (line 1 column 335)",
     );
   });
+
+  it.each(["private tool diagnostics", "HTTP 503 temporary failure"])(
+    "preserves safe tool-loop recovery guidance instead of %s",
+    (errorMessage) => {
+      const message = {
+        ...makeAssistantError(errorMessage),
+        errorCode: "openclaw_repeated_tool_error",
+      };
+      expect(formatUserFacingAssistantErrorText(message)).toBe(
+        "OpenClaw stopped this turn after 3 consecutive identical tool failures. Check the tool arguments or switch to a model with native tool calling before retrying.",
+      );
+    },
+  );
 
   it.each(["request timed out", "LLM request timed out."])(
     "preserves safe user-facing timeout copy for provider error %j",

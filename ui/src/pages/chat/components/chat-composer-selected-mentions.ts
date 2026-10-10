@@ -9,15 +9,21 @@ import { renderChatAuthorAvatar } from "./chat-author-avatar.ts";
 
 class MentionOverflowDirective extends AsyncDirective {
   private element?: HTMLElement;
+  private names?: string;
   private readonly observer =
     typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(() => this.sync());
 
-  render() {
+  render(_names: string) {
     return nothing;
   }
 
-  override update(part: ElementPart) {
-    this.element = part.element instanceof HTMLElement ? part.element : undefined;
+  override update(part: ElementPart, [names]: [string]) {
+    const element = part.element instanceof HTMLElement ? part.element : undefined;
+    if (this.element === element && this.names === names) {
+      return nothing;
+    }
+    this.element = element;
+    this.names = names;
     this.schedule();
     return nothing;
   }
@@ -30,7 +36,10 @@ class MentionOverflowDirective extends AsyncDirective {
       }
       this.observer?.observe(this.element);
       this.sync();
-      void document.fonts?.ready.then(() => this.sync());
+      // A settled font set needs no second write/measure pass on every render.
+      if (document.fonts?.status === "loading") {
+        void document.fonts.ready.then(() => this.sync());
+      }
     });
   }
 
@@ -109,7 +118,11 @@ export function renderSelectedHumanMentions(
       <span class="composer-context-strip__label-text">${t("chat.mentions.selectedLabel")}</span>
     </span>
     <span class="sr-only">${people.map((person) => person.name).join(", ")}</span>
-    <span class="composer-context-strip__people" aria-hidden="true" ${mentionOverflow()}>
+    <span
+      class="composer-context-strip__people"
+      aria-hidden="true"
+      ${mentionOverflow(JSON.stringify(people.map((person) => person.name)))}
+    >
       ${people.map(
         (person, index) => html`<span class="composer-context-strip__person" title=${person.label}>
           ${renderChatAuthorAvatar({ id: person.profileId, name: person.name, identity: { type: "profile", id: person.profileId }, profileAvatarUrl: avatarUrls?.get(person.profileId) })}

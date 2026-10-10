@@ -2,10 +2,17 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { inspectAgentModels } from "acpx/runtime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+  withinTest,
+  type FixtureReceiptChannel,
+} from "openclaw/plugin-sdk/test-fixtures";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import setupPlugin from "./setup-api.js";
 
 const { createAcpxRuntimeServiceMock, tryDispatchAcpReplyHookMock, nativePrograms } = vi.hoisted(
@@ -31,6 +38,11 @@ vi.mock("acpx/agent-registry", async (importActual) => {
         resolvePackageRoot: () => undefined,
       }),
   };
+});
+
+vi.mock("acpx/runtime", async (importActual) => {
+  const { inspectAgentModels: inspect } = await importActual<typeof import("acpx/runtime")>();
+  return { inspectAgentModels: vi.fn(inspect) };
 });
 
 vi.mock("./register.runtime.js", () => ({
@@ -62,10 +74,23 @@ function registerAcpxAutoEnableProbe(): AcpxAutoEnableProbe {
 }
 
 describe("acpx plugin", () => {
+  let receipts: FixtureReceiptChannel;
+  beforeAll(async () => {
+    receipts = await openFixtureReceiptChannel();
+  });
+  afterAll(async () => {
+    await receipts.close();
+  });
   afterEach(() => vi.restoreAllMocks());
   beforeEach(() => {
     vi.clearAllMocks();
     nativePrograms.clear();
+    createAcpxRuntimeServiceMock.mockReturnValue({
+      id: "acpx-service",
+      getRuntime: () => {
+        throw new Error("Catalog inspection must not start the runtime");
+      },
+    });
   });
 
   it("registers the runtime service and reply_dispatch hook", () => {
@@ -84,6 +109,7 @@ describe("acpx plugin", () => {
 
     expect(createAcpxRuntimeServiceMock).toHaveBeenCalledWith({
       pluginConfig: api.pluginConfig,
+      getAllowedAgents: expect.any(Function),
       openKeyedStore: expect.any(Function),
     });
     const params = createAcpxRuntimeServiceMock.mock.calls[0]?.[0] as {
@@ -213,6 +239,19 @@ describe("acpx plugin", () => {
       modelProvider: { endpointOverrides: "none" },
     } as const;
     expect(opencode.supports(selection).supported).toBe(true);
+    const missing = harnesses.get("acp-kilocode");
+    if (!missing?.loadModelCatalog) {
+      throw new Error("Missing native catalog operation");
+    }
+    await expect(
+      missing.loadModelCatalog({
+        config,
+        agentId: "main",
+        agentDir: "/test/agent",
+        workspaceDir: "/test/work",
+      }),
+    ).resolves.toEqual({ entries: [] });
+    expect(inspectAgentModels).not.toHaveBeenCalled();
     nativePrograms.add("pi");
     config = {
       ...config,
@@ -241,7 +280,7 @@ describe("acpx plugin", () => {
         agentDir: "/test/agent",
         workspaceDir: "/test/work",
       }),
-    ).resolves.toEqual([]);
+    ).resolves.toEqual({ entries: [] });
     const disabled = {
       agents: [
         {
@@ -287,12 +326,18 @@ describe("acpx plugin", () => {
     expect(getRuntime).not.toHaveBeenCalled();
   });
 
-  it.each(["enabled", "disabled", "disposed"] as const)(
+  it.for(["enabled", "disabled", "disposed"] as const)(
     "inspects a real native catalog without runtime state when the harness becomes %s",
-    async (lifecycle) => {
+    async (lifecycle, { signal }) => {
       const directory = await fs.mkdtemp(path.join(os.tmpdir(), "acpx-native-catalog-"));
       const peerDirectory = path.join(directory, "peer");
       await fs.mkdir(peerDirectory);
+      const receiptModule = path.join(directory, "receipts.mjs");
+      await fs.writeFile(
+        receiptModule,
+        `${fixtureReceiptClientSource(receipts.endpoint)}
+export { sendReceipt };`,
+      );
       const runtimeDirectory = path.join(directory, "runtime");
       const getRuntime = vi.fn(() => {
         throw new Error("Catalog inspection must not acquire the runtime");
@@ -317,6 +362,7 @@ describe("acpx plugin", () => {
                   peerDirectory,
                   "--model-controls",
                   "--hold-new-session",
+                  `--receipt-module=${receiptModule}`,
                 ],
               },
             },
@@ -353,11 +399,17 @@ describe("acpx plugin", () => {
           (error: unknown) => ({ models: undefined, error }),
         );
       try {
-        await expect
-          .poll(() => fs.readFile(path.join(peerDirectory, "session-new-entered"), "utf8"), {
-            timeout: 10_000,
-          })
-          .not.toBe("");
+        const entered = path.join(peerDirectory, "session-new-entered");
+        // The peer records entry before replying; its receipt uses a separate pipe.
+        await withinTest(
+          Promise.race([
+            receipts.waitFor(entered, ""),
+            catalog.then(async () => {
+              expect(await fs.readFile(entered, "utf8")).not.toBe("");
+            }),
+          ]),
+          signal,
+        );
         if (lifecycle === "disabled") {
           config = {
             plugins: { entries: { acpx: { config: { nativeAgents: { opencode: false } } } } },
@@ -376,21 +428,24 @@ describe("acpx plugin", () => {
           expect(result.error).toBeUndefined();
           expect(result.models).toEqual(
             lifecycle === "disabled"
-              ? []
-              : [
-                  {
-                    provider: "acp-opencode",
-                    id: "initial",
-                    name: "Initial",
-                    nativeRuntime: "acp-opencode",
-                  },
-                  {
-                    provider: "acp-opencode",
-                    id: "selected",
-                    name: "Selected",
-                    nativeRuntime: "acp-opencode",
-                  },
-                ],
+              ? { entries: [] }
+              : {
+                  entries: [
+                    {
+                      provider: "acp-opencode",
+                      id: "initial",
+                      name: "Initial",
+                      nativeRuntime: "acp-opencode",
+                    },
+                    {
+                      provider: "acp-opencode",
+                      id: "selected",
+                      name: "Selected",
+                      nativeRuntime: "acp-opencode",
+                    },
+                  ],
+                  outcomes: [{ provider: "acp-opencode", status: "ready" }],
+                },
           );
         }
         const sessionId = await fs.readFile(
@@ -409,6 +464,71 @@ describe("acpx plugin", () => {
         await catalog;
         await fs.rm(directory, { recursive: true, force: true });
       }
+    },
+  );
+
+  it.each([
+    {
+      name: "RequestError",
+      code: -32000,
+      message: "Authentication required",
+      status: "auth-rejected",
+    },
+    {
+      name: "RequestError",
+      code: -32000,
+      message: "Authentication required: fixture sign-in",
+      status: "auth-rejected",
+    },
+    {
+      name: "RequestError",
+      code: -32000,
+      message: "Generic fixture server error",
+      status: "unavailable",
+    },
+    {
+      name: "RequestError",
+      code: -32603,
+      message: "Authentication required",
+      status: "unavailable",
+    },
+    { name: "Error", code: -32000, message: "Authentication required", status: "unavailable" },
+  ])(
+    "attributes native discovery $name/$code/$message without forwarding error data",
+    async ({ name, code, message, status }) => {
+      nativePrograms.add("copilot");
+      const error = Object.assign(new Error(message), {
+        name,
+        code,
+        data: { privateFixture: "not-for-catalog" },
+      });
+      vi.mocked(inspectAgentModels).mockRejectedValueOnce(error);
+      const harnesses = new Map<string, Parameters<OpenClawPluginApi["registerAgentHarness"]>[0]>();
+      plugin.register(
+        createTestPluginApi({
+          id: "acpx",
+          runtime: createPluginRuntimeMock({ config: { current: () => ({}) } }),
+          registerAgentHarness: (harness) => {
+            harnesses.set(harness.id, harness);
+          },
+        }),
+      );
+      const harness = harnesses.get("acp-copilot");
+      if (!harness?.loadModelCatalog) {
+        throw new Error("Native catalog operation missing");
+      }
+      await expect(
+        harness.loadModelCatalog({
+          config: {},
+          agentId: "main",
+          agentDir: "/fixture/agent",
+          workspaceDir: "/fixture/work",
+        }),
+      ).resolves.toEqual({
+        entries: [],
+        outcomes: [{ provider: "acp-copilot", status, rejectionScope: "catalog" }],
+      });
+      expect(inspectAgentModels).toHaveBeenCalledOnce();
     },
   );
 });

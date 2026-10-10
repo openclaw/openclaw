@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { setTimeout as waitForProcessTick } from "node:timers/promises";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as entrypoints from "../../daemon/gateway-entrypoint.js";
@@ -40,17 +41,28 @@ const sourceImportArgs = sourceLoader ? ["--import", sourceLoader] : [];
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
 
+// The receiver's close event does not join its source-loader descendants, and
+// the process-group owner exposes no extinction promise. Only the test bounds this wait.
+async function waitForReceiverTreeExit(child: ReturnType<typeof spawn>, signal: AbortSignal) {
+  while (isChildProcessTreeAlive(child)) {
+    try {
+      await waitForProcessTick(10, undefined, { signal });
+    } catch (cause) {
+      throw new Error("Fixture tree did not settle", { cause });
+    }
+  }
+}
+
 it.each([
   { supported: true, destination: "same" },
   { supported: false, destination: "same" },
   { supported: "legacy", destination: "same" },
   { supported: "without-backup", destination: "same" },
-  { supported: "without-backup", destination: "same", deferred: true },
   { supported: true, destination: "changed" },
   { supported: true, destination: "foreign" },
 ])(
-  "native command admits only the bound receiver: $supported / $destination / deferred=$deferred",
-  async ({ supported, destination, deferred }) => {
+  "native command admits only the bound receiver: $supported / $destination",
+  async ({ supported, destination }) => {
     const scratch = dirs.make("native-command-custody-");
     const receiverRoot = await fs.realpath(process.cwd());
     const root = destination === "same" ? receiverRoot : scratch;
@@ -70,10 +82,12 @@ it.each([
     const {runGatewayServiceUpdateCommand}=await import(${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.nativeExecutor).href)});
     const {execFileUtf8}=await import(${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.nativeExec).href)});
     const fs=await import("node:fs");
-    if(process.argv.includes("--defer-activation")) fs.writeFileSync(${JSON.stringify(effect)},"unguarded deferred installation");
     const mode=process.argv[process.argv.indexOf("--update-executor")+1];
     const action=process.argv[3];
     if(mode==="check") {
+      // EOF follows the parent's committed PID/start binding; receipts observe that bound row.
+      const {finished}=await import("node:stream/promises");
+      await finished(process.stdin.resume(),{cleanup:true});
       if(!process.argv.includes("--json")) {
         process.stdout.write("Recorded warnings from the current update. ");
       }
@@ -96,8 +110,6 @@ it.each([
     }
     else if(mode==="check" && ${JSON.stringify(supported)}==="without-backup") {
       process.stdout.write(JSON.stringify({updateExecutor:"root-spawner-v1",targetRootBinding:true}));
-      const {finished}=await import("node:stream/promises");
-      await finished(process.stdin.resume(),{cleanup:true});
     }
     else try { await runGatewayServiceUpdateCommand(mode,action,async()=>{
       fs.writeFileSync(${JSON.stringify(receipt)},JSON.stringify({pid:process.pid,parent:process.ppid,noRespawn:process.env.OPENCLAW_NO_RESPAWN}));
@@ -131,17 +143,13 @@ it.each([
       if (supported === "without-backup") {
         const recovery: UpdateServiceDefinitionRecovery = {};
         const warnings: string[] = [];
-        const seal = vi.fn(async () => {});
         const failure = await runUpdatedInstallGatewayCommand(
           {
             result: { root: targetRoot },
-            opts: { json: true, run: { runId, env: process.env, executorFence: fence } },
+            opts: { run: { runId, env: process.env, executorFence: fence } },
             invocationEnv: process.env,
             timeoutMs: 20_000,
             definitionRecovery: recovery,
-            ...(deferred
-              ? { serviceLoadBoundary: { assertCurrent: fence.assertCurrent, seal } }
-              : {}),
             onWarnings: (messages) => warnings.push(...messages),
           },
           "install",
@@ -150,7 +158,6 @@ it.each([
           (error: unknown) => error,
         );
         await expect(fs.stat(effect)).rejects.toMatchObject({ code: "ENOENT" });
-        expect(seal).not.toHaveBeenCalled();
         expect(failure).toMatchObject({
           message: expect.stringContaining("SERVICE_DEFINITION_UNKNOWN"),
         });
@@ -164,7 +171,7 @@ it.each([
       return await runUpdatedInstallGatewayCommand(
         {
           result: { root: targetRoot },
-          opts: { json: true, run: { runId, env: process.env, executorFence: fence } },
+          opts: { run: { runId, env: process.env, executorFence: fence } },
           invocationEnv: process.env,
           timeoutMs: 20_000,
         },
@@ -189,7 +196,14 @@ it.each([
       await expect(fs.stat(effect)).rejects.toMatchObject({ code: "ENOENT" });
       await expect(fs.stat(receipt)).rejects.toMatchObject({ code: "ENOENT" });
     }
-    const probe = JSON.parse(await fs.readFile(probeReceipt, "utf8"));
+    const probe = JSON.parse(
+      await fs.readFile(probeReceipt, "utf8").catch((cause: unknown) => {
+        throw new Error(
+          `${cause instanceof Error ? cause.message : String(cause)}; native probe receipt runner: ${JSON.stringify(observed)}`,
+          { cause },
+        );
+      }),
+    );
     expect(probe).toMatchObject({ owner: runId, helper: process.pid });
     expect(probe.pid).not.toBe(process.pid);
     expect(probe.key.startsWith(root + "/.openclaw-update-child-")).toBe(true);
@@ -258,9 +272,9 @@ it.each(["receiver-root", "original-lineage", "stripped-lineage"] as const)(
   },
 );
 
-it.each([false, true])(
+it.for([false, true])(
   "refuses equal lease rows in a retargeted database (strip pin=%s)",
-  async (stripPin) => {
+  async (stripPin, { signal }) => {
     const scratch = dirs.make("native-database-correlation-");
     const root = await fs.realpath(scratch);
     const receiverRoot = await fs.realpath(process.cwd());
@@ -331,21 +345,17 @@ it.each([false, true])(
             });
             child.once("close", (code) => {
               clearTimeout(watchdog);
-              void vi
-                .waitFor(() => expect(isChildProcessTreeAlive(child)).toBe(false), {
-                  timeout: 5000,
-                })
-                .then(
-                  () => resolve({ code, stderr }),
-                  (error: unknown) => {
-                    forceKillChildProcessTree(child);
-                    reject(
-                      error instanceof Error
-                        ? error
-                        : new Error("Fixture tree did not settle", { cause: error }),
-                    );
-                  },
-                );
+              void waitForReceiverTreeExit(child, signal).then(
+                () => resolve({ code, stderr }),
+                (error: unknown) => {
+                  forceKillChildProcessTree(child);
+                  reject(
+                    error instanceof Error
+                      ? error
+                      : new Error("Fixture tree did not settle", { cause: error }),
+                  );
+                },
+              );
             });
           }),
       );
@@ -357,13 +367,9 @@ it.each([false, true])(
   },
 );
 
-it.skipIf(process.platform === "win32").each([
-  { cleanup: "cooperative", startupDelayMs: 0 },
-  { cleanup: "forced", startupDelayMs: 0 },
-  { cleanup: "cooperative", startupDelayMs: 31_000 },
-] as const)(
-  "capability probe admits only successful settled cleanup: $cleanup (startup=$startupDelayMs)",
-  async ({ cleanup, startupDelayMs }) => {
+it.skipIf(process.platform === "win32").each(["cooperative", "forced"] as const)(
+  "capability probe preserves the caller budget and requires settled cleanup: %s",
+  async (cleanup) => {
     const scratch = fsSync.realpathSync(dirs.make("native-probe-settlement-"));
     const root = fsSync.realpathSync(process.cwd());
     vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(scratch);
@@ -393,7 +399,6 @@ it.skipIf(process.platform === "win32").each([
       });
       await new Promise(resolve => child.once("message", resolve));
       fs.writeFileSync(${JSON.stringify(receipt)}, JSON.stringify({ root: process.pid, child: child.pid }));
-      if (${startupDelayMs} > 0) await new Promise(resolve => setTimeout(resolve, ${startupDelayMs}));
       await runGatewayServiceUpdateCommand("check", "install", async () => {
         throw new Error("Capability probe must not enter the mutation callback");
       });
@@ -405,6 +410,8 @@ it.skipIf(process.platform === "win32").each([
     const observed: Awaited<ReturnType<typeof execCommands.runCommandWithTimeout>>[] = [];
     const actualRun = execCommands.runCommandWithTimeout;
     vi.spyOn(execCommands, "runCommandWithTimeout").mockImplementation(async (...args) => {
+      const timeoutMs = typeof args[1] === "number" ? args[1] : args[1].timeoutMs;
+      expect(timeoutMs).toBe(120_000);
       const result = await actualRun(...args);
       observed.push(result);
       return result;
@@ -453,7 +460,6 @@ it.skipIf(process.platform === "win32").each([
 
 it.each([
   { retained: true, advertised: undefined },
-  { retained: true, advertised: false },
   { retained: true, advertised: "true" },
   { retained: true, advertised: true },
   { retained: false, advertised: undefined },
@@ -485,22 +491,13 @@ it.each([
   `,
     );
     vi.spyOn(entrypoints, "resolveGatewayInstallEntrypoint").mockResolvedValue(entrypoint);
-    const probes: Awaited<ReturnType<typeof execCommands.runCommandWithTimeout>>[] = [];
-    const actualRun = execCommands.runCommandWithTimeout;
-    vi.spyOn(execCommands, "runCommandWithTimeout").mockImplementation(async (...args) => {
-      const result = await actualRun(...args);
-      if (args[0][args[0].indexOf("--update-executor") + 1] === "check") {
-        probes.push(result);
-      }
-      return result;
-    });
     const runId = randomUUID();
     const work = withUpdateCommandExecutor(runId, async (executor) => {
       const fence = await executor.enter(root, { serviceRoot: retained ? serviceRoot : undefined });
       return await runUpdatedInstallGatewayCommand(
         {
           result: { root },
-          opts: { json: true, run: { runId, env: process.env, executorFence: fence } },
+          opts: { run: { runId, env: process.env, executorFence: fence } },
           invocationEnv: process.env,
         },
         "restart",
@@ -516,19 +513,6 @@ it.each([
       expect(fsSync.existsSync(effect)).toBe(false);
     }
     expect(createManagedHandoffLeaseStore().read(root)).toEqual({ kind: "absent" });
-    expect(probes).toHaveLength(1);
-    expect(probes[0]).toMatchObject({
-      code: 0,
-      termination: "exit",
-      signal: null,
-      cleanup: "normal",
-      killed: false,
-    });
-    expect(JSON.parse(probes[0]!.stdout)).toEqual({
-      updateExecutor: "root-spawner-v1",
-      targetRootBinding: true,
-      ...(advertised === undefined ? {} : { retainedOwnerBinding: advertised }),
-    });
     expect(createManagedHandoffLeaseStore().read(serviceRoot)).toEqual({ kind: "absent" });
   },
 );

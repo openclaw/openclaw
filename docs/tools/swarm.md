@@ -57,7 +57,7 @@ include values you want to change:
 {
   tools: {
     swarm: {
-      maxConcurrent: 8,
+      maxConcurrent: 32,
       maxChildrenPerGroup: 50,
       maxTotalPerGroup: 200,
       waitTimeoutSecondsMax: 600,
@@ -70,7 +70,7 @@ include values you want to change:
 | Field                   | Default | Description                                                                                                                    |
 | ----------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------ |
 | `enabled`               | `true`  | Enables collector features subject to tool policy; set `false` to opt out. Code Mode has additional requirements below.        |
-| `maxConcurrent`         | `8`     | Maximum collector children running concurrently in one swarm group. Additional accepted children queue in FIFO order.          |
+| `maxConcurrent`         | `32`    | Maximum collector children running concurrently in one swarm group's execution lane. Additional accepted children queue FIFO.  |
 | `maxChildrenPerGroup`   | `50`    | Maximum live collector children in one group.                                                                                  |
 | `maxTotalPerGroup`      | `200`   | Maximum collector children a group may spawn over its lifetime. This is the runaway-spawn backstop.                            |
 | `waitTimeoutSecondsMax` | `600`   | Maximum timeout accepted by one `agents_wait` call. The call default is 30 seconds.                                            |
@@ -80,6 +80,11 @@ Numeric values must be positive integers. OpenClaw bounds
 `maxConcurrent` to `1`–`1000`, `maxChildrenPerGroup` to `1`–`10000`,
 `maxTotalPerGroup` to `1`–`100000`, and `waitTimeoutSecondsMax` to
 `1`–`86400`.
+
+Each group has its own execution lane, independent of the parent's ordinary
+sub-agent limit. Budget for one model stream and one Code Mode worker isolate
+per running child. Raising `maxConcurrent` increases model and Gateway resource
+use; it does not raise `maxChildrenPerGroup` or `maxTotalPerGroup`.
 
 You can override Swarm for one configured agent with
 `agents.entries.*.tools.swarm`. Per-agent values merge over the top-level
@@ -151,7 +156,7 @@ Spawn or bridge failures can reject with other errors. Read the exact generated
 declarations and short orchestration idioms from `API.read("agents.d.ts")`
 inside Code Mode.
 
-Use `label` for a recognizable child name in transcript activity and Tasks views. Use
+Use `label` for a recognizable child name in session transcripts. Use
 `phase` in the options to publish a phase immediately before that child
 starts, or call `phase()` when several children belong to the same stage.
 `log()` publishes a short progress note. Progress calls are fire-and-forget.
@@ -321,14 +326,20 @@ it can be spawned but cannot start swarms from its own top-level sessions:
 {
   tools: { swarm: { enabled: true, defaultAgentId: "worker" } },
   agents: {
+    ownership: "explicit",
+    defaults: {
+      heartbeat: { agentId: "main" },
+      systemAgent: { agentId: "main" },
+    },
     entries: {
       main: {
-        default: true,
+        workspace: "~/.openclaw/workspace",
         subagents: { allowAgents: ["worker"] },
       },
       worker: { tools: { swarm: false } },
     },
   },
+  talk: { agentId: "main" },
 }
 ```
 
@@ -371,10 +382,14 @@ collector children. Collector children use only `maxChildrenPerGroup` and
 `maxTotalPerGroup`. They do not consume the per-session child budget. The spawn
 depth guard still applies to both modes.
 
-After admission, children above `maxConcurrent` queue FIFO within their swarm
-group, nested inside the global sub-agent lane. These concurrency layers queue
-work rather than rejecting it. A collector spawn that exceeds either group cap
-is rejected with the relevant config key in the error.
+After admission, collector children execute in
+`subagent:swarm:<schedulerGroupKey>`, capped by the group's resolved
+`tools.swarm.maxConcurrent` (default `32`). Additional children queue FIFO.
+They do not consume the parent's ordinary `subagent:<immediate session>` slots,
+which remain capped by `agents.defaults.subagents.maxConcurrent` (default `8`).
+An ordinary child spawned by a collector uses the collector's own session lane.
+A collector spawn that exceeds either group admission cap is rejected with the
+relevant config key in the error.
 
 ## Observe a Swarm
 
@@ -406,8 +421,7 @@ identify each child's status. Native clients present killed and timed-out childr
 as failed. Native groups leave the widget when none of their children are queued
 or running. The native widget disappears when no active groups remain.
 
-Collector children appear in inline transcript activity rows, the chat **Tasks**
-tab, and the [Tasks page](/automation/tasks#control-ui). They have no session-sidebar
+Collector children appear in their session transcripts. They have no session-sidebar
 rows. Their activity and unread failures still contribute to the parent’s sidebar
 ring and attention signals. Persistent spawned sessions and forks keep their
 normal sidebar nesting.
@@ -432,10 +446,13 @@ nested descendants. Collector mode changes result delivery, not cancellation
 scope. Successful cancellation prevents selected queued children from starting
 as running siblings stop. It does not cancel work from unrelated parent turns.
 
-If Stop reports incomplete descendant cancellation, inspect the remaining work
-on the [Tasks page](/automation/tasks#control-ui) and retry cancellation for
+Stop also waits for the selected children's execution and queued-launch cleanup.
+A child's task can show a terminal status while that cleanup is still settling.
+
+If Stop times out or reports incomplete descendant cancellation, inspect the remaining work
+with `subagents` using `action: "list"` and retry cancellation for
 those children. A stopped parent alone does not confirm that every child stopped,
-and a cancellation acknowledgment does not promise instantaneous runtime cleanup.
+and a failed request can leave cleanup pending.
 
 Already-accepted children remain independent when the parent completes normally,
 yields, or times out. If the parent is no longer active, cancel the child tasks
@@ -451,7 +468,7 @@ calls. Both tools must be allowed by the effective tool policy. Default-on
 Swarm does not add them to a restrictive tool profile or allowlist.
 
 Codex Code Mode automatically exposes eligible dynamic OpenClaw tools under
-`tools.*`. It does not use OpenClaw's QuickJS guest API or require
+`tools.*`. It does not use OpenClaw's guest API or require
 `tools.codeMode`, but `tools.swarm` must still be enabled. Codex harness
 `agents_wait` calls support the full 600-second timeout.
 
@@ -540,7 +557,15 @@ failures. A rejected launch or failed child must not discard results from other
 accepted children. Keep the returned run IDs for recovery. Do not repeat
 successful launches or automatically rerun failed work.
 
-Each `agents_wait` call accepts 1–1000 run ids. It returns:
+Each `agents_wait` call accepts 1–1000 run ids. Use `awaitResults: true` to keep
+collection owned until **all** authorized requested collectors settle, without
+an observer polling timeout. It is mutually exclusive with `timeoutSeconds`;
+child and agent-run deadlines, tool watchdogs, cancellation, and ownership
+checks still apply. In OpenClaw Code Mode this also makes the enclosing cell
+required, so the runtime—not repeated model calls—waits for registry completion
+events. An ordinary call keeps its existing first-completion and timeout behavior.
+
+It returns:
 
 ```typescript
 type AgentsWaitResult = {
@@ -589,13 +614,13 @@ sessions, or persistent session mode.
 ## Limits
 
 Swarm runs one-shot collector children. There is no stateful multi-turn worker
-API. Children run on the local Gateway's sub-agent lane, and spawns have no
+API. Children run on the local Gateway in their group's Swarm lane, and spawns have no
 cloud-placement option. Saved workflow definitions and a graph DSL are not part
 of Swarm's current direction.
 
 ## Related
 
-- [Code Mode](/tools/code-mode) for the QuickJS guest runtime and activation rules
+- [Code Mode](/tools/code-mode) for JavaScript executors and activation rules
 - [Sub-agents](/tools/subagents) for child policy, isolation, and session behavior
 - [Multi-agent sandbox tools](/tools/multi-agent-sandbox-tools) for per-agent restrictions
 - [Tools overview](/tools) for tool profiles and policy routing

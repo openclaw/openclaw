@@ -1,6 +1,7 @@
 import { formatErrorMessage } from "../infra/errors.js";
 import { logWarn } from "../logger.js";
 import type { MemoryEmbeddingProvider } from "../plugins/memory-embedding-providers.js";
+import { createDeferredCore } from "../shared/deferred.js";
 
 const EMBEDDING_PROVIDER_RETIREMENTS = new Map<string, Set<MemoryEmbeddingProvider>>();
 const EMBEDDING_PROVIDER_ADMISSION_TAILS = new Map<string, Promise<void>>();
@@ -25,10 +26,7 @@ export async function acquireEmbeddingProviderLease(
     if (!holdForCleanup(provider)) {
       return { provider, lifecycle: Promise.resolve(), release: () => {} };
     }
-    let release: () => void = () => {};
-    const lifecycle = new Promise<void>((resolve) => {
-      release = resolve;
-    });
+    const { promise: lifecycle, resolve: release } = createDeferredCore();
     return { provider, lifecycle, release };
   };
   const acquired = previous.then(createLease, createLease);
@@ -74,15 +72,6 @@ async function drainEmbeddingProviderRetirements(scopeKey: string): Promise<void
   }
 }
 
-function retainEmbeddingProviderForRetirement(
-  scopeKey: string,
-  provider: MemoryEmbeddingProvider,
-): void {
-  const pending = EMBEDDING_PROVIDER_RETIREMENTS.get(scopeKey) ?? new Set();
-  pending.add(provider);
-  EMBEDDING_PROVIDER_RETIREMENTS.set(scopeKey, pending);
-}
-
 export async function closeEmbeddingProvider(
   scopeKey: string,
   provider: MemoryEmbeddingProvider,
@@ -90,7 +79,9 @@ export async function closeEmbeddingProvider(
   try {
     await provider.close?.();
   } catch (closeErr) {
-    retainEmbeddingProviderForRetirement(scopeKey, provider);
+    const pending = EMBEDDING_PROVIDER_RETIREMENTS.get(scopeKey) ?? new Set();
+    pending.add(provider);
+    EMBEDDING_PROVIDER_RETIREMENTS.set(scopeKey, pending);
     logWarn(`openai-compat: failed to close embeddings provider: ${formatErrorMessage(closeErr)}`);
   }
 }

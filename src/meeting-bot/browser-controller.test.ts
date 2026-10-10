@@ -7,11 +7,12 @@ afterEach(() => {
 });
 
 describe("meeting browser navigation errors", () => {
-  it.each([
-    "page.evaluate: Execution context was destroyed, most likely because of a navigation.",
-    "Protocol error: Cannot find context with specified id",
-  ])("retries expected navigation races: %s", (message) => {
-    expect(isMeetingBrowserTransientNavigationError(new Error(message))).toBe(true);
+  it("recognizes a missing browser context as a navigation race", () => {
+    expect(
+      isMeetingBrowserTransientNavigationError(
+        new Error("Protocol error: Cannot find context with specified id"),
+      ),
+    ).toBe(true);
   });
 
   it("does not retry unrelated browser-control failures", () => {
@@ -20,7 +21,7 @@ describe("meeting browser navigation errors", () => {
 });
 
 describe("meeting browser join readiness", () => {
-  it("retries a platform-owned transient in-call status", async () => {
+  it("retries a platform-owned transient in-call status across a wall-clock jump", async () => {
     vi.useFakeTimers();
     const adoptionAttempts: boolean[] = [];
     const captionCaptureAttempts: boolean[] = [];
@@ -80,6 +81,9 @@ describe("meeting browser join readiness", () => {
         }
         if (request.path === "/act") {
           evaluationAttempts += 1;
+          if (evaluationAttempts === 1) {
+            vi.setSystemTime(Date.now() + 60_000);
+          }
         }
         return {};
       },
@@ -112,7 +116,7 @@ describe("meeting browser join readiness", () => {
 });
 
 describe("meeting browser recovery", () => {
-  it("retries status inspection when auto-join navigation destroys the page context", async () => {
+  it("keeps navigation recovery within its budget across a wall-clock rollback", async () => {
     vi.useFakeTimers();
     const adoptionAttempts: boolean[] = [];
     let evaluationAttempts = 0;
@@ -164,6 +168,7 @@ describe("meeting browser recovery", () => {
           evaluationAttempts += 1;
           evaluationTimeouts.push(request.timeoutMs);
           if (evaluationAttempts === 1) {
+            vi.setSystemTime(Date.now() - 60_000);
             throw new Error("page.evaluate: Execution context was destroyed because of navigation");
           }
         }

@@ -3,7 +3,11 @@ import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import { composedParent } from "../lib/navigation-click.ts";
-import { isGitHubHost, matchGitHubItemUrl } from "./github-link-eligibility.ts";
+import {
+  isGitHubHost,
+  isGitHubPublicPageUrl,
+  matchGitHubItemUrl,
+} from "./github-link-eligibility.ts";
 
 export const LINK_READER_HOVERCARD_OPEN_DELAY_MS = 250;
 export const LINK_READER_HOVERCARD_PROVIDER_TAG = "openclaw-link-reader-hovercard-provider";
@@ -60,9 +64,15 @@ export type HoverPreviewOwner = {
 
 export function isPreviewAnchor(anchor: HTMLAnchorElement): boolean {
   const url = URL.parse(anchor.href);
-  // The generic page fallback must not turn GitHub login/profile/repository
-  // links into cards or fetch auth URLs. Hover, focus, and prefetch share this gate.
-  if (url && isGitHubHost(url.hostname) && !matchGitHubItemUrl(url)) {
+  // Repositories and public information pages use anonymous social metadata.
+  // Account/auth URLs stay unfetched.
+  // Hover, focus, and prefetch share this gate.
+  if (
+    url &&
+    isGitHubHost(url.hostname) &&
+    !matchGitHubItemUrl(url) &&
+    !isGitHubPublicPageUrl(url)
+  ) {
     return false;
   }
   if (

@@ -12,10 +12,14 @@ import { WebSocketServer } from "../../../../packages/gateway-client/src/websock
 import { withTestDir } from "../../../test-helpers/temp-dir.js";
 import { createNodeEvalArgs } from "../../../test-utils/node-process.js";
 import { resolveSystemBin } from "../../resolve-system-bin.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../../runtime-worker-url.js";
 import { resolvePreferredOpenClawTmpDir } from "../../tmp-openclaw-dir.js";
+import { externalProxyTestEntrypoints } from "./external-proxy-runtime.test-support.js";
 
 const CHILD_PROCESS_TIMEOUT_MS = process.env.CI ? 45_000 : 15_000;
 const PROBE_TIMEOUT_MS = process.env.CI ? 15_000 : 5_000;
+const lifecycleUrl = resolveRuntimeWorkerUrl(externalProxyTestEntrypoints.lifecycle);
+const websocketUrl = resolveRuntimeWorkerUrl(externalProxyTestEntrypoints.websocket);
 const PROXY_TUNNEL_SOCKETS = new WeakMap<Server, Set<Duplex>>();
 type DiscordTlsFixture = {
   caPath: string;
@@ -251,11 +255,15 @@ async function runNodeModule(
   stdout: string;
   stderr: string;
 }> {
-  const child = spawn(process.execPath, createNodeEvalArgs(source, { imports: ["tsx"] }), {
-    cwd: process.cwd(),
-    env,
-    stdio: ["ignore", "pipe", "pipe"],
-  });
+  const child = spawn(
+    process.execPath,
+    [...resolveRuntimeWorkerArgv(lifecycleUrl).slice(0, -1), ...createNodeEvalArgs(source)],
+    {
+      cwd: process.cwd(),
+      env,
+      stdio: ["ignore", "pipe", "pipe"],
+    },
+  );
 
   let stdout = "";
   let stderr = "";
@@ -368,9 +376,9 @@ describe("SSRF external proxy routing", () => {
         import http from "node:http";
         import https from "node:https";
         import { fetch as undiciFetch } from "undici";
-        import { WebSocket } from "./packages/gateway-client/src/websocket.test-support.ts";
-        import { startProxy, stopProxy } from "./src/infra/net/proxy/proxy-lifecycle.ts";
-        import { registerManagedProxyGatewayLoopbackBypass } from "./src/infra/net/proxy/proxy-lifecycle.ts";
+        import { WebSocket } from ${JSON.stringify(websocketUrl.href)};
+        import { startProxy, stopProxy } from ${JSON.stringify(lifecycleUrl.href)};
+        import { registerManagedProxyGatewayLoopbackBypass } from ${JSON.stringify(lifecycleUrl.href)};
 
         async function nodeHttpGet(url, options = {}) {
           return new Promise((resolve, reject) => {
@@ -518,7 +526,7 @@ describe("SSRF external proxy routing", () => {
       const child = await runNodeModule(
         `
         import https from "node:https";
-        import { startProxy, stopProxy } from "./src/infra/net/proxy/proxy-lifecycle.ts";
+        import { startProxy, stopProxy } from ${JSON.stringify(lifecycleUrl.href)};
 
         async function nodeHttpsGet(url) {
           return new Promise((resolve, reject) => {

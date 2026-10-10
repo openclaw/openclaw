@@ -11,9 +11,9 @@ import {
   stagedInputPathDirectory,
 } from "../../media/staged-inputs.js";
 import { runCommandBuffered, runCommandWithTimeout, runExec } from "../../process/exec.js";
-import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
 import { sameEntry } from "./workspace-manifest-comparison.js";
-import { readWorkspaceNodes } from "./workspace-manifest-worker.js";
+import type { WorkspaceManifestValueInputs } from "./workspace-manifest-computation.js";
+import { prepareWorkspaceTreeInput, readWorkspaceNodes } from "./workspace-manifest-worker.js";
 import {
   MAX_RECONCILIATION_FILE_BYTES,
   MAX_RECONCILIATION_PACK_BYTES,
@@ -21,6 +21,7 @@ import {
   type WorkerWorkspaceManifestEntry,
   type WorkerWorkspaceReconciliationJournal,
 } from "./workspace-manifest.js";
+import { workspacePathAncestors } from "./workspace-path-ancestors.js";
 import {
   assertWorkspaceMatchesManifest,
   ConcurrentWorkspacePathError,
@@ -32,12 +33,9 @@ import {
   reconciliationEntries,
 } from "./workspace-reconcile-derived-paths.js";
 import {
-  clearTemporaryWorkspace,
-  directoryContainsOnlyDerivedWorkspaceEntries,
-  directoryContainsOnlyJournalPaths,
+  directoryContainsOnlyWorkspaceEntries,
   entryMatches,
   localPath,
-  readWorkspaceTreeFile,
   removeEmptyWorkspaceDirectory,
 } from "./workspace-reconcile-fs.js";
 
@@ -47,17 +45,26 @@ type WorkspaceRecoveryContext = {
   journal: WorkerWorkspaceReconciliationJournal;
   filteredBaseTree: boolean;
   isRetainedInput: ReturnType<typeof createStagedInputPathMatcher>;
+  assertCurrent?: () => void;
 };
+function workspaceRecoveryConflict(entryPath: string): ConcurrentWorkspacePathError {
+  return new ConcurrentWorkspacePathError(
+    `Gateway workspace changed while cloud recovery was pending: ${entryPath}`,
+  );
+}
+
 async function requireGit(
   cwd: string,
   args: string[],
   input?: Uint8Array,
   env?: NodeJS.ProcessEnv,
+  assertCurrent?: () => void,
 ): Promise<string> {
   const result = await runCommandWithTimeout(["git", "-C", cwd, ...args], {
     timeoutMs: PATCH_TIMEOUT_MS,
     ...(input ? { input } : {}),
     ...(env ? { env } : {}),
+    ...(assertCurrent ? { beforeInput: assertCurrent } : {}),
     maxOutputBytes: 1024 * 1024,
   });
   if (result.termination !== "exit" || result.code !== 0) {
@@ -66,96 +73,16 @@ async function requireGit(
   return result.stdout.trim();
 }
 
-async function materializeSnapshotEntry(params: {
-  root: string;
-  entry: WorkerWorkspaceManifestEntry;
-  sourceRoot?: string;
-  content?: Uint8Array;
-}): Promise<void> {
-  const target = localPath(params.root, params.entry.path);
-  await fs.mkdir(path.dirname(target), { recursive: true, mode: 0o700 });
-  if (params.entry.type === "symlink") {
-    await fs.symlink(params.entry.target, target);
-    return;
-  }
-  if (params.content) {
-    await fs.writeFile(target, params.content, { mode: params.entry.mode, flag: "wx" });
-  } else if (params.sourceRoot) {
-    await fs.copyFile(localPath(params.sourceRoot, params.entry.path), target);
-  } else {
-    throw new Error(`Cloud workspace snapshot content is missing: ${params.entry.path}`);
-  }
-  await fs.chmod(target, params.entry.mode);
-}
-
-async function materializeSnapshotEntries(params: {
-  root: string;
-  sourceRoot: string;
-  entries: WorkerWorkspaceManifestEntry[];
-}): Promise<void> {
-  const result = await runTasksWithConcurrency({
-    tasks: params.entries.map((entry) => () => materializeSnapshotEntry({ ...params, entry })),
-    limit: 4,
-    errorMode: "stop",
-  });
-  if (result.hasError) {
-    throw result.firstError;
-  }
-  await assertWorkspaceMatchesManifest({
-    root: params.root,
-    manifest: { version: 1, baseCommit: null, entries: params.entries },
-    entries: params.entries,
-  });
-}
-
 async function writeRawWorkspaceTree(params: {
   repositoryRoot: string;
   entries: readonly WorkerWorkspaceManifestEntry[];
+  source: WorkspaceManifestValueInputs["workspace.manifest.tree-input"]["source"];
 }): Promise<string> {
-  // fast-import writes the authenticated bytes directly. A working-tree/index
-  // snapshot would apply user attributes, encodings, and clean filters.
-  const entries = params.entries.toSorted((left, right) => left.path.localeCompare(right.path));
+  // A working-tree/index snapshot would apply user encodings and clean filters.
   const ref = `refs/heads/openclaw-snapshot-${randomBytes(16).toString("hex")}`;
   const inputPath = path.join(params.repositoryRoot, ".git", "snapshot-input");
   try {
-    const output = await fs.open(inputPath, "wx", 0o600);
-    try {
-      for (const [index, entry] of entries.entries()) {
-        const content =
-          entry.type === "symlink"
-            ? Buffer.from(entry.target)
-            : await fs.readFile(localPath(params.repositoryRoot, entry.path));
-        await output.writeFile(
-          Buffer.concat([
-            Buffer.from(`blob\nmark :${index + 1}\ndata ${content.byteLength}\n`),
-            content,
-            Buffer.from("\n"),
-          ]),
-        );
-      }
-      await output.writeFile(
-        `commit ${ref}\ncommitter OpenClaw <noreply@openclaw.ai> 0 +0000\ndata 0\ndeleteall\n`,
-      );
-      for (let offset = 0; offset < entries.length; offset += 256) {
-        await output.writeFile(
-          entries
-            .slice(offset, offset + 256)
-            .map((entry, index) => {
-              const mode =
-                entry.type === "symlink"
-                  ? "120000"
-                  : (entry.mode & 0o111) !== 0
-                    ? "100755"
-                    : "100644";
-              return `M ${mode} :${offset + index + 1} ${JSON.stringify(entry.path)}\n`;
-            })
-            .join(""),
-        );
-      }
-      await output.writeFile("done\n");
-    } finally {
-      await output.close();
-    }
+    await prepareWorkspaceTreeInput({ ...params, inputPath, ref });
     const input = await fs.open(inputPath, "r");
     try {
       await runExec("git", ["-C", params.repositoryRoot, "fast-import", "--quiet"], {
@@ -261,14 +188,10 @@ export async function createWorkspacePatch(params: {
         throw new Error("Cloud workspace rollback exceeds its byte limit");
       }
     }
-    await materializeSnapshotEntries({
-      root: temporary,
-      sourceRoot: params.root,
-      entries: params.baseEntries,
-    });
     const baseTree = await writeRawWorkspaceTree({
       repositoryRoot: temporary,
       entries: params.baseEntries,
+      source: { root: params.root },
     });
     const packed = await runCommandBuffered(
       ["git", "-C", temporary, "pack-objects", "--stdout", "--revs"],
@@ -287,15 +210,10 @@ export async function createWorkspacePatch(params: {
     if (packed.stdout.byteLength > MAX_RECONCILIATION_PACK_BYTES) {
       throw new Error("Cloud workspace recovery snapshot exceeds its byte limit");
     }
-    await clearTemporaryWorkspace(temporary);
-    await materializeSnapshotEntries({
-      root: temporary,
-      sourceRoot: params.stagingRoot,
-      entries: params.appliedEntries,
-    });
     const appliedTree = await writeRawWorkspaceTree({
       repositoryRoot: temporary,
       entries: params.appliedEntries,
+      source: { root: params.stagingRoot },
     });
     const patch = await readWorkspacePatch(temporary, baseTree, appliedTree);
     return { patch, baseTree, basePack: packed.stdout };
@@ -307,7 +225,7 @@ export async function createWorkspacePatch(params: {
 export async function applyWorkspacePatch(params: {
   root: string;
   patch: Uint8Array;
-  reverse?: boolean;
+  assertCurrent?: () => void;
 }): Promise<void> {
   if (params.patch.byteLength === 0) {
     return;
@@ -321,17 +239,10 @@ export async function applyWorkspacePatch(params: {
   try {
     await requireGit(
       params.root,
-      [
-        "-c",
-        "core.autocrlf=false",
-        "apply",
-        "--no-index",
-        "--binary",
-        "--whitespace=nowarn",
-        ...(params.reverse ? ["--reverse"] : []),
-      ],
+      ["-c", "core.autocrlf=false", "apply", "--no-index", "--binary", "--whitespace=nowarn"],
       params.patch,
       { GIT_DIR: path.join(temporary, ".git") },
+      params.assertCurrent,
     );
   } finally {
     await fs.rm(temporary, { recursive: true, force: true });
@@ -363,9 +274,8 @@ async function createWorkspaceRecoveryPatch(params: WorkspaceRecoveryContext): P
     const paths = new Set([...baseByPath.keys(), ...appliedByPath.keys()]);
     const directories = new Set<string>();
     for (const entryPath of paths) {
-      const segments = entryPath.split("/");
-      for (let index = 1; index < segments.length; index += 1) {
-        directories.add(segments.slice(0, index).join("/"));
+      for (const ancestor of workspacePathAncestors(entryPath)) {
+        directories.add(ancestor);
       }
     }
     const actualEntries: WorkerWorkspaceManifestEntry[] = [];
@@ -378,9 +288,7 @@ async function createWorkspaceRecoveryPatch(params: WorkspaceRecoveryContext): P
         if (baseEntry && appliedEntry) {
           // A missing replacement path is ambiguous: Git may have removed the
           // old entry mid-apply, or the user may have deleted it afterward.
-          throw new ConcurrentWorkspacePathError(
-            `Gateway workspace changed while cloud recovery was pending: ${entryPath}`,
-          );
+          throw workspaceRecoveryConflict(entryPath);
         }
         continue;
       }
@@ -397,58 +305,33 @@ async function createWorkspaceRecoveryPatch(params: WorkspaceRecoveryContext): P
       const isJournalDirectory =
         actual.type === "directory" &&
         ((directories.has(entryPath) &&
-          (await directoryContainsOnlyJournalPaths(
+          (await directoryContainsOnlyWorkspaceEntries(
             params.root,
             entryPath,
-            paths,
-            directories,
             params.isRetainedInput,
+            { paths, directories },
           ))) ||
-          (await directoryContainsOnlyDerivedWorkspaceEntries(
+          (await directoryContainsOnlyWorkspaceEntries(
             params.root,
             entryPath,
             params.isRetainedInput,
           )));
       if (!isJournalDirectory) {
-        throw new ConcurrentWorkspacePathError(
-          `Gateway workspace changed while cloud recovery was pending: ${entryPath}`,
-        );
+        throw workspaceRecoveryConflict(entryPath);
       }
     }
-    await materializeSnapshotEntries({
-      root: temporary,
-      sourceRoot: params.root,
-      entries: actualEntries,
-    });
     const actualTree = await writeRawWorkspaceTree({
       repositoryRoot: temporary,
       entries: actualEntries,
+      source: { root: params.root },
     });
-    let recoveryBaseTree = params.journal.baseTree;
-    if (params.filteredBaseTree) {
-      await clearTemporaryWorkspace(temporary);
-      for (const entry of baseEntries) {
-        const content =
-          entry.type === "file"
-            ? await readWorkspaceTreeFile({
-                repositoryRoot: temporary,
-                tree: params.journal.baseTree,
-                entry,
-              })
-            : undefined;
-        await materializeSnapshotEntry({ root: temporary, entry, content });
-      }
-      await assertWorkspaceMatchesManifest({
-        root: temporary,
-        manifest: { version: 1, baseCommit: null, entries: baseEntries },
-        entries: baseEntries,
-      });
-      recoveryBaseTree = await writeRawWorkspaceTree({
-        repositoryRoot: temporary,
-        entries: baseEntries,
-      });
-      await clearTemporaryWorkspace(temporary);
-    }
+    const recoveryBaseTree = params.filteredBaseTree
+      ? await writeRawWorkspaceTree({
+          repositoryRoot: temporary,
+          entries: baseEntries,
+          source: { root: temporary, tree: params.journal.baseTree },
+        })
+      : params.journal.baseTree;
     return await readWorkspacePatch(temporary, actualTree, recoveryBaseTree);
   } finally {
     await fs.rm(temporary, { recursive: true, force: true });
@@ -468,17 +351,14 @@ async function assertWorkspaceRecoveryBase(params: WorkspaceRecoveryContext): Pr
   for (const entryPath of baseDirectoryPaths) {
     const node = await localWorkspaceNode(params.root, entryPath);
     if (node?.type !== "directory") {
-      throw new ConcurrentWorkspacePathError(
-        `Gateway workspace changed while cloud recovery was pending: ${entryPath}`,
-      );
+      throw workspaceRecoveryConflict(entryPath);
     }
   }
   const basePaths = new Set(baseEntries.map((entry) => entry.path));
   const baseDirectories = new Set<string>();
   for (const entryPath of basePaths) {
-    const segments = entryPath.split("/");
-    for (let index = 1; index < segments.length; index += 1) {
-      baseDirectories.add(segments.slice(0, index).join("/"));
+    for (const ancestor of workspacePathAncestors(entryPath)) {
+      baseDirectories.add(ancestor);
     }
   }
   for (const entry of appliedEntries) {
@@ -490,20 +370,17 @@ async function assertWorkspaceRecoveryBase(params: WorkspaceRecoveryContext): Pr
       existing?.isDirectory() &&
       !existing.isSymbolicLink() &&
       baseDirectories.has(entry.path) &&
-      (await directoryContainsOnlyJournalPaths(
+      (await directoryContainsOnlyWorkspaceEntries(
         params.root,
         entry.path,
-        basePaths,
-        baseDirectories,
         params.isRetainedInput,
+        { paths: basePaths, directories: baseDirectories },
       ))
     ) {
       continue;
     }
     if (existing) {
-      throw new ConcurrentWorkspacePathError(
-        `Gateway workspace changed while cloud recovery was pending: ${entry.path}`,
-      );
+      throw workspaceRecoveryConflict(entry.path);
     }
   }
   for (const entryPath of appliedDirectoryPaths) {
@@ -515,16 +392,14 @@ async function assertWorkspaceRecoveryBase(params: WorkspaceRecoveryContext): Pr
       node &&
       !(
         node.type === "directory" &&
-        (await directoryContainsOnlyDerivedWorkspaceEntries(
+        (await directoryContainsOnlyWorkspaceEntries(
           params.root,
           entryPath,
           params.isRetainedInput,
         ))
       )
     ) {
-      throw new ConcurrentWorkspacePathError(
-        `Gateway workspace changed while cloud recovery was pending: ${entryPath}`,
-      );
+      throw workspaceRecoveryConflict(entryPath);
     }
   }
 }
@@ -544,25 +419,20 @@ async function assertWorkspaceRecoveryDirectoriesRecoverable(
       if (
         baseEntries.has(entryPath) &&
         appliedDirectories.has(entryPath) &&
-        !(await directoryContainsOnlyJournalPaths(
+        !(await directoryContainsOnlyWorkspaceEntries(
           params.root,
           entryPath,
-          appliedEntryPaths,
-          appliedDirectories,
           params.isRetainedInput,
+          { paths: appliedEntryPaths, directories: appliedDirectories },
         ))
       ) {
-        throw new ConcurrentWorkspacePathError(
-          `Gateway workspace changed while cloud recovery was pending: ${entryPath}`,
-        );
+        throw workspaceRecoveryConflict(entryPath);
       }
       continue;
     }
     if (!local) {
       if (baseDirectories.has(entryPath) && appliedDirectories.has(entryPath)) {
-        throw new ConcurrentWorkspacePathError(
-          `Gateway workspace changed while cloud recovery was pending: ${entryPath}`,
-        );
+        throw workspaceRecoveryConflict(entryPath);
       }
       continue;
     }
@@ -574,14 +444,15 @@ async function assertWorkspaceRecoveryDirectoriesRecoverable(
     ) {
       continue;
     }
-    throw new ConcurrentWorkspacePathError(
-      `Gateway workspace changed while cloud recovery was pending: ${entryPath}`,
-    );
+    throw workspaceRecoveryConflict(entryPath);
   }
 }
 
 async function restoreWorkspaceJournalDirectories(params: WorkspaceRecoveryContext): Promise<void> {
-  const workspaceRoot = await openFsSafeRoot(params.root, { mode: 0o700 });
+  const workspaceRoot = await openFsSafeRoot(params.root, {
+    mode: 0o700,
+    assertBeforeMutation: params.assertCurrent,
+  });
   const baseDirectories = params.journal.baseDirectories ?? [];
   const appliedDirectories = new Set(params.journal.appliedDirectories ?? []);
   for (const entryPath of baseDirectories.toSorted()) {
@@ -602,13 +473,10 @@ async function restoreWorkspaceJournalDirectories(params: WorkspaceRecoveryConte
 export async function recoverWorkerWorkspaceReconciliation(params: {
   root: string;
   journal: WorkerWorkspaceReconciliationJournal;
-  preservePaths?: ReadonlySet<string>;
+  assertCurrent?: () => void;
 }): Promise<void> {
   if (params.journal.appliedManifestRef) {
     throw new Error("Cloud workspace result is already applied and awaits fence acceptance");
-  }
-  if (params.preservePaths?.size) {
-    throw new Error("Cloud workspace patch recovery cannot preserve partial paths");
   }
   const root = await fs.realpath(params.root);
   validateJournalSnapshot(params.journal);
@@ -652,6 +520,7 @@ export async function recoverWorkerWorkspaceReconciliation(params: {
     journal,
     isRetainedInput,
     filteredBaseTree: journal.baseEntries.length !== params.journal.baseEntries.length,
+    assertCurrent: params.assertCurrent,
   };
   try {
     await assertWorkspaceRecoveryBase(recovery);
@@ -661,8 +530,13 @@ export async function recoverWorkerWorkspaceReconciliation(params: {
   }
   await assertWorkspaceRecoveryDirectoriesRecoverable(recovery);
   const recoveryPatch = await createWorkspaceRecoveryPatch(recovery);
-  await prepareNonDirectoryTargets(root, journal.baseEntries, isRetainedInput);
-  await applyWorkspacePatch({ root, patch: recoveryPatch });
+  await prepareNonDirectoryTargets(
+    root,
+    journal.baseEntries,
+    isRetainedInput,
+    params.assertCurrent,
+  );
+  await applyWorkspacePatch({ root, patch: recoveryPatch, assertCurrent: params.assertCurrent });
   await restoreWorkspaceJournalDirectories(recovery);
   await assertWorkspaceRecoveryBase(recovery);
 }

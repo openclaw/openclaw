@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createAttemptNestedToolActivityState } from "./attempt-nested-tool-activity.js";
 
 const mocks = vi.hoisted(() => ({
   clearActiveEmbeddedRun: vi.fn(),
@@ -64,7 +65,7 @@ function createFixture(overrides: FixtureOverrides = {}) {
   const sessionManager =
     overrides.sessionManager ??
     ({
-      appendLeafControl: vi.fn(),
+      appendLeafControlAsync: vi.fn(async () => undefined),
       buildSessionContext: () => ({ messages: repairedMessages }),
       getEntry: vi.fn(),
     } as never);
@@ -137,6 +138,7 @@ function createFixture(overrides: FixtureOverrides = {}) {
         },
         cacheTrace: {},
         contextGuards: {
+          checkMidTurnPrecheck: vi.fn(),
           getAfterTurnCheckpoint: vi.fn(() => 7),
           takePendingMidTurnPrecheckRequest: vi.fn(() => null),
         },
@@ -158,7 +160,7 @@ function createFixture(overrides: FixtureOverrides = {}) {
         runtimeInfo: { model: { id: "model" } },
         systemPromptReport: undefined,
       },
-      toolBase: { nestedToolActivities: [] },
+      toolBase: { nestedToolActivityState: createAttemptNestedToolActivityState() },
       toolCatalog: {
         effectiveTools: [{ name: "read" }],
         emptyExplicitToolAllowlistError: undefined,

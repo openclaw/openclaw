@@ -59,29 +59,30 @@ function withAcquisitionPeer(
     if (!options.holdStop) {
       stopRelease.resolve();
     }
-    const startSpy = vi
-      .spyOn(GatewayClient.prototype, "start")
-      .mockImplementation(function (this: GatewayClient) {
-        clients.add(this);
-        nativeStart.call(this);
-      });
-    const stopSpy = vi
-      .spyOn(GatewayClient.prototype, "stopAndWait")
-      .mockImplementation(function (this: GatewayClient, stopOptions) {
-        const completion = (async () => {
-          stopCount += 1;
-          await nativeStop.call(this, stopOptions);
-          socketStopped.resolve();
-          // Hold completion after the real socket stop, never instead of stopping it.
-          await stopRelease.promise;
-          if (options.stopError) {
-            throw options.stopError;
-          }
-        })();
-        stops.push(completion);
-        void completion.catch((error: unknown) => socketStopped.reject(error));
-        return completion;
-      });
+    const startSpy = vi.spyOn(GatewayClient.prototype, "start").mockImplementation(function (
+      this: GatewayClient,
+    ) {
+      clients.add(this);
+      nativeStart.call(this);
+    });
+    const stopSpy = vi.spyOn(GatewayClient.prototype, "stopAndWait").mockImplementation(function (
+      this: GatewayClient,
+      stopOptions,
+    ) {
+      const completion = (async () => {
+        stopCount += 1;
+        await nativeStop.call(this, stopOptions);
+        socketStopped.resolve();
+        // Hold completion after the real socket stop, never instead of stopping it.
+        await stopRelease.promise;
+        if (options.stopError) {
+          throw options.stopError;
+        }
+      })();
+      stops.push(completion);
+      void completion.catch((error: unknown) => socketStopped.reject(error));
+      return completion;
+    });
     server.on("connection", (socket) => {
       sendMinimalGatewayConnectChallenge(socket);
       socket.on("message", (data) => {

@@ -119,6 +119,7 @@ turn it into OpenClaw-native concept pages and compiled digests.
 - unknown `type` values are accepted as generic concepts
 - `index.md` and `log.md` are reserved and never imported as concepts
 - broken or external markdown links are left unchanged
+- links inside inline code, fenced code, and indented code blocks remain literal
 
 Imported pages flatten under `concepts/` so existing compile, search, get, and
 dashboard flows see them without a second wiki tree. Each page keeps the
@@ -222,6 +223,10 @@ vault or install file watchers.
 After rollback quarantine, a compile in the running process clears the owner
 immediately; a separate compiler process requires plugin lifecycle refresh so
 the daemon can confirm the new durable publication.
+When automatic compilation is enabled, source synchronization for status and
+wiki tools checks for a valid externally published cache before rebuilding a
+missing in-process snapshot. An unchanged vault reuses that publication;
+changed imports, missing indexes, or an invalid cache still require compilation.
 ChatGPT import rollback records post-import edits before compile and keeps
 their recovery paths in plugin state, so an interrupted rollback can reconcile
 the recovery directory and report the same preserved pages on retry. Target
@@ -293,6 +298,10 @@ includes compact `Claim:` and `Evidence:` lines when available.
 | `wiki_get`    | read a wiki page by id/path, falling back to the shared memory corpus when shared search is enabled and the lookup misses                                     |
 | `wiki_apply`  | narrow synthesis/metadata mutations without freeform page surgery                                                                                             |
 | `wiki_lint`   | structural checks, provenance gaps, contradictions, open questions                                                                                            |
+
+`wiki_search` has a 30-second deadline and honors turn cancellation. A timeout
+or cancellation returns a tool error rather than an empty result, and stops
+the ongoing page scan. For a known page, use `wiki_get` with its id or path.
 
 The plugin also registers a non-exclusive memory corpus supplement, so shared
 `memory_search` and `memory_get` can reach the wiki when the active memory
@@ -425,11 +434,18 @@ normalized agent id:
 ```json5
 {
   agents: {
+    ownership: "explicit",
+    defaults: {
+      heartbeat: { agentId: "support" },
+      systemAgent: { agentId: "support" },
+      authInheritance: { agentId: "support" },
+    },
     entries: {
-      support: { default: true },
+      support: { workspace: "~/.openclaw/workspace" },
       marketing: {},
     },
   },
+  talk: { agentId: "support" },
   plugins: {
     entries: {
       "memory-wiki": {
@@ -547,7 +563,7 @@ subcommand set.
 
 When `vault.renderMode` is `obsidian`, the plugin writes Obsidian-friendly
 Markdown and can optionally use the official `obsidian` CLI for status
-probing, vault search, opening a page, invoking a command, and jumping to the
+checking, vault search, opening a page, invoking a command, and jumping to the
 daily note. This is optional; the wiki still works in native mode without
 Obsidian.
 

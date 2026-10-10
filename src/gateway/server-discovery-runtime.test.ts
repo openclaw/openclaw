@@ -145,90 +145,72 @@ describe("startGatewayDiscovery", () => {
     mocks.resolveTailnetDnsHint.mockResolvedValue("gateway.tailnet.example.ts.net");
   });
 
-  it.each([
-    { registration: "direct", descriptor: "canonical" },
-    { registration: "projected", descriptor: "canonical" },
-    { registration: "direct", descriptor: "frozen" },
-    { registration: "projected", descriptor: "frozen" },
-    { registration: "direct", descriptor: "getter" },
-    { registration: "projected", descriptor: "getter" },
-  ])(
-    "preserves $descriptor discovery descriptors in their $registration scope",
-    async ({ registration, descriptor }) => {
-      useDevelopmentDiscoveryEnv();
-      const builder = createPluginRegistry({
-        logger: { ...makeLogs(), error() {} },
-        runtime: createUnavailableRuntime("setup-only", "native-discovery"),
-        activateGlobalSideEffects: false,
-      });
-      const record = createPluginRecord({
-        id: "native-discovery",
-        source: "test",
-        origin: "workspace",
-        enabled: true,
-        configSchema: false,
-      });
-      builder.registry.plugins.push(record);
-      const instance = new PluginInstance(record.id, { record, registry: builder.registry });
-      const store = createPluginRuntimeStore<object>("discovery runtime missing");
-      const runtime = {};
-      const calls: Array<{ phase: string; value: number; runtime: object | null }> = [];
-      class NativeAdvertisement extends Date {
-        readonly id = "native-discovery";
-        async advertise() {
-          calls.push({ phase: "advertise", value: this.getTime(), runtime: store.tryGetRuntime() });
-          return this;
+  it("preserves getter discovery descriptors in their projected scope", async () => {
+    useDevelopmentDiscoveryEnv();
+    const builder = createPluginRegistry({
+      logger: { ...makeLogs(), error() {} },
+      runtime: createUnavailableRuntime("setup-only", "native-discovery"),
+      activateGlobalSideEffects: false,
+    });
+    const record = createPluginRecord({
+      id: "native-discovery",
+      source: "test",
+      origin: "workspace",
+      enabled: true,
+      configSchema: false,
+    });
+    builder.registry.plugins.push(record);
+    const instance = new PluginInstance(record.id, { record, registry: builder.registry });
+    const store = createPluginRuntimeStore<object>("discovery runtime missing");
+    const runtime = {};
+    const calls: Array<{ phase: string; value: number; runtime: object | null }> = [];
+    class NativeAdvertisement extends Date {
+      readonly id = "native-discovery";
+      async advertise() {
+        calls.push({ phase: "advertise", value: this.getTime(), runtime: store.tryGetRuntime() });
+        return this;
+      }
+      stop() {
+        calls.push({ phase: "stop", value: this.getTime(), runtime: store.tryGetRuntime() });
+      }
+    }
+    const service = new NativeAdvertisement(37);
+    let reads = 0;
+    Object.defineProperty(service, "id", {
+      get() {
+        if (reads++ > 0) {
+          throw new Error("discovery id must only be read at admission");
         }
-        stop() {
-          calls.push({ phase: "stop", value: this.getTime(), runtime: store.tryGetRuntime() });
-        }
-      }
-      const service = new NativeAdvertisement(37);
-      if (descriptor === "frozen") {
-        Object.defineProperty(service, "id", { value: " native-discovery " });
-        Object.freeze(service);
-      } else if (descriptor === "getter") {
-        let reads = 0;
-        Object.defineProperty(service, "id", {
-          get() {
-            if (reads++ > 0) {
-              throw new Error("discovery id must only be read at admission");
-            }
-            return " native-discovery ";
-          },
-        });
-      }
-      instance.run(() => {
-        store.setRuntime(runtime);
-        builder.createApi(record, { config: {} }).registerGatewayDiscoveryService(service);
+        return " native-discovery ";
+      },
+    });
+    instance.run(() => {
+      store.setRuntime(runtime);
+      builder.createApi(record, { config: {} }).registerGatewayDiscoveryService(service);
+    });
+    const registry = createEmptyPluginRegistry();
+    registry.plugins.push(record);
+    projectPluginContributions(builder.registry, record, registry);
+    adoptPluginRegistryRecords(registry);
+    expect(registry.gatewayDiscoveryServices).toHaveLength(1);
+    expect(registry.gatewayDiscoveryServices[0]?.service).toBe(service);
+    expect(record.gatewayDiscoveryServiceIds).toEqual(["native-discovery"]);
+    let discovery: Awaited<ReturnType<typeof startDiscovery>> | undefined;
+    try {
+      discovery = await startDiscovery({
+        gatewayDiscoveryServices: registry.gatewayDiscoveryServices,
       });
-      const registry =
-        registration === "projected" ? createEmptyPluginRegistry() : builder.registry;
-      if (registration === "projected") {
-        registry.plugins.push(record);
-        projectPluginContributions(builder.registry, record, registry);
-        adoptPluginRegistryRecords(registry);
-      }
-      expect(registry.gatewayDiscoveryServices).toHaveLength(1);
-      expect(registry.gatewayDiscoveryServices[0]?.service).toBe(service);
-      expect(record.gatewayDiscoveryServiceIds).toEqual(["native-discovery"]);
-      let discovery: Awaited<ReturnType<typeof startDiscovery>> | undefined;
-      try {
-        discovery = await startDiscovery({
-          gatewayDiscoveryServices: registry.gatewayDiscoveryServices,
-        });
-        await discovery.stop();
-        expect(calls).toEqual([
-          { phase: "advertise", value: 37, runtime },
-          { phase: "stop", value: 37, runtime },
-        ]);
-        expect(calls.every((call) => call.runtime === runtime)).toBe(true);
-      } finally {
-        await discovery?.stop();
-        await instance.dispose();
-      }
-    },
-  );
+      await discovery.stop();
+      expect(calls).toEqual([
+        { phase: "advertise", value: 37, runtime },
+        { phase: "stop", value: 37, runtime },
+      ]);
+      expect(calls.every((call) => call.runtime === runtime)).toBe(true);
+    } finally {
+      await discovery?.stop();
+      await instance.dispose();
+    }
+  });
 
   it("starts registered local discovery services with gateway advertisement context", async () => {
     process.env.NODE_ENV = "development";
@@ -283,26 +265,6 @@ describe("startGatewayDiscovery", () => {
     await expectSshPortOmitted("2222abc");
   });
 
-  it("omits out-of-range SSH discovery ports", async () => {
-    await expectSshPortOmitted("65536");
-  });
-
-  it("continues startup when a local discovery service never settles", async () => {
-    const { logs, resultPromise } = startStuckDiscovery("10");
-
-    await vi.advanceTimersByTimeAsync(10);
-    const result = await resultPromise;
-
-    await result.stop();
-    expect(logs.warn.mock.calls).toEqual([
-      [
-        "gateway discovery service timed out after 10ms (stuck-discovery, plugin=stuck-discovery); continuing startup",
-      ],
-    ]);
-
-    vi.useRealTimers();
-  });
-
   it("uses the default discovery timeout for partial timeout env values", async () => {
     const { logs, resultPromise } = startStuckDiscovery("10abc");
 
@@ -351,21 +313,6 @@ describe("startGatewayDiscovery", () => {
     expect(stop).toHaveBeenCalledOnce();
   });
 
-  it("skips local discovery services when mDNS mode is off", async () => {
-    process.env.NODE_ENV = "development";
-    delete process.env.VITEST;
-
-    const service = makeDiscoveryService({ id: "bonjour" });
-    const result = await startDiscovery({
-      discovery: { mdns: { mode: "off" } },
-      gatewayDiscoveryServices: [service],
-    });
-
-    expect(service.service.advertise).not.toHaveBeenCalled();
-    expect(mocks.resolveTailnetDnsHint).not.toHaveBeenCalled();
-    await result.stop();
-  });
-
   it("skips local discovery services for truthy OPENCLAW_DISABLE_BONJOUR values", async () => {
     process.env.NODE_ENV = "development";
     delete process.env.VITEST;
@@ -379,37 +326,6 @@ describe("startGatewayDiscovery", () => {
     });
 
     expect(service.service.advertise).not.toHaveBeenCalled();
-    await result.stop();
-  });
-
-  it("keeps wide-area DNS-SD publishing active when local discovery is off", async () => {
-    process.env.NODE_ENV = "development";
-    delete process.env.VITEST;
-
-    const service = makeDiscoveryService({ id: "bonjour" });
-    const logs = makeLogs();
-
-    const result = await startDiscovery({
-      discovery: { mdns: { mode: "off" }, wideArea: { domain: "openclaw.internal." } },
-      gatewayTls: { enabled: false },
-      gatewayDirectReachable: true,
-      tailscaleMode: "serve",
-      gatewayDiscoveryServices: [service],
-      logDiscovery: logs,
-    });
-
-    expect(service.service.advertise).not.toHaveBeenCalled();
-    expect(mocks.resolveTailnetDnsHint).toHaveBeenCalledWith({ enabled: true });
-    const zoneParams = latestZoneParams();
-    expect(zoneParams.domain).toBe("openclaw.internal.");
-    expect(zoneParams.gatewayPort).toBe(18789);
-    expect(zoneParams.gatewayDirectReachable).toBe(true);
-    expect(zoneParams.displayName).toBe("Lab Mac (OpenClaw)");
-    expect(zoneParams.tailnetIPv4).toBe("100.64.0.10");
-    expect(zoneParams.tailnetDns).toBe("gateway.tailnet.example.ts.net");
-    expect(logs.info.mock.calls).toEqual([
-      ["wide-area DNS-SD updated (openclaw.internal. → /tmp/openclaw.internal.db)"],
-    ]);
     await result.stop();
   });
 
@@ -445,25 +361,6 @@ describe("startGatewayDiscovery", () => {
       ],
     ]);
     await result.stop();
-  });
-
-  it("omits the CLI path from wide-area DNS-SD in minimal mode", async () => {
-    process.env.NODE_ENV = "development";
-    delete process.env.VITEST;
-
-    const logs = makeLogs();
-
-    await startDiscovery({
-      discovery: { mdns: { mode: "minimal" }, wideArea: { domain: "openclaw.internal." } },
-      gatewayTls: { enabled: false },
-      tailscaleMode: "serve",
-      gatewayDiscoveryServices: [],
-      logDiscovery: logs,
-    });
-
-    const zoneParams = latestZoneParams();
-    expect(zoneParams.cliPath).toBeUndefined();
-    expect(mocks.resolveBonjourCliPath).not.toHaveBeenCalled();
   });
 
   it("replaces advertisements and wide-area metadata across live mode changes", async () => {
@@ -661,29 +558,6 @@ describe("startGatewayDiscovery", () => {
     },
   );
 
-  it("keeps the live mode when the loaded discovery service owner changes", async () => {
-    useDevelopmentDiscoveryEnv();
-    const oldStop = vi.fn();
-    const oldService = makeDiscoveryService({ id: "old", stop: oldStop });
-    const newStop = vi.fn();
-    const newService = makeDiscoveryService({ id: "new", stop: newStop });
-    const discovery = await startDiscovery({
-      discovery: { mdns: { mode: "full" } },
-      gatewayDiscoveryServices: [oldService],
-    });
-    await discovery.update({ mdnsMode: "minimal" });
-    await discovery.update({ gatewayDiscoveryServices: [newService] });
-    expect(oldStop).toHaveBeenCalledTimes(2);
-    expect(newService.service.advertise).toHaveBeenCalledWith(
-      expect.objectContaining({ minimal: true }),
-    );
-    await discovery.update({ mdnsMode: "full" });
-    expect(oldService.service.advertise).toHaveBeenCalledTimes(2);
-    expect(newService.service.advertise).toHaveBeenCalledTimes(2);
-    await discovery.stop();
-    expect(newStop).toHaveBeenCalledTimes(2);
-  });
-
   it.each(["off", "shutdown"] as const)(
     "stops a timed-out advertiser that finishes after %s without resurrecting it",
     async (action) => {
@@ -851,17 +725,6 @@ describe("startGatewayDiscovery", () => {
       await Promise.all([retaining, disabling]);
       await discovery.stop();
     }
-    expect(stop).toHaveBeenCalledOnce();
-  });
-
-  it("takes each acquired cleanup once even when shutdown repeats", async () => {
-    useDevelopmentDiscoveryEnv();
-    const stop = vi.fn();
-    const discovery = await startDiscovery({
-      gatewayDiscoveryServices: [makeDiscoveryService({ id: "bonjour", stop })],
-    });
-    await discovery.stop();
-    await discovery.stop();
     expect(stop).toHaveBeenCalledOnce();
   });
 

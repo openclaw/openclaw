@@ -58,6 +58,31 @@ The baseline list should stay broad enough to cover:
 - repo-reading and docs-reading
 - one small build task such as Lobster Invaders
 
+### Native tool discovery proof
+
+A flow can declare a model-specific configured runtime route:
+
+```yaml
+execution:
+  kind: flow
+  liveConfiguredRuntime:
+    id: codex
+    model: openai/gpt-5.5
+```
+
+This route applies only in `live-frontier` when both `--model` and `--alt-model`
+select the declared model. The launcher prepares singleton and partitioned runs
+through the same runtime route. Other selections keep their general model route;
+explicit forced runtimes and runtime-pair cells retain their own preparation.
+The metadata does not override either model choice or product tool loading.
+
+The native discovery lane selects `openai/gpt-5.5` for both model slots. Its
+Codex catalog supports native tool search without a `code_mode_only` override.
+Provider identity alone does not establish that capability. Shared searchable
+fixtures require linked `tool_search` receipts only in Codex execution cells;
+direct OpenClaw cells still prove tool calls and results. `sessions_spawn`
+remains the always-direct control and does not require discovery receipts.
+
 ## Provider mock lanes
 
 `qa suite` has two local provider mock lanes:
@@ -100,6 +125,32 @@ At the architecture level, the split is:
   observation, transport actions, and normalized transport state.
 - YAML scenario files under `qa/scenarios/` define the test run; `qa-lab`
   provides the reusable runtime surface that executes them.
+
+### Adapter shutdown and failure hooks
+
+The optional QA runner hooks follow one host-owned teardown order:
+
+1. `cleanup()` stops new fixture actions while retaining credential authority
+   and ownership of pending writes. Observers needed for final receipts can
+   remain active through Gateway shutdown. Bound transport requests themselves;
+   a scenario deadline does not settle an already-dispatched request.
+2. The host stops the Gateway and confirms process shutdown.
+3. `captureBeforeGatewayCleanup()` snapshots final native receipts before
+   temporary Gateway state is removed. A successful capture runs once per
+   Gateway lifetime. A thrown error retains the runtime evidence and fails
+   teardown; it does not prevent post-stop fixture cleanup.
+4. `cleanupAfterGatewayStop()` settles pending writes and owned fixture cleanup,
+   then releases the credential lease. The host withholds this hook if Gateway
+   shutdown is unconfirmed. Report failures rather than claiming successful cleanup.
+
+Omitted hooks perform no adapter-specific work; normal host teardown still
+runs. Errors are accumulated across cleanup phases. Keep unknown remote write
+outcomes explicit instead of inferring ownership or replaying writes.
+
+An optional `whenUnhealthy` promise **resolves**, rather than rejects, with a
+terminal error. The host aborts active flow admission; the adapter still owns
+settlement during cleanup. Adapters that omit it retain their explicit health
+checks and scenario deadlines.
 
 ### Adding a channel
 

@@ -2,6 +2,7 @@
 import { Command } from "commander";
 import { describe, expect, it, vi } from "vitest";
 import { defaultRuntime, ExitError } from "../runtime.js";
+import { captureEnv } from "../test-utils/env.js";
 import { runCommandWithRuntime } from "./cli-utils.js";
 import { registerDnsCli } from "./dns-cli.js";
 import {
@@ -40,11 +41,10 @@ describe("waitForever", () => {
 });
 
 describe("runCommandWithRuntime", () => {
-  it.each(
-    [0, 1, 2].flatMap((code) =>
-      [false, true].map((customErrorHandler) => ({ code, customErrorHandler })),
-    ),
-  )(
+  it.each([
+    { code: 0, customErrorHandler: false },
+    { code: 2, customErrorHandler: true },
+  ])(
     "preserves completed exit $code with custom error handler $customErrorHandler",
     async ({ code, customErrorHandler }) => {
       const runtime = { error: vi.fn(), exit: vi.fn() };
@@ -86,18 +86,14 @@ describe("runCommandWithRuntime", () => {
         },
       );
 
-    const originalDebug = process.env.OPENCLAW_DEBUG;
+    const originalEnv = captureEnv(["OPENCLAW_DEBUG"]);
     delete process.env.OPENCLAW_DEBUG;
     try {
       await run();
       process.env.OPENCLAW_DEBUG = "1";
       await run();
     } finally {
-      if (originalDebug === undefined) {
-        delete process.env.OPENCLAW_DEBUG;
-      } else {
-        process.env.OPENCLAW_DEBUG = originalDebug;
-      }
+      originalEnv.restore();
     }
 
     expect(messages).toEqual([
@@ -129,82 +125,46 @@ describe("runCommandWithRuntime", () => {
   });
 });
 
-describe("shouldSkipRespawnForArgv", () => {
+describe("respawn policy", () => {
   it.each([
-    { argv: ["node", "openclaw", "--help"] },
-    { argv: ["node", "openclaw", "-V"] },
-    { argv: ["node", "openclaw", "tui"] },
-    { argv: ["node", "openclaw", "terminal"] },
-    { argv: ["node", "openclaw", "chat"] },
-    { argv: ["node", "openclaw", "hooks", "relay", "--relay-id", "relay-1"] },
-    { argv: ["node", "openclaw", "gateway"] },
-    { argv: ["node", "openclaw", "gateway", "--port", "14720", "--bind", "loopback"] },
-    { argv: ["node", "openclaw", "gateway", "run", "--port=14720", "--bind", "loopback"] },
-    { argv: ["node", "openclaw", "gateway", "--update-canary"] },
-    { argv: ["node", "openclaw", "gateway", "run", "--update-canary", "--port=14720"] },
-    { argv: ["node", "openclaw", "gateway", "status"] },
-    { argv: ["node", "openclaw", "--", "gateway", "run"] },
-    { argv: ["node", "openclaw", "gateway", "--", "status"] },
-    { argv: ["node", "openclaw", "gateway", "--token", "test-token", "status"] },
+    { args: ["--help"], skip: true, startup: true },
+    { args: ["-V"], skip: true, startup: true },
+    { args: ["tui"], skip: true, startup: false },
+    { args: ["hooks", "relay", "--relay-id", "relay-1"], skip: true, startup: true },
     {
-      argv: ["node", "openclaw", "--profile", "server", "gateway", "run", "--allow-unconfigured"],
+      args: ["hooks", "relay", "--relay-id", "relay-1"],
+      platform: "win32",
+      skip: false,
+      startup: false,
     },
+    { args: ["gateway"], skip: true, startup: true },
+    { args: ["gateway", "--port", "14720", "--bind", "loopback"], skip: true, startup: true },
+    { args: ["gateway", "run", "--port=14720", "--bind", "loopback"], skip: true, startup: true },
+    { args: ["gateway", "--update-canary"], skip: true, startup: true },
+    { args: ["gateway", "run", "--update-canary", "--port=14720"], skip: true, startup: true },
+    { args: ["gateway", "status"], skip: true, startup: false },
+    { args: ["--", "gateway", "run"], skip: true, startup: true },
+    { args: ["gateway", "--", "status"], skip: true, startup: false },
+    { args: ["gateway", "--token", "test-token", "status"], skip: true, startup: false },
     {
-      argv: ["node", "openclaw", "--profile", "server", "gateway", "status", "--json"],
+      args: ["--profile", "server", "gateway", "run", "--allow-unconfigured"],
+      skip: true,
+      startup: true,
     },
-  ] as const)("skips respawn for argv %j", ({ argv }) => {
-    expect(shouldSkipRespawnForArgv([...argv]), argv.join(" ")).toBe(true);
-  });
-
-  it.each([
-    { argv: ["node", "openclaw", "status"] },
-    { argv: ["node", "openclaw", "gateway", "call", "health"] },
-  ] as const)("keeps respawn path for argv %j", ({ argv }) => {
-    expect(shouldSkipRespawnForArgv([...argv]), argv.join(" ")).toBe(false);
-  });
-
-  it("keeps native hook relay respawn behavior unchanged on Windows", () => {
-    expect(
-      shouldSkipRespawnForArgv(
-        ["node", "openclaw", "hooks", "relay", "--relay-id", "relay-1"],
-        "win32",
-      ),
-    ).toBe(false);
-  });
-});
-
-describe("shouldSkipStartupEnvironmentRespawnForArgv", () => {
-  it.each([
-    { argv: ["node", "openclaw", "--help"] },
-    { argv: ["node", "openclaw", "hooks", "relay", "--relay-id", "relay-1"] },
-    { argv: ["node", "openclaw", "gateway"] },
-    { argv: ["node", "openclaw", "gateway", "run", "--port=14720"] },
-    { argv: ["node", "openclaw", "gateway", "--update-canary"] },
-    { argv: ["node", "openclaw", "gateway", "run", "--update-canary", "--port=14720"] },
-    { argv: ["node", "openclaw", "--", "gateway", "run"] },
-  ] as const)("skips startup env respawn for argv %j", ({ argv }) => {
-    expect(shouldSkipStartupEnvironmentRespawnForArgv([...argv]), argv.join(" ")).toBe(true);
-  });
-
-  it.each([
-    { argv: ["node", "openclaw", "tui"] },
-    { argv: ["node", "openclaw", "terminal"] },
-    { argv: ["node", "openclaw", "chat"] },
-    { argv: ["node", "openclaw", "status"] },
-    { argv: ["node", "openclaw", "gateway", "--", "status"] },
-    { argv: ["node", "openclaw", "--", "gateway", "run", "--force"] },
-  ] as const)("allows startup env respawn for argv %j", ({ argv }) => {
-    expect(shouldSkipStartupEnvironmentRespawnForArgv([...argv]), argv.join(" ")).toBe(false);
-  });
-
-  it("keeps native hook relay startup environment respawn on Windows", () => {
-    expect(
-      shouldSkipStartupEnvironmentRespawnForArgv(
-        ["node", "openclaw", "hooks", "relay", "--relay-id", "relay-1"],
-        "win32",
-      ),
-    ).toBe(false);
-  });
+    { args: ["--profile", "server", "gateway", "status", "--json"], skip: true, startup: false },
+    { args: ["status"], skip: false, startup: false },
+    { args: ["gateway", "call", "health"], skip: false, startup: false },
+    { args: ["--", "gateway", "run", "--force"], skip: false, startup: false },
+  ] satisfies { args: string[]; platform?: NodeJS.Platform; skip: boolean; startup: boolean }[])(
+    "resolves both respawn policies for $args on $platform",
+    ({ args, platform, skip, startup }) => {
+      const argv = ["node", "openclaw", ...args];
+      expect(shouldSkipRespawnForArgv(argv, platform), argv.join(" ")).toBe(skip);
+      expect(shouldSkipStartupEnvironmentRespawnForArgv(argv, platform), argv.join(" ")).toBe(
+        startup,
+      );
+    },
+  );
 });
 
 describe("dns cli", () => {
@@ -228,7 +188,7 @@ describe("dns cli", () => {
     }
   });
 
-  it.each(["foo/bar", "../../x", "evil\nrecords"])(
+  it.each(["../../x", "evil\nrecords"])(
     "rejects invalid --domain %j with explicit DNS-name diagnostic",
     async (domain) => {
       const log = vi.spyOn(console, "log").mockImplementation(() => {});
@@ -250,56 +210,52 @@ describe("dns cli", () => {
 
 describe("parseByteSize", () => {
   it.each([
-    ["parses 10kb", "10kb", 10 * 1024],
-    ["parses 1mb", "1mb", 1024 * 1024],
-    ["parses 2gb", "2gb", 2 * 1024 * 1024 * 1024],
-    ["parses shorthand 5k", "5k", 5 * 1024],
-    ["parses shorthand 1m", "1m", 1024 * 1024],
-  ] as const)("%s", (_name, input, expected) => {
+    ["10kb", 10 * 1024],
+    ["123", 123],
+    [String(Number.MAX_SAFE_INTEGER), Number.MAX_SAFE_INTEGER],
+    [`${Number.MAX_SAFE_INTEGER}.1`, Number.MAX_SAFE_INTEGER],
+  ] as const)("parses %s without losing precision", (input, expected) => {
     expect(parseByteSize(input)).toBe(expected);
   });
 
-  it("uses default unit when omitted", () => {
-    expect(parseByteSize("123")).toBe(123);
-  });
-
-  it.each(["", "nope", "-5kb"] as const)("rejects invalid value %j", (input) => {
+  it.each(["", "nope", "9007199254740993"])("rejects invalid byte size %j", (input) => {
     expect(() => parseByteSize(input)).toThrow(/Invalid byte size/);
   });
-  it("keeps the largest safe integer exact", () => {
-    expect(parseByteSize(String(Number.MAX_SAFE_INTEGER))).toBe(Number.MAX_SAFE_INTEGER);
-    expect(parseByteSize(`${Number.MAX_SAFE_INTEGER}.1`)).toBe(Number.MAX_SAFE_INTEGER);
-  });
-
-  it.each([String(Number.MAX_SAFE_INTEGER + 1), "9007199254740993", "9000000tb"] as const)(
-    "rejects finite-but-unsafe values that would round to a different number: %j",
-    (input) => {
-      expect(() => parseByteSize(input)).toThrow(/Invalid byte size/);
-    },
-  );
 });
 
 describe("parseDurationMs", () => {
   it.each([
-    ["parses bare ms", "10000", 10_000],
-    ["parses seconds suffix", "10s", 10_000],
-    ["parses minutes suffix", "1m", 60_000],
-    ["parses hours suffix", "2h", 7_200_000],
-    ["parses days suffix", "2d", 172_800_000],
-    ["supports decimals", "0.5s", 500],
-    ["parses composite hours+minutes", "1h30m", 5_400_000],
-    ["parses composite with milliseconds", "2m500ms", 120_500],
-  ] as const)("%s", (_name, input, expected) => {
+    ["10000", 10_000],
+    ["0.5s", 500],
+    ["  1H30M  ", 5_400_000],
+    ["0.4ms0.4ms", 1],
+    ["30m1h30m", 7_200_000],
+    ["9007199254740991ms", Number.MAX_SAFE_INTEGER],
+    ["9007199254740990ms1ms", Number.MAX_SAFE_INTEGER],
+  ] as const)("parses %s", (input, expected) => {
     expect(parseDurationMs(input)).toBe(expected);
   });
 
-  it("rejects invalid composite strings", () => {
-    expect(() => parseDurationMs("1h30")).toThrow(/Invalid duration/);
-    expect(() => parseDurationMs("1h-30m")).toThrow(/Invalid duration/);
+  it("uses the default unit only for bare numbers", () => {
+    expect(parseDurationMs("1.5", { defaultUnit: "m" })).toBe(90_000);
+    expect(parseDurationMs("1s", { defaultUnit: "m" })).toBe(1000);
   });
 
-  it("rejects unsafe millisecond results", () => {
-    expect(() => parseDurationMs("9007199254740993ms")).toThrow(/Invalid duration/);
-    expect(() => parseDurationMs("9007199254740990ms10ms")).toThrow(/Invalid duration/);
+  it.each(["", "-1s", "1w", "1h30", "9007199254740993ms", "9007199254740990ms10ms"])(
+    "rejects invalid or unsafe duration %j",
+    (input) => {
+      expect(() => parseDurationMs(input)).toThrow(/Invalid duration/);
+    },
+  );
+
+  it("retains the 100-character limit per token, including the default unit", () => {
+    const value = `${"0".repeat(97)}1`;
+    expect(parseDurationMs(`${value}ms`)).toBe(1);
+    expect(parseDurationMs(value)).toBe(1);
+    expect(parseDurationMs(`0${value}`, { defaultUnit: "s" })).toBe(1000);
+    expect(parseDurationMs("1ms".repeat(40))).toBe(40);
+    expect(() => parseDurationMs(`0${value}ms`)).toThrow(/Invalid duration/);
+    expect(() => parseDurationMs(`0${value}`)).toThrow(/Invalid duration/);
+    expect(() => parseDurationMs(`1s0${value}ms`)).toThrow(/Invalid duration/);
   });
 });

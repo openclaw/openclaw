@@ -565,6 +565,26 @@ it("shows an unmatched selected value instead of the first option", async () => 
   }
 });
 
+it("marks only an enabled selected row for initial autofocus", async () => {
+  const element = await createAgentSelect({ value: "beta" });
+  const focusedValues = () =>
+    Array.from(element.querySelectorAll<HTMLElement & { value: string }>("[autofocus]")).map(
+      (item) => item.value,
+    );
+
+  expect(focusedValues()).toEqual(["beta"]);
+  element.value = "alpha";
+  await element.updateComplete;
+  expect(focusedValues()).toEqual(["alpha"]);
+  element.options = options.map((option) => ({ ...option, disabled: option.value === "alpha" }));
+  await element.updateComplete;
+  expect(focusedValues()).toEqual([]);
+  element.options = options;
+  element.disabled = true;
+  await element.updateComplete;
+  expect(focusedValues()).toEqual([]);
+});
+
 it("closes and rejects selection when disabled while open", async () => {
   const onSelect = vi.fn<(value: string) => void>();
   const element = await createAgentSelect({ onSelect });

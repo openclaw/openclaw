@@ -1,9 +1,5 @@
 import fsSync from "node:fs";
 import path from "node:path";
-import {
-  getAgentWorkspaceAccess,
-  WorkspaceAccessUnavailableError,
-} from "../../agents/workspace-access.js";
 import { openRootFileSync, readFileDescriptorBoundedSync } from "../../infra/boundary-file-read.js";
 import { resolveClawHubBaseUrl } from "../../infra/clawhub-client.js";
 import {
@@ -15,6 +11,7 @@ import {
 import { formatErrorMessage } from "../../infra/errors.js";
 import { pathExists } from "../../infra/fs-safe.js";
 import {
+  describeClawHubSkillRefMismatch,
   normalizeDownloadedArtifactLock,
   normalizeOptionalStringValue,
   normalizeSkillFileLock,
@@ -26,6 +23,7 @@ import {
   readClawHubSkillsLockfile,
   readClawHubSkillsLockfileStatusSync,
   type ClawHubSkillsLockfileStatusRead,
+  resolveWorkspaceClawHubSkills,
 } from "./clawhub-store.js";
 import {
   normalizeTrackedSkillSlug,
@@ -126,36 +124,36 @@ export function resolveClawHubSkillStatusLinkSync(params: {
     );
   }
 
+  const invalid = (reason: string, registry = originDetails.registry) =>
+    invalidLink(reason, {
+      ...originDetails,
+      registry,
+      slug: trackedSlug,
+      ...(lockRead.kind === "missing" ? {} : { lockPath: lockRead.path }),
+    });
   if (lockRead.kind === "missing") {
-    return invalidLink(
+    return invalid(
       `Skill "${trackedSlug}" has ClawHub origin metadata but is not tracked by the ${lockfileLabel}.`,
-      { ...originDetails, slug: trackedSlug },
     );
   }
   if (lockRead.kind === "malformed") {
-    return invalidLink(`Malformed ${lockfileLabel} at ${lockRead.path}: ${lockRead.error}`, {
-      ...originDetails,
-      slug: trackedSlug,
-      lockPath: lockRead.path,
-    });
+    return invalid(`Malformed ${lockfileLabel} at ${lockRead.path}: ${lockRead.error}`);
   }
   const locked = lockRead.lock.skills[trackedSlug];
   if (!locked) {
-    return invalidLink(
+    return invalid(
       `Skill "${trackedSlug}" has ClawHub origin metadata but is not tracked by the ${lockfileLabel}.`,
-      { ...originDetails, slug: trackedSlug, lockPath: lockRead.path },
     );
   }
   const expectedSkillDir = readRealPathSync(
     resolveWorkspaceSkillInstallDir(params.workspaceDir, trackedSlug),
   );
   if (!expectedSkillDir || readRealPathSync(params.skillDir) !== expectedSkillDir) {
-    return invalidLink(
+    return invalid(
       `Skill "${trackedSlug}" ClawHub origin metadata is not in the expected ClawHub install directory.`,
-      { ...originDetails, slug: trackedSlug, lockPath: lockRead.path },
     );
   }
-  const originRegistry = normalizeStoredRegistry(originRead.origin.registry);
+  const originRegistry = originRead.origin.registry;
   const lockedRegistry =
     locked.registry === undefined ? originRegistry : normalizeStoredRegistry(locked.registry);
   const sourceUrl = normalizeOptionalStringValue(locked.sourceUrl);
@@ -185,32 +183,20 @@ export function resolveClawHubSkillStatusLinkSync(params: {
     lockedRegistry !== originRegistry ||
     !provenanceMatches
   ) {
-    return invalidLink(
+    return invalid(
       `Skill "${trackedSlug}" ClawHub origin metadata does not match the ${lockfileLabel}.`,
-      {
-        ...originDetails,
-        registry: lockedRegistry,
-        slug: trackedSlug,
-        lockPath: lockRead.path,
-      },
+      lockedRegistry,
     );
   }
+  const { version: _version, ...origin } = originRead.origin;
   return {
+    ...origin,
     status: "linked",
     valid: true,
     registry: lockedRegistry,
     slug: trackedSlug,
-    ...(ownerHandle ? { ownerHandle } : {}),
-    ...(requestedReference ? { requestedReference } : {}),
-    ...(trustState ? { trustState } : {}),
-    installedVersion: locked.version,
-    installedAt: locked.installedAt,
     originPath: originRead.path,
     lockPath: lockRead.path,
-    ...(sourceUrl ? { sourceUrl } : {}),
-    ...(artifact ? { artifact } : {}),
-    ...(skillFile ? { skillFile } : {}),
-    ...(fileTreeSha256 ? { fileTreeSha256 } : {}),
   };
 }
 
@@ -266,10 +252,6 @@ export function readLocalSkillCardContentSync(skillDir: string): string | undefi
   return readLocalSkillCardSync(skillDir, true)?.content;
 }
 
-function normalizeOptionalSelector(value: string | undefined): string | undefined {
-  return value?.trim() || undefined;
-}
-
 export async function searchSkillsFromClawHub(params: {
   query?: string;
   limit?: number;
@@ -286,22 +268,16 @@ export async function resolveClawHubSkillVerificationTarget(
   params: Parameters<WorkspaceSkillLifecycle["resolveClawHubSkillVerificationTarget"]>[0],
 ): Promise<ClawHubSkillVerificationTargetResult> {
   try {
-    const workspaceAccess = getAgentWorkspaceAccess(params.workspaceDir, "loadSkills");
-    const access = workspaceAccess?.loadSkills ? workspaceAccess : undefined;
-    if (access) {
-      if (!access.clawHubSkills) {
-        throw new WorkspaceAccessUnavailableError(
-          "Remote workspace ClawHub tracking is unavailable",
-        );
-      }
-      return await access.clawHubSkills.resolveClawHubSkillVerificationTarget({
+    const tracking = resolveWorkspaceClawHubSkills(params.workspaceDir);
+    if (tracking) {
+      return await tracking.resolveClawHubSkillVerificationTarget({
         ...params,
         // Keep Gateway registry configuration when the skill has no installed origin.
         baseUrl: resolveClawHubBaseUrl(params.baseUrl),
       });
     }
-    const version = normalizeOptionalSelector(params.version);
-    const tag = normalizeOptionalSelector(params.tag);
+    const version = normalizeOptionalStringValue(params.version);
+    const tag = normalizeOptionalStringValue(params.tag);
     if (version && tag) {
       return { ok: false, error: "Use either --version or --tag." };
     }
@@ -337,7 +313,7 @@ export async function resolveClawHubSkillVerificationTarget(
           error: `Skill "${trackedSlug}" has ClawHub origin metadata for "${originRead.origin.slug}". Reinstall it from ClawHub before verifying it as an installed ClawHub skill.`,
         };
       }
-      const originRegistry = normalizeStoredRegistry(originRead.origin.registry);
+      const originRegistry = originRead.origin.registry;
       const lockedRegistry =
         locked.registry === undefined ? originRegistry : normalizeStoredRegistry(locked.registry);
       const ownerHandle = normalizeOptionalStringValue(locked.ownerHandle);
@@ -365,21 +341,12 @@ export async function resolveClawHubSkillVerificationTarget(
           error: "--version and --tag are not supported for skills-sh references.",
         };
       }
-      if (requestedRef.ownerHandle && ownerHandle !== requestedRef.ownerHandle) {
-        const trackedRef = ownerHandle ? `@${ownerHandle}/${trackedSlug}` : trackedSlug;
-        return {
-          ok: false,
-          error: `Skill "${trackedSlug}" is tracked as ${trackedRef}, not @${requestedRef.ownerHandle}/${trackedSlug}.`,
-        };
-      }
-      if (
-        requestedRef.requestedReference &&
-        requestedReference !== requestedRef.requestedReference
-      ) {
-        return {
-          ok: false,
-          error: `Skill "${trackedSlug}" is not tracked from ${requestedRef.requestedReference}.`,
-        };
+      const mismatch = describeClawHubSkillRefMismatch(requestedRef, {
+        ownerHandle,
+        requestedReference,
+      });
+      if (mismatch) {
+        return { ok: false, error: mismatch };
       }
       const selector: ClawHubSkillVerificationSelector = version
         ? "version"
@@ -427,12 +394,7 @@ export async function resolveClawHubSkillVerificationTarget(
     const selector: ClawHubSkillVerificationSelector = version ? "version" : tag ? "tag" : "latest";
     return {
       ok: true,
-      slug: requestedRef.slug,
-      ...(requestedRef.ownerHandle ? { ownerHandle: requestedRef.ownerHandle } : {}),
-      ...(requestedRef.requestedReference
-        ? { requestedReference: requestedRef.requestedReference }
-        : {}),
-      ...(requestedRef.trustState ? { trustState: requestedRef.trustState } : {}),
+      ...requestedRef,
       baseUrl: registry,
       version,
       tag,
@@ -492,22 +454,12 @@ export async function resolveRequestedUpdateSlug(
   if (!trackedOrigin && !trackedLockEntry) {
     return validateRequestedSkillSlug(requestedRef.slug);
   }
-  const trackedOwnerHandle = trackedOrigin?.ownerHandle ?? trackedLockEntry?.ownerHandle;
-  if (requestedRef.ownerHandle && trackedOwnerHandle !== requestedRef.ownerHandle) {
-    const trackedRef = trackedOwnerHandle ? `@${trackedOwnerHandle}/${trackedSlug}` : trackedSlug;
-    throw new Error(
-      `Skill "${trackedSlug}" is tracked as ${trackedRef}, not @${requestedRef.ownerHandle}/${trackedSlug}.`,
-    );
-  }
-  const trackedRequestedReference =
-    trackedOrigin?.requestedReference ?? trackedLockEntry?.requestedReference;
-  if (
-    requestedRef.requestedReference &&
-    trackedRequestedReference !== requestedRef.requestedReference
-  ) {
-    throw new Error(
-      `Skill "${trackedSlug}" is not tracked from ${requestedRef.requestedReference}.`,
-    );
+  const mismatch = describeClawHubSkillRefMismatch(requestedRef, {
+    ownerHandle: trackedOrigin?.ownerHandle ?? trackedLockEntry?.ownerHandle,
+    requestedReference: trackedOrigin?.requestedReference ?? trackedLockEntry?.requestedReference,
+  });
+  if (mismatch) {
+    throw new Error(mismatch);
   }
   return trackedSlug;
 }
