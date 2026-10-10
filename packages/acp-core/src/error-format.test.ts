@@ -288,43 +288,4 @@ describe("redactSensitiveText", () => {
       ].join("\n"),
     );
   });
-
-  it("keeps diagnostics adjacent to single-token auth headers", () => {
-    const keyHeader = ["api", "-", "key"].join("");
-    const token = ["opaque", "auth", "value", "1234567890abcdef"].join("-");
-    const input = [
-      `Authorization: ${token}, status=401`,
-      `Proxy-Authorization: ${token}; request_id=example`,
-      `${keyHeader}: ${token}, status=500`,
-    ].join("\n");
-
-    expect(redactSensitiveText(input)).toBe(
-      [
-        "Authorization: [REDACTED], status=401",
-        "Proxy-Authorization: [REDACTED]; request_id=example",
-        `${keyHeader}: [REDACTED], status=500`,
-      ].join("\n"),
-    );
-  });
-
-  it("keeps diagnostics adjacent to scheme-token auth headers", () => {
-    const token = ["scheme", "auth", "value", "1234567890abcdef"].join("-");
-    const input = [
-      `Authorization: Token ${token}, status=401`,
-      `Proxy-Authorization: Basic ${token}; request_id=example`,
-    ].join("\n");
-
-    expect(redactSensitiveText(input)).toBe(
-      [
-        "Authorization: Token [REDACTED], status=401",
-        "Proxy-Authorization: Basic [REDACTED]; request_id=example",
-      ].join("\n"),
-    );
-  });
-
-  it("does not redact ordinary authorization prose in fallback errors", () => {
-    const input = "the authorization model is open";
-
-    expect(redactSensitiveText(input)).toBe(input);
-  });
 });

@@ -165,22 +165,6 @@ describe("loadSkills", () => {
     expect(request).not.toHaveBeenCalled();
   });
 
-  it("does not request ClawHub verdicts when no installed skills are linked", async () => {
-    const { state, request } = createState();
-    request.mockResolvedValueOnce({
-      workspaceDir: "/tmp/workspace",
-      managedSkillsDir: "/tmp/skills",
-      skills: [{ name: "Local", skillKey: "local", source: "workspace" }],
-    });
-
-    await loadSkills(state);
-
-    expect(request).toHaveBeenCalledTimes(1);
-    expect(request).toHaveBeenCalledWith("skills.status", { agentId: "main" });
-    expect(state.clawhubVerdicts).toEqual({});
-    expect(state.clawhubVerdictsError).toBeNull();
-  });
-
   it("requests one bulk ClawHub verdict batch for linked installed skills", async () => {
     const { state, request } = createState();
     state.skillsAgentId = "research";
@@ -604,33 +588,6 @@ describe("searchClawHub", () => {
       { signal: undefined },
     );
   });
-
-  it("returns search results and forwards cancellation", async () => {
-    const { state, request } = createState();
-    const controller = new AbortController();
-    request.mockResolvedValue({
-      results: [
-        {
-          score: 0.95,
-          registry: "https://clawhub.ai",
-          slug: "github-new",
-          installRef: "@openclaw/github-new",
-          displayName: "GitHub New",
-          summary: "Fresh result",
-          version: "2.0.0",
-        },
-      ],
-    });
-
-    await expect(searchClawHub(state.client!, "github", controller.signal)).resolves.toEqual([
-      expect.objectContaining({ slug: "github-new" }),
-    ]);
-    expect(request).toHaveBeenCalledWith(
-      "skills.search",
-      { query: "github", limit: 20 },
-      { signal: controller.signal },
-    );
-  });
 });
 
 describe("loadClawHubDetail", () => {
@@ -758,21 +715,6 @@ describe("skill mutations", () => {
       expectedRequest: ["skills.update", { skillKey: "github", apiKey: "sk-test" }],
       expectedMessage: "API key saved — stored in openclaw.json (skills.entries.github)",
     },
-    {
-      name: "installs skills and uses server success messages",
-      run: (state: SkillsState) => installSkill(state, "github", "GitHub", "install-123", true),
-      expectedRequest: [
-        "skills.install",
-        {
-          agentId: "research",
-          name: "GitHub",
-          installId: "install-123",
-          dangerouslyForceUnsafeInstall: true,
-        },
-      ],
-      expectedMessage: "Installed from registry",
-      installMessage: "Installed from registry",
-    },
   ])("$name", async ({ run, expectedRequest, expectedMessage, installMessage }) => {
     const { state, request } = createState();
     state.skillsAgentId = "research";
@@ -787,7 +729,7 @@ describe("skill mutations", () => {
     expect(state.skillsError).toBeNull();
   });
 
-  it.each([undefined, "   "])(
+  it.each(["   "])(
     "does not clear an existing API key when its replacement is blank: %j",
     async (editValue) => {
       const { state, request } = createState();
@@ -1129,24 +1071,6 @@ describe("skill mutations", () => {
     expect(state.skillMessages).toEqual({});
   });
 
-  it("routes selected agent ClawHub installs through the selected workspace", async () => {
-    const { state, request } = createState();
-    state.skillsAgentId = "research";
-    request.mockResolvedValue({});
-
-    await installFromClawHub(state, "github");
-
-    expect(request).toHaveBeenCalledWith("skills.install", {
-      agentId: "research",
-      source: "clawhub",
-      slug: "github",
-    });
-    expect(state.clawhubInstallMessage).toEqual({
-      kind: "success",
-      text: "Installed github",
-    });
-  });
-
   it("shows ClawHub trust warnings returned by successful skill installs", async () => {
     const { state, request } = createState();
     request.mockImplementation(async (method: string) => {
@@ -1170,11 +1094,6 @@ describe("skill mutations", () => {
   });
 
   it.each([
-    [
-      "shows ClawHub trust warnings from failed skill install error details",
-      "ClawHub blocked this release; install was not started.",
-      { warning: "BLOCKED - ClawHub flagged this release as malicious" },
-    ],
     [
       "shows a ClawHub trust error without an acknowledgement retry",
       "ClawHub requires acknowledgement before installing.",

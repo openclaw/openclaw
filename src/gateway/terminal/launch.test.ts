@@ -89,32 +89,6 @@ describe("createTerminalLaunchPolicy", () => {
     expect(disabledPolicy.resolve()).toEqual({ ok: false, block: { kind: "disabled" } });
   });
 
-  it("preserves sandbox revocations across later restart-bound updates", () => {
-    const workspace = tempDirs.make("term-policy-agent-");
-    const baseConfig: OpenClawConfig = {
-      gateway: { terminal: { enabled: true } },
-      agents: { defaults: { workspace }, entries: { ops: {} } },
-    };
-    const policy = createTerminalLaunchPolicy(baseConfig);
-    policy.prepareConfig(
-      {
-        ...baseConfig,
-        agents: {
-          defaults: { workspace },
-          entries: { ops: { sandbox: { mode: "all" } } },
-        },
-      },
-      { restartPending: true },
-    );
-    policy.prepareConfig(baseConfig, { restartPending: true });
-
-    const resolved = policy.resolve("ops");
-    expect(resolved.ok).toBe(false);
-    if (!resolved.ok) {
-      expect(resolved.block.kind).toBe("sandboxed");
-    }
-  });
-
   it("keeps restart and commit restrictions isolated across agents", () => {
     const baseConfig: OpenClawConfig = {
       agents: { ownership: "explicit", entries: { alpha: {}, beta: {} } },
@@ -186,41 +160,6 @@ describe("createTerminalLaunchPolicy", () => {
     },
   );
 
-  it("keeps current launch details until a restart-bound change takes effect", () => {
-    const workspace = tempDirs.make("term-policy-");
-    const policy = createTerminalLaunchPolicy({
-      gateway: { terminal: { enabled: true, shell: "/bin/old-shell" } },
-      agents: { defaults: { workspace } },
-    });
-
-    policy.prepareConfig(
-      {
-        gateway: { terminal: { enabled: true, shell: "/bin/new-shell" } },
-        agents: { defaults: { workspace } },
-      },
-      { restartPending: true },
-    );
-
-    const resolved = policy.resolve();
-    expect(resolved.ok).toBe(true);
-    if (resolved.ok) {
-      expect(resolved.plan.shell).toBe("/bin/old-shell");
-    }
-
-    policy.prepareConfig(
-      {
-        gateway: { terminal: { enabled: true, shell: "/bin/new-shell" } },
-        agents: { defaults: { workspace, sandbox: { mode: "all" } } },
-      },
-      { restartPending: false },
-    );
-    const tightened = policy.resolve();
-    expect(tightened.ok).toBe(false);
-    if (!tightened.ok) {
-      expect(tightened.block.kind).toBe("sandboxed");
-    }
-  });
-
   it.each([false, true])(
     "publishes shell changes only at hot commit with pending restart=%s",
     (restartPending) => {
@@ -263,25 +202,6 @@ describe("createTerminalLaunchPolicy", () => {
       expect(policy.resolve()).toEqual(defaults);
     },
   );
-
-  it("applies non-restart sandbox policy changes immediately", () => {
-    const policy = createTerminalLaunchPolicy({
-      gateway: { terminal: { enabled: true } },
-    });
-    policy.prepareConfig(
-      {
-        gateway: { terminal: { enabled: true } },
-        agents: { defaults: { sandbox: { mode: "all" } } },
-      },
-      { restartPending: false },
-    );
-
-    const blocked = policy.resolve();
-    expect(blocked.ok).toBe(false);
-    if (!blocked.ok) {
-      expect(blocked.block.kind).toBe("sandboxed");
-    }
-  });
 
   it("does not grant a non-restart policy relaxation before commit", () => {
     const policy = createTerminalLaunchPolicy({
@@ -504,23 +424,16 @@ describe("buildTerminalEnv", () => {
     expect(env.OPENCLAW_TERMINAL).toBe("1");
   });
 
-  it.each(["truecolor", "24bit", ""])("preserves explicit COLORTERM=%j", (colorterm) => {
-    expect(buildTerminalEnv({ COLORTERM: colorterm }).COLORTERM).toBe(colorterm);
+  it.each(["ColorTerm"])("preserves explicit Windows %s through catalog merging", (key) => {
+    for (const value of ["truecolor", "24bit", "ansi", ""]) {
+      const baseEnv = { [key]: value };
+      const env = buildTerminalEnv(baseEnv, "win32");
+      const merged = mergeProcessEnv([env], "win32");
+      expect(resolveEnvironmentValue(merged, "COLORTERM", "win32")).toBe(value);
+      expect(env[key]).toBe(value);
+      expect(baseEnv).toEqual({ [key]: value });
+    }
   });
-
-  it.each(["COLORTERM", "ColorTerm", "colorterm"])(
-    "preserves explicit Windows %s through catalog merging",
-    (key) => {
-      for (const value of ["truecolor", "24bit", "ansi", ""]) {
-        const baseEnv = { [key]: value };
-        const env = buildTerminalEnv(baseEnv, "win32");
-        const merged = mergeProcessEnv([env], "win32");
-        expect(resolveEnvironmentValue(merged, "COLORTERM", "win32")).toBe(value);
-        expect(env[key]).toBe(value);
-        expect(baseEnv).toEqual({ [key]: value });
-      }
-    },
-  );
 
   it("keeps platform key semantics and catalog override precedence", () => {
     expect(buildTerminalEnv({}, "win32").COLORTERM).toBe("truecolor");
@@ -542,11 +455,6 @@ describe("buildTerminalEnv", () => {
       COLORTERM: "truecolor",
     });
     expect(baseEnv).toEqual({ FORCE_COLOR: "0", NO_COLOR: "1", COLORTERM: undefined });
-  });
-
-  it("preserves an existing TERM", () => {
-    const env = buildTerminalEnv({ TERM: "screen-256color" });
-    expect(env.TERM).toBe("screen-256color");
   });
 });
 

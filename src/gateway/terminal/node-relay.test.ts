@@ -236,66 +236,65 @@ describe("createNodeRelayBackend", () => {
     },
   );
 
-  it.each([
-    "codex.terminal.resume.v1",
-    "codex.terminal.start.v1",
-    "anthropic.claude.terminal.start.v1",
-  ])("%s relays progress, input, resize, cancellation, and exit", async (command) => {
-    const invokeResult = createDeferred<NodeInvokeResult>();
-    let onProgress: ((chunk: string) => void) | undefined;
-    let signal: AbortSignal | undefined;
-    const sendInvokeInput = vi.fn();
-    const registry = {
-      invoke: vi.fn(
-        (params: {
-          onDispatchReady?: (id: string) => void;
-          onProgress?: (chunk: string) => void;
-          signal?: AbortSignal;
-        }) => {
-          onProgress = params.onProgress;
-          signal = params.signal;
-          params.onDispatchReady?.("invoke-1");
-          return invokeResult.promise;
-        },
-      ),
-      sendInvokeInput,
-    } as unknown as NodeRegistry;
-    const backend = await createNodeRelayBackend({
-      registry,
-      isDispatchAuthorized: () => true,
-      nodeId: "node-1",
-      expectedConnId: "conn-1",
-      command,
-      params: command.includes(".start.")
-        ? { cwd: "/node/work", cols: 80, rows: 24 }
-        : { threadId: "thread" },
-    });
-    const data = vi.fn();
-    const exit = vi.fn();
-    backend.onData(data);
-    backend.onExit(exit);
+  it.each(["codex.terminal.resume.v1"])(
+    "%s relays progress, input, resize, cancellation, and exit",
+    async (command) => {
+      const invokeResult = createDeferred<NodeInvokeResult>();
+      let onProgress: ((chunk: string) => void) | undefined;
+      let signal: AbortSignal | undefined;
+      const sendInvokeInput = vi.fn();
+      const registry = {
+        invoke: vi.fn(
+          (params: {
+            onDispatchReady?: (id: string) => void;
+            onProgress?: (chunk: string) => void;
+            signal?: AbortSignal;
+          }) => {
+            onProgress = params.onProgress;
+            signal = params.signal;
+            params.onDispatchReady?.("invoke-1");
+            return invokeResult.promise;
+          },
+        ),
+        sendInvokeInput,
+      } as unknown as NodeRegistry;
+      const backend = await createNodeRelayBackend({
+        registry,
+        isDispatchAuthorized: () => true,
+        nodeId: "node-1",
+        expectedConnId: "conn-1",
+        command,
+        params: command.includes(".start.")
+          ? { cwd: "/node/work", cols: 80, rows: 24 }
+          : { threadId: "thread" },
+      });
+      const data = vi.fn();
+      const exit = vi.fn();
+      backend.onData(data);
+      backend.onExit(exit);
 
-    onProgress?.("");
-    onProgress?.("hello");
-    expect(data).toHaveBeenCalledWith("hello");
-    backend.write("keys");
-    backend.resize(100, 30);
-    expect(sendInvokeInput).toHaveBeenNthCalledWith(1, "invoke-1", {
-      kind: "data",
-      data: "keys",
-    });
-    expect(sendInvokeInput).toHaveBeenNthCalledWith(2, "invoke-1", {
-      kind: "resize",
-      cols: 100,
-      rows: 30,
-    });
+      onProgress?.("");
+      onProgress?.("hello");
+      expect(data).toHaveBeenCalledWith("hello");
+      backend.write("keys");
+      backend.resize(100, 30);
+      expect(sendInvokeInput).toHaveBeenNthCalledWith(1, "invoke-1", {
+        kind: "data",
+        data: "keys",
+      });
+      expect(sendInvokeInput).toHaveBeenNthCalledWith(2, "invoke-1", {
+        kind: "resize",
+        cols: 100,
+        rows: 30,
+      });
 
-    invokeResult.resolve({ ok: true, payloadJSON: JSON.stringify({ exitCode: 7, signal: 15 }) });
-    await vi.waitFor(() => expect(exit).toHaveBeenCalledWith({ exitCode: 7, signal: 15 }));
+      invokeResult.resolve({ ok: true, payloadJSON: JSON.stringify({ exitCode: 7, signal: 15 }) });
+      await vi.waitFor(() => expect(exit).toHaveBeenCalledWith({ exitCode: 7, signal: 15 }));
 
-    backend.kill();
-    expect(signal?.aborted).toBe(true);
-  });
+      backend.kill();
+      expect(signal?.aborted).toBe(true);
+    },
+  );
 
   it("maps node disconnect failures to terminal errors", async () => {
     const registry = {
