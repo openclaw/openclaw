@@ -201,6 +201,8 @@ To inspect how much each injected file contributes (raw vs injected, truncation,
 
 The **Temporal Context** section carries the user-local calendar date and time zone in the current-turn runtime context, outside the system prompt. It refreshes each turn without rewriting earlier messages. Day rollover therefore leaves the complete system prompt and prior conversation bytes unchanged, preserving prefix-cache reuse on local and hosted providers. Raw model probes omit OpenClaw runtime context.
 
+Chat Completions and native Ollama retain these hidden per-turn messages by default, so the next request extends the previous request's prefix. Provider replay policies can explicitly opt out. Retained runtime facts include empty snapshots to clear earlier active state and count toward normal history and compaction budgets; transient routes still omit empty producer snapshots.
+
 Use `session_status` when the agent needs the exact current time and the tool is available; its status card includes a timestamp line. The same tool can optionally set a per-session model override (`model=default` clears it).
 
 Configure with:

@@ -57,6 +57,8 @@ Time zone: America/Chicago
 The zone is `agents.defaults.userTimezone` when configured, otherwise the host timezone.
 The section travels in the current-turn runtime context without rewriting earlier messages, so
 date rollover preserves the complete system prompt and conversation-history prefix for caching.
+Chat Completions and native Ollama retain the hidden turn context in history by default; an
+explicit provider replay policy can override that behavior. Normal compaction budgets still apply.
 Raw model probes omit OpenClaw runtime context. When available, `session_status` remains the source
 for exact current time.
 
