@@ -8,7 +8,11 @@ import {
 } from "./vitest.pattern-file.ts";
 import { sharedVitestConfig } from "./vitest.shared.config.ts";
 import { UiE2eSequencer } from "./vitest.ui-e2e.sequencer.ts";
-import { controlUiE2eTestGlobs, uiE2eRealGatewayTestFiles } from "./vitest.ui-paths.mjs";
+import {
+  controlUiE2eTestGlobs,
+  resolveUiTypeScriptPath,
+  uiE2eRealGatewayTestFiles,
+} from "./vitest.ui-paths.mjs";
 
 const uiE2eIncludePatterns = [
   ...controlUiE2eTestGlobs,
@@ -74,9 +78,11 @@ export const uiE2ePrivateServerTestFiles = [
   "ui/src/e2e/sidebar-account-footer.e2e.test.ts",
   "ui/src/e2e/terminal-fonts.e2e.test.ts",
   "ui/src/e2e/terminal-runtime.e2e.test.ts",
-];
+].map((file) => resolveUiTypeScriptPath(file));
 
-export const uiE2eRuntimeBudgetTestFile = "ui/src/e2e/chat-stream-runtime-budgets.e2e.test.ts";
+export const uiE2eRuntimeBudgetTestFile = resolveUiTypeScriptPath(
+  "ui/src/e2e/chat-stream-runtime-budgets.e2e.test.ts",
+);
 
 // Real Gateways never overlap the parallel phase when the CI skip is absent.
 export const uiE2eSerialTestFiles = [
@@ -94,7 +100,7 @@ const uiE2eStandaloneTestFiles = [
   "ui/src/e2e/control-ui-build-publication.e2e.test.ts",
   "ui/src/e2e/control-ui-stale-build-reload.e2e.test.ts",
   "ui/src/e2e/service-worker-update.e2e.test.ts",
-];
+].map((file) => resolveUiTypeScriptPath(file));
 
 export function createUiE2eVitestConfig(
   env: Record<string, string | undefined> = process.env,
