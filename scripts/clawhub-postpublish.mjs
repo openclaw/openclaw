@@ -554,48 +554,59 @@ export async function verifyClawHubPostpublish({
   if (!originalManifest) {
     const manifestName = `openclaw-clawhub-recovery-manifest-${child.id}-${child.run_attempt}`;
     const manifests = childArtifacts.filter((artifact) => artifact.name === manifestName);
-    if (manifests.length !== 1) {
+    if (
+      manifests.length > 1 ||
+      (manifests.length === 0 && (completedProducer || !verifyPublication))
+    ) {
       throw new Error("Missing or ambiguous sealed ClawHub original attempt roster.");
     }
-    const { archiveBytes: manifestArchiveBytes } = await downloadArtifact(
-      manifests[0],
-      child,
-      context,
-      MAX_RECEIPT_BYTES + 4096,
-      {
-        jobName: "Seal exact ClawHub recovery manifest",
-        stepName: "Upload sealed recovery manifest",
-        runStatePolicy: "completed-producer-success",
-      },
-    );
-    const manifestFiles = inspectActionsArtifactZip(
-      manifestArchiveBytes,
-      ["recovery-manifest.json"],
-      {
-        maxEntryBytes: MAX_RECEIPT_BYTES,
-        maxExpandedBytes: MAX_RECEIPT_BYTES,
-      },
-    );
-    originalManifest = JSON.parse(
-      new TextDecoder("utf-8", { fatal: true }).decode(manifestFiles.get("recovery-manifest.json")),
-    );
+    if (manifests.length === 1) {
+      const { archiveBytes: manifestArchiveBytes } = await downloadArtifact(
+        manifests[0],
+        child,
+        context,
+        MAX_RECEIPT_BYTES + 4096,
+        {
+          jobName: "Seal exact ClawHub recovery manifest",
+          stepName: "Upload sealed recovery manifest",
+          runStatePolicy: "completed-producer-success",
+        },
+      );
+      const manifestFiles = inspectActionsArtifactZip(
+        manifestArchiveBytes,
+        ["recovery-manifest.json"],
+        {
+          maxEntryBytes: MAX_RECEIPT_BYTES,
+          maxExpandedBytes: MAX_RECEIPT_BYTES,
+        },
+      );
+      originalManifest = JSON.parse(
+        new TextDecoder("utf-8", { fatal: true }).decode(
+          manifestFiles.get("recovery-manifest.json"),
+        ),
+      );
+    }
   }
-  const validatedRecoveryManifest = validateClawHubRecoveryManifest(originalManifest);
-  const recoveryTransactions = validatedRecoveryManifest.packages.map(
-    ({ name, version, inventoryDigest, artifactName, artifactSha256, artifactSize }) => ({
-      name,
-      version,
-      inventoryDigest,
-      artifactName,
-      artifactSha256,
-      artifactSize,
-    }),
-  );
-  if (
-    JSON.stringify(validatedRecoveryManifest.identity) !== JSON.stringify(identity) ||
-    JSON.stringify(recoveryTransactions) !== JSON.stringify(transactions.packages)
-  ) {
-    throw new Error("ClawHub recovery manifest changed the authorized transaction roster.");
+  const validatedRecoveryManifest = originalManifest
+    ? validateClawHubRecoveryManifest(originalManifest)
+    : undefined;
+  if (validatedRecoveryManifest) {
+    const recoveryTransactions = validatedRecoveryManifest.packages.map(
+      ({ name, version, inventoryDigest, artifactName, artifactSha256, artifactSize }) => ({
+        name,
+        version,
+        inventoryDigest,
+        artifactName,
+        artifactSha256,
+        artifactSize,
+      }),
+    );
+    if (
+      JSON.stringify(validatedRecoveryManifest.identity) !== JSON.stringify(identity) ||
+      JSON.stringify(recoveryTransactions) !== JSON.stringify(transactions.packages)
+    ) {
+      throw new Error("ClawHub recovery manifest changed the authorized transaction roster.");
+    }
   }
   const evidence = {
     schemaVersion: 1,
@@ -612,7 +623,7 @@ export async function verifyClawHubPostpublish({
     receiptArtifactId: receiptArtifact.id,
     receiptArtifactDigest: receiptArtifact.digest,
     packages: [],
-    publicationAttempts: validatedRecoveryManifest.packages.map(
+    publicationAttempts: (validatedRecoveryManifest?.packages ?? []).map(
       ({ name, version, attemptId, publicationStatus }) => ({
         name,
         version,
@@ -626,7 +637,7 @@ export async function verifyClawHubPostpublish({
   const save = () =>
     writeFile(join(outputDir, "evidence.json"), `${JSON.stringify(evidence, null, 2)}\n`);
   await save();
-  if (!verifyPublication) {
+  if (!verifyPublication && validatedRecoveryManifest) {
     evidence.outcome = "authorized-recovery-roster";
     evidence.packages = validatedRecoveryManifest.packages;
     evidence.complete = true;
@@ -699,17 +710,21 @@ export async function verifyClawHubPostpublish({
           : entry.version.includes("-beta.")
             ? "beta"
             : "latest";
-        const original = validatedRecoveryManifest.packages.find(
+        const original = validatedRecoveryManifest?.packages.find(
           (item) => item.name === entry.name,
         );
         const observed = evidence.publicationAttempts.find((item) => item.name === entry.name);
-        await waitForClawHubPublicVersion(original, {
-          deadline: publicationDeadline,
-          fetchImpl,
-          onState: (publication) => {
-            observed.publication = publication;
-          },
-        });
+        // Historical successful publishers have no attempt roster. Their authenticated
+        // transaction bytes still verify, but cannot authorize waiting on an unknown attempt.
+        if (original) {
+          await waitForClawHubPublicVersion(original, {
+            deadline: publicationDeadline,
+            fetchImpl,
+            onState: (publication) => {
+              observed.publication = publication;
+            },
+          });
+        }
         const verified = await verifyPublishedClawHubPackage({
           expectedArtifactDir: artifactDir,
           packageName: entry.name,

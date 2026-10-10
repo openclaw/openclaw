@@ -1108,6 +1108,34 @@ describe("ClawHub detached postpublish verification", () => {
     });
     expect(result.complete).toBe(true);
     expect(result.packages).toHaveLength(1);
+    f.metadata.set("actions/runs/20/artifacts?per_page=100&page=1", {
+      total_count: 2,
+      artifacts: [f.metadata.get("actions/artifacts/2"), f.packageArtifact],
+    });
+    await expect(
+      verifyClawHubPostpublish({
+        ...f.options,
+        parent,
+        parentStatePolicy: parentState.parentStatePolicy,
+      }),
+    ).rejects.toThrow(/sealed ClawHub original attempt roster/u);
+  });
+
+  it("verifies historical successful publishers without recovery manifests", async () => {
+    const f = fixture();
+    f.metadata.set("actions/runs/20/artifacts?per_page=100&page=1", {
+      total_count: 2,
+      artifacts: [f.metadata.get("actions/artifacts/2"), f.packageArtifact],
+    });
+    expect(await verifyClawHubPostpublish(f.options)).toMatchObject({
+      complete: true,
+      packages: [expect.objectContaining({ inventoryDigest: f.entry.inventoryDigest })],
+    });
+    expect(f.registryReads.length).toBeGreaterThan(0);
+    expect(f.registryReads.some((url) => url.endsWith("/publication"))).toBe(false);
+    await expect(
+      verifyClawHubPostpublish({ ...f.options, verifyPublication: false }),
+    ).rejects.toThrow(/sealed ClawHub original attempt roster/u);
   });
 
   it.each(["published", "failed", "replacement"])(
