@@ -9,6 +9,7 @@ import {
   packageActivationRuntimeIdentity,
   resolveImmutableRecoveryCommand,
 } from "./package-update-activation-paths.js";
+import type { ImmutableUpdateCoverage } from "./update-immutable-inspection.js";
 import { readImmutableInstallRecord } from "./update-immutable-install-record.js";
 import type {
   ImmutableInstallDescriptor,
@@ -345,6 +346,7 @@ export type ImmutableUpdateResult = {
   targetSha?: string;
   steps: UpdateStepResult[];
   warnings: string[];
+  coverage?: ImmutableUpdateCoverage;
 };
 
 /** Prepare only. Pointer publication, Doctor, drain, and service activation belong to slice 2. */
@@ -416,7 +418,11 @@ export async function prepareImmutableUpdate(params: {
       targetSha = match[1];
     }
     if (params.dryRun) {
-      return result("dry-run", "preparation-only; activation unavailable");
+      const { inspectImmutableUpdateCoverage } = await import("./update-immutable-inspection.js");
+      return {
+        ...result("dry-run", "inspection-only; no preparation or activation"),
+        coverage: await inspectImmutableUpdateCoverage({ root: installation.root, targetSha }),
+      };
     }
     requireUpdater();
     const { collectGitRuntimeErrors } = await import("./update-git-runtime.js");

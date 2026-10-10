@@ -65,7 +65,8 @@ vi.mock("./update-immutable-owner.js", () => ({ withImmutableUpdateOwner: mocks.
 vi.mock("../cli/update-cli/update-command-executor.js", () => ({
   captureUpdateCommandExecutorAuthority: mocks.authority,
 }));
-vi.mock("./update-immutable-generation.js", () => ({
+vi.mock("./update-immutable-generation.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./update-immutable-generation.js")>()),
   verifyImmutableGeneration: mocks.generation,
 }));
 vi.mock("./update-candidate-canary.js", () => ({ validateUpdateCandidateCanary: mocks.canary }));

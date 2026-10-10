@@ -8688,7 +8688,6 @@
 ["src/infra/update-immutable-activation.test.ts","../daemon/service-operation-lock.js","cbea84315282f53413883f02e2a53c006d88aac8ee9f17bbfbd5e625afbd86f5",1]
 ["src/infra/update-immutable-activation.test.ts","./update-candidate-canary.js","2b53ea3bde7d3480d950b80c2814adc8f1d2c320a828fef9f796a2ef78228bdc",1]
 ["src/infra/update-immutable-activation.test.ts","./update-finalization-budget.js","02ea6e3cdb620cee775d28acd375b8684cac22db46febbc33c31201e91e3df42",1]
-["src/infra/update-immutable-activation.test.ts","./update-immutable-generation.js","efca4c4027ee00b1b6c803f34bc63b06b4cd2ca1d72144cee142e0d77df53395",1]
 ["src/infra/update-immutable-activation.test.ts","./update-immutable-install-record.js","eb509461b62be1d63e0f9cfacabaa337864fa514f18c6fb6f750aad20a221eaf",1]
 ["src/infra/update-immutable-activation.test.ts","./update-immutable-owner.js","20e2014aa7b70ae5d0ace4a5add877f61a7006d7c7e41845e662c8f6d46cf80d",1]
 ["src/infra/update-immutable-activation.test.ts","./update-immutable-protection.js","a5424c71b08c605dab1886b11f4bd1dc9e27d87a760ab176315cf3e489a65a7e",1]
