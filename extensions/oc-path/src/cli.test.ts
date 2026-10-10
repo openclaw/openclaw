@@ -288,6 +288,25 @@ describe("openclaw path CLI", () => {
       expect(out.resolved).toBe(false);
     });
 
+    it("CLI-R05 keeps reading a file whose undecodable byte is outside the resolved leaf", async () => {
+      // Strict admission is limited to the editing verb, so read-only inspection
+      // keeps its existing contract for files that are not valid UTF-8.
+      const workspaceDir = tempDirs.make("oc-path-cli-");
+      const filePath = join(workspaceDir, "gateway.jsonc");
+      const before = Buffer.concat([
+        Buffer.from('{ "version": "1.0", "note": "a'),
+        Buffer.from([0xff]),
+        Buffer.from('b" }'),
+      ]);
+      writeFileSync(filePath, before);
+      const rt = createTestRuntime();
+      await pathResolveCommand("oc://gateway.jsonc/version", { cwd: workspaceDir, json: true }, rt);
+
+      expect(rt.exitCode).toBe(0);
+      expect(JSON.parse(stdoutText(rt)).match.valueText).toBe("1.0");
+      expect(readFileSync(filePath)).toEqual(before);
+    });
+
     it("CLI-R03 missing argument is rejected by Commander", async () => {
       const rt = createTestRuntime();
       await pathResolveCommand(undefined, { json: true }, rt);
@@ -400,6 +419,48 @@ describe("openclaw path CLI", () => {
       expect(rt.exitCode).toBe(0);
       const after = readFileSync(filePath, "utf-8");
       expect(after).toContain('"2.0"');
+    });
+
+    it("CLI-S09 refuses an undecodable file instead of rewriting untouchable bytes", async () => {
+      const workspaceDir = tempDirs.make("oc-path-cli-");
+      const filePath = join(workspaceDir, "gateway.jsonc");
+      // The invalid byte sits in a leaf the edit never touches.
+      const before = Buffer.concat([
+        Buffer.from('{ "version": "1.0", "note": "a'),
+        Buffer.from([0xff]),
+        Buffer.from('b" }'),
+      ]);
+      writeFileSync(filePath, before);
+      const rt = createTestRuntime();
+      await pathSetCommand(
+        "oc://gateway.jsonc/version",
+        "2.0",
+        { cwd: workspaceDir, json: true },
+        rt,
+      );
+
+      expect(rt.exitCode).toBe(2);
+      expect(stderrText(rt)).toContain("OC_PATH_INPUT_NOT_UTF8");
+      expect(stderrText(rt)).toContain("the file was left unchanged");
+      expect(readFileSync(filePath)).toEqual(before);
+    });
+
+    it("CLI-S10 still writes valid non-ASCII values including a literal replacement character", async () => {
+      const workspaceDir = tempDirs.make("oc-path-cli-");
+      const filePath = join(workspaceDir, "gateway.jsonc");
+      writeFileSync(filePath, '{ "version": "1.0", "note": "合法 😀 �" }', "utf8");
+      const rt = createTestRuntime();
+      await pathSetCommand(
+        "oc://gateway.jsonc/version",
+        "2.0",
+        { cwd: workspaceDir, json: true },
+        rt,
+      );
+
+      expect(rt.exitCode).toBe(0);
+      const after = readFileSync(filePath, "utf-8");
+      expect(after).toContain('"version": "2.0"');
+      expect(after).toContain("合法 😀 �");
     });
 
     it("CLI-S02 --dry-run does not write to disk", async () => {
