@@ -35,6 +35,8 @@ The default host runs the callback directly, including in browsers.
 Tool-call stream producers expose cumulative argument text as `partialJson` on
 the active content block while emitting `toolcall_delta`. This transient buffer
 supports input progress; completed tool calls retain only parsed `arguments`.
+It is the live block, not a per-event snapshot: a consumer that lags behind the
+producer reads the latest value, or none once the call has finished.
 
 The explicit `@openclaw/ai/internal/anthropic`, `google-model-family`, `openai`,
 `openai-completions-compat`, `openai-responses-payload-policy`, `retry-after`, `runtime`, `shared`, and
