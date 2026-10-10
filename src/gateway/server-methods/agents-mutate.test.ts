@@ -4,7 +4,9 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi, beforeEach } from "vitest";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { AgentDeletionAuthorityRollbackError } from "../../agents/agent-lifecycle-registry.js";
+import * as identityFile from "../../agents/identity-file.js";
 import { WORKSPACE_BOOTSTRAP_FILENAMES } from "../../agents/workspace.js";
 import { getRuntimeConfigWriteApplication } from "../../config/runtime-write-application.js";
 import { FsSafeError, root } from "../../infra/fs-safe.js";
@@ -62,6 +64,7 @@ const mocks = vi.hoisted(() => ({
   hasDeletedAgentDatabases: vi.fn(() => false),
   reviveAgentDatabases: vi.fn(async (_agentIds: readonly string[]) => {}),
   logGatewayWarn: vi.fn(),
+  broadcast: vi.fn(),
   runAgentDatabaseCleanup: vi.fn(
     async (_target: unknown, run: () => Promise<unknown>) => await run(),
   ),
@@ -546,6 +549,7 @@ function makeCall(method: keyof typeof agentsHandlers, params: Record<string, un
       getRuntimeConfig: () => mocks.loadConfigReturn,
       cron: { removeAgentJobsTransactional: mocks.cronRemoveAgentJobsTransactional },
       logGateway: { warn: mocks.logGatewayWarn },
+      broadcast: mocks.broadcast,
     } as never,
     req: { type: "req" as const, id: "1", method },
     client: null,
@@ -1872,16 +1876,56 @@ describe("agents.files.list", () => {
     );
   });
 
-  // The identity form owns this file via agents.update; raw writes stay available
-  // so removing the editor tab does not remove the capability.
-  it("still accepts direct IDENTITY.md writes even though it is not listed", async () => {
-    const respond = await call("agents.files.set", {
+  it.each([
+    { name: "IDENTITY.md", fail: false },
+    { name: "AGENTS.md", fail: false },
+    { name: "IDENTITY.md", fail: true },
+  ])("publishes only committed identity writes ($name, fail=$fail)", async ({ name, fail }) => {
+    const preparedIdentity = vi
+      .spyOn(identityFile, "loadAgentIdentityFromWorkspaceAsync")
+      .mockResolvedValue(null);
+    const enteredWrite = createDeferred();
+    const committedWrite = createDeferred();
+    mocks.rootWrite.mockImplementationOnce(() => {
+      enteredWrite.resolve();
+      return committedWrite.promise;
+    });
+    const { respond, promise } = makeCall("agents.files.set", {
       agentId: "main",
-      name: "IDENTITY.md",
+      name,
       content: "- Name: Ada\n",
     });
+    try {
+      await awaitGateBeforeSettlement(
+        enteredWrite.promise,
+        Promise.resolve(promise),
+        "file write was not reached",
+      );
+      expect(mocks.broadcast).not.toHaveBeenCalled();
+      if (fail) {
+        committedWrite.reject(new FsSafeError("not-found", "workspace disappeared"));
+      } else {
+        committedWrite.resolve();
+      }
+      await promise;
 
-    expectRespondOk(respond, { ok: true });
+      if (fail) {
+        expectRespondErrorContaining(respond, "unsafe workspace file");
+      } else {
+        expectRespondOk(respond, { ok: true });
+      }
+      if (name === "IDENTITY.md" && !fail) {
+        expect(mocks.broadcast).toHaveBeenCalledExactlyOnceWith("agent.identity.changed", {
+          agentId: "main",
+        });
+      } else {
+        expect(mocks.broadcast).not.toHaveBeenCalled();
+      }
+    } finally {
+      committedWrite.resolve();
+      await Promise.allSettled([promise]);
+      preparedIdentity.mockRestore();
+    }
   });
 
   it("rejects writes to retired HEARTBEAT.md workspace files", async () => {
