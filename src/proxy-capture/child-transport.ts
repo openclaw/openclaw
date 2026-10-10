@@ -1,22 +1,20 @@
 import { request } from "node:http";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { encodeDebugProxyPayload } from "./cli-contract.js";
-import type { DebugProxySettings } from "./env.js";
+import { readDebugProxyChildEndpoint, type DebugProxySettings } from "./env.js";
 import { finalizeCaptureStoreAsync } from "./store-lifecycle.js";
 import type { AsyncDebugProxyCaptureWriter } from "./store.types.js";
 
 export const DEBUG_PROXY_CHILD_CAPTURE_PATH = "/.openclaw/debug-proxy-capture";
-export const DEBUG_PROXY_CHILD_CAPTURE_PARENT = "OPENCLAW_DEBUG_PROXY_CAPTURE_PARENT";
-export const DEBUG_PROXY_CHILD_CAPTURE_TOKEN = "OPENCLAW_DEBUG_PROXY_CAPTURE_TOKEN";
 
 /** A child forwards only its capture writes to the parent's already-selected state owner. */
 export function createDebugProxyChildCaptureStore(settings: DebugProxySettings) {
-  const token = process.env[DEBUG_PROXY_CHILD_CAPTURE_TOKEN];
-  const parent = process.env[DEBUG_PROXY_CHILD_CAPTURE_PARENT];
-  if (parent === undefined && !token) {
+  const credentials = readDebugProxyChildEndpoint();
+  if (!credentials) {
     return undefined;
   }
-  if (parent !== "1" || !token) {
+  const token = decodeURIComponent(credentials.password);
+  if (!token) {
     throw new Error(
       "Parent debug proxy capture credentials are missing or invalid; no local fallback was attempted",
     );

@@ -2,12 +2,9 @@ import { randomBytes, timingSafeEqual } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { readJsonBodyWithLimit } from "../infra/http-body.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
-import {
-  DEBUG_PROXY_CHILD_CAPTURE_PATH,
-  DEBUG_PROXY_CHILD_CAPTURE_PARENT,
-  DEBUG_PROXY_CHILD_CAPTURE_TOKEN,
-} from "./child-transport.js";
+import { DEBUG_PROXY_CHILD_CAPTURE_PATH } from "./child-transport.js";
 import { debugProxyCaptureWriteCommandSchema } from "./cli-contract.js";
+import { DEBUG_PROXY_CHILD_CAPTURE_USERNAME } from "./env.js";
 import type { AsyncDebugProxyCaptureWriter } from "./store.types.js";
 
 export function createDebugProxyChildCaptureReceiver(
@@ -80,9 +77,11 @@ export function createDebugProxyChildCaptureReceiver(
     }
   };
   return {
-    captureEnv: {
-      [DEBUG_PROXY_CHILD_CAPTURE_TOKEN]: token,
-      [DEBUG_PROXY_CHILD_CAPTURE_PARENT]: "1",
+    captureEnv: (proxyUrl: string) => {
+      const endpoint = new URL(proxyUrl);
+      endpoint.username = DEBUG_PROXY_CHILD_CAPTURE_USERNAME;
+      endpoint.password = token;
+      return { OPENCLAW_DEBUG_PROXY_URL: endpoint.toString() };
     },
     stop: () => {
       accepting = false;

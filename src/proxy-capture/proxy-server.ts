@@ -465,7 +465,7 @@ export async function startDebugProxyServer(params: {
     let stopping: Promise<void> | undefined;
     return {
       proxyUrl: `http://${host}:${address.port}`,
-      captureEnv: childCapture.captureEnv,
+      captureEnv: childCapture.captureEnv(`http://${host}:${address.port}`),
       stop: () => {
         stopping ??= (async () => {
           childCapture.stop();

@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
+import { createServer } from "node:http";
 import path from "node:path";
 import { promisify } from "node:util";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -150,7 +151,8 @@ describe("standalone proxy owner routing", () => {
             },
           };
           const endpoint = `${server.proxyUrl}/.openclaw/debug-proxy-capture`;
-          const token = server.captureEnv.OPENCLAW_DEBUG_PROXY_CAPTURE_TOKEN;
+          const captureEndpoint = new URL(server.captureEnv.OPENCLAW_DEBUG_PROXY_URL);
+          const token = captureEndpoint.password;
           for (const [authorization, command] of [
             ["Bearer wrong", body],
             [`Bearer ${token}`, { ...body, input: { ...body.input, sessionId: "other-session" } }],
@@ -186,26 +188,55 @@ describe("standalone proxy owner routing", () => {
             ),
             ...server.captureEnv,
           };
+          expect(resolveDebugProxySettings(childEnv).proxyUrl).toBe(server.proxyUrl);
+          expect(childEnv.HTTP_PROXY).toBe(server.proxyUrl);
+          expect(childEnv.HTTPS_PROXY).toBe(server.proxyUrl);
+          expect(childEnv.ALL_PROXY).toBe(server.proxyUrl);
+          const invalidEndpoint = new URL(captureEndpoint);
+          invalidEndpoint.password = mode === "online" ? "invalid-fixture-token" : "";
           await expect(
             promisify(execFile)(process.execPath, entrypoint, {
               env: {
                 ...childEnv,
-                OPENCLAW_DEBUG_PROXY_CAPTURE_TOKEN:
-                  mode === "online" ? "invalid-fixture-token" : undefined,
+                OPENCLAW_DEBUG_PROXY_URL: invalidEndpoint.toString(),
               },
             }),
           ).rejects.toThrow(/refused capture|credentials are missing/);
           await expect(
             fs.stat(path.join(childRoot, "state", "openclaw.sqlite")),
           ).rejects.toMatchObject({ code: "ENOENT" });
-          await promisify(execFile)(process.execPath, entrypoint, { env: childEnv });
+          const upstream = vi.fn();
+          const origin = createServer((req, res) => {
+            upstream(req.headers);
+            res.end("upstream response");
+          });
+          await new Promise<void>((resolve) => origin.listen(0, "127.0.0.1", resolve));
+          const address = origin.address();
+          if (!address || typeof address === "string") {
+            throw new Error("Fixture origin address unavailable");
+          }
+          try {
+            await promisify(execFile)(
+              process.execPath,
+              [...entrypoint, `http://127.0.0.1:${address.port}/upstream`],
+              { env: childEnv },
+            );
+            expect(upstream).toHaveBeenCalledOnce();
+            expect(upstream.mock.calls[0]?.[0]).not.toHaveProperty("authorization");
+            expect(upstream.mock.calls[0]?.[0]).not.toHaveProperty("proxy-authorization");
+            expect(JSON.stringify(upstream.mock.calls)).not.toContain(token);
+          } finally {
+            await new Promise<void>((resolve) => origin.close(() => resolve()));
+          }
           expect(await store.listSessions()).toEqual([
             expect.objectContaining({
               id: settings.sessionId,
-              eventCount: 1,
+              eventCount: expect.any(Number),
               endedAt: expect.any(Number),
+              proxyUrl: server.proxyUrl,
             }),
           ]);
+          expect(JSON.stringify(await store.listSessions())).not.toContain(token);
           await expect(
             fs.stat(path.join(childRoot, "state", "openclaw.sqlite")),
           ).rejects.toMatchObject({ code: "ENOENT" });
