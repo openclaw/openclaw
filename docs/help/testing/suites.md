@@ -552,9 +552,11 @@ Prefix comparisons permit only the declared first-image cleanup on turn five
 and the exact history-prefix removal on turn nine. Cleanup replaces only image
 blocks with the documented marker; adjacent text remains exact. At the pruning
 boundary, legacy Chat Completions relocates the same runtime facts from the
-retired first user to the retained first user. Legacy Chat Completions and
-Messages also drop the identified transient announcement tail; Messages verifies
-that tail was outside every cache breakpoint. Every other retained byte must
+retired first user to the retained first user. Legacy Messages can refresh its
+identified transient runtime context, including date facts and announcements.
+The fixture compares all history through the last cache breakpoint and rejects
+any breakpoint that includes transient runtime context, including during steering.
+The other three routes compare their complete retained history. Every other retained byte must
 remain identical. Failures identify the first differing segment and JSON field
 with digests and lengths, without printing content.
 

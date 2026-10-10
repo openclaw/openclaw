@@ -1,5 +1,6 @@
 // End-to-end prompt reuse through the admitted runner, durable transcript and real serializers.
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { configureAiTransportHost, getAiTransportHost } from "@openclaw/ai";
@@ -291,6 +292,26 @@ describe("provider prefix across admitted Gateway agent turns", () => {
               try {
                 const payload: unknown = await new Request(input, init).json();
                 const prefix = snapshotProviderPrefix(api, payload);
+                if (route === "messages") {
+                  const runtimeIndex = prefix.history.findIndex((item) =>
+                    item.includes(RUNTIME_CONTEXT_HEADER),
+                  );
+                  expect(
+                    prefix.breakpoints.length,
+                    "legacy Messages cache boundary",
+                  ).toBeGreaterThan(0);
+                  const unsafeMarker = prefix.breakpoints.find(
+                    (point) => runtimeIndex >= 0 && point.index >= runtimeIndex,
+                  );
+                  if (unsafeMarker) {
+                    const digest = createHash("sha256")
+                      .update(prefix.history[runtimeIndex]!)
+                      .digest("hex");
+                    throw new Error(
+                      `messages request ${requests.length + 1}, turn ${turn}: cacheBreakpoint covers transient segment=history[${runtimeIndex}] previous=absent next=${digest} marker=${unsafeMarker.index}`,
+                    );
+                  }
+                }
                 expect(
                   prefix.tools.includes('"name":"cache_probe"'),
                   "synthetic provider only calls an advertised tool",
@@ -530,30 +551,6 @@ describe("provider prefix across admitted Gateway agent turns", () => {
                   "first image reaches the documented cleanup batch",
                 ).toBeGreaterThanOrEqual(0);
               }
-              const expiresAnnouncementContext =
-                (route === "messages" || route === "completions") &&
-                previous.turn === 8 &&
-                current.turn === 9;
-              if (expiresAnnouncementContext) {
-                const tail = previous.prefix.history.at(-1)!;
-                expect(
-                  tail.includes(RUNTIME_CONTEXT_HEADER) &&
-                    tail.includes("Synthetic child verification completed."),
-                  "only the declared transient announcement carrier may expire",
-                ).toBe(true);
-                if (route === "messages") {
-                  expect(
-                    previous.prefix.breakpoints.length,
-                    "old Messages declared a cache boundary",
-                  ).toBeGreaterThan(0);
-                  expect(
-                    previous.prefix.breakpoints.every(
-                      (point) => point.index < previous.prefix.history.length - 1,
-                    ),
-                    "announcement carrier is outside every cache breakpoint",
-                  ).toBe(true);
-                }
-              }
               let previousPrefix = previous.prefix;
               if (route === "completions" && pruning) {
                 // Legacy Chat Completions moves the same Runtime facts to the new
@@ -595,8 +592,8 @@ describe("provider prefix across admitted Gateway agent turns", () => {
               }
               assertStableProviderPrefix(previousPrefix, current.prefix, {
                 label: `${route} request ${index + 1}, turn ${current.turn}`,
-                ...(expiresAnnouncementContext
-                  ? { historyLength: previous.prefix.history.length - 1 }
+                ...(route === "messages"
+                  ? { historyLength: previous.prefix.breakpoints.at(-1)!.index + 1 }
                   : {}),
                 ...(pruning
                   ? {
