@@ -332,9 +332,7 @@ export async function searchKeyword(params: {
   // OR-joined unicode61 plan is tiered; trigram plans already AND their terms
   // and a strict MATCH over raw tokens would just add scan cost.
   const strictMatchQuery =
-    params.ftsTokenizer !== "trigram" && plan.matchQuery
-      ? buildStrictFtsQuery(params.query)
-      : null;
+    params.ftsTokenizer !== "trigram" && plan.matchQuery ? buildStrictFtsQuery(params.query) : null;
 
   // Lexical FTS is model-agnostic (issue #48300), but old databases may
   // already contain orphaned FTS rows from prior model-scoped cleanup.
@@ -370,6 +368,7 @@ export async function searchKeyword(params: {
         ...terms,
         ...params.sourceFilter.params,
         params.limit,
+        // SAFETY: the statement selects exactly the MemorySearchRow columns plus the FTS rank column.
       ) as Array<MemorySearchRow & { rank: number }>;
       if (complete.length >= params.limit) {
         return complete.slice(0, params.limit);
@@ -380,6 +379,7 @@ export async function searchKeyword(params: {
         ...terms,
         ...params.sourceFilter.params,
         params.limit,
+        // SAFETY: same ranked-rows statement as above, bound to the partial-match query.
       ) as Array<MemorySearchRow & { rank: number }>;
       return [...complete, ...partial.filter((row) => !seen.has(row.id))].slice(0, params.limit);
     }
