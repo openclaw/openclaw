@@ -209,6 +209,7 @@ describe("tsdown config", () => {
       requireStandaloneRuntimeGraph("worker/file-tool-read.worker"),
       requireStandaloneRuntimeGraph("worker/image-processor.worker"),
       requireStandaloneRuntimeGraph("worker/sqlite-store.worker"),
+      requireStandaloneRuntimeGraph("worker/sqlite-source-revision.worker"),
       requireStandaloneRuntimeGraph("worker/openclaw-state-read.worker"),
       requireStandaloneRuntimeGraph("worker/worker-native-lifecycle.worker"),
       expectDefined(handoffGraph, "managed handoff graph"),

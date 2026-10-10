@@ -321,8 +321,10 @@ owns its AI-categorization prompt, model, schedule, and run history. The board
 page shows an **Automation** link when that reference is present. Matching
 session events nudge the attached automation through the active Workboard service's
 scheduler authority, including after the worker's tool authority closes, with events
-for the same board coalesced for 60 seconds. The automation's schedule remains
-the backstop. Disabled and auto-disabled automations are never nudged. Deleting
+for the same board coalesced for 60 seconds. If an attempt ends while its run is
+still active, the lifecycle sweep nudges the automation when it records the terminal
+outcome. The automation's schedule remains the backstop. Disabled and auto-disabled
+automations are never nudged. Deleting
 the board does not delete or otherwise mutate the
 operator-owned automation job.
 
@@ -581,11 +583,17 @@ If an active linked session stops reporting recent activity, Workboard marks the
 `stale` and stores that as metadata until the lifecycle clears it.
 
 Lifecycle writes are owned by the Gateway-side Workboard plugin, so they do
-not depend on an open browser tab. Agent and subagent completion hooks persist
-terminal outcomes immediately. A bounded session sweep runs once per minute to
-reconcile active, idle, missing, and stale session state. Each store mutation
-emits the normal `plugin.workboard.changed` invalidation, so an open Workboard tab
-reloads the canonical card instead of writing its own lifecycle projection.
+not depend on an open browser tab. Subagent completion hooks persist terminal
+outcomes immediately. Agent attempt hooks consult the linked session state:
+finishing a model attempt does not move a card into `review` or `blocked` while
+its run is still active. A bounded session sweep runs once per minute to reconcile
+terminal, active, idle, missing, and stale session state. Each store mutation emits
+the normal `plugin.workboard.changed` invalidation, so an open Workboard tab reloads
+the canonical card instead of writing its own lifecycle projection.
+
+Incognito sessions remain absent from session discovery. Explicitly linked
+Incognito cards use authorized exact-session metadata reads, without derived
+titles or message previews, to reconcile their terminal outcomes.
 
 While a card is in an active work state, Workboard follows the linked session:
 

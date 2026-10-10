@@ -155,6 +155,20 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
     const ownsSubagentsPanel = !catalog && !this.compact;
     const chat = renderChat({
       ...chatProps,
+      detailsEnabled: !catalog && !this.compact,
+      detailsWorkspace: {
+        ...resolveSessionWorkspace({
+          session: selectedSession,
+          agentWorkspace,
+          worktreePath: selectedSession?.worktree
+            ? this.headerWorktreePaths.get(selectedSession.worktree.id)?.path
+            : undefined,
+        }),
+        branch:
+          selectedSession?.repository?.branch ??
+          selectedSession?.worktree?.branch ??
+          chatProps.pullRequestsBranch?.branch,
+      },
       onOpenSubagent: ownsSubagentsPanel ? (key) => this.showSubagents(key) : undefined,
       onOpenSubagents: ownsSubagentsPanel ? () => this.showSubagents(null) : undefined,
       composerRecovery: recovery,

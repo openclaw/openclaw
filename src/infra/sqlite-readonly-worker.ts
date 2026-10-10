@@ -12,12 +12,10 @@ import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { isArtifactPreservingStateRead } from "../state/artifact-preserving-state-reads.js";
 import { hasErrnoCode } from "./errno.js";
 import { resolveNodeCompileCacheEnv } from "./node-compile-cache-env.js";
-import {
-  runtimeProcessEntrypoints,
-  SQLITE_READONLY_CHILD_ARG,
-} from "./runtime-process-entrypoints.js";
+import { SQLITE_READONLY_CHILD_ARG } from "./runtime-process-entrypoints.js";
+import { resolveRuntimeProcessEntrypointUrl } from "./runtime-process-url.js";
 import { captureRuntimeWorkerSource } from "./runtime-worker-generation.js";
-import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
+import { resolveRuntimeWorkerArgv } from "./runtime-worker-url.js";
 import { tryProcessCwd } from "./safe-cwd.js";
 import { retainSnapshotWork } from "./sqlite-readonly-location-cleanup.js";
 import type { SqliteReadOnlyOperations } from "./sqlite-readonly-operation-registry.js";
@@ -232,10 +230,10 @@ export function runScopedSqliteInspection<T>(
 
 function sqliteReadOnlyWorkerArgv(pathname: string, options: SqliteReadOnlyWorkerOptions) {
   const { moduleUrl, runtimeGeneration } = captureRuntimeWorkerSource(
-    resolveRuntimeWorkerUrl(
+    resolveRuntimeProcessEntrypointUrl(
       options.mode === "content-version" || options.mode === "file-generation"
-        ? runtimeProcessEntrypoints.sqliteSourceRevision
-        : runtimeProcessEntrypoints.sqliteReadOnly,
+        ? "sqliteSourceRevision"
+        : "sqliteReadOnly",
     ),
   );
   return {
@@ -258,7 +256,7 @@ export function captureSqliteReadOnlyWorkerLaunch(
   const broker = source === "canonical" ? getSpawnBroker() : undefined;
   return {
     runtimeGeneration: captureRuntimeWorkerSource(
-      resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sqliteReadOnly),
+      resolveRuntimeProcessEntrypointUrl("sqliteReadOnly"),
     ).runtimeGeneration,
     env: {
       ...resolveNodeCompileCacheEnv(env),
@@ -276,7 +274,7 @@ export function createScopedSqliteReadOnlyWorker(
     retainOnOperationError?: boolean;
   },
 ): ReturnType<typeof createSqliteReadOnlyWorkerSession> {
-  const workerUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sqliteReadOnly);
+  const workerUrl = resolveRuntimeProcessEntrypointUrl("sqliteReadOnly");
   // Launch facts are captured by the caller; the reusable child belongs to its scope.
   return runInDetachedAsyncContext(() =>
     createSqliteReadOnlyWorkerSession({

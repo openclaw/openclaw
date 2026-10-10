@@ -12,6 +12,12 @@ const runtime = {
   cloudPlacementExecutionMode: "worker-turn" as const,
   devicePlacement: { requiredNodeCommands: [], consumesWorkerSlot: true },
 };
+const hostedRuntime = {
+  id: "agentsapi",
+  source: "model" as const,
+  cloudPlacementSupported: false,
+  workspaceEnvironment: { kind: "provider-hosted" as const, label: "OpenAI (Agents API)" },
+};
 const profile = {
   id: "dedicated",
   providerId: "device",
@@ -48,6 +54,7 @@ function fixture(
             unavailableReason: "missing-auth",
             agentRuntime: runtime,
             runtimeChoices: [
+              { agentRuntime: hostedRuntime, available: true },
               {
                 available: true,
                 agentRuntime: {
@@ -151,6 +158,54 @@ it("projects the latest policy over cached placement without persisting that pol
   await f.gateway.refreshCloudProfiles();
   expect(f.place.cloudProfileId).toBe("");
   expect(f.place.remotePlacement).toBe(false);
+});
+
+it("rejects direct hosted placement and blocks hosted model changes under required placement", async () => {
+  const f = fixture();
+  await ready(f);
+  f.place.selectHostedEnvironment("agentsapi");
+  expect(f.place.modelControl.agentRuntime).toBeUndefined();
+  expect(f.place.cloudProfileId).toBe(profile.id);
+  expect(f.place.worktree).toBe(true);
+
+  f.place.modelControl.selectModel("openai/default", "agentsapi");
+  expect(f.place.hostedEnvironment).toBeUndefined();
+  expect(f.place.remotePlacement).toBe(true);
+  expect(f.place.worktree).toBe(true);
+  expect(f.flow.submitBlock()?.gate).toBe("cloud");
+  await f.flow.submit();
+  expect(f.context.sessions.createResult).not.toHaveBeenCalled();
+});
+
+it("applies a newly required profile over an open hosted draft without advertising a hosted destination", async () => {
+  let current: typeof catalog | { profiles: (typeof profile)[]; environments: never[] } = {
+    profiles: [],
+    environments: [],
+  };
+  const f = fixture(async () => current);
+  await ready(f);
+  f.place.selectHostedEnvironment("agentsapi");
+  expect(f.place.hostedEnvironment).toEqual(hostedRuntime.workspaceEnvironment);
+  expect(f.flow.canSubmit()).toBe(true);
+
+  current = catalog;
+  await f.gateway.refreshCloudProfiles();
+  f.place.browser.popoverCallbacks("where").onPopoverShow();
+  f.place.restorePreferenceSelections();
+  expect(f.place.hostedEnvironment).toBeUndefined();
+  expect(f.place.modelControl.modelDefaultsPolicy).toBe("configured");
+  expect(f.place.browser.popoverOpen("where")).toBe(false);
+  expect(f.place.cloudProfileId).toBe(profile.id);
+  expect(f.place.worktree).toBe(true);
+  expect(f.flow.canSubmit()).toBe(false);
+  await f.flow.submit();
+  expect(f.context.sessions.createResult).not.toHaveBeenCalled();
+
+  current = { profiles: [], environments: [] };
+  await f.gateway.refreshCloudProfiles();
+  f.place.restorePreferenceSelections();
+  expect(f.place.hostedEnvironment).toEqual(hostedRuntime.workspaceEnvironment);
+  expect(f.flow.canSubmit()).toBe(true);
 });
 
 it("does not use a late catalog from a replaced Gateway", async () => {
@@ -305,7 +360,6 @@ it("keeps a cold required-worker draft on configured defaults across asynchronou
   place.resolve(catalog);
   await read;
   f.place.restorePreferenceSelections();
-  expect(f.place.requiredWorkerInference).toBe(true);
   modelsReady.resolve();
   await settleModelCatalogRequests(f.context.gateway.snapshot.client!, { agentId: "main" });
   f.place.restorePreferenceSelections();

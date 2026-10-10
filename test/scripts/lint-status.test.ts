@@ -63,6 +63,7 @@ export function waitForFile(file) {
     "lib/record-shared.mjs",
     "lib/failed-trailer.mts",
     "lib/managed-child-process.mts",
+    "lib/managed-cleanup-handoff.mts",
     "lib/managed-memory.mts",
     "lib/managed-memory-entrypoint.mts",
     "lib/vitest-resource-ownership.mts",

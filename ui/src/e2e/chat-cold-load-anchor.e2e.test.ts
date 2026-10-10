@@ -121,9 +121,9 @@ suite.define(() => {
         await page.getByText("Worked for 3 minutes", { exact: true }).waitFor();
         await page.locator(".chat-reply-attribution__name").filter({ hasText: "Avery" }).waitFor();
         await page
-          .locator('[data-progress-card-placement="composer"]')
+          .locator('[data-progress-card-placement="details"]')
           .filter({ hasText: "Review final report" })
-          .waitFor();
+          .waitFor({ state: "attached" });
         await page.locator(".chat-pane-cache__pane--active").evaluate(async (element) => {
           const pane = element as HTMLElement & { sessionSnapshotStore?: SessionSnapshotStore };
           if (!pane.sessionSnapshotStore) {
@@ -139,7 +139,7 @@ suite.define(() => {
             if (!thread?.querySelector(".chat-virtual-row") || thread.clientHeight === 0) {
               return null;
             }
-            const card = pane?.querySelector('[data-progress-card-placement="composer"]');
+            const card = pane?.querySelector('[data-progress-card-placement="details"]');
             const cardRect = card?.getBoundingClientRect();
             const threadRect = thread.getBoundingClientRect();
             return {
@@ -178,7 +178,7 @@ suite.define(() => {
           if (!window.coldLoadSamples) {
             throw new Error("Missing cold-load frame recorder");
           }
-          window.coldLoadCard = document.querySelector('[data-progress-card-placement="composer"]');
+          window.coldLoadCard = document.querySelector('[data-progress-card-placement="details"]');
           return window.coldLoadSamples.slice(0, 20);
         });
         await writeFile(
@@ -216,7 +216,7 @@ suite.define(() => {
             frames: window.coldLoadSamples?.slice(window.coldLoadReconcileStart ?? 0) ?? [],
             retainedCard:
               window.coldLoadCard ===
-              document.querySelector('[data-progress-card-placement="composer"]'),
+              document.querySelector('[data-progress-card-placement="details"]'),
           };
         });
         await writeFile(

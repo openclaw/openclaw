@@ -132,6 +132,9 @@ export { planShellAuthorization } from "../infra/exec-authorization-plan.js";
 export { commitExecAuthorizationLocked } from "../infra/exec-approvals-authorization.js";
 export { updateExecApprovals, readExecApprovalsSnapshot } from "../infra/exec-approvals-store.js";
 export { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
+export { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+export { readStableSqliteFileGeneration } from "../infra/sqlite-file-generation.js";
+export { recordOpenClawDatabaseQuarantine, readOpenClawDatabaseQuarantineFailure } from "../state/openclaw-quarantine-store.js";
 export { readSecretStoreExecEnvironment } from "../secrets/store/secret-store.js";
 export { rejectUnsafeExecControlShellCommand } from "../infra/exec-control-command-guard.js";
 export { WebSocket } from "../../packages/gateway-client/src/websocket.js";
@@ -225,6 +228,10 @@ const {
   readExecApprovalsSnapshot,
   readSecretStoreExecEnvironment,
   closeOpenClawStateDatabaseAsync,
+  resolveOpenClawStateSqlitePath,
+  readStableSqliteFileGeneration,
+  recordOpenClawDatabaseQuarantine,
+  readOpenClawDatabaseQuarantineFailure,
 } = await import(pathToFileURL(entry).href);
 const match = { id: "portable-exec", pattern: process.execPath };
 const command = "portable exec authorization";
@@ -241,6 +248,17 @@ try {
   assert.equal(stored.lastUsedCommand, command);
   assert.equal(stored.lastResolvedPath, process.execPath);
   assert.ok(stored.lastUsedAt > 0);
+  await closeOpenClawStateDatabaseAsync();
+  const statePath = resolveOpenClawStateSqlitePath();
+  assert.equal(recordOpenClawDatabaseQuarantine({
+    kind: "state", path: statePath, reason: "portable integrity failure",
+    generation: readStableSqliteFileGeneration(statePath),
+  }), true);
+  assert.equal(readOpenClawDatabaseQuarantineFailure("state", statePath)?.name, "SqliteIntegrityError");
+  await assert.rejects(
+    updateExecApprovals({ update: { kind: "replace", file: { version: 1, defaults: { security: "deny", ask: "off" } } } }),
+    /quarantined after integrity verification failed/,
+  );
 } finally {
   await closeOpenClawStateDatabaseAsync();
 }

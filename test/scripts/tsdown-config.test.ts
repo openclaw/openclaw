@@ -61,6 +61,11 @@ const workerBuildTargets = [
     "src/worker/worker-deploy-image-processor.ts",
   ],
   ["sqlite-store", "worker/sqlite-store.worker", "src/worker/worker-deploy-sqlite-store.ts"],
+  [
+    "sqlite-source-revision",
+    "worker/sqlite-source-revision.worker",
+    "src/worker/worker-deploy-sqlite-source-revision.ts",
+  ],
   ["state-read", "worker/openclaw-state-read.worker", "src/worker/worker-deploy-state-read.ts"],
   [
     "worker-native-lifecycle",

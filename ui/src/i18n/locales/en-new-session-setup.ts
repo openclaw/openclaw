@@ -36,6 +36,17 @@ const enNewSessionSetup = {
     autoDeviceSub: "Least-busy device",
     autoDeviceSubEligible: "First eligible device",
     cloud: "Cloud",
+    hosted: "Hosted workspaces",
+    hostedWorkspace: "Hosted workspace",
+    hostedHint:
+      "Runs in the provider’s workspace. Send files as chat attachments; local folders and repositories are not copied.",
+    hostedUnavailable:
+      "No available model for this hosted workspace. Check the runtime setup and API-key account in model settings.",
+    hostModelRequired:
+      "Choose a model with an available local runtime before selecting a device or cloud worker.",
+    hostedSetup: "Agents API setup",
+    hostedSetupHint:
+      "Requires the enabled Agents API plugin, a compatible API-key model, and a hosted environment. ChatGPT subscriptions are not supported.",
     machine: "Machine",
     operatingSystem: "Operating system",
     runsOn: "Runs on {place}",
