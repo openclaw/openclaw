@@ -40,7 +40,11 @@ it.each([
             ...entry,
             updatedAt: 1,
             compactionCount: params.amount ?? 1,
-            transcriptByteCompactionLatch: params.transcriptByteCompactionLatch,
+            ...(params.transcriptByteLatch?.kind === "clear"
+              ? { transcriptByteCompactionLatch: undefined }
+              : params.transcriptByteLatch?.kind === "set"
+                ? { transcriptByteCompactionLatch: params.transcriptByteLatch.value }
+                : {}),
           };
           params.sessionStore[params.sessionKey] = updated;
           return params.amount ?? 1;

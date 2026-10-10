@@ -10,6 +10,7 @@ import { withSandboxRuntimeStatusInWorker } from "../../agents/sandbox/runtime-s
 import type { SessionEntry } from "../../config/sessions.js";
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { applySessionEntryOperation } from "../../config/sessions/session-accessor.sqlite-entry.js";
+import type { TranscriptByteCompactionLatchAccounting } from "../../config/sessions/session-entry-projection.js";
 import { readSessionEntryInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { SessionEntryCohortReader } from "../../config/sessions/session-entry-read-runtime.types.js";
 import {
@@ -328,9 +329,7 @@ export async function incrementCompactionCount(params: {
     InternalSessionEntry,
     "sessionId" | "lifecycleRevision" | "activeWriterRunId"
   >;
-  transcriptByteCompactionLatch?: NonNullable<
-    InternalSessionEntry["transcriptByteCompactionLatch"]
-  >;
+  transcriptByteLatch?: TranscriptByteCompactionLatchAccounting;
   authorize?: () => boolean;
 }): Promise<number | undefined> {
   const { sessionStore, sessionKey, storePath, authorize } = params;
@@ -361,7 +360,7 @@ export async function incrementCompactionCount(params: {
           compactionKind: params.compactionKind,
           now: params.now,
           tokensAfter: params.tokensAfter,
-          transcriptByteCompactionLatch: params.transcriptByteCompactionLatch,
+          transcriptByteLatch: params.transcriptByteLatch,
         },
       },
       {

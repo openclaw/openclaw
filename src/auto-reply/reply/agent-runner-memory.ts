@@ -476,7 +476,9 @@ export async function runSessionCompactionIfNeeded(params: {
       amount: 0,
       expectedSession: entry,
       sessionStore: compactionStore,
-      transcriptByteCompactionLatch: refreshedTranscriptByteCompactionLatch,
+      transcriptByteLatch: refreshedTranscriptByteCompactionLatch
+        ? { kind: "set", value: refreshedTranscriptByteCompactionLatch }
+        : { kind: "clear" },
     });
     assertActive();
     if (compactionCount === undefined) {
@@ -608,7 +610,9 @@ export async function runSessionCompactionIfNeeded(params: {
       tokensAfter,
       compactionKind,
       expectedSession: acceptedEntry,
-      transcriptByteCompactionLatch,
+      transcriptByteLatch: transcriptByteCompactionLatch
+        ? { kind: "set", value: transcriptByteCompactionLatch }
+        : { kind: "clear" },
       authorize: () => {
         assertActive();
         return true;

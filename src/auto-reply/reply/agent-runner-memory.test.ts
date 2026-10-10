@@ -425,7 +425,11 @@ describe("runMemoryFlushIfNeeded", () => {
       const nextEntry: SessionEntry = {
         ...previous,
         compactionCount: (previous.compactionCount ?? 0) + Math.max(0, params.amount ?? 1),
-        transcriptByteCompactionLatch: params.transcriptByteCompactionLatch,
+        ...(params.transcriptByteLatch?.kind === "clear"
+          ? { transcriptByteCompactionLatch: undefined }
+          : params.transcriptByteLatch?.kind === "set"
+            ? { transcriptByteCompactionLatch: params.transcriptByteLatch.value }
+            : {}),
       };
       params.sessionStore[sessionKey] = nextEntry;
       if (typeof params.storePath === "string") {
