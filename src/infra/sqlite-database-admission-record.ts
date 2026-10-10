@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { threadId } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readWorkerAncestors, workerAncestors } from "./worker-ancestry.js";
@@ -37,6 +38,11 @@ export type Admission = {
   facts: Map<string, AdmissionFact>;
 };
 export type SqliteDatabaseAdmissions = Admission[];
+export type SqliteDatabaseAdmissionExchange = (
+  admissions: SqliteDatabaseAdmissions,
+  location?: string,
+  create?: boolean,
+) => SqliteDatabaseAdmissions;
 function readAdmissionFact(value: unknown): AdmissionFact | undefined {
   if (
     !isRecord(value) ||
@@ -332,3 +338,86 @@ export function publishSqliteDatabaseFact(
   );
   return true;
 }
+
+export function installSqliteDatabaseAdmissionRecords(
+  records: Map<string, Admission>,
+  admissions: SqliteDatabaseAdmissions,
+): void {
+  for (const incoming of admissions) {
+    if (incoming.descriptorOwner !== 0 || isSqliteDatabaseAdmissionRetired(incoming)) {
+      continue;
+    }
+    let record = records.get(incoming.identity);
+    if (record && isSqliteDatabaseAdmissionRetired(record)) {
+      records.delete(record.identity);
+      record = undefined;
+    }
+    if (!record) {
+      record = { ...incoming, hostRevision: undefined };
+      records.set(incoming.identity, record);
+    } else if (record.generationId !== incoming.generationId) {
+      // Only the host creates a generation; unrelated revocation cells cannot certify its facts.
+      continue;
+    }
+    for (const [key, fact] of incoming.facts) {
+      if (isSqliteDatabaseAdmissionFactCurrent(incoming, fact)) {
+        record.facts.set(key, fact);
+      }
+    }
+    for (const [writer, cell] of incoming.writers) {
+      if (!record.writers.has(writer)) {
+        record.writers.set(writer, cell);
+      }
+    }
+    if (
+      incoming.hostRevision !== undefined &&
+      incoming.hostRevision ===
+        Atomics.load(new Int32Array(record.generation), SqliteDatabaseGenerationSlot.hostRevision)
+    ) {
+      record.hostRevision = incoming.hostRevision;
+    }
+    registerWriterCustody(record);
+  }
+}
+
+export function createSqliteDatabaseAdmissionRecord(
+  location: string,
+  descriptor: number,
+  identity: string,
+): Admission {
+  const record: Admission = {
+    identity,
+    location,
+    descriptor,
+    descriptorOwner: 0,
+    generationId: randomUUID(),
+    generation: new SharedArrayBuffer(
+      Int32Array.BYTES_PER_ELEMENT * SQLITE_DATABASE_GENERATION_LENGTH,
+    ),
+    writers: new Map(),
+    facts: new Map(),
+  };
+  return record;
+}
+
+export function trackSqliteDatabaseAdmissionRecordWorker(
+  records: Map<string, Admission>,
+  worker: {
+    readonly threadId: number;
+    once(event: "exit", listener: () => void): unknown;
+  },
+): void {
+  const id = worker.threadId;
+  worker.once("exit", () => {
+    for (const record of records.values()) {
+      retireSqliteDatabaseWriter(record, id);
+    }
+  });
+}
+
+export type SqliteDatabaseAdmissionKey<T> = {
+  name: string;
+  read(this: void, value: unknown): T | undefined;
+  schemaDependent?: boolean;
+  writer?: "host";
+};

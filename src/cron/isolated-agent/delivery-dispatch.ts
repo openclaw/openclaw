@@ -216,7 +216,6 @@ export async function dispatchCronDelivery(
     if (payloadNormalization.kind === "suppress") {
       return finishSilentReplyDelivery(payloadNormalization.reason);
     }
-    const normalizedPayloads = payloadNormalization.payload;
     const deliveryIdempotencyKey = buildDirectCronDeliveryIdempotencyKey({
       jobId: params.job.id,
       runStartedAt: params.runStartedAt,
@@ -264,7 +263,7 @@ export async function dispatchCronDelivery(
       const payloadsForDelivery = (
         await maybeApplyTtsToCronPayloads({
           cfg: params.cfgWithAgentDefaults,
-          payloads: normalizedPayloads,
+          payloads: payloadNormalization.payload,
           delivery,
           agentId: params.agentId,
           ttsAuto: params.ttsAuto,
@@ -505,7 +504,6 @@ export async function dispatchCronDelivery(
                   },
                 ),
               );
-        const mirrorText = resolveDirectCronTranscriptMirrorText(mirrorProjection);
         const transcriptMirror = {
           sessionKey: deliverySessionKey,
           agentId: params.agentId,
@@ -515,7 +513,7 @@ export async function dispatchCronDelivery(
                 expectedLifecycleRevision: params.lifecycleRevision,
               }
             : {}),
-          text: mirrorText,
+          text: resolveDirectCronTranscriptMirrorText(mirrorProjection),
           // Keep cron delivery mirrors text-first: non-audio attachment names
           // are folded into mirrorText so media does not replace delivered text.
           mediaUrls: undefined,

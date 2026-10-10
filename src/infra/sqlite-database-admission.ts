@@ -1,5 +1,4 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
@@ -9,18 +8,20 @@ import { hasErrnoCode } from "./errno.js";
 import { SQLITE_DATABASE_ADMISSIONS_KEY } from "./sqlite-database-admission-key.js";
 import {
   captureSqliteDatabaseAdmissionRecords,
+  installSqliteDatabaseAdmissionRecords,
+  createSqliteDatabaseAdmissionRecord,
   SqliteDatabaseGenerationSlot,
-  SQLITE_DATABASE_GENERATION_LENGTH,
   readSqliteDatabaseAdmissions,
   activeSqliteDatabaseWriters as activeWriters,
   readSqliteDatabaseRecordWriteRevision as readWriteRevision,
-  retireSqliteDatabaseWriter,
-  registerWriterCustody,
+  trackSqliteDatabaseAdmissionRecordWorker,
   ensureSqliteDatabaseWriter,
   publishSqliteDatabaseFact,
   isSqliteDatabaseAdmissionRetired as isRetired,
   isSqliteDatabaseAdmissionFactCurrent as valid,
   type Admission,
+  type SqliteDatabaseAdmissionKey,
+  type SqliteDatabaseAdmissionExchange as Exchange,
   type SqliteDatabaseAdmissions,
   type StagedAdmissionFact,
 } from "./sqlite-database-admission-record.js";
@@ -35,22 +36,13 @@ import {
 } from "./sqlite-worker-identity.js";
 
 export { readSqliteDatabaseAdmissions } from "./sqlite-database-admission-record.js";
-export type { SqliteDatabaseAdmissions } from "./sqlite-database-admission-record.js";
+export type {
+  SqliteDatabaseAdmissionKey,
+  SqliteDatabaseAdmissions,
+} from "./sqlite-database-admission-record.js";
 export { beginSqliteDatabaseAdmissionOperation } from "./sqlite-native-admission.js";
 
-export type SqliteDatabaseAdmissionKey<T> = {
-  name: string;
-  read(this: void, value: unknown): T | undefined;
-  schemaDependent?: boolean;
-  writer?: "host";
-};
-
 export type SqliteDatabaseAdmissionCursor = Map<string, string>;
-type Exchange = (
-  admissions: SqliteDatabaseAdmissions,
-  location?: string,
-  create?: boolean,
-) => SqliteDatabaseAdmissions;
 
 const state = resolveGlobalSingleton(Symbol.for("openclaw.sqliteDatabaseAdmissions"), () => ({
   admissions: new Map<string, Admission>(),
@@ -96,18 +88,7 @@ function exchange(location?: string, create?: boolean): void {
 }
 
 function retainDescriptor(location: string, descriptor: number, opened: fs.BigIntStats): Admission {
-  const record: Admission = {
-    identity: identity(opened),
-    location,
-    descriptor,
-    descriptorOwner: 0,
-    generationId: randomUUID(),
-    generation: new SharedArrayBuffer(
-      Int32Array.BYTES_PER_ELEMENT * SQLITE_DATABASE_GENERATION_LENGTH,
-    ),
-    writers: new Map(),
-    facts: new Map(),
-  };
+  const record = createSqliteDatabaseAdmissionRecord(location, descriptor, identity(opened));
   state.admissions.set(record.identity, record);
   rememberEnvironment();
   return record;
@@ -121,9 +102,8 @@ export function retainSqliteDatabaseAdmissionLocation(location: string): void {
   }
   const key = identity(observed);
   const previous = state.admissions.get(key);
-  const retainedPrevious = previous && !isRetired(previous) ? previous : undefined;
-  if (retainedPrevious) {
-    const retained = fs.fstatSync(retainedPrevious.descriptor, { bigint: true });
+  if (previous && !isRetired(previous)) {
+    const retained = fs.fstatSync(previous.descriptor, { bigint: true });
     if (identity(retained) === key) {
       return;
     }
@@ -531,12 +511,7 @@ export function trackSqliteDatabaseAdmissionWorker(worker: {
   readonly threadId: number;
   once(event: "exit", listener: () => void): unknown;
 }): void {
-  const id = worker.threadId;
-  worker.once("exit", () => {
-    for (const record of state.admissions.values()) {
-      retireSqliteDatabaseWriter(record, id);
-    }
-  });
+  trackSqliteDatabaseAdmissionRecordWorker(state.admissions, worker);
 }
 
 export function hasPendingSqliteDatabaseSchemaMutation(database: DatabaseSync): boolean {
@@ -773,41 +748,7 @@ export function captureSqliteDatabaseAdmissions(
 }
 
 export function installSqliteDatabaseAdmissions(admissions: SqliteDatabaseAdmissions): void {
-  for (const incoming of admissions) {
-    if (incoming.descriptorOwner !== 0 || isRetired(incoming)) {
-      continue;
-    }
-    let record = state.admissions.get(incoming.identity);
-    if (record && isRetired(record)) {
-      state.admissions.delete(record.identity);
-      record = undefined;
-    }
-    if (!record) {
-      record = { ...incoming, hostRevision: undefined };
-      state.admissions.set(incoming.identity, record);
-    } else if (record.generationId !== incoming.generationId) {
-      // Only the host creates a generation; unrelated revocation cells cannot certify its facts.
-      continue;
-    }
-    for (const [key, fact] of incoming.facts) {
-      if (valid(incoming, fact)) {
-        record.facts.set(key, fact);
-      }
-    }
-    for (const [writer, cell] of incoming.writers) {
-      if (!record.writers.has(writer)) {
-        record.writers.set(writer, cell);
-      }
-    }
-    if (
-      incoming.hostRevision !== undefined &&
-      incoming.hostRevision ===
-        Atomics.load(new Int32Array(record.generation), SqliteDatabaseGenerationSlot.hostRevision)
-    ) {
-      record.hostRevision = incoming.hostRevision;
-    }
-    registerWriterCustody(record);
-  }
+  installSqliteDatabaseAdmissionRecords(state.admissions, admissions);
   rememberEnvironment();
 }
 

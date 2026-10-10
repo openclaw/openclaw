@@ -11,7 +11,6 @@ import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
 import { resolveCrabboxBinary } from "./crabbox-binary.js";
 import { ensureManagedCrabboxBinary } from "./crabbox-managed-binary.js";
 import {
-  type CrabboxCommandRunner,
   type LeaseCommandContext,
   runCrabboxCommandWithCoordinatorRetry,
   stopCrabboxLease,
@@ -40,6 +39,7 @@ import {
   resolveCrabboxWarmImageProfile,
 } from "./crabbox-worker-profile.js";
 import { prepareCrabboxProjectFiles } from "./crabbox-worker-project.js";
+import type { CrabboxWorkerProviderDependencies } from "./crabbox-worker-provider.types.js";
 import {
   createCrabboxProvisionAuthority,
   failProvisionAfterCleanup,
@@ -70,8 +70,6 @@ import {
   WARM_IMAGE_COMMAND_ROUND_TRIP_TIMEOUT_MS,
 } from "./crabbox-worker-timeouts.js";
 import { loadCrabboxWorkerWallpaperBase64 } from "./crabbox-worker-wallpaper.js";
-import type { CrabboxWarmImagePolicy } from "./crabbox-worker-warm-image-policy.js";
-import type { CrabboxState } from "./crabbox-worker-warm-image-store.js";
 import { createCrabboxWarmImageManager } from "./crabbox-worker-warm-image.js";
 
 // Local pack creation, two seed commands, and upload precede runtime preparation and capture.
@@ -80,19 +78,6 @@ type CrabboxProfile = ReturnType<typeof parseCrabboxProfile>;
 
 type LeaseHeartbeatContext = LeaseCommandContext &
   Pick<CrabboxProfile, "heartbeatIntervalMs" | "heartbeatTimeoutMs" | "idleTimeout">;
-
-type CrabboxWorkerProviderDependencies = {
-  isExecutable?: (candidate: string) => boolean;
-  openclawRoot?: string;
-  pathEnv?: string;
-  platform?: NodeJS.Platform;
-  runCommand?: CrabboxCommandRunner;
-  sleep?: (milliseconds: number, signal?: AbortSignal) => Promise<void>;
-  wallpaperPath: string;
-  state: CrabboxState;
-  warn?: (message: string) => void;
-  warmImagePolicy?: CrabboxWarmImagePolicy;
-};
 
 export function createCrabboxWorkerProvider(
   dependencies: CrabboxWorkerProviderDependencies,

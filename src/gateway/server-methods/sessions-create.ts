@@ -35,8 +35,8 @@ import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
 import {
   prepareSessionWorktreeCreation,
   resolveSessionProjectRoot,
-  validateSessionWorktreeSelection,
 } from "../session-worktree-preparation.js";
+import { validateSessionWorktreeSelection } from "../session-worktree-selection.js";
 import { prepareSkillLibrarySessionCreation } from "../skill-library-session.js";
 import { gatewayClientUploadPolicyError } from "../upload-policy.js";
 import { createAgentRuntimeAuthorityGuard } from "./agent-runtime-authority.js";

@@ -78,11 +78,7 @@ import {
   notifySessionsSendSession,
   resolveConfiguredAgentMainSessionKey,
 } from "./sessions-send-tool.delivery.js";
-import {
-  readSessionsSendMessage,
-  readSessionsSendMode,
-  readSessionsSendTimeout,
-} from "./sessions-send-tool.input.js";
+import * as input from "./sessions-send-tool.input.js";
 import { SessionsSendToolSchema, SessionsSendOutputSchema } from "./sessions-send-tool.schema.js";
 import type { SessionsSendToolOptions } from "./sessions-send-tool.types.js";
 
@@ -103,14 +99,14 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
       const promptedAt = Date.now();
       const gatewayCall = opts?.callGateway ?? callAgentToolGatewayRequest;
       const sendGatewayCall = opts?.callGateway ?? callSessionsSendGateway;
-      const message = readSessionsSendMessage(params);
-      const mode = readSessionsSendMode(params);
+      const message = input.readSessionsSendMessage(params);
+      const mode = input.readSessionsSendMode(params);
       const resumeCaller =
         mode === undefined || mode === "resume" ? captureSessionsSendResumeCaller() : undefined;
       if (mode === "resume" && !resumeCaller) {
         return sendFailure("forbidden", "Task resume requires an admitted parent tool caller.");
       }
-      const timeoutSeconds = readSessionsSendTimeout(params, mode);
+      const timeoutSeconds = input.readSessionsSendTimeout(params, mode);
       const {
         cfg,
         mainKey,

@@ -58,10 +58,7 @@ import {
 import { admitReplyTurn, runWithReplyOperationLifecycleAdmission } from "./reply-turn-admission.js";
 import { resolveReplyTurnKind } from "./reply-turn-kind.js";
 
-type DispatchReplyOperationAcquisition =
-  | { status: "ready" }
-  | { status: "busy" }
-  | { status: "aborted" };
+type DispatchReplyOperationAcquisition = { status: "ready" | "busy" | "aborted" };
 
 async function restoreArchivedDispatchSession(params: {
   ctx: FinalizedMsgContext;
