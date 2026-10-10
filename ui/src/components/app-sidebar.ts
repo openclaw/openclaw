@@ -9,29 +9,30 @@ import type { SessionObserverDigest } from "../../../packages/gateway-protocol/s
 import { isSessionRouteId, pathForRoute } from "../app-route-paths.ts";
 import { beginNativeWindowDragFromTopInset } from "../app/native-window-drag.ts";
 import { t } from "../i18n/index.ts";
-import { createIdleImport } from "../lib/idle-import.ts";
 import "./session-menu.ts";
 import "./mcp-app-catalog.ts";
 import "./sidebar-agent-card.ts";
 import "./sidebar-attention.ts";
+import { rosterActivityStore } from "../lib/agents/roster-activity-store.ts";
+import { createIdleImport } from "../lib/idle-import.ts";
+import "./theme-mode-toggle.ts";
+import "./tooltip.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import {
   buildCatalogSessionKey,
   catalogSessionKeyFromSearch,
 } from "../lib/sessions/catalog-key.ts";
-import "./theme-mode-toggle.ts";
-import "./tooltip.ts";
 import type { CatalogProjectGrouping } from "../lib/sessions/catalog-project-grouping.ts";
 import { showToast } from "../lib/toast.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import { SETTINGS_ROUTE_TARGETS } from "../pages/config/route-data.ts";
 import { renderPluginSurface } from "../plugins/control-ui-view.ts";
-import { renderAppSidebarOnline } from "./app-sidebar-online.ts";
-import "../styles/app-sidebar.css";
+import { sidebarOnlineOrder, renderAppSidebarOnline } from "./app-sidebar-online.ts";
 import "../styles/sidebar-rail.css";
 import { renderSidebarRail, renderSidebarPages, renderSidebarScope } from "./app-sidebar-rail.ts";
 import { renderAppSidebarBrand } from "./app-sidebar-render.ts";
 import type { SessionCatalogGroupsRenderer } from "./app-sidebar-session-catalog-render.ts";
+import "../styles/app-sidebar.css";
 import type { CatalogSessionMenuRequest } from "./app-sidebar-session-catalogs.ts";
 import { renderSessionList } from "./app-sidebar-session-list-render.ts";
 import type {
@@ -66,6 +67,9 @@ import { SessionOrganizerController } from "./session-organizer-controller.ts";
 import { SidebarContextController } from "./sidebar-context-controller.ts";
 import { SidebarMenusController } from "./sidebar-menus-controller.ts";
 import { SidebarPeopleController } from "./sidebar-people-controller.ts";
+import { captureSidebarSnapshotModel } from "./sidebar-snapshot-capture.ts";
+import { SidebarSnapshotController } from "./sidebar-snapshot-controller.ts";
+import type { SidebarSnapshotModel } from "./sidebar-snapshot-model.ts";
 
 class AppSidebar extends AppSidebarSessionNavigationElement implements SessionListHost {
   @state() teamOnlineExpanded = false;
@@ -76,6 +80,91 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
   override readonly sessionOrganizer = new SessionOrganizerController(this);
   override readonly sidebarMenus = new SidebarMenusController(this);
   readonly people = new SidebarPeopleController(this);
+  private readonly sidebarSnapshotController = new SidebarSnapshotController(this);
+
+  restoreSidebarSnapshot(model: SidebarSnapshotModel): void {
+    this.sidebarSnapshot = model;
+    this.sessionOrganizer.collapsedSessionSections = new Set(model.collapsedSections);
+    const rows = [...model.sessions, ...model.sections.flatMap((section) => section.rows)];
+    for (let index = 0; index < rows.length; index += 1) {
+      rows.push(...rows[index]!.children);
+    }
+    this.sessionProjection.restoreChildrenDisplay(rows);
+    this.people.sortMode = model.peopleSortMode;
+    this.people.statusFilter = model.peopleStatusFilter;
+    this.teamOnlineExpanded = model.onlineExpanded;
+    sidebarOnlineOrder(this).restore(model.onlineUsers, new Map(model.onlineCounts));
+    if (model.mode === "roster") {
+      void this.rosterRendererImport.load().catch(() => undefined);
+    }
+  }
+
+  releaseSidebarSnapshot(): void {
+    const snapshot = this.sidebarSnapshot;
+    this.sidebarPluginSnapshot =
+      snapshot && this.context?.plugins.registryStatus !== "complete"
+        ? { entries: snapshot.entries, plugins: snapshot.plugins }
+        : null;
+    this.sidebarSnapshot = null;
+  }
+
+  clearSidebarSnapshot(): void {
+    this.sidebarSnapshot = null;
+    this.sidebarPluginSnapshot = null;
+    this.sessionProjection.restoreChildrenDisplay([]);
+    sidebarOnlineOrder(this).clear();
+    this.people.resetView();
+    this.teamOnlineExpanded = false;
+  }
+
+  sidebarSnapshotSettled(): boolean {
+    const context = this.context;
+    if (!this.connected || !context) {
+      return false;
+    }
+    const people = sidebarOnlineOrder(this).users;
+    if (
+      people.some((person) => person.identity?.type === "profile") &&
+      this.sessionData.ownerCounts.counts === null &&
+      this.sessionData.ownerCounts.error === null
+    ) {
+      return false;
+    }
+    if (this.sidebarAgentsMode === "roster") {
+      const roster = rosterActivityStore(context).snapshot;
+      return (
+        !!this.rosterRenderer &&
+        (roster.membershipReady || roster.error !== null) &&
+        !roster.loading &&
+        roster.involvingMe === this.sidebarSessionOwnerFilter().involvingMe
+      );
+    }
+    return (
+      !!this.sessionData.sessionsResult &&
+      !this.sessionData.sessionsLoading &&
+      !context.sessions.presentation.resultCached
+    );
+  }
+
+  captureSidebarSnapshot(): SidebarSnapshotModel | null {
+    if (
+      !this.context ||
+      this.sidebarSnapshot ||
+      this.sessionData.ownerCounts.error !== null ||
+      (this.sidebarAgentsMode === "roster" &&
+        rosterActivityStore(this.context).snapshot.error !== null) ||
+      (this.context.plugins.registryStatus !== "complete" && !this.sidebarPluginSnapshot)
+    ) {
+      return null;
+    }
+    const rows = this.selectedAgentSessionRows(this.getSessionNavigationState());
+    return captureSidebarSnapshotModel(
+      this,
+      this.context,
+      rows,
+      this.zonedVisibleSections(rows).sections,
+    );
+  }
 
   sessionGroupDefaults(name: string) {
     if (this.context?.sessions.groupsStatus() !== "ready") {
@@ -200,6 +289,9 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
 
   protected override willUpdate(changed: PropertyValues<this>) {
     super.willUpdate(changed);
+    if (this.context?.plugins.registryStatus === "complete") {
+      this.sidebarPluginSnapshot = null;
+    }
     // Admit new geometry only between interactions; once shown it stays put.
     // Popover focus can leave :focus-within false; inspect the owned DOM instead.
     // Native drag can clear :hover, so retain the organizer's authoritative drag facts.
@@ -519,9 +611,17 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
   }
 
   override render() {
+    if (
+      this.sidebarSnapshotController.pending ||
+      (this.sidebarSnapshot?.mode === "roster" && !this.rosterRenderer)
+    ) {
+      return nothing;
+    }
     return html`
       <aside
         class="sidebar sidebar--rail"
+        data-snapshot-state=${this.sidebarSnapshot ? "cached" : "live"}
+        data-snapshot-saved=${String(this.sidebarSnapshotController.saved)}
         @pointerleave=${this.handleSidebarInteractionEnd}
         @focusout=${this.handleSidebarInteractionEnd}
         @contextmenu=${(event: MouseEvent) => {

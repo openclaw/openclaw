@@ -20,6 +20,7 @@ import {
   CHAT_SNAPSHOT_DB_NAME,
   CHAT_SNAPSHOT_METADATA_STORE_NAME,
   CHAT_SNAPSHOT_STORE_NAME,
+  SIDEBAR_SNAPSHOT_STORE_NAME,
   readStoredChatSnapshotRecord,
 } from "./session-snapshot-database.ts";
 import {
@@ -498,8 +499,9 @@ describe("persistent chat session snapshots", () => {
 
     const request = indexedDB.open(CHAT_SNAPSHOT_DB_NAME);
     const database = await requestResult(request);
-    expect(database.version).toBe(4);
+    expect(database.version).toBe(5);
     expect(Array.from(database.objectStoreNames)).toEqual([
+      SIDEBAR_SNAPSHOT_STORE_NAME,
       CHAT_SNAPSHOT_METADATA_STORE_NAME,
       CHAT_SNAPSHOT_STORE_NAME,
     ]);

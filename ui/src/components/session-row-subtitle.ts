@@ -4,6 +4,8 @@ import type { SessionObserverDigest } from "../../../packages/gateway-protocol/s
 import { t } from "../i18n/index.ts";
 import { resolveToolDisplayIcon } from "../lib/chat/tool-display-icon.ts";
 import { isCriticalObserverHealth, pickFreshestObserverDigest } from "../lib/observer-digest.ts";
+import type { CatalogBackingSessionDisplay } from "./app-sidebar-session-catalogs.ts";
+import type { SessionListHost } from "./app-sidebar-session-row-render.ts";
 import type { SidebarRecentSession, SidebarToolActivity } from "./app-sidebar-session-types.ts";
 import { icons } from "./icons.ts";
 import { sessionAttentionSubtitle } from "./session-attention-presentation.ts";
@@ -13,6 +15,42 @@ type SidebarSessionSubtitle = {
   narration: string | undefined;
   toolName?: string;
 };
+
+export function resolveSidebarSessionRowSubtitle(
+  host: Pick<
+    SessionListHost,
+    | "sidebarSnapshot"
+    | "sidebarAgentsMode"
+    | "sessionsShowPreview"
+    | "sidebarLiveActivity"
+    | "sidebarTools"
+    | "sessionProjection"
+    | "sidebarNarrationLines"
+    | "sidebarObserverDigests"
+  >,
+  session: SidebarRecentSession,
+  display?: CatalogBackingSessionDisplay,
+) {
+  if (host.sidebarSnapshot && session.snapshotSubtitle) {
+    return session.snapshotSubtitle;
+  }
+  const toolActivity =
+    host.sidebarAgentsMode !== "roster" &&
+    host.sessionsShowPreview &&
+    session.hasActiveRun &&
+    host.sidebarLiveActivity
+      ? host.sidebarTools.get(session.key)
+      : undefined;
+  return host.sessionProjection.resolveSubtitle({
+    session,
+    hasDisplay: display !== undefined,
+    sidebarLiveActivity: host.sidebarLiveActivity,
+    showPreview: host.sessionsShowPreview,
+    narrationLine: host.sidebarNarrationLines.get(session.key),
+    toolActivity,
+    observerDigest: host.sidebarObserverDigests.get(session.key) ?? null,
+  });
+}
 
 /** Resolves the single subtitle slot without displacing visible status. */
 export function resolveSidebarSessionSubtitle(params: {

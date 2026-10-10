@@ -7,6 +7,7 @@ import { showToast } from "../lib/toast.ts";
 import { buildReconciledSidebarZone } from "./app-sidebar-session-navigation-logic.ts";
 import type { SidebarSessionNavigationState } from "./app-sidebar-session-navigation-logic.ts";
 import { applySidebarSessionOwnerFilter } from "./app-sidebar-session-ownership.ts";
+import type { SidebarSnapshotModel } from "./sidebar-snapshot-model.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 
 type PersonalNavigationHost = {
@@ -15,9 +16,11 @@ type PersonalNavigationHost = {
   readonly activeRouteId?: string;
   readonly navigationView: string;
   readonly effectiveNavigationScope: "mine" | "all";
+  readonly sidebarSnapshot: SidebarSnapshotModel | null;
+  readonly sidebarPluginSnapshot: Pick<SidebarSnapshotModel, "entries" | "plugins"> | null;
   readonly sidebarEntries: readonly string[];
   readonly sessionOwnerFilterId: string | null;
-  readonly sessionDataContext: Pick<ApplicationContext, "sessions" | "gateway"> | undefined;
+  readonly sessionDataContext: Pick<ApplicationContext, "sessions" | "gateway" | "plugins"> | undefined;
   readonly navigationCatalog: { readonly dashboards: SessionListSnapshot | null };
   getRouteSessionKey(): string;
   getSessionNavigationState(): SidebarSessionNavigationState;
@@ -88,6 +91,11 @@ export function personalSidebarZone(host: PersonalNavigationHost, rows: SidebarR
     rows: [...rows, ...pins],
     pluginNavigation: host.pluginNavigation(),
     pluginTabs: host.sessionDataContext?.gateway.snapshot.hello?.controlUiTabs,
+    snapshot: host.sidebarSnapshot
+      ? { model: host.sidebarSnapshot, selectedKey: host.getRouteSessionKey() }
+      : undefined,
+    pendingPlugins:
+      host.sessionDataContext?.plugins.registryStatus !== "complete" ? host.sidebarPluginSnapshot : null,
   });
 }
 
