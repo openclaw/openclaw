@@ -1,9 +1,5 @@
-/**
- * Extracts native Codex subagent completion notifications from trusted
- * contextual and inter-agent messages emitted by the app-server.
- */
 import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { CodexServerNotification, JsonObject, JsonValue } from "./protocol.js";
+import type { CodexServerNotification, JsonValue } from "./protocol.js";
 import { isJsonObject } from "./protocol.js";
 
 export const NATIVE_SUBAGENT_NOTIFICATION_METHODS = new Set([
@@ -30,16 +26,12 @@ export const RECOVERY_REVISION_NOTIFICATION_METHODS = new Set([
 const CODEX_SUBAGENT_NOTIFICATION_START = "<subagent_notification>";
 const CODEX_SUBAGENT_NOTIFICATION_END = "</subagent_notification>";
 
-/** Terminal status values OpenClaw accepts for Codex native subagent completion. */
-type CodexNativeSubagentCompletionStatus = "succeeded" | "failed" | "cancelled";
-
 type CodexNativeSubagentCompletionDetails = {
-  status: CodexNativeSubagentCompletionStatus;
+  status: "succeeded" | "failed" | "cancelled";
   statusLabel: string;
   result: string;
 };
 
-/** Completion associated with a resolved child thread id. */
 export type CodexNativeSubagentCompletion = CodexNativeSubagentCompletionDetails & {
   childThreadId: string;
 };
@@ -49,27 +41,14 @@ type CodexNativeSubagentNotificationCompletion = CodexNativeSubagentCompletionDe
   agentPath: string;
 };
 
-/** Extracts trusted subagent completion payloads from a Codex server notification. */
 function extractCodexNativeSubagentCompletions(
   notification: CodexServerNotification,
 ): CodexNativeSubagentNotificationCompletion[] {
   const params = isJsonObject(notification.params) ? notification.params : undefined;
-  if (!params) {
+  const item = isJsonObject(params?.item) ? params.item : undefined;
+  if (!item || notification.method !== "rawResponseItem/completed" || item.role !== "user") {
     return [];
   }
-  const item = isJsonObject(params.item) ? params.item : undefined;
-  if (!item) {
-    return [];
-  }
-  if (notification.method === "rawResponseItem/completed" && item.role === "user") {
-    return readTrustedContextualCompletions(item);
-  }
-  return [];
-}
-
-function readTrustedContextualCompletions(
-  item: JsonObject,
-): CodexNativeSubagentNotificationCompletion[] {
   const content = item.content;
   const metadata = item.internal_chat_message_metadata_passthrough;
   const kinds = isJsonObject(metadata) ? metadata.content_item_kinds : undefined;
@@ -98,10 +77,22 @@ function readTrustedContextualCompletions(
     ) {
       return [];
     }
-    const completion = parseCodexNativeSubagentNotificationBody(
-      text.slice(CODEX_SUBAGENT_NOTIFICATION_START.length, -CODEX_SUBAGENT_NOTIFICATION_END.length),
-    );
-    return completion ? [completion] : [];
+    let payload: JsonValue;
+    try {
+      payload = JSON.parse(
+        text
+          .slice(CODEX_SUBAGENT_NOTIFICATION_START.length, -CODEX_SUBAGENT_NOTIFICATION_END.length)
+          .trim(),
+      );
+    } catch {
+      return [];
+    }
+    if (!isJsonObject(payload)) {
+      return [];
+    }
+    const agentPath = readString(payload, "agent_path")?.trim();
+    const completion = readCompletionStatus(payload.status);
+    return agentPath && completion ? [{ agentPath, ...completion }] : [];
   });
 }
 
@@ -162,23 +153,6 @@ function readDeliveredNativeCompletionPaths(notification: CodexServerNotificatio
     : [];
 }
 
-function parseCodexNativeSubagentNotificationBody(
-  body: string,
-): CodexNativeSubagentNotificationCompletion | undefined {
-  let payload: JsonValue;
-  try {
-    payload = JSON.parse(body.trim());
-  } catch {
-    return undefined;
-  }
-  if (!isJsonObject(payload)) {
-    return undefined;
-  }
-  const agentPath = readString(payload, "agent_path")?.trim();
-  const completion = readCompletionStatus(payload.status);
-  return agentPath && completion ? { agentPath, ...completion } : undefined;
-}
-
 function readCompletionStatus(
   status: JsonValue | undefined,
 ): CodexNativeSubagentCompletionDetails | undefined {
@@ -205,4 +179,11 @@ function readCompletionStatus(
   return error === undefined
     ? undefined
     : { status: "failed", statusLabel: "errored", result: error.trim() || "(no output)" };
+}
+
+export function isNoFinalCompletion(completion: CodexNativeSubagentCompletion): boolean {
+  return (
+    completion.status === "succeeded" &&
+    completion.statusLabel === "completed_without_final_message"
+  );
 }

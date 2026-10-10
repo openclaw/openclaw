@@ -11,15 +11,12 @@ import type {
 import {
   CROSS_OS_DASHBOARD_FETCH_TIMEOUT_MS,
   CROSS_OS_DASHBOARD_SMOKE_TIMEOUT_MS,
-  CROSS_OS_GATEWAY_STATUS_COMMAND_TIMEOUT_MS,
   buildReleaseModelConfigCommands,
-  gatewayReadyDeadlineMs,
   managedGatewayRestartCommandTimeoutMs,
 } from "./config.ts";
+import { waitForReleaseGateway, type GatewayReadinessParams } from "./gateway-readiness.ts";
 import { installedEntryPath } from "./install.ts";
 import {
-  appendGatewayStatusHelpProbeFallback,
-  buildGatewayStatusArgsFromHelpText,
   buildReleaseOnboardArgs,
   ensureManagedGatewayReady,
   resolveInstalledGatewayStopArgs,
@@ -32,12 +29,7 @@ import {
   resolveDashboardAssetUrls,
   verifyDashboardAssetUrls,
 } from "./network-smokes.ts";
-import {
-  hasChildExited,
-  registerActiveChildProcessTree,
-  runCommand,
-  waitForGatewayWithStartupMigrationRestart,
-} from "./process.ts";
+import { captureGatewayProcess, registerActiveChildProcessTree, runCommand } from "./process.ts";
 import { logLanePhase } from "./reporting.ts";
 import { formatError, sleep } from "./shared.ts";
 
@@ -156,120 +148,21 @@ export async function startGateway(params: LaneCommandParams): Promise<GatewayHa
     },
   );
   const activeChildTree = registerActiveChildProcessTree(child);
-  child.stdout?.on("data", (chunk) => {
-    gatewayLog.write(chunk);
-  });
-  child.stderr?.on("data", (chunk) => {
-    gatewayLog.write(chunk);
-  });
-  let resolveChildClose: () => void;
-  const childClosePromise = new Promise<void>((resolvePromise) => {
-    resolveChildClose = resolvePromise;
-  });
-  let closeLogPromise: Promise<void> | undefined;
-  const closeLog = () => {
-    closeLogPromise ??= new Promise<void>((resolvePromise) => {
-      gatewayLog.once("error", () => resolvePromise());
-      gatewayLog.end(() => resolvePromise());
-    });
-    return closeLogPromise;
-  };
-  child.once("close", () => {
-    resolveChildClose();
-    activeChildTree.unregister();
-    void closeLog();
-  });
-  child.once("error", () => {
-    resolveChildClose();
-    activeChildTree.unregister();
-    void closeLog();
-  });
-  return {
+  return captureGatewayProcess(
     child,
-    closeLog,
-    launchLogOffset,
-    logPath: params.logPath,
-    waitForClose: () => childClosePromise,
-  };
+    gatewayLog,
+    { launchLogOffset, logPath: params.logPath },
+    activeChildTree.unregister,
+  );
 }
 
-export async function waitForGateway(
-  params: LaneCommandParams & {
-    gateway?: GatewayHandle;
-    gatewayHolder?: { current: GatewayHandle | null };
-    gatewayLogPath?: string;
-  },
-) {
-  if (params.gatewayHolder) {
-    if (!params.gatewayLogPath) {
-      throw new Error("Gateway restart coordination requires a gateway log path.");
-    }
-    const gatewayLogPath = params.gatewayLogPath;
-    await waitForGatewayWithStartupMigrationRestart({
-      gatewayHolder: params.gatewayHolder,
-      restartGateway: () =>
-        startGateway({
-          lane: params.lane,
-          env: params.env,
-          logPath: gatewayLogPath,
-        }),
-      waitUntilReady: (gateway) =>
-        waitForGateway({
-          lane: params.lane,
-          env: params.env,
-          gateway,
-          logPath: params.logPath,
-        }),
-    });
-    return;
-  }
-
-  const statusArgs = await resolveGatewayStatusArgs(params.lane, params.env, params.logPath);
-  const deadline = Date.now() + gatewayReadyDeadlineMs();
-  while (Date.now() < deadline) {
-    if (params.gateway && hasChildExited(params.gateway.child)) {
-      throw new Error(`Gateway exited before becoming ready on port ${params.lane.gatewayPort}.`);
-    }
-    let result;
-    try {
-      result = await runOpenClaw({
-        lane: params.lane,
-        env: params.env,
-        args: statusArgs,
-        logPath: params.logPath,
-        timeoutMs: CROSS_OS_GATEWAY_STATUS_COMMAND_TIMEOUT_MS,
-        check: false,
-      });
-    } catch {
-      await sleep(2_000);
-      continue;
-    }
-    if (result.exitCode === 0) {
-      return;
-    }
-    if (params.gateway && hasChildExited(params.gateway.child)) {
-      throw new Error(`Gateway exited before becoming ready on port ${params.lane.gatewayPort}.`);
-    }
-    await sleep(2_000);
-  }
-  throw new Error(`Gateway did not become ready on port ${params.lane.gatewayPort}.`);
-}
-
-async function resolveGatewayStatusArgs(lane: LaneState, env: NodeJS.ProcessEnv, logPath: string) {
-  try {
-    const help = await runOpenClaw({
-      lane,
-      env,
-      args: ["gateway", "status", "--help"],
-      logPath,
-      timeoutMs: 15_000,
-      check: false,
-    });
-    return buildGatewayStatusArgsFromHelpText(`${help.stdout}\n${help.stderr}`);
-  } catch (error) {
-    appendGatewayStatusHelpProbeFallback(logPath, error);
-    return buildGatewayStatusArgsFromHelpText("--require-rpc");
-  }
+export async function waitForGateway(params: GatewayReadinessParams) {
+  await waitForReleaseGateway(
+    params,
+    (args, timeoutMs) => runOpenClaw({ ...params, args, timeoutMs, check: false }),
+    (logPath) => startGateway({ lane: params.lane, env: params.env, logPath }),
+    true,
+  );
 }
 
 export async function runModelsSet(params: LaneCommandParams & { providerConfig: ProviderConfig }) {

@@ -1,4 +1,3 @@
-// Minimax provider module implements model/runtime integration.
 import { toImageDataUrl } from "openclaw/plugin-sdk/image-generation";
 import {
   downloadGeneratedVideoAsset,
@@ -10,18 +9,12 @@ import {
   assertOkOrThrowHttpError,
   createProviderOperationDeadline,
   createProviderOperationTimeoutResolver,
-  executeProviderOperationWithRetry,
-  fetchWithTimeoutGuarded,
   pollProviderOperation,
   postJsonRequest,
   readProviderJsonResponse,
   resolveProviderOperationTimeoutMs,
-  resolveProviderHttpRequestConfig,
-  sanitizeConfiguredModelProviderRequest,
   waitProviderOperationPollInterval,
-  type ProviderOperationRetryStage,
   type ProviderOperationTimeoutMs,
-  type TransientProviderRetryConfig,
 } from "openclaw/plugin-sdk/provider-http";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
@@ -31,9 +24,8 @@ import type {
 } from "openclaw/plugin-sdk/video-generation";
 import {
   assertMinimaxBaseResp,
-  DEFAULT_MINIMAX_MEDIA_BASE_URL,
-  resolveMinimaxGuardedRequestOptions,
-  resolveMinimaxMediaBaseUrl,
+  fetchMinimaxResponse,
+  resolveMinimaxMediaRequestConfig,
   type MinimaxBaseResp,
   type MinimaxRequestPolicy,
 } from "./media-provider-runtime.js";
@@ -74,48 +66,6 @@ type MinimaxFileRetrieveResponse = {
   };
   base_resp?: MinimaxBaseResp;
 };
-
-function resolveMinimaxRequestTimeoutMs(
-  timeoutMs: ProviderOperationTimeoutMs | undefined,
-): number | undefined {
-  const resolved = typeof timeoutMs === "function" ? timeoutMs() : timeoutMs;
-  return typeof resolved === "number" && Number.isFinite(resolved) && resolved > 0
-    ? resolved
-    : undefined;
-}
-
-async function fetchMinimaxResponse(params: {
-  stage: ProviderOperationRetryStage;
-  url: string;
-  init?: RequestInit;
-  timeoutMs?: ProviderOperationTimeoutMs;
-  fetchFn: typeof fetch;
-  requestFailedMessage: string;
-  policy: MinimaxRequestPolicy;
-  retry?: TransientProviderRetryConfig;
-}) {
-  return await executeProviderOperationWithRetry({
-    provider: "minimax",
-    stage: params.stage,
-    retry: params.retry,
-    operation: async () => {
-      const result = await fetchWithTimeoutGuarded(
-        params.url,
-        params.init ?? {},
-        resolveMinimaxRequestTimeoutMs(params.timeoutMs),
-        params.fetchFn,
-        resolveMinimaxGuardedRequestOptions(params.policy),
-      );
-      try {
-        await assertOkOrThrowHttpError(result.response, params.requestFailedMessage);
-      } catch (error) {
-        await result.release();
-        throw error;
-      }
-      return result;
-    },
-  });
-}
 
 function resolveFirstFrameImage(req: VideoGenerationRequest): string | undefined {
   const input = req.inputImages?.[0];
@@ -282,7 +232,9 @@ async function downloadVideoFromFileId(params: {
   };
 }
 
-function buildMinimaxVideoProvider(providerId: string): VideoGenerationProvider {
+export function buildMinimaxVideoGenerationProvider(
+  providerId = "minimax",
+): VideoGenerationProvider {
   return {
     id: providerId,
     label: "MiniMax",
@@ -339,19 +291,11 @@ function buildMinimaxVideoProvider(providerId: string): VideoGenerationProvider 
         label: "MiniMax video generation",
       });
       const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
-        resolveProviderHttpRequestConfig({
-          baseUrl: resolveMinimaxMediaBaseUrl(req.cfg, providerId),
-          defaultBaseUrl: DEFAULT_MINIMAX_MEDIA_BASE_URL,
-          defaultHeaders: {
-            Authorization: `Bearer ${auth.apiKey}`,
-            "Content-Type": "application/json",
-          },
-          provider: providerId,
+        resolveMinimaxMediaRequestConfig({
+          cfg: req.cfg,
+          providerId,
+          apiKey: auth.apiKey,
           capability: "video",
-          transport: "http",
-          request: sanitizeConfiguredModelProviderRequest(
-            req.cfg.models?.providers?.[providerId]?.request,
-          ),
         });
       const requestPolicy: MinimaxRequestPolicy = { allowPrivateNetwork, dispatcherPolicy };
       const model = normalizeOptionalString(req.model) ?? DEFAULT_MINIMAX_VIDEO_MODEL;
@@ -460,30 +404,26 @@ function buildMinimaxVideoProvider(providerId: string): VideoGenerationProvider 
         });
         const videoUrl = normalizeOptionalString(completed.video_url);
         const fileId = normalizeOptionalString(completed.file_id);
-        const maxVideoBytes = resolveGeneratedMediaMaxBytes(req.cfg, "video");
+        const downloadOptions = {
+          timeoutMs: createProviderOperationTimeoutResolver({
+            deadline,
+            defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
+          }),
+          fetchFn,
+          maxBytes: resolveGeneratedMediaMaxBytes(req.cfg, "video"),
+          policy: requestPolicy,
+        };
         const video = videoUrl
           ? await downloadVideoFromUrl({
+              ...downloadOptions,
               url: videoUrl,
-              timeoutMs: createProviderOperationTimeoutResolver({
-                deadline,
-                defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
-              }),
-              fetchFn,
-              maxBytes: maxVideoBytes,
-              policy: requestPolicy,
             })
           : fileId
             ? await downloadVideoFromFileId({
+                ...downloadOptions,
                 fileId,
                 headers,
-                timeoutMs: createProviderOperationTimeoutResolver({
-                  deadline,
-                  defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
-                }),
                 baseUrl,
-                fetchFn,
-                maxBytes: maxVideoBytes,
-                policy: requestPolicy,
               })
             : (() => {
                 throw new Error(
@@ -505,12 +445,4 @@ function buildMinimaxVideoProvider(providerId: string): VideoGenerationProvider 
       }
     },
   };
-}
-
-export function buildMinimaxVideoGenerationProvider(): VideoGenerationProvider {
-  return buildMinimaxVideoProvider("minimax");
-}
-
-export function buildMinimaxPortalVideoGenerationProvider(): VideoGenerationProvider {
-  return buildMinimaxVideoProvider("minimax-portal");
 }

@@ -74,8 +74,7 @@ internal fun wearVoiceLayout(
     orbSize =
       when {
         compactLargeText -> 48.dp
-        compact -> 80.dp
-        fontScale > 1.1f -> 80.dp
+        compact || fontScale > 1.1f -> 80.dp
         else -> 92.dp
       },
     contentHeight =
@@ -87,47 +86,43 @@ internal fun wearVoiceLayout(
   )
 }
 
+internal data class WearVoiceState(
+  val realtimeTalk: WearRealtimeTalkSnapshot,
+  val realtimeStopping: Boolean,
+  val speaking: Boolean,
+  val realtimeCapturing: Boolean,
+  val realtimePlaying: Boolean,
+  val realtimeMouthLevel: Float,
+  val realtimePlaybackFailed: Boolean,
+  val realtimeThinkingOverride: Boolean,
+  val realtimeElapsedSeconds: Long,
+  val actionBusy: Boolean,
+  val inputEnabled: Boolean,
+  val microphonePermissionRequired: Boolean,
+  val microphoneSettingsRequired: Boolean,
+)
+
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 internal fun VoiceHomeMode(
+  voice: WearVoiceState,
   colors: WearColors,
-  microphonePermissionRequired: Boolean,
-  microphoneSettingsRequired: Boolean,
   onMicrophoneRecovery: () -> Unit,
-  realtimeTalk: WearRealtimeTalkSnapshot,
-  realtimeStopping: Boolean,
-  speaking: Boolean,
-  realtimeCapturing: Boolean,
-  realtimePlaying: Boolean,
-  realtimeMouthLevel: Float,
-  realtimePlaybackFailed: Boolean,
-  realtimeThinkingOverride: Boolean,
-  realtimeElapsedSeconds: Long,
-  actionBusy: Boolean,
-  inputEnabled: Boolean,
   onTalk: () -> Unit,
   onRealtimeTalk: () -> Unit,
   onStopSpeaking: () -> Unit,
   onOpenThread: () -> Unit,
 ) {
-  val realtimeActive = realtimeTalk.active || realtimeCapturing
-  val ttsOnly = speaking && !realtimeActive
-  val recoverMicrophone = microphonePermissionRequired && !realtimeActive && !ttsOnly
-  val state =
-    realtimeVoiceButtonState(
-      realtimeTalk = realtimeTalk,
-      ttsOnly = ttsOnly,
-      realtimeCapturing = realtimeCapturing,
-      realtimePlaying = realtimePlaying,
-      realtimePlaybackFailed = realtimePlaybackFailed,
-      realtimeThinkingOverride = realtimeThinkingOverride && !realtimeStopping,
-    )
+  val realtimeActive = voice.realtimeTalk.active || voice.realtimeCapturing
+  val ttsOnly = voice.speaking && !realtimeActive
+  val recoverMicrophone = voice.microphonePermissionRequired && !realtimeActive && !ttsOnly
+  val state = voice.realtimeVoiceButtonState(ttsOnly)
   var dictatePreview by remember { mutableStateOf(false) }
   val coroutineScope = rememberCoroutineScope()
   val list = rememberTransformingLazyColumnState()
-  val dictateActionEnabled = inputEnabled && !actionBusy && !speaking && !realtimeActive && !dictatePreview
+  val dictateActionEnabled = voice.inputEnabled && !voice.actionBusy && !voice.speaking && !realtimeActive && !dictatePreview
   val liveActionEnabled =
-    (realtimeActive || ttsOnly || (inputEnabled && !actionBusy)) && !dictatePreview
+    (realtimeActive || ttsOnly || (voice.inputEnabled && !voice.actionBusy)) && !dictatePreview
   val startDictate: () -> Unit = {
     if (dictateActionEnabled) {
       coroutineScope.launch {
@@ -160,26 +155,20 @@ internal fun VoiceHomeMode(
     }
   val statusText =
     when {
-      realtimeStopping -> stringResource(R.string.stopping)
+      voice.realtimeStopping -> stringResource(R.string.stopping)
       dictatePreview -> stringResource(R.string.listening)
       recoverMicrophone -> stringResource(R.string.microphone_permission_required)
       label == null -> null
-      realtimeActive -> "$label · ${formatVoiceElapsedTime(realtimeElapsedSeconds)}"
+      realtimeActive -> "$label · ${formatVoiceElapsedTime(voice.realtimeElapsedSeconds)}"
       else -> label
     }
-  val accent =
-    when {
-      dictatePreview || state == RealtimeVoiceButtonState.IDLE -> colors.voiceAccent
-      state == RealtimeVoiceButtonState.ERROR -> colors.danger
-      else -> colors.voiceAccent
-    }
+  val accent = if (!dictatePreview && state == RealtimeVoiceButtonState.ERROR) colors.danger else colors.voiceAccent
   val avatarState = if (dictatePreview) RealtimeVoiceButtonState.LISTENING else state
   val liveVoiceDescription = stringResource(R.string.talk)
   val liveClickLabel =
     when {
-      ttsOnly -> stringResource(R.string.stop_speaking)
-      recoverMicrophone -> stringResource(if (microphoneSettingsRequired) R.string.open_settings else R.string.retry)
-      realtimeActive -> stringResource(R.string.stop_speaking)
+      ttsOnly || realtimeActive -> stringResource(R.string.stop_speaking)
+      recoverMicrophone -> stringResource(if (voice.microphoneSettingsRequired) R.string.open_settings else R.string.retry)
       else -> stringResource(R.string.speak_to_agent)
     }
   val dictateClickLabel = stringResource(R.string.dictate)
@@ -194,7 +183,7 @@ internal fun VoiceHomeMode(
   val liveLabel = WearVoiceLabel(stringResource(R.string.tap), stringResource(R.string.live))
   val threadLabel = WearVoiceLabel(stringResource(R.string.double_tap), stringResource(R.string.thread))
   val threadClickLabel = stringResource(R.string.open_thread)
-  val recoveryLabel = if (recoverMicrophone) stringResource(if (microphoneSettingsRequired) R.string.open_settings else R.string.retry) else null
+  val recoveryLabel = if (recoverMicrophone) stringResource(if (voice.microphoneSettingsRequired) R.string.open_settings else R.string.retry) else null
   BoxWithConstraints(Modifier.fillMaxSize()) {
     val layout = wearVoiceLayout(maxWidth = maxWidth, fontScale = fontScale)
     val liveControlWidth = if (recoverMicrophone) layout.orbSize.coerceAtLeast(80.dp) else layout.orbSize
@@ -305,7 +294,7 @@ internal fun VoiceHomeMode(
         } else {
           WearTalkAvatar(
             state = avatarState,
-            mouthLevel = if (realtimePlaying) realtimeMouthLevel else 0f,
+            mouthLevel = if (voice.realtimePlaying) voice.realtimeMouthLevel else 0f,
             syntheticSpeech = ttsOnly,
             accent = accent,
             danger = colors.danger,
@@ -410,7 +399,6 @@ private fun TextLayoutResult.fitsVoiceViewport(
   }
 }
 
-@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun VoiceGestureLabel(
   label: WearVoiceLabel,
@@ -478,44 +466,23 @@ private fun VoiceGestureLabel(
   }
 }
 
-private fun realtimeVoiceButtonState(
-  realtimeTalk: WearRealtimeTalkSnapshot,
-  ttsOnly: Boolean,
-  realtimeCapturing: Boolean,
-  realtimePlaying: Boolean,
-  realtimePlaybackFailed: Boolean,
-  realtimeThinkingOverride: Boolean,
-): RealtimeVoiceButtonState =
+private fun WearVoiceState.realtimeVoiceButtonState(ttsOnly: Boolean): RealtimeVoiceButtonState =
   when {
-    realtimePlaybackFailed || realtimeTalk.status == WearRealtimeTalkStatus.ERROR -> {
-      RealtimeVoiceButtonState.ERROR
-    }
+    realtimePlaybackFailed || realtimeTalk.status == WearRealtimeTalkStatus.ERROR -> RealtimeVoiceButtonState.ERROR
 
-    realtimeThinkingOverride -> {
-      RealtimeVoiceButtonState.THINKING
-    }
+    realtimeThinkingOverride && !realtimeStopping -> RealtimeVoiceButtonState.THINKING
 
-    realtimePlaying || realtimeTalk.speaking || ttsOnly -> {
-      RealtimeVoiceButtonState.SPEAKING
-    }
+    realtimePlaying || realtimeTalk.speaking || ttsOnly -> RealtimeVoiceButtonState.SPEAKING
 
-    realtimeTalk.status == WearRealtimeTalkStatus.THINKING -> {
-      RealtimeVoiceButtonState.THINKING
-    }
+    realtimeTalk.status == WearRealtimeTalkStatus.THINKING -> RealtimeVoiceButtonState.THINKING
 
     realtimeCapturing ||
       realtimeTalk.listening ||
-      realtimeTalk.status == WearRealtimeTalkStatus.LISTENING -> {
-      RealtimeVoiceButtonState.LISTENING
-    }
+      realtimeTalk.status == WearRealtimeTalkStatus.LISTENING -> RealtimeVoiceButtonState.LISTENING
 
-    realtimeTalk.status == WearRealtimeTalkStatus.CONNECTING -> {
-      RealtimeVoiceButtonState.CONNECTING
-    }
+    realtimeTalk.status == WearRealtimeTalkStatus.CONNECTING -> RealtimeVoiceButtonState.CONNECTING
 
-    else -> {
-      RealtimeVoiceButtonState.IDLE
-    }
+    else -> RealtimeVoiceButtonState.IDLE
   }
 
 private fun formatVoiceElapsedTime(totalSeconds: Long): String {

@@ -6,7 +6,8 @@ import * as sqliteQueries from "../infra/kysely-sync.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
-import { ensureProfileForEmail, linkEmail, setUserProfileRole } from "../state/user-profiles.js";
+import { linkEmail, setUserProfileRole } from "../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import {
@@ -25,13 +26,13 @@ async function withSyntheticReader(
     readerId: string;
     ownerEmail: string;
     dispatch: (method: ReadMethod) => ReturnType<typeof dispatchGatewayMethodInProcessRaw>;
-    blockCatalog: () => { entered: Promise<void>; release: () => void };
+    blockCatalog: () => { entered: Promise<void>; readEntered: Promise<void>; release: () => void };
   }) => Promise<void>,
   visibility: "shared" | "draft" = "shared",
 ) {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const config: OpenClawConfig = {
-      agents: { list: [{ id: "main", default: true }] },
+      agents: { entries: { main: {} } },
       gateway: {
         roles: {
           default: "blocked",
@@ -60,8 +61,10 @@ async function withSyntheticReader(
       getRuntimeConfig: () => config,
       trackExecution: trackAsyncWork,
     });
+    const executions: Promise<void>[] = [];
     let catalogGate: ReturnType<typeof createDeferred<void>> | undefined;
     let catalogEntered: ReturnType<typeof createDeferred<void>> | undefined;
+    let restoreReadiness: (() => void) | undefined;
     const projection = await createSessionRowProjection({
       cfg: config,
       context,
@@ -97,20 +100,44 @@ async function withSyntheticReader(
                   forceSyntheticClient: true,
                   syntheticScopes: ["operator.read"],
                   resolveGatewayContext: () => context,
+                  onExecution: (execution) => executions.push(execution),
                 },
               ),
           ),
         blockCatalog: () => {
           catalogGate = createDeferred();
           catalogEntered = createDeferred();
+          const readEntered = createDeferred();
+          const prepare = projection.prepareSelection.bind(projection);
+          // Background catalog work uses a private closure; this observes the actual reader.
+          const readiness = vi
+            .spyOn(projection, "prepareSelection")
+            .mockImplementationOnce((...args) => {
+              readEntered.resolve();
+              return prepare(...args);
+            });
+          restoreReadiness = () => readiness.mockRestore();
           sessionChanges.emit({ all: true, scope: "catalog" });
-          return { entered: catalogEntered.promise, release: () => catalogGate?.resolve() };
+          return {
+            entered: catalogEntered.promise,
+            readEntered: readEntered.promise.then(() => {
+              expect(readiness).toHaveBeenCalledOnce();
+              expect(readiness).toHaveBeenCalledWith(true);
+            }),
+            release: () => catalogGate?.resolve(),
+          };
         },
       });
     } finally {
       catalogGate?.resolve();
-      await projection.ensureMaterialized();
-      projection.dispose();
+      try {
+        // Dispatch reports handler errors through its response; join the owned work before disposal.
+        await Promise.allSettled(executions);
+        await projection.ensureMaterialized();
+      } finally {
+        restoreReadiness?.();
+        projection.dispose();
+      }
     }
   });
 }
@@ -167,24 +194,34 @@ describe("synthetic plugin session reads", () => {
   it.each(methods)("honors role revocation during projection readiness on %s", async (method) => {
     await withSyntheticReader(async ({ readerId, dispatch, blockCatalog }) => {
       const gate = blockCatalog();
-      const pending = method === "sessions.list" ? dispatch(method) : undefined;
+      const pending =
+        method === "sessions.list" ? Promise.allSettled([dispatch(method)]) : undefined;
       try {
         await gate.entered;
+        if (pending) {
+          await gate.readEntered;
+        }
         setUserProfileRole(readerId, "blocked");
         if (pending) {
           gate.release();
-        }
-        const result = await (pending ?? dispatch(method));
-        if (method === "sessions.list") {
-          expect(result).toMatchObject({ ok: true, payload: { sessions: [] } });
+          expect(await pending).toEqual([
+            {
+              status: "rejected",
+              reason: expect.objectContaining({
+                message: "Your operator role changed; reconnect before continuing.",
+              }),
+            },
+          ]);
+          expect(await dispatch(method)).toMatchObject({ ok: true, payload: { sessions: [] } });
         } else {
-          expect(result).toMatchObject({
+          expect(await dispatch(method)).toMatchObject({
             ok: false,
             error: { message: `Session "${sessionKey}" was not found.` },
           });
         }
       } finally {
         gate.release();
+        await pending;
       }
     });
   });

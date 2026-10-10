@@ -28,6 +28,16 @@ function revisionBatchQuery(db: DatabaseSync, selections: readonly RevisionSelec
 }
 
 /** Resolve a bounded session selection in its original order, including repeated pins. */
+function orderRevisionRows<Row extends { skill_id: string; revision: string }>(
+  selections: readonly RevisionSelection[],
+  rows: readonly Row[],
+): Array<Omit<Row, "skill_id" | "revision"> | undefined> {
+  const metadata = new Map(
+    rows.map(({ skill_id, revision, ...value }) => [JSON.stringify([skill_id, revision]), value]),
+  );
+  return selections.map((pin) => metadata.get(JSON.stringify([pin.skillId, pin.revision])));
+}
+
 export function selectSkillLibraryRevisionMetadataBatch(
   db: DatabaseSync,
   selections: readonly RevisionSelection[],
@@ -36,13 +46,7 @@ export function selectSkillLibraryRevisionMetadataBatch(
     db,
     revisionBatchQuery(db, selections).select(["skill_id", "revision", "description"]),
   ).rows;
-  const metadata = new Map(
-    rows.map((row) => [
-      JSON.stringify([row.skill_id, row.revision]),
-      { description: row.description },
-    ]),
-  );
-  return selections.map((pin) => metadata.get(JSON.stringify([pin.skillId, pin.revision])));
+  return orderRevisionRows(selections, rows);
 }
 
 export function selectSkillLibraryRevisionManifestsBatch(
@@ -53,11 +57,5 @@ export function selectSkillLibraryRevisionManifestsBatch(
     db,
     revisionBatchQuery(db, selections).select(["skill_id", "revision", "files_json"]),
   ).rows;
-  const manifests = new Map(
-    rows.map((row) => [
-      JSON.stringify([row.skill_id, row.revision]),
-      { files_json: row.files_json },
-    ]),
-  );
-  return selections.map((pin) => manifests.get(JSON.stringify([pin.skillId, pin.revision])));
+  return orderRevisionRows(selections, rows);
 }

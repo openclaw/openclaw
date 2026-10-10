@@ -1,23 +1,25 @@
 // Gateway lifecycle readiness tests distinguish healthy, still-starting, and failed outcomes.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveGatewayStartupTiming } from "../../commands/gateway-startup-timing.js";
 import { defaultRuntime } from "../../runtime.js";
+import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
 import { requireMockCallArg, type RestartParams } from "./lifecycle.test-helpers.js";
 import { createDaemonActionContext } from "./response.js";
 import { formatGatewayRestartFailure } from "./restart-health-diagnostics.js";
+import { DEFAULT_RESTART_HEALTH_DELAY_MS } from "./restart-health.constants.js";
 
 const service = vi.hoisted(() => ({ readCommand: vi.fn(), restart: vi.fn() }));
 const runServiceStart = vi.hoisted(() => vi.fn());
 const runServiceRestart = vi.hoisted(() => vi.fn());
 const terminateStaleGatewayPids = vi.hoisted(() => vi.fn());
-const resolveGatewayStartupTiming = vi.hoisted(() => vi.fn(() => ({ deadlineMs: 45_000 })));
 const waitForGatewayHealthyRestart = vi.hoisted(() => vi.fn());
 const waitForGatewayHttpReadiness = vi.hoisted(() => vi.fn());
 const renderRestartDiagnostics = vi.hoisted(() => vi.fn(() => ["runtime diagnostics"]));
 const readServiceConfig = vi.hoisted(() => vi.fn());
+const readCliConfig = vi.hoisted(() => vi.fn(async () => ({})));
 
-vi.mock("../../commands/gateway-startup-timing.js", () => ({ resolveGatewayStartupTiming }));
 vi.mock("../../config/config.js", () => ({
-  readBestEffortConfig: vi.fn(async () => ({})),
+  readBestEffortConfig: readCliConfig,
   resolveGatewayPort: vi.fn(() => 18_789),
 }));
 vi.mock("../../config/io.js", () => ({
@@ -77,7 +79,7 @@ describe("Gateway service readiness", () => {
     service.restart.mockReset();
     terminateStaleGatewayPids.mockReset();
     readServiceConfig.mockReset().mockResolvedValue({});
-    resolveGatewayStartupTiming.mockClear();
+    readCliConfig.mockReset().mockResolvedValue({});
     waitForGatewayHealthyRestart.mockReset().mockResolvedValue({ healthy: true });
     waitForGatewayHttpReadiness.mockReset().mockResolvedValue({ healthz: 200, readyz: 200 });
     renderRestartDiagnostics.mockClear();
@@ -87,6 +89,60 @@ describe("Gateway service readiness", () => {
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
   });
+
+  it("gives Windows start and restart the same cold-boot readiness allowance", async () => {
+    mockProcessPlatform("win32");
+    runServiceStart.mockImplementation(async ({ postStartCheck }) => {
+      await postStartCheck({ warnings: [], fail: vi.fn() });
+    });
+
+    await runDaemonStart({ json: true });
+    await runDaemonRestart({ json: true });
+
+    expect(waitForGatewayHealthyRestart).toHaveBeenCalledTimes(2);
+    const { deadlineMs } = resolveGatewayStartupTiming("win32");
+    const attempts = Math.ceil(deadlineMs / DEFAULT_RESTART_HEALTH_DELAY_MS);
+    for (const [options] of waitForGatewayHealthyRestart.mock.calls) {
+      expect(options).toMatchObject({
+        timeoutMs: deadlineMs,
+        attempts,
+        delayMs: DEFAULT_RESTART_HEALTH_DELAY_MS,
+      });
+    }
+    expect(waitForGatewayHttpReadiness).toHaveBeenCalledWith(
+      expect.objectContaining({ attempts, delayMs: DEFAULT_RESTART_HEALTH_DELAY_MS }),
+    );
+  });
+
+  it.each([
+    { preserveDefinition: false, updateMarker: undefined },
+    { preserveDefinition: true, updateMarker: "1" },
+  ])(
+    "checks the activated port and required health (preserve=$preserveDefinition, update=$updateMarker)",
+    async ({ preserveDefinition, updateMarker }) => {
+      vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", updateMarker);
+      readCliConfig.mockResolvedValue({ gateway: { port: 19001 } });
+      runServiceRestart.mockImplementation(async (params: RestartParams) => {
+        await params.postRestartCheck?.({
+          ...createDaemonActionContext({ action: "restart", json: true }),
+          json: true,
+          activationAccepted: true,
+          preserveDefinition,
+        });
+        return true;
+      });
+
+      await runDaemonRestart({ json: true });
+
+      expect(waitForGatewayHealthyRestart).toHaveBeenCalledWith(
+        expect.objectContaining({ port: preserveDefinition ? 18789 : 19001 }),
+      );
+      expect(
+        requireMockCallArg(waitForGatewayHealthyRestart, "waitForGatewayHealthyRestart")
+          .requirePluginHealth,
+      ).toBe(updateMarker ? undefined : false);
+    },
+  );
 
   it.each([
     { outcome: "still-starting", runtime: "running", code: 2 },
@@ -132,27 +188,36 @@ describe("Gateway service readiness", () => {
     );
   });
 
-  it.each([undefined, "1"])(
-    "requires a Gateway health response for plain restarts (update marker=%s)",
-    async (updateMarker) => {
-      vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", updateMarker);
-
-      await runDaemonRestart({ json: true });
-
-      expect(
-        requireMockCallArg(waitForGatewayHealthyRestart, "waitForGatewayHealthyRestart")
-          .requirePluginHealth,
-      ).toBe(updateMarker ? undefined : false);
-    },
-  );
-
   it.each([
+    {
+      outcome: "channel-errors",
+      reason: /channel health checks failed/,
+      json: true,
+      updateMarker: undefined,
+      code: 1,
+      result: "restart-health-failed",
+    },
+    {
+      outcome: "plugin-errors",
+      reason: /plugins reported load errors/,
+      json: true,
+      updateMarker: undefined,
+      code: 1,
+      result: "restart-health-failed",
+    },
     { json: true, updateMarker: undefined, code: 2, result: "still-starting" },
     { json: false, updateMarker: undefined, code: 2, result: "still-starting" },
     { json: true, updateMarker: "1", code: 1, result: "restart-health-failed" },
   ])(
-    "reports progressing startup with the caller's response contract (json=$json, update=$updateMarker)",
-    async ({ json, updateMarker, code: expectedExitCode, result }) => {
+    "reports restart readiness with the caller's response contract ($outcome, json=$json, update=$updateMarker)",
+    async ({
+      outcome = "still-starting",
+      reason,
+      json,
+      updateMarker,
+      code: expectedExitCode,
+      result,
+    }) => {
       vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", updateMarker);
       const writeJson = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
       const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
@@ -172,32 +237,39 @@ describe("Gateway service readiness", () => {
         healthy: false,
         staleGatewayPids: [],
         runtime: { status: "running", pid: 4242 },
-        portUsage: { port: 18789, status: "free", listeners: [], hints: [] },
-        waitOutcome: "still-starting",
-        elapsedMs: 300_000,
-        startupPhase: "startup migration",
+        portUsage: {
+          port: 18789,
+          status: reason ? "busy" : "free",
+          listeners: reason ? [{ pid: 4242 }] : [],
+          hints: [],
+        },
+        waitOutcome: outcome,
+        elapsedMs: reason ? 0 : 300_000,
+        ...(reason ? {} : { startupPhase: "startup migration" }),
       });
 
       await expect(runDaemonRestart({ json })).rejects.toThrow(`exit ${expectedExitCode}`);
 
       expect(exit).toHaveBeenCalledExactlyOnceWith(expectedExitCode);
+      if (reason) {
+        expect(JSON.stringify(writeJson.mock.calls)).not.toMatch(/timed out/);
+      }
+      const message =
+        reason ?? /still starting after 300s.*startup migration.*openclaw gateway status --deep/;
       if (json) {
         expect(writeJson).toHaveBeenCalledExactlyOnceWith(
           expect.objectContaining({
             ok: false,
             action: "restart",
             result,
-            error: expect.stringMatching(
-              /still starting after 300s.*startup migration.*openclaw gateway status --deep/,
-            ),
+            error: expect.stringMatching(message),
+            ...(reason
+              ? { warnings: expect.arrayContaining([expect.stringMatching(reason)]) }
+              : {}),
           }),
         );
       } else {
-        expect(error).toHaveBeenCalledWith(
-          expect.stringMatching(
-            /still starting after 300s.*startup migration.*openclaw gateway status --deep/,
-          ),
-        );
+        expect(error).toHaveBeenCalledWith(expect.stringMatching(message));
         expect(writeJson).not.toHaveBeenCalled();
       }
       expect(

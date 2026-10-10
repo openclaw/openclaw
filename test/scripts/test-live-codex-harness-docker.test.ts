@@ -3,6 +3,9 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { createScriptTestHarness } from "./test-helpers.js";
+
+const { createTempDir } = createScriptTestHarness();
 
 const SCRIPT_PATH = path.resolve(
   import.meta.dirname,
@@ -10,6 +13,61 @@ const SCRIPT_PATH = path.resolve(
 );
 
 describe("scripts/test-live-codex-harness-docker.sh", () => {
+  it("delivers native V2 subagent defaults and preserves explicit app-server arguments", () => {
+    const root = createTempDir("openclaw-codex-native-args-");
+    for (const dir of ["scripts", "bin", "home", "runtime"]) {
+      fs.mkdirSync(path.join(root, dir));
+    }
+    fs.symlinkSync(path.resolve("scripts/lib"), path.join(root, "scripts/lib"));
+    fs.writeFileSync(
+      path.join(root, "scripts/test-live-build-docker.sh"),
+      "#!/bin/bash\nexit 0\n",
+      {
+        mode: 0o755,
+      },
+    );
+    fs.writeFileSync(
+      path.join(root, "bin/docker"),
+      `#!/bin/bash
+case "$1" in
+  info) printf '["name=seccomp"]\\n' ;;
+  run) printf '%s\\0' "$@" >"$CAPTURE" ;;
+esac
+`,
+      { mode: 0o755 },
+    );
+    const nativeV2Args = "app-server --listen stdio:// -c features.multi_agent_v2=true";
+    const explicitArgs = 'app-server --listen stdio:// -c model="caller model"';
+    const cases: Array<{ env: Record<string, string>; expected: string }> = [
+      { env: {}, expected: nativeV2Args },
+      { env: { OPENCLAW_LIVE_CODEX_HARNESS_SUBAGENT_PROBE: "yes" }, expected: nativeV2Args },
+      { env: { OPENCLAW_LIVE_CODEX_HARNESS_SUBAGENT_PROBE: "0" }, expected: "" },
+      { env: { OPENCLAW_CODEX_APP_SERVER_ARGS: explicitArgs }, expected: explicitArgs },
+    ];
+    const capture = path.join(root, "docker-args");
+    for (const testCase of cases) {
+      const result = spawnSync("/bin/bash", [SCRIPT_PATH], {
+        encoding: "utf8",
+        env: {
+          HOME: path.join(root, "home"),
+          PATH: `${path.join(root, "bin")}:${process.env.PATH}`,
+          RUNNER_TEMP: path.join(root, "runtime"),
+          CI: "true",
+          CAPTURE: capture,
+          OPENAI_API_KEY: "test-openai-key",
+          OPENCLAW_LIVE_CODEX_HARNESS_AUTH: "api-key",
+          OPENCLAW_LIVE_DOCKER_TRUSTED_HARNESS_DIR: root,
+          ...testCase.env,
+        },
+      });
+      expect(result.status, result.stderr).toBe(0);
+      const argv = fs.readFileSync(capture, "utf8").split("\0");
+      expect(argv[0]).toBe("run");
+      const forwardedEnv = argv.flatMap((arg, index) => (arg === "-e" ? [argv[index + 1]] : []));
+      expect(forwardedEnv).toContain(`OPENCLAW_CODEX_APP_SERVER_ARGS=${testCase.expected}`);
+    }
+  });
+
   it("retains the Codex auth, isolation, forwarding, and diagnostic contracts", () => {
     const script = fs.readFileSync(SCRIPT_PATH, "utf8");
     const authHelper = fs.readFileSync(

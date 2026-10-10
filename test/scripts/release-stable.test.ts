@@ -1,12 +1,12 @@
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import {
   CANDIDATE_COMMAND,
   CUT_SHA,
+  legacyCapabilities,
   PHASES,
-  PUBLISH_WAIVER,
   RELEASE,
   REPOSITORY,
   REPO_ROOT,
@@ -27,7 +27,11 @@ import {
 } from "./release-stable.test-support.js";
 
 const directories = useAutoCleanupTempDirTracker(afterEach);
-const fixture = () => releaseFixture(directories.make(".release-stable-test-", REPO_ROOT));
+const fixture = () => {
+  const scratch = join(REPO_ROOT, ".tmp");
+  mkdirSync(scratch, { recursive: true });
+  return releaseFixture(directories.make(".release-stable-test-", scratch));
+};
 const fetchMain = () => step("git", ["fetch", "origin", "main:refs/remotes/origin/main"]);
 const mainSha = () => step("git", ["rev-parse", "origin/main"], CUT_SHA);
 
@@ -48,37 +52,6 @@ function newCut(packageVersion = RELEASE, missing = ""): FakeStep[] {
       exit: missing === "records" ? 1 : 0,
     }),
   ];
-}
-
-function validateSetup(fresh = true): FakeStep[] {
-  return [
-    ...(fresh ? [step("git", ["rev-parse", "origin/main"], TOOLING_SHA)] : []),
-    step("git", ["merge-base", "--is-ancestor", TOOLING_SHA, "origin/main"]),
-    ...(fresh
-      ? [
-          step("git", ["show", `${TOOLING_SHA}:.github/workflows/openclaw-release-publish.yml`]),
-          step("git", ["show", "origin/main:.github/workflows/openclaw-stable-main-closeout.yml"]),
-          step("git", ["show", `${TOOLING_SHA}:scripts/lib/release-publish-children.sh`]),
-          step("git", ["tag", "*", TOOLING_SHA]),
-          step("git", ["push", "origin", "*"]),
-        ]
-      : []),
-    step("gh", ["api", "*", "--jq", ".object.sha"], TOOLING_SHA),
-  ];
-}
-
-function request(attempt = 1): FakeStep {
-  return step("pnpm", ["ci:full-release", "--", "--sha", CUT_SHA], "", {
-    request: { phase: "observed", run: { id: 101, attempt } },
-  });
-}
-
-function validationRun(conclusion: string, attempt: number): FakeStep {
-  return step(
-    "gh",
-    ["api", `repos/${REPOSITORY}/actions/runs/101`],
-    JSON.stringify({ status: "completed", conclusion, run_attempt: attempt }),
-  );
 }
 
 const publishWorkflow = "openclaw-release-publish.yml";
@@ -209,99 +182,49 @@ describe("release:stable CLI", () => {
     expect(result.stdout).not.toContain("Confirm cut SHA");
   });
 
-  it("continues failed validation only twice, then resumes with its pinned tooling and observed run", () => {
-    const release = fixture();
-    release.seed(phaseState("validate"));
-    const failed = release.run([
-      ...validateSetup(),
-      request(),
-      validationRun("failure", 1),
-      step("pnpm", ["frv", "continue", "--failed", "--run", "101"]),
-      validationRun("failure", 2),
-      step("pnpm", ["frv", "continue", "--failed", "--run", "101"]),
-      validationRun("failure", 3),
-    ]);
-    expect(failed.status).toBe(2);
-    expect(failed.stderr).toContain("Full Release Validation 101 failed after two continues.");
-    expect(failed.stderr).toContain("pnpm frv status --run 101");
-    expect(release.readState().validate.continues).toBe(2);
-    const createdToolingTag = release.readState().validate.toolingTag;
-    expect(createdToolingTag).toMatch(/^release-publish\/bbbbbbbbbbbb-\d+$/u);
-    const resumed = release.run([
-      ...validateSetup(false),
-      step("pnpm", ["ci:full-release", "--", "--sha", CUT_SHA], "", { exit: 1 }),
-      validationRun("success", 4),
-      step("npm", ["view", "openclaw", "dist-tags.latest"], "2026.9.5\n"),
-    ]);
-    expect(resumed.status, resumed.output).toBe(0);
-    expect(
-      resumed.calls.filter((call) => call.bin === "git" && call.args[0] === "tag"),
-    ).toHaveLength(1);
-    expect(
-      resumed.calls.filter((call) => call.bin === "pnpm" && call.args[0] === "frv"),
-    ).toHaveLength(2);
-    const retained = release.readState();
-    expect(retained.validate).toMatchObject({
-      toolingSha: TOOLING_SHA,
-      toolingTag: createdToolingTag,
-      runId: "101",
-      runAttempt: 4,
-      continues: 2,
-      laneWaiver: "",
-      stableSoakWaiver: `Operator-approved by release-test for ${RELEASE}: beta-profile Full Release Validation 101 attempt 4 green; soak, live/E2E, Telegram, QA-live, and Parallels deferred to postpublish confidence; update from 2026.9.5 to the candidate proven.`,
-    });
-    expect(retained.phases.validate.status).toBe("completed");
-    const helperCalls = resumed.calls.filter(
-      (call) => call.bin === "pnpm" && call.args[0] === "ci:full-release",
-    );
-    expect(helperCalls).toHaveLength(2);
-    expect(helperCalls[0]?.args).toEqual(helperCalls[1]?.args);
-    expect(helperCalls[0]?.args).not.toContain("reuse_evidence");
-  });
+  it.each([0, 2])(
+    "prints legacy status with counter %i without writing or invoking helpers",
+    (continues) => {
+      const release = fixture();
+      const state = phaseState("macos");
+      state.macos = { validateRunId: "201", preflightRunId: "202" };
+      const legacyState = {
+        ...state,
+        capabilities: legacyCapabilities(continues > 0),
+        validate: { ...state.validate, continues },
+      };
+      release.seed(legacyState);
+      const before = readFileSync(release.stateFile, "utf8");
+      const result = release.run([], ["--status"]);
+      expect(result.status, result.output).toBe(0);
+      expect(result.calls).toEqual([]);
+      expect(result.stdout).toMatch(/cut\s+completed\s+cutSha=/u);
+      expect(result.stdout).toMatch(/macos\s+pending\s+validateRunId=201 preflightRunId=202/u);
+      expect(result.stdout.trim().split("\n")).toHaveLength(7);
+      expect(readFileSync(release.stateFile, "utf8")).toBe(before);
+    },
+  );
 
-  it("refuses an unobserved FRV request with the helper's reconciliation command", () => {
-    const release = fixture();
-    release.seed(phaseState("validate"));
-    const result = release.run([
-      ...validateSetup(),
-      step("pnpm", ["ci:full-release"], "", { request: { phase: "dispatching" }, exit: 1 }),
-    ]);
-    expect(result.status).toBe(2);
-    expect(result.stderr).toContain("has no observed run");
-    expect(result.stderr).toContain(
-      `pnpm ci:full-release -- --reconcile-request ${join(release.stateDir, "frv-request.json")}`,
-    );
-    expect(release.readState().validate.runId).toBeUndefined();
-  });
-
-  it("prints retained status without changing state or invoking release helpers", () => {
-    const release = fixture();
-    const state = phaseState("macos");
-    state.macos = { validateRunId: "201", preflightRunId: "202" };
-    release.seed(state);
-    const before = readFileSync(release.stateFile, "utf8");
-    const result = release.run([], ["--status"]);
-    expect(result.status, result.output).toBe(0);
-    expect(result.calls).toEqual([]);
-    expect(result.stdout).toMatch(/cut\s+completed\s+cutSha=/u);
-    expect(result.stdout).toMatch(/macos\s+pending\s+validateRunId=201 preflightRunId=202/u);
-    expect(result.stdout.trim().split("\n")).toHaveLength(7);
-    expect(readFileSync(release.stateFile, "utf8")).toBe(before);
-  });
-
-  it("refuses unknown retained state fields without overwriting the recovery evidence", () => {
-    const release = fixture();
-    const state = phaseState("validate");
-    release.seed(state);
-    const invalid = JSON.stringify({ ...state, validate: { ...state.validate, unknown: true } });
-    writeFileSync(release.stateFile, invalid);
-    const result = release.run([]);
-    expect(result.status).toBe(2);
-    expect(result.stderr).toContain("Invalid state file");
-    expect(result.stderr).toContain("Move the file aside before retrying.");
-    expect(result.stderr).toContain(`pnpm release:stable ${RELEASE}`);
-    expect(readFileSync(release.stateFile, "utf8")).toBe(invalid);
-  });
+  it.each(["stableSoakWaiver", "laneWaiver"])(
+    "refuses retired state field %s without overwriting recovery evidence",
+    (field) => {
+      const release = fixture();
+      const state = phaseState("validate");
+      release.seed(state);
+      const invalid = JSON.stringify({
+        ...state,
+        capabilities: legacyCapabilities(true),
+        validate: { ...state.validate, continues: 2, [field]: "retained legacy value" },
+      });
+      writeFileSync(release.stateFile, invalid);
+      const result = release.run([]);
+      expect(result.status).toBe(2);
+      expect(result.stderr).toContain("Invalid state file");
+      expect(result.stderr).toContain("Move the file aside before retrying.");
+      expect(result.stderr).toContain(`pnpm release:stable ${RELEASE}`);
+      expect(readFileSync(release.stateFile, "utf8")).toBe(invalid);
+    },
+  );
 
   it("refuses a live process lock before touching state and replaces a stale lock", () => {
     const release = fixture();
@@ -353,11 +276,11 @@ describe("release:stable CLI", () => {
     expect(result.stderr.trim().split("\n").at(-1)).toBe(
       `pnpm release:stable ${RELEASE} --from publish --state-dir ${release.stateDir} --operator release-test --approve-publication`,
     );
-    expect(result.stdout).toContain(`stable_soak_waiver=${PUBLISH_WAIVER}`);
+    expect(result.stdout).not.toContain("stable_soak_waiver");
     expect(result.stdout).toContain("FRV=101 attempt 3");
     expect(result.stdout).toContain(`release SHA=${CUT_SHA}`);
     expect(result.stdout).toContain(`tooling tag=${toolingTag}`);
-    expect(result.stdout).toContain("lane_waiver=Deferred fixture lanes");
+    expect(result.stdout).not.toContain("lane_waiver");
     const retained = release.readState();
     expect(retained.operator.login).toBe("release-test");
     expect(result.calls.filter((call) => call.args[1] === "user")).toHaveLength(1);
@@ -383,6 +306,52 @@ describe("release:stable CLI", () => {
       "-f",
       "allow_late_calver_recovery=false",
     ]);
+  });
+
+  it("refuses an existing unsigned local final tag", () => {
+    const release = fixture();
+    const state = publishState();
+    state.operator.publicationApproved = null;
+    release.seed(state);
+    release.candidate(CANDIDATE_COMMAND);
+    const result = release.run([
+      step("pnpm", ["release:candidate", "--", "--tag", `v${RELEASE}`]),
+      step("git", ["ls-remote", "--tags", "origin", `v${RELEASE}`, `v${RELEASE}^{}`]),
+      step("git", ["tag", "-s", `v${RELEASE}`, CUT_SHA, "-m", `OpenClaw ${RELEASE}`], "", {
+        exit: 1,
+      }),
+      step("git", ["rev-parse", `v${RELEASE}^{}`], CUT_SHA),
+      step("git", ["tag", "-s", "-f", `v${RELEASE}`, CUT_SHA, "-m", `OpenClaw ${RELEASE}`], "", {
+        exit: 1,
+      }),
+    ]);
+    expect(result.status, result.output).toBe(2);
+    expect(result.stderr).toContain(`Could not create signed final tag v${RELEASE}`);
+    expect(result.calls.some((call) => call.bin === "git" && call.args[0] === "push")).toBe(false);
+  });
+
+  it("re-signs an existing same-target local final tag before publishing", () => {
+    const release = fixture();
+    const state = publishState();
+    state.operator.publicationApproved = null;
+    release.seed(state);
+    release.candidate(CANDIDATE_COMMAND);
+    const result = release.run([
+      step("pnpm", ["release:candidate", "--", "--tag", `v${RELEASE}`]),
+      step("git", ["ls-remote", "--tags", "origin", `v${RELEASE}`, `v${RELEASE}^{}`]),
+      step("git", ["tag", "-s", `v${RELEASE}`, CUT_SHA, "-m", `OpenClaw ${RELEASE}`], "", {
+        exit: 1,
+      }),
+      step("git", ["rev-parse", `v${RELEASE}^{}`], CUT_SHA),
+      step("git", ["tag", "-s", "-f", `v${RELEASE}`, CUT_SHA, "-m", `OpenClaw ${RELEASE}`]),
+      step("git", ["push", "origin", `refs/tags/v${RELEASE}`]),
+    ]);
+
+    expect(result.stderr).not.toContain(`Could not create signed final tag v${RELEASE}`);
+    expect(result.calls).toContainEqual({
+      bin: "git",
+      args: ["push", "origin", `refs/tags/v${RELEASE}`],
+    });
   });
 
   it("prints child approval guidance, approves only parent gates, and resumes without redispatch", () => {
@@ -492,16 +461,13 @@ describe("release:stable CLI", () => {
       "-f",
       "plugin_publish_scope=all-publishable",
       "-f",
-      `stable_soak_waiver=${PUBLISH_WAIVER}`,
-      "-f",
-      "lane_waiver=Deferred fixture lanes",
-      "-f",
       "publish_openclaw_npm=true",
       "-f",
       "wait_for_clawhub=false",
     ]);
     const helper = resumed.calls.find((call) => call.bin === "pnpm");
-    expect(helper?.args).toContain(PUBLISH_WAIVER);
+    expect(helper?.args).toContain("stable");
+    expect(helper?.args).not.toContain("--stable-soak-waiver");
     expect(helper?.args).toContain("--skip-dispatch");
     expect(helper?.args).toContain("--skip-parallels");
     expect(helper?.args).toContain("--skip-telegram");
@@ -526,7 +492,7 @@ describe("release:stable CLI", () => {
     expect(release.readState().phases.publish.status).toBe("completed");
   });
 
-  it("uses the parent's approval receipt without reading or approving any child gates", () => {
+  it("uses npm-publish tooling without reading or approving any child gates", () => {
     const release = fixture();
     const state = publishState(true);
     state.publish.publishRunId = "301";
@@ -554,9 +520,16 @@ describe("release:stable CLI", () => {
     const state = publishState(true);
     delete state.operator.login;
     if (state.capabilities) {
-      delete state.capabilities.parentSweepsStaleChildren;
+      delete state.capabilities.childNpmPublishEnvironment;
     }
     release.seed(state);
+    writeFileSync(
+      release.stateFile,
+      JSON.stringify({
+        ...state,
+        capabilities: { ...state.capabilities, parentApprovalReceipt: true },
+      }),
+    );
     release.candidate(CANDIDATE_COMMAND);
     const distractors = [
       { ...parentRun(), id: 801, head_branch: "main" },
@@ -574,11 +547,15 @@ describe("release:stable CLI", () => {
         ["show", `${TOOLING_SHA}:.github/workflows/openclaw-release-publish.yml`],
         "release-approval-receipt",
       ),
-      step("git", ["show", "origin/main:.github/workflows/openclaw-stable-main-closeout.yml"]),
       step(
         "git",
         ["show", `${TOOLING_SHA}:scripts/lib/release-publish-children.sh`],
         "sweep_superseded_children",
+      ),
+      step(
+        "git",
+        ["show", `${TOOLING_SHA}:.github/workflows/openclaw-npm-release.yml`],
+        "environment: npm-publish",
       ),
       step("gh", ["api", "user", "--jq", ".login"], "release-test\n"),
       { ...parentDispatch(), exit: 1, stderr: "connection lost after submission" },
@@ -587,6 +564,8 @@ describe("release:stable CLI", () => {
     expect(failed.status, failed.output).toBe(2);
     expect(failed.stdout).not.toContain("state=rejected");
     expect(release.readState().capabilities?.parentSweepsStaleChildren).toBe(true);
+    expect(release.readState().capabilities?.childNpmPublishEnvironment).toBe(true);
+    expect(release.readState().capabilities).not.toHaveProperty("parentApprovalReceipt");
     expect(failed.stderr).toContain(
       `Could not reconcile ${publishWorkflow}; the dispatch may have been accepted.`,
     );

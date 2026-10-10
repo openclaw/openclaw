@@ -17,7 +17,7 @@ function registerNodeRelayClient(registry: NodeRegistry) {
       socket: {
         readyState: WebSocket.OPEN,
         bufferedAmount: 0,
-        send: (frame) => frames.push(frame),
+        send: (frame) => frames.push(frame.toString()),
         close: vi.fn(),
         terminate: vi.fn(),
         on: vi.fn(),

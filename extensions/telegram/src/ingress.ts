@@ -22,10 +22,6 @@ const telegramIngressIdentity = defineStableChannelIngressIdentity({
   sensitivity: "pii",
 });
 
-export function createTelegramIngressSubject(senderId: string) {
-  return { stableId: senderId };
-}
-
 export function createTelegramIngressResolver(params: {
   accountId?: string;
   cfg?: Pick<OpenClawConfig, "accessGroups" | "commands">;
@@ -97,7 +93,7 @@ export async function buildTelegramNativeCommandOwnerContext(params: {
     cfg: params.cfg,
     useDefaultPairingStore: false,
   }).event({
-    subject: createTelegramIngressSubject(params.senderId),
+    subject: { stableId: params.senderId },
     conversation,
     contextBinding: {
       agentId: params.agentId,
@@ -156,12 +152,11 @@ export async function resolveTelegramCommandIngressAuthorization(params: {
     ? ownerAccess.isAuthorizedSender
     : ownerAccess.senderIsOwner;
   if (commandsAllowFromConfigured || authorizedByConfig) {
-    const authorized = authorizedByConfig;
     const shouldBlockControlCommand =
-      params.allowTextCommands === true && params.hasControlCommand === true && !authorized;
+      params.allowTextCommands === true && params.hasControlCommand === true && !authorizedByConfig;
     return {
       requested: true,
-      authorized,
+      authorized: authorizedByConfig,
       authorizedByConfig,
       senderIsOwner: ownerAccess.senderIsOwner,
       assertOwnerCurrent: ownerAccess.assertOwnerCurrent,
@@ -183,7 +178,7 @@ export async function resolveTelegramCommandIngressAuthorization(params: {
     accountId: params.accountId,
     cfg: params.cfg,
   }).command({
-    subject: createTelegramIngressSubject(params.senderId),
+    subject: { stableId: params.senderId },
     conversation: telegramConversation(params),
     event: {
       kind: params.eventKind ?? "native-command",
@@ -213,10 +208,10 @@ export async function resolveTelegramNativeCommandAdmission(
       "accountId" | "cfg" | "dmPolicy" | "isGroup" | "chatId" | "senderId"
     >,
 ): Promise<boolean> {
-  if (resolveTelegramNativeCommandBody(params) === undefined) {
-    return false;
-  }
-  return (await resolveTelegramCommandIngressAuthorization(params)).authorizedByConfig;
+  return (
+    resolveTelegramNativeCommandBody(params) !== undefined &&
+    (await resolveTelegramCommandIngressAuthorization(params)).authorizedByConfig
+  );
 }
 
 export async function resolveTelegramEventIngressAuthorization(params: {
@@ -232,7 +227,7 @@ export async function resolveTelegramEventIngressAuthorization(params: {
   eventKind: Extract<ChannelIngressEventInput["kind"], "reaction" | "button">;
 }) {
   const result = await createTelegramIngressResolver({ accountId: params.accountId }).event({
-    subject: createTelegramIngressSubject(params.senderId),
+    subject: { stableId: params.senderId },
     conversation: telegramConversation(params),
     event: {
       kind: params.eventKind,

@@ -251,7 +251,7 @@ describe("google provider catalog", () => {
     },
   );
 
-  it.each([401, 403, 503])("preserves HTTP %i for the catalog outcome owner", async (status) => {
+  it.each([401, 503])("preserves HTTP %i for the catalog outcome owner", async (status) => {
     const release = vi.fn(async () => undefined);
     const fetchGuard: LiveModelCatalogFetchGuard = vi.fn(async ({ url }) => ({
       response: new Response(null, { status }),

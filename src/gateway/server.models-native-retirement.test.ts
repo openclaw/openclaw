@@ -13,11 +13,7 @@ import {
   resetGatewayTestState,
   setupGatewayTempHome,
 } from "./gateway.test-support.js";
-import {
-  disconnectGatewayClient,
-  getGatewayE2ePortBlock,
-  startGatewayWithClient,
-} from "./test-helpers.e2e.js";
+import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
 
 it.each(["native", "custom"] as const)(
   "models.list excludes retired authored native models and preserves %s inventory",
@@ -30,7 +26,6 @@ it.each(["native", "custom"] as const)(
         setTestEnvValue("OPENCLAW_BUNDLED_PLUGINS_DIR", path.resolve("extensions"));
         deleteTestEnvValue("OPENCLAW_DISABLE_BUNDLED_PLUGINS");
         const token = randomUUID();
-        const port = await getGatewayE2ePortBlock();
         setTestEnvValue("OPENCLAW_GATEWAY_TOKEN", token);
         const baseUrl = endpoint === "native" ? "https://api.x.ai/v1" : "https://custom.invalid/v1";
         const cfg: OpenClawConfig = {
@@ -64,12 +59,11 @@ it.each(["native", "custom"] as const)(
             },
           },
           plugins: { allow: ["xai"], entries: { xai: { enabled: true } } },
-          gateway: { port, auth: { mode: "token", token } },
+          gateway: { auth: { mode: "token", token } },
           hooks: { enabled: false },
         };
         gateway = await startGatewayWithClient({
           cfg,
-          port,
           token,
           configPath: await createGatewayConfigPath(home.tempHome),
         });

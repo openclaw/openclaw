@@ -5,7 +5,7 @@ import {
   type PluginDeclaredSurfaceGroup,
 } from "../../../../packages/gateway-protocol/src/schema/plugin-declared-surface-groups.js";
 import { icons } from "../../components/icons.ts";
-import { imageWithFallback } from "../../components/image-with-fallback.ts";
+import { imageWithFallback, type ImageLoadingState } from "../../components/image-with-fallback.ts";
 import "../../components/modal-dialog.ts";
 import { renderReasonedDisabledControl } from "../../components/reasoned-disabled-control.ts";
 import {
@@ -39,8 +39,8 @@ type PluginConsentFallback = {
 
 export type PluginConsentState = {
   intent: PluginConsentIntent;
-  pluginId: string | null;
-  fallback: PluginConsentFallback | null;
+  pluginId: string;
+  fallback: PluginConsentFallback;
   details?: CapabilityConsentErrorDetails;
 };
 
@@ -50,6 +50,7 @@ type PluginConsentDialogProps = {
   loading: boolean;
   error: string | null;
   iconUrl?: string;
+  iconLoading?: boolean;
   canMutate: boolean;
   mutationBlockedReason: string | null;
   busy: boolean;
@@ -61,25 +62,50 @@ type PluginConsentDialogProps = {
 export function renderArtTile(
   slug: string,
   name: string,
-  iconUrl?: string,
-  onIconError?: () => void,
-  className = "plugins-tile",
-  authorIconUrl?: string,
+  options: {
+    iconUrl?: string;
+    onIconError?: () => void;
+    authorIconUrl?: string;
+    loading?: boolean;
+    className?: string;
+    whiteBackground?: boolean;
+  } = {},
 ): TemplateResult {
-  const renderTile = (url: string | null, onError: () => void) => {
-    if (url) {
-      return html`<span class=${className} data-plugin-icon-id=${slug}>
-        <img
-          class="plugins-icon"
-          src=${url}
-          alt=""
-          loading="lazy"
-          decoding="async"
-          @error=${() => {
-            onError();
-            onIconError?.();
-          }}
-        />
+  const {
+    iconUrl,
+    onIconError,
+    authorIconUrl,
+    loading = false,
+    className = "plugins-tile",
+    whiteBackground = false,
+  } = options;
+  // Fetch admission already limits requests to rendered tiles. Eager loading
+  // lets the hidden image finish before replacing its skeleton.
+  const renderTile = (url: string | null, onError: () => void, image: ImageLoadingState) => {
+    const pending = url ? image.loading : loading;
+    if (url || pending) {
+      return html`<span
+        class=${`${className}${whiteBackground ? " plugins-tile--white" : ""}${pending ? " skeleton" : ""}`}
+        data-plugin-icon-id=${slug}
+        aria-hidden="true"
+      >
+        ${
+          url
+            ? html`<img
+                class="plugins-icon"
+                src=${url}
+                alt=""
+                loading="eager"
+                decoding="async"
+                ?hidden=${pending}
+                @load=${image.onLoad}
+                @error=${() => {
+                  onError();
+                  onIconError?.();
+                }}
+              />`
+            : nothing
+        }
       </span>`;
     }
     const [from, to] = pluginFallbackGradient(slug);
@@ -93,8 +119,8 @@ export function renderArtTile(
       ${monogram ? html`<span>${monogram}</span>` : icons.plug}
     </span>`;
   };
-  return html`${imageWithFallback(iconUrl, (url, onError) =>
-    url ? renderTile(url, onError) : html`${imageWithFallback(authorIconUrl, renderTile)}`,
+  return html`${imageWithFallback(iconUrl, (url, onError, image) =>
+    url ? renderTile(url, onError, image) : html`${imageWithFallback(authorIconUrl, renderTile)}`,
   )}`;
 }
 
@@ -242,19 +268,19 @@ function renderPluginGrants(grants: PluginOperatorGrants, origin?: string): Temp
           }
         `,
       )}
-      ${
-        grants.llm
-          ? renderPluginMetaRow(t("pluginConsent.modelOverrides"), modelOverrideSummary(grants.llm))
-          : nothing
-      }
-      ${
-        grants.subagent
+      ${(["llm", "subagent"] as const).map((key) => {
+        const overrides = grants[key];
+        return overrides
           ? renderPluginMetaRow(
-              t("pluginConsent.subagentModelOverrides"),
-              modelOverrideSummary(grants.subagent),
+              t(
+                key === "llm"
+                  ? "pluginConsent.modelOverrides"
+                  : "pluginConsent.subagentModelOverrides",
+              ),
+              modelOverrideSummary(overrides),
             )
-          : nothing
-      }
+          : nothing;
+      })}
     `,
   );
 }
@@ -278,8 +304,6 @@ const PLUGIN_ORIGIN_LABELS: Readonly<Record<string, string>> = {
   official: "pluginsPage.official",
 };
 
-function pluginOriginLabel(origin: string, official?: boolean): string;
-function pluginOriginLabel(origin: string | undefined, official?: boolean): string | null;
 function pluginOriginLabel(origin: string | undefined, official?: boolean): string | null {
   if (official) {
     return t("pluginsPage.official");
@@ -366,10 +390,10 @@ export function renderPluginConsentDialog(props: PluginConsentDialogProps): Temp
   const plugin = inspection?.plugin;
   const fallback = consent.fallback;
   const packageName = inspection?.source?.packageName;
-  const slug = consent.pluginId ?? packageName ?? fallback?.name ?? "plugin";
-  const name = plugin?.name ?? fallback?.name ?? slug;
-  const version = plugin?.version ?? fallback?.version;
-  const origin = pluginOriginLabel(plugin?.origin, fallback?.official);
+  const slug = consent.pluginId;
+  const name = plugin?.name ?? fallback.name;
+  const version = plugin?.version ?? fallback.version;
+  const origin = pluginOriginLabel(plugin?.origin, fallback.official);
   const meta = [origin, packageName].filter(Boolean).join(" · ");
   const action = props.busy ? t("pluginsPage.working") : t("pluginConsent.enableNamed", { name });
   const confirmUnavailable =
@@ -398,7 +422,7 @@ export function renderPluginConsentDialog(props: PluginConsentDialogProps): Temp
     >
       <section class="plugins-consent oc-card" data-plugin-consent=${consent.intent.kind}>
         <header class="plugins-consent__header">
-          ${renderArtTile(slug, name, props.iconUrl)}
+          ${renderArtTile(slug, name, { iconUrl: props.iconUrl, loading: props.iconLoading })}
           <div>
             <div class="plugins-detail__title">
               <h2>${name}</h2>

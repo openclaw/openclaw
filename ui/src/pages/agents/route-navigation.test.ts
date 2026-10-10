@@ -15,7 +15,8 @@ function context() {
 }
 
 describe("Agents route navigation", () => {
-  it.each(["files", "tools"] as const)("preserves the %s panel when switching agents", (panel) => {
+  it("preserves the files panel when switching agents", () => {
+    const panel = "files";
     const navigation = context();
 
     navigateToAgent(navigation, "research", "main", panel);

@@ -9,9 +9,13 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { areDiagnosticsEnabledForProcess } from "../../infra/diagnostic-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import {
+  OcmUpdateCapabilitiesUnsupportedError,
+  resolveOcmUpdateManager,
+} from "../../infra/ocm-update-client.js";
 import type { RestartSentinelPayload } from "../../infra/restart-sentinel.js";
-import { gatewayUpdateCampaign } from "../../infra/update-campaign.js";
 import { normalizeUpdateChannel } from "../../infra/update-channels.js";
+import { currentUpdateCheckLifecycle } from "../../infra/update-check-lifecycle.js";
 import {
   getUpdateRunAsync,
   getUpdateRunWithReconciliationAsync,
@@ -20,10 +24,11 @@ import {
   reconcileAbandonedUpdateRunsAsync,
 } from "../../infra/update-run-ledger.js";
 import { toPublicUpdateRun } from "../../infra/update-run-record.js";
+import { getUpdateEffectiveChannel } from "../../infra/update-startup.js";
 import {
-  getUpdateEffectiveChannel,
+  getGatewayUpdateSchedule,
   refreshGatewayUpdateStatus,
-} from "../../infra/update-startup.js";
+} from "../../infra/update-status-schedule.js";
 import { getUpdateAvailable, getUpdateSchedule } from "../../infra/update-status-state.js";
 import {
   getGatewayRestartDrainSignal,
@@ -34,8 +39,8 @@ import { createStageTimingTracker } from "../../shared/stage-timing.js";
 import { formatControlPlaneActor, resolveControlPlaneActor } from "../control-plane-audit.js";
 import {
   getLatestUpdateRestartSentinel,
-  refreshLatestUpdateRestartSentinel,
-} from "../server-restart-sentinel.js";
+  prepareLatestUpdateRestartSentinel,
+} from "../server-update-sentinel.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -44,6 +49,9 @@ export const updateStatusHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateUpdateStatusParams, "update.status", respond)) {
       return;
     }
+    const warn = (stage: string, error: unknown) =>
+      context?.logGateway?.warn(`update.status ${stage} failed: ${formatErrorMessage(error)}`);
+    const lifecycle = currentUpdateCheckLifecycle();
     const startedAt = areDiagnosticsEnabledForProcess() ? performance.now() : undefined;
     const timing =
       startedAt === undefined ? undefined : createStageTimingTracker(() => performance.now());
@@ -53,49 +61,85 @@ export const updateStatusHandlers: GatewayRequestHandlers = {
       phase = next;
     };
     try {
+      const immutable = lifecycle.installStatus?.status.installKind === "immutable";
+      let manager = immutable
+        ? null
+        : await resolveOcmUpdateManager().catch((error: unknown) => {
+            if (!(error instanceof OcmUpdateCapabilitiesUnsupportedError)) {
+              throw error;
+            }
+            context?.logGateway?.warn(error.message);
+            return null;
+          });
+      const managedRun = manager ? await manager.status() : null;
+      if (manager && !manager.canStart && !managedRun) {
+        manager = null;
+      }
       let sentinel: RestartSentinelPayload | null;
       try {
-        sentinel = await refreshLatestUpdateRestartSentinel();
+        sentinel = manager ? null : await prepareLatestUpdateRestartSentinel(undefined, lifecycle);
       } catch (err) {
-        context?.logGateway?.warn(
-          `update.status sentinel refresh failed: ${formatErrorMessage(err)}`,
-        );
+        warn("sentinel refresh", err);
         sentinel = getLatestUpdateRestartSentinel();
       }
       mark("checkout");
       const config = context?.getRuntimeConfig?.();
-      const configChannel = normalizeUpdateChannel(config?.update?.channel);
-      if (params.refreshCheckout === true && config) {
+      if ((params.refreshCheckout === true || immutable) && config) {
         try {
           await refreshGatewayUpdateStatus(config);
         } catch (err) {
-          context?.logGateway?.warn(
-            `update.status checkout refresh failed: ${formatErrorMessage(err)}`,
-          );
-        }
-      }
-      mark("identity");
-      const schedule = getUpdateSchedule();
-      let effectiveChannel = configChannel ?? normalizeUpdateChannel(schedule?.channel);
-      if (!effectiveChannel) {
-        try {
-          effectiveChannel = await getUpdateEffectiveChannel();
-        } catch (err) {
-          context?.logGateway?.warn(
-            `update.status install identity failed: ${formatErrorMessage(err)}`,
-          );
+          warn("checkout refresh", err);
         }
       }
       mark("reconciliation");
       try {
-        await reconcileAbandonedUpdateRunsAsync();
+        if (!manager) {
+          await reconcileAbandonedUpdateRunsAsync();
+        }
       } catch (error) {
-        context?.logGateway?.warn(
-          `update.status reconciliation failed: ${formatErrorMessage(error)}`,
-        );
+        warn("reconciliation", error);
       }
       mark("history");
-      const { activeRun, lastRun } = await getUpdateRunStatusAsync();
+      const { activeRun, lastRun } = manager
+        ? {
+            activeRun: managedRun?.status === "running" ? managedRun : undefined,
+            lastRun: managedRun?.status !== "running" ? (managedRun ?? undefined) : undefined,
+          }
+        : await getUpdateRunStatusAsync();
+      const campaign = lifecycle.campaign;
+      const campaignRunId = campaign?.getRunId();
+      const campaignRun =
+        !campaignRunId || lastRun?.runId === campaignRunId
+          ? lastRun
+          : activeRun?.runId === campaignRunId
+            ? activeRun
+            : await getUpdateRunAsync(campaignRunId).catch((error: unknown) => {
+                warn("campaign run lookup", error);
+                return undefined;
+              });
+      if (lifecycle.isCurrent() && !lifecycle.signal.aborted) {
+        campaign?.reconcileRun(campaignRun);
+      }
+      mark("identity");
+      let currentConfig = context?.getRuntimeConfig?.() ?? config;
+      let effectiveChannel =
+        normalizeUpdateChannel(currentConfig?.update?.channel) ??
+        (currentConfig ? undefined : normalizeUpdateChannel(getUpdateSchedule()?.channel));
+      if (!effectiveChannel) {
+        try {
+          effectiveChannel = await getUpdateEffectiveChannel();
+        } catch (err) {
+          warn("install identity", err);
+        }
+        currentConfig = context?.getRuntimeConfig?.() ?? currentConfig;
+        effectiveChannel =
+          normalizeUpdateChannel(currentConfig?.update?.channel) ?? effectiveChannel;
+      }
+      const schedule = currentConfig
+        ? effectiveChannel
+          ? getGatewayUpdateSchedule(currentConfig, effectiveChannel)
+          : undefined
+        : getUpdateSchedule();
       mark("response");
       const result = {
         sentinel,
@@ -138,11 +182,12 @@ export const updateStatusHandlers: GatewayRequestHandlers = {
       return;
     }
     const actor = resolveControlPlaneActor(client);
-    const campaignBeforeHold = gatewayUpdateCampaign.getState();
-    const ok = gatewayUpdateCampaign.hold();
+    const campaign = currentUpdateCheckLifecycle().campaign;
+    const campaignBeforeHold = campaign?.getState();
+    const ok = campaign?.hold() ?? false;
     const schedule = getUpdateSchedule();
     if (ok) {
-      const heldCampaign = gatewayUpdateCampaign.getState();
+      const heldCampaign = campaign?.getState();
       context?.logGateway?.info(
         `update.hold granted ${formatControlPlaneActor(actor)} holdUntilMs=${heldCampaign?.holdUntilMs} forceAtMs=${heldCampaign?.forceAtMs}`,
       );
@@ -171,6 +216,18 @@ export const updateStatusHandlers: GatewayRequestHandlers = {
   },
   "update.runs.get": async ({ params, respond, context }) => {
     if (!assertValidParams(params, validateUpdateRunsGetParams, "update.runs.get", respond)) {
+      return;
+    }
+    if (params.runId.startsWith("ocm:")) {
+      const manager = await resolveOcmUpdateManager();
+      if (!manager) {
+        respond(false, undefined, {
+          code: "UNAVAILABLE",
+          message: "The OCM update manager is unavailable for this Gateway.",
+        });
+        return;
+      }
+      respond(true, { run: await manager.status(params.runId) });
       return;
     }
     // Lazy handler preparation can outlast an in-process restart. Reacquire

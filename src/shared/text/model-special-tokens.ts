@@ -2,7 +2,8 @@
 import { findCodeRegions } from "./code-regions.js";
 
 // Match both ASCII pipe <|...|> and full-width pipe <｜...｜> (U+FF5C) variants.
-const MODEL_SPECIAL_TOKEN_RE = /<[|｜][^|｜]*[|｜]>/g;
+// Control tokens never contain whitespace; prose operators like `<|` ... `|>` do.
+const MODEL_SPECIAL_TOKEN_RE = /<[|｜][^|｜\s]*[|｜]>/g;
 
 /**
  * Strips leaked model control tokens like `<|assistant|>` or full-width pipe variants.

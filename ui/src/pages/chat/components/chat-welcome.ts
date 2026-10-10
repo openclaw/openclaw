@@ -1,4 +1,3 @@
-// Control UI chat module implements chat welcome behavior.
 import { html, nothing } from "lit";
 import type {
   AgentsListResult,
@@ -6,6 +5,7 @@ import type {
   SessionsListResult,
 } from "../../../api/types.ts";
 import { renderAgentIdentityAvatar } from "../../../components/identity-avatar-view.ts";
+import { renderKbd } from "../../../components/kbd.ts";
 import { t } from "../../../i18n/index.ts";
 import "../../../components/openclaw-mascot.ts";
 import { registerCommandPaletteEnglish } from "../../../i18n/locales/en-command-palette.ts";
@@ -21,7 +21,7 @@ import {
   resolveSessionDisplayName,
   resolveSessionWorkSubtitle,
 } from "../../../lib/session-display.ts";
-import { getVisibleSessionRows } from "../../../lib/sessions/navigation.ts";
+import { filterVisibleSessionRows } from "../../../lib/sessions/navigation.ts";
 import {
   areUiSessionKeysEquivalent,
   parseAgentSessionKey,
@@ -93,9 +93,7 @@ export function resolveAssistantDisplayAvatar(
  * minus channel-originated sessions — those live in their channel sections and
  * are not something the user "starts" from here.
  */
-function selectWelcomeRecentSessions(
-  props: Pick<ChatWelcomeProps, "sessions" | "sessionKey" | "sessionHost">,
-): GatewaySessionRow[] {
+function selectWelcomeRecentSessions(props: ChatWelcomeProps): GatewaySessionRow[] {
   if (!props.sessions) {
     return [];
   }
@@ -105,7 +103,11 @@ function selectWelcomeRecentSessions(
   const defaultAgentId = resolveUiSelectedGlobalAgentId(host);
   const agentId = parseAgentSessionKey(props.sessionKey)?.agentId ?? defaultAgentId;
   return (
-    getVisibleSessionRows(props.sessions, { agentId, defaultAgentId, filterByAgent: true })
+    filterVisibleSessionRows(props.sessions.sessions, {
+      agentId,
+      defaultAgentId,
+      filterByAgent: true,
+    })
       .filter(
         (row) =>
           !areUiSessionKeysEquivalent(row.key, props.sessionKey) &&
@@ -171,15 +173,12 @@ function renderWelcomeSuggestions(props: Pick<ChatWelcomeProps, "onDraftChange" 
   `;
 }
 
-function renderWelcomeHero(
-  props: Pick<
-    ChatWelcomeProps,
-    "currentAgentId" | "agents" | "assistantName" | "assistantAvatar" | "assistantAvatarUrl"
-  > & {
-    hint: unknown;
-  },
-) {
+function renderWelcomeHero(props: ChatWelcomeProps) {
   const name = props.assistantName || "Assistant";
+  const hint =
+    props.hint ??
+    html`${t("chat.welcome.hintBeforeShortcut")} ${renderKbd("/")}
+    ${t("chat.welcome.hintAfterShortcut")}`;
   return html`
     <div class="agent-chat__welcome-identity">
       <span class="agent-chat__welcome-avatar" role="img" aria-label=${name}>
@@ -187,7 +186,7 @@ function renderWelcomeHero(
       </span>
       <div class="agent-chat__welcome-identity-copy">
         <h2>${name}</h2>
-        <p class="agent-chat__hint">${props.hint}</p>
+        <p class="agent-chat__hint">${hint}</p>
       </div>
     </div>
   `;
@@ -214,19 +213,7 @@ export function renderWelcomeState(props: ChatWelcomeProps) {
   const recentSessions = selectWelcomeRecentSessions(props);
   return html`
     <div class="agent-chat__welcome" style="--agent-color: var(--accent)">
-      ${renderWelcomeHero({
-        currentAgentId: props.currentAgentId,
-        agents: props.agents,
-        assistantName: props.assistantName,
-        assistantAvatar: props.assistantAvatar,
-        assistantAvatarUrl: props.assistantAvatarUrl,
-        hint:
-          props.hint ??
-          html`${t("chat.welcome.hintBeforeShortcut")} <kbd>/</kbd> ${t(
-              "chat.welcome.hintAfterShortcut",
-            )}`,
-      })}
-      ${props.composer ?? nothing}
+      ${renderWelcomeHero(props)} ${props.composer ?? nothing}
       ${
         props.hideSecondaryContent
           ? nothing

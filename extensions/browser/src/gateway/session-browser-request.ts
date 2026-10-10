@@ -1,9 +1,14 @@
+import {
+  ErrorCodes,
+  errorShape,
+  type GatewayRequestHandlers,
+} from "openclaw/plugin-sdk/gateway-runtime";
 import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { z } from "zod";
 import { createBrowserControlContext } from "../browser-control-state.js";
 import { applyBrowserTabToolBinding } from "../browser-tool-binding.js";
 import { createBrowserRouteDispatcher } from "../browser/routes/dispatcher.js";
-import { ErrorCodes, errorShape, withTimeout, type GatewayRequestHandlers } from "../core-api.js";
+import { withTimeout } from "../sdk-node-runtime.js";
 import { accessSessionBrowserDashboard } from "../session-browser-dashboard.js";
 
 const identitySchema = z.strictObject({

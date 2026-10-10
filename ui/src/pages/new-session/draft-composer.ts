@@ -9,6 +9,7 @@ import {
 import { t } from "../../i18n/index.ts";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import { refreshSlashCommands } from "../chat/chat-commands.ts";
+import { resolveChatAttachmentLimits } from "../chat/components/chat-attachment-admission.ts";
 import type { NewSessionAttachmentDraft } from "./attachment-draft.ts";
 import type { NewSessionComposerOptions } from "./composer-types.ts";
 import { renderNewSessionComposer } from "./composer.ts";
@@ -91,7 +92,7 @@ export function renderNewSessionDraftComposer(
     permissionControl?: TemplateResult;
   },
 ) {
-  const readSignal = options.attachmentDraft.readSignal;
+  const readSignal = options.attachmentDraft.reads.readSignal;
   const commandClient = options.nativeTerminal
     ? null
     : (options.context?.gateway.snapshot.client ?? null);
@@ -117,7 +118,8 @@ export function renderNewSessionDraftComposer(
       .onVisitsDisabled=${() => options.context?.theme.refresh()}
       .floorEnabled=${floorEnabled}
     ></openclaw-lobster-pet>`,
-    attachmentLimits: options.context?.gateway.snapshot.hello?.policy?.attachments,
+    uploadConfig: options.context?.config,
+    attachmentLimits: resolveChatAttachmentLimits(options.context?.gateway.snapshot.hello?.policy),
     attachments: options.attachmentDraft.attachments,
     getAttachments: () => options.attachmentDraft.attachments,
     get message() {
@@ -132,7 +134,7 @@ export function renderNewSessionDraftComposer(
           context: options.context,
           sending: options.submitting,
         }),
-    pendingAttachmentReads: options.attachmentDraft.pendingReads,
+    pendingAttachmentReads: options.attachmentDraft.reads.pendingReads,
     attachmentReads: options.attachmentDraft.reads,
     readSignal,
     refreshCommands: commandClient
@@ -162,6 +164,6 @@ export function renderNewSessionDraftComposer(
         options.attachmentDraft.replace(attachments);
       }
     },
-    onPendingReadsChange: (delta) => options.attachmentDraft.updatePending(readSignal, delta),
+    onPendingReadsChange: (delta) => options.attachmentDraft.reads.updatePending(readSignal, delta),
   });
 }

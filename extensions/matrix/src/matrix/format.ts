@@ -1,4 +1,3 @@
-// Matrix helper module supports format behavior.
 import MarkdownIt from "markdown-it";
 import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-contracts";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -189,10 +188,7 @@ function collectMentionCandidates(text: string): MatrixMentionCandidate[] {
   const mentions: MatrixMentionCandidate[] = [];
   for (const match of text.matchAll(MENTION_PATTERN)) {
     const raw = match[0];
-    const start = match.index ?? -1;
-    if (start < 0 || !raw) {
-      continue;
-    }
+    const start = match.index;
     if (!isMentionStartBoundary(text[start - 1])) {
       continue;
     }
@@ -329,14 +325,6 @@ function createMentionLinkTokens(params: {
   const text = createTextToken(params.sample, params.label);
   const close = createToken(params.sample, "link_close", "a", -1);
   return [open, text, close];
-}
-
-async function resolveMatrixSelfUserId(client: MatrixClient): Promise<string | null> {
-  const getUserId = (client as { getUserId?: () => Promise<string> | string }).getUserId;
-  if (typeof getUserId !== "function") {
-    return null;
-  }
-  return await Promise.resolve(getUserId.call(client)).catch(() => null);
 }
 
 function mutateInlineTokensWithMentions(params: {
@@ -554,7 +542,7 @@ async function resolveMarkdownMentionState(params: {
   tableMode?: MarkdownTableMode;
 }): Promise<{ tokens: MarkdownToken[]; mentions: MatrixMentions }> {
   const tokens = parseMatrixMarkdown(params.analysis, params.tableMode);
-  const selfUserId = await resolveMatrixSelfUserId(params.client);
+  const selfUserId = await params.client.getUserId().catch(() => null);
   const userIds: string[] = [];
   const seenUserIds = new Set<string>();
   let roomMentioned = false;

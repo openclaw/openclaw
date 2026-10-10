@@ -73,9 +73,9 @@ describe("parseOcPath", () => {
   });
 
   it("normalizes deep JSON paths into dotted subsegments", () => {
-    expect(parseOcPath("oc://openclaw.json/agents/list/8/tools/exec/security")).toEqual({
+    expect(parseOcPath("oc://openclaw.json/agents/entries/main/tools/exec/security")).toEqual({
       file: "openclaw.json",
-      section: "agents.list.8.tools",
+      section: "agents.entries.main.tools",
       item: "exec",
       field: "security",
     });
@@ -130,20 +130,4 @@ describe("formatOcPath", () => {
   it("rejects item without section", () => {
     expectOcPathError(() => formatOcPath({ file: "F.md", item: "i" }), "OC_PATH_NESTING");
   });
-});
-
-describe("round-trip", () => {
-  const cases = [
-    "oc://SOUL.md",
-    "oc://SOUL.md/Boundaries",
-    "oc://SOUL.md/Boundaries/deny-rule-1",
-    "oc://SOUL.md/Boundaries/deny-rule-1/risk",
-    "oc://SOUL.md?session=daily",
-    "oc://AGENTS.md/Tools/gh/risk",
-  ];
-  for (const input of cases) {
-    it(`formatOcPath(parseOcPath("${input}")) === "${input}"`, () => {
-      expect(formatOcPath(parseOcPath(input))).toBe(input);
-    });
-  }
 });

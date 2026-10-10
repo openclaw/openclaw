@@ -50,25 +50,19 @@ export function expandSessionDiffGap(
       : Math.min(GAP_CHUNK_SIZE, target.count);
   const remainingCount = target.count - revealCount;
   const revealStart = direction === "up" ? target.newStart + remainingCount : target.newStart;
-  const revealed = contextRows(fileLines, revealStart, revealCount);
-  const replacement: DiffLine[] = [];
-  if (direction === "up" && remainingCount > 0) {
-    replacement.push({
+  const replacement = contextRows(fileLines, revealStart, revealCount);
+  if (remainingCount > 0) {
+    replacement.splice(direction === "up" ? 0 : replacement.length, 0, {
       kind: "skip",
       text: formatGap(remainingCount),
-      gap: { ...target, count: remainingCount },
-    });
-  }
-  replacement.push(...revealed);
-  if (direction !== "up" && remainingCount > 0) {
-    replacement.push({
-      kind: "skip",
-      text: formatGap(remainingCount),
-      gap: {
-        oldStart: target.oldStart + revealCount,
-        newStart: target.newStart + revealCount,
-        count: remainingCount,
-      },
+      gap:
+        direction === "up"
+          ? { ...target, count: remainingCount }
+          : {
+              oldStart: target.oldStart + revealCount,
+              newStart: target.newStart + revealCount,
+              count: remainingCount,
+            },
     });
   }
   return [...lines.slice(0, index), ...replacement, ...lines.slice(index + 1)];

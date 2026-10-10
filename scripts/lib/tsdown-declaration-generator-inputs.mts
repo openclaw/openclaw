@@ -3,8 +3,8 @@ import { builtinModules, createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import * as ts from "typescript/unstable/ast";
+import { API } from "typescript/unstable/sync";
 import { collectModuleReferencesFromSource } from "./guard-inventory-utils.mjs";
-import { createNativeTypeScriptParser } from "./native-typescript.mts";
 import { createRuntimeImportGraph } from "./runtime-import-closure.mts";
 import { STATE_SCHEMA_GENERATOR_INPUTS } from "./state-schema-inline-plugin.mts";
 import { resolveTsxImport } from "./tsx-cli-shim.mjs";
@@ -46,10 +46,7 @@ export function resolveTsdownDeclarationGeneratorInputs(rootDir: string, generat
     "typescript/package.json",
   );
   const dynamicOwners = new Map<string, { expressions: string[]; targets: string[] }>([
-    [
-      "scripts/lib/dist-artifact-ownership.mts",
-      { expressions: ["script"], targets: [generatorEntry] },
-    ],
+    ["scripts/lib/dist-artifact-lock.mts", { expressions: ["script"], targets: [generatorEntry] }],
     [
       "scripts/lib/local-check-runtime.mts",
       {
@@ -61,6 +58,13 @@ export function resolveTsdownDeclarationGeneratorInputs(rootDir: string, generat
       "scripts/lib/native-typescript.mts",
       {
         expressions: ['path.join(path.dirname(packageJson), "lib/getExePath.js")'],
+        targets: [nativeManifest, path.join(path.dirname(nativeManifest), "lib/getExePath.js")],
+      },
+    ],
+    [
+      "scripts/lib/native-typescript-toolchain.mts",
+      {
+        expressions: ["executableResolver"],
         targets: [nativeManifest, path.join(path.dirname(nativeManifest), "lib/getExePath.js")],
       },
     ],
@@ -78,9 +82,22 @@ export function resolveTsdownDeclarationGeneratorInputs(rootDir: string, generat
         targets: [fileURLToPath(resolveTsxImport(root))],
       },
     ],
+    [
+      "scripts/tsdown-build.mts",
+      {
+        // Runtime-only live Gateway dist fence. Declaration writers import this
+        // file for constants/plan helpers and must not walk daemon service-layout.
+        expressions: ["liveGatewayDistFenceHref"],
+        targets: [generatorEntry],
+      },
+    ],
   ]);
   const observedDynamicOwners = new Set<string>();
-  using parser = createNativeTypeScriptParser({ cwd: root });
+  using parser: { api?: API; [Symbol.dispose](): void } = {
+    [Symbol.dispose]() {
+      this.api?.close();
+    },
+  };
   const entryFiles = [generatorEntry, "scripts/tsx.mjs", "tsdown.config.ts"];
   const explicitSources = [...dynamicOwners.values()]
     .flatMap((owner) => owner.targets)
@@ -110,7 +127,7 @@ export function resolveTsdownDeclarationGeneratorInputs(rootDir: string, generat
     }
     visited.add(id);
     const source = fs.readFileSync(absolute, "utf8");
-    const sourceFile = parser.parseSourceFile(absolute, source);
+    const sourceFile = (parser.api ??= new API({ cwd: root })).createSourceFile(absolute, source);
     const expressions = dynamicEdgeExpressions(sourceFile);
     const owner = dynamicOwners.get(id);
     if (

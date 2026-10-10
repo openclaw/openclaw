@@ -3,6 +3,7 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it } from "vitest";
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import { isTruthyEnvValue } from "../../infra/env.js";
+import { getActiveGatewayRootWorkHolders } from "../../process/gateway-work-admission.js";
 import { isLiveTestEnabled } from "../live-test-helpers.js";
 import {
   finalReplies,
@@ -22,7 +23,7 @@ function isForwardedPeerMessage(message: Record<string, unknown>): boolean {
 
 describeLive("OpenAI independent peer coordination", () => {
   it(
-    "keeps five alternating peer replies visible after a nonblocking send",
+    "delivers a delayed peer reply to the requester exactly once without automatic peer turns",
     async () => {
       await runWithLiveSubagentGateway(
         { additionalTools: ["sessions_send"], peerSessions: true },
@@ -31,14 +32,10 @@ describeLive("OpenAI independent peer coordination", () => {
           const parentKey = `agent:main:dashboard:live-peer-requester-${id}`;
           const peerKey = `agent:main:dashboard:live-peer-target-${id}`;
           const waiting = `WAITING_${id}`;
-          const prefix = `PEER_${id}_`;
+          const peerReply = `PEER_RESULT_${id}`;
+          const received = `RECEIVED_${id}`;
           const gate = gates.create();
-          const replyRule = [
-            `When a later agent-to-agent reply step delivers ${prefix} followed by an integer, reply with the same prefix and that integer plus one, with no other text.`,
-            "The Gateway forwards these final replies automatically. Do not call tools during reply steps or stop the exchange early.",
-            "When the current system instructions request the agent-to-agent announce step, reply exactly ANNOUNCE_SKIP. No external announcement is wanted.",
-          ].join(" ");
-          const peerTask = `${gateTask(gate.url)} After this initial retrieval, follow these rules for later turns: ${replyRule}`;
+          const peerTask = gateTask(gate.url);
           await gateway.request("sessions.create", { key: peerKey, agentId: "main" });
           const peer = loadSessionEntry({ agentId: "main", sessionKey: peerKey });
           expect(peer).toMatchObject({ spawnDepth: 0 });
@@ -50,7 +47,7 @@ describeLive("OpenAI independent peer coordination", () => {
               [
                 `Call sessions_send exactly once with ${JSON.stringify({ sessionKey: peerKey, message: peerTask, timeoutSeconds: 0 })}.`,
                 `After acceptance finish this turn with exactly ${waiting}. Do not wait, yield, spawn, inspect files, or call any other tools.`,
-                replyRule,
+                `When the peer result ${peerReply} arrives later, finish with exactly ${received}. Do not call tools or send another message.`,
               ].join("\n"),
             );
             await until("independent peer request reaches the closed gate", () =>
@@ -81,19 +78,19 @@ describeLive("OpenAI independent peer coordination", () => {
             expect(gate.snapshot()).toEqual({ requests: 1, waiting: 1, released: false });
             record("peer-held", { parentKey, peerKey, gate: gate.snapshot() });
 
-            gate.release(`${prefix}0`);
+            gate.release(peerReply);
             await until(
-              "five peer reply turns reach the final announce step",
-              async () => finalReplies(await history(peerKey), "ANNOUNCE_SKIP")[0],
+              "the requester receives the delayed peer reply",
+              async () => finalReplies(await history(parentKey), received)[0],
             );
-            for (const [sessionKey, sourceKey, expectedReplies, incoming] of [
-              [parentKey, peerKey, [waiting, `${prefix}1`, `${prefix}3`, `${prefix}5`], [0, 2, 4]],
-              [
-                peerKey,
-                parentKey,
-                [`${prefix}0`, `${prefix}2`, `${prefix}4`, "ANNOUNCE_SKIP"],
-                [1, 3],
-              ],
+            await until("the accepted peer delivery settles", () =>
+              getActiveGatewayRootWorkHolders().some((origin) => origin === "session:a2a-send")
+                ? undefined
+                : true,
+            );
+            for (const [sessionKey, sourceKey, expectedReplies] of [
+              [parentKey, peerKey, [waiting, received]],
+              [peerKey, parentKey, [peerReply]],
             ] as const) {
               const messages = await history(sessionKey);
               const projected = await gateway.request<{ messages: unknown[] }>("chat.history", {
@@ -109,25 +106,24 @@ describeLive("OpenAI independent peer coordination", () => {
                 visible.filter((message) => !isForwardedPeerMessage(message)),
                 "",
               );
-              record("peer-exchange-observed", {
+              record("peer-delivery-observed", {
                 sessionKey,
                 replies: finalReplies(messages, ""),
                 visibleOwnReplies,
                 projectedMessages: visible,
               });
-              expect(finalReplies(messages, ""), "exactly five alternating replies").toEqual(
+              expect(
+                finalReplies(messages, ""),
+                "only the requested turn and the single requester result turn run",
+              ).toEqual(expectedReplies);
+              expect(visibleOwnReplies, "both sessions' answers remain visible").toEqual(
                 expectedReplies,
-              );
-              expect(visibleOwnReplies, "peer answers remain visible").toEqual(
-                expectedReplies.filter((reply) => reply !== "ANNOUNCE_SKIP"),
               );
               const peerInputs = messages.filter(
                 (message) => message.role === "user" && isForwardedPeerMessage(message),
               );
-              expect(peerInputs).toHaveLength(incoming.length + (sessionKey === peerKey ? 1 : 0));
-              expect(visiblePeerInputs, "every peer input remains visible").toHaveLength(
-                peerInputs.length,
-              );
+              expect(peerInputs, "each session receives one inter-session input").toHaveLength(1);
+              expect(visiblePeerInputs, "the inter-session input remains visible").toHaveLength(1);
               for (const input of [...peerInputs, ...visiblePeerInputs]) {
                 expect(input.provenance).toMatchObject({
                   kind: "inter_session",
@@ -136,30 +132,20 @@ describeLive("OpenAI independent peer coordination", () => {
                 });
                 expect(asOptionalRecord(input.provenance)?.sourceRole).toBeUndefined();
               }
-              for (const input of visiblePeerInputs) {
-                expect(input).toMatchObject({
-                  role: "assistant",
-                  senderSession: { sessionKey: sourceKey },
-                });
-              }
-              for (const turn of incoming) {
-                const input = peerInputs.filter((message) =>
-                  JSON.stringify(message.content).includes(`${prefix}${turn}`),
-                );
-                expect(input, "each preceding reply is delivered once").toHaveLength(1);
-                expect(
-                  visiblePeerInputs.filter((message) =>
-                    JSON.stringify(message.content).includes(`${prefix}${turn}`),
-                  ),
-                  "peer input remains visible",
-                ).toHaveLength(1);
+              expect(visiblePeerInputs[0]).toMatchObject({
+                role: "assistant",
+                senderSession: { sessionKey: sourceKey },
+              });
+              if (sessionKey === parentKey) {
+                expect(JSON.stringify(peerInputs[0]?.content)).toContain(peerReply);
+                expect(JSON.stringify(visiblePeerInputs[0]?.content)).toContain(peerReply);
               }
               expect(
                 messages.filter(
                   (message) =>
                     message.role === "toolResult" && message.toolName === "sessions_send",
                 ),
-                "the Gateway forwards replies without another model messaging call",
+                "the single accepted send owns the delayed delivery",
               ).toHaveLength(sessionKey === parentKey ? 1 : 0);
             }
             expect(gate.snapshot()).toEqual({ requests: 1, waiting: 0, released: true });

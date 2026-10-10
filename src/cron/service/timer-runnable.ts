@@ -1,17 +1,18 @@
 import { parseAbsoluteTimeMs } from "../parse.js";
-import type { CronJob } from "../types.js";
+import { hasCanonicalCronDeliveryMode } from "../store/delivery-codec.js";
+import type { CronJob, CronRunStatus } from "../types.js";
 import {
   computeJobPreviousRunAtOrBeforeMs,
   DEFAULT_ERROR_BACKOFF_SCHEDULE_MS,
   hasActiveCronRun,
   hasScheduledNextRunAtMs,
+  HEARTBEAT_SKIP_DISABLED,
   isJobEnabled,
   isTimeScheduledJob,
   resolveJobErrorBackoffUntilMs,
   resolveJobLastRunStatus,
 } from "./jobs-scheduling.js";
 import type { CronServiceState } from "./state.js";
-import { isScheduledTerminalOneShotRetry } from "./timer-trigger.js";
 import { hasPendingCronTriggerInterval } from "./trigger-interval.js";
 
 /**
@@ -62,24 +63,27 @@ export function hasMissedCronSlotSinceLastRun(job: CronJob, nowMs: number): bool
 }
 
 export function isRunnableJob(params: {
-  state: CronServiceState;
   job: CronJob;
   nowMs: number;
-  skipJobIds?: ReadonlySet<string>;
+  forced?: boolean;
   skipAtIfAlreadyRan?: boolean;
   allowCronMissedRunByLastRun?: boolean;
+  activeInProcess?: boolean;
 }): boolean {
   const { job, nowMs } = params;
   if (!job.state) {
     job.state = {};
   }
+  if (
+    !hasCanonicalCronDeliveryMode(job.delivery) ||
+    hasActiveCronRun(job, params.activeInProcess)
+  ) {
+    return false;
+  }
+  if (params.forced) {
+    return true;
+  }
   if (!isJobEnabled(job) || !isTimeScheduledJob(job)) {
-    return false;
-  }
-  if (params.skipJobIds?.has(job.id)) {
-    return false;
-  }
-  if (hasActiveCronRun(job)) {
     return false;
   }
   const next = job.state.nextRunAtMs;
@@ -151,6 +155,31 @@ export function isRunnableJob(params: {
   return hasMissedCronSlotSinceLastRun(job, nowMs);
 }
 
+function isScheduledTerminalOneShotRetry(
+  job: CronJob,
+  lastRunStatus: CronRunStatus,
+  lastRun: unknown,
+  nextRun: unknown,
+): boolean {
+  if (
+    !isJobEnabled(job) ||
+    typeof nextRun !== "number" ||
+    typeof lastRun !== "number" ||
+    nextRun <= lastRun
+  ) {
+    return false;
+  }
+  if (lastRunStatus === "error") {
+    return true;
+  }
+  return (
+    lastRunStatus === "skipped" &&
+    job.sessionTarget === "main" &&
+    job.wakeMode === "now" &&
+    job.state.lastError === HEARTBEAT_SKIP_DISABLED
+  );
+}
+
 function isErrorBackoffPending(
   job: CronJob,
   nowMs: number,
@@ -163,26 +192,13 @@ function isErrorBackoffPending(
   return backoffUntilMs !== undefined && nowMs < backoffUntilMs;
 }
 
-export function collectRunnableJobs(
-  state: CronServiceState,
-  nowMs: number,
-  opts?: {
-    skipJobIds?: ReadonlySet<string>;
-    skipAtIfAlreadyRan?: boolean;
-    allowCronMissedRunByLastRun?: boolean;
-  },
-): CronJob[] {
-  if (!state.store) {
-    return [];
-  }
-  return state.store.jobs.filter((job) =>
-    isRunnableJob({
-      state,
-      job,
-      nowMs,
-      skipJobIds: opts?.skipJobIds,
-      skipAtIfAlreadyRan: opts?.skipAtIfAlreadyRan,
-      allowCronMissedRunByLastRun: opts?.allowCronMissedRunByLastRun,
-    }),
+export function collectRunnableJobs(state: CronServiceState, nowMs: number): CronJob[] {
+  return (
+    state.store?.jobs.filter((job) =>
+      isRunnableJob({
+        job,
+        nowMs,
+      }),
+    ) ?? []
   );
 }

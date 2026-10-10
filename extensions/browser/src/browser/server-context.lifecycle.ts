@@ -6,6 +6,7 @@
  * transition can still abort and drain all previously admitted work.
  */
 import { AsyncLocalStorage } from "node:async_hooks";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { getChromeMcpModule } from "./chrome-mcp.runtime.js";
 import type { RunningChrome } from "./chrome.js";
 import { stopOpenClawChrome, stopOwnedOpenClawChrome } from "./chrome.js";
@@ -188,26 +189,12 @@ export function waitForProfileOperation<T>(promise: Promise<T>, signal?: AbortSi
 }
 
 function createLease(actor: ProfileLifecycleActor): () => void {
-  let release!: () => void;
-  const settled = new Promise<void>((resolve) => {
-    release = resolve;
-  });
+  const { promise: settled, resolve: release } = createDeferred<void>();
   actor.leases.add(settled);
   return () => {
     actor.leases.delete(settled);
     release();
   };
-}
-
-/** Create the single lifecycle owner for one resolved Browser profile. */
-function createProfileRuntimeState(profile: ResolvedBrowserProfile): ProfileRuntimeState {
-  const runtime: ProfileRuntimeState = {
-    profile,
-    running: null,
-    lastTargetId: null,
-  };
-  profileLifecycles.set(runtime, createProfileLifecycleActor());
-  return runtime;
 }
 
 /** Return the current runtime object; terminal tombstones stay until exact cleanup removes them. */
@@ -221,7 +208,8 @@ export function getOrCreateProfileRuntime(
     getProfileLifecycle(current);
     return current;
   }
-  const created = createProfileRuntimeState(profile);
+  const created: ProfileRuntimeState = { profile, running: null, lastTargetId: null };
+  getProfileLifecycle(created);
   state.profiles.set(profile.name, created);
   return created;
 }
@@ -424,9 +412,9 @@ async function cleanupProfileResources(params: {
 
   if (actor.cleanupChromeMcp.size > 0) {
     try {
-      const { closeChromeMcpSession } = await getChromeMcpModule();
+      const chromeMcp = await getChromeMcpModule.peek();
       for (const profileName of actor.cleanupChromeMcp) {
-        stopped = (await closeChromeMcpSession(profileName)) || stopped;
+        stopped = (await chromeMcp?.closeChromeMcpSession(profileName)) || stopped;
         actor.cleanupChromeMcp.delete(profileName);
       }
     } catch (err) {
@@ -515,19 +503,22 @@ export function beginProfileTransition(
   const eagerPlaywrightRetirement = shouldClosePlaywright
     ? capturePlaywrightRetirement(actor, ownerProfile.cdpUrl)
     : null;
-  if (params.closeRelay) {
-    const relay = params.state.extensionRelays?.get(params.runtime.profile.name);
+  const captureRelay = () => {
+    const relay =
+      params.closeRelay && params.state.extensionRelays?.get(params.runtime.profile.name);
     if (relay) {
       actor.cleanupRelays.add(relay);
     }
-  }
+  };
+  captureRelay();
 
   // Start closing MCP before waiting for a start, lease, or older transition.
   const eagerMcpClose =
     closeSharedAdapters && usesChromeMcp
-      ? getChromeMcpModule()
-          .then(({ closeChromeMcpSession }) => closeChromeMcpSession(ownerProfile.name))
-          .catch(() => false)
+      ? (getChromeMcpModule
+          .peek()
+          ?.then(({ closeChromeMcpSession }) => closeChromeMcpSession(ownerProfile.name))
+          .catch(() => false) ?? null)
       : null;
   const transitionGeneration = actor.generation;
   let cleanupCompleted = false;
@@ -537,12 +528,7 @@ export function beginProfileTransition(
       if (shouldClosePlaywright && hadPendingWork) {
         capturePlaywrightRetirement(actor, ownerProfile.cdpUrl);
       }
-      if (params.closeRelay) {
-        const relay = params.state.extensionRelays?.get(params.runtime.profile.name);
-        if (relay) {
-          actor.cleanupRelays.add(relay);
-        }
-      }
+      captureRelay();
       const result = await cleanupProfileResources({
         state: params.state,
         runtime: params.runtime,

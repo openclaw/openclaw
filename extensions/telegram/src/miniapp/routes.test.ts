@@ -9,7 +9,7 @@ import type {
   PluginCommandContext,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
-import { createMockIncomingRequest } from "openclaw/plugin-sdk/test-env";
+import { createMockIncomingRequest, withTempHome } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { registerTelegramMiniApp } from "../../miniapp-api.js";
 import {
@@ -20,7 +20,12 @@ import {
 type OpenClawPluginHttpRouteParams = Parameters<OpenClawPluginApi["registerHttpRoute"]>[0];
 
 const issueDeviceBootstrapToken = vi.hoisted(() =>
-  vi.fn(async () => ({ token: "issued", expiresAtMs: Date.now() + 600_000 })),
+  vi.fn<typeof import("openclaw/plugin-sdk/device-bootstrap").issueDeviceBootstrapToken>(
+    async () => ({
+      token: "issued",
+      expiresAtMs: Date.now() + 600_000,
+    }),
+  ),
 );
 const resolveTelegramMiniAppUrls = vi.hoisted(() =>
   vi.fn(async () => ({
@@ -81,7 +86,10 @@ class MockResponse extends EventEmitter {
   }
 }
 
-function createRoute(cfg: OpenClawConfig): OpenClawPluginHttpRouteParams {
+function createRoute(
+  cfg: OpenClawConfig,
+  currentConfig?: () => OpenClawConfig,
+): OpenClawPluginHttpRouteParams {
   let route: OpenClawPluginHttpRouteParams | null = null;
   const api = createTestPluginApi({
     config: cfg,
@@ -89,6 +97,13 @@ function createRoute(cfg: OpenClawConfig): OpenClawPluginHttpRouteParams {
       route = params;
     },
   });
+  if (currentConfig) {
+    api.runtime.config = {
+      current: currentConfig,
+      mutateConfigFile: vi.fn(),
+      replaceConfigFile: vi.fn(),
+    };
+  }
   registerTelegramMiniAppRoutes(api, launchTickets);
   if (!route) {
     throw new Error("expected miniapp route registration");
@@ -218,13 +233,17 @@ describe("registerTelegramMiniAppRoutes", () => {
     expect(resolveTelegramMiniAppUrls).not.toHaveBeenCalled();
   });
 
-  it("authenticates the registered owner DM launch ticket and rejects group launches", async () => {
+  it("recovers wildcard-only Control UI access with an explicit owner ID and rejects group launches", async () => {
+    const allowFrom = ["accessGroup:operators"];
     const cfg: OpenClawConfig = {
+      accessGroups: {
+        operators: { type: "message.senders", members: { telegram: ["*"] } },
+      },
       channels: {
         telegram: {
           botToken: BOT_TOKEN,
           allowFrom: ["999999"],
-          accounts: { ops: { allowFrom: ["123456"] } },
+          accounts: { ops: { allowFrom } },
         },
       },
       gateway: { tailscale: { mode: "funnel" } },
@@ -238,7 +257,7 @@ describe("registerTelegramMiniAppRoutes", () => {
         registerHttpRoute: (route) => routes.push(route),
       }),
     );
-    const command = commands.find((entry) => entry.name === "dashboard");
+    const command = commands.find((entry) => entry.name === "controlui");
     const route = routes.find((entry) => entry.path === "/__openclaw_tg_miniapp/");
     if (!command || !route) {
       throw new Error("expected registered Mini App command and route");
@@ -247,7 +266,7 @@ describe("registerTelegramMiniAppRoutes", () => {
       channel: "telegram",
       isAuthorizedSender: true,
       senderIsOwner: false,
-      commandBody: "/dashboard",
+      commandBody: "/controlui",
       config: cfg,
       accountId: "ops",
       from: "telegram:123456",
@@ -268,6 +287,17 @@ describe("registerTelegramMiniAppRoutes", () => {
     expect(resolveTelegramMiniAppUrls).not.toHaveBeenCalled();
     expect(issueDeviceBootstrapToken).not.toHaveBeenCalled();
 
+    const deniedReply = await command.handler(context);
+    expect(deniedReply.text).toContain("administrator");
+    expect(deniedReply.text).toContain("numeric Telegram user ID (123456)");
+    expect(deniedReply.text).toContain("allowFrom");
+    expect(deniedReply.text).toContain("commands.ownerAllowFrom");
+    expect(deniedReply.text).toContain("retry /controlui");
+    expect(deniedReply.presentation).toBeUndefined();
+    expect(resolveTelegramMiniAppUrls).not.toHaveBeenCalled();
+    expect(issueDeviceBootstrapToken).not.toHaveBeenCalled();
+
+    allowFrom.push("123456");
     const reply = await command.handler(context);
     const buttons = reply.presentation?.blocks.find((block) => block.type === "buttons");
     const webAppUrl = buttons?.buttons[0]?.webApp?.url;
@@ -296,6 +326,7 @@ describe("registerTelegramMiniAppRoutes", () => {
     });
     expect(issueDeviceBootstrapToken).toHaveBeenCalledTimes(1);
     expect(issueDeviceBootstrapToken).toHaveBeenCalledWith({
+      assertCurrent: expect.any(Function),
       profile: {
         roles: ["operator"],
         scopes: [
@@ -308,6 +339,173 @@ describe("registerTelegramMiniAppRoutes", () => {
         purpose: "control-ui",
       },
     });
+  });
+
+  it.each(
+    (["account", "command"] as const).flatMap((source) =>
+      (["*", "telegram"] as const).flatMap((channel) =>
+        [
+          { members: ["*"], allowed: false },
+          { members: ["@owner", "999999"], allowed: false },
+          { members: ["telegram:123456"], allowed: true },
+          { members: ["*", "tg:123456"], allowed: true },
+        ].map(({ members, allowed }) => ({ source, channel, members, allowed })),
+      ),
+    ),
+  )(
+    "requires explicit group ownership: $source / $channel / $members",
+    async ({ source, channel, members, allowed }) => {
+      const cfg = config([]);
+      cfg.accessGroups = {
+        operators: { type: "message.senders", members: { [channel]: members } },
+      };
+      if (source === "account") {
+        cfg.channels = {
+          telegram: {
+            botToken: BOT_TOKEN,
+            accounts: { ops: { allowFrom: ["accessGroup:operators"] } },
+          },
+        };
+      } else {
+        cfg.commands = { ownerAllowFrom: ["accessGroup:operators"] };
+      }
+      const commands: OpenClawPluginCommandDefinition[] = [];
+      registerTelegramMiniApp(
+        createTestPluginApi({
+          config: cfg,
+          registerCommand: (command) => commands.push(command),
+        }),
+      );
+      const command = commands.find((entry) => entry.name === "controlui");
+      if (!command) {
+        throw new Error("expected registered Mini App command");
+      }
+      const reply = await command.handler({
+        channel: "telegram",
+        isAuthorizedSender: true,
+        senderIsOwner: true,
+        commandBody: "/controlui",
+        config: cfg,
+        accountId: "ops",
+        from: "telegram:123456",
+        sessionKey: "telegram:direct:123456",
+        requestConversationBinding: async () => ({ status: "error", message: "unused" }),
+        detachConversationBinding: async () => ({ removed: false }),
+        getCurrentConversationBinding: async () => null,
+      });
+      if (allowed) {
+        expect(reply.presentation?.blocks).toEqual([expect.objectContaining({ type: "buttons" })]);
+      } else {
+        expect(reply.text).toContain("Restricted to the bot owner.");
+        expect(reply.presentation).toBeUndefined();
+      }
+
+      // A previously issued ticket must not bypass the auth route's owner check.
+      const res = await callRoute({
+        route: createRoute(cfg),
+        method: "POST",
+        url: "/__openclaw_tg_miniapp/auth",
+        contentType: "application/json",
+        body: authBody({ accountId: "ops", nonce: "group-owner" }),
+        ip: `203.0.113.${100 + signedNonceSequence}`,
+      });
+      expect(res.statusCode).toBe(allowed ? 200 : 403);
+      expect(issueDeviceBootstrapToken).toHaveBeenCalledTimes(allowed ? 1 : 0);
+      if (!allowed) {
+        expect(res.body).toBe("Restricted to the bot owner.");
+      }
+    },
+  );
+
+  it.each([
+    "body",
+    "published URL",
+    "bot token",
+    "credential",
+    "credential response",
+    "unchanged",
+  ] as const)("keeps owner authority current across the %s await", async (stage) => {
+    let currentConfig = config();
+    const route = createRoute(currentConfig, () => currentConfig);
+    const entered = Promise.withResolvers<void>();
+    const resume = Promise.withResolvers<void>();
+    let persistedTokens: number | undefined;
+    if (stage === "published URL" || stage === "bot token") {
+      resolveTelegramMiniAppUrls.mockImplementationOnce(async () => {
+        entered.resolve();
+        await resume.promise;
+        return {
+          pageUrl: "https://host.tailnet.ts.net/__openclaw_tg_miniapp/",
+          controlUiUrl: "https://host.tailnet.ts.net/openclaw",
+          gatewayUrl: "wss://host.tailnet.ts.net",
+        };
+      });
+    } else if (stage === "credential response") {
+      issueDeviceBootstrapToken.mockImplementationOnce(async () => {
+        entered.resolve();
+        await resume.promise;
+        return { token: "issued", expiresAtMs: Date.now() + 600_000 };
+      });
+    } else if (stage !== "body") {
+      const bootstrap = await vi.importActual<
+        typeof import("openclaw/plugin-sdk/device-bootstrap")
+      >("openclaw/plugin-sdk/device-bootstrap");
+      issueDeviceBootstrapToken.mockImplementationOnce((params) =>
+        withTempHome(async () => {
+          entered.resolve();
+          await resume.promise;
+          try {
+            return await bootstrap.issueDeviceBootstrapToken(params);
+          } finally {
+            persistedTokens = (await bootstrap.clearDeviceBootstrapTokens()).removed;
+          }
+        }),
+      );
+    }
+    const req = createPendingAuthRequest("203.0.113.60");
+    const pending = callRouteRequest(route, req);
+    try {
+      if (stage === "body") {
+        currentConfig = config(["999999"]);
+      }
+      req.push(Buffer.from(authBody({ nonce: `revoked-${stage}` })));
+      req.complete = true;
+      req.push(null);
+      if (stage !== "body") {
+        expect(
+          await Promise.race([
+            entered.promise.then(() => "entered"),
+            pending.then(() => "finished"),
+          ]),
+        ).toBe("entered");
+        if (stage === "bot token") {
+          currentConfig = {
+            ...config(),
+            channels: { telegram: { botToken: "replacement", allowFrom: ["123456"] } },
+          };
+        } else if (stage !== "unchanged") {
+          currentConfig = config(["999999"]);
+        }
+      }
+      resume.resolve();
+      const res = await pending;
+      expect(res.statusCode).toBe(stage === "unchanged" ? 200 : 403);
+      if (stage === "unchanged") {
+        expect(JSON.parse(res.body).bootstrapToken).toBeTypeOf("string");
+        expect(persistedTokens).toBe(1);
+      } else {
+        expect(res.body).toBe("Restricted to the bot owner.");
+        if (stage === "credential") {
+          expect(persistedTokens).toBe(0);
+        } else if (stage !== "credential response") {
+          expect(issueDeviceBootstrapToken).not.toHaveBeenCalled();
+        }
+      }
+    } finally {
+      resume.resolve();
+      req.destroy();
+      await pending;
+    }
   });
 
   it("rejects replayed init-data without minting again", async () => {
@@ -332,7 +530,7 @@ describe("registerTelegramMiniAppRoutes", () => {
     });
 
     expect(replay.statusCode).toBe(401);
-    expect(replay.body).toBe("This link expired. Reopen the dashboard from your bot chat.");
+    expect(replay.body).toBe("This link expired. Run /controlui again in your bot chat.");
     expect(issueDeviceBootstrapToken).toHaveBeenCalledTimes(1);
   });
 
@@ -402,7 +600,7 @@ describe("registerTelegramMiniAppRoutes", () => {
     });
 
     expect(res.statusCode).toBe(401);
-    expect(res.body).toBe("This link expired. Reopen the dashboard from your bot chat.");
+    expect(res.body).toBe("This link expired. Run /controlui again in your bot chat.");
     expect(issueDeviceBootstrapToken).not.toHaveBeenCalled();
   });
 
@@ -458,7 +656,7 @@ describe("registerTelegramMiniAppRoutes", () => {
     });
 
     expect(res.statusCode).toBe(401);
-    expect(res.body).toBe("This link expired. Reopen the dashboard from your bot chat.");
+    expect(res.body).toBe("This link expired. Run /controlui again in your bot chat.");
     expect(issueDeviceBootstrapToken).not.toHaveBeenCalled();
   });
 

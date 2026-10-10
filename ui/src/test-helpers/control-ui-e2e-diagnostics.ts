@@ -5,6 +5,7 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ConsoleMessage, Frame, Page, Request } from "playwright";
 import { agentRouteFromPath, isRouteId, pathForRoute } from "../app-route-paths.ts";
 import { createControlUiE2eArtifactDir } from "./control-ui-e2e-artifacts.ts";
+import { captureControlUiE2eRendererStall } from "./control-ui-e2e-renderer-stall.ts";
 
 const CONTROL_UI_E2E_DIAGNOSTIC_RING_LIMIT = 200;
 const controlUiE2ePageDiagnostics = new WeakMap<Page, ControlUiE2eDiagnosticEvent[]>();
@@ -350,6 +351,7 @@ async function captureControlUiE2eFailureDiagnosticsUnsafe(
         socketUrls?: () => string[];
       };
       const windowState = window as Window & {
+        __OPENCLAW_CONTROL_UI_E2E_LONG_FRAMES__?: () => unknown[];
         __OPENCLAW_CONTROL_UI_E2E_UNHANDLED_REJECTIONS__?: unknown[];
         openclawControlUiE2eGateway?: MockGateway;
       };
@@ -405,8 +407,54 @@ async function captureControlUiE2eFailureDiagnosticsUnsafe(
       const agentPath = window.location.pathname.match(
         /^\/settings\/agents\/([^/]+)\/(overview|files|tools|skills|channels|cron)$/u,
       );
+      const groupMode = document.querySelector<HTMLElement>(
+        "wa-dropdown.session-group-defaults__mode-dropdown",
+      );
+      const groupMenu = groupMode?.shadowRoot?.querySelector<HTMLElement>('[part="menu"]');
+      const groupPopup = groupMode?.shadowRoot?.querySelector<HTMLElement>("wa-popup");
+      const groupPopupSurface =
+        groupPopup?.shadowRoot?.querySelector<HTMLElement>('[part="popup"]');
+      const groupFolderPicker = document.querySelector<HTMLElement>(
+        "wa-popover.session-group-defaults__folder-popover",
+      );
       return {
         failureSummary: {
+          sessionGroupDefaults: groupMode
+            ? {
+                open: Reflect.get(groupMode, "open") === true,
+                expanded: safeValue(
+                  groupMode.querySelector('[slot="trigger"]')?.getAttribute("aria-expanded"),
+                  ["true", "false"],
+                ),
+                menuInert: groupMenu?.inert ?? null,
+                menuVisible: groupMenu?.checkVisibility({ visibilityProperty: true }) ?? null,
+                popupActive: groupPopup ? Reflect.get(groupPopup, "active") === true : null,
+                nativePopupOpen: groupPopupSurface?.matches(":popover-open") ?? null,
+                folderPickerOpen: groupFolderPicker
+                  ? Reflect.get(groupFolderPicker, "open") === true
+                  : null,
+                folderDialogOpen:
+                  groupFolderPicker?.shadowRoot?.querySelector<HTMLDialogElement>("dialog")?.open ??
+                  null,
+                items: ["local", "worktree"].map((value) => {
+                  const item = groupMode.querySelector<HTMLElement>(
+                    `wa-dropdown-item[value="${value}"]`,
+                  );
+                  return {
+                    value,
+                    present: Boolean(item),
+                    role: safeValue(item?.getAttribute("role"), [
+                      "menuitem",
+                      "menuitemcheckbox",
+                      "menuitemradio",
+                    ]),
+                    visible: item?.checkVisibility({ visibilityProperty: true }) ?? null,
+                    rectCount: item?.getClientRects().length ?? 0,
+                    iconCount: item?.querySelectorAll('[slot="icon"]').length ?? 0,
+                  };
+                }),
+              }
+            : null,
           canvasWidgets: [...document.querySelectorAll("openclaw-canvas-widget-view")]
             .slice(0, 8)
             .map((widget) => ({
@@ -462,6 +510,7 @@ async function captureControlUiE2eFailureDiagnosticsUnsafe(
             count: Array.isArray(roster?.agents) ? roster.agents.length : null,
             errorPresent: Boolean(agentsState?.agentsError),
           },
+          longFrames: copy(windowState["__OPENCLAW_CONTROL_UI_E2E_LONG_FRAMES__"]?.() ?? null),
           documentReadyState: safeValue(document.readyState, [
             "loading",
             "interactive",
@@ -602,6 +651,7 @@ async function captureControlUiE2eFailureDiagnosticsUnsafe(
     hostBeforeRead,
     lifecycle: controlUiE2ePageLifecycles.get(page) ?? null,
     rendererRead,
+    rendererStall: await captureControlUiE2eRendererStall(page, rendererRead),
     models,
     gatewayRpc: controlUiRpcDiagnostics.get(page) ?? [],
     frameDepthCounts,

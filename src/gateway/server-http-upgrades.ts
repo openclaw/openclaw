@@ -13,7 +13,6 @@ import {
   isGatewayRestartDraining,
   isGatewayWorkAdmissionClosed,
 } from "../process/gateway-work-admission.js";
-import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import {
   NODE_DESKTOP_ATTACH_PATH,
   NODE_PORTAL_ATTACH_PATH,
@@ -35,6 +34,11 @@ import {
 } from "./ingress-attribution.js";
 import { normalizePluginNodeCapabilityScopedUrl } from "./plugin-node-capability.js";
 import {
+  getHttpAuthUtilsModule,
+  getPluginNodeCapabilityAuthModule,
+  getPluginRouteRuntimeScopesModule,
+} from "./server-http-modules.js";
+import {
   getCachedPluginGatewayAuthBypassPaths,
   shouldEnforceDefaultPluginGatewayAuth,
   type ResolvePluginNodeCapabilityRoute,
@@ -52,14 +56,6 @@ import {
   type GatewayWsClient,
 } from "./server/ws-types.js";
 
-const getPluginNodeCapabilityAuthModule = createLazyRuntimeModule(
-  () => import("./server/plugin-node-capability-auth.js"),
-);
-const getHttpAuthUtilsModule = createLazyRuntimeModule(() => import("./http-auth-utils.js"));
-const getPluginRouteRuntimeScopesModule = createLazyRuntimeModule(
-  () => import("./server/plugin-route-runtime-scopes.js"),
-);
-
 function rejectUpgradeAuth(socket: Pick<Duplex, "end" | "destroy">, auth: GatewayAuthResult) {
   if (auth.rateLimited) {
     const retryAfterSeconds =
@@ -70,18 +66,11 @@ function rejectUpgradeAuth(socket: Pick<Duplex, "end" | "destroy">, auth: Gatewa
         type: "rate_limited",
       },
     });
-    socket.end(
-      [
-        "HTTP/1.1 429 Too Many Requests",
-        ...(retryAfterSeconds ? [`Retry-After: ${retryAfterSeconds}`] : []),
-        "Content-Type: application/json; charset=utf-8",
-        `Content-Length: ${Buffer.byteLength(body, "utf8")}`,
-        "Connection: close",
-        "",
-        body,
-      ].join("\r\n"),
-      () => socket.destroy(),
-    );
+    rejectWebSocketUpgrade(socket, {
+      status: 429,
+      body: { contentType: "application/json; charset=utf-8", text: body },
+      headers: retryAfterSeconds ? { "Retry-After": String(retryAfterSeconds) } : undefined,
+    });
     return;
   }
   if (auth.reason === PROXY_ATTRIBUTION_REQUIRED_REASON) {
@@ -91,17 +80,10 @@ function rejectUpgradeAuth(socket: Pick<Duplex, "end" | "destroy">, auth: Gatewa
         type: PROXY_ATTRIBUTION_REQUIRED_REASON,
       },
     });
-    socket.end(
-      [
-        "HTTP/1.1 403 Forbidden",
-        "Content-Type: application/json; charset=utf-8",
-        `Content-Length: ${Buffer.byteLength(body, "utf8")}`,
-        "Connection: close",
-        "",
-        body,
-      ].join("\r\n"),
-      () => socket.destroy(),
-    );
+    rejectWebSocketUpgrade(socket, {
+      status: 403,
+      body: { contentType: "application/json; charset=utf-8", text: body },
+    });
     return;
   }
   rejectWebSocketUpgrade(socket, { status: 401 });
@@ -380,7 +362,7 @@ export function attachGatewayUpgradeHandler(opts: {
         rejectUpgradeAuth(socket, { ok: false, reason: ingressAttribution.reason });
         return;
       }
-      if (requestPath === "/desktop/observe") {
+      if (requestPath === "/desktop/observe" || requestPath === "/desktop/audio") {
         if (!opts.desktopSessionRegistry) {
           rejectGatewayUpgradeServiceUnavailable(socket, "desktop observe unavailable");
           return;
@@ -390,6 +372,11 @@ export function attachGatewayUpgradeHandler(opts: {
         // drained Gateway would keep accepting new desktop streams.
         if (isGatewayWorkAdmissionClosed()) {
           rejectGatewayUpgradeServiceUnavailable(socket, "Gateway websocket admission closed");
+          return;
+        }
+        if (requestPath === "/desktop/audio") {
+          const { handleDesktopAudioUpgrade } = await import("./desktop/audio-bridge.js");
+          handleDesktopAudioUpgrade(req, socket, head);
           return;
         }
         const { handleDesktopObserveUpgrade } = await import("./desktop/observe-bridge.js");

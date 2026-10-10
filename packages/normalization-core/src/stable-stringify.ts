@@ -107,51 +107,37 @@ function stringifyObjectValue(
     return `[${serializedEntries.join(",")}]`;
   }
   const record = value as Record<string, unknown>;
-  if (normalizeString === preserveString) {
-    // oxlint-disable-next-line unicorn/no-array-sort -- Object.keys creates a private array.
-    const fields = Object.keys(record).sort();
+  const keys = Object.keys(record);
+  const fields: Array<string | { key: string; normalizedKey: string }> =
+    normalizeString === preserveString
+      ? keys.sort() // oxlint-disable-line unicorn/no-array-sort -- keys is a private array.
+      : keys
+          .map((key) => ({ key, normalizedKey: normalizeString(key) }))
+          // oxlint-disable-next-line unicorn/no-array-sort -- map creates a private entry array.
+          .sort((left, right) => {
+            const normalizedOrder = compareStableStrings(left.normalizedKey, right.normalizedKey);
+            // Distinct source keys can normalize alike; preserve deterministic ordering without loss.
+            return normalizedOrder || compareStableStrings(left.key, right.key);
+          });
+  write?.("{");
+  const serializedFields: string[] = normalizeString === preserveString ? keys : [];
+  let separator = "";
+  let fieldIndex = 0;
+  for (const field of fields) {
+    const key = typeof field === "string" ? field : field.key;
+    const prefix = `${JSON.stringify(typeof field === "string" ? field : field.normalizedKey)}:`;
     if (write) {
-      write("{");
-      let separator = "";
-      for (const key of fields) {
-        write(`${separator}${JSON.stringify(key)}:`);
-        write(stringifyStableValue(record[key], stack, normalizeString, write));
-        separator = ",";
-      }
-      write("}");
-      return "";
-    }
-    let fieldIndex = 0;
-    for (const key of fields) {
-      fields[fieldIndex++] =
-        `${JSON.stringify(key)}:${stringifyStableValue(record[key], stack, normalizeString)}`;
-    }
-    return `{${fields.join(",")}}`;
-  }
-  const entries = Object.keys(record)
-    .map((key) => ({ key, normalizedKey: normalizeString(key) }))
-    // oxlint-disable-next-line unicorn/no-array-sort -- map creates a private entry array.
-    .sort((left, right) => {
-      const normalizedOrder = compareStableStrings(left.normalizedKey, right.normalizedKey);
-      // Distinct source keys can normalize alike; preserve deterministic ordering without loss.
-      return normalizedOrder || compareStableStrings(left.key, right.key);
-    });
-  const serializedFields: string[] = [];
-  if (write) {
-    write("{");
-    let separator = "";
-    for (const { key, normalizedKey } of entries) {
-      write(`${separator}${JSON.stringify(normalizedKey)}:`);
+      write(`${separator}${prefix}`);
       write(stringifyStableValue(record[key], stack, normalizeString, write));
       separator = ",";
+    } else {
+      serializedFields[fieldIndex++] =
+        `${prefix}${stringifyStableValue(record[key], stack, normalizeString)}`;
     }
+  }
+  if (write) {
     write("}");
     return "";
-  }
-  for (const { key, normalizedKey } of entries) {
-    serializedFields.push(
-      `${JSON.stringify(normalizedKey)}:${stringifyStableValue(record[key], stack, normalizeString)}`,
-    );
   }
   return `{${serializedFields.join(",")}}`;
 }

@@ -37,6 +37,34 @@ detached descendants stopped. Before manually removing an abandoned lock directo
 inspect its `owner.json` and verify all associated build, compiler, and lint
 processes, including detached descendants, have stopped; then retry the command.
 
+Runtime-consuming tests prepare checkout artifacts through the explicit build owner,
+not by launching the CLI with `--version`. Preparation reuses source-runner freshness
+checks and checkout artifact ownership, without updater service or database-maintenance
+custody. Current artifacts need no writable checkout or service inspection.
+`build-all` fingerprints production inputs in the existing stamps. Test preparation
+can reuse a coherent runtime after a source refresh or test-only correction,
+including a new private transport commit. Ordinary CLI and immutable deployment
+HEAD checks remain strict; UI E2E preparation also keeps its current-head checks.
+Changed production inputs, build configuration, dependencies, compiler identity,
+or required missing outputs still require preparation. Partial postbuilds that skip
+static assets cannot satisfy readers requiring those assets. A full build before E2E
+checks should use `OPENCLAW_BUILD_PRIVATE_QA=1 pnpm build`; scope that flag to the
+build command so its artifacts satisfy the strongest test prerequisite.
+
+Before writing, automatic preparation requires verified artifact separation or an
+observed offline managed Gateway. On Linux it reads the loaded command location without reading service
+environment files, using the existing native manager binding. A native `GetUnit`
+not-loaded result establishes no loaded runtime, not absence of its saved definition.
+An unloaded saved unit does not make an otherwise writable source checkout immutable;
+this is admission-time inspection, not service-start exclusion or a sandbox.
+Physically shared `dist` paths, unreadable artifact paths, incomplete discovery, and
+unknown service state never grant permission to rebuild. Immutable deployments and
+known live overlap remain refused. No new CLI flag or configuration is needed for
+ordinary separate worktrees; use the [existing isolated runner](/help/testing/suites#network-isolated-local-e2e)
+when native separation cannot be established. This inspection is not a sandbox.
+Explicit `pnpm build`, automatic source-CLI rebuilds, and actual update publication
+retain their existing admission policies.
+
 Lint reports its final failure on stderr after child joins and artifact ownership
 have settled, including retained ownership when cleanup is uncertain. Standalone
 Oxlint and its shard CLI end with `[oxlint] FAILED (exit N)`; `pnpm lint` owns the
@@ -53,40 +81,43 @@ owner validates its consumed source content, inherited config, selected compiler
 and complete output inventory. Unrelated existing source or test edits retain
 cache hits. Resolution-topology changes invalidate conservatively, including new
 module candidates outside declared roots. Stale declarations get a full native
-emit after clearing only their build-info file; the successful emitted inventory
+emit after clearing their private input receipt; the successful emitted inventory
 then drives obsolete declaration pruning. Missing or tampered outputs invalidate
 the owner. The content records live under
-`.artifacts/extension-package-boundary`, outside packaged build cleanup. A warm run validates the records without emitting declarations.
+`.artifacts/extension-package-boundary`, outside packaged build cleanup. Private
+`.inputs.json` receipts contain normalized checkout-relative source and manifest
+paths instead of native `.tsbuildinfo` state. A warm run validates the records
+without emitting declarations.
 
 Packaged declaration builds and package-boundary records accept only checkout-owned input
 realpaths, including compiler libraries, inherited config, dependency links, and
-package manifests. Local pnpm links remain supported when their targets stay
-inside the checkout. The tsgo wrapper does not create or reuse a shared external
-install; invocations from subdirectories still use the containing checkout as
-the ownership boundary. Declared checkout junctions and platform path aliases map
-to the same native root for validation and actual snapshot reads. Local declaration
-preparation also aligns the compiler's `PWD` with its working directory so shell
-aliases do not change emitted inventory paths. Native resolution itself is not
-sandboxed: an ancestor install can still enter a successful compiler
-receipt. Resolution can read an ancestor's candidate `package.json` while searching
-for declarations, then resolve the import to checkout-local JavaScript. This can
-happen with a complete local frozen install and no external source files in the
-compiler Program; it does not by itself prove an undeclared dependency. Those
-manifests still affect resolution and must remain in the receipt. The owner fails
-with `Declaration input escapes checkout`, without publishing a success record or
-pruning obsolete declarations. Warm records use the same input check.
+package manifests. These paths share `compileNativeProject`, which uses the
+pinned native compiler's asynchronous API for checking and in-memory declaration
+emission. Its filesystem callbacks make candidates outside the checkout appear
+missing before native resolution can read them. Source and package-manifest reads
+are captured directly; admission does not depend on parsing resolution traces.
+The compiler version is pinned in `package.json` because this API is unstable.
+Configuration and requested semantic checks run before emission. Declaration
+errors come from the in-memory emit result, avoiding a separate declaration
+transform solely for diagnostics. Any error prevents artifact publication.
 
-Repair this at checkout provisioning: use a separate physical checkout whose
-ancestor directories do not contain `node_modules`, with the same candidate source
-(including any uncommitted changes) and its own `pnpm install --frozen-lockfile`.
-Run declaration preparation and dependent lint or package-boundary checks in that
-checkout, so the checks consume its freshly sealed receipts. A symlink to the
-nested checkout, a repeated install there, or `nodeLinker: isolated` does not bound
-native ancestor lookup. Do not alter the ancestor installation, add incidental
-dependencies, filter compiler receipts, or transplant declarations to bypass the
-checks. The pinned native compiler's filesystem callback API supports analysis,
-not declaration and build-info emission; native validation does not automatically
-create an isolated checkout.
+Nested physical worktrees are supported with their own
+`pnpm install --frozen-lockfile`, even when ancestor directories contain
+`node_modules`. An ancestor dependency cannot satisfy a missing local input or
+change the emitted declarations. Local pnpm links remain supported when their
+targets stay inside the checkout. A local link that resolves outside still fails
+with `Declaration input escapes checkout`, without publishing a success record or
+pruning obsolete declarations. An outside candidate remains inaccessible even if
+it is a symlink back into the checkout. Warm records use the same input check.
+Do not filter compiler receipts or transplant declarations to bypass the checks.
+
+Declared checkout junctions and platform path aliases map to the same native root
+for validation and actual snapshot reads. Local declaration preparation also
+aligns the compiler's `PWD` with its working directory so shell aliases do not
+change emitted inventory paths. Invocations from subdirectories still use the
+containing checkout as the ownership boundary. Other `pnpm tsgo` lanes continue
+to use the native CLI; its wrapper does not create or reuse a shared external
+install.
 
 Packaged SDK declarations belong to one staged owner shared by full, package, and
 `ciArtifacts` builds. It serializes the two canonical tsdown SDK groups on a miss
@@ -98,29 +129,18 @@ and resolution topology without starting a compiler on hits. Cache hits restore
 into fresh staging and pass the same entry and relative declaration closure checks
 before publication.
 All tsdown declaration builds (the eight SDK/unified groups, workspace packages,
-and the AI package) use the same admission policy: native resolution may read an
-ancestor install, but outside input paths prevent accepting compiler output,
-publishing declarations, or sealing a success record. Successful builds need
-checkout-owned compiler libraries and declaration dependencies. In-checkout pnpm
-links remain supported; shared external installs are not. Compiler receipts retain
-complete source membership. The emitting process also
-records lexical resolution paths before symlink canonicalization, so an ancestor
-package alias pointing back inside the checkout still fails admission. Malformed
-resolution traces fail closed.
+and the AI package) use the same bounded compiler as local declaration preparation
+and package-boundary checks. Successful builds need checkout-owned compiler
+libraries and declaration dependencies; shared external installs are not supported.
+Compiler receipts retain complete source and package-manifest membership, including
+JSON inputs. Default type roots stay within the checkout, explicit type roots must
+be local, and a valid root `package.json` bounds source-package scope lookup.
 
-Default type roots stay within the checkout, and a valid root `package.json` stops
-source-package scope lookup. Explicit type roots must be local. For metadata
-lookups that native emission does not trace, each emitted source package must
-resolve its runtime dependencies to local package directories before ancestor
-search. Native emission also considers JSON program inputs during this lookup,
-so their package dependencies receive the same check. A missing local dependency with an ancestor installation, or an actual
-failed type lookup there, requires local declarations or a separate physical
-checkout. Complete nested checkouts can still build when their local inputs
-satisfy every lookup. Ancestor-install appearance and removal invalidate cached
-records; source and namespace changes during compilation prevent acceptance.
-Missing-file probes outside both the checkout and its absent ancestor install
-roots also fail admission, because their later appearance is not owned by the
-checkout cache.
+The shared snapshot policy still validates consumed bytes and resolution topology.
+Source and namespace changes during compilation prevent acceptance. New local
+module candidates invalidate cached records, as do ancestor-install appearance
+and removal. Outside checks always see missing files, so later changes to ancestor
+package contents cannot enter the compiler's filesystem view.
 Each emitted declaration must have one source-map owner in the successful compiler
 membership. The bundler consumes those declarations under their original source
 paths; private compiler stages are removed only after their child settles.
@@ -167,6 +187,12 @@ Vitest namespaces, found through their explicit resource owners. Parallel invoca
 therefore share port ownership while a fixture hands its reserved socket to a child;
 removing one invocation's files cannot remove another fixture's port claim.
 
+A fixture that binds a Gateway, in-process or spawned, on a shared pool port holds
+that port's claim from selection until the Gateway closes. A Gateway retries a busy
+port while starting, so an unclaimed fixture can take another fixture's port during
+its handoff. `getDeterministicFreePortBlock` is a check, not a lease; in-process
+Gateway E2E fixtures use `acquireGatewayE2ePortBlock` with `startClaimedGateway`.
+
 Live-aware setup still loads the original profile and stages live state when
 requested. A bounded invocation artifact carries the original home to that setup;
 it does not grant live access, and hermetic setup never consults it. Known
@@ -203,6 +229,10 @@ this boundary. Forced parent or supervisor death (such as `SIGKILL`) can prevent
 cleanup; unregistered descendants that intentionally escape the owned group remain
 outside this contract. The wrappers do
 not sweep old directories or infer ownership from names, ages, or PIDs.
+The CI shard runner also removes its default include-file and transform-cache
+scratch directory after every admitted group has joined. Caller-supplied scratch
+and persistent cache roots remain caller-owned. Unverified descendant completion
+retains the shard scratch directory and reports its exact path.
 This is home isolation, not a filesystem sandbox: explicit absolute paths,
 `os.userInfo()` account lookup, children with stripped or replaced home variables,
 and intentionally real-home live execution remain outside its protection.
@@ -214,7 +244,7 @@ reuse during the file and releasing it before isolated fork shutdown.
 - `src/test-utils/openclaw-test-state.ts`: use from Vitest when a test needs an isolated `HOME`, `OPENCLAW_STATE_DIR`, `OPENCLAW_CONFIG_PATH`, config fixture, workspace, agent dir, or auth-profile store.
 - `pnpm test:env-mutations:report`: non-blocking report of tests/harnesses that mutate `HOME`, `OPENCLAW_STATE_DIR`, `OPENCLAW_CONFIG_PATH`, `OPENCLAW_WORKSPACE_DIR`, or related env keys directly. Use it to find migration candidates for the shared test-state helper.
 - `test/helpers/openclaw-test-instance.ts`: process-level E2E tests needing a running Gateway, CLI env, log capture, and cleanup in one place.
-- Docker/Bash E2E lanes that source `scripts/lib/docker-e2e-image.sh` can pass `docker_e2e_test_state_shell_b64 <label> <scenario>` into the container and decode it with `scripts/lib/openclaw-e2e-instance.sh`; multi-home scripts can pass `docker_e2e_test_state_function_b64` and call `openclaw_test_state_create <label> <scenario>` in each flow. `node --import tsx scripts/lib/openclaw-test-state.mts -- create --label <name> --scenario <name> --env-file <path> --json` writes a sourceable host env file (the `--` before `create` keeps newer Node runtimes from treating `--env-file` as a Node flag). Lanes that launch a Gateway can source `scripts/lib/openclaw-e2e-instance.sh` for entrypoint resolution, mock OpenAI startup, foreground/background launch, readiness probes, state env export, log dumps, and process cleanup.
+- Docker/Bash E2E lanes that source `scripts/lib/docker-e2e-image.sh` can pass `docker_e2e_test_state_shell_b64 <label> <scenario>` into the container and decode it with `scripts/lib/openclaw-e2e-instance.sh`; multi-home scripts can pass `docker_e2e_test_state_function_b64` and call `openclaw_test_state_create <label> <scenario>` in each flow. `node --import tsx scripts/lib/openclaw-test-state.mts -- create --label <name> --scenario <name> --env-file <path> --json` writes a sourceable host env file (the `--` before `create` keeps newer Node runtimes from treating `--env-file` as a Node flag). Lanes that launch a Gateway can source `scripts/lib/openclaw-e2e-instance.sh` for entrypoint resolution, mock OpenAI startup, foreground/background launch, readiness checks, state env export, log dumps, and process cleanup.
 
 `createOpenClawTestState` selects and owns temporary paths and process environment
 selectors. It is not filesystem sandboxing and does not stop external producers.

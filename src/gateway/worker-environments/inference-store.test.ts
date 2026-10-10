@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -18,13 +19,13 @@ import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-sta
 import { collectErrorGraphCandidates } from "../../infra/errors.js";
 import * as brokerReply from "../../infra/sqlite-worker-broker-reply.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../infra/sqlite-worker-contract.js";
-import * as lifecyclePreparation from "../../infra/sqlite-worker-lifecycle-preparation.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { claimOpenClawStateOwnership } from "../../state/openclaw-state-ownership-operations.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import type { AcceptedWorkerInferenceSessionDrain } from "./inference-control-internal.js";
 import {
@@ -79,9 +80,7 @@ function hashRequest(
   identity: WorkerConnectionIdentity,
   request: WorkerInferenceStartParams,
 ): string {
-  if (!identity.turnClaim) {
-    throw new Error("inference fixture requires a turn claim");
-  }
+  assert(identity.turnClaim, "inference fixture requires a turn claim");
   return createHash("sha256")
     .update(`${serializeWorkerSessionTurnClaim(identity.turnClaim)}\0${stableStringify(request)}`)
     .digest("hex");
@@ -118,6 +117,7 @@ describe("worker inference SQLite store", async () => {
   let store: WorkerInferenceStore;
 
   beforeEach(async () => {
+    vi.stubEnv("OPENCLAW_SUPERVISOR_MODE", "");
     root = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "openclaw-inference-store-"));
     nowMs = 1_000;
     database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
@@ -140,6 +140,7 @@ describe("worker inference SQLite store", async () => {
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     await fs.rm(root, { recursive: true, force: true });
+    vi.unstubAllEnvs();
   });
 
   async function reopenStore(): Promise<WorkerInferenceStore> {
@@ -202,6 +203,18 @@ describe("worker inference SQLite store", async () => {
     return manager;
   }
 
+  it("retains process ownership checks when the captured environment permits writes", async () => {
+    const options = {
+      path: database.path,
+      env: { OPENCLAW_STATE_DIR: root, OPENCLAW_SUPERVISOR_MODE: "external" },
+    };
+    claimOpenClawStateOwnership("inference-owner", options);
+    expect(openOpenClawStateDatabase(options)).toBe(database);
+    await expect(
+      createWorkerInferenceStore(options).recoverPending(PROVIDER_ERROR),
+    ).rejects.toThrow("is externally supervised by inference-owner");
+  });
+
   it("rejects a terminal identity with a different request hash as a conflict", async () => {
     expect(await store.begin(BASE_INPUT)).toEqual({ kind: "claimed" });
     await store.complete({ ...BASE_INPUT, outcome: PROVIDER_ERROR });
@@ -238,7 +251,6 @@ describe("worker inference SQLite store", async () => {
           ...(current instanceof Error ? [current.cause] : []),
           ...(current instanceof AggregateError ? current.errors : []),
         ]);
-      const posted = createDeferred();
       const dispatched = createDeferred();
       const submitted = createDeferred<{ promise: ReturnType<WorkerInferenceStore["begin"]> }>();
       const originalBegin = store.begin;
@@ -264,28 +276,6 @@ describe("worker inference SQLite store", async () => {
       const restores: Array<() => void> = [];
       try {
         await manager.ready();
-        const armByPort = new WeakMap<MessagePort, () => void>();
-        const originalPrepare = lifecyclePreparation.createSqliteWorkerLifecyclePreparation;
-        const preparation = vi
-          .spyOn(lifecyclePreparation, "createSqliteWorkerLifecyclePreparation")
-          .mockImplementation((params) => {
-            let selected = false;
-            const prepared = originalPrepare({
-              ...params,
-              dispatch() {
-                params.dispatch();
-                if (selected) {
-                  invalid = true;
-                  dispatched.resolve();
-                }
-              },
-            });
-            armByPort.set(prepared.port, () => {
-              selected = true;
-            });
-            return prepared;
-          });
-        restores.push(() => preparation.mockRestore());
         const originalPost: unknown = Object.getOwnPropertyDescriptor(
           Worker.prototype,
           "postMessage",
@@ -309,18 +299,14 @@ describe("worker inference SQLite store", async () => {
               if (
                 typeof request.id !== "number" ||
                 typeof request.actor !== "number" ||
-                !(request.lifecyclePreparation instanceof MessagePort)
+                !(request.operationAdmission instanceof MessagePort)
               ) {
-                throw new Error("native begin did not use its maintained lifecycle preparation");
-              }
-              const arm = armByPort.get(request.lifecyclePreparation);
-              if (!arm) {
-                throw new Error("native begin preparation was not observed");
+                throw new Error("native begin omitted its operation admission");
               }
               Reflect.apply(originalPost, this, args);
               target = { worker: this, id: request.id, actor: request.actor };
-              arm();
-              posted.resolve();
+              invalid = true;
+              dispatched.resolve();
               return;
             }
           }
@@ -330,7 +316,7 @@ describe("worker inference SQLite store", async () => {
         const originalReceive = brokerReply.receiveSqliteWorkerReply;
         const replies = vi
           .spyOn(brokerReply, "receiveSqliteWorkerReply")
-          .mockImplementation((slot, reply, owner, pumping) => {
+          .mockImplementation((slot, reply, owner) => {
             const job = slot.current;
             const refusal = job?.operationAdmission?.admission.failure;
             if (
@@ -346,10 +332,10 @@ describe("worker inference SQLite store", async () => {
             ) {
               refusalReplies += 1;
               if (mode === "lost-refusal-reply" && refusalReplies === 1) {
-                return originalReceive(slot, { ...reply, id: reply.id + 1 }, owner, pumping);
+                return originalReceive(slot, { ...reply, id: reply.id + 1 }, owner);
               }
             }
-            return originalReceive(slot, reply, owner, pumping);
+            return originalReceive(slot, reply, owner);
           });
         restores.push(() => replies.mockRestore());
         const started = manager.start({
@@ -373,22 +359,17 @@ describe("worker inference SQLite store", async () => {
             throw new Error("begin failed before observed native dispatch");
           },
         );
-        await Promise.race([posted.promise, endedBeforeDispatch]);
+        await Promise.race([dispatched.promise, endedBeforeDispatch]);
         drain = manager.reserveSessionDrain(REQUEST.sessionId).accept();
         const drained = Promise.allSettled([drain.drained]);
-        await Promise.race([dispatched.promise, endedBeforeDispatch]);
         const [native] = await Promise.allSettled([promise]);
-        if (native.status !== "rejected") {
-          throw new Error("native begin unexpectedly succeeded");
-        }
+        assert(native.status === "rejected", "native begin unexpectedly succeeded");
         expect(refusalReplies).toBe(1);
         expect(hasSqliteWorkerOutcomeUnknown(native.reason)).toBe(mode === "lost-refusal-reply");
         expect(await started).toEqual({ ok: false, reason: "provider-error" });
         drain.start();
         const [settled] = await drained;
-        if (settled.status !== "rejected") {
-          throw new Error("accepted drain discarded begin failure");
-        }
+        assert(settled.status === "rejected", "accepted drain discarded begin failure");
         expect(hasSqliteWorkerOutcomeUnknown(settled.reason)).toBe(mode === "lost-refusal-reply");
         expect(complete).not.toHaveBeenCalled();
         expect(execute).not.toHaveBeenCalled();
@@ -410,9 +391,7 @@ describe("worker inference SQLite store", async () => {
           expect(begin).toHaveBeenCalledOnce();
           expect(complete).not.toHaveBeenCalled();
           const [stopped] = await Promise.allSettled([manager.stop()]);
-          if (stopped.status !== "rejected") {
-            throw new Error("shutdown discarded native refusal evidence");
-          }
+          assert(stopped.status === "rejected", "shutdown discarded native refusal evidence");
           expect(hasSqliteWorkerOutcomeUnknown(stopped.reason)).toBe(true);
           expect(errorGraph(stopped.reason)).toContain(ordinary);
           expect(errorGraph(stopped.reason)).toContain(native.reason);
@@ -426,9 +405,7 @@ describe("worker inference SQLite store", async () => {
             sessionTarget,
             sink: retry.sink,
           });
-          if (!accepted.ok) {
-            throw new Error("known native refusal prevented legitimate retry");
-          }
+          assert(accepted.ok, "known native refusal prevented legitimate retry");
           accepted.launch();
           expect(await retry.terminal).toEqual(PROVIDER_ERROR);
           expect(begin).toHaveBeenCalledTimes(2);
@@ -515,7 +492,7 @@ describe("worker inference SQLite store", async () => {
         const originalReceive = brokerReply.receiveSqliteWorkerReply;
         const receiver = vi
           .spyOn(brokerReply, "receiveSqliteWorkerReply")
-          .mockImplementation((slot, reply, owner, pumping) => {
+          .mockImplementation((slot, reply, owner) => {
             if (
               slot.current?.request.type === "execute" &&
               slot.current.nativeDispatched &&
@@ -531,18 +508,13 @@ describe("worker inference SQLite store", async () => {
               ) {
                 terminalReplies += 1;
                 if (terminalReplies === 1) {
-                  // Both lifecycle-port and Worker messages reach this receiver after COMMIT.
+                  // The Worker reply reaches this receiver after COMMIT.
                   committedOutcome = value;
-                  return originalReceive(
-                    slot,
-                    { ...reply, value: new Uint8Array([0]) },
-                    owner,
-                    pumping,
-                  );
+                  return originalReceive(slot, { ...reply, value: new Uint8Array([0]) }, owner);
                 }
               }
             }
-            return originalReceive(slot, reply, owner, pumping);
+            return originalReceive(slot, reply, owner);
           });
         restoreReceiver = () => receiver.mockRestore();
         const cancellation = manager.captureSessionCancellation(REQUEST.sessionId).cancel();
@@ -555,9 +527,10 @@ describe("worker inference SQLite store", async () => {
             "native terminal completion settled without intercepting its committed result",
           );
         }
-        if (completed.status !== "rejected") {
-          throw new Error("corrupted native terminal result unexpectedly succeeded");
-        }
+        assert(
+          completed.status === "rejected",
+          "corrupted native terminal result unexpectedly succeeded",
+        );
         const failure: unknown = completed.reason;
         expect(hasSqliteWorkerOutcomeUnknown(failure)).toBe(true);
         const [cancellationResult] = await cancelled;
@@ -618,15 +591,14 @@ describe("worker inference SQLite store", async () => {
 
         provider.resolve(PROVIDER_ERROR);
         const [drainResult] = await drained;
-        if (drainResult.status !== "rejected") {
-          throw new Error("native uncertainty was lost during inference settlement");
-        }
+        assert(
+          drainResult.status === "rejected",
+          "native uncertainty was lost during inference settlement",
+        );
         expect(drainResult.reason).toBe(failure);
         if (stopped) {
           const [stopResult] = await stopped;
-          if (stopResult.status !== "rejected") {
-            throw new Error("native uncertainty was lost during shutdown");
-          }
+          assert(stopResult.status === "rejected", "native uncertainty was lost during shutdown");
           expect(stopResult.reason).toBe(failure);
         }
         expect(complete).toHaveBeenCalledOnce();
@@ -675,9 +647,7 @@ describe("worker inference SQLite store", async () => {
           expect(await successor.terminal).toEqual(PROVIDER_ERROR);
           const replaySink = createSink();
           const replayed = await startSuccessor(replaySink.sink);
-          if (!replayed.ok) {
-            throw new Error("independent native successor could not replay");
-          }
+          assert(replayed.ok, "independent native successor could not replay");
           expect(replayed.result.status).toBe("replayed");
           replayed.launch();
           expect(await replaySink.terminal).toEqual(PROVIDER_ERROR);
@@ -719,26 +689,24 @@ describe("worker inference SQLite store", async () => {
     ).toEqual({ kind: "rejected", reason: "conflict" });
   });
 
-  it("prunes terminal turns older than maxAge", async () => {
-    await completeTurn("run-old");
-    nowMs += 1_000;
-    store = createWorkerInferenceStore({
-      path: database.path,
-      now: () => nowMs,
+  it.each([
+    {
+      limit: "older than maxAge",
+      elapsedMs: 1_000,
       retention: { maxAgeMs: 500, maxRows: 10, maxBytes: 1_000_000 },
-    });
-
-    await completeTurn("run-current");
-    expect(terminalRunIds()).toEqual(["run-current"]);
-  });
-
-  it("prunes terminal turns beyond maxRows", async () => {
+    },
+    {
+      limit: "beyond maxRows",
+      elapsedMs: 1,
+      retention: { maxAgeMs: 10_000, maxRows: 1, maxBytes: 1_000_000 },
+    },
+  ])("prunes terminal turns $limit", async ({ elapsedMs, retention }) => {
     await completeTurn("run-first");
-    nowMs += 1;
+    nowMs += elapsedMs;
     store = createWorkerInferenceStore({
       path: database.path,
       now: () => nowMs,
-      retention: { maxAgeMs: 10_000, maxRows: 1, maxBytes: 1_000_000 },
+      retention,
     });
 
     await completeTurn("run-second");

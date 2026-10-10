@@ -281,7 +281,7 @@ Portals proxy only the selected development server on the Gateway host or a node
 - Older node bundles without portal-stream support cannot open worker portals. Update the node bundle, or move the session back to the Gateway with `sessions.move`.
 - SSH-backed `remote-exec` placements, including Codex sessions, do not run the OpenClaw worker tool loop, so the `portal` tool does not apply there. Move the session back to the Gateway with `sessions.move` when a Gateway-hosted portal is needed.
 - A Gateway-only proxy, SSH tunnel, or externally managed Serve route does not automatically create portal ingress. Configure private wildcard ingress or OpenClaw-managed Serve. The UI reports a remote loopback URL as requiring ingress; it does not invent a reachable URL.
-- Browser reachability probes check transport only. A response can be an authentication page or a waiting page, not a rendered application. A Content Security Policy-blocked probe says nothing about iframe reachability.
+- Browser reachability checks verify transport only. A response can be an authentication page or a waiting page, not a rendered application. A Content Security Policy-blocked check says nothing about iframe reachability.
 - Portal ingress does not inherit Gateway trusted-proxy identities, Cloudflare Access policies, or tailnet ACL grants. Configure and verify those boundaries separately.
 - The prefix isolates cookies forwarded to each target; it does not create separate browser cookie jars. In direct/Serve mode, browser-side code can see non-`HttpOnly` cookies for sibling portals on the same hostname through `document.cookie`. Wildcard ingress separates hostnames, but portals under a common DNS suffix are not necessarily separate sites, and the cookie-name prefix still applies. Use `HttpOnly` for sensitive application cookies. Applications that manage cookies in browser code must account for the prefix; unprefixed cookies written directly by browser code are not forwarded to the target.
 
@@ -290,6 +290,8 @@ Portals proxy only the selected development server on the Gateway host or a node
 ### The portal shows a 502 waiting page
 
 The proxy is ready, but the application is not listening on the selected port or its worker node is temporarily disconnected. The page retries automatically. Check the background process, confirm that the server honors `PORT`, and verify that the worker node is connected.
+
+WebSocket upgrades to an unavailable worker return the same 502 waiting response and close the connection. Reconnect after the application or worker is available again.
 
 ### The portal is not reachable from this browser
 
@@ -308,7 +310,7 @@ Check the exact returned portal URL rather than substituting the Gateway host:
 - **Page loads but streaming or live reload fails:** preserve WebSocket upgrades
   and request paths, disable buffering, and check the app's `PUBLIC_URL`.
 - **New tab works but the preview does not:** inspect edge authentication,
-  frame policies, and browser cookie restrictions. A blocked reachability probe
+  frame policies, and browser cookie restrictions. A blocked reachability check
   alone does not prove the iframe is unreachable.
 
 After correcting ingress, select **Retry**. Reopen a portal if its route was

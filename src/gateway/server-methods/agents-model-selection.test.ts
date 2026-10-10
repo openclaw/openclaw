@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { preparePublishedModelRuntimeChoice } from "../../agents/model-runtime-choice.js";
+import { getRuntimeConfigWriteApplication } from "../../config/runtime-write-application.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 
@@ -25,6 +26,9 @@ vi.mock("../../config/config.js", async (importOriginal) => ({
     params.writeOptions?.assertConfigPathForWrite?.();
     fixture.writes(draft);
     fixture.config = draft;
+    if (params.writeOptions) {
+      getRuntimeConfigWriteApplication(params.writeOptions)?.claim()?.settle("applied");
+    }
   },
 }));
 vi.mock("../../agents/model-runtime-choice.js", () => ({

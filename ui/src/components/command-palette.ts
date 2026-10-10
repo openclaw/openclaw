@@ -10,7 +10,6 @@ import { updateHumanMentions, type HumanMentionInput } from "../lib/chat/human-m
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import { modelCatalogEventInvalidation } from "../lib/model-catalog-cache.ts";
 import { ModelCatalogReader } from "../lib/model-catalog-reader.ts";
-import { modelCatalogRefreshError } from "../lib/model-catalog-store.ts";
 import { resolveUiSelectedGlobalAgentId } from "../lib/sessions/session-key.ts";
 import { searchVisibleSessionTranscripts } from "../lib/sessions/transcript-search.ts";
 import { GatewayPageController } from "../lit/gateway-page-controller.ts";
@@ -29,7 +28,6 @@ import {
   getCommandPaletteModelItems,
   getStaticCommandPaletteCatalogItems,
   loadCommandPaletteCatalogItems,
-  toCommandPaletteItems,
   type CommandPaletteItem,
 } from "./command-palette-catalog-search.ts";
 import {
@@ -44,8 +42,6 @@ import {
 import { renderCommandPalette, type PaletteFilter } from "./command-palette-view.ts";
 import type { OpenClawModalDialog } from "./modal-dialog.ts";
 
-type PaletteItem = CommandPaletteItem;
-
 const SEARCH_DEBOUNCE_MS = 200;
 const SESSION_SEARCH_MIN_CHARS = 2;
 const PROMPT_ENTER_CHARS = 60;
@@ -57,6 +53,7 @@ const SESSION_SEARCH_SCOPE = {
   excludeSubagents: true,
   excludeCron: true,
   excludeSystem: true,
+  excludeDock: true,
 } as const;
 const CATALOG_CACHE_TTL_MS = 30_000;
 
@@ -129,8 +126,8 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
   @state() private searchQuery = "";
   @state() private promptMode = false;
   @state() private activeId: string | null = null;
-  @state() private sessionItems: readonly PaletteItem[] = [];
-  @state() private catalogItems: readonly PaletteItem[] = [];
+  @state() private sessionItems: readonly CommandPaletteItem[] = [];
+  @state() private catalogItems: readonly CommandPaletteItem[] = [];
   @state() private sessionSearchPending = false;
   @state() private sessionSearchFailed = false;
   @state() private sessionSearchPartial = false;
@@ -182,9 +179,8 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
           }
         }),
     );
-    this.subscriptions.watch(
+    this.subscriptions.watchStore(
       () => this.context?.agentSelection,
-      (selection, notify) => selection.subscribe(notify),
       () => {
         this.clearSessionSearch();
         this.clearCatalogSearch();
@@ -327,7 +323,7 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
     if (input.imageFiles?.length) {
       this.draft.adoptImageFiles(input.imageFiles, input.submitRequested);
     } else if (input.submitRequested) {
-      void this.draft.submit();
+      this.draft.submitCold();
     }
   };
 
@@ -422,7 +418,7 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
         this.context?.agentSelection === context.agentSelection &&
         gateway.snapshot.client === client
       ) {
-        this.catalogItems = toCommandPaletteItems(items);
+        this.catalogItems = items;
         this.catalogLoad = { ...this.catalogLoad, loadedAt: Date.now() };
       }
     });
@@ -508,6 +504,7 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
     try {
       const result = await sessions.list({
         ...SESSION_SEARCH_SCOPE,
+        source: "command-palette",
         search,
         limit: SESSION_SEARCH_LIMIT,
       });
@@ -633,21 +630,15 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
         this.context?.agentSelection.state.selectedId ??
         resolveUiSelectedGlobalAgentId(this.context?.gateway.snapshot ?? {}),
       sessionItems: this.sessionItems,
-      modelSearchError: this.modelReader.failed
-        ? t("palette.modelSearchFailed")
-        : models.hasSnapshot
-          ? modelCatalogRefreshError(models)
-          : null,
+      modelSearchError: this.modelReader.failed ? t("palette.modelSearchFailed") : null,
       primaryModelSearch: models.hasSnapshot && !models.modelSelectionPolicy?.restricted,
       catalogItems: [
-        ...toCommandPaletteItems(
-          getStaticCommandPaletteCatalogItems(
-            hasOperatorAdminAccess(this.context?.gateway.snapshot.hello?.auth ?? null),
-            this.context?.nativeDeviceSettings,
-          ),
+        ...getStaticCommandPaletteCatalogItems(
+          hasOperatorAdminAccess(this.context?.gateway.snapshot.hello?.auth ?? null),
+          this.context?.nativeDeviceSettings,
         ),
         ...this.catalogItems,
-        ...toCommandPaletteItems(getCommandPaletteModelItems(models)),
+        ...getCommandPaletteModelItems(models),
       ],
       sessionSearchPending: this.sessionSearchPending,
       catalogSearchPending: Boolean(

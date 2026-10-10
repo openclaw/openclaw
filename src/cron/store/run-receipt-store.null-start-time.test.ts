@@ -26,6 +26,7 @@ describe("cron run receipt process identity", () => {
 
     expect(() =>
       prepareCronRunReceiptClaim({
+        observed: undefined,
         storePath: "/tmp/null-start-time-cron.json",
         job,
         agentId: "main",

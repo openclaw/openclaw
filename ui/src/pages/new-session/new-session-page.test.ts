@@ -16,7 +16,6 @@ function routeData(agentId: string, catalogId = ""): NewSessionRouteData {
     agentId,
     requestedAgentId: agentId,
     catalogId,
-    model: "",
     catalogLabel: "",
     startTerminal: false,
   };

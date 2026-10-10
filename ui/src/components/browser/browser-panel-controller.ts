@@ -36,8 +36,6 @@ import { BrowserPanelViewportController } from "./browser-panel-viewport-control
 import { browserRouteKey, type BrowserRoute } from "./browser-target.ts";
 import { normalizeBrowserUrlDraft } from "./browser-url.ts";
 
-const ACTION_REFRESH_DELAY_MS = 350;
-
 type BrowserPanelMode = "interact" | "annotate" | "inspect";
 
 export type { BrowserPanelControllerHost } from "./browser-panel-operation-ownership.ts";
@@ -236,9 +234,7 @@ export class BrowserPanelController implements ReactiveController {
         this.exitCaptureModes();
       }
       this.setState("activeTargetId", active?.id ?? null);
-      if (!this.urlDraftEditing) {
-        this.setState("urlDraft", active?.url ?? "");
-      }
+      this.syncUrlDraft(active?.url ?? "");
       if (active) {
         await this.refreshView(active.id, invocation.epoch);
       } else {
@@ -273,11 +269,7 @@ export class BrowserPanelController implements ReactiveController {
       this.setState("errorText", null);
       await action(client);
       if (current() && refreshView) {
-        this.pendingInput.scheduleRefresh(ACTION_REFRESH_DELAY_MS, () => {
-          if (current() && this.activeTargetId) {
-            void this.refreshView(this.activeTargetId, epoch);
-          }
-        });
+        this.snapshot.scheduleRefresh(epoch, current);
       }
       return current();
     } catch (error) {
@@ -368,9 +360,7 @@ export class BrowserPanelController implements ReactiveController {
         invocation.epoch = this.operations.epoch;
         this.exitCaptureModes();
         const targetId = this.activeTargetId;
-        previousNavigationQueued =
-          this.operations.hasQueuedNavigation(client, targetId) ||
-          this.operations.hasUnreconciledNavigation(client, targetId);
+        previousNavigationQueued = this.operations.hasPendingNavigation(client, targetId);
         await this.operations.queueNavigation(client, targetId, async () => {
           if (invocation.isCurrent()) {
             await navigateBrowser(client, { url, targetId });
@@ -411,9 +401,7 @@ export class BrowserPanelController implements ReactiveController {
           ) {
             this.setState("activeTargetId", null);
             this.setState("view", null);
-            if (!this.urlDraftEditing) {
-              this.setState("urlDraft", "");
-            }
+            this.syncUrlDraft("");
           }
         }
         this.reportError(error);
@@ -511,9 +499,7 @@ export class BrowserPanelController implements ReactiveController {
         // The prior remote document changed while selection failed. Expose an
         // unavailable state instead of restoring a screenshot that no longer owns it.
         this.setState("activeTargetId", null);
-        if (!this.urlDraftEditing) {
-          this.setState("urlDraft", "");
-        }
+        this.syncUrlDraft("");
         return;
       }
       this.setState("activeTargetId", previous.targetId);

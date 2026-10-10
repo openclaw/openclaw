@@ -66,6 +66,11 @@ export const AgentEventSchema = closedObject({
   spawnedBy: Type.Optional(NonEmptyString),
   isHeartbeat: Type.Optional(Type.Boolean()),
   data: Type.Record(Type.String(), Type.Unknown()),
+  preamble: Type.Optional(
+    closedObject({
+      retainedText: Type.Optional(Type.String()),
+    }),
+  ),
 });
 
 const MessageActionReplyModeSchema = Type.Union([
@@ -260,12 +265,7 @@ export const ConversationTurnResultSchema = Type.Union([
     channel: NonEmptyString,
     messageId: Type.Optional(NonEmptyString),
     correlationPersisted: Type.Boolean(),
-    status: Type.Union([
-      Type.Literal("sent"),
-      Type.Literal("queued"),
-      Type.Literal("suppressed"),
-      Type.Literal("unknown"),
-    ]),
+    status: ConversationSendResultSchema.properties.status,
     error: NonEmptyString,
   }),
 ]);

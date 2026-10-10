@@ -1,6 +1,4 @@
-import type { ReactiveController, ReactiveControllerHost } from "lit";
 import type { PresenceEntry } from "../../api/types.ts";
-import type { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 
 const PLACE_TOPOLOGY_EVENTS = new Set([
   "config.changed",
@@ -27,17 +25,6 @@ export function nodePresenceStateSignature(entries: PresenceEntry[]): string {
   return JSON.stringify([...states].toSorted(([left], [right]) => left.localeCompare(right)));
 }
 
-export function createControllerHost(element: OpenClawLightDomElement): ReactiveControllerHost {
-  return {
-    addController: (controller: ReactiveController) => element.addController(controller),
-    removeController: (controller: ReactiveController) => element.removeController(controller),
-    requestUpdate: () => element.requestUpdate(),
-    get updateComplete() {
-      return element.updateComplete;
-    },
-  };
-}
-
 export function closeAgentPicker(root: ParentNode) {
   const dropdown = root.querySelector<HTMLElement & { open: boolean }>(
     ".new-session-page__select--agent wa-dropdown",
@@ -53,4 +40,12 @@ export function closeSessionMenus(root: ParentNode) {
       menu.open = false;
     }
   }
+}
+
+export function onOwnPopoverEvent(callback: (event: Event) => void) {
+  return (event: Event) => {
+    if (event.target === event.currentTarget) {
+      callback(event);
+    }
+  };
 }

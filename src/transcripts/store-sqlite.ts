@@ -149,43 +149,6 @@ export function meetingTranscriptUtteranceQuery(
     .where("session_started_at", "=", session.startedAt);
 }
 
-function hasExactMeetingTranscriptUtterance(params: {
-  database: DatabaseSync;
-  metadataJson: string | null;
-  session: Pick<TranscriptSessionDescriptor, "sessionId" | "startedAt">;
-  utterance: TranscriptUtterance & { id: string };
-}): boolean {
-  const utterance = params.utterance;
-  // SQLite bindings replace lone surrogates, so these cannot exactly match stored text.
-  if (
-    [
-      utterance.startedAt,
-      utterance.endedAt,
-      utterance.speaker?.id,
-      utterance.speaker?.label,
-      utterance.text,
-    ].some((value) => value != null && toUSVString(value) !== value)
-  ) {
-    return false;
-  }
-  return Boolean(
-    executeSqliteQueryTakeFirstSync(
-      params.database,
-      meetingTranscriptUtteranceQuery(params.database, params.session)
-        .select("sequence")
-        .where("utterance_id", "=", utterance.id)
-        .where("started_at", "is", utterance.startedAt ?? null)
-        .where("ended_at", "is", utterance.endedAt ?? null)
-        .where("speaker_id", "is", utterance.speaker?.id ?? null)
-        .where("speaker_label", "is", utterance.speaker?.label ?? null)
-        .where("text", "=", utterance.text)
-        .where("final", "is", utterance.final === undefined ? null : utterance.final ? 1 : 0)
-        .where("metadata_json", "is", params.metadataJson)
-        .limit(1),
-    ),
-  );
-}
-
 export function appendMeetingTranscriptUtterance(params: {
   database: DatabaseSync;
   metadataJson: string | null;
@@ -197,12 +160,28 @@ export function appendMeetingTranscriptUtterance(params: {
   const db = meetingTranscriptDb(database);
   if (
     utterance.id &&
-    hasExactMeetingTranscriptUtterance({
+    // SQLite bindings replace lone surrogates, so these cannot exactly match stored text.
+    ![
+      utterance.startedAt,
+      utterance.endedAt,
+      utterance.speaker?.id,
+      utterance.speaker?.label,
+      utterance.text,
+    ].some((value) => value != null && toUSVString(value) !== value) &&
+    executeSqliteQueryTakeFirstSync(
       database,
-      metadataJson: params.metadataJson,
-      session,
-      utterance: { ...utterance, id: utterance.id },
-    })
+      meetingTranscriptUtteranceQuery(database, session)
+        .select("sequence")
+        .where("utterance_id", "=", utterance.id)
+        .where("started_at", "is", utterance.startedAt ?? null)
+        .where("ended_at", "is", utterance.endedAt ?? null)
+        .where("speaker_id", "is", utterance.speaker?.id ?? null)
+        .where("speaker_label", "is", utterance.speaker?.label ?? null)
+        .where("text", "=", utterance.text)
+        .where("final", "is", utterance.final === undefined ? null : utterance.final ? 1 : 0)
+        .where("metadata_json", "is", params.metadataJson)
+        .limit(1),
+    )
   ) {
     return;
   }

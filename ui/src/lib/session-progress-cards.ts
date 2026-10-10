@@ -24,9 +24,6 @@ import {
 } from "./sessions/session-key.ts";
 import { generateUUID } from "./uuid.ts";
 
-const PROGRESS_CARD_GET_METHOD = "progressCard.get";
-const PROGRESS_CARD_PUT_METHOD = "progressCard.put";
-const PROGRESS_CARD_CHANGED_EVENT = "progressCard.changed";
 const CACHE_LIMIT = 100;
 const REFRESH_TIMEOUT_MS = 120_000;
 
@@ -48,6 +45,7 @@ type ProgressCardEntry = {
   /** Invalidates conditional dismissals when newer numbered progress arrives. */
   dismissalGeneration: number;
   dirty: boolean;
+  hydratedScope?: object;
   /** Latest invalidation observed while a read is already in flight. */
   pendingRefreshRevision?: number | null;
   card?: ProgressCard | null;
@@ -70,6 +68,8 @@ export type SessionProgressCardStore = {
     options?: ProgressCardWatchOptions,
   ) => void;
   unwatch: (owner: object) => void;
+  hydrate: (target: ProgressCardGetParams, card: ProgressCard | null) => void;
+  invalidate: (target: ProgressCardGetParams) => void;
   load: (target: ProgressCardGetParams) => Promise<ProgressCard | null>;
   dismiss: (target: ProgressCardGetParams, card: ProgressCard) => Promise<boolean>;
   refresh: (target: ProgressCardGetParams, card: ProgressCard) => void;
@@ -82,16 +82,13 @@ export type SessionProgressCardStore = {
 
 const stores = new WeakMap<ApplicationGateway, SessionProgressCardStore>();
 
-function parseProgressCardStep(value: unknown): ProgressCardStep | null {
-  if (!isRecord(value) || typeof value.step !== "string") {
-    return null;
-  }
+function parseProgressCardStep(value: unknown): ProgressCardStep {
   if (
-    value.status !== "pending" &&
-    value.status !== "in_progress" &&
-    value.status !== "completed"
+    !isRecord(value) ||
+    typeof value.step !== "string" ||
+    (value.status !== "pending" && value.status !== "in_progress" && value.status !== "completed")
   ) {
-    return null;
+    throw new Error("Progress card response contained invalid steps");
   }
   return { status: value.status, step: value.step };
 }
@@ -124,11 +121,7 @@ function parseProgressCard(value: unknown, sessionKey: string): ProgressCard | n
     throw new Error("Progress card response did not match the requested session");
   }
   const steps = Array.isArray(rawSteps) ? rawSteps.map(parseProgressCardStep) : undefined;
-  if (steps?.some((step) => step === null)) {
-    throw new Error("Progress card response contained invalid steps");
-  }
-  const parsedSteps = steps?.filter((step) => step !== null);
-  if (markdown === undefined && (!parsedSteps || parsedSteps.length === 0)) {
+  if (markdown === undefined && (!steps || steps.length === 0)) {
     throw new Error("Progress card response contained no content");
   }
   return {
@@ -136,7 +129,7 @@ function parseProgressCard(value: unknown, sessionKey: string): ProgressCard | n
     revision,
     updatedAt,
     ...(markdown !== undefined ? { markdown } : {}),
-    ...(parsedSteps && parsedSteps.length > 0 ? { steps: parsedSteps } : {}),
+    ...(steps && steps.length > 0 ? { steps } : {}),
   };
 }
 
@@ -167,7 +160,13 @@ function progressCardRequestTarget(target: ProgressCardGetParams): ProgressCardG
   return parseAgentSessionKey(target.sessionKey) ? { sessionKey: target.sessionKey } : target;
 }
 
-function createStore(gateway: ApplicationGateway): SessionProgressCardStore {
+export function sessionProgressCardsForGateway(
+  gateway: ApplicationGateway,
+): SessionProgressCardStore {
+  const existing = stores.get(gateway);
+  if (existing) {
+    return existing;
+  }
   const watchedByOwner = new Map<
     object,
     ProgressCardWatchOptions & { targets: readonly ProgressCardGetParams[] }
@@ -182,6 +181,8 @@ function createStore(gateway: ApplicationGateway): SessionProgressCardStore {
     if (scope !== presentationScope) {
       presentationScope = scope;
       lifetimes.clear();
+      entries.forEach(retireRefresh);
+      entries.clear();
     }
   };
   const acceptLifetime = (
@@ -222,11 +223,7 @@ function createStore(gateway: ApplicationGateway): SessionProgressCardStore {
           }),
         ),
     );
-  const notify = () => {
-    for (const listener of listeners) {
-      listener();
-    }
-  };
+  const notify = () => listeners.forEach((listener) => listener());
   const retireRefresh = (entry: ProgressCardEntry) => {
     clearTimeout(entry.refresh?.timer);
     delete entry.refresh;
@@ -270,25 +267,14 @@ function createStore(gateway: ApplicationGateway): SessionProgressCardStore {
     gateway.snapshot.phase === "connected" && gateway.snapshot.client !== null;
 
   const queueRefresh = (entry: ProgressCardEntry, revision: number | null) => {
-    if (entry.pendingRefreshRevision === null || revision === null) {
-      entry.pendingRefreshRevision = null;
-      return;
-    }
-    if (entry.pendingRefreshRevision === undefined || revision > entry.pendingRefreshRevision) {
+    const pending = entry.pendingRefreshRevision;
+    if (pending !== null && (revision === null || pending === undefined || revision > pending)) {
       entry.pendingRefreshRevision = revision;
     }
   };
 
-  const satisfiesPendingRefresh = (entry: ProgressCardEntry) => {
-    const revision = entry.pendingRefreshRevision;
-    return (
-      revision !== undefined &&
-      revision !== null &&
-      entry.card !== null &&
-      entry.card !== undefined &&
-      entry.card.revision >= revision
-    );
-  };
+  const hasRevision = (entry: ProgressCardEntry, revision: number | null | undefined) =>
+    revision != null && entry.card != null && entry.card.revision >= revision;
 
   const load = async (target: ProgressCardGetParams): Promise<ProgressCard | null> => {
     const resolved = resolveTarget(target);
@@ -322,10 +308,7 @@ function createStore(gateway: ApplicationGateway): SessionProgressCardStore {
       gateway.snapshot.client === scope.client;
     let ignoredOvertakenNull = false;
     const request = scope.client
-      .request<ProgressCardGetResult>(
-        PROGRESS_CARD_GET_METHOD,
-        progressCardRequestTarget(entry.target),
-      )
+      .request<ProgressCardGetResult>("progressCard.get", progressCardRequestTarget(entry.target))
       .then((response) => {
         const card = parseProgressCard(response, entry.wireKey);
         if (!current()) {
@@ -339,8 +322,11 @@ function createStore(gateway: ApplicationGateway): SessionProgressCardStore {
           return entry.card ?? null;
         }
         entry.card = card;
+        delete entry.hydratedScope;
         acceptLifetime(resolved.key, entry.target, card);
-        entry.dirty = entry.pendingRefreshRevision !== undefined && !satisfiesPendingRefresh(entry);
+        entry.dirty =
+          entry.pendingRefreshRevision !== undefined &&
+          !hasRevision(entry, entry.pendingRefreshRevision);
         delete entry.error;
         reconcileRefresh(entry);
         notify();
@@ -359,7 +345,8 @@ function createStore(gateway: ApplicationGateway): SessionProgressCardStore {
             remember(resolved.key, entry);
             const needsRefresh =
               ignoredOvertakenNull ||
-              (entry.pendingRefreshRevision !== undefined && !satisfiesPendingRefresh(entry));
+              (entry.pendingRefreshRevision !== undefined &&
+                !hasRevision(entry, entry.pendingRefreshRevision));
             delete entry.pendingRefreshRevision;
             // Coalesced invalidations survive a hidden watch that resumes before
             // this read settles, but only one follow-up read is needed.
@@ -378,11 +365,20 @@ function createStore(gateway: ApplicationGateway): SessionProgressCardStore {
       void load(target).catch(() => undefined);
     }
   };
-  const handleGatewaySnapshot = (snapshot: ApplicationGateway["snapshot"]) => {
-    if (connection.transition(snapshot)) {
-      for (const entry of entries.values()) {
+  const retireClientEntries = () => {
+    const scope = gatewayPresentationScope(gateway);
+    for (const [key, entry] of entries) {
+      if (entry.hydratedScope !== scope) {
         retireRefresh(entry);
+        entries.delete(key);
+        lifetimes.delete(key);
       }
+    }
+  };
+  const handleGatewaySnapshot = (snapshot: ApplicationGateway["snapshot"]) => {
+    syncLifetimeScope();
+    if (connection.transition(snapshot)) {
+      entries.forEach(retireRefresh);
       notify();
     }
     const clientChanged = snapshot.client !== knownClient;
@@ -404,8 +400,7 @@ function createStore(gateway: ApplicationGateway): SessionProgressCardStore {
     }
     if (clientChanged) {
       knownClient = snapshot.client;
-      entries.clear();
-      lifetimes.clear();
+      retireClientEntries();
       notify();
     }
     refreshWatched();
@@ -419,34 +414,24 @@ function createStore(gateway: ApplicationGateway): SessionProgressCardStore {
       if (!changed) {
         return;
       }
+      const matchesTarget = (target: ProgressCardGetParams) =>
+        uiSessionEventMatches(
+          {
+            hello: gateway.snapshot.hello,
+            assistantAgentId: target.agentId,
+            sessionKey: target.sessionKey,
+          },
+          changed.key,
+          changed.agentId,
+        );
       for (const [key, { target }] of lifetimes) {
-        if (
-          uiSessionEventMatches(
-            {
-              hello: gateway.snapshot.hello,
-              assistantAgentId: target.agentId,
-              sessionKey: target.sessionKey,
-            },
-            changed.key,
-            changed.agentId,
-          )
-        ) {
+        if (matchesTarget(target)) {
           lifetimes.delete(key);
         }
       }
       let removed = false;
       for (const [key, entry] of entries) {
-        if (
-          uiSessionEventMatches(
-            {
-              hello: gateway.snapshot.hello,
-              assistantAgentId: entry.target.agentId,
-              sessionKey: entry.target.sessionKey,
-            },
-            changed.key,
-            changed.agentId,
-          )
-        ) {
+        if (matchesTarget(entry.target)) {
           retireRefresh(entry);
           entries.delete(key);
           removed = true;
@@ -458,7 +443,7 @@ function createStore(gateway: ApplicationGateway): SessionProgressCardStore {
       refreshWatched();
       return;
     }
-    if (event.event !== PROGRESS_CARD_CHANGED_EVENT || !isRecord(event.payload)) {
+    if (event.event !== "progressCard.changed" || !isRecord(event.payload)) {
       return;
     }
     const { sessionKey, revision } = event.payload;
@@ -475,14 +460,7 @@ function createStore(gateway: ApplicationGateway): SessionProgressCardStore {
       // Distinct canonical rows can share a wire key. A numbered event that is
       // already represented by the cache is redundant; a null revision remains
       // an unconditional refresh hint.
-      if (
-        !entry.load &&
-        !entry.dirty &&
-        revision !== null &&
-        entry.card !== null &&
-        entry.card !== undefined &&
-        entry.card.revision >= revision
-      ) {
+      if (!entry.load && !entry.dirty && hasRevision(entry, revision)) {
         continue;
       }
       entry.dirty = true;
@@ -493,7 +471,7 @@ function createStore(gateway: ApplicationGateway): SessionProgressCardStore {
         continue;
       }
       entry.generation += 1;
-      if (!entry.load && watched.has(key)) {
+      if (watched.has(key)) {
         void load(entry.target).catch(() => undefined);
       }
     }
@@ -502,11 +480,11 @@ function createStore(gateway: ApplicationGateway): SessionProgressCardStore {
     if (stopGatewaySnapshots || stopGatewayEvents) {
       return;
     }
+    syncLifetimeScope();
     connection.transition(gateway.snapshot);
     if (gateway.snapshot.client !== knownClient) {
       knownClient = gateway.snapshot.client;
-      entries.clear();
-      lifetimes.clear();
+      retireClientEntries();
     }
     knownAvailable = available();
     stopGatewaySnapshots = gateway.subscribe(handleGatewaySnapshot);
@@ -521,9 +499,7 @@ function createStore(gateway: ApplicationGateway): SessionProgressCardStore {
     stopGatewaySnapshots = null;
     stopGatewayEvents = null;
     // Without event/client subscriptions these snapshots cannot remain fresh.
-    for (const entry of entries.values()) {
-      retireRefresh(entry);
-    }
+    entries.forEach(retireRefresh);
     entries.clear();
   };
   const watch: SessionProgressCardStore["watch"] = (owner, targets, options) => {
@@ -544,7 +520,36 @@ function createStore(gateway: ApplicationGateway): SessionProgressCardStore {
       }
     }
   };
-  return {
+  const store: SessionProgressCardStore = {
+    invalidate: (target) => {
+      const { key } = resolveTarget(target);
+      const entry = entries.get(key);
+      if (entry) {
+        retireRefresh(entry);
+        entries.delete(key);
+      }
+      lifetimes.delete(key);
+      notify();
+    },
+    hydrate: (target, card) => {
+      syncLifetimeScope();
+      const resolved = resolveTarget(target);
+      if (entries.has(resolved.key)) {
+        return;
+      }
+      const parsed = parseProgressCard({ card }, resolved.wireKey);
+      remember(resolved.key, {
+        target: resolved.target,
+        wireKey: resolved.wireKey,
+        generation: 0,
+        dismissalGeneration: 0,
+        dirty: true,
+        card: parsed,
+        hydratedScope: gatewayPresentationScope(gateway),
+      });
+      acceptLifetime(resolved.key, resolved.target, parsed);
+      notify();
+    },
     watch,
     unwatch: (owner) => watch(owner, []),
     load,
@@ -559,16 +564,14 @@ function createStore(gateway: ApplicationGateway): SessionProgressCardStore {
       const retry = entry.refresh?.state === "failed" || entry.refresh?.state === "timeout";
       // A timed-out request may still be running. Retry the same intent rather
       // than starting duplicate agent work after an uncertain outcome.
+      const retained =
+        entry.refresh && entry.refresh.state !== "updated" && !entry.refresh.retryNewIntent
+          ? entry.refresh
+          : undefined;
       const refresh: ProgressCardRefresh = {
         state: "pending",
-        idempotencyKey:
-          entry.refresh && entry.refresh.state !== "updated" && !entry.refresh.retryNewIntent
-            ? entry.refresh.idempotencyKey
-            : generateUUID(),
-        baseline:
-          entry.refresh && entry.refresh.state !== "updated" && !entry.refresh.retryNewIntent
-            ? entry.refresh.baseline
-            : card.revision,
+        idempotencyKey: retained?.idempotencyKey ?? generateUUID(),
+        baseline: retained?.baseline ?? card.revision,
         accepted: false,
       };
       retireRefresh(entry);
@@ -647,7 +650,7 @@ function createStore(gateway: ApplicationGateway): SessionProgressCardStore {
         connection.isCurrent(scope) &&
         gateway.snapshot.client === scope.client;
       const result = await scope.client
-        .request<ProgressCardPutResult>(PROGRESS_CARD_PUT_METHOD, {
+        .request<ProgressCardPutResult>("progressCard.put", {
           ...progressCardRequestTarget(entry.target),
           expectedRevision: card.revision,
         })
@@ -690,7 +693,10 @@ function createStore(gateway: ApplicationGateway): SessionProgressCardStore {
       }
       return dismissed;
     },
-    get: (target) => entries.get(resolveTarget(target).key)?.card,
+    get: (target) => {
+      syncLifetimeScope();
+      return entries.get(resolveTarget(target).key)?.card;
+    },
     getLifetime: (target) => {
       syncLifetimeScope();
       return lifetimes.get(resolveTarget(target).key)?.token;
@@ -705,16 +711,6 @@ function createStore(gateway: ApplicationGateway): SessionProgressCardStore {
       };
     },
   };
-}
-
-export function sessionProgressCardsForGateway(
-  gateway: ApplicationGateway,
-): SessionProgressCardStore {
-  const existing = stores.get(gateway);
-  if (existing) {
-    return existing;
-  }
-  const store = createStore(gateway);
   stores.set(gateway, store);
   return store;
 }

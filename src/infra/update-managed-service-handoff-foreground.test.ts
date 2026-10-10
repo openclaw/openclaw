@@ -1,13 +1,13 @@
 import { EventEmitter, once } from "node:events";
 import fs from "node:fs/promises";
-import { createRequire } from "node:module";
 import path from "node:path";
 import { PassThrough } from "node:stream";
-import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { updateExecutorEntrypoints } from "../cli/cli-entrypoint.test-support.js";
 import { isPidAlive } from "../shared/pid-alive.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
+import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import { createManagedServiceBoundaryCleanup } from "./update-managed-service-handoff-process.test-support.js";
 import { signalMockManagedUpdateHandoffReady } from "./update-managed-service-handoff.test-support.js";
 
@@ -134,18 +134,16 @@ describe("foreground update through the prepared managed helper", () => {
       import { spawn } from "node:child_process";
       import { once } from "node:events";
       import assert from "node:assert/strict";
-      const { register } = await import(${JSON.stringify(pathToFileURL(createRequire(import.meta.url).resolve("tsx/esm/api")).href)});
-      register({ tsconfig: ${JSON.stringify(path.resolve("tsconfig.json"))} });
-      const { registerSealedRuntime } = await import(${JSON.stringify(new URL("./sealed-runtime-registry.ts", import.meta.url).href)});
+      const { registerSealedRuntime } = await import(${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorEntrypoints.sealedRegistry).href)});
       registerSealedRuntime({ json5: undefined, resolveSecureTempRoot: () => ${JSON.stringify(coordinator)} });
     `;
     await fs.mkdir(path.join(root, "dist", "cli"), { recursive: true });
     await fs.writeFile(
       path.join(root, "dist", "cli", "daemon-cli.js"),
       `${bootstrap}
-      const ledger = await import(${JSON.stringify(new URL("./update-run-ledger.ts", import.meta.url).href)});
+      const ledger = await import(${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorEntrypoints.ledger).href)});
       export const { adoptUpdateRun, finishUpdateRun, getUpdateRun, recordUpdateRunStep, recordUpdateRunVerification } = ledger;
-      const handoff = await import(${JSON.stringify(new URL("./update-managed-service-handoff.ts", import.meta.url).href)});
+      const handoff = await import(${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorEntrypoints.handoff).href)});
       export async function assertForegroundUpdateOrigin(...args) {
         await handoff.assertForegroundUpdateOrigin(...args);
         if (${JSON.stringify(mode)} === "lost-claim") {
@@ -167,12 +165,12 @@ describe("foreground update through the prepared managed helper", () => {
       try {
       const root = ${JSON.stringify(root)}, mode = ${JSON.stringify(mode)};
       const unchanged = mode === "no-op" || mode === "lost-terminal-claim";
-      const handoff = await import(${JSON.stringify(new URL("./update-managed-service-handoff.ts", import.meta.url).href)});
-      const { readGatewayOwnerLease } = await import(${JSON.stringify(new URL("./gateway-owner-lease.ts", import.meta.url).href)});
-      const { resolvePathViaExistingAncestorSync } = await import(${JSON.stringify(new URL("./boundary-path.ts", import.meta.url).href)});
-      const { resolveOpenClawStateSqlitePath } = await import(${JSON.stringify(new URL("../state/openclaw-state-db.paths.ts", import.meta.url).href)});
-      const { readControlPlaneUpdateSentinelMeta } = await import(${JSON.stringify(new URL("./update-control-plane-sentinel.ts", import.meta.url).href)});
-      const { createUpdateRun, getUpdateRun } = await import(${JSON.stringify(new URL("./update-run-ledger.ts", import.meta.url).href)});
+      const handoff = await import(${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorEntrypoints.handoff).href)});
+      const { readGatewayOwnerLease } = await import(${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorEntrypoints.gatewayOwnerLease).href)});
+      const { resolvePathViaExistingAncestorSync } = await import(${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorEntrypoints.boundaryPath).href)});
+      const { resolveOpenClawStateSqlitePath } = await import(${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorEntrypoints.statePaths).href)});
+      const { readControlPlaneUpdateSentinelMeta } = await import(${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorEntrypoints.sentinel).href)});
+      const { createUpdateRun, getUpdateRun } = await import(${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorEntrypoints.ledger).href)});
       const stagePath = path.join(root, "staging"), activationPath = path.join(root, "activated");
       if (process.argv[2] === "triage") {
         process.stdout.write(JSON.stringify({ diagnostic: "fixture failure recorded" }));
@@ -229,8 +227,8 @@ describe("foreground update through the prepared managed helper", () => {
         process.disconnect();
         }
       } else {
-        const { acquireGatewayLock } = await import(${JSON.stringify(new URL("./gateway-lock.ts", import.meta.url).href)});
-        const { createManagedHandoffLeaseStore } = await import(${JSON.stringify(new URL("./update-managed-service-handoff-lease.ts", import.meta.url).href)});
+        const { acquireGatewayLock } = await import(${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorEntrypoints.gatewayLock).href)});
+        const { createManagedHandoffLeaseStore } = await import(${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorEntrypoints.lease).href)});
         const server = net.createServer(socket => socket.end("serving"));
         server.listen(0, "127.0.0.1"); await once(server, "listening");
         const port = server.address().port;

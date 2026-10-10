@@ -104,9 +104,8 @@ export function resolveChatAvatarUrl(state: ChatPageHost): string | null {
   ) {
     return assistantAvatar;
   }
-  const agent = state.agentsList?.agents?.find((candidate) => candidate.id === agentId) as
-    | { identity?: { avatar?: string; avatarUrl?: string } }
-    | undefined;
+  const agentsList: ApplicationContext["agents"]["state"]["agentsList"] = state.agentsList;
+  const agent = agentsList?.agents?.find((candidate) => candidate.id === agentId);
   const identity = agent?.identity;
   const avatar = identity?.avatarUrl ?? identity?.avatar;
   return typeof avatar === "string" && isRenderableControlUiAvatarUrl(avatar) ? avatar : null;

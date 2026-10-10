@@ -22,7 +22,7 @@ import "./router-outlet.ts";
 // The fixture supplies its own page renderer; retain the registered route's ownership policy.
 vi.mock("../pages/chat/chat-page.ts", () => ({}));
 
-type RouteId = "chat" | "dashboard" | "home" | "settings";
+type RouteId = "chat" | "dashboard" | "home" | "settings" | "new-session";
 type TestContext = Record<string, never>;
 type OwnerMatch = Pick<RouteMatch<string, unknown, ChatRouteData>, "data" | "location">;
 type TestModule = {
@@ -99,6 +99,61 @@ afterEach(() => {
 });
 
 describe("openclaw-router-outlet chat ownership", () => {
+  it.each(["error", "notFound", "unmatched location"] as const)(
+    "retains only the active launcher across %s recovery",
+    async (failure) => {
+      const firstLoad = createDeferredCore<ChatRouteData>();
+      const retryLoad = createDeferredCore<ChatRouteData>();
+      const module = await routeModule("chat", (data) =>
+        data ? html`<div data-testid="chat-ready">Chat</div>` : nothing,
+      );
+      const loader = vi.fn(() => retryLoad.promise);
+      if (failure !== "unmatched location") {
+        loader.mockImplementationOnce(() => firstLoad.promise);
+      }
+      const router = createRouter<RouteId, TestContext, TestModule, ChatRouteData>({
+        routes: [
+          definePage({
+            id: "new-session",
+            path: "/new",
+            component: () => ({ render: () => html`<textarea data-testid="launcher"></textarea>` }),
+          }),
+          definePage({ id: "chat", path: "/chat", component: () => module, loader }),
+        ],
+      });
+      const outlet = createOutlet(router);
+      await router.navigate("new-session", {});
+      await settleOutlet(outlet);
+      const launcher = outlet.querySelector<HTMLTextAreaElement>('[data-testid="launcher"]')!;
+      launcher.value = "Keep the first prompt visible";
+
+      if (failure === "unmatched location") {
+        await router.navigateLocation(location("/missing"), {});
+      } else {
+        const navigation = router.navigate("chat", {});
+        await settleOutlet(outlet);
+        expect(outlet.querySelector('[data-testid="launcher"]')).toBe(launcher);
+        expect(launcher.isConnected).toBe(true);
+        expect(launcher.value).toBe("Keep the first prompt visible");
+
+        const error = Object.assign(new Error("Chat load failed"), { type: failure });
+        const rejected = expect(navigation).rejects.toBe(error);
+        firstLoad.reject(error);
+        await rejected;
+      }
+      await settleOutlet(outlet);
+      expect(launcher.isConnected).toBe(false);
+
+      const retry = router.navigate("chat", {}, { revalidate: true });
+      await settleOutlet(outlet);
+      expect(outlet.querySelector('[data-testid="launcher"]')).toBeNull();
+      retryLoad.resolve(sessionData("agent:main:main", "chat"));
+      await retry;
+      await settleOutlet(outlet);
+      expect(outlet.querySelector('[data-testid="chat-ready"]')?.textContent).toBe("Chat");
+      router.stop();
+    },
+  );
   it("keeps the loaded session connected and inert across Home and Settings, then restores its draft", async () => {
     const sessionKey = "agent:main:dashboard:12345678-90ab-cdef-1234-567890abcdef";
     const teardown = vi.fn(async () => undefined);

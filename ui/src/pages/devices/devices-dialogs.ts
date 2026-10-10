@@ -1,11 +1,7 @@
-// Devices page dialog orchestration. One owner holds every awaited dialog so
-// the page controller stays under its max-lines budget: destructive actions
-// confirm through the shared dialog and revalidate the captured connection
-// scope after the await, and the alias editor reuses the same single-dialog
-// slot so a reconnect aborts whichever dialog is open.
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { showConfirmDialog, type ConfirmDialogOptions } from "../../components/confirm-dialog.ts";
 import { t } from "../../i18n/index.ts";
+import { registerDevicesEnglish } from "../../i18n/locales/en-devices.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import type {
   DevicesPageDataState,
@@ -20,7 +16,9 @@ import {
   revokeDeviceToken,
 } from "../../lib/nodes/page-operations.ts";
 
-export type DeviceAliasTarget = {
+registerDevicesEnglish();
+
+type DeviceAliasTarget = {
   id: string;
   name: string;
   operatorLabel?: string;
@@ -30,7 +28,6 @@ type InventoryRemovalPrompt =
   | { kind: "entry"; entry: InventoryRemovalRequest }
   | { kind: "stale"; entries: InventoryRemovalRequest[] };
 
-/** Narrow seam the page controller implements; dialogs never see page internals. */
 export type DevicesDialogHost = {
   canManagePairing: () => boolean;
   gatewayConnected: () => boolean;
@@ -38,27 +35,26 @@ export type DevicesDialogHost = {
   gatewayClient: () => GatewayBrowserClient | null;
   gatewayUrl: () => string;
   runPageTask: <T>(task: (pageState: DevicesPageDataState) => T | Promise<T>) => Promise<T>;
-  pendingDialog: () => AbortController | null;
-  setPendingDialog: (controller: AbortController | null) => void;
   setDevicesError: (message: string) => void;
 };
 
 export class DevicesDialogController {
+  private pending: AbortController | null = null;
+
   constructor(private readonly host: DevicesDialogHost) {}
 
-  /**
-   * Opens the alias editor for one paired device through the shared input
-   * dialog. The dialog's submit runs the rename under the current page scope
-   * and a rejected attempt stays visible and retryable. It shares the page's
-   * pending-dialog slot, so a reconnect aborts it and no second dialog can
-   * stack on top of a destructive confirmation (or vice versa).
-   */
+  cancel() {
+    this.pending?.abort();
+    this.pending = null;
+  }
+
+  // Alias edits and destructive confirmations share one slot, retired on reconnect.
   async editAlias(device: DeviceAliasTarget): Promise<void> {
-    if (!this.host.canManagePairing() || this.host.pendingDialog()) {
+    if (!this.host.canManagePairing() || this.pending) {
       return;
     }
     const controller = new AbortController();
-    this.host.setPendingDialog(controller);
+    this.pending = controller;
     try {
       const { showInputDialog } = await import("../../components/input-dialog.ts");
       await showInputDialog({
@@ -80,48 +76,39 @@ export class DevicesDialogController {
     } catch (error) {
       this.host.setDevicesError(formatUiError(error));
     } finally {
-      if (this.host.pendingDialog() === controller) {
-        this.host.setPendingDialog(null);
+      if (this.pending === controller) {
+        this.pending = null;
       }
     }
   }
 
   confirmInventoryRemoval(prompt: InventoryRemovalPrompt): Promise<void> {
-    if (!this.host.canManagePairing()) {
-      return Promise.resolve();
-    }
-    if (prompt.kind === "entry") {
-      const entry = prompt.entry;
-      return this.confirmDestructiveAction(
-        {
-          title: t("devices.inventory.removePromptTitle", { name: entry.name }),
-          message: t("devices.inventory.removePromptBody"),
-          details: t("devices.inventory.deviceId", { id: entry.id }),
-          confirmLabel: t("devices.inventory.remove"),
-        },
-        (pageState) => removeInventoryEntry(pageState, entry),
-      );
-    }
-    const entries = prompt.entries;
     return this.confirmDestructiveAction(
       {
-        title: t(
-          entries.length === 1
-            ? "devices.inventory.removeStalePromptTitleOne"
-            : "devices.inventory.removeStalePromptTitle",
-          { count: String(entries.length) },
-        ),
-        message: t("devices.inventory.removeStalePromptBody"),
         confirmLabel: t("devices.inventory.remove"),
+        ...(prompt.kind === "entry"
+          ? {
+              title: t("devices.inventory.removePromptTitle", { name: prompt.entry.name }),
+              message: t("devices.inventory.removePromptBody"),
+              details: t("devices.inventory.deviceId", { id: prompt.entry.id }),
+            }
+          : {
+              title: t(
+                prompt.entries.length === 1
+                  ? "devices.inventory.removeStalePromptTitleOne"
+                  : "devices.inventory.removeStalePromptTitle",
+                { count: String(prompt.entries.length) },
+              ),
+              message: t("devices.inventory.removeStalePromptBody"),
+            }),
       },
-      (pageState) => removeStaleInventoryEntries(pageState, entries),
+      prompt.kind === "entry"
+        ? (pageState) => removeInventoryEntry(pageState, prompt.entry)
+        : (pageState) => removeStaleInventoryEntries(pageState, prompt.entries),
     );
   }
 
   confirmPairingReject(target: "device" | "node", requestId: string): Promise<void> {
-    if (!this.host.canManagePairing()) {
-      return Promise.resolve();
-    }
     return this.confirmDestructiveAction(
       {
         title: t(
@@ -140,9 +127,6 @@ export class DevicesDialogController {
   }
 
   confirmTokenRevoke(deviceId: string, role: string): Promise<void> {
-    if (!this.host.canManagePairing()) {
-      return Promise.resolve();
-    }
     return this.confirmDestructiveAction(
       {
         title: t("devices.inventory.revokePromptTitle", { role }),
@@ -159,6 +143,32 @@ export class DevicesDialogController {
     );
   }
 
+  /**
+   * Switching the exec approvals target throws away an unsaved policy draft, so
+   * it confirms through the same single-dialog slot as the destructive actions:
+   * a reconnect aborts it and it cannot stack on another prompt. There is no
+   * request to place, so the post-await revalidation is only that this dialog is
+   * still the page's current one — a false result must leave every field alone.
+   */
+  async confirmExecApprovalsDiscard(): Promise<boolean> {
+    if (this.pending) {
+      return false;
+    }
+    const controller = new AbortController();
+    this.pending = controller;
+    const confirmed = await showConfirmDialog({
+      title: t("devices.execApprovals.discardPromptTitle"),
+      message: t("devices.execApprovals.discardPromptBody"),
+      confirmLabel: t("devices.execApprovals.discardConfirm"),
+      danger: true,
+      signal: controller.signal,
+    });
+    if (this.pending === controller) {
+      this.pending = null;
+    }
+    return confirmed && !controller.signal.aborted;
+  }
+
   // Every destructive Devices action confirms here, never through window.confirm: the
   // awaited dialog lets the gateway reconnect or swap clients mid-prompt, so the captured
   // scope and current authority are revalidated before the operation runs.
@@ -166,11 +176,11 @@ export class DevicesDialogController {
     prompt: Omit<ConfirmDialogOptions, "danger" | "signal">,
     run: (pageState: DevicesPageDataState) => unknown,
   ) {
-    if (this.host.pendingDialog()) {
+    if (!this.host.canManagePairing() || this.pending) {
       return;
     }
     const controller = new AbortController();
-    this.host.setPendingDialog(controller);
+    this.pending = controller;
     const generation = this.host.requestGeneration();
     const client = this.host.gatewayClient();
     const confirmed = await showConfirmDialog({
@@ -178,8 +188,8 @@ export class DevicesDialogController {
       danger: true,
       signal: controller.signal,
     });
-    if (this.host.pendingDialog() === controller) {
-      this.host.setPendingDialog(null);
+    if (this.pending === controller) {
+      this.pending = null;
     }
     if (
       !confirmed ||

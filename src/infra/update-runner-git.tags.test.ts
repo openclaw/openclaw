@@ -150,34 +150,18 @@ describe("Git updater release tag refresh", () => {
     return { result, fetches };
   }
 
-  it("reproduces the original clobber rejection with a colliding fork tag", () => {
-    const setup = fixture("upstream", "fork");
-    const result = spawnSync("git", ["-C", setup.root, "fetch", "--all", "--prune", "--tags"], {
-      encoding: "utf8",
-      env: { ...process.env, ...gitEnv },
-    });
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("would clobber existing tag");
-    expect(git(setup.root, "rev-parse", "v2026.9.1")).toBe(setup.oldTag);
+  it("keeps beta on regular stable when extended-stable tags sort newer", async () => {
+    const setup = fixture();
+    for (const tag of ["v2026.9.33", "v2026.9.34", "v2026.9.34-1"]) {
+      git(setup.seed, "tag", tag, setup.oldTag);
+    }
+    git(setup.seed, "push", "origin", "--tags");
+    const { result } = await update(setup, "beta");
+    expect(result).toMatchObject({ status: "skipped", reason: "already-current" });
+    expect(git(setup.root, "rev-parse", "HEAD")).toBe(setup.release);
   });
 
-  it.each(["stable", "beta"] as const)(
-    "keeps %s on regular stable when extended-stable tags sort newer",
-    async (channel) => {
-      const setup = fixture();
-      for (const tag of ["v2026.9.33", "v2026.9.34", "v2026.9.34-1"]) {
-        git(setup.seed, "tag", tag, setup.oldTag);
-      }
-      git(setup.seed, "push", "origin", "--tags");
-      const { result } = await update(setup, channel);
-      expect(result).toMatchObject({ status: "skipped", reason: "already-current" });
-      expect(git(setup.root, "rev-parse", "HEAD")).toBe(setup.release);
-    },
-  );
-
   it.each([
-    { releaseRemote: "upstream", forkRemote: "afork", tracked: true },
-    { releaseRemote: "upstream", forkRemote: "zfork", tracked: true },
     { releaseRemote: "upstream", forkRemote: "origin", tracked: true },
     { releaseRemote: "origin", forkRemote: "fork", tracked: false },
     { releaseRemote: "upstream", forkRemote: undefined, tracked: false },

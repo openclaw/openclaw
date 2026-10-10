@@ -3,6 +3,7 @@ import path from "node:path";
 import { isContainerEnvironment } from "./container-environment.js";
 import { readPackageName } from "./package-json.js";
 import { detectGlobalInstallManagerForRoot } from "./update-global.js";
+import type { UpdateInstallKind } from "./update-install-kind.js";
 import { UPDATE_RUNNER_TIMEOUT_MS } from "./update-run-timeouts.js";
 import { buildUpdateCommandRunner } from "./update-runner-command.js";
 import type { CommandRunner, UpdateInstallSurface } from "./update-runner-types.js";
@@ -35,16 +36,19 @@ export async function describeUpdateInstallRoot(root: string): Promise<string> {
 
 export async function resolveUpdateInstallSurface(opts: {
   root: string | null;
-  installKind: "git" | "package" | "unknown";
+  installKind: UpdateInstallKind;
   timeoutMs?: number;
   runCommand?: CommandRunner;
 }): Promise<UpdateInstallSurface> {
   const root = opts.root;
-  if (!root || opts.installKind === "unknown") {
+  if (!root || opts.installKind === "unknown" || opts.installKind === "host") {
     return { kind: "missing", mode: "unknown" };
   }
   if (opts.installKind === "git") {
     return { kind: "git", mode: "git", root, packageRoot: root };
+  }
+  if (opts.installKind === "immutable") {
+    return { kind: "immutable", mode: "unknown", root, packageRoot: root };
   }
   const { runCommand } = await buildUpdateCommandRunner(opts.runCommand);
   const globalManager = await detectGlobalInstallManagerForRoot(

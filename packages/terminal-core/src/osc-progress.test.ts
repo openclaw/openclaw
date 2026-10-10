@@ -1,6 +1,6 @@
 // Terminal Core tests cover osc progress behavior.
 import { describe, expect, it } from "vitest";
-import { createOscProgressController, supportsOscProgress } from "./osc-progress.js";
+import { formatOscProgress, supportsOscProgress } from "./osc-progress.js";
 
 describe("OSC progress", () => {
   it("detects supported terminal environments", () => {
@@ -9,19 +9,8 @@ describe("OSC progress", () => {
     expect(supportsOscProgress({ WT_SESSION: "1" }, false)).toBe(false);
   });
 
-  it("writes OSC 9;4 progress sequences without labels", () => {
-    const writes: string[] = [];
-    const controller = createOscProgressController({
-      env: { TERM_PROGRAM: "ghostty" },
-      isTty: true,
-      write: (chunk) => writes.push(chunk),
-    });
-
-    controller.setIndeterminate("Build\u001b]bad\u0007");
-    controller.setPercent("Build", 42.6);
-    controller.clear();
-
-    expect(writes).toEqual([
+  it("formats OSC 9;4 progress sequences", () => {
+    expect([formatOscProgress(3, 0), formatOscProgress(1, 42.6), formatOscProgress(0, 0)]).toEqual([
       "\u001b]9;4;3;0\u001b\\",
       "\u001b]9;4;1;43\u001b\\",
       "\u001b]9;4;0;0\u001b\\",

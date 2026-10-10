@@ -18,13 +18,10 @@ import {
   getWorkboardRuntime,
   getWorkboardState,
   invalidateWorkboardLoads,
-  resetWorkboardLifecycleTaskConfirmations,
-  setWorkboardLifecycleTaskRefreshFailed,
   workboardHasActiveWrites,
   workboardMutationsReady,
-  type WorkboardHost,
+  type WorkboardClientContext,
 } from "./runtime.ts";
-import { applyTaskSummariesToState, listWorkboardTasks } from "./task-links.ts";
 import type {
   WorkboardCard,
   WorkboardDeleteResult,
@@ -45,11 +42,7 @@ function normalizeDispatchSummary(value: unknown): WorkboardDispatchSummary {
   };
 }
 
-export async function saveWorkboardCardDraft(params: {
-  host: WorkboardHost;
-  client: GatewayBrowserClient | null;
-  requestUpdate?: () => void;
-}) {
+export async function saveWorkboardCardDraft(params: WorkboardClientContext) {
   const state = getWorkboardState(params.host);
   const cardId = state.editingCardId;
   const base = cardId ? state.editingCardBase : null;
@@ -95,17 +88,10 @@ export async function saveWorkboardCardDraft(params: {
     replaceCard(state, normalizeCardPayload(payload));
     resetDraftState(state);
   } catch (error) {
-    if (
-      base &&
-      isGatewayRequestError(error) &&
-      error.code === "workboard_conflict" &&
-      isRecord(error.details) &&
-      error.details.type === "workboard_card_conflict"
-    ) {
-      const current = normalizeCardPayload(error.details);
-      replaceCard(state, current);
-      rebaseWorkboardDraft(state, current);
-      state.error = `${error.message} Your unsaved edits remain in the form.`;
+    const conflict = base && reconcileCardConflict(state, error);
+    if (conflict) {
+      rebaseWorkboardDraft(state, conflict.card);
+      state.error = `${conflict.message} Your unsaved edits remain in the form.`;
     } else {
       state.error = formatError(error);
     }
@@ -116,92 +102,72 @@ export async function saveWorkboardCardDraft(params: {
   }
 }
 
-export async function addWorkboardCardComment(params: {
-  host: WorkboardHost;
-  client: GatewayBrowserClient | null;
-  cardId?: string;
-  body?: string;
-  requestUpdate?: () => void;
-}) {
-  const state = getWorkboardState(params.host);
-  const cardId = params.cardId ?? state.editingCardId;
+export async function addWorkboardCardComment(
+  params: WorkboardClientContext & {
+    cardId?: string;
+    body?: string;
+  },
+) {
+  const draftState = getWorkboardState(params.host);
+  const cardId = params.cardId ?? draftState.editingCardId;
   const draftField = params.body === undefined ? "draftCommentBody" : "detailCommentBody";
-  const submittedDraft = params.body ?? state.draftCommentBody;
+  const submittedDraft = params.body ?? draftState.draftCommentBody;
   const body = submittedDraft.trim();
-  if (
-    !cardId ||
-    !params.client ||
-    !workboardMutationsReady(state) ||
-    !body ||
-    state.dispatching ||
-    state.draftSaving ||
-    state.busyCardIds.has(cardId)
-  ) {
+  if (!cardId || !body || draftState.draftSaving) {
     return;
   }
-  invalidateWorkboardLoads(params.host);
-  state.busyCardIds.add(cardId);
-  state.error = null;
-  params.requestUpdate?.();
-  try {
-    const payload = await params.client.request("workboard.cards.comment", {
-      id: cardId,
-      body,
-    });
-    const current = normalizeCardPayload(payload);
-    replaceCard(state, current);
-    if (state.editingCardId === cardId && state.editingCardBase?.id === cardId) {
-      rebaseWorkboardDraft(state, current);
-    }
-    // The operator may type another note or switch cards while this request settles.
-    // Clear only the draft that submitted it, preserving the raw text for comparison.
-    const draftCardId =
-      draftField === "draftCommentBody" ? state.editingCardId : state.detailCardId;
-    if (
-      draftField === "detailCommentBody" &&
-      state.detailCommentDrafts.get(cardId) === submittedDraft
-    ) {
-      state.detailCommentDrafts.delete(cardId);
-    }
-    if (draftCardId === cardId && state[draftField] === submittedDraft) {
-      state[draftField] = "";
-    }
-  } catch (error) {
-    state.error = formatError(error);
-  } finally {
-    state.busyCardIds.delete(cardId);
-    params.requestUpdate?.();
-  }
+  await runWorkboardCardMutation(
+    { ...params, cardId, reconcileConflict: false },
+    async (state, client) => {
+      const payload = await client.request("workboard.cards.comment", {
+        id: cardId,
+        body,
+      });
+      const current = normalizeCardPayload(payload);
+      replaceCard(state, current);
+      if (state.editingCardId === cardId && state.editingCardBase?.id === cardId) {
+        rebaseWorkboardDraft(state, current);
+      }
+      // The operator may type another note or switch cards while this request settles.
+      // Clear only the draft that submitted it, preserving the raw text for comparison.
+      const draftCardId =
+        draftField === "draftCommentBody" ? state.editingCardId : state.detailCardId;
+      if (
+        draftField === "detailCommentBody" &&
+        state.detailCommentDrafts.get(cardId) === submittedDraft
+      ) {
+        state.detailCommentDrafts.delete(cardId);
+      }
+      if (draftCardId === cardId && state[draftField] === submittedDraft) {
+        state[draftField] = "";
+      }
+    },
+  );
 }
 
-function reconcileCardConflict(
-  state: ReturnType<typeof getWorkboardState>,
-  error: unknown,
-): boolean {
+function reconcileCardConflict(state: ReturnType<typeof getWorkboardState>, error: unknown) {
   if (
     isGatewayRequestError(error) &&
     error.code === "workboard_conflict" &&
     isRecord(error.details) &&
     error.details.type === "workboard_card_conflict"
   ) {
-    replaceCard(state, normalizeCardPayload(error.details));
-    return true;
+    const card = normalizeCardPayload(error.details);
+    replaceCard(state, card);
+    return { card, message: error.message };
   }
-  return false;
+  return null;
 }
 
 export async function moveWorkboardCard(
-  params: {
-    host: WorkboardHost;
-    client: GatewayBrowserClient | null;
+  params: WorkboardClientContext & {
     cardId: string;
     status: WorkboardStatus;
     expectedUpdatedAt?: number;
-    requestUpdate?: () => void;
   } & (
-    | { position: number; beforeCardId?: never }
-    | { beforeCardId: string | null; boardFilter: string; position?: never }
-  ),
+      | { position: number; beforeCardId?: never }
+      | { beforeCardId: string | null; boardFilter: string; position?: never }
+    ),
 ) {
   const state = getWorkboardState(params.host);
   if (
@@ -273,62 +239,25 @@ export async function moveWorkboardCard(
     params.requestUpdate?.();
   }
   if (reloadAfterFailure) {
+    invalidateWorkboardLoads(params.host);
     await loadWorkboard({
       host: params.host,
       client: params.client,
       requestUpdate: params.requestUpdate,
       force: true,
       preserveError: true,
-      taskRefresh: "all",
     });
   }
 }
 
-export async function updateWorkboardCardProperties(params: {
-  host: WorkboardHost;
-  client: GatewayBrowserClient | null;
-  card: WorkboardCard;
-  patch: Partial<Pick<WorkboardCard, "priority" | "labels" | "agentId" | "title" | "notes">>;
-  requestUpdate?: () => void;
-}) {
-  const state = getWorkboardState(params.host);
-  if (
-    !params.client ||
-    !workboardMutationsReady(state) ||
-    state.dispatching ||
-    state.busyCardIds.has(params.card.id)
-  ) {
-    return false;
-  }
-  invalidateWorkboardLoads(params.host);
-  state.busyCardIds.add(params.card.id);
-  state.error = null;
-  params.requestUpdate?.();
-  try {
-    const payload = await params.client.request("workboard.cards.update", {
-      id: params.card.id,
-      expectedUpdatedAt: params.card.updatedAt,
-      patch: params.patch,
-    });
-    replaceCard(state, normalizeCardPayload(payload));
-    return true;
-  } catch (error) {
-    reconcileCardConflict(state, error);
-    state.error = formatError(error);
-    return false;
-  } finally {
-    state.busyCardIds.delete(params.card.id);
-    params.requestUpdate?.();
-  }
-}
-
-export async function deleteWorkboardCard(params: {
-  host: WorkboardHost;
-  client: GatewayBrowserClient | null;
+type WorkboardCardMutationParams = WorkboardClientContext & {
   cardId: string;
-  expectedUpdatedAt?: number;
-  requestUpdate?: () => void;
-}): Promise<WorkboardDeleteResult | false> {
+};
+
+export async function runWorkboardCardMutation<T>(
+  params: WorkboardCardMutationParams & { reconcileConflict?: boolean },
+  mutate: (state: ReturnType<typeof getWorkboardState>, client: GatewayBrowserClient) => Promise<T>,
+): Promise<T | false> {
   const state = getWorkboardState(params.host);
   if (
     !params.client ||
@@ -343,7 +272,41 @@ export async function deleteWorkboardCard(params: {
   state.error = null;
   params.requestUpdate?.();
   try {
-    const result = await params.client.request<WorkboardDeleteResult>("workboard.cards.delete", {
+    return await mutate(state, params.client);
+  } catch (error) {
+    if (params.reconcileConflict !== false) {
+      reconcileCardConflict(state, error);
+    }
+    state.error = formatError(error);
+    return false;
+  } finally {
+    state.busyCardIds.delete(params.cardId);
+    params.requestUpdate?.();
+  }
+}
+
+export async function updateWorkboardCardProperties(
+  params: WorkboardClientContext & {
+    card: WorkboardCard;
+    patch: Partial<Pick<WorkboardCard, "priority" | "labels" | "agentId" | "title" | "notes">>;
+  },
+) {
+  return runWorkboardCardMutation({ ...params, cardId: params.card.id }, async (state, client) => {
+    const payload = await client.request("workboard.cards.update", {
+      id: params.card.id,
+      expectedUpdatedAt: params.card.updatedAt,
+      patch: params.patch,
+    });
+    replaceCard(state, normalizeCardPayload(payload));
+    return true;
+  });
+}
+
+export async function deleteWorkboardCard(
+  params: WorkboardCardMutationParams & { expectedUpdatedAt?: number },
+): Promise<WorkboardDeleteResult | false> {
+  return runWorkboardCardMutation(params, async (state, client) => {
+    const result = await client.request<WorkboardDeleteResult>("workboard.cards.delete", {
       id: params.cardId,
       ...(params.expectedUpdatedAt !== undefined
         ? { expectedUpdatedAt: params.expectedUpdatedAt }
@@ -361,39 +324,14 @@ export async function deleteWorkboardCard(params: {
     }
     setWorkboardCards(state, remaining);
     return result;
-  } catch (error) {
-    reconcileCardConflict(state, error);
-    state.error = formatError(error);
-    return false;
-  } finally {
-    state.busyCardIds.delete(params.cardId);
-    params.requestUpdate?.();
-  }
+  });
 }
 
-export async function archiveWorkboardCard(params: {
-  host: WorkboardHost;
-  client: GatewayBrowserClient | null;
-  cardId: string;
-  archived?: boolean;
-  expectedUpdatedAt?: number;
-  requestUpdate?: () => void;
-}) {
-  const state = getWorkboardState(params.host);
-  if (
-    !params.client ||
-    !workboardMutationsReady(state) ||
-    state.dispatching ||
-    state.busyCardIds.has(params.cardId)
-  ) {
-    return false;
-  }
-  invalidateWorkboardLoads(params.host);
-  state.busyCardIds.add(params.cardId);
-  state.error = null;
-  params.requestUpdate?.();
-  try {
-    const payload = await params.client.request("workboard.cards.archive", {
+export async function archiveWorkboardCard(
+  params: WorkboardCardMutationParams & { archived?: boolean; expectedUpdatedAt?: number },
+) {
+  return runWorkboardCardMutation(params, async (state, client) => {
+    const payload = await client.request("workboard.cards.archive", {
       id: params.cardId,
       archived: params.archived ?? true,
       ...(params.expectedUpdatedAt !== undefined
@@ -402,21 +340,10 @@ export async function archiveWorkboardCard(params: {
     });
     replaceCard(state, normalizeCardPayload(payload));
     return true;
-  } catch (error) {
-    reconcileCardConflict(state, error);
-    state.error = formatError(error);
-    return false;
-  } finally {
-    state.busyCardIds.delete(params.cardId);
-    params.requestUpdate?.();
-  }
+  });
 }
 
-export async function dispatchWorkboard(params: {
-  host: WorkboardHost;
-  client: GatewayBrowserClient | null;
-  requestUpdate?: () => void;
-}) {
+export async function dispatchWorkboard(params: WorkboardClientContext) {
   const state = getWorkboardState(params.host);
   if (
     !params.client ||
@@ -442,20 +369,6 @@ export async function dispatchWorkboard(params: {
     setWorkboardCards(state, normalized.cards);
     state.statuses = normalized.statuses;
     state.lastDispatchSummary = normalizeDispatchSummary(dispatchResult);
-    state.tasksByCardId = new Map();
-    resetWorkboardLifecycleTaskConfirmations(state, { host: params.host });
-    try {
-      applyTaskSummariesToState(state, await listWorkboardTasks(params.client));
-      setWorkboardLifecycleTaskRefreshFailed(state, false, { host: params.host });
-      state.lifecycleTaskRefreshError = null;
-      state.lastRefreshError = null;
-    } catch (error) {
-      setWorkboardLifecycleTaskRefreshFailed(state, true, {
-        host: params.host,
-        requestUpdate: params.requestUpdate,
-      });
-      state.lastRefreshError = formatError(error);
-    }
     // A teardown may have invalidated this in-flight dispatch. Keep its cached
     // result reload-required so reconnect cannot treat an old completion as canonical.
     state.loaded = workboardMutationsReady(state);

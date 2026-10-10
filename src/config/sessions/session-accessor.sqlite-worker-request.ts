@@ -5,9 +5,12 @@ import { registerOpenClawAgentDatabaseAsyncResource } from "../../state/openclaw
 import type { OpenClawAgentReadOnlyDatabase } from "../../state/openclaw-agent-db-readonly.js";
 import {
   adoptOpenClawAgentDatabaseValidation,
+  captureOpenClawAgentDatabaseValidationTransfer,
   getOpenClawAgentDatabaseValidation,
+  getOpenClawAgentDatabaseValidationForTransfer,
   type OpenClawAgentDatabaseValidation,
 } from "../../state/openclaw-agent-db-validation-cache.js";
+import type { AgentDatabaseGenerationClaim } from "../../state/openclaw-agent-execution-admission-contract.js";
 import {
   captureOpenClawStateDatabaseReadAdmission,
   registerOpenClawStateDatabaseAsyncResource,
@@ -30,7 +33,9 @@ export function withSqliteMutationWorkerLifetime<T>(
     commitGate: SharedArrayBuffer;
     signal: AbortSignal;
   }) => Promise<T>,
+  callerSignal?: AbortSignal,
 ): Promise<T> {
+  callerSignal?.throwIfAborted();
   const completion = createDeferredCore();
   const state = captureOpenClawStateDatabaseReadAdmission(
     resolveOpenClawStateSqlitePath(options.env),
@@ -39,7 +44,11 @@ export function withSqliteMutationWorkerLifetime<T>(
   const controller = new AbortController();
   const revoke = () => {
     revokeSqliteReclamationCommit(commitGate);
-    controller.abort(new Error("SQLite mutation Worker request was revoked"));
+    controller.abort(
+      callerSignal?.aborted
+        ? callerSignal.reason
+        : new Error("SQLite mutation Worker request was revoked"),
+    );
   };
   const assertCurrent = () => {
     controller.signal.throwIfAborted();
@@ -65,12 +74,17 @@ export function withSqliteMutationWorkerLifetime<T>(
     unregisterAgent();
     throw error;
   }
+  callerSignal?.addEventListener("abort", revoke, { once: true });
+  if (callerSignal?.aborted) {
+    revoke();
+  }
   return Promise.resolve()
     .then(() => {
       assertCurrent();
       return run({ assertCurrent, commitGate, signal: controller.signal });
     })
     .finally(() => {
+      callerSignal?.removeEventListener("abort", revoke);
       revoke();
       completion.resolve();
       unregisterAgent();
@@ -83,12 +97,18 @@ export type SqliteWorkerWriteAdmission<Result> = (
   diagnostics: SqliteSessionReclamationAdmissionDiagnostics,
 ) => Promise<void>;
 
-export type SqliteMutationWorkerValidationOwner = {
-  database: OpenClawAgentReadOnlyDatabase;
-  isCurrent: () => boolean;
-};
+export type SqliteMutationWorkerValidationOwner =
+  | {
+      database: OpenClawAgentReadOnlyDatabase;
+      isCurrent: () => boolean;
+    }
+  | {
+      source: { agentId: string; path: string };
+      claim: AgentDatabaseGenerationClaim;
+    };
 
 export type SqliteMutationWorkerMessage<Result> =
+  | { type: "refused"; operationId: number; settled: true }
   | { type: "commit-request"; operationId: number }
   | { type: "admission-request" | "admission-release"; operationId: number; admissionId: number }
   | {
@@ -99,6 +119,13 @@ export type SqliteMutationWorkerMessage<Result> =
       validation?: OpenClawAgentDatabaseValidation;
     };
 
+/** Transport settlement is separate from the caller's refused authority. */
+export class SqliteMutationWorkerSettledRefusal extends Error {
+  constructor(cause: Error) {
+    super(cause.message, { cause });
+  }
+}
+
 /** Share request authority, not connection lifetime: cold mutations join exit; sweeps join each result. */
 export function runSqliteMutationWorkerRequest<Result>(params: {
   transport: SqliteMutationWorkerTransport;
@@ -107,11 +134,52 @@ export function runSqliteMutationWorkerRequest<Result>(params: {
   onCommitRequest: () => void;
   withWriteAdmission: SqliteWorkerWriteAdmission<Result>;
   validationOwner?: SqliteMutationWorkerValidationOwner;
+  /** Opening proof remains revocable and is adopted only against the worker's native identity. */
+  readOpeningValidation?: () => OpenClawAgentDatabaseValidation | undefined;
   dispatch?: () => void;
   getFailure?: () => Error | undefined;
   onExit?: (code: number) => void;
 }): Promise<Result> {
   const { transport, operationId } = params;
+  const validationOwner = params.validationOwner;
+  if (validationOwner && "source" in validationOwner) {
+    validationOwner.claim.assertCurrent();
+  }
+  const receiveValidation =
+    validationOwner && "source" in validationOwner
+      ? captureOpenClawAgentDatabaseValidationTransfer(validationOwner.source)
+      : undefined;
+  const readValidation = () => {
+    if (!validationOwner) {
+      return params.readOpeningValidation?.();
+    }
+    if ("database" in validationOwner) {
+      return validationOwner.isCurrent()
+        ? getOpenClawAgentDatabaseValidation(validationOwner.database)
+        : undefined;
+    }
+    validationOwner.claim.assertCurrent();
+    const validation = getOpenClawAgentDatabaseValidationForTransfer(validationOwner.source);
+    return validation?.identity === validationOwner.claim.identity ? validation : undefined;
+  };
+  const adoptValidation = (validation: OpenClawAgentDatabaseValidation) => {
+    if (!validationOwner) {
+      return;
+    }
+    if ("database" in validationOwner) {
+      if (validationOwner.isCurrent()) {
+        adoptOpenClawAgentDatabaseValidation(validationOwner.database, validation);
+      }
+      return;
+    }
+    try {
+      validationOwner.claim.assertCurrent();
+    } catch {
+      // Retirement after settlement cannot revive proof or reject an acknowledged result.
+      return;
+    }
+    receiveValidation?.(validationOwner.claim.identity, validation);
+  };
   const worker = transport.channel;
   return new Promise((resolve, reject) => {
     // oxlint-disable-next-line no-warning-comments -- remove after the upstream Bun Worker fix ships.
@@ -131,6 +199,7 @@ export function runSqliteMutationWorkerRequest<Result>(params: {
       | undefined;
     let admissionId = 0;
     let completed = false;
+    let settledRefusal = false;
     const admissionTasks: Promise<void>[] = [];
     const terminate = () => {
       void terminateSqliteMutationWorker(transport).catch((failure: unknown) => {
@@ -172,14 +241,14 @@ export function runSqliteMutationWorkerRequest<Result>(params: {
         .then(() => {
           const failure = workerError ?? transportError ?? params.getFailure?.();
           if (failure) {
-            reject(failure);
+            reject(settledRefusal ? new SqliteMutationWorkerSettledRefusal(failure) : failure);
           } else if (code !== undefined && code !== 0) {
             reject(new Error(`SQLite transcript archive worker exited with code ${code}`));
           } else if (result === undefined) {
             reject(new Error("SQLite session reclamation Worker exited without results"));
           } else {
-            if (validation && params.validationOwner?.isCurrent()) {
-              adoptOpenClawAgentDatabaseValidation(params.validationOwner.database, validation);
+            if (validation) {
+              adoptValidation(validation);
             }
             resolve(result);
           }
@@ -240,10 +309,7 @@ export function runSqliteMutationWorkerRequest<Result>(params: {
                 operationId,
                 admissionId: requested.id,
                 allowed,
-                validation:
-                  allowed && params.validationOwner?.isCurrent()
-                    ? getOpenClawAgentDatabaseValidation(params.validationOwner.database)
-                    : undefined,
+                validation: allowed ? readValidation() : undefined,
               },
               [],
             );
@@ -287,6 +353,14 @@ export function runSqliteMutationWorkerRequest<Result>(params: {
         admission = undefined;
         released.diagnostics.releaseCause = "worker-release";
         released.released.resolve();
+      } else if (message.type === "refused") {
+        if (!message.settled || params.completion !== "result") {
+          fail(new Error("SQLite reclamation Worker omitted refusal settlement"));
+          return;
+        }
+        settledRefusal = true;
+        workerError ??= new Error("SQLite reclamation Worker request was refused");
+        finish();
       } else if (message.type === "reclaimed") {
         if (!message.settled) {
           fail(new Error("SQLite reclamation Worker omitted operation settlement"));

@@ -1,7 +1,7 @@
 import { normalizeTelegramBotInfo, type TelegramBotInfo } from "./bot-info.js";
 import { getTelegramRuntime } from "./runtime.js";
 import { normalizeTelegramStateAccountId } from "./state-account-id.js";
-import { fingerprintTelegramBotToken } from "./token-fingerprint.js";
+import { fingerprintOptionalTelegramBotToken } from "./token-fingerprint.js";
 
 const TELEGRAM_BOT_INFO_CACHE_NAMESPACE = "telegram.bot-info-cache";
 const TELEGRAM_BOT_INFO_CACHE_MAX_ENTRIES = 128;
@@ -13,26 +13,9 @@ type TelegramBotInfoCacheState = {
   botInfo: TelegramBotInfo;
 };
 
-type CachedTelegramBotInfo = {
-  botInfo: TelegramBotInfo;
-  fetchedAt: string;
-};
+type CachedTelegramBotInfo = Pick<TelegramBotInfoCacheState, "botInfo" | "fetchedAt">;
 
-type TelegramBotInfoCacheStore = {
-  register(key: string, value: TelegramBotInfoCacheState): Promise<void>;
-  lookup(key: string): Promise<TelegramBotInfoCacheState | undefined>;
-  delete(key: string): Promise<boolean>;
-};
-
-function fingerprintFromToken(botToken?: string): string | null {
-  const trimmed = botToken?.trim();
-  if (!trimmed) {
-    return null;
-  }
-  return fingerprintTelegramBotToken(trimmed);
-}
-
-function openBotInfoCacheStore(): TelegramBotInfoCacheStore {
+function openBotInfoCacheStore() {
   return getTelegramRuntime().state.openKeyedStore<TelegramBotInfoCacheState>({
     namespace: TELEGRAM_BOT_INFO_CACHE_NAMESPACE,
     maxEntries: TELEGRAM_BOT_INFO_CACHE_MAX_ENTRIES,
@@ -40,7 +23,18 @@ function openBotInfoCacheStore(): TelegramBotInfoCacheStore {
   });
 }
 
-function parseCachedTelegramBotInfo(value: unknown) {
+export async function readCachedTelegramBotInfo(params: {
+  accountId?: string;
+  botToken?: string;
+  now?: Date;
+}): Promise<CachedTelegramBotInfo | null> {
+  const tokenFingerprint = fingerprintOptionalTelegramBotToken(params.botToken);
+  if (!tokenFingerprint) {
+    return null;
+  }
+  const value: unknown = await openBotInfoCacheStore().lookup(
+    normalizeTelegramStateAccountId(params.accountId),
+  );
   if (!value || typeof value !== "object") {
     return null;
   }
@@ -56,34 +50,17 @@ function parseCachedTelegramBotInfo(value: unknown) {
   if (!botInfo) {
     return null;
   }
-  return {
-    tokenFingerprint: state.tokenFingerprint,
-    fetchedAt: state.fetchedAt,
-    botInfo,
-  };
-}
-
-export async function readCachedTelegramBotInfo(params: {
-  accountId?: string;
-  botToken?: string;
-  now?: Date;
-}): Promise<CachedTelegramBotInfo | null> {
-  const tokenFingerprint = fingerprintFromToken(params.botToken);
-  if (!tokenFingerprint) {
+  const cachedTokenFingerprint = state.tokenFingerprint;
+  const fetchedAt = state.fetchedAt;
+  if (cachedTokenFingerprint !== tokenFingerprint) {
     return null;
   }
-  const parsed = parseCachedTelegramBotInfo(
-    await openBotInfoCacheStore().lookup(normalizeTelegramStateAccountId(params.accountId)),
-  );
-  if (!parsed || parsed.tokenFingerprint !== tokenFingerprint) {
-    return null;
-  }
-  const fetchedAtMs = Date.parse(parsed.fetchedAt);
+  const fetchedAtMs = Date.parse(fetchedAt);
   const nowMs = params.now?.getTime() ?? Date.now();
   if (nowMs - fetchedAtMs > TELEGRAM_BOT_INFO_CACHE_MAX_AGE_MS) {
     return null;
   }
-  return { botInfo: parsed.botInfo, fetchedAt: parsed.fetchedAt };
+  return { botInfo, fetchedAt };
 }
 
 export async function writeCachedTelegramBotInfo(params: {
@@ -91,7 +68,7 @@ export async function writeCachedTelegramBotInfo(params: {
   botToken: string;
   botInfo: TelegramBotInfo;
 }): Promise<void> {
-  const tokenFingerprint = fingerprintFromToken(params.botToken);
+  const tokenFingerprint = fingerprintOptionalTelegramBotToken(params.botToken);
   if (!tokenFingerprint) {
     return;
   }

@@ -136,9 +136,6 @@ export async function deliverLineAutoReply(params: {
     allowFailedBatchTextRecovery: boolean,
     externalTail: messagingApi.Message[] = [],
   ): Promise<void> => {
-    if (messages.length === 0) {
-      return;
-    }
     for (let i = 0; i < messages.length; i += 5) {
       const batch = messages.slice(i, i + 5);
       try {
@@ -235,26 +232,17 @@ export async function deliverLineAutoReply(params: {
   // Inbound auto-replies bypass the channel outbound adapter, so enforce the
   // same assistant-visible boundary here before Markdown can create LINE UI.
   const visibleText = payload.text ? sanitizeAssistantVisibleText(payload.text) : "";
-  const processed = visibleText ? processLineMessage(visibleText) : { text: "", flexMessages: [] };
+  const processed = visibleText ? processLineMessage(visibleText) : [];
 
-  if (!processed.segments) {
-    for (const flexMsg of processed.flexMessages) {
-      richMessages.push(createFlexMessage(flexMsg.altText, flexMsg.contents));
-    }
-  }
-
-  const orderedMessages = processed.segments?.flatMap<
-    messagingApi.FlexMessage | messagingApi.TextMessage
-  >((segment) =>
-    segment.type === "flex"
-      ? [createFlexMessage(segment.message.altText, segment.message.contents)]
-      : chunkMarkdownText(segment.text, textLimit).map((text) => ({ type: "text" as const, text })),
+  const markdownMessages = processed.flatMap<messagingApi.FlexMessage | messagingApi.TextMessage>(
+    (segment) =>
+      segment.type === "flex"
+        ? [createFlexMessage(segment.message.altText, segment.message.contents)]
+        : chunkMarkdownText(segment.text, textLimit).map((text) => ({
+            type: "text" as const,
+            text,
+          })),
   );
-  const chunks = orderedMessages
-    ? orderedMessages.flatMap((message) => (message.type === "text" ? [message.text] : []))
-    : processed.text
-      ? chunkMarkdownText(processed.text, textLimit)
-      : [];
 
   // Match the push path (outbound.ts): hand the LINE media options to the same
   // leaf so a reply-token video/audio is not downgraded to an image. A media
@@ -269,11 +257,7 @@ export async function deliverLineAutoReply(params: {
   };
   const mediaMessages: messagingApi.Message[] = [];
   let deliveryError: unknown;
-  for (const rawUrl of mediaUrls) {
-    const url = rawUrl?.trim();
-    if (!url) {
-      continue;
-    }
+  for (const url of mediaUrls) {
     try {
       mediaMessages.push(await buildLineMediaMessage(url, mediaOpts, to));
     } catch (err) {
@@ -281,14 +265,13 @@ export async function deliverLineAutoReply(params: {
     }
   }
 
-  const textMessages: messagingApi.Message[] = chunks.map((text) => ({ type: "text", text }));
-  // Rich-only Markdown stays on the inline media path so its final media
-  // message, not an earlier Flex card, owns the visible quick replies.
-  const orderedDeliveryMessages =
-    hasQuickReplies && chunks.length === 0 ? undefined : orderedMessages;
+  // Rich-only Markdown stays beside media so the final media message owns quick replies.
+  const inlineMarkdown =
+    hasQuickReplies && !markdownMessages.some((message) => message.type === "text");
+  const textMessages: messagingApi.Message[] = inlineMarkdown ? [] : markdownMessages;
   const richMediaMessages = [
     ...richMessages,
-    ...(orderedDeliveryMessages ? [] : (orderedMessages ?? [])),
+    ...(inlineMarkdown ? markdownMessages : []),
     ...mediaMessages,
   ];
   if (hasQuickReplies && textMessages.length === 0 && richMediaMessages.length === 0) {
@@ -298,11 +281,7 @@ export async function deliverLineAutoReply(params: {
     });
   }
   if (hasQuickReplies) {
-    const targetMessages = orderedDeliveryMessages?.length
-      ? orderedDeliveryMessages
-      : textMessages.length > 0
-        ? textMessages
-        : richMediaMessages;
+    const targetMessages = textMessages.length > 0 ? textMessages : richMediaMessages;
     const lastIndex = targetMessages.length - 1;
     const target = expectDefined(targetMessages[lastIndex], "last LINE auto-reply message");
     targetMessages[lastIndex] = {
@@ -314,8 +293,8 @@ export async function deliverLineAutoReply(params: {
   // Quick replies disappear when a newer message arrives, so rich/media parts
   // lead and the action-bearing text remains final across reply/push batches.
   const ordered = hasQuickReplies
-    ? [...richMediaMessages, ...(orderedDeliveryMessages ?? textMessages)]
-    : [...(orderedDeliveryMessages ?? textMessages), ...richMediaMessages];
+    ? [...richMediaMessages, ...textMessages]
+    : [...textMessages, ...richMediaMessages];
   // The token rides on the message rather than on a request so it survives the
   // reply-token batch splitting into pushes and the reply-to-push fallback.
   const replyQuoteToken = resolveLineQuoteToken({

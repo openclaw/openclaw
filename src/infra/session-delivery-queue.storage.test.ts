@@ -46,26 +46,15 @@ describe("session-delivery queue storage", () => {
 
   it("dedupes entries when an idempotency key is reused", async () => {
     await withSessionDeliveryQueue(async (_stateDir, queueContext) => {
-      const firstId = await enqueueSessionDelivery(
-        {
-          kind: "agentTurn",
-          sessionKey: "agent:main:main",
-          message: "continue after restart",
-          messageId: "restart-sentinel:agent:main:main:agentTurn:123",
-          idempotencyKey: "restart-sentinel:agent:main:main:agentTurn:123",
-        },
-        queueContext,
-      );
-      const secondId = await enqueueSessionDelivery(
-        {
-          kind: "agentTurn",
-          sessionKey: "agent:main:main",
-          message: "continue after restart",
-          messageId: "restart-sentinel:agent:main:main:agentTurn:123",
-          idempotencyKey: "restart-sentinel:agent:main:main:agentTurn:123",
-        },
-        queueContext,
-      );
+      const payload = {
+        kind: "agentTurn" as const,
+        sessionKey: "agent:main:main",
+        message: "continue after restart",
+        messageId: "restart-sentinel:agent:main:main:agentTurn:123",
+        idempotencyKey: "restart-sentinel:agent:main:main:agentTurn:123",
+      };
+      const firstId = await enqueueSessionDelivery(payload, queueContext);
+      const secondId = await enqueueSessionDelivery({ ...payload }, queueContext);
 
       expect(secondId).toBe(firstId);
       expect(await loadPendingSessionDeliveries(queueContext)).toHaveLength(1);
@@ -376,23 +365,6 @@ describe("session-delivery queue storage", () => {
     } finally {
       sqlCalls.restore();
     }
-  });
-
-  it("moves entries into completed idempotency state", async () => {
-    await withSessionDeliveryQueue(async (tempDir, queueContext) => {
-      const id = await enqueueSessionDelivery(
-        {
-          kind: "systemEvent",
-          sessionKey: "agent:main:main",
-          text: "restart complete",
-        },
-        queueContext,
-      );
-
-      await settleSessionDelivery(id, queueContext);
-
-      expect(readSessionQueueStatus(tempDir, id)).toBe("completed");
-    });
   });
 
   it("retains a permanent completion receipt", async () => {

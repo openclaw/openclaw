@@ -1,16 +1,22 @@
 /* @vitest-environment jsdom */
 import { expectDefined } from "@openclaw/normalization-core";
+import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { openDesktopFocus } from "../../components/desktop/desktop-focus-window.ts";
 import { formatTimeAgo } from "../../lib/format.ts";
 import type { InventoryRemovalRequest } from "../../lib/nodes/page-operations.ts";
 import { showToast } from "../../lib/toast.ts";
-import { createOfflineDeviceNode, deviceSystemInfo } from "../../test-helpers/devices-fixtures.ts";
+import {
+  createDevicesViewProps,
+  createOfflineDeviceNode,
+  deviceSystemInfo,
+} from "../../test-helpers/devices-fixtures.ts";
 import {
   renderDevicesContainer,
   getDevicesSection as getSection,
   getDeviceSettingsRow as getSettingsRow,
 } from "../../test-helpers/devices-view.ts";
+import { renderDevices } from "./view.ts";
 
 vi.mock("../../components/desktop/desktop-focus-window.ts", () => ({
   openDesktopFocus: vi.fn(),
@@ -75,38 +81,6 @@ function statusesByText(scope: Element, text: string): HTMLElement[] {
 }
 
 describe("devices pending rendering", () => {
-  it("shows requested and approved access for a scope upgrade", () => {
-    const container = renderDevicesContainer({
-      devicesList: {
-        pending: [
-          {
-            requestId: "req-1",
-            deviceId: "device-1",
-            displayName: "Device One",
-            role: "operator",
-            scopes: ["operator.admin", "operator.read"],
-            ts: Date.now(),
-          },
-        ],
-        paired: [
-          {
-            deviceId: "device-1",
-            displayName: "Device One",
-            roles: ["operator"],
-            scopes: ["operator.read"],
-          },
-        ],
-      },
-    });
-    const details = getPendingDeviceDetails(container);
-
-    expect(details[0]).toMatch(/^scope upgrade requires approval · requested /u);
-    expect(details.slice(1)).toEqual([
-      "requested: roles: operator · scopes: operator.admin, operator.read, operator.write",
-      "approved now: roles: operator · scopes: operator.read",
-    ]);
-  });
-
   it("normalizes pending device ids before matching paired access", () => {
     const container = renderDevicesContainer({
       devicesList: {
@@ -133,7 +107,10 @@ describe("devices pending rendering", () => {
     const details = getPendingDeviceDetails(container);
 
     expect(details[0]).toMatch(/^scope upgrade requires approval · requested /u);
-    expect(details.at(-1)).toBe("approved now: roles: operator · scopes: operator.read");
+    expect(details.slice(1)).toEqual([
+      "requested: roles: operator · scopes: operator.admin, operator.read, operator.write",
+      "approved now: roles: operator · scopes: operator.read",
+    ]);
   });
 
   it("does not show upgrade context for key-mismatched pending requests", () => {
@@ -498,6 +475,33 @@ describe("devices inventory rendering", () => {
     const row = getSettingsRow(container, "Bare node");
     expect(row.querySelector('wa-dropdown-item[value="copy"]')).toBeInstanceOf(Element);
     expect(row.querySelector('wa-dropdown-item[value="editAlias"]')).toBeNull();
+  });
+
+  it("keeps focus on Copy when an inventory refresh adds preceding approval actions", async () => {
+    const node = { nodeId: "node-one", displayName: "Node One", paired: true, connected: true };
+    const props = createDevicesViewProps({ nodes: [node] });
+    const container = renderDevicesContainer(props);
+    const copy = expectDefined(
+      container.querySelector<HTMLElementTagNameMap["wa-dropdown-item"]>(
+        'wa-dropdown-item[value="copy"]',
+      ),
+      "Copy device ID menu item",
+    );
+    await copy.updateComplete;
+    copy.focus();
+    expect(document.activeElement).toBe(copy);
+
+    render(
+      renderDevices({
+        ...props,
+        nodes: [{ ...node, approvalState: "pending-reapproval", pendingRequestId: "request-new" }],
+      }),
+      container,
+    );
+
+    expect(container.querySelector('wa-dropdown-item[value="approve"]')).not.toBeNull();
+    expect(container.querySelector('wa-dropdown-item[value="copy"]')).toBe(copy);
+    expect(document.activeElement).toBe(copy);
   });
 
   it.each([true, false])(
@@ -1011,7 +1015,7 @@ describe("devices access gating", () => {
           },
         ],
       },
-      configForm: { agents: { entries: [{ id: "main", default: true }] } },
+      configForm: { agents: { entries: { main: {} } } },
       configDirty: true,
     });
 

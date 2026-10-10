@@ -1,9 +1,4 @@
-/**
- * Interactive custom provider onboarding prompts and endpoint verification.
- *
- * The pure config helpers are re-exported from here because setup and configure
- * flows import this command module as their custom API entrypoint.
- */
+import { isHttpUrl } from "@openclaw/net-policy/url-protocol";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SecretInput } from "../config/types.secrets.js";
 import { loadManifestMetadataSnapshot } from "../plugins/manifest-contract-eligibility.js";
@@ -83,8 +78,7 @@ type VerificationResult = {
 };
 
 function isJsonVerificationResponse(res: Response): boolean {
-  const contentType =
-    typeof res.headers?.get === "function" ? (res.headers.get("content-type") ?? "") : "";
+  const contentType = res.headers.get("content-type") ?? "";
   if (!contentType.trim()) {
     return true;
   }
@@ -94,11 +88,9 @@ function isJsonVerificationResponse(res: Response): boolean {
   );
 }
 
-async function requestVerification(params: {
-  endpoint: string;
-  headers: Record<string, string>;
-  body: Record<string, unknown>;
-}): Promise<VerificationResult> {
+async function requestVerification(
+  params: ReturnType<typeof buildOpenAiVerificationProbeRequest>,
+): Promise<VerificationResult> {
   let res: Response | undefined;
   try {
     res = await fetchWithTimeout(
@@ -130,22 +122,6 @@ async function requestVerification(params: {
   }
 }
 
-async function verifyCustomApiCompatibility(params: {
-  baseUrl: string;
-  apiKey: string;
-  modelId: string;
-  compatibility: CustomApiCompatibility;
-}): Promise<VerificationResult> {
-  return await requestVerification(
-    params.compatibility === "anthropic"
-      ? buildAnthropicVerificationProbeRequest(params)
-      : buildOpenAiVerificationProbeRequest({
-          ...params,
-          responsesApi: params.compatibility === "openai-responses",
-        }),
-  );
-}
-
 async function promptBaseUrlAndKey(params: {
   prompter: WizardPrompter;
   config: OpenClawConfig;
@@ -157,7 +133,7 @@ async function promptBaseUrlAndKey(params: {
     initialValue: params.initialBaseUrl,
     placeholder: "https://api.example.com/v1",
     validate: (val) => {
-      return URL.canParse(val) ? undefined : t("wizard.customProvider.validUrl");
+      return isHttpUrl(val) ? undefined : t("wizard.customProvider.validUrl");
     },
   });
   const baseUrl = baseUrlInput.trim();
@@ -185,19 +161,6 @@ async function promptBaseUrlAndKey(params: {
   };
 }
 
-type CustomApiRetryChoice = "baseUrl" | "model" | "both";
-
-async function promptCustomApiRetryChoice(prompter: WizardPrompter): Promise<CustomApiRetryChoice> {
-  return await prompter.select({
-    message: t("wizard.customProvider.retryChoice"),
-    options: [
-      { value: "baseUrl", label: t("wizard.customProvider.changeBaseUrl") },
-      { value: "model", label: t("wizard.customProvider.changeModel") },
-      { value: "both", label: t("wizard.customProvider.changeBaseUrlAndModel") },
-    ],
-  });
-}
-
 async function promptCustomApiModelId(prompter: WizardPrompter): Promise<string> {
   return (
     await prompter.text({
@@ -206,31 +169,6 @@ async function promptCustomApiModelId(prompter: WizardPrompter): Promise<string>
       validate: (val) => (val.trim() ? undefined : t("wizard.customProvider.modelIdRequired")),
     })
   ).trim();
-}
-
-async function applyCustomApiRetryChoice(params: {
-  prompter: WizardPrompter;
-  config: OpenClawConfig;
-  secretInputMode?: SecretInputMode;
-  retryChoice: CustomApiRetryChoice;
-  current: { baseUrl: string; apiKey?: SecretInput; resolvedApiKey: string; modelId: string };
-}): Promise<{ baseUrl: string; apiKey?: SecretInput; resolvedApiKey: string; modelId: string }> {
-  let { baseUrl, apiKey, resolvedApiKey, modelId } = params.current;
-  if (params.retryChoice === "baseUrl" || params.retryChoice === "both") {
-    const retryInput = await promptBaseUrlAndKey({
-      prompter: params.prompter,
-      config: params.config,
-      secretInputMode: params.secretInputMode,
-      initialBaseUrl: baseUrl,
-    });
-    baseUrl = retryInput.baseUrl;
-    apiKey = retryInput.apiKey;
-    resolvedApiKey = retryInput.resolvedApiKey;
-  }
-  if (params.retryChoice === "model" || params.retryChoice === "both") {
-    modelId = await promptCustomApiModelId(params.prompter);
-  }
-  return { baseUrl, apiKey, resolvedApiKey, modelId };
 }
 
 /** Prompts for a custom API provider and prepares its endpoint config without writing it. */
@@ -251,14 +189,11 @@ export async function promptCustomApiConfig(params: {
     env: process.env,
   }).plugins;
 
-  const baseInput = await promptBaseUrlAndKey({
+  let { baseUrl, apiKey, resolvedApiKey } = await promptBaseUrlAndKey({
     prompter,
     config,
     secretInputMode: params.secretInputMode,
   });
-  let baseUrl = baseInput.baseUrl;
-  let apiKey = baseInput.apiKey;
-  let resolvedApiKey = baseInput.resolvedApiKey;
 
   const compatibilityChoice = await prompter.select({
     message: t("wizard.customProvider.compatibility"),
@@ -275,6 +210,19 @@ export async function promptCustomApiConfig(params: {
 
   let compatibility: CustomApiCompatibility | null =
     compatibilityChoice === "unknown" ? null : compatibilityChoice;
+  const verifyCompatibility = async (
+    candidate: CustomApiCompatibility,
+  ): Promise<VerificationResult> => {
+    const probeParams = { baseUrl, apiKey: resolvedApiKey, modelId, compatibility: candidate };
+    return await requestVerification(
+      candidate === "anthropic"
+        ? buildAnthropicVerificationProbeRequest(probeParams)
+        : buildOpenAiVerificationProbeRequest({
+            ...probeParams,
+            responsesApi: candidate === "openai-responses",
+          }),
+    );
+  };
 
   while (params.verification !== "deferred") {
     if (!compatibility) {
@@ -287,12 +235,7 @@ export async function promptCustomApiConfig(params: {
         anthropic: "wizard.customProvider.detectedAnthropic",
       };
       for (const candidate of ["openai", "openai-responses", "anthropic"] as const) {
-        const result = await verifyCustomApiCompatibility({
-          baseUrl,
-          apiKey: resolvedApiKey,
-          modelId,
-          compatibility: candidate,
-        });
+        const result = await verifyCompatibility(candidate);
         if (result.ok) {
           probeSpinner.stop(t(detectionMessages[candidate]));
           compatibility = candidate;
@@ -311,12 +254,7 @@ export async function promptCustomApiConfig(params: {
       // Explicit compatibility choices still get a live probe so setup does not
       // persist endpoints or models that fail the selected protocol.
       const verifySpinner = prompter.progress(t("wizard.customProvider.verifying"));
-      const result = await verifyCustomApiCompatibility({
-        baseUrl,
-        apiKey: resolvedApiKey,
-        modelId,
-        compatibility,
-      });
+      const result = await verifyCompatibility(compatibility);
       if (result.ok) {
         verifySpinner.stop(t("wizard.customProvider.verificationSuccessful"));
         break;
@@ -333,14 +271,25 @@ export async function promptCustomApiConfig(params: {
         );
       }
     }
-    const retryChoice = await promptCustomApiRetryChoice(prompter);
-    ({ baseUrl, apiKey, resolvedApiKey, modelId } = await applyCustomApiRetryChoice({
-      prompter,
-      config,
-      secretInputMode: params.secretInputMode,
-      retryChoice,
-      current: { baseUrl, apiKey, resolvedApiKey, modelId },
-    }));
+    const retryChoice = await prompter.select<"baseUrl" | "model" | "both">({
+      message: t("wizard.customProvider.retryChoice"),
+      options: [
+        { value: "baseUrl", label: t("wizard.customProvider.changeBaseUrl") },
+        { value: "model", label: t("wizard.customProvider.changeModel") },
+        { value: "both", label: t("wizard.customProvider.changeBaseUrlAndModel") },
+      ],
+    });
+    if (retryChoice === "baseUrl" || retryChoice === "both") {
+      ({ baseUrl, apiKey, resolvedApiKey } = await promptBaseUrlAndKey({
+        prompter,
+        config,
+        secretInputMode: params.secretInputMode,
+        initialBaseUrl: baseUrl,
+      }));
+    }
+    if (retryChoice === "model" || retryChoice === "both") {
+      modelId = await promptCustomApiModelId(prompter);
+    }
     if (compatibilityChoice === "unknown") {
       compatibility = null;
     }

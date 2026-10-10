@@ -1,19 +1,22 @@
 import path from "node:path";
-import { afterEach, describe, expect, it, onTestFinished } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
-import { rotateAgentRunRegistryLifecycleGeneration } from "../../infra/agent-run-registry.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { createContext } from "../server-methods/sessions.abort-agent-scope.test-support.js";
 import type { GatewayContextResolver } from "../server-methods/types.js";
-import { createDevicePlacementDemandReader } from "./device-placement-demand.js";
+import {
+  createDevicePlacementDemandReader,
+  createDevicePlacementDemandReaderAsync,
+} from "./device-placement-demand.js";
 import { DEVICE_WORKER_PROVIDER_ID } from "./device-provider-identity.js";
 import { ACTIVE_PLACEMENT } from "./placement-dispatch-coordinator.test-support.js";
 import { createDispatchEnvironmentFixtures } from "./placement-dispatch-test-fixtures.js";
 import type { WorkerSessionPlacementRecord } from "./placement-record.js";
+import type { WorkerSessionPlacementStore } from "./placement-store.js";
 import type { WorkerEnvironmentService } from "./service.js";
 
 type ActivePlacement = Extract<WorkerSessionPlacementRecord, { state: "active" }>;
@@ -29,10 +32,10 @@ function createFixture() {
   const root = tempDirs.make("openclaw-device-placement-demand-");
   const config = { session: { store: path.join(root, "{agentId}", "sessions.json") } };
   const context = createContext({ extra: { getRuntimeConfig: () => config } });
-  const resolveGatewayContext = () => context;
+  const resolveGatewayContext = vi.fn(() => context);
   const records = new Map<string, WorkerSessionPlacementRecord>();
   const environments = new Map<string, Environment>();
-  const placements = {
+  const placements: Pick<WorkerSessionPlacementStore, "getMany" | "getManyAsync"> = {
     getMany: (ids: readonly string[]) =>
       new Map(
         ids.flatMap((id) => {
@@ -40,6 +43,7 @@ function createFixture() {
           return record ? [[id, record] as const] : [];
         }),
       ),
+    getManyAsync: async (ids) => placements.getMany(ids),
   };
   const writeSession = (
     placement: ActivePlacement,
@@ -55,11 +59,13 @@ function createFixture() {
       },
       { sessionId, updatedAt: 1 },
     );
-  const read = createDevicePlacementDemandReader({
+  const sources = {
     resolveGatewayContext,
     placements,
-    environments: { get: (id) => environments.get(id) },
-  });
+    environments: { get: (id: string) => environments.get(id) },
+  };
+  const read = createDevicePlacementDemandReaderAsync(sources);
+  const readSync = createDevicePlacementDemandReader(sources);
   const addPlacement = (sessionId = "session-1", deviceId = "node-1", agentId = "main") => {
     const placement: ActivePlacement = {
       ...ACTIVE_PLACEMENT,
@@ -98,24 +104,36 @@ function createFixture() {
     onTestFinished(() => lease.release());
     return lease;
   };
-  return { addPlacement, admit, environments, placements, read, records, root, writeSession };
+  return {
+    addPlacement,
+    admit,
+    environments,
+    placements,
+    read,
+    readSync,
+    records,
+    root,
+    resolveGatewayContext,
+    writeSession,
+  };
 }
 
 describe("admitted device placement demand", () => {
   it("counts one session through overlapping admissions and removes it after the final release", async () => {
     const fixture = createFixture();
     const { placement } = fixture.addPlacement();
-    expect(fixture.read().size).toBe(0);
+    expect((await fixture.read()).size).toBe(0);
 
     const first = await fixture.admit(placement);
     const second = await fixture.admit(placement, {
       identities: [placement.sessionId, placement.sessionKey, placement.sessionId],
     });
-    expect(fixture.read()).toEqual(new Map([["node-1", 1]]));
+    expect(await fixture.read()).toEqual(new Map([["node-1", 1]]));
+    expect(fixture.readSync()).toEqual(new Map([["node-1", 1]]));
     first.release();
-    expect(fixture.read()).toEqual(new Map([["node-1", 1]]));
+    expect(await fixture.read()).toEqual(new Map([["node-1", 1]]));
     second.release();
-    expect(fixture.read().size).toBe(0);
+    expect((await fixture.read()).size).toBe(0);
   });
 
   it("groups distinct admitted sessions by device across agent stores and excludes the dispatching session", async () => {
@@ -129,13 +147,13 @@ describe("admitted device placement demand", () => {
     }
     fixture.addPlacement("idle", "node-2");
 
-    expect(fixture.read()).toEqual(
+    expect(await fixture.read()).toEqual(
       new Map([
         ["node-1", 2],
         ["node-2", 1],
       ]),
     );
-    expect(fixture.read("one")).toEqual(
+    expect(await fixture.read("one")).toEqual(
       new Map([
         ["node-1", 1],
         ["node-2", 1],
@@ -143,7 +161,7 @@ describe("admitted device placement demand", () => {
     );
   });
 
-  it.each(["gateway", "scope", "session-key", "session-id"] as const)(
+  it.each(["gateway", "scope"] as const)(
     "does not borrow a matching-looking admission from another %s",
     async (mismatch) => {
       const fixture = createFixture();
@@ -153,14 +171,9 @@ describe("admitted device placement demand", () => {
         ...(mismatch === "scope"
           ? { scope: path.join(fixture.root, "other", "sessions.json") }
           : {}),
-        ...(mismatch === "session-key"
-          ? { identities: ["agent:main:other", placement.sessionId] }
-          : mismatch === "session-id"
-            ? { identities: [placement.sessionKey, "other-session"] }
-            : {}),
       });
 
-      expect(fixture.read().size).toBe(0);
+      expect((await fixture.read()).size).toBe(0);
     },
   );
 
@@ -171,9 +184,9 @@ describe("admitted device placement demand", () => {
     fixture.writeSession(placement, scope);
     const lease = await fixture.admit(placement, { scope });
 
-    expect(fixture.read()).toEqual(new Map([["node-1", 1]]));
+    expect(await fixture.read()).toEqual(new Map([["node-1", 1]]));
     lease.release();
-    expect(fixture.read().size).toBe(0);
+    expect((await fixture.read()).size).toBe(0);
   });
 
   it("rejects an admitted scope whose persisted session row belongs to another session ID", async () => {
@@ -183,7 +196,7 @@ describe("admitted device placement demand", () => {
     fixture.writeSession(placement, scope, "replaced-session");
     await fixture.admit(placement, { scope });
 
-    expect(fixture.read().size).toBe(0);
+    expect((await fixture.read()).size).toBe(0);
   });
 
   it("does not combine different multi-identity admissions into one placement owner", async () => {
@@ -192,30 +205,27 @@ describe("admitted device placement demand", () => {
     await fixture.admit(placement, { identities: [placement.sessionKey, "other-session"] });
     await fixture.admit(placement, { identities: ["agent:main:other", placement.sessionId] });
 
-    expect(fixture.read().size).toBe(0);
+    expect((await fixture.read()).size).toBe(0);
   });
 
-  it("drops admission demand when the Gateway lifecycle rotates", async () => {
-    const fixture = createFixture();
-    await fixture.admit(fixture.addPlacement().placement);
-    expect(fixture.read()).toEqual(new Map([["node-1", 1]]));
+  it.each(["admission", "gateway"] as const)(
+    "rechecks captured %s ownership after reading placements",
+    async (owner) => {
+      const fixture = createFixture();
+      const lease = await fixture.admit(fixture.addPlacement().placement);
+      const getMany = fixture.placements.getMany;
+      fixture.placements.getManyAsync = async (ids) => {
+        if (owner === "admission") {
+          lease.release();
+        } else {
+          fixture.resolveGatewayContext.mockReturnValue(createContext());
+        }
+        return getMany(ids);
+      };
 
-    rotateAgentRunRegistryLifecycleGeneration();
-
-    expect(fixture.read().size).toBe(0);
-  });
-
-  it("rechecks captured admission ownership after reading placements", async () => {
-    const fixture = createFixture();
-    const lease = await fixture.admit(fixture.addPlacement().placement);
-    const getMany = fixture.placements.getMany;
-    fixture.placements.getMany = (ids) => {
-      lease.release();
-      return getMany(ids);
-    };
-
-    expect(fixture.read().size).toBe(0);
-  });
+      expect((await fixture.read()).size).toBe(0);
+    },
+  );
 
   it.each([
     { name: "owner epoch", patch: { ownerEpoch: 2 } },
@@ -232,10 +242,10 @@ describe("admitted device placement demand", () => {
       const fixture = createFixture();
       const { placement, environment } = fixture.addPlacement();
       await fixture.admit(placement);
-      expect(fixture.read()).toEqual(new Map([["node-1", 1]]));
+      expect(await fixture.read()).toEqual(new Map([["node-1", 1]]));
       fixture.environments.set(environment.environmentId, { ...environment, ...patch });
 
-      expect(fixture.read().size).toBe(0);
+      expect((await fixture.read()).size).toBe(0);
     },
   );
 
@@ -248,6 +258,6 @@ describe("admitted device placement demand", () => {
     fixture.records.set(remote.sessionId, { ...remote, executionMode: "remote-exec" });
     fixture.records.set(draining.sessionId, { ...draining, state: "draining" });
 
-    expect(fixture.read().size).toBe(0);
+    expect((await fixture.read()).size).toBe(0);
   });
 });

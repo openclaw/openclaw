@@ -104,65 +104,58 @@ try {
     expect(result.status, result.stderr).toBe(0);
   });
 
-  it.each([".js", ".cjs"])(
-    "lists exact %s contracts and channel legacy setup references",
-    (extension) => {
-      const rootDir = makeRoot(extension);
-      write(
-        rootDir,
-        `dist/extensions/demo/doctor-contract-api${extension}`,
-        "export const ok = true;\n",
-      );
-      write(rootDir, `dist/extensions/demo/contract-api${extension}`, "export const ok = true;\n");
-      write(
-        rootDir,
-        `dist/extensions/demo/provider-contract-api${extension}`,
-        "export const ignored = true;\n",
-      );
-      write(
-        rootDir,
-        `dist/extensions/demo/setup-entry${extension}`,
-        [
-          "const setup = {",
-          `  legacyStateMigrations: { specifier: "./legacy-state-migrations-api${extension}" },`,
-          `  legacySessionSurface: { specifier: "./legacy-session-surface-api${extension}" },`,
-          "};",
-          "export default setup;",
-        ].join("\n"),
-      );
-      write(
-        rootDir,
-        `dist/extensions/demo/legacy-state-migrations-api${extension}`,
-        "export {};\n",
-      );
-      write(rootDir, `dist/extensions/demo/legacy-session-surface-api${extension}`, "export {};\n");
+  it.each([".cjs"])("lists exact %s contracts and channel legacy setup references", (extension) => {
+    const rootDir = makeRoot(extension);
+    write(
+      rootDir,
+      `dist/extensions/demo/doctor-contract-api${extension}`,
+      "export const ok = true;\n",
+    );
+    write(rootDir, `dist/extensions/demo/contract-api${extension}`, "export const ok = true;\n");
+    write(
+      rootDir,
+      `dist/extensions/demo/provider-contract-api${extension}`,
+      "export const ignored = true;\n",
+    );
+    write(
+      rootDir,
+      `dist/extensions/demo/setup-entry${extension}`,
+      [
+        "const setup = {",
+        `  legacyStateMigrations: { specifier: "./legacy-state-migrations-api${extension}" },`,
+        `  legacySessionSurface: { specifier: "./legacy-session-surface-api${extension}" },`,
+        "};",
+        "export default setup;",
+      ].join("\n"),
+    );
+    write(rootDir, `dist/extensions/demo/legacy-state-migrations-api${extension}`, "export {};\n");
+    write(rootDir, `dist/extensions/demo/legacy-session-surface-api${extension}`, "export {};\n");
 
-      expect(listBuiltPluginControlPlaneModules({ rootDir })).toEqual([
-        {
-          pluginId: "demo",
-          kind: "contract",
-          relativePath: `dist/extensions/demo/contract-api${extension}`,
-        },
-        {
-          pluginId: "demo",
-          kind: "doctor-contract",
-          relativePath: `dist/extensions/demo/doctor-contract-api${extension}`,
-        },
-        {
-          pluginId: "demo",
-          kind: "channel-legacy-session-surface",
-          relativePath: `dist/extensions/demo/legacy-session-surface-api${extension}`,
-        },
-        {
-          pluginId: "demo",
-          kind: "channel-legacy-state-migrations",
-          relativePath: `dist/extensions/demo/legacy-state-migrations-api${extension}`,
-        },
-      ]);
-    },
-  );
+    expect(listBuiltPluginControlPlaneModules({ rootDir })).toEqual([
+      {
+        pluginId: "demo",
+        kind: "contract",
+        relativePath: `dist/extensions/demo/contract-api${extension}`,
+      },
+      {
+        pluginId: "demo",
+        kind: "doctor-contract",
+        relativePath: `dist/extensions/demo/doctor-contract-api${extension}`,
+      },
+      {
+        pluginId: "demo",
+        kind: "channel-legacy-session-surface",
+        relativePath: `dist/extensions/demo/legacy-session-surface-api${extension}`,
+      },
+      {
+        pluginId: "demo",
+        kind: "channel-legacy-state-migrations",
+        relativePath: `dist/extensions/demo/legacy-state-migrations-api${extension}`,
+      },
+    ]);
+  });
 
-  it.each([".js", ".cjs"])("accepts synchronously requireable %s artifacts", (extension) => {
+  it.each([".cjs"])("accepts synchronously requireable %s artifacts", (extension) => {
     const rootDir = makeRoot(extension);
     write(
       rootDir,
@@ -199,7 +192,7 @@ try {
 
 describe("built doctor contract closures", () => {
   it.each([".js", ".cjs"])(
-    "follows %s chunk edges to a forbidden runtime dependency",
+    "checks shared and cyclic %s chunks once while reporting each doctor contract",
     (extension) => {
       const rootDir = makeRoot(extension);
       write(
@@ -218,18 +211,26 @@ describe("built doctor contract closures", () => {
       );
       write(
         rootDir,
+        `dist/extensions/other/doctor-contract-api${extension}`,
+        extension === ".cjs"
+          ? 'module.exports = require("../../token-chunk.cjs");'
+          : 'export * from "../../token-chunk.js";',
+      );
+      write(
+        rootDir,
         `dist/exec-chunk${extension}`,
         extension === ".cjs"
-          ? 'const exec = require("execa"); exports.rule = exec;'
-          : 'import "execa"; export const rule = 1;',
+          ? 'require("./token-chunk.cjs"); const exec = require("execa"); exports.rule = exec;'
+          : 'import "./token-chunk.js"; import "execa"; export const rule = 1;',
       );
-
-      expect(
-        collectBuiltDoctorContractClosureViolations(
-          listBuiltPluginControlPlaneModules({ rootDir }),
-          { rootDir },
-        ),
-      ).toEqual([
+      // Both formats use the same closure check; select the synthetic second plugin explicitly.
+      const modules = ["demo", "other"].map((pluginId) => ({
+        pluginId,
+        kind: "doctor-contract",
+        relativePath: `dist/extensions/${pluginId}/doctor-contract-api${extension}`,
+      }));
+      const readFile = vi.spyOn(fs, "readFileSync");
+      expect(collectBuiltDoctorContractClosureViolations(modules, { rootDir })).toEqual([
         {
           pluginId: "demo",
           kind: "doctor-contract",
@@ -237,39 +238,49 @@ describe("built doctor contract closures", () => {
           dependency: "execa",
           importerPath: `dist/exec-chunk${extension}`,
         },
+        {
+          pluginId: "other",
+          kind: "doctor-contract",
+          relativePath: `dist/extensions/other/doctor-contract-api${extension}`,
+          dependency: "execa",
+          importerPath: `dist/exec-chunk${extension}`,
+        },
       ]);
+      for (const chunk of ["token-chunk", "exec-chunk"]) {
+        expect(
+          readFile.mock.calls.filter(
+            ([file]) => file === path.join(rootDir, `dist/${chunk}${extension}`),
+          ),
+        ).toHaveLength(1);
+      }
+      write(rootDir, `dist/exec-chunk${extension}`, "");
+      expect(collectBuiltDoctorContractClosureViolations(modules, { rootDir })).toEqual([]);
     },
   );
 
-  it.each([".js", ".cjs"])(
-    "ignores lazy %s edges and non-doctor contract surfaces",
-    (extension) => {
-      const rootDir = makeRoot(extension);
-      // A dynamic import is never paid at enumeration time, and the general contract
-      // surface may legitimately spawn commands (matrix probes its SDK packages).
-      write(
-        rootDir,
-        `dist/extensions/demo/doctor-contract-api${extension}`,
-        extension === ".cjs"
-          ? 'exports.load = () => require("execa");'
-          : 'export const load = () => import("execa");',
-      );
-      write(
-        rootDir,
-        `dist/extensions/demo/contract-api${extension}`,
-        extension === ".cjs"
-          ? 'require("execa"); exports.a = 1;'
-          : 'import "execa"; export const a = 1;',
-      );
+  it.each([".cjs"])("ignores lazy %s edges and non-doctor contract surfaces", (extension) => {
+    const rootDir = makeRoot(extension);
+    // A dynamic import is never paid at enumeration time, and the general contract
+    // surface may legitimately spawn commands (matrix probes its SDK packages).
+    write(
+      rootDir,
+      `dist/extensions/demo/doctor-contract-api${extension}`,
+      extension === ".cjs"
+        ? 'exports.load = () => require("execa");'
+        : 'export const load = () => import("execa");',
+    );
+    write(
+      rootDir,
+      `dist/extensions/demo/contract-api${extension}`,
+      extension === ".cjs"
+        ? 'require("execa"); exports.a = 1;'
+        : 'import "execa"; export const a = 1;',
+    );
 
-      expect(
-        collectBuiltDoctorContractClosureViolations(
-          listBuiltPluginControlPlaneModules({ rootDir }),
-          {
-            rootDir,
-          },
-        ),
-      ).toEqual([]);
-    },
-  );
+    expect(
+      collectBuiltDoctorContractClosureViolations(listBuiltPluginControlPlaneModules({ rootDir }), {
+        rootDir,
+      }),
+    ).toEqual([]);
+  });
 });

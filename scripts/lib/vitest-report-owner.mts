@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { JsonTestResults } from "vitest/node";
+import type { CliOptions, JsonTestResults } from "vitest/node";
 import { vitestOptionConsumesNextArg } from "./vitest-cli-mode.mts";
 import { parseVitestExecutionArgs } from "./vitest-cli.mts";
 import type { VitestReportCapture } from "./vitest-report-capture.mts";
@@ -18,16 +18,33 @@ type Attempt = { json: string; blob: string; outcome?: VitestReportOutcome; erro
 const captureReporter = fileURLToPath(new URL("./vitest-report-capture.mts", import.meta.url));
 const reporterConfigModule = new URL("../../test/vitest/vitest.reporters.ts", import.meta.url).href;
 const consoleReporters = new Set([
-  "json",
   "default",
   "verbose",
   "dot",
   "agent",
   "minimal",
   "tree",
-  "github-actions",
   "hanging-process",
 ]);
+
+/** CLI overrides establish output ownership without evaluating each config twice. */
+export function canParallelizeVitestOutput(
+  options: Pick<CliOptions, "coverage" | "outputFile" | "reporter" | "reporters">,
+  reportOwner: boolean,
+) {
+  const reporters = [options.reporter ?? [], options.reporters ?? []].flat();
+  // JSON needs the existing artifact owner; github-actions can append a shared
+  // config-owned job summary even when its name was explicitly selected by CLI.
+  return (
+    reporters.length > 0 &&
+    reporters.every(
+      (reporter) =>
+        typeof reporter === "string" &&
+        (consoleReporters.has(reporter) || (reportOwner && reporter === "json")),
+    ) &&
+    (reportOwner || (options.coverage?.enabled === false && !options.outputFile))
+  );
+}
 
 function withoutOutputArgs(args: string[]) {
   const result: string[] = [];
@@ -92,7 +109,11 @@ export async function createVitestReportOwner(invocations: Invocation[], cwd: st
     "JSON destinations differ across invocations",
   );
   assert(
-    requests.every((entry) => entry!.reporters.every((name) => consoleReporters.has(name))),
+    requests.every((entry) =>
+      entry!.reporters.every(
+        (name) => consoleReporters.has(name) || name === "json" || name === "github-actions",
+      ),
+    ),
     "Multi-invocation JSON supports native JSON plus console reporters. Run other file/custom reporters separately with unique destinations.",
   );
   const { readJsonFile, validateVitestJsonReport } = await import("../test-report-utils.mts");

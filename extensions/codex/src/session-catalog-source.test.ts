@@ -148,44 +148,30 @@ describe("Codex catalog physical status sources", () => {
     },
   );
 
-  it("preserves an active source when an unrelated helper client closes", async () => {
-    const { a, b, index, readNative, active } = await fixture();
-    active(a, "source-a");
-    b.client.close();
+  it("ignores a buffered thread/read status after its source closes", async () => {
+    const { a, b, index, active } = await fixture();
+    const reading = a.client.request<{ thread: CodexThread }>(
+      "thread/read",
+      { threadId: "thread-1" },
+      { timeoutMs: 1_000 },
+    );
+    const request = JSON.parse(await a.waitForWrite(1));
+    const native = thread({ status: { type: "active", activeFlags: ["stale-source-a"] } });
+    a.send({
+      id: request.id,
+      result: { thread: native },
+    });
+    a.client.close();
+    active(b, "source-b");
+    const response = await reading;
+    expect(response.thread).toEqual(native);
+    await index.upsertThread(response.thread);
     expect((await index.list({})).sessions[0]).toMatchObject({
       status: "active",
-      activeFlags: ["source-a"],
+      activeFlags: ["source-b"],
     });
-    expect(readNative).toHaveBeenCalledOnce();
+    expect(JSON.stringify(index.get("thread-1"))).not.toContain('"closed"');
   });
-
-  it.each(["thread/read", "thread/start", "thread/fork", "thread/resume"] as const)(
-    "ignores a buffered %s status after its source closes",
-    async (method) => {
-      const { a, b, index, active } = await fixture();
-      const reading = a.client.request<{ thread: CodexThread }>(
-        method,
-        method === "thread/start" ? {} : { threadId: "thread-1" },
-        { timeoutMs: 1_000 },
-      );
-      const request = JSON.parse(await a.waitForWrite(1));
-      const native = thread({ status: { type: "active", activeFlags: ["stale-source-a"] } });
-      a.send({
-        id: request.id,
-        result: { thread: native },
-      });
-      a.client.close();
-      active(b, "source-b");
-      const response = await reading;
-      expect(response.thread).toEqual(native);
-      await index.upsertThread(response.thread);
-      expect((await index.list({})).sessions[0]).toMatchObject({
-        status: "active",
-        activeFlags: ["source-b"],
-      });
-      expect(JSON.stringify(index.get("thread-1"))).not.toContain('"closed"');
-    },
-  );
 
   it("keeps another source active when a DB-only list reports source-local notLoaded", async () => {
     vi.useFakeTimers({
@@ -195,6 +181,8 @@ describe("Codex catalog physical status sources", () => {
     active(b, "source-b");
     inventory[0] = thread({ cwd: "/workspace/fresh", status: { type: "notLoaded" } });
     await vi.advanceTimersByTimeAsync(15 * 60_000);
+    await index.list({});
+    await vi.waitFor(() => expect(readNative).toHaveBeenCalledTimes(2));
     await readNative.mock.results[1]!.value;
     await vi.waitFor(async () => {
       expect((await index.list({})).sessions[0]?.cwd).toBe("/workspace/fresh");

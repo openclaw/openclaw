@@ -1,4 +1,3 @@
-// Normalizes raw agent output into sendable reply text and metadata.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeUserFacingText } from "../../agents/embedded-agent-helpers/sanitize-user-facing-text.js";
 import { renderUserFacingText } from "../../agents/embedded-agent-helpers/user-facing-text.js";
@@ -14,13 +13,10 @@ import {
   HEARTBEAT_TOKEN,
   isInternalFormattingArtifact,
   isSilentReplyPayloadText,
-  isSilentReplyText,
   SILENT_REPLY_TOKEN,
-  startsWithSilentToken,
-  stripLeadingSilentToken,
-  stripSilentToken,
 } from "../tokens.js";
 import type { ReplyPayload } from "../types.js";
+import { stripMixedSilentReplyTokens } from "./mixed-silent-reply-tokens.js";
 import type {
   NormalizeReplyOutcome as PayloadNormalizationOutcome,
   NormalizeReplySkipReason,
@@ -99,16 +95,11 @@ export function normalizeReplyPayloadOutcome(
       }
       text = "";
     }
-    // Strip NO_REPLY from mixed-content messages (e.g. "😄 NO_REPLY") so the
-    // token never leaks to end users.  If stripping leaves nothing, treat it as
-    // silent just like the exact-match path above.  (#30916, #30955)
-    if (text && !isSilentReplyText(text, silentToken)) {
-      const hasLeadingSilentToken = startsWithSilentToken(text, silentToken);
-      if (hasLeadingSilentToken) {
-        text = stripLeadingSilentToken(text, silentToken);
-      }
-      if (hasLeadingSilentToken || text.toLowerCase().includes(silentToken.toLowerCase())) {
-        text = stripSilentToken(text, silentToken);
+    // Mixed-content silent tokens must not leak to channel delivery.
+    if (text) {
+      const stripped = stripMixedSilentReplyTokens(text, silentToken);
+      if (stripped !== null) {
+        text = stripped;
         if (!hasContent(text)) {
           return suppress("silent");
         }
@@ -167,7 +158,6 @@ export function normalizeReplyPayloadOutcome(
     text = enrichedPayload.text;
   }
 
-  // Resolve template variables in responsePrefix if context is provided
   const effectivePrefix = opts.responsePrefixContext
     ? resolveResponsePrefixTemplate(opts.responsePrefix, opts.responsePrefixContext)
     : opts.responsePrefix;

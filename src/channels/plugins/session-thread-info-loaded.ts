@@ -1,8 +1,3 @@
-/**
- * Loaded-plugin session thread info resolver.
- *
- * Uses only already loaded channel hooks to resolve thread suffix metadata on hot paths.
- */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   parseRawSessionConversationRef,
@@ -18,14 +13,10 @@ function resolveLoadedSessionConversationThreadInfo(
   if (!raw) {
     return null;
   }
-  const rawId = raw.rawId.trim();
-  if (!rawId) {
-    return null;
-  }
   const messaging = getLoadedChannelPluginForRead(raw.channel)?.messaging;
   const resolved = messaging?.resolveSessionConversation?.({
     kind: raw.kind,
-    rawId,
+    rawId: raw.rawId,
   });
   if (!resolved?.id?.trim()) {
     return null;

@@ -1,4 +1,3 @@
-/** LaunchAgent stop semantics and in-service maintenance parking. */
 import { isDeepStrictEqual } from "node:util";
 import { readLockPayloadSync, resolveGatewayLockPaths } from "../infra/gateway-lock.js";
 import { readGatewayOwnerLease } from "../infra/gateway-owner-lease.js";
@@ -171,7 +170,7 @@ export async function stopLaunchAgent({
     assertCurrent?.();
     assertGatewayServiceUpdateCurrent();
   };
-  const insideService = await isCurrentProcessInsideLaunchdService(label, process.env);
+  const insideService = await isCurrentProcessInsideLaunchdService(label);
   const assertStopCurrent = async () => {
     assertNativeCurrent();
     // Classify from the live lease too: losing an inherited marker cannot turn a
@@ -196,7 +195,7 @@ export async function stopLaunchAgent({
         updateOwned &&
         updateHandoff &&
         (await (
-          await import("../infra/update-managed-service-handoff.js")
+          await import("../infra/update-managed-service-handoff-current.js")
         ).isCurrentManagedServiceUpdateHandoffProcess({ ...updateHandoff, env: intentEnv }));
       if (!authorized) {
         throw launchAgentStopError(
@@ -328,7 +327,7 @@ export async function parkCurrentLaunchAgentForMaintenance(
   const serviceEnv = params.env ?? (process.env as GatewayServiceEnv);
   const domain = resolveLaunchAgentGuiDomain();
   const label = resolveLaunchAgentLabel(serviceEnv);
-  if (!(await isCurrentProcessInsideLaunchdService(label, process.env))) {
+  if (!(await isCurrentProcessInsideLaunchdService(label))) {
     return false;
   }
   const serviceTarget = `${domain}/${label}`;

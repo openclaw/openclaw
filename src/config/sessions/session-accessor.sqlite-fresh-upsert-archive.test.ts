@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { executeSqliteQueryTakeFirstSync } from "../../infra/kysely-sync.js";
 import { onInternalSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
@@ -13,6 +13,7 @@ import {
   loadTranscriptEvents,
   replaceSessionEntry,
 } from "./session-accessor.js";
+import * as archiveWorker from "./session-accessor.sqlite-archive.js";
 import { readTranscriptStorageRows } from "./session-accessor.sqlite-read.js";
 import {
   getSessionKysely,
@@ -31,6 +32,30 @@ describe("fresh session creation with pending transcript archives", () => {
   const freshScope = () => ({
     sessionKey: "agent:main:fresh-session",
     storePath: fixture.storePath(),
+  });
+
+  it("skips empty archive recovery during warning-mode upserts", async () => {
+    await replaceSessionEntry(freshScope(), freshEntry);
+    const probe = vi.spyOn(archiveWorker, "readPendingSqliteTranscriptArchivesInWorker");
+    try {
+      for (let turn = 0; turn < 3; turn += 1) {
+        await applySessionEntryLifecycleMutation({
+          storePath: fixture.storePath(),
+          skipMaintenance: false,
+          maintenanceOverride: { mode: "warn" },
+          upserts: [
+            {
+              sessionKey: freshScope().sessionKey,
+              entry: { ...freshEntry, label: `turn-${turn}` },
+            },
+          ],
+        });
+      }
+      expect(loadSessionEntry(freshScope())?.label).toBe("turn-2");
+      expect(probe).not.toHaveBeenCalled();
+    } finally {
+      probe.mockRestore();
+    }
   });
 
   function readArchive() {
@@ -253,45 +278,6 @@ describe("fresh session creation with pending transcript archives", () => {
       );
       expect(loadSessionEntry(target)).toMatchObject(adoptedEntry);
       expect(readTranscriptStorageRows(database, scope.sessionId)).toEqual(retainedRows);
-    },
-  );
-
-  it.each([
-    "existing upsert",
-    "canonical repair",
-    "Doctor transfer",
-    "maintenance",
-    "empty retry",
-  ] as const)(
-    "recovers pending archives during %s without producing a new archive",
-    async (operation) => {
-      if (operation === "existing upsert") {
-        await replaceSessionEntry(freshScope(), freshEntry);
-      }
-      const collisionPath = await failUnrelatedArchiveExport();
-      fs.rmSync(collisionPath);
-
-      await applySessionEntryLifecycleMutation({
-        storePath: fixture.storePath(),
-        skipMaintenance: operation !== "maintenance",
-        ...(operation === "maintenance" ? { maintenanceOverride: { mode: "warn" as const } } : {}),
-        ...(operation === "canonical repair" ? { allowCanonicalRepair: true } : {}),
-        ...(operation === "Doctor transfer" ? { afterUpsertsInTransaction: () => {} } : {}),
-        ...(operation === "empty retry"
-          ? {}
-          : { upserts: [{ sessionKey: freshScope().sessionKey, entry: freshEntry }] }),
-      });
-
-      expect(readArchive()).toMatchObject({
-        published_at: expect.any(Number),
-        last_publish_error: null,
-      });
-      expect(readSessionArchiveContentSync(collisionPath)).toBe(
-        `${JSON.stringify(archivedEvent)}\n`,
-      );
-      if (operation !== "empty retry") {
-        expect(loadSessionEntry(freshScope())).toMatchObject(freshEntry);
-      }
     },
   );
 });

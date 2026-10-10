@@ -3,16 +3,18 @@ import {
   isFutureDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
 } from "openclaw/plugin-sdk/number-runtime";
+import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import type { CoreConfig } from "../../types.js";
 import {
   resolveMatrixAccountAllowlistConfig,
   resolveMatrixAccountConfig,
 } from "../account-config.js";
+import { setBoundedMap } from "./bounded-cache.js";
 import {
   resolveMatrixMonitorLiveUserAllowlist,
   type MatrixResolvedAllowlistEntry,
 } from "./config.js";
-import type { PluginRuntime, RuntimeEnv } from "./runtime-api.js";
 
 const ALLOW_FROM_STORE_CACHE_TTL_MS = 30_000;
 const PAIRING_REPLY_COOLDOWN_MS = 5 * 60_000;
@@ -116,21 +118,15 @@ export function createMatrixHandlerState(config: {
 
   const shouldSendPairingReply = (senderId: string, created: boolean): boolean => {
     const now = Date.now();
-    if (created) {
-      pairingReplySentAtMsBySender.set(senderId, now);
-      return true;
-    }
     const lastSentAtMs = pairingReplySentAtMsBySender.get(senderId);
-    if (typeof lastSentAtMs === "number" && now - lastSentAtMs < PAIRING_REPLY_COOLDOWN_MS) {
+    if (
+      !created &&
+      typeof lastSentAtMs === "number" &&
+      now - lastSentAtMs < PAIRING_REPLY_COOLDOWN_MS
+    ) {
       return false;
     }
-    pairingReplySentAtMsBySender.set(senderId, now);
-    if (pairingReplySentAtMsBySender.size > MAX_TRACKED_PAIRING_REPLY_SENDERS) {
-      const oldestSender = pairingReplySentAtMsBySender.keys().next().value;
-      if (typeof oldestSender === "string") {
-        pairingReplySentAtMsBySender.delete(oldestSender);
-      }
-    }
+    setBoundedMap(pairingReplySentAtMsBySender, senderId, now, MAX_TRACKED_PAIRING_REPLY_SENDERS);
     return true;
   };
 

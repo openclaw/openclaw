@@ -6,11 +6,9 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { readSourceConfigBestEffort, resetConfigRuntimeState } from "../config/config.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { readAgentDeletionJournal } from "../state/agent-deletion-journal.js";
+import { closeOpenClawAgentDatabases } from "../state/openclaw-agent-db-lifecycle.js";
 import { listOpenClawRegisteredAgentDatabases } from "../state/openclaw-agent-db-registry.js";
-import {
-  closeOpenClawAgentDatabases,
-  openOpenClawAgentDatabase,
-} from "../state/openclaw-agent-db.js";
+import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -116,9 +114,6 @@ describe("Claw removal operation ownership", () => {
               if (directory === current.workspace && !raced) {
                 raced = true;
                 await fs.rm(trackedDirectory, { recursive: true });
-                return entries.toSorted((left, right) =>
-                  left.name.toString().localeCompare(right.name.toString()),
-                );
               }
               return entries;
             });
@@ -291,8 +286,8 @@ describe("Claw removal operation ownership", () => {
           code: "monitor_cleanup_failed",
           message: expect.stringMatching(
             test.reject
-              ? /original quiescence failure|agent deletion core:agent-deletion\/worker was lost/
-              : /no longer owns|agent deletion core:agent-deletion\/worker was lost/,
+              ? /original quiescence failure|(?:agent deletion|state lease) core:agent-deletion\/worker was lost/
+              : /no longer owns|(?:agent deletion|state lease) core:agent-deletion\/worker was lost/,
           ),
         },
       });
@@ -343,7 +338,7 @@ describe("Claw removal operation ownership", () => {
         error: {
           code: "monitor_cleanup_failed",
           message: expect.stringMatching(
-            /no longer owns|agent deletion core:agent-deletion\/worker was lost/,
+            /no longer owns|(?:agent deletion|state lease) core:agent-deletion\/worker was lost/,
           ),
         },
       });
@@ -410,7 +405,7 @@ describe("Claw removal operation ownership", () => {
           error: {
             code: "monitor_cleanup_failed",
             message: expect.stringMatching(
-              /no longer owns|agent deletion core:agent-deletion\/worker was lost/,
+              /no longer owns|(?:agent deletion|state lease) core:agent-deletion\/worker was lost/,
             ),
           },
         });

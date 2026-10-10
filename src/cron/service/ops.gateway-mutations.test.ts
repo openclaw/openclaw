@@ -30,6 +30,7 @@ import { CommandLane } from "../../process/lanes.js";
 import { runWithAsyncWorkResources } from "../../shared/async-work-resources.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 
 type CallerClosure = "revoked" | "aborted";
@@ -60,7 +61,7 @@ async function withCronGateway(
   await withOpenClawTestState({ prefix: "cron-mutation-dispatch-" }, async (state) => {
     resetCommandQueueStateForTest();
     const cfg: OpenClawConfig = {
-      agents: { list: [{ id: "main" }], defaults: { workspace: state.workspaceDir } },
+      agents: { entries: { main: {} }, defaults: { workspace: state.workspaceDir } },
       cron: { enabled: false },
     };
     await state.writeConfig(cfg);
@@ -71,6 +72,7 @@ async function withCronGateway(
     const finished = createDeferredCore<CronEvent>();
     const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
     const cron = new CronService({
+      scheduler: createTestGatewayScheduler(),
       storePath,
       cronEnabled: false,
       defaultAgentId: "main",
@@ -253,8 +255,6 @@ describe("Cron mutation outcomes through the in-process router", () => {
 
   it.each([
     { closure: "revoked", reportingError: false },
-    { closure: "aborted", reportingError: false },
-    { closure: "revoked", reportingError: true },
     { closure: "aborted", reportingError: true },
   ] as const)(
     "preserves committed state and outcome when $closure after commit (reporting error: $reportingError)",

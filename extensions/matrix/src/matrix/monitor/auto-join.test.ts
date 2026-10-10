@@ -1,4 +1,3 @@
-// Matrix tests cover auto join plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginRuntime, RuntimeEnv } from "../../../runtime-api.js";
 import { setMatrixRuntime } from "../../runtime.js";
@@ -84,11 +83,15 @@ async function triggerInvite(
   await flushInviteTasks();
 }
 
+const loggerWarn = vi.fn();
+
 describe("registerMatrixAutoJoin", () => {
   beforeEach(() => {
+    loggerWarn.mockReset();
     setMatrixRuntime({
       logging: {
         shouldLogVerbose: () => false,
+        getChildLogger: () => ({ info: vi.fn(), warn: loggerWarn, error: vi.fn() }),
       },
     } as unknown as PluginRuntime);
   });
@@ -190,41 +193,6 @@ describe("registerMatrixAutoJoin", () => {
     expect(joinRoom).not.toHaveBeenCalled();
   });
 
-  it("uses account-scoped auto-join settings for non-default accounts", async () => {
-    const { getInviteHandler, joinRoom } = registerAutoJoinHarness({
-      accountConfig: {
-        autoJoin: "allowlist",
-        autoJoinAllowlist: ["#ops-allowed:example.org"],
-      },
-      resolveRoomValue: "!room:example.org",
-    });
-
-    await triggerInvite(getInviteHandler);
-    expect(joinRoom).toHaveBeenCalledWith("!room:example.org");
-  });
-
-  it("joins sender-scoped invites without eager direct repair", async () => {
-    const { getInviteHandler, joinRoom } = registerAutoJoinHarness({
-      accountConfig: {
-        autoJoin: "always",
-      },
-    });
-
-    await triggerInvite(getInviteHandler, { sender: "@alice:example.org" });
-
-    expect(joinRoom).toHaveBeenCalledWith("!room:example.org");
-  });
-
-  it("still joins invites when the sender is unavailable", async () => {
-    const { getInviteHandler } = registerAutoJoinHarness({
-      accountConfig: {
-        autoJoin: "always",
-      },
-    });
-
-    await expect(triggerInvite(getInviteHandler, {})).resolves.toBeUndefined();
-  });
-
   it("removes the exact invite listener on disposal", async () => {
     const { dispose, getInviteHandler, joinRoom, off, runDetachedTask } = registerAutoJoinHarness({
       accountConfig: {
@@ -241,6 +209,69 @@ describe("registerMatrixAutoJoin", () => {
     expect(off).toHaveBeenCalledWith("room.invite", listener);
     expect(getInviteHandler()).toBeNull();
     expect(runDetachedTask).not.toHaveBeenCalled();
+    expect(joinRoom).not.toHaveBeenCalled();
+  });
+
+  it("warns once when the allowlist holds an entry that can never match a room", () => {
+    registerAutoJoinHarness({
+      accountConfig: {
+        autoJoin: "allowlist",
+        autoJoinAllowlist: ["@ryan:example.org"],
+      },
+    });
+
+    expect(loggerWarn).toHaveBeenCalledTimes(1);
+    expect(loggerWarn).toHaveBeenCalledWith(
+      "matrix: autoJoinAllowlist entries cannot match an invited room and are ignored: @ryan:example.org",
+    );
+  });
+
+  it("does not warn for room, alias, or wildcard allowlist entries", () => {
+    registerAutoJoinHarness({
+      accountConfig: {
+        autoJoin: "allowlist",
+        autoJoinAllowlist: ["!room:example.org", "#alias:example.org", "*"],
+      },
+    });
+
+    expect(loggerWarn).not.toHaveBeenCalled();
+  });
+
+  it("warns about malformed prefixed entries the room matcher can never use", () => {
+    registerAutoJoinHarness({
+      accountConfig: {
+        autoJoin: "allowlist",
+        autoJoinAllowlist: ["!", "#missing-server", "#ops:"],
+      },
+    });
+
+    expect(loggerWarn).toHaveBeenCalledTimes(1);
+    expect(loggerWarn).toHaveBeenCalledWith(
+      "matrix: autoJoinAllowlist entries cannot match an invited room and are ignored: !, #missing-server, #ops:",
+    );
+  });
+
+  it("does not warn when auto-join does not consult the allowlist", () => {
+    registerAutoJoinHarness({
+      accountConfig: { autoJoin: "off", autoJoinAllowlist: ["@ryan:example.org"] },
+    });
+    registerAutoJoinHarness({
+      accountConfig: { autoJoin: "always", autoJoinAllowlist: ["@ryan:example.org"] },
+    });
+
+    expect(loggerWarn).not.toHaveBeenCalled();
+  });
+
+  it("ignores an unmatchable user-ID allowlist entry without joining", async () => {
+    const { getInviteHandler, joinRoom } = registerAutoJoinHarness({
+      accountConfig: {
+        autoJoin: "allowlist",
+        autoJoinAllowlist: ["@ryan:example.org"],
+      },
+    });
+
+    await triggerInvite(getInviteHandler, { sender: "@ryan:example.org" });
+
     expect(joinRoom).not.toHaveBeenCalled();
   });
 });

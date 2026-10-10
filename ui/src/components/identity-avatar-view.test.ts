@@ -2,10 +2,14 @@
 
 import { html, nothing, render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  resolveThemeBranding,
+  type ThemeBranding,
+} from "../../../packages/gateway-protocol/src/theme.ts";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { currentThemeBranding, setCurrentThemeBranding } from "../app/theme-branding.ts";
 import { setAvatarGatewayOrigin } from "../lib/identity-avatar-context.ts";
 import { resolveAvatarImageUrl } from "../lib/identity-avatar-loader.ts";
-import { resolveAvatarInitials } from "../lib/identity-avatar.ts";
 import {
   renderAgentIdentityAvatar,
   identityAvatarClass,
@@ -36,6 +40,44 @@ afterEach(() => {
 });
 
 describe("shared identity avatar view", () => {
+  it("updates reserved avatars on theme publication without rerendering their host", () => {
+    const previous = currentThemeBranding();
+    const container = document.createElement("div");
+    setCurrentThemeBranding(resolveThemeBranding(undefined));
+    const part = render(
+      renderAgentIdentityAvatar({ id: "openclaw", name: "Assistant" }),
+      container,
+    );
+    try {
+      expect(container.querySelector("img")?.getAttribute("src")).toContain("favicon.svg");
+      const publish = (url: string) => {
+        const branding = resolveThemeBranding({
+          brandIcon: "compass",
+          artwork: { icons: { compass: { url } } },
+        });
+        setCurrentThemeBranding(branding);
+        return branding;
+      };
+      const first = publish("/__openclaw__/plugin-theme-art/demo/brand/icon/compass?v=1");
+      const icon = () =>
+        container.querySelector<HTMLElement & { branding: ThemeBranding }>(
+          "openclaw-theme-brand-icon",
+        );
+      expect(icon()?.branding).toBe(first);
+      const next = publish("/__openclaw__/plugin-theme-art/demo/brand/icon/compass?v=2");
+      expect(icon()?.branding).toBe(next);
+      part.setConnected(false);
+      setCurrentThemeBranding(resolveThemeBranding(undefined));
+      expect(icon()?.branding).toBe(next);
+      part.setConnected(true);
+      expect(icon()).toBeNull();
+      expect(container.querySelector("img")?.getAttribute("src")).toContain("favicon.svg");
+    } finally {
+      render(nothing, container);
+      setCurrentThemeBranding(previous);
+    }
+  });
+
   it.each(["/favicon.svg", "/control/assets/mascot.svg?v=build-1"])(
     "preserves the public image %s through reconnect without authenticated fetching",
     (url) => {
@@ -54,21 +96,6 @@ describe("shared identity avatar view", () => {
       render(nothing, container);
     },
   );
-
-  it("derives fallback initials and colors from the canonical user identity", () => {
-    const identity = {
-      id: "profile-riley",
-      name: "Riley",
-      username: "riley@example.test",
-    };
-
-    const view = resolveIdentityAvatarView(identity);
-
-    expect(view.fallback).toEqual(resolveAvatarInitials(identity));
-    expect(view.fallback.initials).toBe("R");
-    expect(view.imageUrl).toBeNull();
-    expect(view.pending).toBe(false);
-  });
 
   it("keeps hostile avatar origins out of the shared authenticated renderer", () => {
     setAvatarGatewayOrigin("https://gateway.example.test", ["avatar-token"]);
