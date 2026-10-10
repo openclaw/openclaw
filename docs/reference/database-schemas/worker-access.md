@@ -483,6 +483,18 @@ process-local facts.
 
 ### Approval, placement, and workspace receipts
 
+Ordinary turn preparation retains workspace snapshots, conversation bindings,
+skill-library queries, workshop changes, GitHub attribution, node catalogs, and
+exec policy in bounded process-local caches. Their existing owning writers
+invalidate the retained facts on commit or uncertain settlement. Binding expiry
+still invokes its pruning owner; workspace recovery predicates and explicit
+snapshot reads retain their existing database paths. Unchanged workspace
+preparation does not dispatch another registration transaction. Workshop reads
+filter the existing per-agent retained history in memory. Caller-visible mutable
+results are copied. Final execution and credential-use checks retain their
+current authority owners; prepared policy is not permission to execute.
+These caches change no schema, persisted data, retention, or update behavior.
+
 Managed approval and exec writers capture exact row postimages and deletion
 facts in their mutation statements. Approval expiry and corrupt-row repair are
 writers too. Effective exec policy and usage accounting remain separate domains:

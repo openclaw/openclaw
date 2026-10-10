@@ -4,6 +4,7 @@ import { StatementSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GIT_COAUTHOR_PREFERENCE_KEY } from "../../packages/gateway-protocol/src/index.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import * as stateReads from "./openclaw-state-db-readonly.js";
 import { withOpenClawStateDatabaseReadSnapshot } from "./openclaw-state-db-readonly.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -329,6 +330,22 @@ describe("multi-account people", () => {
     }, options);
     setUserPreferences(person.id, { [GIT_COAUTHOR_PREFERENCE_KEY]: true }, options);
     const preparedCredit = await prepareUserProfileGitHubAttribution([work.id], options);
+    const attributionRead = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
+    try {
+      const credit = await resolveUserProfileGitHubAttribution([work.id], options);
+      const identity = credit.get(work.id);
+      expect(identity?.accountId).toBe(primary.accountId);
+      if (identity) {
+        identity.login = "caller-edit";
+      }
+      expect((await resolveUserProfileGitHubAttribution([work.id], options)).get(work.id)).toEqual({
+        accountId: primary.accountId,
+        login: primary.canonicalLogin,
+      });
+      expect(attributionRead).not.toHaveBeenCalled();
+    } finally {
+      attributionRead.mockRestore();
+    }
     expect(await setCanonicalUserPreferences(work.id, { theme: "dark" }, options)).toMatchObject({
       ok: true,
     });
