@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { expect, it } from "vitest";
-import "../../ui/src/app/app-host.ts";
+import { ShellGatewayOwner } from "../../ui/src/app/app-shell-gateway.ts";
 import type { ApplicationContext } from "../../ui/src/app/context.ts";
 import { makeChatHost, makeRequestMock } from "../../ui/src/pages/chat/chat-host.test-support.ts";
 import { handlePageGatewayEvent } from "../../ui/src/pages/chat/chat-state-events.ts";
@@ -72,17 +72,22 @@ it("refreshes a retained pane from a persisted profile-only selection through th
       client,
     }) as ChatPageHost;
     const sibling = makeChatHost({ sessionKey: otherKey, client }) as ChatPageHost;
-    const shell = document.createElement("openclaw-app-shell") as HTMLElement & {
-      runtime: { context: ApplicationContext };
-      handleGatewayEvent: (event: { event: string; payload: unknown }) => void;
-    };
-    shell.runtime = {
+    const shell = new ShellGatewayOwner({
       context: {
         gateway: { snapshot: { client, hello: retained.hello, phase: "connected" } },
         agents: { state: { agentsList: null } },
         sessions: retained.sessions,
       } as unknown as ApplicationContext,
-    };
+      routeState: { routeId: "chat" },
+      activeSessionKey: sessionKey,
+      desktopNavigationExpanded: false,
+      lastLocalePrefSignature: null,
+      outboxStoreImport: { load: async () => undefined },
+      observeDeletedSessions() {},
+      recoverDeletedActiveSession() {},
+      selectChatSession() {},
+      requestUpdate() {},
+    });
     await refreshChatMetadata(retained);
     await refreshChatMetadata(sibling);
     expect(retained.chatModelCatalog[0]?.available).toBe(false);
@@ -94,7 +99,7 @@ it("refreshes a retained pane from a persisted profile-only selection through th
       sessionEventSubscribers: { getAll: () => new Set(["reader"]) },
       chatAbortControllers: new Map(),
       broadcastToConnIds: (event, payload) => {
-        shell.handleGatewayEvent({ event, payload });
+        shell.handleGatewayEvent({ type: "event", event, payload });
         handlePageGatewayEvent(retained, { type: "event", event, payload });
         handlePageGatewayEvent(sibling, { type: "event", event, payload });
       },
