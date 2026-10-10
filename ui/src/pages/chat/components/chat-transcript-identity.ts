@@ -120,10 +120,10 @@ export function resolveTranscriptAvatarPlacement(
       !hasForwardedGroups,
     props.userId,
   );
-  const isDirectThread = defaultAvatarPlacement === "footer";
   const avatarPlacement =
     activeSession?.classification === "subagent" || isSubagentSessionKey(props.sessionKey)
       ? "none"
       : defaultAvatarPlacement;
-  return { isDirectThread, avatarPlacement };
+  // Hidden subagent avatars must not leave the group layout reserving their columns.
+  return { isDirectThread: avatarPlacement !== "gutter", avatarPlacement };
 }
