@@ -1,7 +1,8 @@
 /* @vitest-environment jsdom */
 import { afterEach, expect, it, vi } from "vitest";
 import { fnv1aUtf16 } from "../../../lib/fnv1a.ts";
-import { ChatDetailsSession, type ChatDetailsProps } from "./chat-details-session.ts";
+import { ChatDetailsSession } from "./chat-details-session.ts";
+import type { ChatDetailsProps } from "./chat-details-types.ts";
 import type { ChatSubagentActivityLive } from "./chat-subagent-activity-live.ts";
 
 const mounted: HTMLElement[] = [];

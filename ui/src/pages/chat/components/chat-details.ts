@@ -5,7 +5,7 @@ import { keyed } from "lit/directives/keyed.js";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
 import { OpenClawLightDomElement } from "../../../lit/openclaw-element.ts";
-import type { ChatDetailsProps } from "./chat-details-session.ts";
+import type { ChatDetailsProps } from "./chat-details-types.ts";
 import "./chat-details-session.ts";
 import "./chat-details-progress.ts";
 import "../../../styles/chat/details.css";

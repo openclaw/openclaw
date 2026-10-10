@@ -6,50 +6,11 @@ import { t } from "../../../i18n/index.ts";
 import { scopedSessionArtifactKey } from "../../../lib/sessions/session-key.ts";
 import { OpenClawLightDomElement } from "../../../lit/openclaw-element.ts";
 import { projectSubagentStatus } from "../chat-subagent-wait.ts";
-import type { ChatProps } from "../chat-view.ts";
 import { renderChatAuthorAvatar } from "./chat-author-avatar.ts";
+import type { ChatDetailsProps } from "./chat-details-types.ts";
 import { renderChatPullRequests } from "./chat-pull-requests.ts";
 import "./chat-subagent-activity-live.ts";
 import "./chat-summary-automations.ts";
-
-export type ChatDetailsWorkspace = { root: string | null; label: string | null; branch?: string };
-export type ChatDetailsProps = Pick<
-  ChatProps,
-  | "sessionKey"
-  | "currentAgentId"
-  | "selectedSession"
-  | "messages"
-  | "runActive"
-  | "subagentSessions"
-  | "subagentParentKey"
-  | "subagentSessionsHydrated"
-  | "subagentSessionsRead"
-  | "onOpenSubagent"
-  | "onSessionSelect"
-  | "detailsWorkspace"
-  | "gatewayScope"
-  | "pullRequests"
-  | "pullRequestsGateway"
-  | "pullRequestsSessionId"
-  | "pullRequestsBranch"
-  | "pullRequestsBranchDismissed"
-  | "pullRequestsStatus"
-  | "onDismissPullRequest"
-  | "onDismissPullRequestsBranch"
-  | "onOpenSessionDiff"
-  | "githubPublication"
-  | "progressCardInitialLoading"
-  | "progressCard"
-  | "progressCardIdentity"
-  | "progressCardLifetime"
-  | "progressCardRefresh"
-  | "onDismissProgressCard"
-  | "onClearSavedProgressCard"
-  | "collapseTaskProgress"
-  | "onHideTaskProgress"
-  | "onCollapseTaskProgressChange"
-  | "onOpenTaskProgressSettings"
->;
 
 /** A projection of the pane's accepted session/workspace/PR/child-roster facts. */
 export class ChatDetailsSession extends OpenClawLightDomElement {

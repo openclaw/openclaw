@@ -2,7 +2,8 @@ import type WaDropdown from "@awesome.me/webawesome/dist/components/dropdown/dro
 import type { ProgressCard } from "@openclaw/gateway-protocol";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ChatDetailsProgress } from "./chat-details-progress.ts";
-import type { ChatDetailsProps, ChatDetailsSession } from "./chat-details-session.ts";
+import type { ChatDetailsSession } from "./chat-details-session.ts";
+import type { ChatDetailsProps } from "./chat-details-types.ts";
 import { ChatDetails } from "./chat-details.ts";
 import baseStyles from "../../../styles/base.css?inline";
 import detailsStyles from "../../../styles/chat/details.css?inline";

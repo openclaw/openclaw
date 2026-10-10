@@ -7,13 +7,7 @@ import type {
   SessionSuggestion,
   SessionSuggestionResolution,
 } from "../../../../packages/gateway-protocol/src/index.js";
-import type {
-  ControlUiSessionBranch,
-  ControlUiSessionPullRequest,
-  ControlUiSessionPullRequestSnapshot,
-} from "../../../../src/gateway/control-ui-contract.js";
 import type { ExecApprovalDecision, ExecApprovalRequest } from "../../app/exec-approval.ts";
-import type { ApplicationGateway } from "../../app/gateway.ts";
 import { shellLayoutTraits } from "../../app/shell-layout-traits.ts";
 import { renderExecApprovalCard } from "../../components/exec-approval-card.ts";
 import { icons } from "../../components/icons.ts";
@@ -66,7 +60,7 @@ import { getChatComposerState, hasTerminalRunStatus } from "./components/chat-co
 import type { ChatComposerProps } from "./components/chat-composer-types.ts";
 import { renderChatComposerQueue } from "./components/chat-composer-view.ts";
 import { isChatRunWorking, renderChatComposer } from "./components/chat-composer.ts";
-import type { ChatDetailsWorkspace } from "./components/chat-details-session.ts";
+import type { ChatDetailsProps } from "./components/chat-details-types.ts";
 import { isImageLightboxEvent, openInlineChatImage } from "./components/chat-image-lightbox.ts";
 import { renderChatPullRequests } from "./components/chat-pull-requests.ts";
 import "./components/chat-details.ts";
@@ -111,6 +105,7 @@ export type ChatProps = Omit<
   | "onSend"
 > &
   Omit<ChatComposerProps, "notices" | "footerContent" | "disabled" | "onOpenImage"> &
+  ChatDetailsProps &
   ChatTaskSuggestionTrayProps &
   ChatPlacementStartupNoticeProps & {
     onCompanionStageAttachment?: (attachment: ChatAttachment, sourceSessionKey: string) => boolean;
@@ -155,7 +150,6 @@ export type ChatProps = Omit<
       }>;
       defaultId?: string;
     } | null;
-    onSessionSelect?: (sessionKey: string) => void;
     sessionSuggestions?: readonly SessionSuggestion[];
     sessionSuggestionRole?: SessionSharingRole;
     sessionSuggestionBusyIds?: ReadonlySet<string>;
@@ -166,20 +160,6 @@ export type ChatProps = Omit<
       resolution: SessionSuggestionResolution,
     ) => void;
     detailsEnabled?: boolean;
-    detailsWorkspace?: ChatDetailsWorkspace;
-    onHideTaskProgress?: () => void;
-    onCollapseTaskProgressChange?: (collapsed: boolean) => void;
-    onOpenTaskProgressSettings?: () => void;
-    pullRequests?: ControlUiSessionPullRequest[];
-    pullRequestsGateway?: ApplicationGateway;
-    pullRequestsSessionId?: string;
-    pullRequestsBranch?: ControlUiSessionBranch;
-    pullRequestsBranchDismissed?: boolean;
-    pullRequestsStatus?: ControlUiSessionPullRequestSnapshot["status"];
-    onOpenSessionDiff?: () => void;
-    onDismissPullRequest?: (pullRequest: ControlUiSessionPullRequest) => void;
-    onDismissPullRequestsBranch?: (branch: ControlUiSessionBranch) => void;
-    githubPublication?: import("../../lib/sessions/github-publication-controller.ts").GitHubPublicationView;
   };
 
 // renderChat runs on every pane render and the chat-item cache keys the queue by

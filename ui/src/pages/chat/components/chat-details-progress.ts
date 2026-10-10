@@ -5,7 +5,7 @@ import { renderSessionProgressCard } from "../../../components/session-progress-
 import "../../../components/web-awesome.ts";
 import { t } from "../../../i18n/index.ts";
 import { OpenClawLightDomElement } from "../../../lit/openclaw-element.ts";
-import type { ChatDetailsProps } from "./chat-details-session.ts";
+import type { ChatDetailsProps } from "./chat-details-types.ts";
 
 /** Presentation only: the pane owns the durable card, lifetime and all actions. */
 export class ChatDetailsProgress extends OpenClawLightDomElement {
