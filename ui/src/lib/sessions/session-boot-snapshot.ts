@@ -54,12 +54,15 @@ export function createSessionBootSnapshot(
     });
   const retire = () => {
     retirement.abort();
-    if (host.readState().resultCached) clear();
+    if (host.readState().resultCached) {
+      clear();
+    }
   };
   const stopRetirement = subscribeSidebarBootRetirement(() => scope, retire);
   const stopInvalidation = subscribeSnapshotInvalidation((event) => {
-    if (scope && sidebarSnapshotInvalidationMatches(sidebarSnapshotScopeKey(scope), event))
+    if (scope && sidebarSnapshotInvalidationMatches(sidebarSnapshotScopeKey(scope), event)) {
       retire();
+    }
   });
   let routingDefaults = bootRecord
     ? { mainKey: bootRecord.agents.mainKey, scope: bootRecord.agents.scope }
@@ -73,7 +76,9 @@ export function createSessionBootSnapshot(
     retirement.signal.addEventListener("abort", () => resolve(), { once: true });
     void readSidebarBootSnapshot(gateway)
       .then((snapshot) => {
-        if (!snapshot || retirement.signal.aborted || !current()) return;
+        if (!snapshot || retirement.signal.aborted || !current()) {
+          return;
+        }
         routingDefaults = snapshot.routingDefaults;
         const roster = snapshot.roster;
         if (

@@ -121,11 +121,11 @@ function harness(
     return cached ? sidebarBootSnapshot(cached) : null;
   });
   const selection = { state: { selectedId: "main" }, subscribe: () => () => undefined };
-  const sessions = createSessionCapability(gateway, selection, {
-    ...(options.withBootRecord !== false
-      ? { bootRecord: options.admittedRecord ?? bootRecord }
-      : {}),
-  });
+  const sessions = createSessionCapability(
+    gateway,
+    selection,
+    options.withBootRecord !== false ? { bootRecord: options.admittedRecord ?? bootRecord } : {},
+  );
   activeCapabilities.add(sessions);
   const publish = (patch: Partial<typeof snapshot>) => {
     snapshot = { ...snapshot, ...patch };

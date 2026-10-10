@@ -242,7 +242,7 @@ describe("sidebar snapshot lifecycle", () => {
     );
     test.controller.hostConnected();
     expect(test.controller.pending).toBe(true);
-    test.settle();
+    void test.settle();
     test.publish();
     expect(test.controller.pending).toBe(false);
     stalled.resolve(model);

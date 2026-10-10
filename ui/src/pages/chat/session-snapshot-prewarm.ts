@@ -3,7 +3,7 @@ import {
   subscribeBootRecordChanges,
   type BootRecord,
 } from "../../app/boot-record.ts";
-import type { SidebarSnapshotModel } from "../../components/sidebar-snapshot-model.ts";
+import type { SidebarSnapshotModel } from "../../components/sidebar-snapshot-data.ts";
 import {
   sidebarSnapshotInvalidationMatches,
   snapshotStoreGeneration,
@@ -128,7 +128,7 @@ export function admitSidebarBootScope(
   sidebarScopes.set(gateway, entry);
   entry.snapshot = Promise.all([
     import("./session-snapshot-store.ts"),
-    import("../../components/sidebar-snapshot-model.ts"),
+    import("../../components/sidebar-snapshot-data.ts"),
   ])
     .then(async ([{ SessionSnapshotStore }, { parseSidebarSnapshot }]) => {
       const store = new SessionSnapshotStore();
