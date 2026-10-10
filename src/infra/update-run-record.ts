@@ -152,11 +152,7 @@ export function finishUpdateRunRecord(
   for (const step of record.steps) {
     if (step.step === record.phase || step.status === "in_progress") {
       step.status =
-        result.status === "failed"
-          ? "failed"
-          : result.status === "skipped"
-            ? "skipped"
-            : "completed";
+        result.status === "failed" || result.status === "skipped" ? result.status : "completed";
       step.endedAtMs = now;
     }
   }

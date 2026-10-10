@@ -267,24 +267,38 @@ describe("telegram ingress supersede policy", () => {
     ).toBe(false);
   });
 
-  it("supersedes on authorized bot_command entity even without static text alias", async () => {
-    const ourBotAuth = {
+  it.each([
+    ["/verbose on", false],
+    ["/think low", false],
+    ["/usage tokens", false],
+    ["/reasoning on", false],
+    ["/deploy", false],
+    ["/status", false],
+    ["/btw quick question", false],
+    ["/stop", true],
+    ["/new", true],
+    ["/reset", true],
+  ])("only cancellation commands supersede pending input: %s", async (text, expected) => {
+    const predicate = createShouldSupersedeTelegramSpooledPending({
       ...auth,
       botUsername: "mybot",
-    };
-    const shouldSupersedeOurBot = createShouldSupersedeTelegramSpooledPending(ourBotAuth);
-    const skillCommandUpdate = messageUpdate({
-      updateId: 2,
-      text: "/deploy@mybot",
-      senderId: OWNER_ID,
-      entities: [{ type: "bot_command", offset: 0, length: "/deploy@mybot".length }],
     });
-    expect(
-      await shouldSupersedeOurBot(
-        record("2", skillCommandUpdate),
-        claim("1", messageUpdate({ updateId: 1, text: "prior", senderId: OWNER_ID })),
-      ),
-    ).toBe(true);
+    const [command, ...args] = text.split(" ");
+    for (const target of ["", "@mybot", "@otherbot"]) {
+      const commandText = `${command}${target}`;
+      const body = [commandText, ...args].join(" ");
+      for (const entities of [
+        undefined,
+        [{ type: "bot_command", offset: 0, length: commandText.length }],
+      ]) {
+        expect(
+          await predicate(
+            record("2", messageUpdate({ updateId: 2, text: body, senderId: OWNER_ID, entities })),
+            claim("1", messageUpdate({ updateId: 1, text: "prior question", senderId: OWNER_ID })),
+          ),
+        ).toBe(expected && target !== "@otherbot");
+      }
+    }
   });
 
   it.each([

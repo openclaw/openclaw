@@ -15,6 +15,7 @@ import { noteClientVoiceConfirmationUtteranceForTest as noteClientVoiceConfirmat
 import { resolveOpenClientVoiceSessionId } from "./client-voice-session-read.js";
 import {
   completeRun,
+  createVoiceSession,
   recordMutation,
   seedSession,
 } from "./client-voice-session.fixture.test-support.js";
@@ -100,12 +101,7 @@ describe("client voice session", () => {
       transcriptCapable: true,
       voiceSessionId: "voice-capable",
     });
-    const legacy = await createOrResumeClientVoiceSession({
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      origin: "client",
-      voiceSessionId: "voice-legacy",
-    });
+    const legacy = await createVoiceSession({ voiceSessionId: "voice-legacy" });
     const relay = await createOrResumeClientVoiceSession({
       agentId: "main",
       sessionKey: "agent:main:main",
@@ -127,12 +123,7 @@ describe("client voice session", () => {
       channel: "discord",
       to: "channel:voice-updates",
     });
-    const voiceSessionId = await createOrResumeClientVoiceSession({
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      origin: "client",
-      voiceSessionId: "voice-durable-close",
-    });
+    const voiceSessionId = await createVoiceSession({ voiceSessionId: "voice-durable-close" });
     await recordMutation(voiceSessionId);
     await completeRun(`run-${voiceSessionId}`);
 
@@ -233,10 +224,7 @@ describe("client voice session", () => {
 
   it("rejects a concurrent close when an accepted transcript fails", async () => {
     await seedSession("agent:main:main");
-    const voiceSessionId = await createOrResumeClientVoiceSession({
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      origin: "client",
+    const voiceSessionId = await createVoiceSession({
       voiceSessionId: "voice-concurrent-close-failure",
     });
     const transcriptWrite = createDeferred();
@@ -281,10 +269,7 @@ describe("client voice session", () => {
 
   it("keeps the session open when a failed transcript is retried after close", async () => {
     await seedSession("agent:main:main");
-    const voiceSessionId = await createOrResumeClientVoiceSession({
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      origin: "client",
+    const voiceSessionId = await createVoiceSession({
       voiceSessionId: "voice-close-after-failure",
     });
     const transcriptWrite = createDeferred();
@@ -399,12 +384,7 @@ describe("client voice session", () => {
 
   it("bounds stalled transcript operations and closes after the accepted prefix", async () => {
     await seedSession("agent:main:main");
-    const voiceSessionId = await createOrResumeClientVoiceSession({
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      origin: "client",
-      voiceSessionId: "voice-bounded",
-    });
+    const voiceSessionId = await createVoiceSession({ voiceSessionId: "voice-bounded" });
     const firstAppend = createDeferred();
     const appendEntered = createDeferred();
     releaseHeldWrites.push(() => firstAppend.resolve());
@@ -497,12 +477,7 @@ describe("client voice session", () => {
 
   it("ignores whitespace transcripts without consuming queue capacity", async () => {
     await seedSession("agent:main:main");
-    const voiceSessionId = await createOrResumeClientVoiceSession({
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      origin: "client",
-      voiceSessionId: "voice-whitespace",
-    });
+    const voiceSessionId = await createVoiceSession({ voiceSessionId: "voice-whitespace" });
 
     await Promise.all(
       Array.from({ length: 10_000 }, (_, index) =>
@@ -536,10 +511,7 @@ describe("client voice session", () => {
 
   it("requires every failed transcript entry to recover before close", async () => {
     await seedSession("agent:main:main");
-    const voiceSessionId = await createOrResumeClientVoiceSession({
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      origin: "client",
+    const voiceSessionId = await createVoiceSession({
       voiceSessionId: "voice-multiple-write-failures",
     });
     sessionTurnMocks.appendExpectedSessionTranscriptTurn
@@ -610,10 +582,7 @@ describe("client voice session", () => {
 
   it("bounds unresolved transcript failure identity", async () => {
     await seedSession("agent:main:main");
-    const voiceSessionId = await createOrResumeClientVoiceSession({
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      origin: "client",
+    const voiceSessionId = await createVoiceSession({
       voiceSessionId: "voice-write-failure-bound",
     });
     sessionTurnMocks.appendExpectedSessionTranscriptTurn.mockRejectedValue(
@@ -687,16 +656,12 @@ describe("client voice session", () => {
   it("keeps durable operation ownership independent between voice sessions", async () => {
     await seedSession("agent:main:first");
     await seedSession("agent:main:second");
-    const firstVoiceSessionId = await createOrResumeClientVoiceSession({
-      agentId: "main",
+    const firstVoiceSessionId = await createVoiceSession({
       sessionKey: "agent:main:first",
-      origin: "client",
       voiceSessionId: "voice-first",
     });
-    const secondVoiceSessionId = await createOrResumeClientVoiceSession({
-      agentId: "main",
+    const secondVoiceSessionId = await createVoiceSession({
       sessionKey: "agent:main:second",
-      origin: "client",
       voiceSessionId: "voice-second",
     });
     const firstAppend = createDeferred();
@@ -743,18 +708,9 @@ describe("client voice session", () => {
   });
 
   it("resolves the open client record for legacy tool calls", async () => {
-    const voiceSessionId = await createOrResumeClientVoiceSession({
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      origin: "client",
-    });
+    const voiceSessionId = await createVoiceSession();
 
-    const closed = await createOrResumeClientVoiceSession({
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      origin: "client",
-      voiceSessionId: "discarded-closed",
-    });
+    const closed = await createVoiceSession({ voiceSessionId: "discarded-closed" });
     await closeClientVoiceSession({
       agentId: "main",
       sessionKey: "agent:main:main",
@@ -775,22 +731,14 @@ describe("client voice session", () => {
     expect(
       await resolveOpenClientVoiceSessionId({ agentId: "main", sessionKey: "agent:main:other" }),
     ).toBeUndefined();
-    await createOrResumeClientVoiceSession({
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      origin: "client",
-    });
+    await createVoiceSession();
     expect(
       await resolveOpenClientVoiceSessionId({ agentId: "main", sessionKey: "agent:main:main" }),
     ).toBeUndefined();
   });
 
   it("records only mutating started effects and updates their terminal status", async () => {
-    const voiceSessionId = await createOrResumeClientVoiceSession({
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      origin: "client",
-    });
+    const voiceSessionId = await createVoiceSession();
     await registerClientVoiceConsultRun({
       agentId: "main",
       sessionKey: "agent:main:main",

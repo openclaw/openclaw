@@ -50,7 +50,6 @@ import {
   snapshotFromExecApprovalsDatabase,
   warnFailClosed,
   assertExecApprovalsMutationAllowed,
-  readExecApprovalsConfigRow,
   serializeExecApprovals,
   snapshotFromExecApprovalsRow,
   writeExecApprovalsConfigRow,
@@ -79,6 +78,21 @@ export function readExecApprovalsSnapshot(): ExecApprovalsSnapshot {
   }
 }
 
+function snapshotFromReadReply(
+  reply: Awaited<ReturnType<typeof executeExistingOpenClawStateRead>>,
+  displayPath: () => string,
+): ExecApprovalsSnapshot {
+  if (reply && (!reply.ok || reply.type !== "exec-approvals.read")) {
+    throw new Error("Unexpected exec approvals read result");
+  }
+  return snapshotFromExecApprovalsRow({
+    path: displayPath(),
+    row: reply?.row,
+    onMalformed: () =>
+      warnFailClosed("exec approvals SQLite row is malformed; denying host execution"),
+  });
+}
+
 export async function readExecApprovalsSnapshotAsync(
   context = captureOpenClawStateWorkerContext(),
 ): Promise<ExecApprovalsSnapshot> {
@@ -90,15 +104,7 @@ export async function readExecApprovalsSnapshotAsync(
       { context, current: true },
     );
     context.admission.assertCurrent();
-    if (reply && (!reply.ok || reply.type !== "exec-approvals.read")) {
-      throw new Error("Unexpected exec approvals read result");
-    }
-    return snapshotFromExecApprovalsRow({
-      path: resolveExecApprovalsDisplayPath(context.environment),
-      row: reply?.row,
-      onMalformed: () =>
-        warnFailClosed("exec approvals SQLite row is malformed; denying host execution"),
-    });
+    return snapshotFromReadReply(reply, () => resolveExecApprovalsDisplayPath(context.environment));
   } catch (error) {
     if (error instanceof ExecApprovalsMigrationRequiredError) {
       throw error;
@@ -172,15 +178,7 @@ export async function readExecApprovalsPolicyReadOnlyAsync(
   try {
     assertNoPendingLegacyExecApprovals({ env: owner.env });
     const reply = await executeExistingOpenClawStateRead(owner, { type: "exec-approvals.read" });
-    if (reply && (!reply.ok || reply.type !== "exec-approvals.read")) {
-      throw new Error("Unexpected exec approvals read result");
-    }
-    const snapshot = snapshotFromExecApprovalsRow({
-      path: resolveExecApprovalsDisplayPath(owner.env),
-      row: reply?.row,
-      onMalformed: () =>
-        warnFailClosed("exec approvals SQLite row is malformed; denying host execution"),
-    });
+    const snapshot = snapshotFromReadReply(reply, () => resolveExecApprovalsDisplayPath(owner.env));
     return { file: snapshot.file, revision: JSON.stringify([stateDbPath, snapshot.hash]) };
   } catch (error) {
     if (error instanceof ExecApprovalsMigrationRequiredError) {
@@ -206,12 +204,7 @@ export function updateExecApprovalsForMaintenance(
   return runOpenClawStateWriteTransaction(
     ({ db }) => {
       params.assertCurrent?.();
-      const current = snapshotFromExecApprovalsRow({
-        path: resolveExecApprovalsDisplayPath(),
-        row: readExecApprovalsConfigRow(db),
-        onMalformed: () =>
-          warnFailClosed("exec approvals SQLite row is malformed; denying host execution"),
-      });
+      const current = snapshotFromExecApprovalsDatabase(db);
       if (params.baseHash !== undefined && current.hash !== params.baseHash) {
         return null;
       }

@@ -4,7 +4,6 @@ import { readRegularFileSync } from "@openclaw/fs-safe/advanced";
 import { replaceFileAtomicSync } from "@openclaw/fs-safe/atomic";
 import {
   decodeSessionArchiveBytes,
-  encodeSessionArchiveContent,
   readSessionArchiveContentSync,
   SESSION_ARCHIVE_ZSTD_SUFFIX,
 } from "../config/sessions/archive-compression.js";
@@ -83,6 +82,7 @@ import {
 import { transformMediaArchiveContent } from "./state-migrations.media-persistence-transform.js";
 import { repairDoctorSessionWindowOrphans } from "./state-migrations.session-window-repair.js";
 import {
+  encodeArchiveContent,
   MEDIA_ARCHIVE_VERIFICATION_KEY,
   migrateCanonicalTranscriptArchives,
 } from "./state-migrations.transcript-directives-archives.js";
@@ -379,16 +379,15 @@ function migrateTranscriptArchive(
   if (!transformed.changed) {
     return false;
   }
-  const encoded = compressed
-    ? encodeSessionArchiveContent(transformed.content)
-    : { bytes: Buffer.from(transformed.content, "utf8"), suffix: "" as const };
-  if (compressed && encoded.suffix !== SESSION_ARCHIVE_ZSTD_SUFFIX) {
-    throw new Error(`${filePath} could not be re-encoded with its zstd codec`);
-  }
+  const encoded = encodeArchiveContent(
+    transformed.content,
+    compressed ? "zstd" : "identity",
+    filePath,
+  );
   options.beforeReplace?.();
   replaceFileAtomicSync({
     filePath,
-    content: encoded.bytes,
+    content: encoded,
     preserveExistingMode: true,
     syncParentDir: true,
     syncTempFile: true,

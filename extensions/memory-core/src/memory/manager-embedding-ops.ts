@@ -12,6 +12,7 @@ import { createSubsystemLogger } from "openclaw/plugin-sdk/memory-core-host-engi
 import {
   buildFileEntry,
   buildMultimodalChunkForIndexing,
+  createMemorySearchDeadlineControl,
   MEMORY_SEARCH_DEADLINE_CONTROL,
   runWithConcurrency,
   type MemorySearchDeadlineControl,
@@ -35,7 +36,7 @@ import {
 } from "./manager-embedding-cache-ops.js";
 import { createMemoryEmbeddingOperationError } from "./manager-embedding-errors.js";
 import {
-  runEmbeddingOperationWithTimeout,
+  runMemoryEmbeddingBatchTimeoutRetry,
   runMemoryEmbeddingBatchRetryWithSplit,
   runMemoryEmbeddingRetryLoop,
 } from "./manager-embedding-policy.js";
@@ -53,6 +54,7 @@ import type {
 } from "./manager-sync-ops.js";
 import { logMemoryVectorDegradedWrite } from "./manager-vector-warning.js";
 import { resolveMemoryPathClassification } from "./memory-path-provenance.js";
+import { runEmbeddingOperationWithTimeout } from "./paused-deadline.js";
 
 const EMBEDDING_BATCH_MAX_TOKENS = 8000;
 const EMBEDDING_INDEX_CONCURRENCY = 4;
@@ -73,12 +75,6 @@ type PreparedMemoryIndexEntry = {
   chunks: IndexedMemoryChunk[];
   structuredInputBytes?: number;
 };
-
-// Retry attempts are host control state. Provider-thrown values stay opaque so
-// they cannot override the counter or break accounting when they are immutable.
-type MemoryBatchRetryResult =
-  | { kind: "success"; value: number[][] | null }
-  | { kind: "failure"; error: unknown; attempts: 1 | 2 };
 
 function countBatchSources(items: Array<{ source: MemorySource }>): Record<string, number> {
   const counts: Record<string, number> = {};
@@ -231,8 +227,9 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
 
     const missingChunks = missingCandidates.map((candidate) => candidate.chunk);
     const batchResult = this.batch.enabled
-      ? await this.runBatchWithTimeoutRetry({
-          provider: provider.id,
+      ? await runMemoryEmbeddingBatchTimeoutRetry({
+          onRetry: () =>
+            log.warn(`memory embeddings: ${provider.id} batch timed out; retrying once`),
           run: () =>
             batchEmbed({
               agentId: this.agentId,
@@ -428,6 +425,34 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
       : defaults[provider?.id === "local" ? "local" : "remote"];
   }
 
+  protected async probeEmbeddingProvider(
+    provider: EmbeddingProvider,
+    providerRuntime: MemoryEmbeddingProviderRuntime | undefined,
+  ): Promise<void> {
+    const timeoutMs = this.resolveEmbeddingTimeout("query", provider, providerRuntime);
+    const deadlineControl = createMemorySearchDeadlineControl();
+    try {
+      await runEmbeddingOperationWithTimeout({
+        timeoutMs,
+        message: `memory embedding probe timed out after ${Math.round(timeoutMs / 1000)}s`,
+        deadlineControl,
+        run: (signal) =>
+          this.withProviderUse(provider, () =>
+            provider.embed(formatEmbeddingModelInput("ping", provider.model, "query"), {
+              signal,
+              inputType: "query",
+              [MEMORY_SEARCH_DEADLINE_CONTROL]: deadlineControl,
+            }),
+          ),
+      });
+    } catch (error) {
+      if (provider === this.provider) {
+        this.markLocalEmbeddingProviderDegraded(error);
+      }
+      throw error;
+    }
+  }
+
   protected async embedQueryWithRetry(
     text: string,
     signal?: AbortSignal,
@@ -486,24 +511,6 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
     message: string,
   ): Promise<T> {
     return await runEmbeddingOperationWithTimeout({ timeoutMs, message, run: () => promise });
-  }
-
-  private async runBatchWithTimeoutRetry(params: {
-    provider: string;
-    run: () => Promise<number[][] | null>;
-  }): Promise<MemoryBatchRetryResult> {
-    let attempts: 1 | 2 = 1;
-    while (true) {
-      try {
-        return { kind: "success", value: await params.run() };
-      } catch (error) {
-        if (attempts === 2 || !/timed out|timeout/i.test(formatErrorMessage(error))) {
-          return { kind: "failure", error, attempts };
-        }
-      }
-      log.warn(`memory embeddings: ${params.provider} batch timed out; retrying once`);
-      attempts = 2;
-    }
   }
 
   protected getIndexConcurrency(): number {

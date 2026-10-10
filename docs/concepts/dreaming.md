@@ -18,8 +18,10 @@ Dreaming is enabled by default. Set
 When the cron scheduler is disabled (`cron.enabled: false` or
 `OPENCLAW_SKIP_CRON=1`), dreaming defers automatic job creation and updates while
 preserving existing jobs. Startup cleanup of historical dreaming artifacts waits
-for each agent's pending database preparation before running. Explicitly disabling
-dreaming removes jobs carrying its canonical declaration key in the active cron store.
+for each agent's pending database preparation before running, including managed
+background cleanup after a restart or upgrade. Database preparation failures are
+reported with repair guidance. Explicitly disabling dreaming removes jobs carrying
+its canonical declaration key in the active cron store.
 
 ## What dreaming writes
 

@@ -1,11 +1,7 @@
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
-import {
-  createPluginStateKeyedStoreForTests,
-  createPluginStateSyncKeyedStoreForTests,
-  resetPluginStateStoreForTests,
-} from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import * as initialStateRuntime from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, vi } from "vitest";
 import { setTelegramRuntime } from "./runtime.js";
@@ -40,6 +36,7 @@ export const TELEGRAM_THREAD_BINDINGS_TEST_CFG: OpenClawConfig = {
 };
 
 export function useTelegramThreadBindingsFixture() {
+  let stateRuntime = initialStateRuntime;
   let state: OpenClawTestState;
   let store: PluginStateKeyedStore<TelegramThreadBindingRecord>;
   const managers = new Set<Awaited<ReturnType<typeof createTelegramThreadBindingManager>>>();
@@ -63,7 +60,7 @@ export function useTelegramThreadBindingsFixture() {
             if (!allowLegacySync) {
               throw new Error("Bundled bindings must not execute host SQLite");
             }
-            return createPluginStateSyncKeyedStoreForTests<T>("telegram", options);
+            return stateRuntime.createPluginStateSyncKeyedStoreForTests<T>("telegram", options);
           },
           // SAFETY: This fixture serves only the thread-binding namespace and its canonical record type.
           openKeyedStore: (() => store) as TelegramRuntime["state"]["openKeyedStore"],
@@ -72,6 +69,8 @@ export function useTelegramThreadBindingsFixture() {
     );
   };
   beforeEach(async () => {
+    // A source-reload case may reset modules while retaining this fixture.
+    stateRuntime = await import("openclaw/plugin-sdk/plugin-state-test-runtime");
     acpHost.read.mockReset();
     const acpRuntime = await vi.importActual<typeof import("openclaw/plugin-sdk/acp-runtime")>(
       "openclaw/plugin-sdk/acp-runtime",
@@ -82,9 +81,9 @@ export function useTelegramThreadBindingsFixture() {
       layout: "state-only",
       prefix: "openclaw-telegram-bindings-",
     });
-    resetPluginStateStoreForTests({ closeDatabase: false });
+    stateRuntime.resetPluginStateStoreForTests({ closeDatabase: false });
     installStore(
-      createPluginStateKeyedStoreForTests("telegram", {
+      stateRuntime.createPluginStateKeyedStoreForTests("telegram", {
         namespace: TELEGRAM_THREAD_BINDINGS_NAMESPACE,
         maxEntries: TELEGRAM_THREAD_BINDINGS_MAX_ENTRIES,
       }),
@@ -95,7 +94,7 @@ export function useTelegramThreadBindingsFixture() {
     vi.useRealTimers();
     await stopManagers();
     clearTelegramRuntimeForTest();
-    resetPluginStateStoreForTests();
+    stateRuntime.resetPluginStateStoreForTests();
     await state.cleanup();
   });
   return {
