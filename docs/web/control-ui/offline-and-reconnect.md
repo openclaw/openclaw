@@ -298,7 +298,7 @@ the **System · restart recovery** notice shows that outcome and asks you to sen
 message to continue. It does not mean the agent resumed. Messages forwarded from
 other sessions keep their own delivery status next to each message.
 
-Once the Gateway confirms that a message is in the transcript, reconnecting retires its temporary browser copy even when the original message is outside the latest history page. Loading older history shows the saved message in its original position without adding a second copy.
+Once the Gateway confirms that a message is in the transcript, reconnecting retires its temporary browser copy even when the original message is outside the latest history page. Delivery checks also clear confirmed later messages when an earlier unconfirmed message still blocks the queue, so those delivered copies no longer raise sidebar or Inbox attention. This does not retry the uncertain message or send later queued messages out of order. Loading older history shows the saved message in its original position without adding a second copy.
 
 Retiring a delivered attachment does not discard the run's completion. If the browser misses
 that completion, a queue recovery read that confirms the same session and run have finished
