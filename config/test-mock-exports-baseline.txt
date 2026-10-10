@@ -911,8 +911,6 @@
 ["extensions/line/src/setup-surface.test.ts","./monitor.js","0bc85ef964fbfacbd0897061c2cf32af5c2edcd25b245a54940126ba4297d3ae",1]
 ["extensions/llama-cpp/src/llama-server-install.test.ts","./llama-server-vc-runtime.js","127d73206e7f5bc92e1b62bb4c9f74959132367aaa03d7eb6507388c3c913d78",1]
 ["extensions/lmstudio/src/setup.test.ts","./models.fetch.js","dd6f4487d5fbcd95742e345a6cc8995b553915d67ffd835002173dbe18165707",1]
-["extensions/lmstudio/src/stream.instances.test.ts","./runtime.js","deec6f6aadf45979fa35d19dc057f197f894ac930352c36e295ce7c4433fc1a7",1]
-["extensions/lmstudio/src/stream.test.ts","./models.fetch.js","ea9123c0a82b77045908b519e0474a83e9ef3ae48679ef9ec3d3e5ab997c6957",1]
 ["extensions/lmstudio/src/stream.test.ts","./runtime.js","977c08d4e9ad0888bdb03cef54d5267f45ac941ff4d53543d7573bd50f4cbdd8",1]
 ["extensions/logbook/src/node-host.test.ts","openclaw/plugin-sdk/process-runtime","b16471867358979b51355e078b4e9633553fc7957b4c94ea2836b095e67bcec4",1]
 ["extensions/logbook/src/node-host.test.ts","openclaw/plugin-sdk/temp-path","337878b1e8ccbcbeec14b13fecbef62e70cf6f9d45cf4fe9271d9b5b633eacc0",1]

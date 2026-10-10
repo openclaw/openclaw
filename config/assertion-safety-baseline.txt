@@ -424,7 +424,6 @@ extensions/line/src/webhook-spool.ts	2
 extensions/llm-task/doctor-contract-api.ts	1
 extensions/llm-task/src/llm-task-tool.ts	2
 extensions/lmstudio/src/models.ts	2
-extensions/lmstudio/src/stream.ts	2
 extensions/lobster/src/lobster-runner.ts	2
 extensions/logbook/index.ts	5
 extensions/logbook/src/analyze.ts	5
