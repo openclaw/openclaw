@@ -12,6 +12,10 @@ import {
   startControlUiE2eServer,
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import {
+  observeTerminalControllers,
+  readTerminalCanvasState,
+} from "./terminal-controller.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI terminal runtime isolation",
@@ -76,6 +80,7 @@ suite.define(() => {
         permissions: ["clipboard-read", "clipboard-write"],
       },
       async ({ page }) => {
+        await observeTerminalControllers(page);
         const gateway = await installMockGateway(page, {
           terminalEnabled: true,
           featureMethods: [...defaultControlUiFeatureMethods, "terminal.open"],
@@ -125,20 +130,16 @@ suite.define(() => {
             throw new Error("Terminal canvas is not visible");
           }
           // The real terminal renderer owns cell metrics; use its public dimensions.
-          const metrics = await panel.evaluate((element) => {
-            const renderer = (
-              element as import("../components/terminal/terminal-panel.ts").OpenClawTerminalPanel
-            )["terminalSessions"].tabs[0]?.controller.terminal.renderer;
-            if (!renderer) {
-              throw new Error("Terminal renderer is not ready");
-            }
-            return { width: renderer.charWidth, height: renderer.charHeight };
-          });
-          await page.mouse.move(bounds.x + 1, bounds.y + metrics.height * 1.5);
+          const metrics = await readTerminalCanvasState(canvas);
+          await page.mouse.move(bounds.x + 1, bounds.y + metrics.cellHeight * 1.5);
           await page.mouse.down();
-          await page.mouse.move(bounds.x + metrics.width * 4.5, bounds.y + metrics.height * 1.5, {
-            steps: 5,
-          });
+          await page.mouse.move(
+            bounds.x + metrics.cellWidth * 4.5,
+            bounds.y + metrics.cellHeight * 1.5,
+            {
+              steps: 5,
+            },
+          );
           await page.mouse.up();
         };
         await drag();

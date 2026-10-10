@@ -13,7 +13,10 @@ import {
   BrowserPanelController,
   type BrowserPanelControllerHost,
 } from "./browser-panel-controller.ts";
-import { defineBrowserPanelElement } from "./browser-panel-registration.tsx";
+import {
+  defineBrowserPanelElement,
+  type BrowserPanelInputs,
+} from "./browser-panel-registration.tsx";
 import { browserPanelHostedTabs } from "./browser-panel-tabs.ts";
 import {
   browserTabKey,
@@ -318,7 +321,23 @@ export class BrowserPanelPresentation
   }
 }
 
-export type BrowserPanelElement = HTMLElement & BrowserPanelPresentation;
+export type BrowserPanelElement = HTMLElement &
+  BrowserPanelInputs &
+  Pick<
+    BrowserPanelPresentation,
+    | "browserPanelIsOpen"
+    | "toggle"
+    | "handleToggleRequest"
+    | "selectHostedTab"
+    | "closeHostedTab"
+    | "requestUpdate"
+    | "renderRoot"
+    | "hasUpdated"
+    | "hostedTabs"
+    | "activeHostedTabId"
+    | "browserPanelController"
+    | "updateComplete"
+  >;
 
 declare global {
   interface HTMLElementTagNameMap {

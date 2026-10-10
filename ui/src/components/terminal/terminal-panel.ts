@@ -18,6 +18,7 @@ import {
 import { SolidPanelController } from "../solid-panel-controller.ts";
 import type { TerminalGatewayClient, TerminalSessionInfo } from "./terminal-connection.ts";
 import { updateTerminalFont } from "./terminal-fonts.ts";
+import type { TerminalInputs } from "./terminal-panel-registration.tsx";
 import { TerminalPanelSessionController } from "./terminal-panel-session-controller.ts";
 import {
   reattachTerminalSessionHosts,
@@ -562,7 +563,30 @@ export class TerminalPanelController extends SolidPanelController {
 }
 
 /** Public custom-element surface retained for the shell and panel hosts. */
-export type OpenClawTerminalPanel = HTMLElement & TerminalPanelController;
+export type OpenClawTerminalPanel = HTMLElement &
+  TerminalInputs &
+  Pick<
+    TerminalPanelController,
+    | "activateTerminalHost"
+    | "toggle"
+    | "closeTerminalPanel"
+    | "hideTerminalPanelForUnavailableSurface"
+    | "restoreTerminalPanelOpenState"
+    | "resetTerminalSessionPicker"
+    | "findTerminalPanelViewport"
+    | "selectHostedTab"
+    | "closeHostedTab"
+    | "handleToggleRequest"
+    | "requestUpdate"
+    | "renderRoot"
+    | "hasUpdated"
+    | "hostedTabs"
+    | "activeHostedTabId"
+    | "hostedActions"
+    | "terminalPanelOpen"
+    | "terminalPanelUploadController"
+    | "updateComplete"
+  >;
 
 declare global {
   interface HTMLElementTagNameMap {

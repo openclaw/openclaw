@@ -11,6 +11,10 @@ import {
   createControlUiE2eSuite,
   holdModuleResponse,
 } from "./control-ui-e2e-suite.test-support.ts";
+import {
+  observeTerminalControllers,
+  readTerminalCanvasState,
+} from "./terminal-controller.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "terminal fonts",
@@ -22,6 +26,7 @@ suite.define(() => {
     await suite.withPage(
       { serviceWorkers: "block", viewport: { width: 1180, height: 600 }, deviceScaleFactor: 2 },
       async ({ page, context }) => {
+        await observeTerminalControllers(page);
         const fontDownload = await holdModuleResponse(page, /symbols-nerd-font-mono\.woff2/);
         const gateway = await installMockGateway(page, {
           terminalEnabled: true,
@@ -57,11 +62,9 @@ suite.define(() => {
           seq: output.length,
           data: output,
         });
-        await page.waitForFunction(
-          () =>
-            document.querySelector("openclaw-terminal-panel")?.shadowRoot?.querySelector("canvas")
-              ?.width,
-        );
+        await expect
+          .poll(async () => (await readTerminalCanvasState(canvas)).width)
+          .toBeGreaterThan(0);
         await fontDownload.request;
         const fallbackPixels = await canvas.evaluate((element) =>
           (element as HTMLCanvasElement).toDataURL(),
@@ -83,33 +86,7 @@ suite.define(() => {
           animations: "disabled",
         });
         await fs.writeFile(path.join(suite.artifactDir, "terminal.png"), frame.png);
-        const terminalState = () =>
-          page.locator("openclaw-terminal-panel").evaluate((element) => {
-            const panel = element as unknown as {
-              terminalSessions: {
-                tabs: Array<{
-                  controller: {
-                    terminal: {
-                      options: { fontFamily: string };
-                      wasmTerm: { getLine: (row: number) => Array<{ codepoint: number }> };
-                    };
-                  };
-                }>;
-              };
-            };
-            const terminal = panel.terminalSessions.tabs[0]!.controller.terminal;
-            const terminalCanvas = element.shadowRoot!.querySelector("canvas")!;
-            return {
-              family: terminal.options.fontFamily,
-              width: terminalCanvas.width,
-              cssWidth: Number.parseFloat(terminalCanvas.style.width),
-              dpr: devicePixelRatio,
-              text: terminal.wasmTerm
-                .getLine(0)
-                .map((cell) => String.fromCodePoint(cell.codepoint || 32))
-                .join(""),
-            };
-          });
+        const terminalState = () => readTerminalCanvasState(canvas);
         const initial = await terminalState();
         expect(initial.width).toBe(initial.cssWidth * initial.dpr);
         expect(initial.family).toContain('"JetBrains Mono"');
