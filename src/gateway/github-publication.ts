@@ -543,6 +543,7 @@ export function createGitHubPublicationCoordinator(params: {
   );
   const methods = createGitHubPublicationCoordinatorMethods({
     placements: params.placements,
+    assertCurrent,
     readById,
     requestForClaim,
     sameWorktree,

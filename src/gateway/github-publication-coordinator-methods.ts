@@ -32,6 +32,7 @@ import type {
   GitHubPublicationRequesterV2,
 } from "./github-publication-requester.js";
 import { readSharedGitHubPublication } from "./github-publication-shared-read.js";
+import { deferGitHubPublicationRequestsAsync } from "./github-publication-store-async.js";
 import {
   deferGitHubPublicationRequests as deferRequests,
   insertGitHubPublicationRequest,
@@ -140,6 +141,7 @@ export function createSharedGitHubPublicationReadMethods(
 
 export function createGitHubPublicationCoordinatorMethods(params: {
   placements: WorkerSessionPlacementStore;
+  assertCurrent: () => void;
   readById: (requestId: string) => PublicationRow | undefined;
   requestForClaim: (
     request: GitHubPublicationClaimRequest,
@@ -494,12 +496,7 @@ export function createGitHubPublicationCoordinatorMethods(params: {
     },
 
     async deferOrphanedRequestsAsync(): Promise<void> {
-      if (!schemaExists()) {
-        return;
-      }
-      deferOrphanedRequestsWithPendingResults(
-        await params.placements.listPendingWorkspaceResultsAsync(),
-      );
+      await deferGitHubPublicationRequestsAsync({ kind: "orphaned" }, params.assertCurrent);
     },
 
     listUnreportedResults(): Array<{
