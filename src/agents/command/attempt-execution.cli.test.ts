@@ -2280,6 +2280,36 @@ describe("CLI attempt execution", () => {
     expect(embeddedArg.trustedInternalHandoff).toEqual(opts.trustedInternalHandoff);
   });
 
+  it("keeps embedded fallback context separate from the admitted user prompt", async () => {
+    const inputProvenance = { kind: "inter_session", sourceTool: "sessions_send" } as const;
+    const runtimeContextFragments = [
+      { kind: "conversation-data", text: "existing context" },
+    ] as const;
+    const input = {
+      body: "Return the original answer.",
+      transcriptBody: "Return the original answer.",
+      sessionHasHistory: true,
+      opts: { inputProvenance, runtimeContextFragments: [...runtimeContextFragments] },
+    };
+    const primary = await runOpenClawEmbeddedAttemptForTest({ ...input, runId: "prompt-primary" });
+    const fallback = await runOpenClawEmbeddedAttemptForTest({
+      ...input,
+      runId: "prompt-fallback",
+      isFallbackRetry: true,
+    });
+    expect(fallback.prompt).toBe(primary.prompt);
+    expect(fallback.transcriptPrompt).toBe(input.transcriptBody);
+    expect(fallback.inputProvenance).toEqual(inputProvenance);
+    expect(fallback.runtimeContextFragments).toEqual([
+      ...runtimeContextFragments,
+      {
+        kind: "conversation-data",
+        text: "[Retry after the previous model attempt failed or timed out]",
+      },
+    ]);
+    expect(primary.runtimeContextFragments).toEqual(runtimeContextFragments);
+  });
+
   it("records raw CLI-shaped model runs as embedded origins", async () => {
     const images = [{ type: "image" as const, data: "aGVsbG8=", mimeType: "image/png" }];
     const fallbackRuntimeState: NonNullable<RunAgentAttemptParams["fallbackRuntimeState"]> = {};
