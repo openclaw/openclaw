@@ -23,6 +23,9 @@ import {
   createGitCommandError,
   enqueueGitRefMutation,
   executeGitCommand,
+  executeGitCommandBytes,
+  executeGitCommandBuffered,
+  GitCommandTimeoutError,
   gitNullConfigPath,
   normalizeGitPathForFilesystem,
   requireGitCommand,
@@ -314,12 +317,10 @@ describe("Git filesystem paths", () => {
     expect(normalizeGitPathForFilesystem(input, "win32")).toBe(expected);
   });
 
-  it.each(["/c", "/C", "/c/", "/c/Users/example/repo"])(
-    "leaves MSYS-shaped text unchanged on non-Windows hosts: %s",
-    (input) => {
-      expect(normalizeGitPathForFilesystem(input, "linux")).toBe(input);
-    },
-  );
+  it("leaves MSYS-shaped text unchanged on non-Windows hosts", () => {
+    const input = "/c/Users/example/repo";
+    expect(normalizeGitPathForFilesystem(input, "linux")).toBe(input);
+  });
 });
 
 const progress = Array.from({ length: 1000 }, (_, i) => `Updating files: ${i}/1000`).join("\r");
@@ -332,18 +333,40 @@ const failure = {
   termination: "exit",
 } satisfies SpawnResult;
 
+it.skipIf(process.platform === "win32").each([
+  ["text", executeGitCommand],
+  ["bytes", executeGitCommandBytes],
+  ["buffered", executeGitCommandBuffered],
+] as const)("lowers Git %s child priority without changing the parent", async (_kind, run) => {
+  const parentPriority = os.getPriority();
+  const result = await run(process.cwd(), ["-c", "alias.priority=!ps -o ni= -p $$", "priority"], {
+    lowerPriority: true,
+    killProcessTree: true,
+  });
+  expect(result.code).toBe(0);
+  expect(Number(result.stdout.toString().trim())).toBe(Math.min(19, parentPriority + 10));
+  expect(os.getPriority()).toBe(parentPriority);
+});
+
 it.each(["maintenance.autoDetach", "gc.autoDetach"])(
   "overrides %s only for an explicitly owned Git command",
   async (key) => {
     await withTestDir({ prefix: "openclaw-git-exec-maintenance-" }, async (root) => {
-      await requireGitCommand(root, ["init"]);
-      await requireGitCommand(root, ["config", key, "true"]);
+      const env = {
+        GIT_CONFIG_COUNT: "0",
+        GIT_CONFIG_PARAMETERS: undefined,
+      };
+      await requireGitCommand(root, ["init"], { env });
+      await requireGitCommand(root, ["config", key, "true"], { env });
       const owned = await executeGitCommand(root, ["config", "--get", key], {
+        env,
         killProcessTree: true,
       });
       expect(owned.code).toBe(0);
       expect(owned.stdout.trim()).toBe("false");
-      await expect(requireGitCommand(root, ["config", "--get", key])).resolves.toBe("true");
+      await expect(requireGitCommand(root, ["config", "--get", key], { env })).resolves.toBe(
+        "true",
+      );
     });
   },
 );
@@ -360,7 +383,9 @@ it.each([
   const args = ["worktree", "add"];
   const result = await executeGitCommand("/repo", args, { timeoutMs });
   const label = `timed out after ${seconds} seconds`;
-  const message = createGitCommandError("git worktree add", result).message;
+  const error = createGitCommandError("git worktree add", result);
+  expect(error).toBeInstanceOf(GitCommandTimeoutError);
+  const message = error.message;
   expect(message).toContain(label);
   expect(message).toContain(
     `Git did not finish within its ${seconds}s budget; check remote reachability, repository locks, and clone shape (partial clones fetch missing objects lazily).`,

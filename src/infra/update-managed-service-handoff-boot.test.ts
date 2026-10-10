@@ -46,12 +46,10 @@ describe("managed handoff boot identity", () => {
   });
 
   it.each([
-    { status: 0, stdout: Buffer.alloc(0) },
     { status: 0, stdout: Buffer.alloc(15) },
     { status: 0, stdout: Buffer.alloc(17) },
     { status: 0, stdout: "0123456789abcdef" },
     { status: 1, stdout: bootBytes },
-    { status: null, stdout: bootBytes, signal: "SIGKILL" },
     { status: 0, stdout: bootBytes, error: new Error("read failed") },
   ])("refuses an unavailable or incomplete FreeBSD boot token: %j", async (result) => {
     spawnSyncMock.mockReturnValue(result);

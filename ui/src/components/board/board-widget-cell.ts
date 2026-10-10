@@ -34,7 +34,10 @@ import { renderPluginContribution } from "../../plugins/control-ui-view.ts";
 import { renderLazyViewError } from "../lazy-view-error.ts";
 import { renderBoardMcpAppContent } from "./board-mcp-app-content.ts";
 import { BoardMcpAppLifecycle } from "./board-mcp-app-lifecycle.ts";
-import { renderBoardGrantedCapabilities } from "./board-widget-capabilities.ts";
+import {
+  renderBoardGrantedCapabilities,
+  renderBoardPendingCapabilities,
+} from "./board-widget-capabilities.ts";
 import {
   BOARD_SIZE_PRESETS,
   closeBoardWidgetMenu,
@@ -42,7 +45,6 @@ import {
   renderBoardWidgetActionError,
   renderBoardWidgetError,
   renderBoardWidgetMenu,
-  renderBoardWidgetPending,
   renderBoardWidgetRejected,
 } from "./board-widget-cell-render.ts";
 import { BoardWidgetFrameLifecycle } from "./board-widget-frame.ts";
@@ -92,13 +94,14 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
   @property({ type: Boolean }) busy = false;
   @property({ type: Boolean }) canMutate = true;
   @property({ type: Boolean }) canGrant = true;
+  @property({ type: Boolean }) loadingCovered = false;
 
   @state() private actionError = "";
   @state() private actionPending = false;
+  private bodyErrored = false;
   private readonly coreWidgetLoader = new LazyCustomElementRequestController(this);
-  private readonly pluginSubscriptions = new SubscriptionsController(this).watch(
+  private readonly pluginSubscriptions = new SubscriptionsController(this).watchStore(
     () => this.context?.plugins,
-    (plugins, notify) => plugins.subscribe(notify),
   );
   private readonly appView = new BoardMcpAppLifecycle({
     active: () => this.active,
@@ -109,6 +112,7 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
   });
   private readonly frame = new BoardWidgetFrameLifecycle({
     active: () => this.active,
+    loadingCovered: () => this.loadingCovered,
     bridgeEnabled: () => this.bridgeEnabled,
     connected: () => this.isConnected,
     context: () => this.context,
@@ -164,6 +168,21 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
       }
     });
     this.frame.update();
+    if (this.loadingCovered && this.presentationReady) {
+      this.dispatchEvent(new Event("openclaw-board-widget-presentation", { bubbles: true }));
+    }
+  }
+
+  get presentationReady(): boolean {
+    const widget = this.widget;
+    // Native views and access notices own their loading and recovery presentation.
+    return (
+      !widget?.viewTicket ||
+      widget.grantState === "pending" ||
+      widget.grantState === "rejected" ||
+      this.bodyErrored ||
+      this.frame.presentationReady
+    );
   }
 
   override disconnectedCallback(): void {
@@ -234,11 +253,13 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
     }
   }
 
-  private renderMcpApp(widget: BoardWidget, callbacks: BoardWidgetCellCallbacks): TemplateResult {
-    void ensureCustomElementDefined("mcp-app-view", loadMcpAppView).catch(() => undefined);
+  private renderBody(widget: BoardWidget, callbacks: BoardWidgetCellCallbacks): TemplateResult {
+    if (widget.contentKind === "mcp-app") {
+      void ensureCustomElementDefined("mcp-app-view", loadMcpAppView).catch(() => undefined);
+    }
     const accessNotice =
       widget.grantState === "pending"
-        ? renderBoardWidgetPending({
+        ? renderBoardPendingCapabilities({
             widget,
             disabled: this.busy || this.actionPending || !this.canGrant,
             onGrant: (decision) => this.runGrantDecision(widget, callbacks, decision),
@@ -248,46 +269,27 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
           })
         : widget.grantState === "rejected"
           ? renderBoardWidgetRejected({
-              widget,
               disabled: this.busy || this.actionPending || !this.canMutate,
               onRemove: () => void this.runAction(() => callbacks.remove(widget)),
             })
           : nothing;
-    return renderBoardMcpAppContent({
-      accessNotice,
-      appView: this.appView.state,
-      busy: this.busy || this.actionPending || !this.canMutate,
-      active: this.active,
-      loading: this.appView.loading,
-      nearVisible: this.appView.nearVisible,
-      sessionKey: this.sessionKey,
-      widget,
-      expired: () => this.appView.expire(),
-      remove: () => void this.runAction(() => callbacks.remove(widget)),
-      retry: () => this.appView.retry(),
-    });
-  }
-
-  private renderBody(widget: BoardWidget, callbacks: BoardWidgetCellCallbacks): TemplateResult {
     if (widget.contentKind === "mcp-app") {
-      return this.renderMcpApp(widget, callbacks);
-    }
-    if (widget.grantState === "pending") {
-      return renderBoardWidgetPending({
+      return renderBoardMcpAppContent({
+        accessNotice,
+        appView: this.appView.state,
+        busy: this.busy || this.actionPending || !this.canMutate,
+        active: this.active,
+        loading: this.appView.loading,
+        nearVisible: this.appView.nearVisible,
+        sessionKey: this.sessionKey,
         widget,
-        disabled: this.busy || this.actionPending || !this.canGrant,
-        onGrant: (decision) => this.runGrantDecision(widget, callbacks, decision),
-        ...(this.actionError
-          ? { error: renderBoardWidgetActionError(this.actionError, true) }
-          : {}),
+        expired: () => this.appView.expire(),
+        remove: () => void this.runAction(() => callbacks.remove(widget)),
+        retry: () => this.appView.retry(),
       });
     }
-    if (widget.grantState === "rejected") {
-      return renderBoardWidgetRejected({
-        widget,
-        disabled: this.busy || this.actionPending || !this.canMutate,
-        onRemove: () => void this.runAction(() => callbacks.remove(widget)),
-      });
+    if (accessNotice !== nothing) {
+      return accessNotice;
     }
     if (widget.contentKind === "plugin" && widget.frameUrl) {
       return this.frame.render(widget);
@@ -334,7 +336,6 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
             canMutate: this.canMutate,
             canGrant: this.canGrant,
           },
-          nothing,
           this.active,
         );
       }
@@ -425,6 +426,7 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
       body = renderBoardWidgetError(error);
       bodyErrored = true;
     }
+    this.bodyErrored = bodyErrored;
     const label = widget.title || widget.name;
     const readOnly = !this.canMutate;
     const bodyScrollable =

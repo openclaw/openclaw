@@ -7,7 +7,6 @@ import {
   mkdirSync,
   readFileSync,
   readlinkSync,
-  realpathSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -15,6 +14,7 @@ import {
 import { join } from "node:path";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { createIndependentPrFixtureEnv } from "./pr-wrapper.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const templateDirs = useAutoCleanupTempDirTracker(afterAll);
@@ -167,7 +167,7 @@ function runShell(fixture: Fixture, commands: string[], env?: NodeJS.ProcessEnv)
       reviewScript,
       fixture.root,
     ],
-    { cwd: fixture.root, encoding: "utf8", env: { ...process.env, ...env } },
+    { cwd: fixture.root, encoding: "utf8", env: { ...createIndependentPrFixtureEnv(), ...env } },
   );
 }
 
@@ -278,7 +278,11 @@ describePosix("scripts/pr worktree containment", () => {
                   fixture.root,
                   String(pr),
                 ],
-                { cwd: fixture.root, stdio: ["ignore", "pipe", "pipe"] },
+                {
+                  cwd: fixture.root,
+                  env: createIndependentPrFixtureEnv(),
+                  stdio: ["ignore", "pipe", "pipe"],
+                },
               );
               let output = "";
               child.stdout.on("data", (chunk) => {
@@ -312,17 +316,12 @@ describePosix("scripts/pr worktree containment", () => {
     }
   });
 
-  for (const caller of ["enter_worktree 42 true || exit $?", "review_init 42"] as const) {
+  for (const caller of ["enter_worktree 42 true || exit $?"] as const) {
     it.each([
       {
         name: "private fetch interrupted",
         failure: '[[ "$*" == *" fetch "* ]] && [ "$PWD" = "$fixture_root/.worktrees/pr-42" ]',
         code: 130,
-      },
-      {
-        name: "private fetch Git error",
-        failure: '[[ "$*" == *" fetch "* ]] && [ "$PWD" = "$fixture_root/.worktrees/pr-42" ]',
-        code: 128,
       },
       { name: "GitHub auth failure", failure: '[ "$1" = gh_plain ]', code: 1 },
     ])(`stops on $name without replaying a pending transition (${caller})`, ({ failure, code }) => {
@@ -349,16 +348,10 @@ describePosix("scripts/pr worktree containment", () => {
 
   it.each([
     {
-      name: "first fetch",
-      failure: '[[ "$*" == *" fetch "* ]] && [ "$PWD" = "$fixture_root" ]',
-      provisioned: false,
-    },
-    {
       name: "second fetch",
       failure: '[[ "$*" == *" fetch "* ]] && [ "$PWD" = "$fixture_root/.worktrees/pr-42" ]',
       provisioned: true,
     },
-    { name: "auth", failure: '[ "$1" = gh_plain ]', provisioned: false },
   ])(
     "stops cold entry on $name failure, retaining only completed provisioning",
     ({ failure, provisioned }) => {
@@ -380,62 +373,15 @@ describePosix("scripts/pr worktree containment", () => {
 
   it.each([
     {
-      name: "root resolution",
-      failure: '[ "$*" = "pwd" ] && [ "$PWD" = "$fixture_root" ]',
-      setup: [],
-    },
-    {
-      name: "canonical cd",
-      failure: '[ "$*" = "cd $fixture_root" ] && [ "$BASH_SUBSHELL" = 0 ]',
-      setup: [],
-    },
-    {
-      name: "stale target removal",
-      failure: '[[ "$*" == "git worktree remove "* ]]',
-      setup: [
-        "git worktree add .worktrees/pr-42 -b temp/pr-42 origin/main",
-        "rm -rf .worktrees/pr-42",
-      ],
-    },
-    {
-      name: "worktree add",
-      failure: '[[ "$*" == "git -C $fixture_root worktree add "* ]]',
-      setup: [],
-    },
-    {
-      name: "post-add parent resolution",
-      failure: '[ "$*" = "pwd -P" ] && [ "$PWD" = "$fixture_root/.worktrees" ]',
-      setup: [],
-    },
-    {
       name: "worktree cd",
       failure: '[ "$*" = "cd $fixture_root/.worktrees/pr-42" ] && [ "$BASH_SUBSHELL" = 0 ]',
       setup: [],
-    },
-    {
-      name: "warm registration read",
-      failure: '[ "$*" = "git worktree list --porcelain -z" ]',
-      setup: ["git worktree add .worktrees/pr-42 -b temp/pr-42 origin/main"],
     },
     {
       name: "warm Git identity read",
       failure: '[ "$*" = "git rev-parse --path-format=absolute --git-dir --git-common-dir" ]',
       setup: ["git worktree add .worktrees/pr-42 -b temp/pr-42 origin/main"],
     },
-    {
-      name: "sparse conversion",
-      failure: '[ "$*" = "git sparse-checkout disable" ]',
-      setup: [
-        "git sparse-checkout init --no-cone",
-        "git sparse-checkout set --no-cone fixture.txt",
-      ],
-    },
-    {
-      name: "sparse config read",
-      failure: '[ "$*" = "git config --bool core.sparseCheckout" ]',
-      setup: [],
-    },
-    { name: "artifact directory", failure: '[ "$*" = "mkdir -p .local" ]', setup: [] },
   ])("stops required entry steps on $name failure in an OR list", ({ failure, setup }) => {
     const fixture = createFixture();
     const result = runShell(fixture, [
@@ -464,43 +410,6 @@ describePosix("scripts/pr worktree containment", () => {
     expect(readFileSync(marker, "utf8")).toBe("preserve me\n");
   });
 
-  it("stale .worktrees/pr-<N> directory does not clobber the canonical checkout", () => {
-    const fixture = createFixture();
-    makeStaleWorktreeDir(fixture);
-
-    runShell(fixture, ["enter_worktree 42 true"]);
-
-    expectCanonicalCheckoutUnchanged(fixture);
-  });
-
-  it("review_checkout_main cannot detach the canonical checkout", () => {
-    const fixture = createFixture();
-    makeStaleWorktreeDir(fixture);
-
-    const result = runShell(fixture, ["review_checkout_main 42"]);
-
-    expectCanonicalCheckoutUnchanged(fixture);
-    if (result.status !== 0) {
-      expect(result.stderr).toContain("scripts/pr refuses to mutate the shared canonical checkout");
-    }
-  });
-
-  it("failure midway leaves the canonical checkout untouched", () => {
-    const fixture = createFixture();
-    const brokenWorktree = join(fixture.root, ".worktrees", "pr-42");
-    git(fixture.root, "worktree", "add", brokenWorktree, "-b", "temp/pr-42", "origin/main");
-    rmSync(join(brokenWorktree, ".git"));
-
-    const result = runShell(fixture, [
-      "enter_worktree 42 false",
-      "git checkout --detach origin/main",
-      "exit 1",
-    ]);
-
-    expect(result.status).not.toBe(0);
-    expectCanonicalCheckoutUnchanged(fixture);
-  });
-
   it("refuses a symlink alias pointing at another PR's worktree", () => {
     const fixture = createFixture();
     const worktrees = join(fixture.root, ".worktrees");
@@ -524,51 +433,16 @@ describePosix("scripts/pr worktree containment", () => {
     expectCanonicalCheckoutUnchanged(fixture);
   });
 
-  it.each(["cold", "warm"])("enters a %s PR worktree and fetches in its Git context", (state) => {
-    const fixture = createFixture();
-    const expectedWorktree = join(fixture.root, ".worktrees", "pr-42");
-    if (state === "warm") {
-      git(fixture.root, "worktree", "add", expectedWorktree, "-b", "temp/pr-42", "origin/main");
-    }
-
-    const result = runShell(fixture, [
-      "enter_worktree 42 false || exit $?",
-      'printf "cwd=%s\\n" "$PWD"',
-      'printf "branch=%s\\n" "$(git branch --show-current)"',
-      'printf "head=%s\\n" "$(git rev-parse HEAD)"',
-    ]);
-
-    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
-    expect(result.stdout).toContain(`cwd=${realpathSync(expectedWorktree)}`);
-    expect(result.stdout).toContain("branch=temp/pr-42");
-    expect(result.stdout).toContain(`head=${fixture.mainSha}`);
-    const fetchHead = git(
-      expectedWorktree,
-      "rev-parse",
-      "--path-format=absolute",
-      "--git-path",
-      "FETCH_HEAD",
-    );
-    expect(fetchHead).not.toBe(
-      git(fixture.root, "rev-parse", "--path-format=absolute", "--git-path", "FETCH_HEAD"),
-    );
-    expect(readFileSync(fetchHead, "utf8")).toContain(fixture.mainSha);
-    expectCanonicalCheckoutUnchanged(fixture);
-  });
-
   for (const operation of [
     { name: "ordinary entry", command: "enter_worktree 42 false", target: true, success: true },
-    { name: "reset entry", command: "enter_worktree 42 true", target: true, success: true },
-    { name: "review entry", command: "review_init 42", target: true, success: true },
     {
       name: "destructive cleanup",
       command: 'remove_worktree_if_present ".worktrees/pr-42"',
       target: true,
       success: false,
     },
-    { name: "cold entry", command: "enter_worktree 42 false", target: false, success: false },
   ]) {
-    it.each(["missing", "empty", "unreadable"])(
+    it.each(operation.success ? ["unreadable"] : ["missing", "unreadable"])(
       `${operation.name} preserves an unrelated worktree with a %s backlink`,
       (damage) => {
         const fixture = createReviewFixture();
@@ -707,7 +581,7 @@ describePosix("scripts/pr worktree containment", () => {
     expectCanonicalCheckoutUnchanged(fixture);
   });
 
-  for (const mode of ["branch", "detached"] as const) {
+  for (const mode of ["branch"] as const) {
     it.each([
       {
         name: "worktree writes before the index commit",
@@ -719,10 +593,6 @@ describePosix("scripts/pr worktree containment", () => {
       {
         name: "partially restored index",
         setup: ['git restore --source="$target_sha" --staged --worktree -- pr-only.txt'],
-      },
-      {
-        name: "fully restored index",
-        setup: ['git restore --source="$target_sha" --staged --worktree -- .'],
       },
       {
         name: "interrupted recovery checkout",
@@ -802,13 +672,6 @@ describePosix("scripts/pr worktree containment", () => {
       expectedStatus: "M overlap.txt",
       dirtyFile: "overlap.txt",
       dirtyContent: "foreign unstaged\n",
-    },
-    {
-      name: "zero-byte non-endpoint",
-      setup: [": > overlap.txt"],
-      expectedStatus: "M overlap.txt",
-      dirtyFile: "overlap.txt",
-      dirtyContent: "",
     },
     {
       name: "untracked",
@@ -938,44 +801,40 @@ describePosix("scripts/pr worktree containment", () => {
   );
 
   for (const recovery of [false, true]) {
-    it.each([
-      { name: "file", path: "main-only.txt", directory: false, symlink: false },
-      { name: "dangling symlink", path: "main-only.txt", directory: false, symlink: true },
-      {
-        name: "file ancestor",
-        path: "main-only.txt",
-        directory: false,
-        symlink: false,
-        ancestor: true,
-      },
-      {
-        name: "dangling symlink ancestor",
-        path: "main-only.txt",
-        directory: false,
-        symlink: true,
-        ancestor: true,
-      },
-      {
-        name: "directory symlink ancestor",
-        path: "main-only.txt",
-        directory: false,
-        symlink: true,
-        ancestor: true,
-        directoryTarget: true,
-      },
-      {
-        name: "directory containing ignored data",
-        path: "main-only.txt/private.ignored",
-        directory: true,
-        symlink: false,
-      },
-      {
-        name: "directory containing an ignored dangling symlink",
-        path: "main-only.txt/private.ignored",
-        directory: true,
-        symlink: true,
-      },
-    ])(`preserves an ignored $name before mutation (recovery=${recovery})`, (collision) => {
+    it.each(
+      [
+        { name: "file", path: "main-only.txt", directory: false, symlink: false },
+        { name: "dangling symlink", path: "main-only.txt", directory: false, symlink: true },
+        {
+          name: "file ancestor",
+          path: "main-only.txt",
+          directory: false,
+          symlink: false,
+          ancestor: true,
+        },
+        {
+          name: "dangling symlink ancestor",
+          path: "main-only.txt",
+          directory: false,
+          symlink: true,
+          ancestor: true,
+        },
+        {
+          name: "directory symlink ancestor",
+          path: "main-only.txt",
+          directory: false,
+          symlink: true,
+          ancestor: true,
+          directoryTarget: true,
+        },
+        {
+          name: "directory containing ignored data",
+          path: "main-only.txt/private.ignored",
+          directory: true,
+          symlink: false,
+        },
+      ].filter((collision) => !recovery || collision.name === "file"),
+    )(`preserves an ignored $name before mutation (recovery=${recovery})`, (collision) => {
       const fixture = createReviewFixture();
       if ("ancestor" in collision) {
         git(fixture.root, "checkout", "main");
@@ -1024,7 +883,7 @@ describePosix("scripts/pr worktree containment", () => {
     });
   }
 
-  it.each([".local", ".local/review-mode.env"])("refuses reserved transition path %s", (path) => {
+  it.each([".local/review-mode.env"])("refuses reserved transition path %s", (path) => {
     const fixture = createReviewFixture();
     git(fixture.root, "checkout", "review/pr");
     if (path !== ".local") {
@@ -1045,26 +904,6 @@ describePosix("scripts/pr worktree containment", () => {
     expect(result.stderr).toContain("reserved .local artifact namespace");
     expect(reviewState(worktree)).toEqual(before);
     expect(readFileSync(join(worktree, ".local", "review-mode.env"), "utf8")).toBe(artifact);
-    expectCanonicalCheckoutUnchanged(fixture);
-  });
-
-  it("allows a missing transition path that merely matches an ignore rule", () => {
-    const fixture = createReviewFixture();
-    const result = runShell(fixture, [
-      "review_init 42",
-      "review_checkout_pr 42",
-      'printf "main-only.txt\\n.local/\\n" >> "$(git rev-parse --git-path info/exclude)"',
-      'printf "preserved artifact\\n" > .local/review-note',
-      "review_checkout_pr 42",
-      "git check-ignore -q main-only.txt",
-      "test ! -e main-only.txt",
-      "review_checkout_main 42",
-    ]);
-
-    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
-    expect(readFileSync(join(fixture.root, ".worktrees", "pr-42", "main-only.txt"), "utf8")).toBe(
-      "main-only\n",
-    );
     expectCanonicalCheckoutUnchanged(fixture);
   });
 

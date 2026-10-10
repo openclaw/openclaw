@@ -14,6 +14,10 @@ import {
 import { QuestionManager, QuestionManagerError } from "../../gateway/question-manager.js";
 import { createDeferredCore as deferred, type Deferred } from "../../shared/deferred.js";
 import { withEnvAsync } from "../../test-utils/env.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../../test-utils/gateway-scheduler-clock.js";
 // Collect the real transport before test deadlines; production still imports it lazily.
 export { callGatewayTool } from "../tools/gateway.js";
 
@@ -22,6 +26,7 @@ export { callGatewayTool } from "../tools/gateway.js";
 export async function withQuestionGateway(
   run: (fixture: {
     manager: QuestionManager;
+    clock: ReturnType<typeof createGatewaySchedulerClock>;
     backingRun: AbortController;
     requests: RequestFrame[];
     waitStarted: Promise<void>;
@@ -57,7 +62,8 @@ export async function withQuestionGateway(
           auth: { mode: "token", token: "synthetic-question-test" },
         },
       });
-      const manager = new QuestionManager();
+      const clock = createGatewaySchedulerClock(Date.now());
+      const manager = new QuestionManager(createTestGatewayScheduler(clock.clock));
       const backingRun = new AbortController();
       const requests: RequestFrame[] = [];
       const waitStarted = deferred();
@@ -162,6 +168,7 @@ export async function withQuestionGateway(
       try {
         await run({
           manager,
+          clock,
           backingRun,
           requests,
           waitStarted: waitStarted.promise,

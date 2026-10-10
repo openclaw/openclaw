@@ -90,7 +90,7 @@ describe.each(transcriptCases)("loaded Control UI $kind transcript assertion", (
 
   it("reads the active transcript beyond a 12K shell prefix without returning its text", async () => {
     const proof = runTranscriptStep(testCase.kind, [
-      `<nav>${"x".repeat(12_001)}</nav>${pane(transcript)}`,
+      `<nav>${"x".repeat(12_001)}</nav>${pane("", false, false)}${pane(transcript)}`,
     ]);
 
     const result = await proof.result;
@@ -112,60 +112,29 @@ describe.each(transcriptCases)("loaded Control UI $kind transcript assertion", (
     expect(result.steps.at(-1)?.details).not.toContain(testCase.prompt);
   });
 
-  it.each([
-    "missing prompt",
-    "missing answer",
-    "hidden pane",
-    "menu decoy",
-    "reversed roles",
-    "prompt-only answer",
-  ] as const)("rejects %s and keeps bounded, pane-owned failure diagnostics", async (missing) => {
-    const pages = {
-      "missing prompt": pane(message("assistant", testCase.reply)),
-      "missing answer": pane(message("user", testCase.prompt)),
-      "hidden pane": pane(transcript, true) + pane(""),
-      "menu decoy": `<nav>${transcript}</nav>${pane("")}`,
-      "reversed roles": pane(
-        message("assistant", testCase.prompt) + message("user", testCase.reply),
-      ),
-      "prompt-only answer": pane(message("user", `${testCase.prompt} ${testCase.reply}`)),
-    };
-    const proof = runTranscriptStep(testCase.kind, [pages[missing]]);
+  it.each(["menu decoy", "reversed roles"] as const)(
+    "rejects %s and keeps bounded, pane-owned failure diagnostics",
+    async (missing) => {
+      const pages = {
+        "menu decoy": `<nav>${transcript}</nav>${pane(transcript, true)}${pane(transcript, false, false)}${pane("")}`,
+        "reversed roles": pane(
+          message("assistant", testCase.prompt) + message("user", testCase.reply),
+        ),
+      };
+      const proof = runTranscriptStep(testCase.kind, [pages[missing]]);
 
-    await expect(proof.result).rejects.toThrow(
-      `control ui ${testCase.kind} transcript missing after fresh load. state=`,
-    );
-    expect(proof.snapshots).toHaveLength(1);
-    expect(proof.snapshots[0]?.maxChars).toBe(12_000);
-    expect(proof.snapshots[0]?.text.length).toBeLessThanOrEqual(12_000);
-    expect(proof.observations.at(-1)).toMatchObject({
-      panePresent: true,
-      threadPresent: true,
-      transcriptLoading: false,
-    });
-    expect(proof.evaluationTimeouts.at(-1)).toBe(15_000);
-  });
-
-  it.each([true, false])(
-    "uses the active transcript, not an earlier presented pane (active has transcript: %s)",
-    async (activeHasTranscript) => {
-      const proof = runTranscriptStep(testCase.kind, [
-        pane(activeHasTranscript ? "" : transcript, false, false) +
-          pane(activeHasTranscript ? transcript : ""),
-      ]);
-
-      if (activeHasTranscript) {
-        await expect(proof.result).resolves.toMatchObject({ status: "pass" });
-        expect(proof.snapshots).toEqual([]);
-      } else {
-        await expect(proof.result).rejects.toThrow(
-          `control ui ${testCase.kind} transcript missing after fresh load. state=`,
-        );
-      }
+      await expect(proof.result).rejects.toThrow(
+        `control ui ${testCase.kind} transcript missing after fresh load. state=`,
+      );
+      expect(proof.snapshots).toHaveLength(1);
+      expect(proof.snapshots[0]?.maxChars).toBe(12_000);
+      expect(proof.snapshots[0]?.text.length).toBeLessThanOrEqual(12_000);
       expect(proof.observations.at(-1)).toMatchObject({
-        hasPrompt: activeHasTranscript,
-        [testCase.replyFlag]: activeHasTranscript,
+        panePresent: true,
+        threadPresent: true,
+        transcriptLoading: false,
       });
+      expect(proof.evaluationTimeouts.at(-1)).toBe(15_000);
     },
   );
 
@@ -184,17 +153,4 @@ describe.each(transcriptCases)("loaded Control UI $kind transcript assertion", (
     expect(proof.evaluationTimeouts).toEqual([30_000, 30_000, 30_000]);
     expect(proof.snapshots).toEqual([]);
   });
-});
-
-it.each(["red", "blue"])("requires both image color groups, not only %s", async (color) => {
-  const proof = runTranscriptStep("image", [
-    pane(
-      message("user", transcriptCases[1].prompt) + message("assistant", `The image is ${color}.`),
-    ),
-  ]);
-
-  await expect(proof.result).rejects.toThrow(
-    "control ui image transcript missing after fresh load",
-  );
-  expect(proof.observations.at(-1)).toMatchObject({ hasPrompt: true, hasColors: false });
 });

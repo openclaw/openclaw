@@ -9,7 +9,7 @@ import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { renderSettingsPageHeader } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
-import { canCallGatewayMethod, isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
+import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import {
   bulkSetSecretsStoreEntries,
   createInitialSecretsStoreState,
@@ -67,37 +67,22 @@ class SecretsPage extends OpenClawLightDomElement {
     this.notice = null;
   }
 
-  private get canList(): boolean {
-    return this.canCall("secrets.store.list");
-  }
-
-  private get canSet(): boolean {
-    return this.canCall("secrets.store.set");
-  }
-
-  private get canDelete(): boolean {
-    return this.canCall("secrets.store.delete");
-  }
-
   private canCall(method: "secrets.store.list" | "secrets.store.set" | "secrets.store.delete") {
-    return (
-      isGatewayMethodAdvertised(this.gateway.snapshot ?? {}, method) === true &&
-      canCallGatewayMethod(this.gateway.snapshot, method, "operator.admin")
-    );
+    return canCallGatewayMethod(this.gateway.snapshot, method, "operator.admin");
   }
 
   private ensureInitialData() {
-    if (this.canList && !this.store.loaded && !this.store.loading) {
-      void this.runStoreTask((store) => loadSecretsStore(store));
+    if (this.canCall("secrets.store.list") && !this.store.loaded && !this.store.loading) {
+      void this.runStoreTask(loadSecretsStore);
     }
   }
 
-  private async runStoreTask<T>(task: (store: SecretsStoreState) => Promise<T>): Promise<T> {
+  private async runStoreTask(task: (store: SecretsStoreState) => Promise<unknown>): Promise<void> {
     const store = this.store;
     try {
       const result = task(store);
       this.requestUpdate();
-      return await result;
+      await result;
     } finally {
       if (this.store === store) {
         this.requestUpdate();
@@ -105,43 +90,31 @@ class SecretsPage extends OpenClawLightDomElement {
     }
   }
 
-  private refresh() {
-    if (!this.canList) {
-      return;
-    }
-    void this.runStoreTask((store) => loadSecretsStore(store));
-  }
-
-  private openAdd() {
-    if (!this.canSet) {
+  private openEntry(entry?: (typeof this.store.entries)[number]) {
+    if (!this.canCall("secrets.store.set")) {
       return;
     }
     this.notice = null;
     this.formError = null;
-    this.secretKindOverridden = false;
-    this.draft = { name: "", value: "", kind: "env", allowedHosts: "" };
-    this.dialogMode = "add";
+    this.secretKindOverridden = Boolean(entry);
+    this.draft = entry
+      ? {
+          name: entry.name,
+          value: entry.kind === "env" ? entry.value : "",
+          kind: entry.kind,
+          allowedHosts: entry.kind === "secret" ? (entry.allowedHosts ?? []).join("\n") : "",
+        }
+      : { name: "", value: "", kind: "env", allowedHosts: "" };
+    this.dialogMode = entry ? "edit" : "add";
   }
 
-  private openEdit(entry: (typeof this.store.entries)[number]) {
-    if (!this.canSet) {
-      return;
-    }
-    this.notice = null;
-    this.formError = null;
-    this.secretKindOverridden = true;
-    this.draft = {
-      name: entry.name,
-      value: entry.kind === "env" ? entry.value : "",
-      kind: entry.kind,
-      allowedHosts: entry.kind === "secret" ? (entry.allowedHosts ?? []).join("\n") : "",
-    };
-    this.dialogMode = "edit";
-  }
-
-  private closeDialog() {
+  private closeDialog(bulk = false) {
     if (!this.store.busy) {
-      this.dialogMode = null;
+      if (bulk) {
+        this.bulkOpen = false;
+      } else {
+        this.dialogMode = null;
+      }
       this.formError = null;
     }
   }
@@ -171,25 +144,12 @@ class SecretsPage extends OpenClawLightDomElement {
     return null;
   }
 
-  private validateDraft(): string | null {
-    if (!ENV_SECRET_REF_ID_RE.test(this.draft.name)) {
-      return t("secretsStore.badName");
-    }
-    return this.validateValue(this.draft.value, this.draft.kind);
-  }
-
-  private submitDraft() {
-    if (!this.canSet || !this.dialogMode) {
-      return;
-    }
-    const error = this.validateDraft();
-    if (error) {
-      this.formError = error;
-      return;
-    }
-    const draft = { ...this.draft };
+  private saveEntryTask<Result extends { warningCount?: number }>(
+    save: (store: SecretsStoreState) => Promise<Result | null>,
+    finish: (result: Result) => string,
+  ) {
     void this.runStoreTask(async (store) => {
-      const result = await setSecretsStoreEntry(store, draft);
+      const result = await save(store);
       if (this.store !== store) {
         return;
       }
@@ -197,20 +157,40 @@ class SecretsPage extends OpenClawLightDomElement {
         this.formError = store.error;
         return;
       }
-      this.dialogMode = null;
+      const saved = finish(result);
       this.formError = null;
-      const saved = t(
-        draft.kind === "secret" ? "secretsStore.savedProtected" : "secretsStore.savedReadable",
-        { name: draft.name },
-      );
       this.notice = result.warningCount
         ? `${saved} ${t("secretsStore.warnings", { count: String(result.warningCount) })}`
         : saved;
     });
   }
 
+  private submitDraft() {
+    if (!this.canCall("secrets.store.set") || !this.dialogMode) {
+      return;
+    }
+    const error = ENV_SECRET_REF_ID_RE.test(this.draft.name)
+      ? this.validateValue(this.draft.value, this.draft.kind)
+      : t("secretsStore.badName");
+    if (error) {
+      this.formError = error;
+      return;
+    }
+    const draft = { ...this.draft };
+    this.saveEntryTask(
+      (store) => setSecretsStoreEntry(store, draft),
+      () => {
+        this.dialogMode = null;
+        return t(
+          draft.kind === "secret" ? "secretsStore.savedProtected" : "secretsStore.savedReadable",
+          { name: draft.name },
+        );
+      },
+    );
+  }
+
   private openBulk() {
-    if (!this.canSet) {
+    if (!this.canCall("secrets.store.set")) {
       return;
     }
     this.notice = null;
@@ -220,19 +200,12 @@ class SecretsPage extends OpenClawLightDomElement {
     this.bulkOpen = true;
   }
 
-  private closeBulk() {
-    if (!this.store.busy) {
-      this.bulkOpen = false;
-      this.formError = null;
-    }
-  }
-
   private get bulkParsed() {
     return parseSecretsStoreBulkInput(this.bulkRaw, this.bulkAutoDetect);
   }
 
   private submitBulk() {
-    if (!this.canSet || !this.bulkOpen) {
+    if (!this.canCall("secrets.store.set") || !this.bulkOpen) {
       return;
     }
     const parsed = this.bulkParsed;
@@ -251,26 +224,17 @@ class SecretsPage extends OpenClawLightDomElement {
         return;
       }
     }
-    void this.runStoreTask(async (store) => {
-      const result = await bulkSetSecretsStoreEntries(store, parsed.entries);
-      if (this.store !== store) {
-        return;
-      }
-      if (!result) {
-        this.formError = store.error;
-        return;
-      }
-      this.bulkOpen = false;
-      this.formError = null;
-      const saved = t("secretsStore.savedMany", {
-        count: String(result.saved),
-        protected: String(parsed.entries.filter((entry) => entry.kind === "secret").length),
-        readable: String(parsed.entries.filter((entry) => entry.kind === "env").length),
-      });
-      this.notice = result.warningCount
-        ? `${saved} ${t("secretsStore.warnings", { count: String(result.warningCount) })}`
-        : saved;
-    });
+    this.saveEntryTask(
+      (store) => bulkSetSecretsStoreEntries(store, parsed.entries),
+      (result) => {
+        this.bulkOpen = false;
+        return t("secretsStore.savedMany", {
+          count: String(result.saved),
+          protected: String(parsed.entries.filter((entry) => entry.kind === "secret").length),
+          readable: String(parsed.entries.filter((entry) => entry.kind === "env").length),
+        });
+      },
+    );
   }
 
   private async removeEntry(entry: (typeof this.store.entries)[number]) {
@@ -280,7 +244,7 @@ class SecretsPage extends OpenClawLightDomElement {
     const client = this.store.client;
     if (
       !client ||
-      !this.canDelete ||
+      !this.canCall("secrets.store.delete") ||
       !(await showConfirmDialog({
         title: t("common.delete"),
         message: t("secretsStore.confirmDelete", { name: entry.name }),
@@ -291,7 +255,11 @@ class SecretsPage extends OpenClawLightDomElement {
       return;
     }
     this.notice = null;
-    if (this.context.gateway !== gateway || this.store.client !== client || !this.canDelete) {
+    if (
+      this.context.gateway !== gateway ||
+      this.store.client !== client ||
+      !this.canCall("secrets.store.delete")
+    ) {
       this.store.error = t("secretsStore.deleteFailed");
       this.requestUpdate();
       return;
@@ -312,9 +280,9 @@ class SecretsPage extends OpenClawLightDomElement {
       busy: this.store.busy,
       error: this.store.error,
       notice: this.notice,
-      canList: this.canList,
-      canSet: this.canSet,
-      canDelete: this.canDelete,
+      canList: this.canCall("secrets.store.list"),
+      canSet: this.canCall("secrets.store.set"),
+      canDelete: this.canCall("secrets.store.delete"),
       dialogMode: this.dialogMode,
       draft: this.draft,
       formError: this.formError,
@@ -324,9 +292,13 @@ class SecretsPage extends OpenClawLightDomElement {
       bulkSecretCount: parsed.entries.filter((entry) => entry.kind === "secret").length,
       bulkEntryCount: parsed.entries.length,
       bulkInvalidNames: parsed.invalidNames,
-      onRefresh: () => this.refresh(),
-      onOpenAdd: () => this.openAdd(),
-      onOpenEdit: (entry) => this.openEdit(entry),
+      onRefresh: () => {
+        if (this.canCall("secrets.store.list")) {
+          void this.runStoreTask(loadSecretsStore);
+        }
+      },
+      onOpenAdd: () => this.openEntry(),
+      onOpenEdit: (entry) => this.openEntry(entry),
       onCloseDialog: () => this.closeDialog(),
       onDraftNameChange: (name) => this.changeDraftName(name),
       onDraftValueChange: (value) => this.patchDraft({ value }),
@@ -337,7 +309,7 @@ class SecretsPage extends OpenClawLightDomElement {
       },
       onSubmitDraft: () => this.submitDraft(),
       onOpenBulk: () => this.openBulk(),
-      onCloseBulk: () => this.closeBulk(),
+      onCloseBulk: () => this.closeDialog(true),
       onBulkRawChange: (raw) => {
         this.bulkRaw = raw;
         this.formError = null;

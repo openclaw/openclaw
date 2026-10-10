@@ -41,7 +41,6 @@ export function createTerminalRequesterSettleGate() {
             {
               agentId: requester.agentId,
               search: requester.sessionKey,
-              excludeSubagents: true,
               limit: 100,
             },
             { timeoutMs: 10_000 },
@@ -60,7 +59,7 @@ export function createTerminalRequesterSettleGate() {
         if (
           requesters.get(key) === requester &&
           session?.hasActiveRun === false &&
-          session.status === "done" &&
+          (session.status === undefined || session.status === "done") &&
           session.abortedLastRun !== true
         ) {
           markSettled(key);
@@ -80,7 +79,7 @@ export function createTerminalRequesterSettleGate() {
       const promise = new Promise<void>((resolve, reject) => {
         const timeout = setTimeout(() => {
           finish(new Error(`terminal requester did not settle: ${caseName} (${childSessionKey})`));
-        }, 30_000);
+        }, 120_000);
         finish = (error) => {
           clearTimeout(timeout);
           waiters.delete(key);

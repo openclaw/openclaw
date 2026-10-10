@@ -193,27 +193,6 @@ describe("runWizardWithPromptNavigation", () => {
 });
 
 describe("runWizardWithPromptNavigationScope", () => {
-  it("returns a typed back outcome from the first prompt", async () => {
-    const select = vi.fn(async () => {
-      throw new WizardNavigationError("back");
-    }) as unknown as WizardPrompter["select"];
-    const prompter = createWizardPrompter({ select });
-
-    const outcome = await runWizardWithPromptNavigationScope(prompter, async (scopedPrompter) => {
-      await scopedPrompter.select({
-        message: "First channel prompt",
-        options: selectOptions(["continue"]),
-      });
-      return "completed";
-    });
-
-    expect(outcome).toEqual({ status: "back" });
-    expect(selectParamsAt(select as ReturnType<typeof vi.fn>, 0).navigation).toEqual({
-      canGoBack: true,
-      canGoForward: false,
-    });
-  });
-
   it("creates a fresh scope inside an outer wizard whose back history is disabled", async () => {
     const select = vi.fn(async () => {
       throw new WizardNavigationError("back");

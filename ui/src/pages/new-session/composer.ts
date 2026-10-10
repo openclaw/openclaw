@@ -7,13 +7,18 @@ import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import { updateHumanMentions } from "../../lib/chat/human-mentions.ts";
+import {
+  clearCompositionEnd,
+  isComposingKeyboardEvent,
+  recordCompositionEnd,
+} from "../../lib/ime.ts";
 import "../../components/tooltip.ts";
+import { renderChatAttachmentInputs } from "../chat/components/chat-attachment-inputs.ts";
 import {
   createChatAttachmentDropHandlers,
   handleChatAttachmentPaste,
   renderAttachmentPreview,
   renderAttachmentReadStatus,
-  renderChatAttachmentInputs,
 } from "../chat/components/chat-attachments.ts";
 import { adjustTextareaHeight, paneDomId } from "../chat/components/chat-composer-dom.ts";
 import type { HumanMentionMenuHost } from "../chat/components/chat-composer-mention-menu.ts";
@@ -55,111 +60,22 @@ function renderStartControl(options: NewSessionComposerOptions) {
     ? t("newSession.starting")
     : t(options.nativeTerminal ? "newSession.startInTerminal" : "newSession.start");
   const reasonedBlock = !options.canSubmit && options.submitDisabledReason !== undefined;
+  const busy = options.submitting || options.pendingAttachmentReads > 0;
   return html` <openclaw-tooltip content=${options.submitDisabledReason ?? startLabel}>
     <button
       type="button"
       class="chat-send-btn new-session-page__start-submit ${
         reasonedBlock ? "new-session-page__start-submit--blocked" : ""
-      }"
+      } ${busy ? "new-session-page__start-submit--busy" : ""}"
       ?disabled=${!options.canSubmit && !reasonedBlock}
       aria-disabled=${String(!options.canSubmit)}
-      aria-busy=${String(options.submitting || options.pendingAttachmentReads > 0)}
+      aria-busy=${String(busy)}
       aria-label=${startLabel}
       @click=${() => submitNewSession(options)}
     >
-      ${
-        options.submitting || options.pendingAttachmentReads > 0
-          ? icons.loader
-          : options.nativeTerminal
-            ? icons.squareTerminal
-            : icons.arrowUp
-      }
+      ${busy ? icons.loader : options.nativeTerminal ? icons.squareTerminal : icons.arrowUp}
     </button>
   </openclaw-tooltip>`;
-}
-
-function handleComposerKeydown(
-  event: KeyboardEvent,
-  options: NewSessionComposerOptions,
-  skillMenuHost: SkillMenuHost,
-  slashMenuHost: SlashMenuHost,
-  mentionMenuHost: HumanMentionMenuHost,
-) {
-  if (options.dictationActive || options.submitting || options.messageLocked) {
-    return;
-  }
-  if (options.textareaController.composing || event.isComposing || event.keyCode === 229) {
-    return;
-  }
-  if (
-    options.textareaController.emojiMenu.handleKeydown(event, "new-session", options.requestUpdate)
-  ) {
-    return;
-  }
-  if (
-    options.textareaController.mentionMenu.handleKeydown(
-      event,
-      mentionMenuHost,
-      options.requestUpdate,
-    )
-  ) {
-    return;
-  }
-  if (
-    handleSkillMenuKeydown(
-      event,
-      options.textareaController.skillMenuState,
-      skillMenuHost,
-      options.requestUpdate,
-    )
-  ) {
-    return;
-  }
-  if (
-    handleSlashMenuKeydown(
-      event,
-      options.textareaController.slashMenuState,
-      slashMenuHost,
-      options.requestUpdate,
-    )
-  ) {
-    return;
-  }
-  if (event.key !== "Enter") {
-    return;
-  }
-  const hasSubmitModifier = event.metaKey || event.ctrlKey;
-  const isBackgroundShortcut = options.requiresModifier
-    ? hasSubmitModifier && event.shiftKey
-    : hasSubmitModifier && !event.shiftKey;
-  if (!event.altKey && isBackgroundShortcut && options.onBackgroundSubmit) {
-    if (event.repeat) {
-      event.preventDefault();
-      return;
-    }
-    if (options.canSubmit || options.submitDisabledReason !== undefined) {
-      event.preventDefault();
-      resetSkillMenuState(options.textareaController.skillMenuState);
-      resetSlashMenuState(options.textareaController.slashMenuState);
-      options.textareaController.mentionMenu.close();
-      options.onBackgroundSubmit();
-    }
-    return;
-  }
-  if (event.shiftKey || (options.requiresModifier && !hasSubmitModifier)) {
-    return;
-  }
-  if (event.repeat) {
-    event.preventDefault();
-    return;
-  }
-  // A reasoned gate still consumes the press: the submission flow records the
-  // attempt and surfaces the reason instead of silently inserting a newline.
-  // Only silent gates (busy button, empty draft) keep Enter native.
-  if (options.canSubmit || options.submitDisabledReason !== undefined) {
-    event.preventDefault();
-    submitNewSession(options);
-  }
 }
 
 /** Draft message box styled as the chat composer shell so both pickers match. */
@@ -170,11 +86,7 @@ export function renderNewSessionComposer(options: NewSessionComposerOptions) {
   const emojiMenu = options.textareaController.emojiMenu;
   const composerLocked =
     options.submitting || options.messageLocked === true || options.dictationActive === true;
-  mentionMenu.syncDirectory(
-    options.submitting || options.messageLocked || options.dictationActive
-      ? undefined
-      : options.mentionDirectory,
-  );
+  mentionMenu.syncDirectory(composerLocked ? undefined : options.mentionDirectory);
   const skillMenuHost: SkillMenuHost = {
     paneId: "new-session",
     getDraft: () => options.textareaController.getTextarea()?.value ?? options.message,
@@ -183,14 +95,10 @@ export function renderNewSessionComposer(options: NewSessionComposerOptions) {
     refreshCommands: options.refreshCommands,
   };
   const slashMenuHost: SlashMenuHost = {
-    paneId: skillMenuHost.paneId,
-    getDraft: skillMenuHost.getDraft,
-    commitDraft: skillMenuHost.commitDraft,
-    getTextarea: skillMenuHost.getTextarea,
+    ...skillMenuHost,
     resolveArgOptions: (command) => command.argOptions ?? [],
     runCommand: () => submitNewSession(options),
     canRun: (inline) => !inline,
-    refreshCommands: options.refreshCommands,
     commandFilter: (command) => command.executeLocal !== true,
   };
   const mentionMenuHost: HumanMentionMenuHost = {
@@ -199,6 +107,70 @@ export function renderNewSessionComposer(options: NewSessionComposerOptions) {
     getTextarea: skillMenuHost.getTextarea,
     getMentions: () => options.getMentions?.() ?? options.mentions ?? [],
     commitDraft: options.onInput,
+  };
+  const handleComposerKeydown = (event: KeyboardEvent) => {
+    if (
+      options.dictationActive ||
+      options.submitting ||
+      options.messageLocked ||
+      options.textareaController.composing ||
+      isComposingKeyboardEvent(event)
+    ) {
+      return;
+    }
+    if (
+      options.textareaController.emojiMenu.handleKeydown(
+        event,
+        "new-session",
+        options.requestUpdate,
+      ) ||
+      options.textareaController.mentionMenu.handleKeydown(
+        event,
+        mentionMenuHost,
+        options.requestUpdate,
+      ) ||
+      handleSkillMenuKeydown(
+        event,
+        options.textareaController.skillMenuState,
+        skillMenuHost,
+        options.requestUpdate,
+      ) ||
+      handleSlashMenuKeydown(
+        event,
+        options.textareaController.slashMenuState,
+        slashMenuHost,
+        options.requestUpdate,
+      )
+    ) {
+      return;
+    }
+    if (event.key !== "Enter") {
+      return;
+    }
+    const hasSubmitModifier = event.metaKey || event.ctrlKey;
+    const isBackgroundShortcut = hasSubmitModifier && event.shiftKey;
+    const background = Boolean(!event.altKey && isBackgroundShortcut && options.onBackgroundSubmit);
+    if (!background && (event.shiftKey || (options.requiresModifier && !hasSubmitModifier))) {
+      return;
+    }
+    if (event.repeat) {
+      event.preventDefault();
+      return;
+    }
+    // A reasoned gate still consumes the press: the submission flow records the
+    // attempt and surfaces the reason instead of silently inserting a newline.
+    // Only silent gates (busy button, empty draft) keep Enter native.
+    if (options.canSubmit || options.submitDisabledReason !== undefined) {
+      event.preventDefault();
+      if (background) {
+        resetSkillMenuState(options.textareaController.skillMenuState);
+        resetSlashMenuState(options.textareaController.slashMenuState);
+        options.textareaController.mentionMenu.close();
+        options.onBackgroundSubmit?.();
+      } else {
+        submitNewSession(options);
+      }
+    }
   };
   const updateEmojiMenu = (target: HTMLTextAreaElement) => {
     emojiMenu.update(
@@ -225,11 +197,7 @@ export function renderNewSessionComposer(options: NewSessionComposerOptions) {
       skillMenuHost,
       options.requestUpdate,
     );
-    if (
-      event?.inputType === "insertFromPaste" ||
-      event?.inputType === "insertFromDrop" ||
-      event?.isComposing
-    ) {
+    if (event?.inputType === "insertFromPaste" || event?.inputType === "insertFromDrop") {
       mentionMenu.close();
     } else {
       mentionMenu.update(
@@ -261,6 +229,7 @@ export function renderNewSessionComposer(options: NewSessionComposerOptions) {
   const attachmentProps = {
     attachmentReads: options.attachmentReads,
     attachmentLimits: options.attachmentLimits,
+    uploadConfig: options.uploadConfig,
     attachments: options.attachments,
     get disabled() {
       return (
@@ -309,10 +278,10 @@ export function renderNewSessionComposer(options: NewSessionComposerOptions) {
     emojiMenu,
   );
   const menuAnnouncementId = paneDomId(skillMenuHost.paneId, "active-menu-announcement");
-  const ordinaryShortcut = options.requiresModifier ? "Control+Enter Meta+Enter" : "Enter";
-  const backgroundShortcut = options.requiresModifier
-    ? "Control+Shift+Enter Meta+Shift+Enter"
-    : "Control+Enter Meta+Enter";
+  const ordinaryShortcut = options.requiresModifier
+    ? "Control+Enter Meta+Enter"
+    : "Enter Control+Enter Meta+Enter";
+  const backgroundShortcut = "Control+Shift+Enter Meta+Shift+Enter";
   const keyShortcuts = options.onBackgroundSubmit
     ? `${ordinaryShortcut} ${backgroundShortcut}`
     : ordinaryShortcut;
@@ -437,12 +406,14 @@ export function renderNewSessionComposer(options: NewSessionComposerOptions) {
               @focus=${handleSelect}
               @pointerup=${handleSelect}
               @keyup=${(event: KeyboardEvent) => {
+                clearCompositionEnd(event);
                 emojiMenu.handleKeyup(event);
                 if (event.key.startsWith("Arrow") || event.key === "Home" || event.key === "End") {
                   handleSelect(event);
                 }
               }}
-              @blur=${() => {
+              @blur=${(event: FocusEvent) => {
+                clearCompositionEnd(event);
                 const emojiWasOpen = emojiMenu.open;
                 options.textareaController.composing = false;
                 emojiMenu.close();
@@ -451,19 +422,13 @@ export function renderNewSessionComposer(options: NewSessionComposerOptions) {
                 }
               }}
               @compositionend=${(event: CompositionEvent) => {
+                recordCompositionEnd(event);
                 options.textareaController.composing = false;
                 if (event.target instanceof HTMLTextAreaElement) {
                   updateMenus(event.target);
                 }
               }}
-              @keydown=${(event: KeyboardEvent) =>
-                handleComposerKeydown(
-                  event,
-                  options,
-                  skillMenuHost,
-                  slashMenuHost,
-                  mentionMenuHost,
-                )}
+              @keydown=${handleComposerKeydown}
               @compositionstart=${() => {
                 options.textareaController.composing = true;
                 emojiMenu.close();

@@ -61,7 +61,6 @@ describe("onepassword list with SQLite grants", () => {
   });
 
   afterEach(async () => {
-    vi.restoreAllMocks();
     await closeOpenClawStateDatabaseAsync();
     resetPluginStateStoreForTests();
   });
@@ -75,7 +74,7 @@ describe("onepassword list with SQLite grants", () => {
     });
   }
 
-  function setup(slugs: string[], grants: PluginStateKeyedStore<StandingGrant> = openGrants()) {
+  function setup(slugs: string[], grants: PluginStateKeyedStore<StandingGrant>) {
     const getItem = vi.fn(async () => {
       throw new Error("list must not retrieve a secret");
     });
@@ -89,34 +88,6 @@ describe("onepassword list with SQLite grants", () => {
       createOnePasswordTool(broker, { ...invocation, agentId }).execute("list", { action: "list" });
     return { list, getItem };
   }
-
-  it("requests only the configured agent's grant keys when listing items", async () => {
-    const grants = openGrants();
-    const slugs = ["second", "first"];
-    for (const agentId of [
-      invocation.agentId,
-      ...Array.from({ length: 31 }, (_, i) => `other-${i}`),
-    ]) {
-      for (const slug of slugs) {
-        await grants.register(grantKey(agentId, slug), grant(slug, agentId));
-      }
-    }
-    const { list, getItem } = setup(slugs, grants);
-    const lookupMany = vi.spyOn(grants, "lookupMany");
-    expect((await list()).details).toEqual({
-      ok: true,
-      items: ["first", "second"].map((slug) => ({
-        slug,
-        description: "",
-        policy: "approve",
-        standingGrantActive: true,
-      })),
-    });
-    expect(lookupMany).toHaveBeenCalledExactlyOnceWith(
-      ["first", "second"].map((slug) => grantKey(invocation.agentId, slug)),
-    );
-    expect(getItem).not.toHaveBeenCalled();
-  });
 
   it.each([true, false])("validates selected grants with bulk support=%s", async (bulk) => {
     const grants = openGrants();

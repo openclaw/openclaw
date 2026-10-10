@@ -36,6 +36,7 @@ export type SqliteSchemaRow = {
 };
 
 export type SqliteTableListRow = {
+  schema: string;
   name: string;
   strict: number;
   wr: number;
@@ -83,7 +84,7 @@ export function createSqliteTableContract(
     normalizedTableSql !== null && /^CREATE VIRTUAL TABLE /iu.test(normalizedTableSql);
 
   return {
-    definition: isVirtualTable ? null : parseTableDefinition(table.sql, tableName),
+    definition: isVirtualTable ? null : parseSqliteTableDefinition(table.sql, tableName),
     indexes,
     strict: tableList.strict,
     triggers: normalizedTriggers,
@@ -97,11 +98,11 @@ export function createSqliteIndexContract(
   schemaSql: string | null,
   rows: SqliteIndexTermRow[],
 ): SqliteIndexContract {
-  const terms = rows.map(({ cid, coll, desc, key, name, seqno }) => ({
+  const terms = rows.map<SqliteIndexTermContract>(({ cid, coll, desc, key, name, seqno }) => ({
     coll,
     desc,
     key,
-    kind: sqliteIndexTermKind(cid),
+    kind: cid === -2 ? "expression" : cid === -1 ? "rowid" : "column",
     name,
     seqno,
   }));
@@ -115,11 +116,10 @@ export function createSqliteIndexContract(
   };
 }
 
-function sqliteIndexTermKind(cid: number): SqliteIndexTermContract["kind"] {
-  return cid === -2 ? "expression" : cid === -1 ? "rowid" : "column";
-}
-
-function parseTableDefinition(sql: string | null, tableName: string): SqliteTableDefinition {
+export function parseSqliteTableDefinition(
+  sql: string | null,
+  tableName: string,
+): SqliteTableDefinition {
   if (sql === null) {
     throw new Error(`Could not inspect SQLite table definition for ${tableName}.`);
   }

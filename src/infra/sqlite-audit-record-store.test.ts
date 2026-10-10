@@ -7,7 +7,11 @@ import {
 } from "../state/openclaw-state-db.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { getNodeSqliteKysely } from "./kysely-sync.js";
-import { registerSqliteAuditRecordAsync } from "./sqlite-audit-record-store.async.js";
+import {
+  createSqliteAuditRecordReader,
+  createSqliteAuditRecordWriter,
+  registerSqliteAuditRecordAsync,
+} from "./sqlite-audit-record-store.async.js";
 import { createSqliteAuditRecordStore } from "./sqlite-audit-record-store.js";
 
 function withAuditStoreFixture(
@@ -25,6 +29,130 @@ function withAuditStoreFixture(
 }
 
 describe("SQLite audit record store", () => {
+  it("refreshes sequence and retention facts after foreign writes and duplicate legacy rows", async () => {
+    await withAuditStoreFixture({ prefix: "openclaw-audit-write-facts-" }, async (stateDir) => {
+      const options = {
+        env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+        scope: "write-facts",
+        maxEntries: 3,
+      };
+      const native = createSqliteAuditRecordStore<{ value: number }>(options);
+      const writer = createSqliteAuditRecordWriter<{ value: number }>(options);
+      native.registerLegacyMany([
+        { key: "legacy", value: { value: 0 }, createdAt: 0 },
+        { key: "legacy", value: { value: 99 }, createdAt: 1 },
+      ]);
+      await writer.register("first", { value: 1 }, 1);
+      native.register("foreign", { value: 2 }, 2);
+      await writer.register("second", { value: 3 }, 3);
+      expect(native.latest({ limit: 5 })).toEqual([
+        { key: "second", value: { value: 3 }, createdAt: 3, sequence: 3 },
+        { key: "foreign", value: { value: 2 }, createdAt: 2, sequence: 2 },
+        { key: "first", value: { value: 1 }, createdAt: 1, sequence: 1 },
+      ]);
+      await writer.register("first", { value: 99 }, 99);
+      expect(native.entries()).toHaveLength(3);
+      await expect(writer.compareAndSet("foreign", { value: 2 }, null)).resolves.toBe(true);
+      native.registerLegacyMany([
+        { key: "legacy", value: { value: 4 }, createdAt: 4 },
+        { key: "legacy", value: { value: 99 }, createdAt: 5 },
+      ]);
+      await writer.register("third", { value: 5 }, 5);
+      expect(native.latest({ limit: 5 })).toEqual([
+        { key: "third", value: { value: 5 }, createdAt: 5, sequence: 4 },
+        { key: "second", value: { value: 3 }, createdAt: 3, sequence: 3 },
+        { key: "first", value: { value: 1 }, createdAt: 1, sequence: 1 },
+      ]);
+    });
+  });
+
+  it("scans older config edits and rejects all facts when a later page is corrupt", async () => {
+    await withAuditStoreFixture({ prefix: "openclaw-audit-facts-scan-" }, async (stateDir) => {
+      const options = {
+        env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+        scope: "config-audit",
+        maxEntries: 10,
+      };
+      const native = createSqliteAuditRecordStore<{ event: string }>(options);
+      native.register("old-external", { event: "config.external" }, 1);
+      for (let sequence = 2; sequence <= 8; sequence += 1) {
+        native.register(`write-${sequence}`, { event: "config.write" }, sequence);
+      }
+      const reader = createSqliteAuditRecordReader<{ event: string }>(options);
+
+      await expect(reader.configAuditFacts(0)).resolves.toEqual({
+        auditSequence: 8,
+        recentExternalEdit: true,
+      });
+      await expect(reader.configAuditFacts(1)).resolves.toEqual({
+        auditSequence: 8,
+        recentExternalEdit: false,
+      });
+
+      native.upsert("write-8", { event: "config.external" }, 8);
+      const { db } = openOpenClawStateDatabase(options);
+      db.prepare(
+        "UPDATE diagnostic_events SET payload_json = ? WHERE scope = ? AND event_key = ?",
+      ).run("{", options.scope, "old-external");
+
+      await expect(reader.configAuditFacts(0)).rejects.toThrow(/JSON|Unexpected|property name/i);
+      await expect(reader.configAuditFacts(5)).resolves.toEqual({
+        auditSequence: 8,
+        recentExternalEdit: true,
+      });
+    });
+  });
+
+  it("settles competing worker comparisons against current rows and captures submitted values", async () => {
+    await withAuditStoreFixture({ prefix: "openclaw-audit-cas-" }, async (stateDir) => {
+      const options = {
+        env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+        scope: "greeting-cas",
+        maxEntries: 1,
+      };
+      const native = createSqliteAuditRecordStore<{ text: string; cursor: number }>(options);
+      native.register("latest", { text: "initial", cursor: 0 }, 1);
+      const firstWriter = createSqliteAuditRecordWriter<{ text: string; cursor: number }>(options);
+      const secondWriter = createSqliteAuditRecordWriter<{ text: string; cursor: number }>(options);
+      const reader = createSqliteAuditRecordReader<{ text: string; cursor: number }>(options);
+      expect((await reader.latest({ limit: 1 }))[0]?.value).toEqual({ text: "initial", cursor: 0 });
+
+      const expected = { text: "initial", cursor: 0 };
+      const replacement = { text: "greeting", cursor: 0 };
+      const first = firstWriter.compareAndSet("latest", expected, replacement, 2);
+      const second = secondWriter.compareAndSet(
+        "latest",
+        { text: "initial", cursor: 0 },
+        { text: "initial", cursor: 7 },
+        3,
+      );
+      expected.cursor = 99;
+      replacement.text = "mutated after submission";
+
+      await expect(Promise.all([first, second])).resolves.toEqual([true, false]);
+      expect((await reader.latest({ limit: 1 }))[0]).toMatchObject({
+        value: { text: "greeting", cursor: 0 },
+        createdAt: 2,
+        sequence: 1,
+      });
+
+      native.upsert("latest", { text: "foreign commit", cursor: 8 }, 4);
+      expect((await reader.latest({ limit: 1 }))[0]?.value).toEqual({
+        text: "foreign commit",
+        cursor: 8,
+      });
+      await expect(
+        secondWriter.compareAndSet(
+          "latest",
+          { text: "foreign commit", cursor: 8 },
+          { text: "next greeting", cursor: 8 },
+          5,
+        ),
+      ).resolves.toBe(true);
+      expect(native.latest({ limit: 1 })[0]?.value).toEqual({ text: "next greeting", cursor: 8 });
+    });
+  });
+
   it("rolls back async insertion and retention together, preserving sibling scopes", async () => {
     await withAuditStoreFixture({ prefix: "openclaw-async-audit-rollback-" }, async (stateDir) => {
       const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
@@ -73,23 +201,6 @@ describe("SQLite audit record store", () => {
         before[0],
       ]);
       expect(sibling.entries()).toEqual([{ key: "one", value: { value: 9 }, createdAt: 1 }]);
-    });
-  });
-
-  it("keeps the newest configured number of rows per scope", async () => {
-    await withAuditStoreFixture({ prefix: "openclaw-audit-store-" }, async (stateDir) => {
-      const store = createSqliteAuditRecordStore<{ value: number }>({
-        scope: "bounded-test",
-        maxEntries: 2,
-        env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-      });
-
-      store.register("one", { value: 1 }, 1);
-      store.register("two", { value: 2 }, 2);
-      store.register("three", { value: 3 }, 3);
-
-      expect(store.size()).toBe(2);
-      expect(store.entries().map((entry) => entry.key)).toEqual(["two", "three"]);
     });
   });
 
@@ -213,7 +324,13 @@ describe("SQLite audit record store", () => {
             maxEntries: 2,
           });
           if (operation === "compareAndSet") {
-            expect(store.compareAndSet("old\0key", { value: 0 }, { value: 9 }, 0)).toBe(true);
+            const writer = createSqliteAuditRecordWriter<{ value: number }>({
+              ...options,
+              maxEntries: 2,
+            });
+            await expect(
+              writer.compareAndSet("old\0key", { value: 0 }, { value: 9 }, 0),
+            ).resolves.toBe(true);
           } else {
             store[operation]("old\0key", { value: 9 }, 0);
           }
@@ -268,11 +385,13 @@ describe("SQLite audit record store", () => {
 
   it("keeps keyed mutations atomic without changing insertion age", async () => {
     await withAuditStoreFixture({ prefix: "openclaw-audit-store-upsert-" }, async (stateDir) => {
-      const store = createSqliteAuditRecordStore<{ value: number }>({
+      const options = {
         scope: "upsert-test",
         maxEntries: 2,
         env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-      });
+      };
+      const store = createSqliteAuditRecordStore<{ value: number }>(options);
+      const writer = createSqliteAuditRecordWriter<{ value: number }>(options);
 
       store.register("one", { value: 1 }, 1);
       store.register("two", { value: 2 }, 2);
@@ -282,60 +401,30 @@ describe("SQLite audit record store", () => {
         { key: "one", value: { value: 3 }, createdAt: 3, sequence: 1 },
       ]);
 
-      expect(store.compareAndSet("one", { value: 3 }, { value: 4 }, 4)).toBe(true);
+      await expect(writer.compareAndSet("one", { value: 3 }, { value: 4 }, 4)).resolves.toBe(true);
       expect(store.latest({ limit: 2 })).toEqual([
         { key: "two", value: { value: 2 }, createdAt: 2, sequence: 2 },
         { key: "one", value: { value: 4 }, createdAt: 4, sequence: 1 },
       ]);
 
-      expect(store.compareAndSet("one", { value: 999 }, null)).toBe(false);
+      await expect(writer.compareAndSet("one", { value: 999 }, null)).resolves.toBe(false);
       expect(store.latest({ limit: 2 })).toEqual([
         { key: "two", value: { value: 2 }, createdAt: 2, sequence: 2 },
         { key: "one", value: { value: 4 }, createdAt: 4, sequence: 1 },
       ]);
 
-      expect(store.compareAndSet("one", { value: 4 }, null)).toBe(true);
-      expect(store.compareAndSet("three", null, { value: 5 }, 5)).toBe(true);
+      await expect(writer.compareAndSet("one", { value: 4 }, null)).resolves.toBe(true);
+      await expect(writer.compareAndSet("three", null, { value: 5 }, 5)).resolves.toBe(true);
       expect(store.latest({ limit: 2 })).toEqual([
         { key: "three", value: { value: 5 }, createdAt: 5, sequence: 3 },
         { key: "two", value: { value: 2 }, createdAt: 2, sequence: 2 },
       ]);
 
-      expect(store.compareAndSet("four", null, { value: 6 }, 6)).toBe(true);
+      await expect(writer.compareAndSet("four", null, { value: 6 }, 6)).resolves.toBe(true);
       expect(store.latest({ limit: 2 })).toEqual([
         { key: "four", value: { value: 6 }, createdAt: 6, sequence: 4 },
         { key: "three", value: { value: 5 }, createdAt: 5, sequence: 3 },
       ]);
-
-      store.delete("four");
-      expect(store.latest({ limit: 2 })).toEqual([
-        { key: "three", value: { value: 5 }, createdAt: 5, sequence: 3 },
-      ]);
     });
-  });
-
-  it("orders legacy batches before existing runtime rows", async () => {
-    await withAuditStoreFixture(
-      { prefix: "openclaw-audit-store-legacy-order-" },
-      async (stateDir) => {
-        const store = createSqliteAuditRecordStore<{ value: number }>({
-          scope: "legacy-order",
-          maxEntries: 4,
-          env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-        });
-
-        store.register("runtime", { value: 3 }, 3);
-        store.registerLegacyMany([
-          { key: "legacy-one", value: { value: 1 }, createdAt: 1 },
-          { key: "legacy-two", value: { value: 2 }, createdAt: 2 },
-        ]);
-
-        expect(store.entries().map((entry) => entry.key)).toEqual([
-          "legacy-one",
-          "legacy-two",
-          "runtime",
-        ]);
-      },
-    );
   });
 });

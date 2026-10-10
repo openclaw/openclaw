@@ -60,7 +60,6 @@ const runCliAgentMock = vi.fn();
 const runWithModelFallbackMock = vi.fn();
 const runtimeErrorMock = vi.fn();
 const abortEmbeddedAgentRunMock = vi.fn();
-const clearSessionQueuesMock = vi.fn();
 const refreshQueuedFollowupSessionMock = vi.fn();
 const compactState = vi.hoisted(() => ({
   compactEmbeddedAgentSessionMock: vi.fn(),
@@ -123,6 +122,7 @@ vi.mock("../../agents/thinking-runtime.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../agents/thinking-runtime.js")>();
   return {
     ...actual,
+    resolveCandidateAgentRuntime: () => "openclaw",
     resolveCandidateThinkingLevel: (
       params: Parameters<typeof actual.resolveCandidateThinkingLevel>[0],
     ) => params.level,
@@ -140,10 +140,12 @@ vi.mock("../../runtime.js", () => {
   };
 });
 
+// mock-isolation: Keep the process-wide followup queue and drain registry outside runner cases.
 vi.mock("./queue.js", () => {
   return {
     admitFollowupRunLifecycle: vi.fn(async () => {}),
     enqueueFollowupRun: vi.fn(),
+    kickFollowupDrainIfIdle: vi.fn(),
     parkSteerCandidate: vi.fn(() => ({
       admit: async () => "steer",
       accepted: vi.fn(),
@@ -152,7 +154,6 @@ vi.mock("./queue.js", () => {
     })),
     resolveFollowupAbortSignal: vi.fn(() => undefined),
     scheduleFollowupDrain: vi.fn(),
-    clearSessionQueues: (...args: unknown[]) => clearSessionQueuesMock(...args),
     refreshQueuedFollowupSession: (...args: unknown[]) => refreshQueuedFollowupSessionMock(...args),
   };
 });
@@ -207,7 +208,7 @@ vi.mock("../../agents/subagents/registry/subagent-registry.js", async (importOri
     await importOriginal<typeof import("../../agents/subagents/registry/subagent-registry.js")>();
   return {
     ...actual,
-    getSwarmRunByLaunchReplayKey: () => undefined,
+    getSwarmRunByLaunchReplayKey: async () => undefined,
     markSubagentRunTerminated: () => 0,
   };
 });
@@ -215,8 +216,7 @@ vi.mock("../../agents/subagents/registry/subagent-registry-read.js", async (impo
   ...(await importOriginal<
     typeof import("../../agents/subagents/registry/subagent-registry-read.js")
   >()),
-  getLatestSubagentRunByChildSessionKey: () => null,
-  listSubagentRunsForController: () => [],
+  getLatestSubagentRunByChildSessionKey: async () => null,
 }));
 
 // #85714: keep the real private-final decision but spy the WARN emitter so we
@@ -249,8 +249,6 @@ function setupAgentRunnerMocks(): void {
     compacted: false,
     reason: "test-preflight-disabled",
   });
-  clearSessionQueuesMock.mockReset();
-  clearSessionQueuesMock.mockReturnValue({ followupCleared: 0, laneCleared: 0, keys: [] });
   refreshQueuedFollowupSessionMock.mockReset();
   refreshQueuedFollowupSessionMock.mockResolvedValue(undefined);
   vi.mocked(enqueueFollowupRun).mockReset();

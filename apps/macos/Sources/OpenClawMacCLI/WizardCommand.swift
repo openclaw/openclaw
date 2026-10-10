@@ -54,8 +54,7 @@ enum WizardCliError: Error, CustomStringConvertible {
         switch self {
         case let .invalidUrl(raw): "Invalid URL: \(raw)"
         case .missingRemoteUrl: "gateway.remote.url is missing"
-        case let .gatewayError(msg): msg
-        case let .decodeError(msg): msg
+        case let .gatewayError(msg), let .decodeError(msg): msg
         case .cancelled: "Wizard cancelled"
         }
     }
@@ -93,8 +92,7 @@ func runWizardCommand(_ args: [String], configURL: URL) async {
         let client = GatewayWizardClient(
             url: endpoint.url,
             token: endpoint.token,
-            password: endpoint.password,
-            json: opts.json)
+            password: endpoint.password)
         try await client.connect()
         defer { Task { await client.close() } }
         try await runWizard(client: client, opts: opts)
@@ -105,54 +103,23 @@ func runWizardCommand(_ args: [String], configURL: URL) async {
 }
 
 private func resolveWizardGatewayEndpoint(opts: WizardCliOptions, config: GatewayConfig) throws -> GatewayEndpoint {
-    if let raw = opts.url, !raw.isEmpty {
-        guard let url = URL(string: raw) else { throw WizardCliError.invalidUrl(raw) }
-        return GatewayEndpoint(
-            url: url,
-            token: resolvedToken(opts: opts, config: config),
-            password: resolvedPassword(opts: opts, config: config),
-            mode: (config.mode ?? "local").lowercased())
-    }
-
     let mode = (config.mode ?? "local").lowercased()
-    if mode == "remote" {
-        guard let raw = config.remoteUrl?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else {
-            throw WizardCliError.missingRemoteUrl
-        }
-        guard let url = URL(string: raw) else { throw WizardCliError.invalidUrl(raw) }
-        return GatewayEndpoint(
-            url: url,
-            token: resolvedToken(opts: opts, config: config),
-            password: resolvedPassword(opts: opts, config: config),
-            mode: mode)
+    let raw: String
+    if let explicitURL = opts.url, !explicitURL.isEmpty {
+        raw = explicitURL
+    } else if mode == "remote" {
+        guard let remoteURL = config.remoteUrl?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !remoteURL.isEmpty else { throw WizardCliError.missingRemoteUrl }
+        raw = remoteURL
+    } else {
+        raw = "ws://127.0.0.1:\(config.port ?? 18789)"
     }
-
-    let port = config.port ?? 18789
-    let host = "127.0.0.1"
-    guard let url = URL(string: "ws://\(host):\(port)") else {
-        throw WizardCliError.invalidUrl("ws://\(host):\(port)")
-    }
+    guard let url = URL(string: raw) else { throw WizardCliError.invalidUrl(raw) }
     return GatewayEndpoint(
         url: url,
-        token: resolvedToken(opts: opts, config: config),
-        password: resolvedPassword(opts: opts, config: config),
+        token: resolvedCredential(opts.token, mode: mode, local: config.token, remote: config.remoteToken),
+        password: resolvedCredential(opts.password, mode: mode, local: config.password, remote: config.remotePassword),
         mode: mode)
-}
-
-private func resolvedToken(opts: WizardCliOptions, config: GatewayConfig) -> String? {
-    if let token = opts.token, !token.isEmpty { return token }
-    if (config.mode ?? "local").lowercased() == "remote" {
-        return config.remoteToken
-    }
-    return config.token
-}
-
-private func resolvedPassword(opts: WizardCliOptions, config: GatewayConfig) -> String? {
-    if let password = opts.password, !password.isEmpty { return password }
-    if (config.mode ?? "local").lowercased() == "remote" {
-        return config.remotePassword
-    }
-    return config.password
 }
 
 actor GatewayWizardClient {
@@ -164,18 +131,16 @@ actor GatewayWizardClient {
     private let url: URL
     private let token: String?
     private let password: String?
-    private let json: Bool
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
     private let session = URLSession(configuration: .default)
     private let connectChallengeTimeoutSeconds: Double = 0.75
     private var task: URLSessionWebSocketTask?
 
-    init(url: URL, token: String?, password: String?, json: Bool) {
+    init(url: URL, token: String?, password: String?) {
         self.url = url
         self.token = token
         self.password = password
-        self.json = json
     }
 
     func connect() async throws {
@@ -183,7 +148,7 @@ actor GatewayWizardClient {
         socket.maximumMessageSize = 16 * 1024 * 1024
         socket.resume()
         self.task = socket
-        try await self.sendConnect()
+        try await self.sendConnect(task: socket)
     }
 
     func close() {
@@ -195,6 +160,15 @@ actor GatewayWizardClient {
         guard let task = self.task else {
             throw WizardCliError.gatewayError("gateway not connected")
         }
+        return try await self.request(task: task, method: method, params: params, failureMessage: "gateway error")
+    }
+
+    private func request(
+        task: URLSessionWebSocketTask,
+        method: String,
+        params: [String: ProtoAnyCodable]?,
+        failureMessage: String) async throws -> ResponseFrame
+    {
         let id = UUID().uuidString
         let frame = RequestFrame(
             type: "req",
@@ -209,7 +183,7 @@ actor GatewayWizardClient {
             let frame = try decodeFrame(message)
             if case let .res(res) = frame, res.id == id {
                 if res.ok == false {
-                    let msg = res.error?.message ?? "gateway error"
+                    let msg = res.error?.message ?? failureMessage
                     throw WizardCliError.gatewayError(msg)
                 }
                 return res
@@ -226,28 +200,24 @@ actor GatewayWizardClient {
     }
 
     private func decodeFrame(_ message: URLSessionWebSocketTask.Message) throws -> GatewayFrame {
-        let data: Data? = switch message {
-        case let .data(data): data
-        case let .string(text): text.data(using: .utf8)
-        @unknown default: nil
-        }
-        guard let data else {
+        let data: Data
+        switch message {
+        case let .data(value): data = value
+        case let .string(text): data = Data(text.utf8)
+        @unknown default:
             throw WizardCliError.decodeError("empty gateway response")
         }
         return try self.decoder.decode(GatewayFrame.self, from: data)
     }
 
-    private func sendConnect() async throws {
-        guard let task = self.task else {
-            throw WizardCliError.gatewayError("gateway not connected")
-        }
+    private func sendConnect(task: URLSessionWebSocketTask) async throws {
         let osVersion = ProcessInfo.processInfo.operatingSystemVersion
         let platform = "macos \(osVersion.majorVersion).\(osVersion.minorVersion).\(osVersion.patchVersion)"
         let clientId = "openclaw-macos"
         let clientMode = "ui"
         let role = "operator"
         // Explicit scopes; gateway no longer defaults empty scopes to admin.
-        let scopes = defaultOperatorConnectScopes
+        let scopes = GatewayChannelActor.defaultOperatorConnectScopes
         let client: [String: ProtoAnyCodable] = [
             "id": ProtoAnyCodable(clientId),
             "displayName": ProtoAnyCodable(Host.current().localizedName ?? "OpenClaw macOS Wizard CLI"),
@@ -273,7 +243,7 @@ actor GatewayWizardClient {
         } else if let password = self.password {
             params["auth"] = ProtoAnyCodable(["password": ProtoAnyCodable(password)])
         }
-        let connectChallenge = try await self.waitForConnectChallenge()
+        let connectChallenge = try await self.waitForConnectChallenge(task: task)
         let connectNonce = connectChallenge.nonce
         guard let identity = DeviceIdentityStore.loadOrCreatePersisted() else {
             throw NSError(
@@ -300,32 +270,13 @@ actor GatewayWizardClient {
             params["device"] = ProtoAnyCodable(device)
         }
 
-        let reqId = UUID().uuidString
-        let frame = RequestFrame(
-            type: "req",
-            id: reqId,
-            method: "connect",
-            params: ProtoAnyCodable(params))
-        let data = try self.encoder.encode(frame)
-        try await task.send(.data(data))
-
-        while true {
-            let message = try await task.receive()
-            let frameResponse = try decodeFrame(message)
-            if case let .res(res) = frameResponse, res.id == reqId {
-                if res.ok == false {
-                    let msg = res.error?.message ?? "gateway connect failed"
-                    throw WizardCliError.gatewayError(msg)
-                }
-                _ = try self.decodePayload(res, as: HelloOk.self)
-                return
-            }
-        }
+        let response = try await self.request(
+            task: task, method: "connect", params: params, failureMessage: "gateway connect failed")
+        _ = try self.decodePayload(response, as: HelloOk.self)
     }
 
-    private func waitForConnectChallenge() async throws -> GatewayConnectChallenge {
-        guard let task = self.task else { throw ConnectChallengeError.timeout }
-        return try await AsyncTimeout.withTimeout(
+    private func waitForConnectChallenge(task: URLSessionWebSocketTask) async throws -> GatewayConnectChallenge {
+        try await AsyncTimeout.withTimeout(
             seconds: self.connectChallengeTimeoutSeconds,
             onTimeout: { ConnectChallengeError.timeout },
             operation: {
@@ -389,6 +340,7 @@ private func runWizard(client: GatewayWizardClient, opts: WizardCliOptions) asyn
             // Gateway-executed steps (download/install progress) take no answer;
             // echo the frame and poll, or the run stalls on input that can never
             // advance the session.
+            var nextParams = ["sessionId": ProtoAnyCodable(sessionId)]
             if let step = nextResult.step, wizardStepExecutor(step) != "gateway" {
                 let answer = try promptAnswer(for: step)
                 var answerPayload: [String: ProtoAnyCodable] = [
@@ -397,27 +349,14 @@ private func runWizard(client: GatewayWizardClient, opts: WizardCliOptions) asyn
                 if !(answer is NSNull) {
                     answerPayload["value"] = ProtoAnyCodable(answer)
                 }
-                let response = try await client.request(
-                    method: "wizard.next",
-                    params: [
-                        "sessionId": ProtoAnyCodable(sessionId),
-                        "answer": ProtoAnyCodable(answerPayload),
-                    ])
-                nextResult = try await client.decodePayload(response, as: WizardNextResult.self)
-                if opts.json {
-                    dumpResult(response)
-                }
-            } else {
-                if let step = nextResult.step, !opts.json {
-                    printWizardStepHeader(step)
-                }
-                let response = try await client.request(
-                    method: "wizard.next",
-                    params: ["sessionId": ProtoAnyCodable(sessionId)])
-                nextResult = try await client.decodePayload(response, as: WizardNextResult.self)
-                if opts.json {
-                    dumpResult(response)
-                }
+                nextParams["answer"] = ProtoAnyCodable(answerPayload)
+            } else if let step = nextResult.step, !opts.json {
+                printWizardStepHeader(step)
+            }
+            let response = try await client.request(method: "wizard.next", params: nextParams)
+            nextResult = try await client.decodePayload(response, as: WizardNextResult.self)
+            if opts.json {
+                dumpResult(response)
             }
         }
     } catch WizardCliError.cancelled {
@@ -433,11 +372,7 @@ private func dumpResult(_ response: ResponseFrame) {
         print("{\"error\":\"missing payload\"}")
         return
     }
-    let encoder = JSONEncoder()
-    encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-    if let data = try? encoder.encode(payload), let text = String(data: data, encoding: .utf8) {
-        print(text)
-    }
+    printCLIJSON(payload)
 }
 
 private func printWizardStepHeader(_ step: WizardStep) {
@@ -454,25 +389,19 @@ private func promptAnswer(for step: WizardStep) throws -> Any {
     printWizardStepHeader(step)
 
     switch type {
-    case "note":
-        _ = try readLineWithPrompt("Continue? (enter)")
-        return NSNull()
-    case "progress":
-        _ = try readLineWithPrompt("Continue? (enter)")
-        return NSNull()
     case "action":
         _ = try readLineWithPrompt("Run? (enter)")
         return true
     case "text":
         let initial = anyCodableString(step.initialvalue)
         let prompt = step.placeholder ?? "Value"
+        let value: String
         if step.sensitive == true {
             let sensitivePrompt = initial.isEmpty ? prompt : "\(prompt) (leave blank to keep existing)"
-            let value = try readSensitiveLineWithPrompt(sensitivePrompt)
-            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-            return trimmed.isEmpty ? initial : trimmed
+            value = try readSensitiveLineWithPrompt(sensitivePrompt)
+        } else {
+            value = try readLineWithPrompt("\(prompt)\(initial.isEmpty ? "" : " [\(initial)]")")
         }
-        let value = try readLineWithPrompt("\(prompt)\(initial.isEmpty ? "" : " [\(initial)]")")
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? initial : trimmed
     case "confirm":
@@ -482,59 +411,44 @@ private func promptAnswer(for step: WizardStep) throws -> Any {
         if trimmed.isEmpty { return initial }
         return trimmed == "y" || trimmed == "yes" || trimmed == "true"
     case "select":
-        return try promptSelect(step)
+        return try promptSelect(step, multiple: false).first ?? NSNull()
     case "multiselect":
-        return try promptMultiSelect(step)
+        return try promptSelect(step, multiple: true)
     default:
         _ = try readLineWithPrompt("Continue? (enter)")
         return NSNull()
     }
 }
 
-private func promptSelect(_ step: WizardStep) throws -> Any {
-    let options = parseWizardOptions(step.options)
-    guard !options.isEmpty else { return NSNull() }
-    for (idx, option) in options.enumerated() {
-        let hint = option.hint?.isEmpty == false ? " — \(option.hint!)" : ""
-        print("  [\(idx + 1)] \(option.label)\(hint)")
-    }
-    let initialIndex = options.firstIndex(where: { anyCodableEqual($0.value, step.initialvalue) })
-    let defaultLabel = initialIndex.map { " [\($0 + 1)]" } ?? ""
-    while true {
-        let input = try readLineWithPrompt("Select one\(defaultLabel)")
-        let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty, let initialIndex {
-            return options[initialIndex].value?.value ?? options[initialIndex].label
-        }
-        if trimmed.lowercased() == "q" { throw WizardCliError.cancelled }
-        if let number = Int(trimmed), (1...options.count).contains(number) {
-            let option = options[number - 1]
-            return option.value?.value ?? option.label
-        }
-        print("Invalid selection.")
-    }
-}
-
-private func promptMultiSelect(_ step: WizardStep) throws -> [Any] {
+private func promptSelect(_ step: WizardStep, multiple: Bool) throws -> [Any] {
     let options = parseWizardOptions(step.options)
     guard !options.isEmpty else { return [] }
     for (idx, option) in options.enumerated() {
         let hint = option.hint?.isEmpty == false ? " — \(option.hint!)" : ""
         print("  [\(idx + 1)] \(option.label)\(hint)")
     }
-    let initialValues = anyCodableArray(step.initialvalue)
-    let initialIndices = options.enumerated().compactMap { index, option in
-        initialValues.contains { anyCodableEqual($0, option.value) } ? index + 1 : nil
+    let initialIndices: [Int]
+    if multiple {
+        let initialValues = anyCodableArray(step.initialvalue)
+        initialIndices = options.enumerated().compactMap { index, option in
+            initialValues.contains { anyCodableEqual($0, option.value) } ? index + 1 : nil
+        }
+    } else {
+        initialIndices = options.firstIndex(where: { anyCodableEqual($0.value, step.initialvalue) })
+            .map { [$0 + 1] } ?? []
     }
     let defaultLabel = initialIndices.isEmpty ? "" : " [\(initialIndices.map(String.init).joined(separator: ","))]"
+    let prompt = multiple ? "Select (comma-separated)" : "Select one"
     while true {
-        let input = try readLineWithPrompt("Select (comma-separated)\(defaultLabel)")
+        let input = try readLineWithPrompt("\(prompt)\(defaultLabel)")
         let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty {
+        if trimmed.isEmpty, multiple || !initialIndices.isEmpty {
             return initialIndices.map { options[$0 - 1].value?.value ?? options[$0 - 1].label }
         }
         if trimmed.lowercased() == "q" { throw WizardCliError.cancelled }
-        let parts = trimmed.split(separator: ",").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        let parts = multiple
+            ? trimmed.split(separator: ",").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            : [trimmed]
         let indices = parts.compactMap { Int($0) }.filter { (1...options.count).contains($0) }
         if indices.isEmpty {
             print("Invalid selection.")

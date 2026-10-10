@@ -1,21 +1,9 @@
 /** Coordinates automatic Control UI bootstrap work for one Gateway connection epoch. */
 import { createDeferredCore } from "../../../src/shared/deferred.js";
 
-export type ConnectionBootstrapCoordinator = {
-  reset: () => void;
-  run: (
-    key: string | object,
-    task: () => Promise<unknown>,
-    options?: { background?: boolean },
-  ) => Promise<void>;
-  synchronize: (params: { client: object | null; connected: boolean }) => void;
-  /** Undefined is unresolved native navigation; null leaves background work unblocked. */
-  setForegroundRoute: (sessionKey: string | null | undefined) => void;
-  setForegroundPane: (
-    owner: object,
-    state: { sessionKey: string; client: object | null; ready: boolean } | null,
-  ) => void;
-};
+export type ConnectionBootstrapCoordinator = ReturnType<
+  typeof createConnectionBootstrapCoordinator
+>;
 
 const MAX_CONNECTION_BOOTSTRAP_CONCURRENCY = 2;
 
@@ -28,7 +16,7 @@ type QueuedBootstrapTask = {
 };
 
 /** Owns the queue and revokes pending work synchronously with its connection epoch. */
-export function createConnectionBootstrapCoordinator(): ConnectionBootstrapCoordinator {
+export function createConnectionBootstrapCoordinator() {
   let client: object | null = null;
   let generation = 0;
   let active = 0;
@@ -88,7 +76,7 @@ export function createConnectionBootstrapCoordinator(): ConnectionBootstrapCoord
 
   return {
     reset,
-    synchronize(params) {
+    synchronize(this: void, params: { client: object | null; connected: boolean }) {
       const nextClient = params.connected ? params.client : null;
       if (!nextClient || (client && client !== nextClient)) {
         reset();
@@ -96,11 +84,16 @@ export function createConnectionBootstrapCoordinator(): ConnectionBootstrapCoord
       client = nextClient;
       drain();
     },
-    setForegroundRoute(sessionKey) {
+    /** Undefined is unresolved native navigation; null leaves background work unblocked. */
+    setForegroundRoute(this: void, sessionKey: string | null | undefined) {
       foregroundRoute = sessionKey;
       drain();
     },
-    setForegroundPane(owner, state) {
+    setForegroundPane(
+      this: void,
+      owner: object,
+      state: { sessionKey: string; client: object | null; ready: boolean } | null,
+    ) {
       if (state && (foregroundRoute === undefined || state.sessionKey === foregroundRoute)) {
         foregroundPane = { owner, ...state };
       } else if (!state && foregroundPane?.owner === owner) {
@@ -108,7 +101,12 @@ export function createConnectionBootstrapCoordinator(): ConnectionBootstrapCoord
       }
       drain();
     },
-    run(key, task, options) {
+    run(
+      this: void,
+      key: string | object,
+      task: () => Promise<unknown>,
+      options?: { background?: boolean },
+    ) {
       const current = tasks.get(key);
       if (current) {
         return current.promise;

@@ -3,10 +3,14 @@ import { readTranscriptEventAtSeqSync } from "../../config/sessions/session-acce
 import { readActiveTranscriptEntryAnchor } from "../../config/sessions/session-accessor.sqlite-transcript-anchor.js";
 import { isIndexedSessionEntry } from "../../config/sessions/session-entry-codec.js";
 import { walkSessionCurrentTurn } from "../../config/sessions/session-entry-navigation.js";
-import { prepareSessionTranscriptHydration } from "../../config/sessions/session-transcript-hydration.js";
 import type { TranscriptEntryAnchor } from "../../config/sessions/transcript-entry-anchor.js";
 import { captureOwnedTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
+import {
+  OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE,
+  SYSTEM_UPDATE_MESSAGE_CUSTOM_TYPE,
+} from "../internal-runtime-context.js";
 import { isSessionContextMetadataEntry } from "./session-manager-codec.js";
+import { prepareSessionManagerHydration } from "./session-manager-incognito.js";
 import type { SessionEntry, SessionMessageEntry } from "./session-manager-types.js";
 import type { SessionManagerPersistenceTarget } from "./session-manager-view-types.js";
 
@@ -15,9 +19,20 @@ export const sessionManagerPrepareCurrentTurnReplay: unique symbol = Symbol.for(
   "openclaw.session-manager.prepare-current-turn-replay",
 );
 
-export type CurrentTurnReplayWitness = {
-  anchor: TranscriptEntryAnchor;
+/** @internal Runtime model history is not the raw persistence/navigation window. */
+export const sessionManagerReadInitialContext: unique symbol = Symbol.for(
+  "openclaw.session-manager.read-initial-context",
+);
+
+/** @internal Committed manager facts for the current execution boundary. */
+export const sessionManagerReadTranscriptStart: unique symbol = Symbol.for(
+  "openclaw.session-manager.read-transcript-start",
+);
+
+export type CurrentTurnReplaySelection = {
+  entryId: string;
   version: SessionTranscriptContextVersion;
+  assertCurrent: () => void;
 };
 
 type CurrentTurnView = {
@@ -41,6 +56,9 @@ function traversalEntry(
     traversable:
       isSessionContextMetadataEntry(entry) ||
       entry.type === "compaction" ||
+      (entry.type === "custom_message" &&
+        (entry.customType === OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE ||
+          entry.customType === SYSTEM_UPDATE_MESSAGE_CUSTOM_TYPE)) ||
       (isInterruptedTail?.(entry) ?? false),
   };
 }
@@ -79,14 +97,16 @@ export function resolveCurrentTurnEntryId(
   return next.value;
 }
 
-export async function prepareCurrentTurnReplayWitness(
+export async function prepareCurrentTurnReplaySelection(
   readView: () => CurrentTurnView & {
     target: SessionManagerPersistenceTarget | undefined;
     version: SessionTranscriptContextVersion | undefined;
+    pendingDeliberateAppend: boolean;
   },
   matchesUser: (entry: SessionEntry | undefined) => boolean,
   signal?: AbortSignal,
-): Promise<CurrentTurnReplayWitness | undefined> {
+  manager?: object,
+): Promise<CurrentTurnReplaySelection | undefined> {
   const view = readView();
   if (!view.target || !view.version) {
     return undefined;
@@ -94,25 +114,29 @@ export async function prepareCurrentTurnReplayWitness(
   const version = { ...view.version };
   const entryCount = view.entries.size;
   const assertOwned = captureOwnedTranscriptWriteAssertion(view.target);
+  const reader = prepareSessionManagerHydration(view.target, { signal, manager });
   const assertCurrent = () => {
+    signal?.throwIfAborted();
     assertOwned();
+    reader.assertCurrent();
     const current = readView();
     if (
       current.target !== view.target ||
       current.version !== view.version ||
       current.entries !== view.entries ||
       current.entries.size !== entryCount ||
-      current.parentId !== view.parentId
+      current.parentId !== view.parentId ||
+      current.pendingDeliberateAppend !== view.pendingDeliberateAppend
     ) {
       throw new Error("Session manager changed during replay preparation");
     }
   };
   assertCurrent();
-  const reader = prepareSessionTranscriptHydration(view.target, undefined, signal);
   const walk = walkSessionCurrentTurn(view.parentId, view.remainingAncestors);
   let next = walk.next();
+  let entry: SessionEntry | undefined;
   while (!next.done) {
-    let entry = view.entries.get(next.value);
+    entry = view.entries.get(next.value);
     if (!entry) {
       const result = await reader.readCurrentTurnEntry({
         entryId: next.value,
@@ -121,12 +145,15 @@ export async function prepareCurrentTurnReplayWitness(
       });
       reader.assertCurrent();
       assertCurrent();
-      entry = omittedCustomMessage(result.event, result.anchor);
+      entry =
+        isIndexedSessionEntry(result.event) && result.event.id === next.value
+          ? result.event
+          : undefined;
     }
     next = walk.next(traversalEntry(entry, next.value, view.isInterruptedTail));
   }
   const userId = next.value;
-  if (!userId || !matchesUser(view.entries.get(userId))) {
+  if (!userId || entry?.id !== userId || !matchesUser(entry)) {
     return undefined;
   }
   const result = await reader.readCurrentTurnEntry({
@@ -134,7 +161,10 @@ export async function prepareCurrentTurnReplayWitness(
     version,
     includeEntry: false,
   });
-  reader.assertCurrent();
   assertCurrent();
-  return result.anchor ? { anchor: result.anchor, version: result.version } : undefined;
+  if (!result.anchor) {
+    return undefined;
+  }
+  assertCurrent();
+  return { entryId: userId, version, assertCurrent };
 }

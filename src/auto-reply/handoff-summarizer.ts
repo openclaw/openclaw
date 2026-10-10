@@ -23,32 +23,30 @@ export function buildHierarchyReinforcementMessage(snapshot: HandoffSnapshot): A
 
   const hasSubagents = snapshot.activeSubagents.length > 0;
 
-  const teamPrefix = [
-    "You are the new LEADER (Orchestrator). Do not perform tasks already delegated to subordinates.",
-    "",
-    "ACTIVE SUBORDINATE UNITS:",
-    subagentReport,
-  ];
-
-  const soloPrefix = [
-    "Review the current state below and continue the conversation from where the previous model left off.",
-  ];
-
-  const teamSuffix = [
-    "",
-    "INSTRUCTIONS:",
-    "1. Review the state and subordinate reports.",
-    "2. Provide strategic guidance and commands to subordinates.",
-    "3. Do not repeat work already performed by subordinates.",
-  ];
-
   const content = [
     "[SYSTEM HANDOFF] The previous model is no longer active and a fallback model is now active.",
-    ...(hasSubagents ? teamPrefix : soloPrefix),
+    ...(hasSubagents
+      ? [
+          "You are the new LEADER (Orchestrator). Do not perform tasks already delegated to subordinates.",
+          "",
+          "ACTIVE SUBORDINATE UNITS:",
+          subagentReport,
+        ]
+      : [
+          "Review the current state below and continue the conversation from where the previous model left off.",
+        ]),
     "",
     "CURRENT STATE SUMMARY:",
     snapshot.summary,
-    ...(hasSubagents ? teamSuffix : []),
+    ...(hasSubagents
+      ? [
+          "",
+          "INSTRUCTIONS:",
+          "1. Review the state and subordinate reports.",
+          "2. Provide strategic guidance and commands to subordinates.",
+          "3. Do not repeat work already performed by subordinates.",
+        ]
+      : []),
   ].join("\n");
 
   return {

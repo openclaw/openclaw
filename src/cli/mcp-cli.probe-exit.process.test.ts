@@ -61,6 +61,6 @@ describe("mcp probe process exit", () => {
     };
     expect(output.servers).toEqual({});
     expect(output.diagnostics).toEqual([expect.objectContaining({ serverName: "broken" })]);
-    expect(result.stderr).toContain(`MCP probe failed for "broken" in ${configPath}:`);
+    expect(result.stderr).toContain(`MCP check failed for "broken" in ${configPath}:`);
   });
 });

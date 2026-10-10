@@ -10,49 +10,15 @@ import { enqueueRoutedSystemEvent } from "openclaw/plugin-sdk/system-event-runti
 import { migrateSlackChannelConfig } from "../../channel-migration.js";
 import { resolveSlackChannelLabel } from "../channel-config.js";
 import type { SlackMonitorContext } from "../context.js";
-import type { SlackEventScope } from "../event-scope.js";
+import { resolveSlackMonitorEventScope } from "../event-scope.js";
 import { resolveSlackIngressTurnLifecycle } from "../ingress.js";
 import type { SlackChannelIdChangedEvent, SlackChannelRenamedEvent } from "../types.js";
-import { resolveSlackListenerEventScope } from "./system-event-context.js";
 
 export function registerSlackChannelEvents(params: {
   ctx: SlackMonitorContext;
   trackEvent?: () => void;
 }) {
   const { ctx, trackEvent } = params;
-
-  const enqueueChannelSystemEvent = async (paramsLocal: {
-    kind: "created" | "renamed";
-    channelId: string | undefined;
-    channelName: string | undefined;
-    eventId: string;
-    eventScope?: SlackEventScope;
-  }) => {
-    const runtimeContext = await params.ctx.readRuntimeContext();
-    if (
-      !runtimeContext.isChannelAllowed({
-        teamId: paramsLocal.eventScope?.teamId ?? runtimeContext.teamId,
-        channelId: paramsLocal.channelId,
-        channelName: paramsLocal.channelName,
-        channelType: "channel",
-      })
-    ) {
-      return;
-    }
-
-    const label = resolveSlackChannelLabel({
-      channelId: paramsLocal.channelId,
-      channelName: paramsLocal.channelName,
-    });
-    const route = runtimeContext.resolveSlackSystemEventRoute({
-      channelId: paramsLocal.channelId,
-      channelType: "channel",
-      eventScope: paramsLocal.eventScope,
-    });
-    enqueueRoutedSystemEvent(`Slack channel ${paramsLocal.kind}: ${label}.`, route, {
-      contextKey: `slack:channel:${paramsLocal.eventScope ? `${paramsLocal.eventScope.teamId}:` : ""}${paramsLocal.kind}:${paramsLocal.channelId ?? paramsLocal.channelName ?? "unknown"}:${paramsLocal.eventId}`,
-    });
-  };
 
   for (const [eventName, kind] of [
     ["channel_created", "created"],
@@ -64,20 +30,40 @@ export function registerSlackChannelEvents(params: {
         args: SlackEventMiddlewareArgs<"channel_created" | "channel_rename"> & AllMiddlewareArgs,
       ) => {
         const { event, body, context, client } = args;
-        const eventScope = resolveSlackListenerEventScope({ ctx, body, context, client });
+        const eventScope = resolveSlackMonitorEventScope({ ctx, body, context, client });
         if (eventScope === null || ctx.shouldDropMismatchedSlackEvent(body)) {
           return;
         }
         trackEvent?.();
 
         const channel: SlackChannelRenamedEvent["channel"] = event.channel;
-        await enqueueChannelSystemEvent({
-          kind,
-          channelId: channel?.id,
-          channelName:
-            kind === "renamed" ? (channel?.name_normalized ?? channel?.name) : channel?.name,
-          eventId: body.event_id,
+        const channelId = channel?.id;
+        const channelName =
+          kind === "renamed" ? (channel?.name_normalized ?? channel?.name) : channel?.name;
+        const eventId = body.event_id;
+        const runtimeContext = await params.ctx.readRuntimeContext();
+        if (
+          !runtimeContext.isChannelAllowed({
+            teamId: eventScope?.teamId ?? runtimeContext.teamId,
+            channelId,
+            channelName,
+            channelType: "channel",
+          })
+        ) {
+          return;
+        }
+
+        const label = resolveSlackChannelLabel({
+          channelId,
+          channelName,
+        });
+        const route = runtimeContext.resolveSlackSystemEventRoute({
+          channelId,
+          channelType: "channel",
           eventScope,
+        });
+        enqueueRoutedSystemEvent(`Slack channel ${kind}: ${label}.`, route, {
+          contextKey: `slack:channel:${eventScope ? `${eventScope.teamId}:` : ""}${kind}:${channelId ?? channelName ?? "unknown"}:${eventId}`,
         });
       },
     );

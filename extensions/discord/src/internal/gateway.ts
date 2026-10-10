@@ -7,9 +7,6 @@ import {
   type APIGatewayBotInfo,
   type APIVoiceState,
   type GatewayDispatchPayload,
-  type GatewayHeartbeat,
-  type GatewayIdentify,
-  type GatewayPresenceUpdateData,
   type GatewayReceivePayload,
   type GatewaySendPayload,
   type GatewayVoiceStateUpdateData,
@@ -25,30 +22,16 @@ import { GatewayHeartbeatTimers, GatewayReconnectTimer } from "./gateway-lifecyc
 import { decodeGatewayMessage, ensureGatewayParams } from "./gateway-payload.js";
 import { GatewaySendLimiter } from "./gateway-rate-limit.js";
 import { DiscordGatewayVoiceStateCache } from "./gateway-voice-state-cache.js";
-import type { DiscordGatewayVoiceStateTransition } from "./gateway-voice-state-cache.js";
+import type {
+  DiscordGatewayVoiceStateTransition,
+  GatewayPluginContract,
+  GatewayPluginOptions,
+  UpdatePresenceData,
+} from "./plugin-contract.js";
 import { WebSocket } from "./ws-runtime.js";
 
 export { GatewayCloseCodes };
 export const GatewayIntents = GatewayIntentBits;
-export type Activity = NonNullable<GatewayPresenceUpdateData["activities"]>[number];
-export type UpdatePresenceData = Omit<GatewayPresenceUpdateData, "status"> & {
-  status: "online" | "idle" | "dnd" | "invisible" | "offline";
-};
-type RequestGuildMembersData = {
-  guild_id: string;
-  query?: string;
-  limit: number;
-  presences?: boolean;
-  user_ids?: string | string[];
-  nonce?: string;
-};
-type GatewayPluginOptions = {
-  reconnect?: { maxAttempts?: number };
-  intents?: number;
-  autoInteractions?: boolean;
-  shard?: [number, number];
-  url?: string;
-};
 type GatewayReconnectReason =
   | "close"
   | "identify"
@@ -75,17 +58,16 @@ export const DISCORD_GATEWAY_WS_CLIENT_OPTIONS = Object.freeze({
 const INVALID_SESSION_MIN_DELAY_MS = 1_000;
 const INVALID_SESSION_JITTER_MS = 4_000;
 const RESUME_FAILURE_THRESHOLD = 3;
+const MAX_RECONNECT_ATTEMPTS = 50;
 
-export class GatewayPlugin extends Plugin {
+export class GatewayPlugin extends Plugin implements GatewayPluginContract {
   readonly id = "gateway";
   protected client?: Client;
-  readonly options: Required<Pick<GatewayPluginOptions, "autoInteractions">> & GatewayPluginOptions;
+  readonly options: GatewayPluginContract["options"];
   public ws: ws.WebSocket | null = null;
   public sequence: number | null = null;
   public lastHeartbeatAck = true;
   public emitter = new EventEmitter();
-  public shardId?: number;
-  public totalShards?: number;
   protected gatewayInfo?: APIGatewayBotInfo;
   public isConnected = false;
   private sessionId: string | null = null;
@@ -93,7 +75,7 @@ export class GatewayPlugin extends Plugin {
   private reconnectAttempts = 0;
   private consecutiveResumeFailures = 0;
   private shouldReconnect = false;
-  private isConnecting = false;
+  protected isConnecting = false;
   private readonly heartbeatTimers = new GatewayHeartbeatTimers();
   private readonly reconnectTimer = new GatewayReconnectTimer();
   private readonly voiceStateCache = new DiscordGatewayVoiceStateCache();
@@ -111,15 +93,9 @@ export class GatewayPlugin extends Plugin {
     super();
     this.options = {
       ...options,
-      reconnect: { maxAttempts: 50, ...options.reconnect },
-      autoInteractions: options.autoInteractions ?? true,
       intents: options.intents ?? 0,
     };
     this.gatewayInfo = gatewayInfo;
-  }
-
-  get ping(): number | null {
-    return null;
   }
 
   listVoiceChannelStates(guildId: string, channelId: string): APIVoiceState[] | null {
@@ -134,37 +110,15 @@ export class GatewayPlugin extends Plugin {
     return this.voiceStateCache.takeTransition(state);
   }
 
-  get heartbeatInterval(): NodeJS.Timeout | undefined {
-    return this.heartbeatTimers.heartbeatInterval;
-  }
-
-  set heartbeatInterval(timer: NodeJS.Timeout | undefined) {
-    this.heartbeatTimers.heartbeatInterval = timer;
-  }
-
-  get firstHeartbeatTimeout(): NodeJS.Timeout | undefined {
-    return this.heartbeatTimers.firstHeartbeatTimeout;
-  }
-
-  set firstHeartbeatTimeout(timer: NodeJS.Timeout | undefined) {
-    this.heartbeatTimers.firstHeartbeatTimeout = timer;
-  }
-
   override async registerClient(client: Client): Promise<void> {
     this.client = client;
-    if (this.options.shard) {
-      client.shardId = this.options.shard[0];
-      client.totalShards = this.options.shard[1];
-      this.shardId = this.options.shard[0];
-      this.totalShards = this.options.shard[1];
-    }
     this.shouldReconnect = true;
     this.connect(false);
   }
 
   connect(resume = false): void {
-    this.stopReconnectTimer();
-    this.stopHeartbeat();
+    this.reconnectTimer.stop();
+    this.heartbeatTimers.stop();
     if (this.isConnecting) {
       return;
     }
@@ -183,8 +137,8 @@ export class GatewayPlugin extends Plugin {
 
   disconnect(): void {
     this.shouldReconnect = false;
-    this.stopReconnectTimer();
-    this.stopHeartbeat();
+    this.reconnectTimer.stop();
+    this.heartbeatTimers.stop();
     this.outboundLimiter.clear();
     this.ws?.close(1000, "Client disconnect");
     this.ws = null;
@@ -227,7 +181,7 @@ export class GatewayPlugin extends Plugin {
         return;
       }
       const closeCode = code as GatewayCloseCodes;
-      this.stopHeartbeat();
+      this.heartbeatTimers.stop();
       this.outboundLimiter.clear();
       this.isConnecting = false;
       this.isConnected = false;
@@ -284,16 +238,11 @@ export class GatewayPlugin extends Plugin {
                 session_id: resumeState.sessionId,
                 seq: resumeState.sequence,
               },
-            } as GatewaySendPayload,
+            },
             true,
           );
         } else {
-          void this.identifyWithConcurrency(sourceSocket).catch((error: unknown) => {
-            this.emitter.emit(
-              "error",
-              error instanceof Error ? error : new Error(String(error), { cause: error }),
-            );
-          });
+          void this.identifyWithConcurrency(sourceSocket).catch(this.emitAsyncError);
         }
         break;
       }
@@ -304,12 +253,7 @@ export class GatewayPlugin extends Plugin {
         this.sendHeartbeat();
         break;
       case GatewayOpcodes.Dispatch:
-        void this.handleDispatch(payload).catch((error: unknown) => {
-          this.emitter.emit(
-            "error",
-            error instanceof Error ? error : new Error(String(error), { cause: error }),
-          );
-        });
+        void this.handleDispatch(payload).catch(this.emitAsyncError);
         break;
       case GatewayOpcodes.InvalidSession:
         if (!payload.d) {
@@ -328,6 +272,13 @@ export class GatewayPlugin extends Plugin {
     }
   }
 
+  private emitAsyncError = (error: unknown): void => {
+    this.emitter.emit(
+      "error",
+      error instanceof Error ? error : new Error(String(error), { cause: error }),
+    );
+  };
+
   private startHeartbeat(intervalMs: number): void {
     this.heartbeatTimers.start({
       intervalMs,
@@ -340,20 +291,12 @@ export class GatewayPlugin extends Plugin {
     });
   }
 
-  private stopHeartbeat(): void {
-    this.heartbeatTimers.stop();
-  }
-
-  private stopReconnectTimer(): void {
-    this.reconnectTimer.stop();
-  }
-
   private sendHeartbeat(): void {
     if (!this.ws || this.ws.readyState !== READY_STATE_OPEN) {
       return;
     }
     this.lastHeartbeatAck = false;
-    this.send({ op: GatewayOpcodes.Heartbeat, d: this.sequence } as GatewayHeartbeat, true);
+    this.send({ op: GatewayOpcodes.Heartbeat, d: this.sequence }, true);
   }
 
   private identify(): void {
@@ -364,18 +307,14 @@ export class GatewayPlugin extends Plugin {
           token: this.client?.options.token ?? "",
           intents: this.options.intents ?? 0,
           properties: { os: process.platform, browser: "openclaw", device: "openclaw" },
-          shard: this.options.shard,
         },
-      } as GatewayIdentify,
+      },
       true,
     );
   }
 
   private async identifyWithConcurrency(sourceSocket?: ws.WebSocket): Promise<void> {
-    await sharedGatewayIdentifyLimiter.wait({
-      shardId: this.shardId,
-      maxConcurrency: this.gatewayInfo?.session_start_limit.max_concurrency,
-    });
+    await sharedGatewayIdentifyLimiter.wait();
     const socket = sourceSocket ?? this.ws;
     if (!socket || socket !== this.ws) {
       return;
@@ -392,10 +331,7 @@ export class GatewayPlugin extends Plugin {
       throw new Error("Discord gateway socket is not open");
     }
     const serialized = JSON.stringify(payload);
-    const payloadSize =
-      typeof Buffer !== "undefined"
-        ? Buffer.byteLength(serialized, "utf8")
-        : new TextEncoder().encode(serialized).byteLength;
+    const payloadSize = Buffer.byteLength(serialized, "utf8");
     if (payloadSize > DISCORD_GATEWAY_PAYLOAD_LIMIT_BYTES) {
       throw new Error(
         `Discord gateway payload exceeds ${DISCORD_GATEWAY_PAYLOAD_LIMIT_BYTES}-byte limit`,
@@ -416,20 +352,17 @@ export class GatewayPlugin extends Plugin {
       return;
     }
     if (payload.t === GatewayDispatchEvents.Ready) {
-      const ready = payload.d as { session_id?: string; resume_gateway_url?: string };
+      const ready = payload.d;
       this.sessionId = ready.session_id ?? null;
       this.resumeGatewayUrl = ready.resume_gateway_url ?? null;
-      this.reconnectAttempts = 0;
-      this.consecutiveResumeFailures = 0;
-      this.isConnected = true;
     }
-    if (payload.t === GatewayDispatchEvents.Resumed) {
+    if (payload.t === GatewayDispatchEvents.Ready || payload.t === GatewayDispatchEvents.Resumed) {
       this.reconnectAttempts = 0;
       this.consecutiveResumeFailures = 0;
       this.isConnected = true;
     }
     this.voiceStateCache.apply(payload);
-    dispatchVoiceGatewayEvent(this.client, payload.t, payload.d);
+    dispatchVoiceGatewayEvent(this.client, payload);
     // MESSAGE_CREATE is the durable-ingress raw-envelope boundary. Its listener
     // maps structures only after the queue claim; other events retain eager mapping.
     const data =
@@ -437,9 +370,6 @@ export class GatewayPlugin extends Plugin {
         ? payload.d
         : mapGatewayDispatchData(this.client, payload.t, payload.d);
     await this.client.dispatchGatewayEvent(payload.t, data);
-    if (payload.t === GatewayDispatchEvents.InteractionCreate && this.options.autoInteractions) {
-      await this.client.handleInteraction(payload.d);
-    }
   }
 
   private resetSessionState(): void {
@@ -460,20 +390,19 @@ export class GatewayPlugin extends Plugin {
     if (!this.shouldReconnect) {
       return;
     }
-    this.stopHeartbeat();
-    this.stopReconnectTimer();
+    this.heartbeatTimers.stop();
+    this.reconnectTimer.stop();
     this.ws?.close();
     this.ws = null;
     this.isConnecting = false;
     this.isConnected = false;
     this.outboundLimiter.clear();
     this.reconnectAttempts += 1;
-    if (this.reconnectAttempts > (this.options.reconnect?.maxAttempts ?? 50)) {
-      const maxAttempts = this.options.reconnect?.maxAttempts ?? 50;
+    if (this.reconnectAttempts > MAX_RECONNECT_ATTEMPTS) {
       this.emitter.emit(
         "error",
         new Error(
-          `Max reconnect attempts (${maxAttempts}) reached${options.closeCode !== undefined ? ` after close code ${options.closeCode}` : ""}`,
+          `Max reconnect attempts (${MAX_RECONNECT_ATTEMPTS}) reached${options.closeCode !== undefined ? ` after close code ${options.closeCode}` : ""}`,
         ),
       );
       return;
@@ -512,27 +441,10 @@ export class GatewayPlugin extends Plugin {
   }
 
   updateVoiceState(data: GatewayVoiceStateUpdateData): void {
-    this.send({ op: GatewayOpcodes.VoiceStateUpdate, d: data } as GatewaySendPayload, true);
-  }
-
-  requestGuildMembers(data: RequestGuildMembersData): void {
-    if (!this.hasIntent(GatewayIntentBits.GuildMembers)) {
-      throw new Error("GUILD_MEMBERS intent is required for requestGuildMembers");
-    }
-    if (data.presences && !this.hasIntent(GatewayIntentBits.GuildPresences)) {
-      throw new Error("GUILD_PRESENCES intent is required when requesting presences");
-    }
-    if (!data.query && data.query !== "" && !data.user_ids) {
-      throw new Error("Either query or user_ids is required for requestGuildMembers");
-    }
-    this.send({ op: GatewayOpcodes.RequestGuildMembers, d: data } as GatewaySendPayload);
+    this.send({ op: GatewayOpcodes.VoiceStateUpdate, d: data }, true);
   }
 
   getRateLimitStatus() {
     return this.outboundLimiter.getStatus();
-  }
-
-  hasIntent(intent: number): boolean {
-    return Boolean((this.options.intents ?? 0) & intent);
   }
 }

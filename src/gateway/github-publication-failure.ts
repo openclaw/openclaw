@@ -90,6 +90,16 @@ export class GitHubPublicationRequesterUnavailableError extends GitHubPublicatio
   }
 }
 
+export class GitHubPublicationCreditChangedError extends GitHubPublicationKnownFailure {
+  constructor() {
+    super("GitHub publication contributor credit changed.", {
+      code: "identity_changed",
+      nextAction:
+        "Review contributor credit and any recorded GitHub effects, reconcile unpushed prepared commits, then request a new publication. Already published commits and pull requests are retained.",
+    });
+  }
+}
+
 export class GitHubPublicationWorkflowChangesError extends GitHubPublicationKnownFailure {
   constructor() {
     super("Publishing GitHub workflow changes requires full operator write permission.", {

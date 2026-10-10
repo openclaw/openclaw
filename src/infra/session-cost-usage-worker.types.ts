@@ -14,6 +14,22 @@ import type {
   UsageCostTranscriptFile,
   UsageDailyBucket,
 } from "./session-cost-usage.types.js";
+import type { WorkerTaskOptions } from "./worker-task-pool.types.js";
+
+export type SessionCostUsageWorkerOptions = Pick<
+  WorkerTaskOptions<UsageCostWorkerInput>,
+  "signal" | "onRequest" | "inputBytes" | "timeoutMs" | "transferList" | "onInputConsumed"
+> & { beforeDispatch?: () => void };
+
+export type SessionCostUsageWorkerScope = {
+  assertCurrent: () => void;
+  run: (
+    input: UsageCostWorkerInput,
+    options: SessionCostUsageWorkerOptions,
+  ) => Promise<UsageCostWorkerResult>;
+  /** Register before acquisition can wait; a failed cleanup stays owned for close retry. */
+  retainCleanup: (close: () => Promise<void>) => () => void;
+};
 
 export type UsageCostWorkerDatabase = { agentId: string; path: string };
 
@@ -57,6 +73,8 @@ export type UsageCostWorkerInput = {
   location: UsageCostWorkerLocation;
   databases: UsageCostWorkerDatabase[];
   operation: UsageCostWorkerOperation;
+  /** Captured transcript selection; supplied actor work never discovers disk artifacts. */
+  transcriptFiles?: string[];
 };
 
 export type UsageCostWorkerResult =
@@ -72,7 +90,7 @@ export type UsageCostWorkerResult =
       staleSessionFiles: string[];
       invalidRows: SessionCostUsageRollupRow[];
     }
-  | { kind: "refresh" };
+  | { kind: "refresh"; changed: boolean };
 
 export type UsageCostWorkerFailure = {
   message: string;
@@ -108,6 +126,7 @@ type UsageCostPruneRow = {
 };
 
 export type UsageCostWorkerHostEffects = {
+  "refresh-session": { input: { sessionFile: string }; output: void };
   pricing: {
     input: Array<{ provider?: string; model?: string }>;
     output: Array<ModelCostConfig | undefined>;

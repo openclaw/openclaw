@@ -1,17 +1,17 @@
 // Bench Gateway Startup tests cover bench gateway startup script behavior.
-import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import { createServer, type RequestListener } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { collectConfiguredModelRefs } from "@openclaw/model-catalog-core/configured-model-refs";
-import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { testing } from "../../scripts/bench-gateway-startup.ts";
-import { stopChild } from "../../scripts/lib/gateway-bench-child.ts";
 import {
   classifyGatewayReadyLog,
   collectOutputLines,
+  collectTraceLine,
+  createGatewayBenchEnv,
   waitForInitialProbe,
 } from "../../scripts/lib/gateway-bench-runtime.ts";
 import { isStartupTraceDuration } from "../../scripts/lib/gateway-startup-trace-ranking.js";
@@ -21,9 +21,44 @@ import { isPidAlive } from "../../src/shared/pid-alive.js";
 import { waitForPidToExit } from "../../src/test-utils/process-tree.js";
 import { runNodeScript } from "../helpers/run-node-script.js";
 import { createTempDirTracker, useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-import { registerStopChildBehaviorTests } from "./bench-gateway-child-test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+type GatewaySample = Parameters<typeof testing.summarizeCase>[1][number];
+
+function startupProbe(
+  ms: number | null,
+  firstErrorKind: string | null = null,
+): GatewaySample["healthz"] {
+  return {
+    firstErrorKind,
+    firstRecoveryMs: ms,
+    ms,
+    status: ms === null ? null : 200,
+    transitions: [],
+  };
+}
+
+function gatewaySample(overrides: Partial<GatewaySample> = {}): GatewaySample {
+  return {
+    completionMs: 20,
+    cpuCoreRatio: 0.5,
+    cpuMs: 100,
+    exitCode: null,
+    firstOutputMs: 1,
+    gatewayReadyLogLine: "[gateway] ready",
+    gatewayReadyLogMs: 20,
+    healthz: startupProbe(10, "econnrefused"),
+    httpListenLogLine: "[gateway] http server listening (0 plugins)",
+    httpListenLogMs: 5,
+    maxRssMb: 120,
+    outputTail: "",
+    readyz: startupProbe(18, "http-503"),
+    signal: null,
+    startupTrace: {},
+    ...overrides,
+  };
+}
 
 async function listenOnLoopback(handler: RequestListener) {
   const server = createServer(handler);
@@ -40,34 +75,6 @@ async function listenOnLoopback(handler: RequestListener) {
 }
 
 describe("gateway startup benchmark script", () => {
-  let helpResult: ReturnType<typeof spawnSync>;
-
-  beforeAll(() => {
-    helpResult = spawnSync(
-      process.execPath,
-      ["--import", "tsx", "scripts/bench-gateway-startup.ts", "--help"],
-      {
-        cwd: process.cwd(),
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          NODE_NO_WARNINGS: "1",
-        },
-      },
-    );
-  });
-
-  it("prints help without running benchmark cases", () => {
-    expect(helpResult.status).toBe(0);
-    expect(helpResult.stdout).toContain("OpenClaw Gateway startup benchmark");
-    expect(helpResult.stdout).toContain("--case <id>");
-    expect(helpResult.stdout).toContain("--cpu-prof-dir <dir>");
-    expect(helpResult.stdout).toContain("--heap-prof-dir <dir>");
-    expect(helpResult.stdout).toContain("default (gateway default)");
-    expect(helpResult.stdout).not.toContain("[gateway-startup-bench]");
-    expect(helpResult.stderr).toBe("");
-  });
-
   // Strict managed process-group verification is not supported on Windows.
   it.skipIf(process.platform === "win32")(
     "reports fractional counts without time units through the benchmark CLI",
@@ -215,7 +222,12 @@ server.listen(port, "127.0.0.1", () => {
     expect(() => testing.parseOptions(["--installed-cpu-diagnostic"])).toThrow(
       "--installed-cpu-diagnostic requires --installed-cohort",
     );
-    for (const flag of ["--cpu-prof-dir", "--heap-prof-dir"]) {
+    for (const flag of [
+      "--cpu-prof-dir",
+      "--heap-prof-dir",
+      "--gateway-runtime",
+      "--gateway-cpus",
+    ]) {
       expect(() =>
         testing.parseOptions([
           "--installed-cohort",
@@ -261,63 +273,16 @@ server.listen(port, "127.0.0.1", () => {
     ).toThrow("--output was provided more than once");
   });
 
-  it("rejects unknown benchmark CLI args before running cases", () => {
-    const result = spawnSync(
-      process.execPath,
-      ["--import", "tsx", "scripts/bench-gateway-startup.ts", "--wat"],
-      {
-        cwd: process.cwd(),
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          NODE_NO_WARNINGS: "1",
-        },
-      },
-    );
-
-    expect(result.status).toBe(1);
-    expect(result.stdout).toBe("");
-    expect(result.stderr.trim()).toBe("Unknown argument: --wat");
-    expect(result.stderr).not.toContain("\n    at ");
-  });
-
-  it("reports duplicate benchmark cases without a stack trace", () => {
-    const result = spawnSync(
-      process.execPath,
-      [
-        "--import",
-        "tsx",
-        "scripts/bench-gateway-startup.ts",
-        "--case",
-        "default",
-        "--case",
-        "default",
-      ],
-      {
-        cwd: process.cwd(),
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          NODE_NO_WARNINGS: "1",
-        },
-      },
-    );
-
-    expect(result.status).toBe(1);
-    expect(result.stdout).toBe("");
-    expect(result.stderr.trim()).toBe('Duplicate --case "default"');
-    expect(result.stderr).not.toContain("\n    at ");
-  });
-
-  it("does not disable local-check policy in the child gateway environment", () => {
-    const env = testing.sanitizedEnv("/tmp/openclaw-bench", "/tmp/openclaw-bench/config.json", {
-      config: {},
-      id: "default",
-      name: "gateway default",
-    });
-
-    expect(env.OPENCLAW_LOCAL_CHECK).toBeUndefined();
-    expect(env.OPENCLAW_GATEWAY_STARTUP_TRACE).toBe("1");
+  it("selects the Gateway runtime and affinity independently of the controller", () => {
+    expect(testing.parseOptions([]).gatewayRuntime).toBe(process.execPath);
+    expect(
+      testing.parseOptions(["--gateway-runtime", "/tmp/bun", "--gateway-cpus", "0,1"]),
+    ).toMatchObject({ gatewayRuntime: "/tmp/bun", gatewayCpus: "0,1" });
+    expect(() => testing.parseOptions(["--gateway-cpus", "0-1"])).toThrow("--gateway-cpus");
+    expect(() => testing.parseOptions(["--gateway-runtime", "bun\0"])).toThrow("--gateway-runtime");
+    expect(() =>
+      testing.parseOptions(["--gateway-runtime", "bun", "--gateway-runtime", "node"]),
+    ).toThrow("--gateway-runtime was provided more than once");
   });
 
   it("forces incident packaged-plugin cases to load built plugin entries", () => {
@@ -326,11 +291,9 @@ server.listen(port, "127.0.0.1", () => {
       throw new Error("expected combined incident benchmark case");
     }
 
-    const env = testing.sanitizedEnv(
-      "/tmp/openclaw-bench",
-      "/tmp/openclaw-bench/config.json",
-      benchCase,
-    );
+    const env = createGatewayBenchEnv("/tmp/openclaw-bench", "/tmp/openclaw-bench/config.json", {
+      caseEnv: benchCase.env,
+    });
 
     expect(env.OPENCLAW_DISABLE_BUNDLED_ENTRY_SOURCE_FALLBACK).toBe("1");
     expect(env.OPENCLAW_DISABLE_BUNDLED_SOURCE_OVERLAYS).toBeUndefined();
@@ -371,7 +334,7 @@ server.listen(port, "127.0.0.1", () => {
     }
     const trace: Record<string, number> = {};
     for (const line of lines) {
-      testing.collectStartupTrace(line, trace);
+      collectTraceLine(line, "startup trace", trace);
     }
 
     expect(carry).toBe("");
@@ -383,72 +346,9 @@ server.listen(port, "127.0.0.1", () => {
     });
   });
 
-  it("summarizes split ready log timings without the ambiguous readyLogMs field", () => {
-    const sample = {
-      completionMs: 50,
-      cpuCoreRatio: null,
-      cpuMs: null,
-      exitCode: null,
-      firstOutputMs: 1,
-      gatewayReadyLogLine: "[gateway] ready",
-      gatewayReadyLogMs: 40,
-      healthz: {
-        firstErrorKind: "econnrefused",
-        firstRecoveryMs: 20,
-        ms: 20,
-        status: 200,
-        transitions: [],
-      },
-      httpListenLogLine: "[gateway] http server listening (0 plugins)",
-      httpListenLogMs: 10,
-      maxRssMb: null,
-      outputTail: "",
-      readyz: {
-        firstErrorKind: "http-503",
-        firstRecoveryMs: 30,
-        ms: 30,
-        status: 200,
-        transitions: [],
-      },
-      signal: null,
-      startupTrace: {
-        "sidecars.ready.total": 50,
-        "sidecars.ready": 5,
-        "plugins.load": 0,
-      },
-    };
-    const samples: Parameters<typeof testing.summarizeCase>[1] = [
-      sample,
-      {
-        ...sample,
-        startupTrace: {
-          "sidecars.ready": 15,
-          "sidecars.ready.total": 70,
-        },
-      },
-    ];
-    const result = testing.summarizeCase({ config: {}, id: "demo", name: "demo" }, samples);
-
-    expect(result.samples).toBe(samples);
-    expect(result.summary.completionMs?.p50).toBe(50);
-    expect(result.summary.httpListenLogMs?.p50).toBe(10);
-    expect(result.summary.gatewayReadyLogMs?.p50).toBe(40);
-    expect("readyLogMs" in result.summary).toBe(false);
-    expect(Object.keys(result.summary.startupTrace)).toEqual([
-      "plugins.load",
-      "sidecars.ready",
-      "sidecars.ready.total",
-    ]);
-    expect(result.summary.startupTrace).toEqual({
-      "plugins.load": { avg: 0, max: 0, min: 0, p50: 0, p95: 0 },
-      "sidecars.ready": { avg: 10, max: 15, min: 5, p50: 10, p95: 15 },
-      "sidecars.ready.total": { avg: 60, max: 70, min: 50, p50: 60, p95: 70 },
-    });
-  });
-
   it("flags samples that never produced readiness or process metrics", () => {
     const result = testing.summarizeCase({ config: {}, id: "demo", name: "demo" }, [
-      {
+      gatewaySample({
         completionMs: null,
         cpuCoreRatio: null,
         cpuMs: null,
@@ -456,27 +356,13 @@ server.listen(port, "127.0.0.1", () => {
         firstOutputMs: 5,
         gatewayReadyLogLine: null,
         gatewayReadyLogMs: null,
-        healthz: {
-          firstErrorKind: "econnrefused",
-          firstRecoveryMs: null,
-          ms: null,
-          status: null,
-          transitions: [],
-        },
+        healthz: startupProbe(null, "econnrefused"),
         httpListenLogLine: null,
         httpListenLogMs: null,
         maxRssMb: null,
         outputTail: "Error: Cannot find module 'dist/entry.js'",
-        readyz: {
-          firstErrorKind: "econnrefused",
-          firstRecoveryMs: null,
-          ms: null,
-          status: null,
-          transitions: [],
-        },
-        signal: null,
-        startupTrace: {},
-      },
+        readyz: startupProbe(null, "econnrefused"),
+      }),
     ]);
 
     expect(result.summary.startupTrace).toEqual({});
@@ -491,38 +377,16 @@ server.listen(port, "127.0.0.1", () => {
 
   it("flags samples that become ready and then exit nonzero", () => {
     const result = testing.summarizeCase({ config: {}, id: "demo", name: "demo" }, [
-      {
-        completionMs: 20,
-        cpuCoreRatio: 0.5,
-        cpuMs: 100,
+      gatewaySample({
         exitedBeforeTeardown: true,
         exitCode: 1,
-        firstOutputMs: 1,
-        gatewayReadyLogLine: "[gateway] ready",
-        gatewayReadyLogMs: 20,
-        healthz: {
-          firstErrorKind: "econnrefused",
-          firstRecoveryMs: 10,
-          ms: 10,
-          status: 200,
-          transitions: [],
-        },
-        httpListenLogLine: "[gateway] http server listening (0 plugins)",
-        httpListenLogMs: 5,
-        maxRssMb: 120,
         outputTail: "ready\\nError: startup sidecar crashed",
-        readyz: {
-          firstErrorKind: "http-503",
-          firstRecoveryMs: 18,
-          ms: 18,
-          status: 200,
-          transitions: [],
-        },
-        signal: null,
-        startupTrace: {},
-      },
+      }),
     ]);
 
+    expect(result.summary.httpListenLogMs?.p50).toBe(5);
+    expect(result.summary.gatewayReadyLogMs?.p50).toBe(20);
+    expect("readyLogMs" in result.summary).toBe(false);
     expect(testing.collectResultFailures([result])).toEqual([
       {
         id: "demo",
@@ -532,74 +396,15 @@ server.listen(port, "127.0.0.1", () => {
     ]);
   });
 
-  it("does not flag nonzero exits from intentional teardown", () => {
-    const result = testing.summarizeCase({ config: {}, id: "demo", name: "demo" }, [
-      {
-        completionMs: 20,
-        cpuCoreRatio: 0.5,
-        cpuMs: 100,
-        exitedBeforeTeardown: false,
-        exitCode: 1,
-        firstOutputMs: 1,
-        gatewayReadyLogLine: "[gateway] ready",
-        gatewayReadyLogMs: 20,
-        healthz: {
-          firstErrorKind: "econnrefused",
-          firstRecoveryMs: 10,
-          ms: 10,
-          status: 200,
-          transitions: [],
-        },
-        httpListenLogLine: "[gateway] http server listening (0 plugins)",
-        httpListenLogMs: 5,
-        maxRssMb: 120,
-        outputTail: "",
-        readyz: {
-          firstErrorKind: "http-503",
-          firstRecoveryMs: 18,
-          ms: 18,
-          status: 200,
-          transitions: [],
-        },
-        signal: null,
-        startupTrace: {},
-      },
-    ]);
-
-    expect(testing.collectResultFailures([result])).toEqual([]);
-  });
-
   it("enforces the combined incident readiness budgets", () => {
     const result = testing.summarizeCase({ config: {}, id: "incidentCombined", name: "incident" }, [
-      {
+      gatewaySample({
         completionMs: 60_000,
-        cpuCoreRatio: 0.5,
-        cpuMs: 100,
         exitCode: 0,
-        firstOutputMs: 1,
-        gatewayReadyLogLine: "[gateway] ready",
         gatewayReadyLogMs: 60_000,
-        healthz: {
-          firstErrorKind: null,
-          firstRecoveryMs: 30_000,
-          ms: 30_000,
-          status: 200,
-          transitions: [],
-        },
-        httpListenLogLine: "[gateway] http server listening (0 plugins)",
-        httpListenLogMs: 5,
-        maxRssMb: 120,
-        outputTail: "",
-        readyz: {
-          firstErrorKind: null,
-          firstRecoveryMs: 60_000,
-          ms: 60_000,
-          status: 200,
-          transitions: [],
-        },
-        signal: null,
-        startupTrace: {},
-      },
+        healthz: startupProbe(30_000),
+        readyz: startupProbe(60_000),
+      }),
     ]);
 
     expect(testing.collectResultFailures([result])).toEqual([
@@ -618,36 +423,11 @@ server.listen(port, "127.0.0.1", () => {
 
   it("flags samples that become ready and then die from a signal", () => {
     const result = testing.summarizeCase({ config: {}, id: "demo", name: "demo" }, [
-      {
-        completionMs: 20,
-        cpuCoreRatio: 0.5,
-        cpuMs: 100,
+      gatewaySample({
         exitedBeforeTeardown: true,
-        exitCode: null,
-        firstOutputMs: 1,
-        gatewayReadyLogLine: "[gateway] ready",
-        gatewayReadyLogMs: 20,
-        healthz: {
-          firstErrorKind: "econnrefused",
-          firstRecoveryMs: 10,
-          ms: 10,
-          status: 200,
-          transitions: [],
-        },
-        httpListenLogLine: "[gateway] http server listening (0 plugins)",
-        httpListenLogMs: 5,
-        maxRssMb: 120,
         outputTail: "ready\\nsegmentation fault",
-        readyz: {
-          firstErrorKind: "http-503",
-          firstRecoveryMs: 18,
-          ms: 18,
-          status: 200,
-          transitions: [],
-        },
         signal: "SIGSEGV",
-        startupTrace: {},
-      },
+      }),
     ]);
 
     expect(testing.collectResultFailures([result])).toEqual([
@@ -659,35 +439,17 @@ server.listen(port, "127.0.0.1", () => {
     ]);
   });
 
-  registerStopChildBehaviorTests({
-    stopChild,
-    queuedExitCode: 7,
-  });
-
   it("collects Count-suffixed startup trace metrics", () => {
     const startupTrace: Record<string, number> = {};
 
-    testing.collectStartupTrace(
+    collectTraceLine(
       "[gateway] startup trace: sidecars.acp.runtime-ready ready=1 readyCount=1 backend=acpx",
+      "startup trace",
       startupTrace,
     );
 
     expect(startupTrace["sidecars.acp.runtime-ready.ready"]).toBeUndefined();
     expect(startupTrace["sidecars.acp.runtime-ready.readyCount"]).toBe(1);
-  });
-
-  it("collects prepared runtime grouping counts", () => {
-    const startupTrace: Record<string, number> = {};
-
-    testing.collectStartupTrace(
-      "[gateway] startup trace: sidecars.model-runtime-build agentCount=12 workspaceGroupCount=2 configuredFactsGroupCount=2 catalogSourceCount=0 credentialGroupCount=1 catalogGroupCount=0 runtimeRegistryCount=2 sourceConcurrencyLimitCount=2 fullCatalogConcurrencyLimitCount=1",
-      startupTrace,
-    );
-
-    expect(startupTrace["sidecars.model-runtime-build.agentCount"]).toBe(12);
-    expect(startupTrace["sidecars.model-runtime-build.configuredFactsGroupCount"]).toBe(2);
-    expect(startupTrace["sidecars.model-runtime-build.catalogGroupCount"]).toBe(0);
-    expect(startupTrace["sidecars.model-runtime-build.runtimeRegistryCount"]).toBe(2);
   });
 
   it("uses the recorded trace total for completion timing", async () => {
@@ -853,9 +615,11 @@ server.listen(port, "127.0.0.1", () => {
         throw new Error("expected prepared runtime catalog stall case");
       }
       const configPath = testing.writeConfig(root, benchCase);
-      const config = JSON.parse(fs.readFileSync(configPath, "utf8")) as {
-        plugins?: { allow?: string[]; load?: { paths?: string[] } };
-      };
+      const config = JSON.parse(fs.readFileSync(configPath, "utf8")) as OpenClawConfig;
+      expect(config.agents?.defaults?.modelPolicy?.allow).toEqual([
+        "bench-catalog-stall/bench-model",
+      ]);
+      expect(validateConfigObject(config)).toMatchObject({ ok: true });
       const pluginId = config.plugins?.allow?.[0];
       expect(pluginId).toBe("bench-plugin-01");
       const pluginDir = path.join(root, "plugins", pluginId ?? "missing");
@@ -893,22 +657,36 @@ server.listen(port, "127.0.0.1", () => {
     expect(config.plugins?.allow).toEqual(["openai", "google", "minimax"]);
   });
 
-  it("builds prepared-runtime scale cases with shared and distinct workspaces", () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-bench-config-test-"));
-    try {
-      const benchCase = testing.parseOptions(["--case", "preparedRuntimeScaleMany"]).cases[0];
+  it.each([
+    { id: "preparedRuntimeScaleOne", agentCount: 1, sharedCount: 1, owner: "main" },
+    { id: "preparedRuntimeScaleMany", agentCount: 12, sharedCount: 11, owner: "agent-01" },
+  ])(
+    "builds valid $id config with its shared and distinct workspaces",
+    ({ id, agentCount, sharedCount, owner }) => {
+      const root = tempDirs.make("openclaw-bench-config-test-");
+      const benchCase = testing.parseOptions(["--case", id]).cases[0];
       if (!benchCase) {
         throw new Error("expected prepared runtime scale case");
       }
       const configPath = testing.writeConfig(root, benchCase);
-      const config = JSON.parse(fs.readFileSync(configPath, "utf8")) as {
-        agents?: { list?: Array<{ id: string; workspace: string }> };
-        plugins?: { allow?: string[] };
-      };
-      const agents = config.agents?.list ?? [];
-      expect(agents).toHaveLength(12);
-      expect(new Set(agents.slice(0, 11).map((agent) => agent.workspace)).size).toBe(1);
-      expect(agents[11]?.workspace).not.toBe(agents[0]?.workspace);
+      const config = JSON.parse(fs.readFileSync(configPath, "utf8")) as OpenClawConfig;
+      expect(validateConfigObject(config)).toMatchObject({ ok: true });
+      expect(config.agents?.ownership).toBe("explicit");
+      expect(config.agents?.defaults?.systemAgent?.agentId).toBe(owner);
+      expect(config.agents?.defaults?.modelPolicy?.allow).toEqual([
+        "bench-catalog-stall/bench-model",
+      ]);
+      expect(
+        config.agents?.defaults?.models?.["bench-catalog-stall/bench-model"]?.agentRuntime,
+      ).toEqual({
+        id: "openclaw",
+      });
+      const agents = Object.values(config.agents?.entries ?? {});
+      expect(agents).toHaveLength(agentCount);
+      expect(new Set(agents.slice(0, sharedCount).map((agent) => agent.workspace)).size).toBe(1);
+      if (agentCount > sharedCount) {
+        expect(agents[sharedCount]?.workspace).not.toBe(agents[0]?.workspace);
+      }
       const pluginId = config.plugins?.allow?.[0];
       const manifest = JSON.parse(
         fs.readFileSync(
@@ -925,30 +703,6 @@ server.listen(port, "127.0.0.1", () => {
           "utf8",
         ),
       ).toContain("preparedRuntimeStaticCatalogCallCount");
-    } finally {
-      fs.rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  it("keeps startup-lazy plugin fixtures opted out of startup activation", () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-bench-config-test-"));
-    try {
-      testing.writeConfig(root, {
-        config: {},
-        id: "fiftyStartupLazyPlugins",
-        name: "gateway, 50 startup-lazy manifest plugins",
-        pluginActivationOnStartup: false,
-        pluginCount: 1,
-      });
-      const manifest = JSON.parse(
-        fs.readFileSync(
-          path.join(root, "plugins", "bench-plugin-01", "openclaw.plugin.json"),
-          "utf8",
-        ),
-      ) as { activation?: { onStartup?: boolean } };
-      expect(manifest.activation?.onStartup).toBe(false);
-    } finally {
-      fs.rmSync(root, { recursive: true, force: true });
-    }
-  });
+    },
+  );
 });

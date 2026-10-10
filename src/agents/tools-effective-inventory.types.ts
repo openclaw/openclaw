@@ -3,55 +3,24 @@
  * Shared by agent/session tool inventory resolvers and UI/API callers that
  * present enabled tools grouped by source.
  */
+import type { ToolsEffectiveEntry } from "../../packages/gateway-protocol/src/schema/tools-catalog.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
+import type { ResolvedConversationCapabilityProfile } from "./conversation-capability-profile.js";
 
-/** Source bucket for an effective agent tool inventory entry. */
-export type EffectiveToolSource = "core" | "plugin" | "channel" | "mcp";
+export type {
+  ToolsEffectiveEntry as EffectiveToolInventoryEntry,
+  ToolsEffectiveGroup as EffectiveToolInventoryGroup,
+  ToolsEffectiveNotice as EffectiveToolInventoryNotice,
+  ToolsEffectiveResult as EffectiveToolInventoryResult,
+} from "../../packages/gateway-protocol/src/schema/tools-catalog.js";
 
-/** One tool listed in the effective inventory for an agent/session context. */
-export type EffectiveToolInventoryEntry = {
-  id: string;
-  label: string;
-  description: string;
-  rawDescription: string;
-  source: EffectiveToolSource;
-  pluginId?: string;
-  channelId?: string;
-  mcpServer?: string;
-  mcpToolName?: string;
-  deniedBySession?: true;
-  risk?: "low" | "medium" | "high";
-  tags?: string[];
-};
-
-/** Grouped effective tools for one source bucket. */
-export type EffectiveToolInventoryGroup = {
-  id: EffectiveToolSource;
-  label: string;
-  source: EffectiveToolSource;
-  tools: EffectiveToolInventoryEntry[];
-};
-
-/** Operator-facing notice emitted while building effective tool inventory. */
-export type EffectiveToolInventoryNotice = {
-  id: string;
-  severity: "info" | "warning";
-  message: string;
-  servers?: string[];
-};
-
-/** Effective tool inventory result for one agent/profile. */
-export type EffectiveToolInventoryResult = {
-  agentId: string;
-  profile: string;
-  groups: EffectiveToolInventoryGroup[];
-  notices?: EffectiveToolInventoryNotice[];
-};
+export type EffectiveToolSource = ToolsEffectiveEntry["source"];
 
 /** Inputs for resolving the effective tool inventory in a session/runtime context. */
 export type ResolveEffectiveToolInventoryParams = {
   cfg: OpenClawConfig;
+  conversationCapabilityProfile?: ResolvedConversationCapabilityProfile;
   agentId?: string;
   sessionKey?: string;
   sessionId?: string;

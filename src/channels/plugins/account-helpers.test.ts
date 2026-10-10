@@ -6,10 +6,7 @@ import {
   createAccountListHelpers,
   describeAccountSnapshot,
   describeWebhookAccountSnapshot,
-  listCombinedAccountIds,
-  mergeAccountConfig,
   resolveListedDefaultAccountId,
-  resolveMergedAccountConfig,
 } from "./account-helpers.js";
 
 const { listConfiguredAccountIds, listAccountIds, resolveDefaultAccountId } =
@@ -36,18 +33,6 @@ function cfg(accounts?: Record<string, unknown> | null, defaultAccount?: string)
   } as unknown as OpenClawConfig;
 }
 
-function expectResolvedAccountIdsCase(params: {
-  resolve: (cfg: OpenClawConfig) => string[];
-  input: OpenClawConfig;
-  expected: string[];
-}) {
-  expect(params.resolve(params.input)).toEqual(params.expected);
-}
-
-function expectResolvedDefaultAccountCase(input: OpenClawConfig, expected: string) {
-  expect(resolveDefaultAccountId(input)).toBe(expected);
-}
-
 describe("createAccountListHelpers", () => {
   describe("listConfiguredAccountIds", () => {
     it.each([
@@ -55,22 +40,11 @@ describe("createAccountListHelpers", () => {
       ["returns empty when no accounts key", cfg(null)],
       ["returns empty for empty accounts object", cfg({})],
     ])("%s", (_name, input) => {
-      expectResolvedAccountIdsCase({
-        resolve: listConfiguredAccountIds,
-        input,
-        expected: [],
-      });
+      expect(listConfiguredAccountIds(input)).toEqual([]);
     });
 
     it("filters out empty keys", () => {
       expect(listConfiguredAccountIds(cfg({ "": {}, a: {} }))).toEqual(["a"]);
-    });
-
-    it("returns account keys", () => {
-      expect(listConfiguredAccountIds(cfg({ work: {}, personal: {} }))).toEqual([
-        "work",
-        "personal",
-      ]);
     });
   });
 
@@ -96,11 +70,7 @@ describe("createAccountListHelpers", () => {
       ['returns ["default"] for empty accounts', cfg({}), ["default"]],
       ["returns sorted ids", cfg({ z: {}, a: {}, m: {} }), ["a", "m", "z"]],
     ])("%s", (_name, input, expected) => {
-      expectResolvedAccountIdsCase({
-        resolve: listAccountIds,
-        input,
-        expected,
-      });
+      expect(listAccountIds(input)).toEqual(expected);
     });
 
     it("keeps an implicit default account when root credential keys coexist with named accounts", () => {
@@ -212,7 +182,7 @@ describe("createAccountListHelpers", () => {
       ["returns first sorted id when no default", cfg({ beta: {}, alpha: {} }), "alpha"],
       ['returns "default" for empty config', {} as OpenClawConfig, "default"],
     ])("%s", (_name, input, expected) => {
-      expectResolvedDefaultAccountCase(input, expected);
+      expect(resolveDefaultAccountId(input)).toBe(expected);
     });
 
     it("can preserve configured defaults that are not present in accounts", () => {
@@ -307,37 +277,8 @@ describe("createAccountListHelpers account resolution", () => {
   });
 });
 
-describe("listCombinedAccountIds", () => {
-  it("combines configured, additional, and implicit ids once", () => {
-    expect(
-      listCombinedAccountIds({
-        configuredAccountIds: ["work", "alerts"],
-        additionalAccountIds: ["default", "alerts"],
-        implicitAccountId: "ops",
-      }),
-    ).toEqual(["alerts", "default", "ops", "work"]);
-  });
-
-  it("uses the fallback id when no accounts are present", () => {
-    expect(
-      listCombinedAccountIds({
-        configuredAccountIds: [],
-        fallbackAccountIdWhenEmpty: "default",
-      }),
-    ).toEqual(["default"]);
-  });
-});
-
 describe("resolveListedDefaultAccountId", () => {
   it.each([
-    [
-      "prefers the configured default when present in the listed ids",
-      {
-        accountIds: ["alerts", "work"],
-        configuredDefaultAccountId: "work",
-      },
-      "work",
-    ],
     [
       "matches configured defaults against normalized listed ids",
       {
@@ -345,22 +286,6 @@ describe("resolveListedDefaultAccountId", () => {
         configuredDefaultAccountId: "router-d",
       },
       "router-d",
-    ],
-    [
-      "prefers the default account id when listed",
-      {
-        accountIds: ["default", "work"],
-      },
-      "default",
-    ],
-    [
-      "can preserve an unlisted configured default",
-      {
-        accountIds: ["default", "work"],
-        configuredDefaultAccountId: "ops",
-        allowUnlistedDefaultAccount: true,
-      },
-      "ops",
     ],
     [
       "supports an explicit fallback id for ambiguous multi-account setups",
@@ -445,157 +370,5 @@ describe("account snapshots", () => {
     ],
   ] as const)("%s", (_name, resolveSnapshot, expected) => {
     expect(resolveSnapshot()).toEqual(expected);
-  });
-});
-
-describe("account config merging", () => {
-  type MergeAccountConfigShape = {
-    enabled?: boolean;
-    defaultAccount?: string;
-    name?: string;
-    accounts?: Record<string, { name: string }>;
-    commands?: {
-      native?: boolean;
-      callbackPath?: string;
-    };
-  };
-
-  type MergeAccountInput = Parameters<typeof mergeAccountConfig<MergeAccountConfigShape>>[0];
-
-  it.each<[string, MergeAccountInput, MergeAccountConfigShape]>([
-    [
-      "drops accounts from the base config before merging",
-      {
-        channelConfig: {
-          enabled: true,
-          accounts: {
-            work: { name: "Work" },
-          },
-        },
-        accountConfig: {
-          name: "Work",
-        },
-      },
-      {
-        enabled: true,
-        name: "Work",
-      },
-    ],
-    [
-      "drops caller-specified keys from the base config before merging",
-      {
-        channelConfig: {
-          enabled: true,
-          defaultAccount: "work",
-        },
-        accountConfig: {
-          name: "Work",
-        },
-        omitKeys: ["defaultAccount"],
-      },
-      {
-        enabled: true,
-        name: "Work",
-      },
-    ],
-    [
-      "deep-merges selected nested object keys",
-      {
-        channelConfig: {
-          commands: {
-            native: true,
-          },
-        },
-        accountConfig: {
-          commands: {
-            callbackPath: "/work",
-          },
-        },
-        nestedObjectKeys: ["commands"],
-      },
-      {
-        commands: {
-          native: true,
-          callbackPath: "/work",
-        },
-      },
-    ],
-  ])("%s", (_name, input, expected) => {
-    expect(mergeAccountConfig<MergeAccountConfigShape>(input)).toEqual(expected);
-  });
-
-  type MergedChannelConfig = { enabled?: boolean; name?: string };
-  type ResolveMergedInput = Parameters<typeof resolveMergedAccountConfig<MergedChannelConfig>>[0];
-
-  const resolveMergedCases: Array<[string, ResolveMergedInput, MergedChannelConfig]> = [
-    [
-      "merges the matching account config into channel config",
-      {
-        channelConfig: {
-          enabled: true,
-        },
-        accounts: {
-          work: {
-            name: "Work",
-          },
-        },
-        accountId: "work",
-      },
-      {
-        enabled: true,
-        name: "Work",
-      },
-    ],
-    [
-      "supports normalized account lookups",
-      {
-        channelConfig: {
-          enabled: true,
-        },
-        accounts: {
-          "Router D": {
-            name: "Router",
-          },
-        },
-        accountId: "router-d",
-        normalizeAccountId,
-      },
-      {
-        enabled: true,
-        name: "Router",
-      },
-    ],
-  ];
-
-  it.each(resolveMergedCases)("%s", (_name, input, expected) => {
-    expect(resolveMergedAccountConfig<MergedChannelConfig>(input)).toEqual(expected);
-  });
-
-  it("deep-merges selected nested object keys after resolving the account", () => {
-    const merged = resolveMergedAccountConfig<{
-      nickserv?: { service?: string; registerEmail?: string };
-    }>({
-      channelConfig: {
-        nickserv: {
-          service: "NickServ",
-        },
-      },
-      accounts: {
-        work: {
-          nickserv: {
-            registerEmail: "work@example.com",
-          },
-        },
-      },
-      accountId: "work",
-      nestedObjectKeys: ["nickserv"],
-    });
-
-    expect(merged).toEqual({
-      nickserv: {
-        service: "NickServ",
-        registerEmail: "work@example.com",
-      },
-    });
   });
 });

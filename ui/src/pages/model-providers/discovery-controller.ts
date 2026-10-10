@@ -5,40 +5,6 @@ import { registerModelSetupEnglish } from "../../i18n/locales/en-model-setup.ts"
 
 registerModelSetupEnglish();
 
-function renderModelProviderDiscovery(props: {
-  state: "closed" | "loading" | "ready";
-  agentLabel: string;
-  credentialChoices: readonly string[];
-  onCancel: () => void;
-  onClose: () => void;
-  onConnectChoice: (authChoice?: string) => void;
-}) {
-  if (props.state === "closed") {
-    return nothing;
-  }
-  if (props.state === "loading") {
-    return html`<openclaw-modal-dialog
-      label=${t("modelSetup.discovery.title")}
-      @modal-cancel=${props.onCancel}
-    >
-      <div class="model-setup-wizard">
-        <div class="model-setup-wizard__body" role="status">${t("common.loading")}</div>
-        <div class="model-setup-wizard__footer">
-          <button class="btn" @click=${props.onCancel}>${t("common.cancel")}</button>
-        </div>
-      </div>
-    </openclaw-modal-dialog>`;
-  }
-  return html`<openclaw-model-setup-page
-    .routeData=${{ firstRun: false }}
-    .embedded=${true}
-    .onConnectChoice=${props.onConnectChoice}
-    .credentialChoices=${props.credentialChoices}
-    .agentLabel=${props.agentLabel}
-    .onClose=${props.onClose}
-  ></openclaw-model-setup-page>`;
-}
-
 type DiscoveryOwner = {
   client: GatewayBrowserClient | null;
   epoch: number;
@@ -52,7 +18,6 @@ type DiscoveryOptions = {
   getOwner: () => DiscoveryOwner;
   isCurrent: (owner: DiscoveryOwner) => boolean;
   onClose: () => void;
-  onConnectChoice: (authChoice?: string) => void;
   onError: (error: unknown) => void;
 };
 
@@ -135,27 +100,37 @@ export class ModelProviderDiscoveryController implements ReactiveController {
   }
 
   render(data: { agentLabel: string; credentialChoices: readonly string[] }) {
+    if (this.state === "closed") {
+      return nothing;
+    }
     const generation = this.generation;
-    return renderModelProviderDiscovery({
-      ...data,
-      state: this.state,
-      onCancel: () => {
-        if (generation === this.generation) {
-          this.reset();
-        }
-      },
-      onClose: () => {
-        if (generation === this.generation) {
-          this.reset();
+    const close = (refresh = false) => {
+      if (generation === this.generation) {
+        this.reset();
+        if (refresh) {
           this.options.onClose();
         }
-      },
-      onConnectChoice: (provider) => {
-        if (generation === this.generation) {
-          this.reset();
-          this.options.onConnectChoice(provider);
-        }
-      },
-    });
+      }
+    };
+    if (this.state === "loading") {
+      return html`<openclaw-modal-dialog
+        label=${t("modelSetup.discovery.title")}
+        @modal-cancel=${() => close()}
+      >
+        <div class="model-setup-wizard">
+          <div class="model-setup-wizard__body" role="status">${t("common.loading")}</div>
+          <div class="model-setup-wizard__footer">
+            <button class="btn" @click=${() => close()}>${t("common.cancel")}</button>
+          </div>
+        </div>
+      </openclaw-modal-dialog>`;
+    }
+    return html`<openclaw-model-setup-page
+      .routeData=${{ firstRun: false }}
+      .embedded=${true}
+      .credentialChoices=${data.credentialChoices}
+      .agentLabel=${data.agentLabel}
+      .onClose=${() => close(true)}
+    ></openclaw-model-setup-page>`;
   }
 }

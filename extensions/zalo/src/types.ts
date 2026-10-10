@@ -1,4 +1,3 @@
-// Zalo type declarations define plugin contracts.
 import type { tryReadSecretFileSync } from "openclaw/plugin-sdk/secret-file-runtime";
 import type { z } from "zod";
 import type { ZaloAccountSchema, ZaloConfigSchema } from "./config-schema.js";

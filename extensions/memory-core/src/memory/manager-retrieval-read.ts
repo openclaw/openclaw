@@ -4,21 +4,15 @@ import {
   type MemorySource,
   MEMORY_INDEX_FTS_TABLE,
   MEMORY_INDEX_VECTOR_TABLE,
-  type MemoryVectorIndexState,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import { tableExists } from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import type { MemoryIndexMeta } from "./manager-reindex-state.js";
 import { loadMemorySourceFileState } from "./manager-source-state.js";
-import {
-  memoryTableExists,
-  resolvePersistedMemoryVectorIndexState,
-} from "./manager-vector-rebuild-state.js";
+import { resolvePersistedMemoryVectorIndexState } from "./manager-vector-rebuild-state.js";
 
 export const MEMORY_INDEX_META_KEY = "memory_index_meta_v1";
 
-export function readMemoryIndexMetadata(db: DatabaseSync): {
-  meta: MemoryIndexMeta | null;
-  serialized: string | null;
-} {
+export function readMemoryIndexMetadata(db: DatabaseSync) {
   const row = db
     .prepare("SELECT value FROM memory_index_meta WHERE key = ?")
     .get(MEMORY_INDEX_META_KEY);
@@ -33,20 +27,15 @@ export function readMemoryIndexMetadata(db: DatabaseSync): {
   }
 }
 
-export type MemoryRetrievalIndexState = {
-  meta: MemoryIndexMeta | null;
-  hasIndexedChunks: boolean;
-  hasFtsContent: boolean;
-  vectorState: MemoryVectorIndexState;
-};
+export type MemoryRetrievalIndexState = ReturnType<typeof readMemoryRetrievalIndexState>;
 
-export function readMemoryRetrievalIndexState(db: DatabaseSync): MemoryRetrievalIndexState {
+export function readMemoryRetrievalIndexState(db: DatabaseSync) {
   const { meta } = readMemoryIndexMetadata(db);
   const hasIndexedChunks =
     db.prepare("SELECT 1 FROM memory_index_chunks LIMIT 1").get() !== undefined;
   const hasFtsContent =
     !hasIndexedChunks &&
-    memoryTableExists(db, MEMORY_INDEX_FTS_TABLE) &&
+    tableExists(db, MEMORY_INDEX_FTS_TABLE) &&
     db.prepare(`SELECT 1 FROM ${MEMORY_INDEX_FTS_TABLE} LIMIT 1`).get() !== undefined;
   const vectorState =
     meta && meta.provider !== "none"
@@ -96,3 +85,5 @@ export function readMemoryRecallData(db: DatabaseSync, request: MemoryRecallQuer
   }
   return { rows, sourceMtimes };
 }
+
+export type MemoryRecallData = ReturnType<typeof readMemoryRecallData>;

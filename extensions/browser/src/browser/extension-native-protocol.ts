@@ -1,5 +1,5 @@
 import os from "node:os";
-import { parseStrictJsonObject } from "./extension-relay/strict-json.js";
+import { hasExactKeys, parseStrictJsonObject } from "../../chrome-extension/modules/strict-json.js";
 
 const BROWSER_NATIVE_REQUEST_MAX_BYTES = 4 * 1024;
 const BROWSER_NATIVE_RESPONSE_MAX_BYTES = 1024 * 1024;
@@ -49,10 +49,9 @@ function parseBrowserNativeRequest(raw: string): BrowserNativeBootstrapRequest |
   if (record?.v !== 1 || !isCanonicalNonce(record.nonce)) {
     return null;
   }
-  const keys = Object.keys(record);
   const expected =
     record.op === "ensure_relay" ? ["v", "op", "nonce", "relayPort"] : ["v", "op", "nonce"];
-  if (keys.length !== expected.length || !expected.every((key) => keys.includes(key))) {
+  if (!hasExactKeys(record, expected)) {
     return null;
   }
   if (record.op === "bootstrap") {

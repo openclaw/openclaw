@@ -3,6 +3,7 @@ import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.j
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import type { SessionRowProjection } from "../session-row-projection.js";
 import {
   roleClient,
   rolePolicyConfig,
@@ -10,22 +11,18 @@ import {
 } from "../session-sharing.test-utils.js";
 import {
   ArtifactSessionResolutionError,
+  createArtifactSessionAccess,
   prepareArtifactSessionResolution,
   type ArtifactQuery,
 } from "./artifacts-session-resolution.js";
 import type { GatewayClient } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
-  getTaskSession: vi.fn(),
   resolveRunSession: vi.fn(),
 }));
 
-vi.mock("../../tasks/task-registry-read.js", () => ({
-  prepareTaskRegistryRead: async () => ({ getTaskById: mocks.getTaskSession }),
-}));
-
 vi.mock("../server-session-key.js", () => ({
-  resolveSessionKeyForRun: mocks.resolveRunSession,
+  resolveSessionForRun: mocks.resolveRunSession,
 }));
 
 async function resolveSession(
@@ -33,8 +30,13 @@ async function resolveSession(
   getRuntimeConfig: () => OpenClawConfig | undefined,
   client: GatewayClient | null,
 ) {
+  using access = createArtifactSessionAccess({
+    getRuntimeConfig: () => getRuntimeConfig() ?? {},
+    client,
+  });
   const resolve = await prepareArtifactSessionResolution(query);
-  return resolve(getRuntimeConfig(), client);
+  const selected = await resolve(access);
+  return selected ? { sessionKey: selected.sessionKey, agentId: selected.agentId } : undefined;
 }
 
 function identifiedClient(scopes: string[], profileId = "viewer@example.com"): GatewayClient {
@@ -59,10 +61,49 @@ function identifiedClient(scopes: string[], profileId = "viewer@example.com"): G
 describe("artifact session authorization", () => {
   beforeEach(() => vi.clearAllMocks());
 
+  it("waits for indirect artifact topology without waiting for unrelated row enrichment", async () => {
+    const unavailable = new Error("session projection is unavailable");
+    const projection: Pick<
+      SessionRowProjection,
+      | "ensureMaterialized"
+      | "findBySessionId"
+      | "sharingRevision"
+      | "sharingTarget"
+      | "sharingTargetState"
+      | "readSource"
+      | "readMembership"
+      | "needsMembershipPreparation"
+      | "prepareMembership"
+    > = {
+      sharingRevision: undefined,
+      sharingTarget: vi.fn(),
+      sharingTargetState: vi.fn(),
+      readSource: vi.fn(),
+      readMembership: vi.fn(),
+      needsMembershipPreparation: vi.fn(),
+      prepareMembership: vi.fn(),
+      ensureMaterialized: vi
+        .fn<SessionRowProjection["ensureMaterialized"]>()
+        .mockRejectedValue(unavailable),
+      findBySessionId: vi.fn<SessionRowProjection["findBySessionId"]>(),
+    };
+    await expect(
+      prepareArtifactSessionResolution({ sessionKey: "agent:main:main" }, projection),
+    ).resolves.toBeTypeOf("function");
+    expect(projection.ensureMaterialized).not.toHaveBeenCalled();
+    await expect(prepareArtifactSessionResolution({ runId: "run-1" }, projection)).rejects.toBe(
+      unavailable,
+    );
+    const current = { ...projection, sharingRevision: {} };
+    await expect(prepareArtifactSessionResolution({ runId: "run-1" }, current)).resolves.toBeTypeOf(
+      "function",
+    );
+  });
+
   it("denies direct and indirect incognito selectors while preserving admin access", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const sessionKey = "agent:main:dashboard:incognito-artifacts";
-      const cfg = { agents: { list: [{ id: "main", default: true }] } };
+      const cfg = { agents: { entries: { main: {} } } };
       await upsertSessionEntryCore(
         { agentId: "main", sessionKey },
         {
@@ -72,12 +113,7 @@ describe("artifact session authorization", () => {
           visibility: "shared",
         },
       );
-      mocks.getTaskSession.mockReturnValue({
-        requesterSessionKey: sessionKey,
-        requesterAgentId: "main",
-        ownerKey: sessionKey,
-      });
-      mocks.resolveRunSession.mockReturnValue(sessionKey);
+      mocks.resolveRunSession.mockReturnValue({ sessionKey, agentId: "main" });
       const viewer = identifiedClient(["operator.read"]);
 
       await expect(
@@ -87,7 +123,7 @@ describe("artifact session authorization", () => {
           viewer,
         ),
       ).rejects.toThrow('Incognito session "dashboard:incognito-artifacts" was not found.');
-      for (const query of [{ taskId: "task-private" }, { runId: "run-private" }]) {
+      for (const query of [{ runId: "run-private" }]) {
         try {
           await resolveSession(query, () => cfg, viewer);
           throw new Error("expected incognito artifact selector to be denied");
@@ -126,7 +162,7 @@ describe("artifact session authorization", () => {
       role: "write",
     },
   ] as const)(
-    "hides $name artifacts behind direct, run, and task selectors",
+    "hides $name artifacts behind direct and run selectors",
     async ({ visibility, cfg, role }) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
         const viewerProfile = ensureProfileForEmail("viewer@example.com");
@@ -141,26 +177,12 @@ describe("artifact session authorization", () => {
             visibility,
           },
         );
-        mocks.getTaskSession.mockImplementation((taskId: string) =>
-          taskId === "task-run"
-            ? { runId: "run-foreign", agentId: "main" }
-            : {
-                requesterSessionKey: sessionKey,
-                requesterAgentId: "main",
-                ownerKey: sessionKey,
-              },
-        );
-        mocks.resolveRunSession.mockReturnValue(sessionKey);
+        mocks.resolveRunSession.mockReturnValue({ sessionKey, agentId: "main" });
         const viewer = role
           ? roleClient(role, "artifact-viewer")
           : identifiedClient(["operator.read"], viewerProfile.id);
 
-        for (const query of [
-          { sessionKey },
-          { runId: "run-foreign" },
-          { taskId: "task-foreign" },
-          { taskId: "task-run" },
-        ]) {
+        for (const query of [{ sessionKey }, { runId: "run-foreign" }]) {
           await expect(resolveSession(query, () => cfg, viewer)).rejects.toThrowError(
             expect.objectContaining({
               shape: {

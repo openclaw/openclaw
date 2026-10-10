@@ -34,7 +34,7 @@ describe("worker environment service", () => {
       now: () => support.testState.nowMs,
     });
     const liveEvents = support.createLiveEvents();
-    const { identity, workerService } = support.bindPlacementHarness(
+    const { identity, workerService } = await support.bindPlacementHarness(
       {
         ...newer,
         sessionId,

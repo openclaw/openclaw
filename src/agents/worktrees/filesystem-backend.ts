@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
+import { isRosettaTranslatedProcess } from "../../shared/rosetta-translation.js";
 import type {
   WorktreeFilesystemBackend,
   WorktreeFilesystemOptions,
@@ -73,7 +74,11 @@ export async function detectWorktreeFilesystemBackend(
   }
   const backend = await nativeWorktreeFilesystem.probe(parentPath, options);
   assertActive(options);
-  if (backend !== "apfs" && backend !== "btrfs") {
+  // The APFS ACL guard calls getattrlist through koffi, which faults under Rosetta.
+  if (
+    (backend !== "apfs" && backend !== "btrfs") ||
+    (backend === "apfs" && isRosettaTranslatedProcess())
+  ) {
     return null;
   }
   const apfs =

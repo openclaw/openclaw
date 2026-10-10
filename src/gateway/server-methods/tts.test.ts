@@ -7,6 +7,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { setActiveDegradedSecretOwners } from "../../secrets/runtime-degraded-state.js";
 import { expectGatewayErrorResponse } from "./gateway-response.test-helpers.js";
+import { ttsHandlers } from "./tts.js";
 
 const mocks = vi.hoisted(() => ({
   getRuntimeConfig: vi.fn(() => ({})),
@@ -88,6 +89,19 @@ vi.mock("../../tts/tts.js", () => ({
   textToSpeech: mocks.textToSpeech as typeof import("../../tts/tts.js").textToSpeech,
 }));
 
+async function callTts(method: string, params: Record<string, unknown> = {}) {
+  const respond = vi.fn();
+  await expectDefined(
+    ttsHandlers[method],
+    `TTS handler ${method}`,
+  )({
+    params,
+    respond,
+    context: { getRuntimeConfig: mocks.getRuntimeConfig },
+  } as never);
+  return respond;
+}
+
 describe("ttsHandlers", () => {
   beforeEach(() => {
     setActiveDegradedSecretOwners([]);
@@ -145,7 +159,6 @@ describe("ttsHandlers", () => {
     mocks.listSpeechProviders.mockReturnValue(providers);
     mocks.resolveTtsProviderOrder.mockReturnValue(["openai", "google"]);
 
-    const { ttsHandlers } = await import("./tts.js");
     const respond = vi.fn();
     const statusPromise = expectDefined(
       ttsHandlers["tts.status"],
@@ -222,16 +235,7 @@ describe("ttsHandlers", () => {
         summarize: true,
       });
 
-      const { ttsHandlers } = await import("./tts.js");
-      const respond = vi.fn();
-      await expectDefined(
-        ttsHandlers[method],
-        `ttsHandlers[${method}] test invariant`,
-      )({
-        params: {},
-        respond,
-        context: { getRuntimeConfig: mocks.getRuntimeConfig },
-      } as never);
+      const respond = await callTts(method, {});
 
       expect(mocks.listSpeechProviders).toHaveBeenCalledOnce();
       expect(mocks.isTtsProviderConfigured.mock.calls.map((call) => call[1])).toEqual(providers);
@@ -275,16 +279,7 @@ describe("ttsHandlers", () => {
       return providerId !== "google";
     });
 
-    const { ttsHandlers } = await import("./tts.js");
-    const respond = vi.fn();
-    await expectDefined(
-      ttsHandlers["tts.status"],
-      'ttsHandlers["tts.status"] test invariant',
-    )({
-      params: {},
-      respond,
-      context: { getRuntimeConfig: mocks.getRuntimeConfig },
-    } as never);
+    const respond = await callTts("tts.status", {});
 
     expect(mocks.isTtsProviderConfigured.mock.calls.map((call) => call[1])).toEqual([
       providers[0],
@@ -320,17 +315,7 @@ describe("ttsHandlers", () => {
         const providerId = typeof provider === "string" ? provider : provider.id;
         return providerId !== "gradium";
       });
-      const { ttsHandlers } = await import("./tts.js");
-      const respond = vi.fn();
-
-      await expectDefined(
-        ttsHandlers[method],
-        `ttsHandlers[${method}] test invariant`,
-      )({
-        params: {},
-        respond,
-        context: { getRuntimeConfig: mocks.getRuntimeConfig },
-      } as never);
+      const respond = await callTts(method, {});
 
       expect(respond).toHaveBeenCalledWith(
         true,
@@ -349,20 +334,10 @@ describe("ttsHandlers", () => {
       throw new Error('Unknown TTS provider "bad".');
     });
 
-    const { ttsHandlers } = await import("./tts.js");
-    const respond = vi.fn();
-
-    await expectDefined(
-      ttsHandlers["tts.convert"],
-      'ttsHandlers["tts.convert"] test invariant',
-    )({
-      params: {
-        text: "hello",
-        provider: "bad",
-      },
-      respond,
-      context: { getRuntimeConfig: mocks.getRuntimeConfig },
-    } as never);
+    const respond = await callTts("tts.convert", {
+      text: "hello",
+      provider: "bad",
+    });
 
     expectGatewayErrorResponse(respond, {
       code: ErrorCodes.INVALID_REQUEST,
@@ -372,17 +347,7 @@ describe("ttsHandlers", () => {
   });
 
   it("tts.speak returns the synthesized clip inline with provider metadata", async () => {
-    const { ttsHandlers } = await import("./tts.js");
-    const respond = vi.fn();
-
-    await expectDefined(
-      ttsHandlers["tts.speak"],
-      'ttsHandlers["tts.speak"] test invariant',
-    )({
-      params: { text: "Hello there." },
-      respond,
-      context: { getRuntimeConfig: mocks.getRuntimeConfig },
-    } as never);
+    const respond = await callTts("tts.speak", { text: "Hello there." });
 
     expect(mocks.synthesizeSpeech).toHaveBeenCalledWith({ text: "Hello there.", cfg: {} });
     expect(respond).toHaveBeenCalledWith(true, {
@@ -395,17 +360,7 @@ describe("ttsHandlers", () => {
   });
 
   it("tts.speak rejects blank text without synthesizing", async () => {
-    const { ttsHandlers } = await import("./tts.js");
-    const respond = vi.fn();
-
-    await expectDefined(
-      ttsHandlers["tts.speak"],
-      'ttsHandlers["tts.speak"] test invariant',
-    )({
-      params: { text: "   " },
-      respond,
-      context: { getRuntimeConfig: mocks.getRuntimeConfig },
-    } as never);
+    const respond = await callTts("tts.speak", { text: "   " });
 
     expectGatewayErrorResponse(respond, {
       code: ErrorCodes.INVALID_REQUEST,
@@ -417,17 +372,7 @@ describe("ttsHandlers", () => {
   it("tts.speak rejects text above the configured max length", async () => {
     mocks.resolveTtsConfig.mockReturnValue({ maxTextLength: 10 });
 
-    const { ttsHandlers } = await import("./tts.js");
-    const respond = vi.fn();
-
-    await expectDefined(
-      ttsHandlers["tts.speak"],
-      'ttsHandlers["tts.speak"] test invariant',
-    )({
-      params: { text: "This text is definitely too long." },
-      respond,
-      context: { getRuntimeConfig: mocks.getRuntimeConfig },
-    } as never);
+    const respond = await callTts("tts.speak", { text: "This text is definitely too long." });
 
     expectGatewayErrorResponse(respond, {
       code: ErrorCodes.INVALID_REQUEST,
@@ -442,17 +387,7 @@ describe("ttsHandlers", () => {
       error: "No TTS provider is configured.",
     });
 
-    const { ttsHandlers } = await import("./tts.js");
-    const respond = vi.fn();
-
-    await expectDefined(
-      ttsHandlers["tts.speak"],
-      'ttsHandlers["tts.speak"] test invariant',
-    )({
-      params: { text: "Hello there." },
-      respond,
-      context: { getRuntimeConfig: mocks.getRuntimeConfig },
-    } as never);
+    const respond = await callTts("tts.speak", { text: "Hello there." });
 
     expectGatewayErrorResponse(respond, {
       code: ErrorCodes.UNAVAILABLE,
@@ -472,17 +407,7 @@ describe("ttsHandlers", () => {
       },
     ]);
 
-    const { ttsHandlers } = await import("./tts.js");
-    const respond = vi.fn();
-
-    await expectDefined(
-      ttsHandlers["tts.speak"],
-      'ttsHandlers["tts.speak"] test invariant',
-    )({
-      params: { text: "Hello there." },
-      respond,
-      context: { getRuntimeConfig: mocks.getRuntimeConfig },
-    } as never);
+    const respond = await callTts("tts.speak", { text: "Hello there." });
 
     expectGatewayErrorResponse(respond, {
       code: ErrorCodes.UNAVAILABLE,

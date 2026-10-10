@@ -1,4 +1,3 @@
-// Stuck session recovery integration tests cover end-to-end recovery diagnostics.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { resolveEmbeddedSessionLane } from "../agents/embedded-agent-runner/lanes.js";
@@ -20,6 +19,8 @@ import {
 } from "../infra/diagnostic-events.js";
 import { enqueueCommandInLane, getQueueSize, resetCommandLane } from "../process/command-queue.js";
 import { resetCommandQueueStateForTest } from "../process/command-queue.test-support.js";
+// Stuck session recovery integration tests cover end-to-end recovery diagnostics.
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import {
   beginDiagnosticBackendActivity,
   closeDiagnosticEmbeddedRunOwner,
@@ -32,7 +33,7 @@ import {
 import { markDiagnosticModelStartedForTest } from "./diagnostic-run-activity.test-support.js";
 import { logMessageQueuedWithBacklogPolicy } from "./diagnostic-runtime.js";
 import { recoverStuckDiagnosticSession } from "./diagnostic-stuck-session-recovery.runtime.js";
-import { logSessionStateChange, startDiagnosticHeartbeat } from "./diagnostic.js";
+import { logSessionStateChange, startGatewayDiagnosticHeartbeat } from "./diagnostic.js";
 import { resetDiagnosticStateForTest } from "./diagnostic.test-support.js";
 
 async function expectPendingAfterEventLoopTurn(promise: Promise<unknown>): Promise<void> {
@@ -68,7 +69,8 @@ describe("stuck session recovery integration", () => {
     const lane = resolveEmbeddedSessionLane(sessionKey);
     const events: DiagnosticEventPayload[] = [];
     const unsubscribe = onDiagnosticEvent((event) => events.push(event));
-    startDiagnosticHeartbeat(
+    startGatewayDiagnosticHeartbeat(
+      createTestGatewayScheduler("fake-timers"),
       { diagnostics: { enabled: true } },
       {
         recoverStuckSession: recoverStuckDiagnosticSession,
@@ -157,7 +159,7 @@ describe("stuck session recovery integration", () => {
     }
   });
 
-  it("recovers repeated paid-call-shaped activity once without duplicate queued delivery", async () => {
+  it("gives a long request one bounded retry window before recovering queued delivery once", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(Date.parse("2026-08-04T03:00:00Z"));
     const sessionKey = "agent:main:repeated-requests";
@@ -198,7 +200,8 @@ describe("stuck session recovery integration", () => {
 
     const events: DiagnosticEventPayload[] = [];
     const unsubscribe = onDiagnosticEvent((event) => events.push(event));
-    startDiagnosticHeartbeat(
+    startGatewayDiagnosticHeartbeat(
+      createTestGatewayScheduler("fake-timers"),
       { diagnostics: { enabled: true } },
       {
         recoverStuckSession: recoverStuckDiagnosticSession,
@@ -215,8 +218,13 @@ describe("stuck session recovery integration", () => {
       model: "repeated-request-model",
       observationUnit: "request",
     });
-    for (let attempt = 2; attempt <= 3; attempt += 1) {
+    // A long first response can exhaust its output limit before the corrective retry starts.
+    for (let chunk = 0; chunk < 32; chunk += 1) {
+      markDiagnosticRunProgress({ sessionId, sessionKey, reason: "model_call:stream_progress" });
       await vi.advanceTimersByTimeAsync(30_000);
+    }
+    expect(events.filter((event) => event.type === "session.recovery.requested")).toHaveLength(0);
+    for (let attempt = 2; attempt <= 4; attempt += 1) {
       markDiagnosticModelStartedForTest({
         sessionId,
         sessionKey,
@@ -225,8 +233,10 @@ describe("stuck session recovery integration", () => {
         model: "repeated-request-model",
         observationUnit: "request",
       });
+      expect(events.filter((event) => event.type === "session.recovery.requested")).toHaveLength(0);
+      expect(deliveries).toBe(0);
+      await vi.advanceTimersByTimeAsync(30_000);
     }
-    await vi.advanceTimersByTimeAsync(30_000);
     await Promise.resolve();
 
     await expect(active).resolves.toBe("aborted");
@@ -545,7 +555,8 @@ describe("stuck session recovery integration", () => {
       });
       await activeStarted;
 
-      startDiagnosticHeartbeat(
+      startGatewayDiagnosticHeartbeat(
+        createTestGatewayScheduler("fake-timers"),
         {
           diagnostics: { enabled: true },
           agents: { defaults: { compaction: { timeoutSeconds: 600 } } },

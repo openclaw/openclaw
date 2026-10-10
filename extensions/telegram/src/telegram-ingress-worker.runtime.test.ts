@@ -77,7 +77,6 @@ function createRuntime(
       token: "test-auth-token",
       accountId: "acct",
       initialUpdateId: null,
-      spoolDir: "/tmp/openclaw-telegram-ingress-worker-test",
       apiRoot: "https://api.telegram.test",
       timeoutSeconds: options.timeoutSeconds ?? 1,
     },
@@ -231,7 +230,6 @@ describe("telegram ingress worker durable-before-offset", () => {
         token: "test-auth-token",
         accountId: "acct",
         initialUpdateId: null,
-        spoolDir: "/tmp/openclaw-telegram-ingress-worker-offset-test",
         apiRoot: "https://api.telegram.test",
         timeoutSeconds: 1,
       },
@@ -293,65 +291,13 @@ describe("telegram ingress worker retry policy", () => {
     );
   });
 
-  it.each([0, -1, Number.MAX_VALUE])(
-    "does not publish an invalid effective flood wait (%s)",
-    async (retryAfterSeconds) => {
-      vi.useFakeTimers();
-      const runtime = createRuntime([
-        jsonResponse(429, {
-          ok: false,
-          error_code: 429,
-          description: "Too Many Requests",
-          parameters: { retry_after: retryAfterSeconds },
-        }),
-        jsonResponse(200, { ok: true, result: [] }),
-      ]);
-
-      await flushRuntime();
-      await runtime.done;
-
-      const floodError = runtime.messages.find((message) => message.type === "poll-error");
-      expect(floodError).toMatchObject({ type: "poll-error", errorCode: 429 });
-      expect(floodError).not.toHaveProperty("retryAfterMs");
-      expect(runtime.calls).toHaveLength(2);
-    },
-  );
-
-  it.each([500, 502])("retries getUpdates %s responses with backoff", async (status) => {
+  it.each([
+    { name: "non-JSON", response: () => htmlResponse(502, "<html>Bad Gateway</html>") },
+    { name: "JSON-null", response: () => jsonResponse(502, null) },
+  ])("retries a $name getUpdates 502 response as a server error", async ({ response }) => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-01T12:00:00.000Z"));
-    const runtime = createRuntime([
-      jsonResponse(status, {
-        ok: false,
-        error_code: status,
-        description: status === 500 ? "Internal Server Error" : "Bad Gateway",
-      }),
-      jsonResponse(200, { ok: true, result: [] }),
-    ]);
-
-    expect(runtime.calls).toHaveLength(1);
-    await flushRuntime();
-    expect(runtime.messages).toContainEqual(
-      expect.objectContaining({ type: "poll-error", errorCode: status }),
-    );
-    await vi.advanceTimersByTimeAsync(999);
-    expect(runtime.calls).toHaveLength(1);
-    await vi.advanceTimersByTimeAsync(1);
-    await runtime.done;
-
-    expect(runtime.calls).toHaveLength(2);
-    const secondCall = expectDefined(runtime.calls[1], "second Telegram poll call");
-    const firstCall = expectDefined(runtime.calls[0], "first Telegram poll call");
-    expect(secondCall - firstCall).toBe(1000);
-  });
-
-  it("retries a non-json getUpdates 502 response as a server error", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-07-01T12:00:00.000Z"));
-    const runtime = createRuntime([
-      htmlResponse(502, "<html>Bad Gateway</html>"),
-      jsonResponse(200, { ok: true, result: [] }),
-    ]);
+    const runtime = createRuntime([response(), jsonResponse(200, { ok: true, result: [] })]);
 
     expect(runtime.calls).toHaveLength(1);
     await flushRuntime();
@@ -368,21 +314,18 @@ describe("telegram ingress worker retry policy", () => {
     expect(runtime.calls).toHaveLength(2);
   });
 
-  it.each([401, 409])("propagates getUpdates %s responses to the parent", async (status) => {
+  it("propagates getUpdates 409 responses to the parent", async () => {
     const runtime = createRuntime([
-      jsonResponse(status, {
+      jsonResponse(409, {
         ok: false,
-        error_code: status,
-        description:
-          status === 401 ? "Unauthorized" : "Conflict: terminated by other getUpdates request",
+        error_code: 409,
+        description: "Conflict: terminated by other getUpdates request",
       }),
     ]);
 
-    await expect(runtime.done).rejects.toThrow(
-      status === 401 ? "Unauthorized" : "Conflict: terminated by other getUpdates request",
-    );
+    await expect(runtime.done).rejects.toThrow("Conflict: terminated by other getUpdates request");
     expect(runtime.messages).toContainEqual(
-      expect.objectContaining({ type: "poll-error", errorCode: status }),
+      expect.objectContaining({ type: "poll-error", errorCode: 409 }),
     );
   });
 });

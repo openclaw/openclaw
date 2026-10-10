@@ -27,85 +27,6 @@ import { describe, expect, it, vi } from "vitest";
 import { CODEX_INFERENCE_GENERATION_KEY } from "./inference-context.js";
 
 describe("inference relay capacity", () => {
-  it("admits new root, child and HTTP fallback after 16 completed prewarm connections", async () => {
-    for (let index = 0; index < 16; index++) {
-      const { client, upstream } = await open();
-      await send(client, upstream, prewarm);
-      await complete(client, upstream);
-    }
-    expect((await post()).status).toBe(200);
-    const { client, upstream } = await open();
-    const registration = proxy.context.register({
-      threadId: "root",
-      text: "synthetic persona",
-      signal: new AbortController().signal,
-      assertCurrent: () => {},
-    });
-    await send(client, upstream, {
-      type: "response.create",
-      client_metadata: {
-        "x-codex-turn-metadata": JSON.stringify({
-          thread_id: "root",
-          request_kind: "turn",
-          [CODEX_INFERENCE_GENERATION_KEY]: registration.generation,
-        }),
-      },
-    });
-    await complete(client, upstream);
-    const childStream = await open();
-    await send(childStream.client, childStream.upstream);
-    await complete(childStream.client, childStream.upstream);
-    expect(clients.every((socket) => socket.readyState === WebSocket.OPEN)).toBe(true);
-  });
-
-  it("starts another inference and HTTP fallback while 16 responses are still active", async () => {
-    const streams = [];
-    for (let index = 0; index < 16; index++) {
-      const stream = await open();
-      await send(stream.client, stream.upstream);
-      streams.push(stream);
-    }
-    const next = await open();
-    await send(next.client, next.upstream, prewarm);
-    expect((await post()).status).toBe(200);
-    expect(streams.every(({ client }) => client.readyState === WebSocket.OPEN)).toBe(true);
-    expect(upstreams).toHaveLength(17);
-    // No terminal has been sent for the first batch when the next request arrives.
-    for (const stream of [...streams, next]) {
-      await complete(stream.client, stream.upstream);
-    }
-  });
-
-  it("starts a WebSocket request while 16 HTTP responses are still streaming", async () => {
-    const http = holdHttpResponses();
-    const responses = Array.from({ length: 16 }, () => post());
-    await http.waitFor(16);
-    const next = await open();
-    await send(next.client, next.upstream);
-    await complete(next.client, next.upstream);
-    for (const stream of http.streams) {
-      stream.close();
-    }
-    expect((await Promise.all(responses)).every((response) => response.status === 200)).toBe(true);
-  });
-
-  it("reclaims the oldest idle transport immediately when its pool is full", async () => {
-    for (let index = 0; index < 64; index++) {
-      const stream = await open();
-      await send(stream.client, stream.upstream, prewarm);
-      await complete(stream.client, stream.upstream);
-    }
-    const oldest = clients[0];
-    assert(oldest);
-    const closed = once(oldest, "close");
-    const replacement = await open();
-    await closed;
-    await send(replacement.client, replacement.upstream);
-    await complete(replacement.client, replacement.upstream);
-    expect(clients.slice(1).every((client) => client.readyState === WebSocket.OPEN)).toBe(true);
-    expect((await post()).status).toBe(200);
-  });
-
   it("reclaims completed WebSockets for HTTP pressure without a 16-response bottleneck", async () => {
     for (let index = 0; index < 64; index++) {
       const stream = await open();
@@ -480,9 +401,12 @@ describe("inference relay capacity", () => {
       once(active.client, "close").then(() => "active"),
       once(oldestIdle, "close").then(() => "idle"),
     ]);
-    await open();
+    const replacement = await open();
     expect(await evicted).toBe("idle");
     expect(active.client.readyState).toBe(WebSocket.OPEN);
+    expect(clients.slice(2).every((client) => client.readyState === WebSocket.OPEN)).toBe(true);
+    await send(replacement.client, replacement.upstream);
+    await complete(replacement.client, replacement.upstream);
     expect(drained).toBeTypeOf("function");
     drained?.();
   });

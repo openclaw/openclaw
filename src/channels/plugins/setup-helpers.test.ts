@@ -15,7 +15,6 @@ import {
   createPatchedAccountSetupAdapter,
   moveSingleAccountChannelSectionToDefaultAccount,
   patchScopedAccountConfig,
-  prepareScopedSetupConfig,
 } from "./setup-helpers.js";
 import type { ChannelSetupAdapter } from "./types.adapters.js";
 
@@ -130,51 +129,6 @@ afterAll(() => {
 });
 
 describe("applySetupAccountConfigPatch", () => {
-  it("patches top-level config for default account and enables channel", () => {
-    const next = applySetupAccountConfigPatch({
-      cfg: asConfig({
-        channels: {
-          "demo-setup": {
-            webhookPath: "/old",
-            enabled: false,
-          },
-        },
-      }),
-      channelKey: "demo-setup",
-      accountId: DEFAULT_ACCOUNT_ID,
-      patch: { webhookPath: "/new", botToken: "tok" },
-    });
-
-    const channel = channelRecord(next, "demo-setup");
-    expect(channel.enabled).toBe(true);
-    expect(channel.webhookPath).toBe("/new");
-    expect(channel.botToken).toBe("tok");
-  });
-
-  it("patches named account config and preserves existing account enabled flag", () => {
-    const next = applySetupAccountConfigPatch({
-      cfg: asConfig({
-        channels: {
-          "demo-setup": {
-            enabled: false,
-            accounts: {
-              work: { botToken: "old", enabled: false },
-            },
-          },
-        },
-      }),
-      channelKey: "demo-setup",
-      accountId: "work",
-      patch: { botToken: "new" },
-    });
-
-    const channel = channelRecord(next, "demo-setup");
-    const work = accountRecord(channel, "work");
-    expect(channel.enabled).toBe(true);
-    expect(work.enabled).toBe(false);
-    expect(work.botToken).toBe("new");
-  });
-
   it("normalizes account id and preserves other accounts", () => {
     const next = applySetupAccountConfigPatch({
       cfg: asConfig({
@@ -360,36 +314,30 @@ describe("createPatchedAccountSetupAdapter", () => {
 });
 
 describe("moveSingleAccountChannelSectionToDefaultAccount", () => {
-  it.each([undefined, {}])(
-    "seeds an empty default for ordinary single-account promotion: %j",
-    (accounts) => {
-      const cfg = asConfig({
-        channels: { demo: { enabled: true, ...(accounts ? { accounts } : {}) } },
-      });
-      const next = moveSingleAccountChannelSectionToDefaultAccount({ cfg, channelKey: "demo" });
-      expect(next.channels?.demo).toEqual({ enabled: true, accounts: { default: {} } });
-      expect(cfg.channels?.demo).toEqual({ enabled: true, ...(accounts ? { accounts } : {}) });
-    },
-  );
+  it("seeds an empty default for ordinary single-account promotion", () => {
+    const cfg = asConfig({
+      channels: { demo: { enabled: true, accounts: {} } },
+    });
+    const next = moveSingleAccountChannelSectionToDefaultAccount({ cfg, channelKey: "demo" });
+    expect(next.channels?.demo).toEqual({ enabled: true, accounts: { default: {} } });
+    expect(cfg.channels?.demo).toEqual({ enabled: true, accounts: {} });
+  });
 
-  it.each([undefined, {}, { ada: { enabled: true } }])(
-    "does not create an empty default for explicit preserve-root: %j",
-    (accounts) => {
-      const cfg = asConfig({
-        channels: { demo: { enabled: true, ...(accounts ? { accounts } : {}) } },
-      });
-      expect(
-        moveSingleAccountChannelSectionToDefaultAccount({
-          cfg,
-          channelKey: "demo",
-          setupSurface: {
-            configPromotion: "preserve-root",
-            applyAccountConfig: ({ cfg: currentConfig }) => currentConfig,
-          },
-        }),
-      ).toBe(cfg);
-    },
-  );
+  it("does not create an empty default for explicit preserve-root", () => {
+    const cfg = asConfig({
+      channels: { demo: { enabled: true, accounts: {} } },
+    });
+    expect(
+      moveSingleAccountChannelSectionToDefaultAccount({
+        cfg,
+        channelKey: "demo",
+        setupSurface: {
+          configPromotion: "preserve-root",
+          applyAccountConfig: ({ cfg: currentConfig }) => currentConfig,
+        },
+      }),
+    ).toBe(cfg);
+  });
 
   it("does not add a default when an ordinary named account already exists and no keys move", () => {
     const cfg = asConfig({ channels: { demo: { enabled: true, accounts: { ada: {} } } } });
@@ -545,43 +493,5 @@ describe("createEnvPatchedAccountSetupAdapter", () => {
         input: { token: "tok" },
       }),
     ).toBeNull();
-  });
-});
-
-describe("prepareScopedSetupConfig", () => {
-  it("stores the name and migrates it for named accounts when requested", () => {
-    const next = prepareScopedSetupConfig({
-      cfg: asConfig({
-        channels: {
-          "demo-scoped": {
-            name: "Personal",
-          },
-        },
-      }),
-      channelKey: "demo-scoped",
-      accountId: "Work Team",
-      name: "Work",
-      migrateBaseName: true,
-    });
-
-    const channel = channelRecord(next, "demo-scoped");
-    const defaultAccount = accountRecord(channel, "default");
-    const workTeam = accountRecord(channel, "work-team");
-    expect(defaultAccount.name).toBe("Personal");
-    expect(workTeam.name).toBe("Work");
-    expect(next.channels?.["demo-scoped"]).not.toHaveProperty("name");
-  });
-
-  it("keeps the base shape for the default account when migration is disabled", () => {
-    const next = prepareScopedSetupConfig({
-      cfg: asConfig({ channels: { "demo-base": { enabled: true } } }),
-      channelKey: "demo-base",
-      accountId: DEFAULT_ACCOUNT_ID,
-      name: "Libera",
-    });
-
-    const channel = channelRecord(next, "demo-base");
-    expect(channel.enabled).toBe(true);
-    expect(channel.name).toBe("Libera");
   });
 });

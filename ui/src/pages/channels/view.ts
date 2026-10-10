@@ -1,19 +1,7 @@
-// Channels hub: connected-channel rows, add-a-channel gallery, setup wizard,
-// and a per-channel detail overlay with the full config form.
 import { html, nothing } from "lit";
 import { repeat } from "lit/directives/repeat.js";
 import "../../styles/channels.css";
-import type {
-  ChannelsStatusSnapshot,
-  DiscordStatus,
-  GoogleChatStatus,
-  IMessageStatus,
-  NostrStatus,
-  SignalStatus,
-  SlackStatus,
-  TelegramStatus,
-  WhatsAppStatus,
-} from "../../api/types.ts";
+import type { ChannelsStatusSnapshot } from "../../api/types.ts";
 import { renderChannelIcon } from "../../components/channel-icon.ts";
 import { icons } from "../../components/icons.ts";
 import "../../components/openclaw-mascot.ts";
@@ -24,22 +12,23 @@ import {
   renderSettingsStatus,
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
-import { resolveChannelAccounts } from "../../lib/channels/index.ts";
+import { channelSnapshotEntryIsActive, resolveChannelAccounts } from "../../lib/channels/index.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { renderChannelDetail } from "./view.detail.ts";
 import { renderChannelPairingPrompt, renderChannelPairingQueue } from "./view.pairing.ts";
-import {
-  channelEnabled,
-  renderChannelRefreshAction,
-  resolveChannelDisplayState,
-} from "./view.shared.ts";
-import type { ChannelKey, ChannelsChannelData, ChannelsProps } from "./view.types.ts";
+import { renderChannelRefreshAction, resolveChannelDisplayState } from "./view.shared.ts";
+import type { ChannelsProps } from "./view.types.ts";
 import { renderChannelWizard } from "./wizard-view.ts";
 
-type ChannelCardState = "running" | "configured" | "attention";
+const CHANNEL_CARD_STATES = {
+  running: { kind: "ok", labelKey: "channels.hub.stateRunning" },
+  configured: { kind: "muted", labelKey: "channels.hub.stateConfigured" },
+  attention: { kind: "danger", labelKey: "channels.hub.stateAttention" },
+} as const;
+type ChannelCardState = keyof typeof CHANNEL_CARD_STATES;
 
-const RECOMMENDED_CHANNEL_ORDER: ChannelKey[] = [
+const RECOMMENDED_CHANNEL_ORDER: string[] = [
   "whatsapp",
   "telegram",
   "discord",
@@ -51,10 +40,11 @@ const RECOMMENDED_CHANNEL_ORDER: ChannelKey[] = [
 ];
 
 export function renderChannels(props: ChannelsProps) {
-  const channelOrder = resolveChannelOrder(props.channels.channelsSnapshot);
+  const snapshot = props.channels.channelsSnapshot;
+  const channelOrder = resolveChannelOrder(snapshot);
   // Key both lists so status updates cannot retarget an in-flight channel click.
-  const connected = channelOrder.filter((key) => channelEnabled(key, props));
-  const available = channelOrder.filter((key) => !channelEnabled(key, props));
+  const connected = channelOrder.filter((key) => channelSnapshotEntryIsActive(snapshot, key));
+  const available = channelOrder.filter((key) => !channelSnapshotEntryIsActive(snapshot, key));
   const showingStaleSnapshot = Boolean(
     props.channels.channelsLoading &&
     props.channels.channelsSnapshot &&
@@ -64,7 +54,6 @@ export function renderChannels(props: ChannelsProps) {
     props.channels.channelsSnapshot?.warnings
       ?.filter((warning) => warning.trim())
       .map((warning) => formatUiExternalText(warning)) ?? [];
-  const data = buildChannelData(props);
   const selected = props.selectedChannel;
 
   return html`
@@ -141,7 +130,6 @@ export function renderChannels(props: ChannelsProps) {
             label: resolveChannelLabel(props, selected),
             pluginIconUrl: props.presentation.pluginIconUrls[selected],
             props,
-            data,
             onClose: () => props.onCloseDetail(),
             onSetup: () => props.onStartSetup(selected),
           })
@@ -157,7 +145,7 @@ export function renderChannels(props: ChannelsProps) {
             onToggleMultiselect: (value) => props.wizardHost.toggleMultiselect(value),
             textValue: props.wizardHost.textValue,
             secretVisible: props.wizardHost.secretVisible,
-            onTextInput: (value) => props.wizardHost.setTextValue(value),
+            onTextInput: (value) => (props.wizardHost.textValue = value),
             onToggleSecretVisibility: () => props.wizardHost.toggleSecretVisibility(),
             onAnswer: (value) => props.wizardHost.answer(value),
             onClose: () => props.wizardHost.close(),
@@ -174,22 +162,7 @@ export function renderChannels(props: ChannelsProps) {
   `;
 }
 
-function buildChannelData(props: ChannelsProps): ChannelsChannelData {
-  const channels = props.channels.channelsSnapshot?.channels as Record<string, unknown> | null;
-  return {
-    whatsapp: (channels?.whatsapp ?? undefined) as WhatsAppStatus | undefined,
-    telegram: (channels?.telegram ?? undefined) as TelegramStatus | undefined,
-    discord: (channels?.discord ?? null) as DiscordStatus | null,
-    googlechat: (channels?.googlechat ?? null) as GoogleChatStatus | null,
-    slack: (channels?.slack ?? null) as SlackStatus | null,
-    signal: (channels?.signal ?? null) as SignalStatus | null,
-    imessage: (channels?.imessage ?? null) as IMessageStatus | null,
-    nostr: (channels?.nostr ?? null) as NostrStatus | null,
-    channelAccounts: props.channels.channelsSnapshot?.channelAccounts ?? null,
-  };
-}
-
-export function resolveChannelOrder(snapshot: ChannelsStatusSnapshot | null): ChannelKey[] {
+export function resolveChannelOrder(snapshot: ChannelsStatusSnapshot | null): string[] {
   const statusOrder = snapshot?.channelMeta?.length
     ? snapshot.channelMeta.map((entry) => entry.id)
     : (snapshot?.channelOrder ?? []);
@@ -220,7 +193,7 @@ function resolveChannelDetailLabel(props: ChannelsProps, key: string): string | 
   return detail && detail !== resolveChannelLabel(props, key) ? detail : null;
 }
 
-function resolveRowState(key: ChannelKey, props: ChannelsProps): ChannelCardState {
+function resolveRowState(key: string, props: ChannelsProps): ChannelCardState {
   const displayState = resolveChannelDisplayState(key, props);
   const lastError =
     typeof displayState.status?.lastError === "string" && displayState.status.lastError.trim()
@@ -238,19 +211,11 @@ function resolveRowState(key: ChannelKey, props: ChannelsProps): ChannelCardStat
 }
 
 function rowStatus(state: ChannelCardState) {
-  switch (state) {
-    case "running":
-      return renderSettingsStatus({ kind: "ok", label: t("channels.hub.stateRunning") });
-    case "configured":
-      return renderSettingsStatus({ kind: "muted", label: t("channels.hub.stateConfigured") });
-    case "attention":
-      return renderSettingsStatus({ kind: "danger", label: t("channels.hub.stateAttention") });
-    default:
-      return state satisfies never;
-  }
+  const { kind, labelKey } = CHANNEL_CARD_STATES[state];
+  return renderSettingsStatus({ kind, label: t(labelKey) });
 }
 
-function lastActivityLine(key: ChannelKey, props: ChannelsProps): string | null {
+function lastActivityLine(key: string, props: ChannelsProps): string | null {
   const lastInbound = resolveChannelAccounts(
     props.channels.channelsSnapshot?.channelAccounts,
     key,
@@ -261,7 +226,7 @@ function lastActivityLine(key: ChannelKey, props: ChannelsProps): string | null 
   return t("channels.hub.lastMessageAgo", { ago: formatRelativeTimestamp(lastInbound) });
 }
 
-function renderConnectedRow(key: ChannelKey, props: ChannelsProps) {
+function renderConnectedRow(key: string, props: ChannelsProps) {
   const label = resolveChannelLabel(props, key);
   const statusIssue = props.channels.channelsSnapshot?.statusIssues?.find(
     (issue) => issue.channel === key,
@@ -292,7 +257,7 @@ function renderConnectedRow(key: ChannelKey, props: ChannelsProps) {
   `;
 }
 
-function renderAvailableRow(key: ChannelKey, props: ChannelsProps) {
+function renderAvailableRow(key: string, props: ChannelsProps) {
   const plugin = resolveChannelPlugin(props, key);
   const label = resolveChannelLabel(props, key);
   const description =

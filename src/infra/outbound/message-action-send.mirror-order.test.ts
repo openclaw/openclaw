@@ -3,8 +3,7 @@
 // rewrote the folded main session's durable delivery route and minted a
 // conversation identity before the send was attempted.
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { jsonResult } from "../../agents/tools/common.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -14,11 +13,11 @@ import {
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { sessionDeliveryOrigin } from "../../utils/delivery-context.read.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { runMessageAction } from "./message-action-runner.js";
@@ -30,7 +29,7 @@ vi.mock("../../tts/tts.runtime.js", () => ({
 const MAIN_SESSION_KEY = "agent:main:main";
 
 describe("outbound mirror route ordering", () => {
-  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+  const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-mirror-order-");
   let storePath: string;
   let cfg: OpenClawConfig;
   const handleAction = vi.fn();
@@ -84,7 +83,7 @@ describe("outbound mirror route ordering", () => {
   }
 
   beforeEach(async () => {
-    storePath = path.join(tempDirs.make("openclaw-mirror-order-"), "sessions.json");
+    storePath = path.join(sessionDirs.make(), "sessions.json");
     cfg = {
       session: { store: storePath },
       channels: { testchat: { enabled: true } },
@@ -96,7 +95,6 @@ describe("outbound mirror route ordering", () => {
 
   afterEach(() => {
     setActivePluginRegistry(createTestRegistry([]));
-    closeOpenClawAgentDatabasesForTest();
   });
 
   it("leaves the main session route untouched when the send fails", async () => {

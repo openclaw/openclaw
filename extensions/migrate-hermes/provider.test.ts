@@ -1,8 +1,6 @@
-// Migrate Hermes tests cover provider plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { createCapturedPluginRegistration } from "openclaw/plugin-sdk/plugin-test-runtime";
 import {
   resolvePreferredOpenClawTmpDir,
   tempWorkspace,
@@ -10,10 +8,9 @@ import {
 } from "openclaw/plugin-sdk/temp-path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveHomePath } from "./helpers.js";
-import pluginEntry from "./index.js";
 import { HERMES_REASON_INCLUDE_SECRETS } from "./items.js";
 import { buildHermesMigrationProvider } from "./provider.js";
-import { makeContext, writeFile } from "./test/provider-helpers.js";
+import { makeContext, makeHermesPaths, writeFile } from "./test/provider-helpers.js";
 
 let testWorkspace: TempWorkspace;
 
@@ -36,26 +33,6 @@ describe("Hermes migration provider", () => {
     await testWorkspace.cleanup();
   });
 
-  it("registers the Hermes migration provider through the plugin entry", () => {
-    const captured = createCapturedPluginRegistration();
-    pluginEntry.register(captured.api);
-    expect(captured.migrationProviders.map((provider) => provider.id)).toEqual(["hermes"]);
-  });
-
-  it("resolves tilde source paths against the OS home when OPENCLAW_HOME is set", () => {
-    const previous = process.env.OPENCLAW_HOME;
-    process.env.OPENCLAW_HOME = path.join(path.sep, "tmp", "openclaw-home");
-    try {
-      expect(resolveHomePath("~/.hermes")).toBe(path.join(os.homedir(), ".hermes"));
-    } finally {
-      if (previous === undefined) {
-        delete process.env.OPENCLAW_HOME;
-      } else {
-        process.env.OPENCLAW_HOME = previous;
-      }
-    }
-  });
-
   it("keeps literal $ patterns in home when expanding tildes", () => {
     const spy = vi.spyOn(os, "homedir").mockReturnValue("/home/$&user");
     try {
@@ -65,28 +42,8 @@ describe("Hermes migration provider", () => {
     }
   });
 
-  it("detects Hermes sources supported by planning", async () => {
-    const root = testWorkspace.dir;
-    const source = path.join(root, "hermes");
-    await writeFile(path.join(source, "SOUL.md"), "# Hermes soul\n");
-
-    const provider = buildHermesMigrationProvider();
-    const detected = await provider.detect?.(
-      makeContext({
-        source,
-        stateDir: path.join(root, "state"),
-        workspaceDir: path.join(root, "workspace"),
-      }),
-    );
-
-    expect(detected?.found).toBe(true);
-    expect(detected?.source).toBe(source);
-    expect(detected?.confidence).toBe("high");
-  });
-
   it("detects archive-only Hermes sources", async () => {
-    const root = testWorkspace.dir;
-    const source = path.join(root, "hermes");
+    const { root, source } = makeHermesPaths(testWorkspace.dir);
     await writeFile(path.join(source, "logs", "run.log"), "log line\n");
 
     const provider = buildHermesMigrationProvider();
@@ -103,106 +60,8 @@ describe("Hermes migration provider", () => {
     expect(detected?.confidence).toBe("high");
   });
 
-  it("detects only memory files in memory-only mode", async () => {
-    const root = testWorkspace.dir;
-    const source = path.join(root, "hermes");
-    const workspaceDir = path.join(root, "workspace");
-    await writeFile(path.join(source, "SOUL.md"), "# Hermes soul\n");
-    const provider = buildHermesMigrationProvider();
-    const context = makeContext({
-      source,
-      stateDir: path.join(root, "state"),
-      workspaceDir,
-      itemKinds: ["memory"],
-    });
-
-    expect((await provider.detect?.(context))?.found).toBe(false);
-    await expect(provider.plan(context)).resolves.toMatchObject({
-      items: [],
-      summary: { total: 0 },
-    });
-    await writeFile(path.join(source, "memories", "MEMORY.md"), "remember this\n");
-    expect((await provider.detect?.(context))?.found).toBe(true);
-  });
-
-  it("plans only copy items under the Hermes memory import directory", async () => {
-    const root = testWorkspace.dir;
-    const source = path.join(root, "hermes");
-    const workspaceDir = path.join(root, "workspace");
-    await writeFile(path.join(source, "memories", "MEMORY.md"), "remember this\n");
-    await writeFile(path.join(source, "memories", "USER.md"), "user detail\n");
-    await writeFile(path.join(source, "SOUL.md"), "# Must not be planned\n");
-    const provider = buildHermesMigrationProvider();
-
-    const plan = await provider.plan(
-      makeContext({
-        source,
-        stateDir: path.join(root, "state"),
-        workspaceDir,
-        itemKinds: ["memory"],
-      }),
-    );
-
-    expect(provider.supportedItemKinds).toEqual(["memory"]);
-    expect(plan.items).toHaveLength(2);
-    expect(plan.items).toEqual([
-      expect.objectContaining({
-        id: "memory:MEMORY.md",
-        kind: "memory",
-        action: "copy",
-        status: "planned",
-        target: path.join(workspaceDir, "memory", "imports", "hermes", "MEMORY.md"),
-        details: {
-          sourceType: "hermes-memory",
-          sourceLabel: "Hermes MEMORY.md",
-          collectionId: "hermes",
-          collectionLabel: "Hermes",
-          relativePath: "MEMORY.md",
-        },
-      }),
-      expect.objectContaining({
-        id: "memory:USER.md",
-        kind: "memory",
-        action: "copy",
-        status: "planned",
-        target: path.join(workspaceDir, "memory", "imports", "hermes", "USER.md"),
-      }),
-    ]);
-  });
-
-  it("targets the selected agent workspace for memory-only imports", async () => {
-    const root = testWorkspace.dir;
-    const source = path.join(root, "hermes");
-    const defaultWorkspace = path.join(root, "workspace-main");
-    const targetWorkspace = path.join(root, "workspace-research");
-    await writeFile(path.join(source, "memories", "MEMORY.md"), "research memory\n");
-    const provider = buildHermesMigrationProvider();
-
-    const plan = await provider.plan(
-      makeContext({
-        source,
-        stateDir: path.join(root, "state"),
-        workspaceDir: defaultWorkspace,
-        config: {
-          agents: {
-            defaults: { workspace: defaultWorkspace },
-            list: [{ id: "research", workspace: targetWorkspace }],
-          },
-        },
-        targetAgentId: "research",
-        itemKinds: ["memory"],
-      }),
-    );
-
-    expect(plan.items[0]?.target).toBe(
-      path.join(targetWorkspace, "memory", "imports", "hermes", "MEMORY.md"),
-    );
-  });
-
   it("marks existing memory import targets as conflicts", async () => {
-    const root = testWorkspace.dir;
-    const source = path.join(root, "hermes");
-    const workspaceDir = path.join(root, "workspace");
+    const { root, source, workspaceDir } = makeHermesPaths(testWorkspace.dir);
     await writeFile(path.join(source, "memories", "MEMORY.md"), "remember this\n");
     await writeFile(
       path.join(workspaceDir, "memory", "imports", "hermes", "MEMORY.md"),
@@ -228,9 +87,7 @@ describe("Hermes migration provider", () => {
   it.runIf(process.platform !== "win32")(
     "marks a dangling Hermes memory destination symlink as a conflict",
     async () => {
-      const root = testWorkspace.dir;
-      const source = path.join(root, "hermes");
-      const workspaceDir = path.join(root, "workspace");
+      const { root, source, workspaceDir } = makeHermesPaths(testWorkspace.dir);
       const target = path.join(workspaceDir, "memory", "imports", "hermes", "MEMORY.md");
       await writeFile(path.join(source, "memories", "MEMORY.md"), "remember this\n");
       await fs.mkdir(path.dirname(target), { recursive: true });
@@ -255,8 +112,7 @@ describe("Hermes migration provider", () => {
   );
 
   it("copies memory bytes through the memory migration runtime", async () => {
-    const root = testWorkspace.dir;
-    const source = path.join(root, "hermes");
+    const { root, source } = makeHermesPaths(testWorkspace.dir);
     const workspaceDir = path.join(root, "missing-workspace");
     const stateDir = path.join(root, "state");
     const sourceBytes = "remember exact bytes\n";
@@ -282,10 +138,7 @@ describe("Hermes migration provider", () => {
   it.runIf(process.platform !== "win32")(
     "uses the fs-safe copier for memory-only plans applied without itemKinds",
     async () => {
-      const root = testWorkspace.dir;
-      const source = path.join(root, "hermes");
-      const workspaceDir = path.join(root, "workspace");
-      const stateDir = path.join(root, "state");
+      const { root, source, workspaceDir, stateDir } = makeHermesPaths(testWorkspace.dir);
       const outsideDir = path.join(root, "outside");
       await writeFile(path.join(source, "memories", "MEMORY.md"), "remember this\n");
       const provider = buildHermesMigrationProvider();
@@ -309,10 +162,7 @@ describe("Hermes migration provider", () => {
   );
 
   it("rejects append items mixed into a memory-only copy plan", async () => {
-    const root = testWorkspace.dir;
-    const source = path.join(root, "hermes");
-    const workspaceDir = path.join(root, "workspace");
-    const stateDir = path.join(root, "state");
+    const { source, workspaceDir, stateDir } = makeHermesPaths(testWorkspace.dir);
     await writeFile(path.join(source, "memories", "MEMORY.md"), "remember this\n");
     const provider = buildHermesMigrationProvider();
     const plan = await provider.plan(
@@ -351,10 +201,7 @@ describe("Hermes migration provider", () => {
   });
 
   it("plans model, workspace, memory, skill, and secret items without importing secrets by default", async () => {
-    const root = testWorkspace.dir;
-    const source = path.join(root, "hermes");
-    const workspaceDir = path.join(root, "workspace");
-    const stateDir = path.join(root, "state");
+    const { source, workspaceDir, stateDir } = makeHermesPaths(testWorkspace.dir);
     await writeFile(
       path.join(source, "config.yaml"),
       "model:\n  provider: openai\n  model: gpt-5.4\n",

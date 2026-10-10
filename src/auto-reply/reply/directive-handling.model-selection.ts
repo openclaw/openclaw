@@ -1,8 +1,8 @@
 import {
   assertOperatorModelAllowed,
+  createOperatorModelSelectionAssertion,
   type AdmittedRunOperatorAuthority,
 } from "../../agents/admitted-run-context.js";
-/** Resolves /model directive selections and auth profile overrides. */
 import { ensureAuthProfileStore } from "../../agents/auth-profiles.js";
 import type { ModelAliasIndex } from "../../agents/model-selection.js";
 import {
@@ -11,6 +11,10 @@ import {
 } from "../../agents/model-visibility-policy.js";
 import { resolveOperatorModelDefault } from "../../agents/operator-model-policy.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
+import {
+  composeSessionSourceAssertion,
+  type SessionSourceAssertion,
+} from "../../config/sessions/session-source-authority.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { resolveProfileOverride } from "./directive-handling.auth-profile.js";
@@ -29,41 +33,35 @@ function validateOperatorSelection(
   }
 }
 
-function resolveStoredNumericProfileModelDirective(params: { raw: string; agentDir: string }): {
+function resolveStoredNumericProfileModelDirective(
+  raw: string,
+  agentDir: string,
+): {
   modelRaw: string;
   profileId: string;
   profileProvider: string;
 } | null {
-  const trimmed = params.raw.trim();
-  const lastSlash = trimmed.lastIndexOf("/");
-  const profileDelimiter = trimmed.indexOf("@", lastSlash + 1);
+  const lastSlash = raw.lastIndexOf("/");
+  const profileDelimiter = raw.indexOf("@", lastSlash + 1);
   if (profileDelimiter <= 0) {
     return null;
   }
 
-  const profileId = trimmed.slice(profileDelimiter + 1).trim();
+  const profileId = raw.slice(profileDelimiter + 1).trim();
   if (!/^\d{8}$/.test(profileId)) {
     return null;
   }
 
-  const modelRaw = trimmed.slice(0, profileDelimiter).trim();
-  if (!modelRaw) {
-    return null;
-  }
-
-  const store = ensureAuthProfileStore(params.agentDir, {
+  const modelRaw = raw.slice(0, profileDelimiter).trim();
+  const store = ensureAuthProfileStore(agentDir, {
     allowKeychainPrompt: false,
   });
   const profile = store.profiles[profileId];
-  if (!profile) {
-    return null;
-  }
-
-  return { modelRaw, profileId, profileProvider: profile.provider };
+  return profile ? { modelRaw, profileId, profileProvider: profile.provider } : null;
 }
 
 /** Resolves the requested model/profile override from parsed inline directives. */
-export function resolveModelSelectionFromDirective(params: {
+export async function resolveModelSelectionFromDirective(params: {
   directives: InlineDirectives;
   cfg: OpenClawConfig;
   agentDir: string;
@@ -73,17 +71,16 @@ export function resolveModelSelectionFromDirective(params: {
   allowedModelKeys: Set<string>;
   modelPolicy?: ModelVisibilityPolicy;
   operatorAuthority?: AdmittedRunOperatorAuthority;
-  allowedModelCatalog: Array<{ provider: string; id?: string; name?: string }>;
-  provider: string;
   agentId?: string;
   requesterProfileId?: string;
-}): {
+}): Promise<{
   modelSelection?: ModelDirectiveSelection;
   profileOverride?: string;
   errorText?: string;
   validateAuthProfileSelection?: () => string | undefined;
   validateModelSelection?: () => string | undefined;
-} {
+  modelSelectionSource?: SessionSourceAssertion;
+}> {
   if (!params.directives.hasModelDirective || !params.directives.rawModelDirective) {
     if (params.directives.rawModelProfile) {
       return { errorText: "Auth profile override requires a model selection." };
@@ -123,28 +120,31 @@ export function resolveModelSelectionFromDirective(params: {
         resetToDefault: true,
       },
       validateModelSelection: () => validateOperatorSelection(params.operatorAuthority, selection),
+      modelSelectionSource: createOperatorModelSelectionAssertion(
+        params.operatorAuthority,
+        selection,
+      ),
     };
   }
   const storedNumericProfile =
     params.directives.rawModelProfile === undefined
-      ? resolveStoredNumericProfileModelDirective({
-          raw,
-          agentDir: params.agentDir,
-        })
+      ? resolveStoredNumericProfileModelDirective(raw, params.agentDir)
       : null;
+  const resolveSelection = (directive: string) =>
+    resolveModelDirectiveSelection({
+      raw: directive,
+      defaultProvider: params.defaultProvider,
+      defaultModel: params.defaultModel,
+      aliasIndex: params.aliasIndex,
+      allowedModelKeys: params.allowedModelKeys,
+      modelPolicy: params.modelPolicy,
+      operatorModelPolicy: params.operatorAuthority?.modelPolicy,
+      cfg: params.cfg,
+      agentId: params.agentId,
+      rawRuntime: params.directives.rawModelRuntime,
+    });
   const storedNumericProfileSelection = storedNumericProfile
-    ? resolveModelDirectiveSelection({
-        raw: storedNumericProfile.modelRaw,
-        defaultProvider: params.defaultProvider,
-        defaultModel: params.defaultModel,
-        aliasIndex: params.aliasIndex,
-        allowedModelKeys: params.allowedModelKeys,
-        modelPolicy: params.modelPolicy,
-        operatorModelPolicy: params.operatorAuthority?.modelPolicy,
-        cfg: params.cfg,
-        agentId: params.agentId,
-        rawRuntime: params.directives.rawModelRuntime,
-      })
+    ? resolveSelection(storedNumericProfile.modelRaw)
     : null;
   const useStoredNumericProfile =
     Boolean(storedNumericProfileSelection?.selection) &&
@@ -155,9 +155,6 @@ export function resolveModelSelectionFromDirective(params: {
         config: params.cfg,
         storedCredential: true,
       });
-  const modelRaw =
-    useStoredNumericProfile && storedNumericProfile ? storedNumericProfile.modelRaw : raw;
-
   if (/^[0-9]+$/.test(raw)) {
     return {
       errorText: [
@@ -169,18 +166,10 @@ export function resolveModelSelectionFromDirective(params: {
     };
   }
 
-  const resolved = resolveModelDirectiveSelection({
-    raw: modelRaw,
-    defaultProvider: params.defaultProvider,
-    defaultModel: params.defaultModel,
-    aliasIndex: params.aliasIndex,
-    allowedModelKeys: params.allowedModelKeys,
-    modelPolicy: params.modelPolicy,
-    operatorModelPolicy: params.operatorAuthority?.modelPolicy,
-    cfg: params.cfg,
-    agentId: params.agentId,
-    rawRuntime: params.directives.rawModelRuntime,
-  });
+  const resolved =
+    useStoredNumericProfile && storedNumericProfileSelection
+      ? storedNumericProfileSelection
+      : resolveSelection(raw);
   if (resolved.error) {
     return { errorText: resolved.error };
   }
@@ -198,10 +187,9 @@ export function resolveModelSelectionFromDirective(params: {
     params.directives.rawModelProfile ??
     (useStoredNumericProfile ? storedNumericProfile?.profileId : undefined);
   if (modelSelection && rawProfile) {
-    const profileResolved = resolveProfileOverride({
+    const profileResolved = await resolveProfileOverride({
       rawProfile,
       provider: modelSelection.provider,
-      cfg: params.cfg,
       agentDir: params.agentDir,
       requesterProfileId: params.requesterProfileId,
     });
@@ -221,6 +209,16 @@ export function resolveModelSelectionFromDirective(params: {
           validateModelSelection: () =>
             validateOperatorSelection(params.operatorAuthority, modelSelection) ??
             validateAuthProfileSelection?.(),
+          modelSelectionSource: composeSessionSourceAssertion(
+            [createOperatorModelSelectionAssertion(params.operatorAuthority, modelSelection)],
+            (assertSource) => {
+              assertSource();
+              const error = validateAuthProfileSelection?.();
+              if (error) {
+                throw new Error(error);
+              }
+            },
+          ),
         }
       : {}),
   };

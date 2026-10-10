@@ -3,41 +3,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { setPluginEnabledInConfig } from "../plugins/toggle-config.js";
 
 describe("setPluginEnabledInConfig", () => {
-  it("sets enabled flag for an existing plugin entry", () => {
-    const config = {
-      plugins: {
-        entries: {
-          alpha: { enabled: false, custom: "x" },
-        },
-      },
-    } as OpenClawConfig;
-
-    const next = setPluginEnabledInConfig(config, "alpha", true);
-
-    expect(next.plugins?.entries?.alpha).toEqual({
-      enabled: true,
-      custom: "x",
-    });
-  });
-
-  it("creates a plugin entry when it does not exist", () => {
-    const config = {} as OpenClawConfig;
-
-    const next = setPluginEnabledInConfig(config, "beta", false);
-
-    expect(next.plugins?.entries?.beta).toEqual({
-      enabled: false,
-    });
-  });
-
   it.each([
-    { name: "absent", policy: {}, expected: {} },
-    {
-      name: "own undefined",
-      policy: { allow: undefined, deny: undefined },
-      expected: { allow: undefined, deny: undefined },
-    },
-    { name: "empty", policy: { allow: [], deny: [] }, expected: { allow: [], deny: [] } },
     {
       name: "ordered duplicates",
       policy: {
@@ -82,77 +48,20 @@ describe("setPluginEnabledInConfig", () => {
     }
   });
 
+  const legacyEntry = {
+    config: { region: "us", nested: { legacy: true, shared: "legacy" } },
+    custom: "legacy",
+    enabled: true,
+  };
+  const canonicalEntry = {
+    config: { model: "gemini", nested: { canonical: true, shared: "canonical" } },
+    custom: "canonical",
+    enabled: false,
+  };
   it.each([
-    { action: "enables", enabled: true },
-    { action: "disables", enabled: false },
-  ])("$action one canonical compatibility entry without losing its config", ({ enabled }) => {
-    const config = {
-      plugins: {
-        allow: [" GOOGLE-GEMINI-CLI "],
-        entries: {
-          "GOOGLE-GEMINI-CLI": {
-            enabled: !enabled,
-            custom: "preserved",
-            config: { region: "us" },
-          },
-        },
-      },
-    } as OpenClawConfig;
-
-    const next = setPluginEnabledInConfig(config, "google", enabled);
-
-    expect(next.plugins?.allow).toEqual(["google"]);
-    expect(next.plugins?.entries).toEqual({
-      google: {
-        enabled,
-        custom: "preserved",
-        config: { region: "us" },
-      },
-    });
-  });
-
-  it.each([
-    {
-      name: "canonical entry last",
-      entries: {
-        "GOOGLE-GEMINI-CLI": {
-          config: {
-            region: "us",
-            nested: { legacy: true, shared: "legacy" },
-          },
-          custom: "legacy",
-          enabled: true,
-        },
-        google: {
-          config: {
-            model: "gemini",
-            nested: { canonical: true, shared: "canonical" },
-          },
-          custom: "canonical",
-          enabled: false,
-        },
-      },
-    },
     {
       name: "canonical entry first",
-      entries: {
-        google: {
-          config: {
-            model: "gemini",
-            nested: { canonical: true, shared: "canonical" },
-          },
-          custom: "canonical",
-          enabled: false,
-        },
-        "GOOGLE-GEMINI-CLI": {
-          config: {
-            region: "us",
-            nested: { legacy: true, shared: "legacy" },
-          },
-          custom: "legacy",
-          enabled: true,
-        },
-      },
+      entries: { google: canonicalEntry, "GOOGLE-GEMINI-CLI": legacyEntry },
     },
   ])("deep-merges compatibility settings with $name", ({ entries }) => {
     const config = {

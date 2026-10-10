@@ -15,6 +15,7 @@ import { refreshVisibleToolsEffectiveForCurrentSession } from "../../lib/agents/
 import { loadCronJobsPage } from "../../lib/cron/index.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
+import { agentFileValues, setAgentFileValues } from "./agent-file-state.test-helpers.ts";
 import {
   agentsCapability,
   agentsList,
@@ -195,9 +196,51 @@ describe("AgentsPage gateway lifecycle", () => {
       runtimeConfig: { save },
     } as unknown as ApplicationContext;
 
-    page.saveAgentConfig();
+    void page.refreshAgents("save");
     await waitForFast(() => expect(save).toHaveBeenCalledOnce());
     expect(refreshList).not.toHaveBeenCalled();
+  });
+
+  it("refreshes effective tools after saving tool settings for the same session", async () => {
+    const saved = deferred<boolean>();
+    const roster = deferred<typeof agentsList>();
+    let effectiveReads = 0;
+    const request = vi.fn(async (method: string) => {
+      if (method === "tools.effective") {
+        effectiveReads += 1;
+        return {
+          agentId: "main",
+          profile: effectiveReads === 1 ? "messaging" : "full",
+          groups: [],
+        };
+      }
+      return { agentId: "main", profiles: [], groups: [] };
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const agents = agentsCapability(async () => files("main", "unused"));
+    agents.refreshList = vi.fn(() => roster.promise);
+    const context = pageContext(gateway(snapshot(client)), agents);
+    const page = document.createElement("openclaw-agents-page") as TestAgentsPage;
+    page.context = {
+      ...context,
+      runtimeConfig: { ...context.runtimeConfig, state: {}, save: () => saved.promise },
+    } as unknown as ApplicationContext;
+    page.routeData = { panel: "tools" } as AgentsRouteData;
+    setPageGateway(page, client);
+    page.agentsSelectedId = "main";
+    page.loadEffectiveToolsForAgent("main");
+    await Promise.resolve();
+    expect(page.toolsEffectiveResult?.profile).toBe("messaging");
+
+    void page.refreshAgents("save");
+    saved.resolve(true);
+    await saved.promise;
+    roster.resolve(agentsList);
+    await roster.promise;
+    await Promise.resolve();
+
+    expect(effectiveReads).toBe(2);
+    expect(page.toolsEffectiveResult?.profile).toBe("full");
   });
 
   it("loads the selected agent's configured model catalog once for the overview model picker", async () => {
@@ -807,7 +850,7 @@ describe("AgentsPage gateway lifecycle", () => {
     await page.loadAgentFiles("main");
 
     expect(page.agentFileActive).toBe("AGENTS.md");
-    expect(page.agentFileContents["AGENTS.md"]).toBe("# Instructions");
+    expect(page.agentFileEditors["AGENTS.md"]?.content).toBe("# Instructions");
     expect(request).toHaveBeenCalledWith("agents.files.get", {
       agentId: "main",
       name: "AGENTS.md",
@@ -832,7 +875,7 @@ describe("AgentsPage gateway lifecycle", () => {
     };
     page.agentsSelectedId = "main";
     page.routeData = { panel: "files" } as AgentsRouteData;
-    page.agentFileContents = { "cached.md": "keep" };
+    setAgentFileValues(page, "content", { "cached.md": "keep" });
     page.routeDataInitialized = true;
     page.context = {
       agents: {
@@ -849,7 +892,7 @@ describe("AgentsPage gateway lifecycle", () => {
 
     setPageGateway(page, client, false);
     expect(page.agentFilesLoading).toBe(false);
-    expect(page.agentFileContents).toEqual({ "cached.md": "keep" });
+    expect(agentFileValues(page, "content")).toEqual({ "cached.md": "keep" });
 
     setPageGateway(page, client);
     expect(ensureFiles).toHaveBeenCalledTimes(2);

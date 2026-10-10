@@ -7,6 +7,10 @@ const observedGroupHistoryHint = {
 const observedDmHistoryHint = {
   help: "Automatic observed-DM context uses a default of 0 and a maximum of 200 messages; 0 disables that extra context. The JSON integer maximum selects the 0-message default. Session transcript trimming separately counts user turns, where 0 means no trimming. The observed-message cap does not rewrite saved values.",
 };
+const botThreadMentionHint = {
+  label: "Require Mention in Bot Threads",
+  help: "Override mention gating in threads whose root message was sent by this bot. False allows unmentioned replies; true requires a mention even when implicit reply or participation signals are enabled. Omit to preserve the existing mention policy. Channel settings override account settings; access restrictions still apply.",
+};
 
 export const slackChannelConfigUiHints = {
   historyLimit: observedGroupHistoryHint,
@@ -15,6 +19,10 @@ export const slackChannelConfigUiHints = {
   "accounts.*.dmHistoryLimit": observedDmHistoryHint,
   "dms.*.historyLimit": observedDmHistoryHint,
   "accounts.*.dms.*.historyLimit": observedDmHistoryHint,
+  requireMentionInBotThreads: botThreadMentionHint,
+  "accounts.*.requireMentionInBotThreads": botThreadMentionHint,
+  "channels.*.requireMentionInBotThreads": botThreadMentionHint,
+  "accounts.*.channels.*.requireMentionInBotThreads": botThreadMentionHint,
   "": {
     label: "Slack",
     help: "Slack channel provider configuration for bot/app tokens, streaming behavior, and DM policy controls. Keep token handling and thread behavior explicit to avoid noisy workspace interactions.",
@@ -36,7 +44,7 @@ export const slackChannelConfigUiHints = {
     implicitMentions: true,
     streaming: {
       "": 'Unified Slack stream preview mode: "off" | "partial" | "block" | "progress" (default). Legacy boolean/streamMode keys are auto-mapped.',
-      mode: 'Canonical Slack preview mode: "off" | "partial" | "block" | "progress" (default).',
+      mode: 'Canonical Slack preview mode: "off" | "partial" | "block" | "progress" (default). Default progress outside reply threads uses only a temporary typing reaction. Any explicit streaming.progress setting opts top-level turns into a preview, except nativeTaskCards: true, which only affects threads.',
       chunkMode: 'Chunking mode for outbound Slack text delivery: "length" (default) or "newline".',
       "block.enabled":
         'Enable chunked block-style Slack preview delivery when channels.slack.streaming.mode="block".',
@@ -48,19 +56,23 @@ export const slackChannelConfigUiHints = {
       "preview.commandText":
         'Command/exec detail in preview tool-progress lines: "status" is the safe default; "raw" opts into command text.',
       "progress.style":
-        'Slack progress presentation: "card" uses structured task/session cards; "compact" keeps a temporary editable text draft. The final response is posted as a new message, then the draft is deleted after confirmed delivery. Defaults to "compact" when progress.toolProgress is explicitly false, otherwise "card".',
+        'Slack progress presentation: "card" uses structured task/session cards; "compact" keeps a temporary editable text draft. The final response is posted as a new message, then the draft is deleted after confirmed delivery. Outside reply threads, unset progress presentation is quiet. Any explicit streaming.progress setting in the merged root and account config opts top-level turns into a preview, except nativeTaskCards: true, which only affects threads. This includes commentary or label alone. The style defaults to "compact" when toolProgress is explicitly false, otherwise "card".',
       "progress.nativeTaskCards":
         'Slack native task-card progress updates when channels.slack.streaming.mode="progress", progress.style="card", and streaming.nativeTransport is enabled. Set false to fall back to the Block Kit progress card. Default: true.',
     },
     progress: { labels: "openclaw" },
   }),
+  "streaming.progress.toolProgress": {
+    label: "Slack Progress Tool Lines",
+    help: "Show individual tool activity, including intermediate failures, in progress drafts (default: false). Native cards add a task row per tool call. Block Kit cards add tool activity, the plan checklist, and tool/file/time totals while working; finished cards retain only file diff totals. Default Block Kit cards show commentary and text, approval requests, and available session links. Failed turns show a plain Failed line on the Block Kit card, even without an error reply.",
+  },
   joinIntro: {
     label: "Slack Channel Join Introduction",
     help: "Post one brief, room-specific introduction when the bot joins an allowed Slack channel (default: true). Account settings override the channel-wide setting.",
   },
   allowBots: {
     label: "Slack Allow Bot Messages",
-    help: "Allow bot-authored messages to trigger Slack replies (default: false).",
+    help: 'Allow bot-authored messages to trigger Slack replies (default: true). Set false to disable bot-triggered turns, or "mentions" to require a mention. Channel access, mention, owner-presence, and loop-protection rules still apply; accessible bot-authored context remains available independently.',
   },
   botLoopProtection: {
     label: "Slack Bot Loop Protection",

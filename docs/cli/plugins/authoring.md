@@ -40,7 +40,9 @@ rewriting files.
 
 Tool and provider scaffolds compile `src/index.ts` and its imported modules into
 `dist`, leaving independent test files out of the package. Feature scaffolds also
-include their separate browser entry in TypeScript checks.
+include their separate browser entry in TypeScript checks. All scaffolds pin
+TypeScript 7.0.2 and set `rootDir` to `src`, keeping the compiled entry at
+`dist/index.js`.
 
 ### Feature scaffold and artifacts
 

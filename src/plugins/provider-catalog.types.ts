@@ -40,6 +40,7 @@ export type ProviderCatalogContext = {
     profileId?: string;
     /** Credential preparation exhausted its candidates; not an unconfigured provider. */
     preparationFailed?: boolean;
+    authFlow?: string;
   };
 };
 
@@ -75,13 +76,7 @@ export type UnifiedModelCatalogProviderPlugin = {
     | Promise<readonly UnifiedModelCatalogEntry[] | null | undefined>
     | null
     | undefined;
-  liveCatalog?: (
-    ctx: UnifiedModelCatalogProviderContext,
-  ) =>
-    | readonly UnifiedModelCatalogEntry[]
-    | Promise<readonly UnifiedModelCatalogEntry[] | null | undefined>
-    | null
-    | undefined;
+  liveCatalog?: NonNullable<UnifiedModelCatalogProviderPlugin["staticCatalog"]>;
 };
 
 /**

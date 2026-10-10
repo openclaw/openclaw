@@ -15,7 +15,11 @@ import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-wo
 import { runScopedSqliteArchiveOperation } from "./session-accessor.sqlite-archive-session.js";
 import type {
   MaterializedSessionStateDeletePlan,
+  SessionHistoryEvictionArchivePlan,
   SessionStateDeletePlan,
+  SqliteArchiveOneShotWorkerData,
+  TranscriptArchivePagePlan,
+  TranscriptArchivePageResult,
   TranscriptArchivePublishPlan,
   TranscriptArchivePublishResult,
   TranscriptArchiveReadPlan,
@@ -32,6 +36,7 @@ import {
   type SqliteWorkerWriteAdmission,
 } from "./session-accessor.sqlite-worker-request.js";
 import type { SessionColdWorkerData } from "./session-cold-storage-worker.js";
+import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 
 export function createSqliteTranscriptArchiveWorker(workerData: object): Worker {
   const workerUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sessionTranscriptArchive);
@@ -99,11 +104,7 @@ function spawnSqliteTranscriptArchiveWorkerOperation<Result>(
           onExit: (code) => {
             exitCode = code;
           },
-          dispatch: () =>
-            worker.postMessage(
-              { type: "mutate", coordination },
-              coordination.stateLifecycle ? [coordination.stateLifecycle] : [],
-            ),
+          dispatch: () => worker.postMessage({ type: "mutate", coordination }, []),
         }),
     ).then((result) => [result]);
     const observe = (outcome: "resolved" | "rejected") => {
@@ -234,17 +235,22 @@ function runSqliteTranscriptArchiveWorker(
   }
   return runSqliteTranscriptArchiveWorkerOperation<TranscriptArchiveWorkerResult>({
     expectedMessageType: "done",
-    workerData: { operation: "materialize", type: "sqlite-transcript-archive-v2", plans },
+    workerData: {
+      operation: "materialize",
+      type: "sqlite-transcript-archive-v2",
+      plans,
+    } satisfies SqliteArchiveOneShotWorkerData,
   });
 }
 
 export function runSqliteTranscriptArchivePublishWorker(
   plans: readonly TranscriptArchivePublishPlan[],
+  signal?: AbortSignal,
 ): Promise<TranscriptArchivePublishResult[]> {
   const scoped = runScopedSqliteArchiveOperation(
     { operation: "publish", plans },
     createSqliteTranscriptArchiveWorker,
-    runExclusiveSqliteTranscriptArchiveWorker,
+    (run) => runExclusiveSqliteTranscriptArchiveWorker(run, signal),
   );
   if (scoped) {
     return scoped.then((result) => {
@@ -255,9 +261,30 @@ export function runSqliteTranscriptArchivePublishWorker(
     });
   }
   return runSqliteTranscriptArchiveWorkerOperation<TranscriptArchivePublishResult>({
+    signal,
     expectedMessageType: "published",
-    workerData: { operation: "publish", type: "sqlite-transcript-archive-v2", plans },
+    workerData: {
+      operation: "publish",
+      type: "sqlite-transcript-archive-v2",
+      plans,
+    } satisfies SqliteArchiveOneShotWorkerData,
   });
+}
+
+/** Probe pending publication without creating a writable database or archive schema. */
+export async function readPendingSqliteTranscriptArchivesInWorker(
+  plan: {
+    agentId: string;
+    databasePath: string;
+    env: NodeJS.ProcessEnv;
+  },
+  signal: AbortSignal,
+): Promise<boolean> {
+  signal.throwIfAborted();
+  return withSessionHistoryWorkerDatabase(
+    { agentId: plan.agentId, path: plan.databasePath, env: plan.env },
+    (reader) => reader.readPendingArchives({ env: plan.env }, signal),
+  );
 }
 
 export async function runSqliteTranscriptArchiveReadWorker(
@@ -273,6 +300,24 @@ export async function runSqliteTranscriptArchiveReadWorker(
   }
   const result = await scoped;
   if (result.type !== "final-read") {
+    throw new Error("SQLite archive Worker returned another operation's result");
+  }
+  return result.results;
+}
+
+export async function runSqliteTranscriptArchivePageWorker(
+  plans: readonly TranscriptArchivePagePlan[],
+): Promise<Array<TranscriptArchivePageResult | undefined>> {
+  const scoped = runScopedSqliteArchiveOperation(
+    { operation: "read-page", plans },
+    createSqliteTranscriptArchiveWorker,
+    runExclusiveSqliteTranscriptArchiveWorker,
+  );
+  if (!scoped) {
+    throw new Error("SQLite archive reads require their captured database scope");
+  }
+  const result = await scoped;
+  if (result.type !== "page-read") {
     throw new Error("SQLite archive Worker returned another operation's result");
   }
   return result.results;
@@ -298,23 +343,43 @@ export async function materializeSessionStateDeletePlans(
     if (!result) {
       throw new Error(`SQLite transcript archive worker omitted ${plan.sessionId}`);
     }
-    const generation = plan.snapshot.generation;
-    if (result.archive && !generation) {
-      throw new Error(
-        `Cannot archive SQLite transcript without a generation for ${plan.sessionId}`,
-      );
-    }
-    const archivedTranscript =
-      result.archive && generation
-        ? {
-            generation,
-            sessionId: plan.sessionId,
-            archivedPath: path.join(plan.archiveDirectory, result.archive.archiveName),
-            sourcePath: path.join(plan.archiveDirectory, `${plan.sessionId}.jsonl`),
-          }
-        : null;
-    return Object.assign({}, plan, { archive: result.archive, archivedTranscript });
+    return materializedSessionStateDeletePlan(plan, result);
   });
+}
+
+/** Plan and stage the selected history in the archive worker's existing read snapshot. */
+export async function materializeSessionHistoryEvictionPlan(
+  input: SessionHistoryEvictionArchivePlan,
+): Promise<MaterializedSessionStateDeletePlan | null> {
+  const [result] = await runSqliteTranscriptArchiveWorker([input]);
+  if (!result || result.sessionId !== input.sessionId || result.preparedPlan === undefined) {
+    throw new Error(
+      `SQLite transcript archive worker omitted history planning for ${input.sessionId}`,
+    );
+  }
+  return result.preparedPlan
+    ? materializedSessionStateDeletePlan(result.preparedPlan, result)
+    : null;
+}
+
+function materializedSessionStateDeletePlan(
+  plan: SessionStateDeletePlan,
+  result: TranscriptArchiveWorkerResult,
+): MaterializedSessionStateDeletePlan {
+  const generation = plan.snapshot.generation;
+  if (result.archive && !generation) {
+    throw new Error(`Cannot archive SQLite transcript without a generation for ${plan.sessionId}`);
+  }
+  const archivedTranscript =
+    result.archive && generation
+      ? {
+          generation,
+          sessionId: plan.sessionId,
+          archivedPath: path.join(plan.archiveDirectory, result.archive.archiveName),
+          sourcePath: path.join(plan.archiveDirectory, `${plan.sessionId}.jsonl`),
+        }
+      : null;
+  return Object.assign({}, plan, { archive: result.archive, archivedTranscript });
 }
 
 // Multiple removed entries can point at one transcript session. If any owner

@@ -29,6 +29,7 @@ export function validateOnboardingChoiceOptions(
   opts: OnboardOptions,
   runtime: RuntimeEnv,
 ): boolean {
+  const reject = (message: string) => rejectOnboardingOption(opts, runtime, message);
   const choiceValidations: Array<readonly [string, string | undefined, readonly string[]]> = [
     ["--gateway-bind", opts.gatewayBind, ["loopback", "tailnet", "lan", "auto", "custom"]],
     ["--gateway-auth", opts.gatewayAuth, ["token", "password"]],
@@ -41,35 +42,25 @@ export function validateOnboardingChoiceOptions(
   ];
   for (const [flag, value, allowed] of choiceValidations) {
     if (value !== undefined && !allowed.includes(value)) {
-      return rejectOnboardingOption(
-        opts,
-        runtime,
+      return reject(
         `Invalid ${flag} ${JSON.stringify(value)}. Use ${allowed.map((choice) => JSON.stringify(choice)).join(", ")}.`,
       );
     }
   }
   if (opts.flow !== undefined && !isOnboardFlow(opts.flow)) {
-    return rejectOnboardingOption(
-      opts,
-      runtime,
-      'Invalid --flow. Use "quickstart", "advanced", "manual", or "import".',
-    );
+    return reject('Invalid --flow. Use "quickstart", "advanced", "manual", or "import".');
   }
   if (opts.daemonRuntime !== undefined && !isGatewayDaemonRuntime(opts.daemonRuntime)) {
-    return rejectOnboardingOption(opts, runtime, 'Invalid --daemon-runtime. Use "node" or "bun".');
+    return reject('Invalid --daemon-runtime. Use "node" or "bun".');
   }
   if (opts.nodeManager !== undefined && !isNodeManagerChoice(opts.nodeManager)) {
-    return rejectOnboardingOption(
-      opts,
-      runtime,
-      'Invalid --node-manager. Use "npm", "pnpm", or "bun".',
-    );
+    return reject('Invalid --node-manager. Use "npm", "pnpm", or "bun".');
   }
   if (
     opts.gatewayPort !== undefined &&
     (!Number.isFinite(opts.gatewayPort) || opts.gatewayPort <= 0 || opts.gatewayPort > 65_535)
   ) {
-    return rejectOnboardingOption(opts, runtime, formatInvalidPortOption("--gateway-port"));
+    return reject(formatInvalidPortOption("--gateway-port"));
   }
   return true;
 }

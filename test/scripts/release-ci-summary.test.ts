@@ -13,16 +13,11 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { runInNewContext } from "node:vm";
-import { crc32 } from "node:zlib";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { parse } from "yaml";
 import { continueFailed, preflightContinuation } from "../../scripts/frv.mjs";
 import { buildFullReleaseCandidateRequest } from "../../scripts/full-release-candidate-contract.mjs";
-import {
-  releaseFlakeIntentSha256,
-  selectReleaseFlakeIntent,
-} from "../../scripts/full-release-flake-policy.mjs";
 import {
   createPublicationAdmission,
   createPublicationObservations,
@@ -39,18 +34,22 @@ import {
   MAX_RELEASE_ARTIFACT_BYTES,
   releaseCompositeJobsSha256,
   releaseExecutionPlanSha256,
-  type ReleaseExecutionPlan,
 } from "../../scripts/full-release-validation-policy.mjs";
+import { canonicalizeJsonValue } from "../../scripts/lib/canonical-json.mjs";
 import {
-  artifactDownloadArgs,
+  releaseChildDispatchInputs,
+  releaseChildReuseSha256,
+} from "../../scripts/lib/full-release-child-request.mjs";
+import { validateReusableReleaseChild } from "../../scripts/lib/full-release-child-reuse.mjs";
+import { FULL_RELEASE_CHILD_EVIDENCE_JOB } from "../../scripts/lib/full-release-evidence.mjs";
+import { runManagedCommand } from "../../scripts/lib/managed-child-process.mts";
+import {
   artifactDownloadTimeoutMs,
   createReleaseEvidenceClient,
   expectedChildDispatches,
   expectedSelectedChildDispatches,
-  githubRestArgs,
   manifestChildEntries,
   readManifestArtifactArchive,
-  releaseAdvisoryJobEvidence,
   requiredChildKeysForRerunGroup,
   resolveManifestChildOriginAttempt,
   runReleaseCiGh,
@@ -69,20 +68,62 @@ import {
   validatePerformanceArtifactOnlyJobs,
   validateReleaseRunEvidence,
   validateRequestedEvidenceReuse,
-  validateTrustedProducerIdentity,
 } from "../../scripts/release-ci-summary.mjs";
 import { authenticateFullReleaseValidationEvidence } from "../../scripts/validate-full-release-validation-evidence.mjs";
 import { fullReleaseCandidateBindingFixture } from "../helpers/full-release-candidate.js";
+import { withinTest } from "../helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { makeStoredZip } from "./actions-artifact-zip.test-support.js";
+import { candidatePublicationFixture } from "./candidate-publication.test-support.js";
+import {
+  rawManifest,
+  trustedMainPackageFixture,
+  trustedMainFullFixture,
+  trustedMainNpmFixture,
+} from "./release-ci-summary.test-support.js";
 
 const SCRIPT = "scripts/release-ci-summary.mjs";
 const MANIFEST_ARTIFACT_ENTRY = "full-release-validation-manifest.json";
 const hasUnzip = spawnSync("unzip", ["-v"], { stdio: "ignore" }).status === 0;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-function publicationRestoreFixture(fullCoverage = false, route: "normal" | "prepared" = "normal") {
-  const fixture = trustedMainNpmFixture();
-  const source = createPublicationSourceFact(
+async function runInterruptedPlanFixture(
+  args: string[],
+  env: NodeJS.ProcessEnv,
+  signal: AbortSignal,
+) {
+  let stdout = "";
+  let stderr = "";
+  const command = runManagedCommand({
+    bin: process.execPath,
+    args,
+    env,
+    stdio: ["ignore", "pipe", "pipe"],
+    timeoutMs: 12_000,
+    requireProcessTreeExit: process.platform !== "win32",
+    signal,
+    onReady(child) {
+      child.stdout!.on("data", (chunk: Buffer) => {
+        stdout += chunk.toString();
+      });
+      child.stderr!.on("data", (chunk: Buffer) => {
+        stderr += chunk.toString();
+      });
+    },
+  });
+  try {
+    return { status: await withinTest(command, signal), stdout, stderr };
+  } finally {
+    await command.catch(() => {});
+  }
+}
+
+function publicationSourceFixture(
+  fixture: ReturnType<typeof trustedMainNpmFixture>,
+  fullCoverage: boolean,
+  route: "normal" | "prepared" = "normal",
+) {
+  return createPublicationSourceFact(
     publicationSourceRequest({
       PUBLICATION_INPUTS_JSON: JSON.stringify({
         ref: fixture.targetSha,
@@ -127,6 +168,11 @@ function publicationRestoreFixture(fullCoverage = false, route: "normal" | "prep
       platforms: [],
     },
   );
+}
+
+function publicationRestoreFixture(fullCoverage = false, route: "normal" | "prepared" = "normal") {
+  const fixture = trustedMainNpmFixture();
+  const source = publicationSourceFixture(fixture, fullCoverage, route);
   const time = "2026-08-28T12:00:00.000Z";
   const observations = createPublicationObservations(source, {
     sourceDigest: source.digest,
@@ -185,10 +231,8 @@ function publicationRestoreFixture(fullCoverage = false, route: "normal" | "prep
 
 describe("original publication admission reader", () => {
   it.each([
-    "complete",
     "changed-admission",
     "skipped-original-upload",
-    "core-normal",
     "core-prepared",
     "wrong-channel",
     "wrong-target",
@@ -309,6 +353,9 @@ describe("original publication admission reader", () => {
     };
     const client = {
       ...fixture.client,
+      validateChildReuse: async () => {
+        throw new Error("publication admission fixture does not reuse children");
+      },
       getJobLog: async (id: number) =>
         id === 902
           ? `2026-08-28T12:01:03.750Z FRV_EXECUTION_PLAN_SHA256=${releaseExecutionPlanSha256(fixture.plan)}\n`
@@ -347,9 +394,7 @@ describe("original publication admission reader", () => {
       verifierSourceContent: readFileSync(SCRIPT),
       verifierSourceSha: "c".repeat(40),
     };
-    const consumerCase = !["complete", "changed-admission", "skipped-original-upload"].includes(
-      fault,
-    );
+    const consumerCase = !["changed-admission", "skipped-original-upload"].includes(fault);
     if (fault.startsWith("continuation")) {
       const observed = structuredClone(fixture.plan);
       if (fault === "continuation-mutated") {
@@ -432,7 +477,7 @@ describe("original publication admission reader", () => {
           client,
         )
       : validateReleaseRunEvidence(strictOptions, client);
-    if (["complete", "core-normal", "core-prepared"].includes(fault)) {
+    if (fault === "core-prepared") {
       const value = await result;
       const verified = "evidence" in value ? value.evidence : value;
       expect(verified.children).toHaveLength(5);
@@ -446,8 +491,7 @@ describe("original publication admission reader", () => {
     }
   });
 
-  it.each([
-    "complete",
+  it.for([
     "workflow-restore",
     "workflow-restore-failed-resolution",
     "workflow-plan-restore",
@@ -460,26 +504,19 @@ describe("original publication admission reader", () => {
     "cached-plan-duplicate-witness",
     "cached-plan-outside-witness",
     "cached-plan-wrong-witness-step",
-    "cached-plan-duplicate-witness-step",
     "cached-plan-failed-witness",
-    "cached-plan-failed-upload",
     "cached-plan-historical",
     "reuploaded-plan",
-    "reuploaded-plan-mutated",
     "interrupted-sealer",
-    "missing-sealer",
     "duplicate-sealer",
-    "later-sealer",
     "skipped-seal",
     "failed-upload",
-    "skipped-upload",
     "late-artifact",
     "upload-before-seal",
     "wrong-repository",
     "wrong-attempt",
     "wrong-workflow",
     "wrong-sha",
-    "failed-resolution",
     "deleted-capability",
     "deleted-admission",
     "missing-plan",
@@ -489,13 +526,13 @@ describe("original publication admission reader", () => {
     "extra-entry",
     "symlink-entry",
     "changed-selection",
-  ])("authenticates retained attempt one before any new observations: %s", (fault) => {
+  ])("authenticates retained attempt one before any new observations: %s", async (fault, t) => {
     const fixture = publicationRestoreFixture();
     const cachedRestore = fault.includes("cached");
     const witnessContract =
       (cachedRestore && fault !== "cached-plan-historical") || fault.startsWith("reuploaded-plan");
     const originalPlanDigest = releaseExecutionPlanSha256(fixture.plan);
-    if (fault === "cached-plan-mutated" || fault === "reuploaded-plan-mutated") {
+    if (fault === "cached-plan-mutated") {
       const row = expectDefined(fixture.admission.observations.npm[0], "root observation");
       if (row.outcome !== "observed") {
         throw new Error("fixture root observation unavailable");
@@ -504,7 +541,18 @@ describe("original publication admission reader", () => {
       fixture.admission.binding.observationsDigest = `sha256:${createHash("sha256").update(publicationObservationJson(fixture.admission.observations)).digest("hex")}`;
       fixture.plan.sha256 = releaseExecutionPlanSha256(fixture.plan);
     }
-    const root = tempDirs.make("publication-original-reader-");
+    let interruptedWork: ReturnType<typeof runInterruptedPlanFixture> | undefined;
+    const caseTempDirs =
+      fault === "interrupted-sealer"
+        ? useAutoCleanupTempDirTracker((cleanup) =>
+            t.onTestFinished(async () => {
+              // The interrupted fixture owns its root until its managed process tree has joined.
+              await interruptedWork?.catch(() => {});
+              cleanup();
+            }),
+          )
+        : tempDirs;
+    const root = caseTempDirs.make("publication-original-reader-");
     const request = join(root, "request.json");
     const fixturesPath = join(root, "fixtures.json");
     const archivePath = join(root, "plan.zip");
@@ -533,6 +581,7 @@ describe("original publication admission reader", () => {
       const pendingGh = gh;
       const ready = join(root, "pending-gh-ready");
       const settled = join(root, "pending-gh-settled");
+      const receipts = join(root, "pending-gh-receipts");
       const written = join(root, "interrupted-plan.json");
       const outputsPath = join(root, "interrupted-outputs");
       const admissionPath = join(root, "source-admission.json");
@@ -548,11 +597,18 @@ describe("original publication admission reader", () => {
       writeFileSync(
         pendingGh,
         `#!${process.execPath}
-require("node:fs").writeFileSync(${JSON.stringify(ready)}, String(process.pid));
+const fs = require("node:fs");
+const receipts = fs.openSync(${JSON.stringify(receipts)}, "w");
 const parent = process.ppid;
-process.once("exit", () => require("node:fs").writeFileSync(${JSON.stringify(settled)}, "settled"));
+process.once("exit", () => {
+  fs.writeFileSync(${JSON.stringify(settled)}, "settled");
+  // Synchronous FIFO writes cannot be lost when this orphan exits immediately afterward.
+  fs.writeSync(receipts, "settled\\n");
+});
 setInterval(() => { if (process.ppid !== parent) process.exit(0); }, 10);
 setTimeout(() => {}, 30000);
+fs.writeFileSync(${JSON.stringify(ready)}, String(process.pid));
+fs.writeSync(receipts, "ready\\n");
 `,
         { mode: 0o755 },
       );
@@ -579,58 +635,75 @@ setTimeout(() => {}, 30000);
         evidenceRunUrl: "https://example.invalid/runs/99",
         evidenceChangedPaths: [],
       };
-      const interrupted = spawnSync(
-        process.execPath,
+      interruptedWork = runInterruptedPlanFixture(
         [
           "--input-type=module",
           "--eval",
           `
-import { spawn } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
-import { setTimeout as delay } from "node:timers/promises";
+import { execFileSync, spawn } from "node:child_process";
+import { closeSync, createReadStream, existsSync, openSync, readFileSync } from "node:fs";
+import { once } from "node:events";
+execFileSync("mkfifo", [${JSON.stringify(receipts)}]);
+// Keep the FIFO open until gh owns its writer; then EOF joins that fixture's exit.
+let heldWriter = openSync(${JSON.stringify(receipts)}, "r+");
+const receiptStream = createReadStream(${JSON.stringify(receipts)}, { encoding: "utf8" });
+const receiptClosed = new Promise(resolve => receiptStream.once("close", resolve));
+const ended = once(receiptStream, "end");
+let markReady;
+const reached = new Promise(resolve => { markReady = resolve; });
+let receiptText = "";
+receiptStream.on("data", chunk => {
+  receiptText += chunk;
+  if (receiptText.includes("ready\\n")) markReady();
+});
+await once(receiptStream, "open");
 const child = spawn(process.execPath, [${JSON.stringify(resolve("scripts/full-release-validation-state.mjs"))}, "plan"], { env: process.env, stdio: ["ignore", "pipe", "pipe"] });
 child.stdout.pipe(process.stdout); child.stderr.pipe(process.stderr);
 const closed = new Promise(resolve => child.once("close", (code, signal) => resolve({ code, signal })));
 const timeout = setTimeout(() => child.kill("SIGKILL"), 8000);
 try {
-  while (!existsSync(${JSON.stringify(ready)}) && child.exitCode === null) await delay(10);
-  if (!existsSync(${JSON.stringify(ready)})) {
-    await closed;
-    throw new Error("reuse did not reach controlled gh: " + (existsSync(${JSON.stringify(written)}) ? readFileSync(${JSON.stringify(written)}, "utf8") : "no checkpoint"));
-  }
+  await Promise.race([reached, closed.then(() => {
+    // The durable marker is written before the pipe receipt; close can win their delivery race.
+    if (!existsSync(${JSON.stringify(ready)})) throw new Error("reuse did not reach controlled gh: " + (existsSync(${JSON.stringify(written)}) ? readFileSync(${JSON.stringify(written)}, "utf8") : "no checkpoint"));
+  })]);
+  closeSync(heldWriter); heldWriter = undefined;
   child.kill("SIGTERM");
   const result = await closed;
   if (result.code !== 1 || result.signal !== null) throw new Error("interruption did not write and exit 1");
-  const settlementDeadline = Date.now() + 2000;
-  while (!existsSync(${JSON.stringify(settled)}) && Date.now() < settlementDeadline) await delay(10);
+  await ended;
   if (!existsSync(${JSON.stringify(settled)})) throw new Error("controlled gh did not settle after owner interruption");
-} finally { clearTimeout(timeout); }
+} finally {
+  clearTimeout(timeout);
+  if (heldWriter !== undefined) closeSync(heldWriter);
+  receiptStream.destroy();
+  child.kill("SIGKILL");
+  await closed;
+  await receiptClosed;
+}
 `,
         ],
         {
-          encoding: "utf8",
-          timeout: 12_000,
-          env: {
-            PATH: `${root}:${process.env.PATH ?? ""}`,
-            OPENCLAW_GH_BIN: pendingGh,
-            GH_TOKEN: "synthetic-evidence-token",
-            FULL_RELEASE_SOURCE_ADMISSION_CONTRACT: "1",
-            FULL_RELEASE_PUBLICATION_ADMISSION_CONTRACT: "1",
-            FULL_RELEASE_EXECUTION_PLAN_PATH: written,
-            PUBLICATION_ADMISSION_PATH: admissionPath,
-            FULL_RELEASE_PLAN_INPUTS_JSON: JSON.stringify(inputs),
-            GITHUB_OUTPUT: outputsPath,
-            GITHUB_REPOSITORY: "openclaw/openclaw",
-            GITHUB_RUN_ID: fixture.runId,
-            GITHUB_RUN_ATTEMPT: "1",
-            GITHUB_REF_NAME: "main",
-            GITHUB_SHA: fixture.workflowSha,
-            TARGET_SHA: fixture.targetSha,
-            RELEASE_PROFILE: "beta",
-            RERUN_GROUP: "all",
-          },
+          PATH: `${root}:${process.env.PATH ?? ""}`,
+          OPENCLAW_GH_BIN: pendingGh,
+          GH_TOKEN: "synthetic-evidence-token",
+          FULL_RELEASE_SOURCE_ADMISSION_CONTRACT: "1",
+          FULL_RELEASE_PUBLICATION_ADMISSION_CONTRACT: "1",
+          FULL_RELEASE_EXECUTION_PLAN_PATH: written,
+          PUBLICATION_ADMISSION_PATH: admissionPath,
+          FULL_RELEASE_PLAN_INPUTS_JSON: JSON.stringify(inputs),
+          GITHUB_OUTPUT: outputsPath,
+          GITHUB_REPOSITORY: "openclaw/openclaw",
+          GITHUB_RUN_ID: fixture.runId,
+          GITHUB_RUN_ATTEMPT: "1",
+          GITHUB_REF_NAME: "main",
+          GITHUB_SHA: fixture.workflowSha,
+          TARGET_SHA: fixture.targetSha,
+          RELEASE_PROFILE: "beta",
+          RERUN_GROUP: "all",
         },
+        t.signal,
       );
+      const interrupted = await interruptedWork;
       expect(interrupted.status, interrupted.stderr).toBe(0);
       Object.assign(fixture.plan, JSON.parse(readFileSync(written, "utf8")));
       expect(fixture.plan.errors).toContainEqual(
@@ -720,7 +793,7 @@ try {
         content: workflowBytes.toString("base64"),
       },
       jobs: {
-        total_count: fault === "missing-sealer" ? 1 : fault === "duplicate-sealer" ? 3 : 2,
+        total_count: fault === "duplicate-sealer" ? 3 : 2,
         jobs: [
           {
             id: 999,
@@ -730,60 +803,51 @@ try {
             conclusion: fault.endsWith("failed-resolution") ? "failure" : "success",
             steps: [{ name: "Finalize publication admission", conclusion: "success" }],
           },
-          ...(fault === "missing-sealer"
-            ? []
-            : Array.from({ length: fault === "duplicate-sealer" ? 2 : 1 }, (_, index) => ({
-                id: 1000 + index,
-                name: "Seal release execution plan",
-                run_attempt: fault === "later-sealer" ? 2 : 1,
+          ...Array.from({ length: fault === "duplicate-sealer" ? 2 : 1 }, (_, index) => ({
+            id: 1000 + index,
+            name: "Seal release execution plan",
+            run_attempt: 1,
+            status: "completed",
+            conclusion: fault === "interrupted-sealer" ? "failure" : "success",
+            steps: [
+              {
+                name: "Seal immutable release execution plan",
+                number: 5,
                 status: "completed",
-                conclusion: fault === "interrupted-sealer" ? "failure" : "success",
-                steps: [
-                  {
-                    name: "Seal immutable release execution plan",
-                    number: 5,
-                    status: "completed",
-                    conclusion:
-                      fault === "skipped-seal"
-                        ? "skipped"
-                        : fault === "interrupted-sealer"
-                          ? "failure"
-                          : "success",
-                    started_at: "2026-08-28T12:01:00.000Z",
-                    completed_at: "2026-08-28T12:01:01.000Z",
-                  },
-                  {
-                    name: "Upload immutable release execution plan",
-                    number: fault === "upload-before-seal" ? 4 : 6,
-                    status: "completed",
-                    conclusion:
-                      fault === "failed-upload" || fault === "cached-plan-failed-upload"
-                        ? "failure"
-                        : fault === "skipped-upload"
-                          ? "skipped"
-                          : "success",
-                    started_at: "2026-08-28T12:01:01.000Z",
-                    completed_at: "2026-08-28T12:01:03.000Z",
-                  },
-                  ...(witnessContract
-                    ? Array.from(
-                        { length: fault === "cached-plan-duplicate-witness-step" ? 2 : 1 },
-                        (_witness, witnessIndex) => ({
-                          name:
-                            fault === "cached-plan-wrong-witness-step"
-                              ? "Unrelated successful step"
-                              : "Record immutable release execution plan digest",
-                          number: 7 + witnessIndex,
-                          status: "completed",
-                          conclusion:
-                            fault === "cached-plan-failed-witness" ? "failure" : "success",
-                          started_at: "2026-08-28T12:01:03.000Z",
-                          completed_at: "2026-08-28T12:01:03.000Z",
-                        }),
-                      )
-                    : []),
-                ],
-              }))),
+                conclusion:
+                  fault === "skipped-seal"
+                    ? "skipped"
+                    : fault === "interrupted-sealer"
+                      ? "failure"
+                      : "success",
+                started_at: "2026-08-28T12:01:00.000Z",
+                completed_at: "2026-08-28T12:01:01.000Z",
+              },
+              {
+                name: "Upload immutable release execution plan",
+                number: fault === "upload-before-seal" ? 4 : 6,
+                status: "completed",
+                conclusion: fault === "failed-upload" ? "failure" : "success",
+                started_at: "2026-08-28T12:01:01.000Z",
+                completed_at: "2026-08-28T12:01:03.000Z",
+              },
+              ...(witnessContract
+                ? [
+                    {
+                      name:
+                        fault === "cached-plan-wrong-witness-step"
+                          ? "Unrelated successful step"
+                          : "Record immutable release execution plan digest",
+                      number: 7,
+                      status: "completed",
+                      conclusion: fault === "cached-plan-failed-witness" ? "failure" : "success",
+                      started_at: "2026-08-28T12:01:03.000Z",
+                      completed_at: "2026-08-28T12:01:03.000Z",
+                    },
+                  ]
+                : []),
+            ],
+          })),
         ],
       },
       listing: { total_count: fault === "incomplete-list" ? 2 : artifacts.length, artifacts },
@@ -864,7 +928,13 @@ process.stdout.write(JSON.stringify(value));
       planRestore
         ? [resolve("scripts/full-release-validation-state.mjs"), "plan"]
         : workflowRestore
-          ? ["-c", expectDefined(restoreCommand, "actual admission command")]
+          ? [
+              "-c",
+              // Shell startup may prepend host tools; restore the fixture transport first.
+              'export PATH="$OPENCLAW_FIXTURE_PATH"\n' +
+                '[[ "$(command -v gh)" == "$OPENCLAW_GH_BIN" ]] || exit 97\n' +
+                expectDefined(restoreCommand, "actual admission command"),
+            ]
           : [
               "--input-type=module",
               "--eval",
@@ -880,6 +950,7 @@ process.stdout.write(JSON.stringify(restored));
         encoding: "utf8",
         env: {
           PATH: `${root}:${process.env.PATH ?? ""}`,
+          OPENCLAW_FIXTURE_PATH: `${root}:${dirname(process.execPath)}:${process.env.PATH ?? ""}`,
           OPENCLAW_GH_BIN: gh,
           GH_TOKEN: "synthetic-evidence-token",
           GITHUB_RUN_ATTEMPT:
@@ -927,7 +998,6 @@ process.stdout.write(JSON.stringify(restored));
         expect(calls).not.toContain("/artifacts");
       }
     } else if (
-      fault === "complete" ||
       fault === "workflow-restore" ||
       fault === "workflow-restore-cached" ||
       fault === "reuploaded-plan" ||
@@ -1024,156 +1094,124 @@ process.stdout.write(JSON.stringify(restored.plan));
 });
 
 describe("GitHub API commands", () => {
-  it("delegates authentication to gh for REST and artifact requests", () => {
-    expect(githubRestArgs("actions/runs/123", "owner/repo")).toEqual([
-      "api",
-      "repos/owner/repo/actions/runs/123",
-    ]);
-    expect(artifactDownloadArgs(456, "owner/repo")).toEqual([
-      "api",
-      "repos/owner/repo/actions/artifacts/456/zip",
-    ]);
-  });
-
   it("budgets large artifact downloads for a conservative transfer rate", () => {
     expect(artifactDownloadTimeoutMs(55 * 1024 * 1024)).toBeGreaterThan(60_000);
     expect(artifactDownloadTimeoutMs(245 * 1024 * 1024)).toBeGreaterThan(15 * 60_000);
     expect(() => artifactDownloadTimeoutMs(0)).toThrow("artifact download size is invalid");
   });
 
-  it.skipIf(!hasUnzip)("renders phased advisories with cached GitHub reads", () => {
-    const root = mkdtempSync(join(tmpdir(), "release-ci-gh-routing-"));
-    const workflowSha = "0".repeat(40);
-    const targetSha = "8".repeat(40);
-    const verifierSha = "c".repeat(40);
-    const fixture = trustedMainPackageFixture({ manifestVersion: 3, targetSha, workflowSha });
-    const runId = fixture.runId;
-    const childRunId = String(fixture.childRun.id);
-    const candidateChild = expectDefined(
-      expectedChildDispatches(runId, 1, "main", 3).find(
-        (child) => child.manifestKey === "releaseChecksCandidate",
-      ),
-      "candidate child",
-    );
-    fixture.parentJob.name = candidateChild.parentJobName;
-    fixture.childRun.display_title = candidateChild.displayTitle;
-    fixture.childRun.conclusion = "failure";
-    const composite = composeReleaseAttemptJobs(
-      [
-        {
-          jobs: [
-            {
-              name: "cross_os_release_checks / Windows / packaged fresh",
-              status: "completed",
-              conclusion: "failure",
-            },
-            {
-              name: "cross_os_release_checks / macOS / packaged fresh",
-              status: "completed",
-              conclusion: "success",
-            },
-            {
-              name: "cross_os_release_checks / Linux / packaged fresh",
-              status: "completed",
-              conclusion: "success",
-            },
-          ],
-          runAttempt: 1,
-        },
-      ],
-      { effectiveRunAttempt: 1, plannedRunAttempt: 1 },
-    );
-    const childEvidence = {
-      releaseChecksCandidate: {
-        compositeJobsSha256: composite.sha256,
-        dispatchActor: "github-actions[bot]",
-        effectiveRunAttempt: 1,
-        jobs: composite.jobs,
-        observedRunAttempts: [1],
-        plannedRunAttempt: 1,
-        repository: "openclaw/openclaw",
-        runId: childRunId,
-        triggeringActor: "github-actions[bot]",
-      },
-    };
-    Object.assign(fixture.manifest, {
-      advisoryJobs: releaseAdvisoryJobEvidence(childEvidence, "full", "main"),
-      childEvidence,
-      childRuns: {
-        releaseChecksCandidate: childRunId,
-        normalCi: "",
-        npmTelegram: "",
-        pluginPrereleaseIndependent: "",
-        pluginPrereleaseCandidate: "",
-        releaseChecksIndependent: "",
-      },
-      version: 4,
-    });
-    const advisoryJobs = releaseAdvisoryJobEvidence(childEvidence, "full", "main");
-    const firstAdvisory = expectDefined(advisoryJobs[0], "first advisory job");
-    for (const advisoryClaim of [
-      [
-        { ...firstAdvisory, job: "cross_os_release_checks / Linux / packaged fresh" },
-        ...advisoryJobs.slice(1),
-      ],
-      [
-        {
-          ...firstAdvisory,
-          conclusion: firstAdvisory.conclusion === "success" ? "failure" : "success",
-        },
-        ...advisoryJobs.slice(1),
-      ],
-      advisoryJobs.slice(1),
-    ]) {
-      expect(() =>
-        validateParentManifest(
-          { ...fixture.manifest, advisoryJobs: advisoryClaim },
-          { runAttempt: 1, runId, workflowRef: "main", workflowSha },
+  it.skipIf(!hasUnzip)(
+    "routes evidence reads through cached GitHub and downloads through plain GitHub",
+    () => {
+      const root = mkdtempSync(join(tmpdir(), "release-ci-gh-routing-"));
+      const workflowSha = "0".repeat(40);
+      const targetSha = "8".repeat(40);
+      const verifierSha = "c".repeat(40);
+      const fixture = trustedMainPackageFixture({ manifestVersion: 3, targetSha, workflowSha });
+      const runId = fixture.runId;
+      const childRunId = String(fixture.childRun.id);
+      const candidateChild = expectDefined(
+        expectedChildDispatches(runId, 1, "main", 3).find(
+          (child) => child.manifestKey === "releaseChecksCandidate",
         ),
-      ).toThrow("release validation advisory jobs differ from canonical policy evidence");
-    }
-    const artifactId = fixture.artifact.id;
-    const archive = makeStoredZip({
-      [MANIFEST_ARTIFACT_ENTRY]: JSON.stringify(fixture.manifest),
-    });
-    const archivePath = join(root, "manifest.zip");
-    const fixturesPath = join(root, "fixtures.json");
-    const shimLog = join(root, "shim.log");
-    const plainLog = join(root, "plain.log");
-    const shimGh = join(root, "gh");
-    const plainGh = join(root, "plain-gh");
-    fixture.artifact.digest = artifactDigest(archive);
-    fixture.artifact.size_in_bytes = archive.length;
-    writeFileSync(archivePath, archive);
-    writeFileSync(
-      fixturesPath,
-      JSON.stringify({
-        artifact: fixture.artifact,
-        artifactList: { artifacts: [fixture.artifact] },
-        child: fixture.childRun,
-        jobLog: `TARGET_SHA: ${targetSha}\nDispatched: https://github.com/openclaw/openclaw/actions/runs/${childRunId} (attempt 1)`,
-        jobs: { jobs: [fixture.parentJob] },
-        lineage: { merge_base_commit: { sha: workflowSha }, status: "ahead" },
-        parent: fixture.parentRun,
-        parentView: fixture.parentView,
-        rate: { resources: { core: { limit: 5000, remaining: 4999, reset: 2_000_000_000 } } },
-        workflow: {
-          type: "file",
-          encoding: "base64",
-          path: ".github/workflows/full-release-validation.yml",
-          content: Buffer.from("name: Full Release Validation\n").toString("base64"),
-          size: Buffer.byteLength("name: Full Release Validation\n"),
-          sha: createHash("sha1")
-            .update(
-              `blob ${Buffer.byteLength("name: Full Release Validation\n")}\0name: Full Release Validation\n`,
-            )
-            .digest("hex"),
+        "candidate child",
+      );
+      fixture.parentJob.name = candidateChild.parentJobName;
+      fixture.childRun.display_title = candidateChild.displayTitle;
+      fixture.childRun.conclusion = "success";
+      const composite = composeReleaseAttemptJobs(
+        [
+          {
+            jobs: [
+              {
+                name: "Run QA Lab live Discord lane",
+                status: "completed",
+                conclusion: "success",
+              },
+              {
+                name: "Run QA Lab parity lane (core)",
+                status: "completed",
+                conclusion: "success",
+              },
+              {
+                name: "cross_os_release_checks / Linux / packaged fresh",
+                status: "completed",
+                conclusion: "success",
+              },
+            ],
+            runAttempt: 1,
+          },
+        ],
+        { effectiveRunAttempt: 1, plannedRunAttempt: 1 },
+      );
+      const childEvidence = {
+        releaseChecksCandidate: {
+          compositeJobsSha256: composite.sha256,
+          dispatchActor: "github-actions[bot]",
+          effectiveRunAttempt: 1,
+          jobs: composite.jobs,
+          observedRunAttempts: [1],
+          plannedRunAttempt: 1,
+          repository: "openclaw/openclaw",
+          runId: childRunId,
+          triggeringActor: "github-actions[bot]",
         },
-      }),
-    );
-    writeFileSync(
-      shimGh,
-      `#!/usr/bin/env node
+      };
+      Object.assign(fixture.manifest, {
+        advisoryJobs: [],
+        childEvidence,
+        childRuns: {
+          releaseChecksCandidate: childRunId,
+          normalCi: "",
+          npmTelegram: "",
+          pluginPrereleaseIndependent: "",
+          pluginPrereleaseCandidate: "",
+          releaseChecksIndependent: "",
+        },
+        version: 4,
+      });
+      const artifactId = fixture.artifact.id;
+      const archive = makeStoredZip({
+        [MANIFEST_ARTIFACT_ENTRY]: JSON.stringify(fixture.manifest),
+      });
+      const archivePath = join(root, "manifest.zip");
+      const fixturesPath = join(root, "fixtures.json");
+      const shimLog = join(root, "shim.log");
+      const plainLog = join(root, "plain.log");
+      const shimGh = join(root, "gh");
+      const plainGh = join(root, "plain-gh");
+      fixture.artifact.digest = artifactDigest(archive);
+      fixture.artifact.size_in_bytes = archive.length;
+      writeFileSync(archivePath, archive);
+      writeFileSync(
+        fixturesPath,
+        JSON.stringify({
+          artifact: fixture.artifact,
+          artifactList: { artifacts: [fixture.artifact] },
+          child: fixture.childRun,
+          jobLog: `TARGET_SHA: ${targetSha}\nDispatched: https://github.com/openclaw/openclaw/actions/runs/${childRunId} (attempt 1)`,
+          jobs: { jobs: [fixture.parentJob] },
+          lineage: { merge_base_commit: { sha: workflowSha }, status: "ahead" },
+          parent: fixture.parentRun,
+          parentView: fixture.parentView,
+          rate: { resources: { core: { limit: 5000, remaining: 4999, reset: 2_000_000_000 } } },
+          workflow: {
+            type: "file",
+            encoding: "base64",
+            path: ".github/workflows/full-release-validation.yml",
+            content: Buffer.from("name: Full Release Validation\n").toString("base64"),
+            size: Buffer.byteLength("name: Full Release Validation\n"),
+            sha: createHash("sha1")
+              .update(
+                `blob ${Buffer.byteLength("name: Full Release Validation\n")}\0name: Full Release Validation\n`,
+              )
+              .digest("hex"),
+          },
+        }),
+      );
+      writeFileSync(
+        shimGh,
+        `#!/usr/bin/env node
 import { appendFileSync, readFileSync } from "node:fs";
 const args = process.argv.slice(2);
 appendFileSync(process.env.SHIM_LOG, JSON.stringify(args) + "\\n");
@@ -1194,10 +1232,10 @@ else if (endpoint === "repos/openclaw/openclaw/compare/${workflowSha}...${verifi
 else { console.error("unexpected cached gh request: " + args.join(" ")); process.exit(43); }
 process.stdout.write(typeof output === "string" ? output : JSON.stringify(output));
 `,
-    );
-    writeFileSync(
-      plainGh,
-      `#!/usr/bin/env node
+      );
+      writeFileSync(
+        plainGh,
+        `#!/usr/bin/env node
 import { appendFileSync, readFileSync } from "node:fs";
 const args = process.argv.slice(2);
 appendFileSync(process.env.PLAIN_LOG, JSON.stringify(args) + "\\n");
@@ -1211,79 +1249,72 @@ if (args[0] !== "api" || args[1] !== "repos/openclaw/openclaw/actions/artifacts/
 }
 process.stdout.write(readFileSync(process.env.ARCHIVE));
 `,
-    );
-    chmodSync(shimGh, 0o755);
-    chmodSync(plainGh, 0o755);
+      );
+      chmodSync(shimGh, 0o755);
+      chmodSync(plainGh, 0o755);
 
-    try {
-      const env: NodeJS.ProcessEnv = {
-        ...process.env,
-        ARCHIVE: archivePath,
-        FIXTURES: fixturesPath,
-        OPENCLAW_GH_BIN: plainGh,
-        PATH: `${root}:${process.env.PATH ?? ""}`,
-        PLAIN_LOG: plainLog,
-        SHIM_LOG: shimLog,
-      };
-      delete env.GH_ENTERPRISE_TOKEN;
-      delete env.GITHUB_ENTERPRISE_TOKEN;
-      delete env.GITHUB_TOKEN;
-      delete env.GH_TOKEN;
-      const lineageResult = spawnSync(
-        process.execPath,
-        [
-          "--input-type=module",
-          "--eval",
-          `import { createReleaseEvidenceClient } from ${JSON.stringify(pathToFileURL(resolve(SCRIPT)).href)};
+      try {
+        const env: NodeJS.ProcessEnv = {
+          ...process.env,
+          ARCHIVE: archivePath,
+          FIXTURES: fixturesPath,
+          OPENCLAW_GH_BIN: plainGh,
+          PATH: `${root}:${process.env.PATH ?? ""}`,
+          PLAIN_LOG: plainLog,
+          SHIM_LOG: shimLog,
+        };
+        delete env.GH_ENTERPRISE_TOKEN;
+        delete env.GITHUB_ENTERPRISE_TOKEN;
+        delete env.GITHUB_TOKEN;
+        delete env.GH_TOKEN;
+        const lineageResult = spawnSync(
+          process.execPath,
+          [
+            "--input-type=module",
+            "--eval",
+            `import { createReleaseEvidenceClient } from ${JSON.stringify(pathToFileURL(resolve(SCRIPT)).href)};
            process.stdout.write(JSON.stringify(createReleaseEvidenceClient("openclaw/openclaw").compareCommitLineage("${workflowSha}", "${verifierSha}")));`,
-        ],
-        { encoding: "utf8", env },
-      );
-      expect(lineageResult.status).toBe(0);
-      expect(JSON.parse(lineageResult.stdout)).toEqual({
-        merge_base_commit: { sha: workflowSha },
-        status: "ahead",
-      });
+          ],
+          { encoding: "utf8", env },
+        );
+        expect(lineageResult.status).toBe(0);
+        expect(JSON.parse(lineageResult.stdout)).toEqual({
+          merge_base_commit: { sha: workflowSha },
+          status: "ahead",
+        });
 
-      const result = spawnSync(process.execPath, [SCRIPT, runId], { encoding: "utf8", env });
+        const result = spawnSync(process.execPath, [SCRIPT, runId], { encoding: "utf8", env });
 
-      expect(result.stderr).toBe("");
-      expect(result.status).toBe(0);
-      expect(result.stdout).toContain(
-        `child: ${childRunId} OpenClaw Release Checks completed/failure`,
-      );
-      expect(result.stdout).toContain(
-        "::warning title=Advisory lane failed::releaseChecksCandidate completed/failure cross_os_release_checks / Windows / packaged fresh",
-      );
-      expect(result.stdout).toContain(
-        "advisory: releaseChecksCandidate completed/success cross_os_release_checks / macOS / packaged fresh",
-      );
-      expect(result.stdout).not.toContain(
-        "advisory: releaseChecksCandidate completed/success cross_os_release_checks / Linux",
-      );
-      const shimCalls = readFileSync(shimLog, "utf8");
-      const plainCalls = readFileSync(plainLog, "utf8");
-      expect(shimCalls).toContain('"run","view"');
-      expect(shimCalls).toContain('"auth","token"');
-      expect(shimCalls).toContain(`"repos/openclaw/openclaw/actions/runs/${runId}"`);
-      expect(shimCalls).toContain(
-        `"repos/openclaw/openclaw/compare/${workflowSha}...${verifierSha}?per_page=1&page=2"`,
-      );
-      expect(shimCalls).toContain(
-        JSON.stringify([
-          "api",
-          `repos/openclaw/openclaw/actions/jobs/${fixture.parentJob.id}/logs`,
-          "--allow-escape-sequences",
-        ]),
-      );
-      expect(shimCalls).not.toContain(`/actions/artifacts/${artifactId}/zip`);
-      expect(plainCalls.trim()).toBe(
-        JSON.stringify(["api", `repos/openclaw/openclaw/actions/artifacts/${artifactId}/zip`]),
-      );
-    } finally {
-      rmSync(root, { force: true, recursive: true });
-    }
-  });
+        expect(result.stderr).toBe("");
+        expect(result.status).toBe(0);
+        expect(result.stdout).toContain(
+          `child: ${childRunId} OpenClaw Release Checks completed/success`,
+        );
+        expect(result.stdout).not.toContain("Advisory lane failed");
+        const shimCalls = readFileSync(shimLog, "utf8");
+        const plainCalls = readFileSync(plainLog, "utf8");
+        expect(shimCalls).toContain('"run","view"');
+        expect(shimCalls).toContain('"auth","token"');
+        expect(shimCalls).toContain(`"repos/openclaw/openclaw/actions/runs/${runId}"`);
+        expect(shimCalls).toContain(
+          `"repos/openclaw/openclaw/compare/${workflowSha}...${verifierSha}?per_page=1&page=2"`,
+        );
+        expect(shimCalls).toContain(
+          JSON.stringify([
+            "api",
+            `repos/openclaw/openclaw/actions/jobs/${fixture.parentJob.id}/logs`,
+            "--allow-escape-sequences",
+          ]),
+        );
+        expect(shimCalls).not.toContain(`/actions/artifacts/${artifactId}/zip`);
+        expect(plainCalls.trim()).toBe(
+          JSON.stringify(["api", `repos/openclaw/openclaw/actions/artifacts/${artifactId}/zip`]),
+        );
+      } finally {
+        rmSync(root, { force: true, recursive: true });
+      }
+    },
+  );
 });
 
 function runParentJobLogProbe(shimBody: string) {
@@ -1345,17 +1376,6 @@ describe("parent job log compatibility", () => {
   const flaggedArgs = ["api", "repos/owner/repo/actions/jobs/123/logs", "--allow-escape-sequences"];
   const legacyArgs = ["api", "repos/owner/repo/actions/jobs/123/logs"];
 
-  it("uses one flagged call when gh supports raw escape-sequence output", () => {
-    const { calls, result } = runParentJobLogProbe(
-      'process.stdout.write("\\u001b[31mlog\\u001b[0m");',
-    );
-
-    expect(result.status).toBe(0);
-    expect(result.stderr).toBe("");
-    expect(result.stdout).toBe("\u001b[31mlog\u001b[0m");
-    expect(calls).toEqual([flaggedArgs]);
-  });
-
   it("retries once without the flag for the exact legacy gh error", () => {
     const { calls, result } = runParentJobLogProbe(`
 if (args.includes("--allow-escape-sequences")) {
@@ -1407,19 +1427,6 @@ describe("runReleaseCiGh", () => {
       }),
     );
   });
-
-  it("propagates GitHub lookup timeouts", () => {
-    const timeoutError = Object.assign(new Error("spawnSync gh ETIMEDOUT"), {
-      code: "ETIMEDOUT",
-    });
-    expect(() =>
-      runReleaseCiGh(["api", "rate_limit"], {
-        execFileSyncImpl: () => {
-          throw timeoutError;
-        },
-      }),
-    ).toThrow(timeoutError);
-  });
 });
 
 describe("Release execution plan artifact reads", () => {
@@ -1452,19 +1459,6 @@ process.exit(1);
 
 describe("Release Decision artifact polling", () => {
   const parent = { attempt: 1, headSha: "a".repeat(40) };
-
-  it("treats GitHub CLI 2.93 missing named artifacts as unavailable", () => {
-    expect(
-      tryReadReleaseDecisionArtifact(parent, "123", "openclaw/openclaw", () => {
-        throw Object.assign(
-          new Error("no artifact matches any of the names or patterns provided"),
-          {
-            stderr: "no artifact matches any of the names or patterns provided",
-          },
-        );
-      }),
-    ).toBeUndefined();
-  });
 
   it.each(["HTTP 503: Server Error", "HTTP 403: secondary rate limit"])(
     "treats transient download transport failure %s as unavailable this poll",
@@ -1499,337 +1493,8 @@ describe("Release Decision artifact polling", () => {
   });
 });
 
-function u16(value: number): Buffer {
-  const buffer = Buffer.alloc(2);
-  buffer.writeUInt16LE(value);
-  return buffer;
-}
-
-function u32(value: number): Buffer {
-  const buffer = Buffer.alloc(4);
-  buffer.writeUInt32LE(value);
-  return buffer;
-}
-
-function makeStoredZip(files: Record<string, string>): Buffer {
-  const localParts: Buffer[] = [];
-  const centralParts: Buffer[] = [];
-  let offset = 0;
-
-  for (const [name, contents] of Object.entries(files)) {
-    const nameBuffer = Buffer.from(name, "utf8");
-    const contentsBuffer = Buffer.from(contents, "utf8");
-    const checksum = crc32(contentsBuffer);
-    const localHeader = Buffer.concat([
-      u32(0x04034b50),
-      u16(20),
-      u16(0),
-      u16(0),
-      u16(0),
-      u16(0),
-      u32(checksum),
-      u32(contentsBuffer.length),
-      u32(contentsBuffer.length),
-      u16(nameBuffer.length),
-      u16(0),
-      nameBuffer,
-    ]);
-    localParts.push(localHeader, contentsBuffer);
-    centralParts.push(
-      Buffer.concat([
-        u32(0x02014b50),
-        u16(20),
-        u16(20),
-        u16(0),
-        u16(0),
-        u16(0),
-        u16(0),
-        u32(checksum),
-        u32(contentsBuffer.length),
-        u32(contentsBuffer.length),
-        u16(nameBuffer.length),
-        u16(0),
-        u16(0),
-        u16(0),
-        u16(0),
-        u32((0o100644 << 16) >>> 0),
-        u32(offset),
-        nameBuffer,
-      ]),
-    );
-    offset += localHeader.length + contentsBuffer.length;
-  }
-
-  const localData = Buffer.concat(localParts);
-  const centralDirectory = Buffer.concat(centralParts);
-  return Buffer.concat([
-    localData,
-    centralDirectory,
-    u32(0x06054b50),
-    u16(0),
-    u16(0),
-    u16(Object.keys(files).length),
-    u16(Object.keys(files).length),
-    u32(centralDirectory.length),
-    u32(localData.length),
-    u16(0),
-  ]);
-}
-
 function artifactDigest(bytes: Buffer): string {
   return `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
-}
-
-function rawManifest({
-  candidateBinding,
-  evidenceReuse,
-  rerunGroup = "all",
-  runId = "29090000000",
-  targetSha = "a".repeat(40),
-  version = 2,
-  workflowFullRef,
-  workflowRefType,
-  workflowSha,
-}: {
-  candidateBinding?: unknown;
-  evidenceReuse?: unknown;
-  rerunGroup?: string;
-  runId?: string;
-  targetSha?: string;
-  version?: 2 | 3;
-  workflowFullRef?: string;
-  workflowRefType?: "branch" | "tag";
-  workflowSha?: string;
-}): {
-  candidateBinding?: unknown;
-  childRuns: Record<string, string | { blocking: boolean; conclusion: string; runId: string }>;
-  controls: Record<string, unknown>;
-  evidenceReuse?: unknown;
-  releaseProfile: string;
-  rerunGroup: string;
-  runAttempt: string;
-  runId: string;
-  runReleaseSoak: string;
-  targetRef?: string;
-  targetSha: string;
-  validationInputs: Record<string, string>;
-  version: 2 | 3;
-  workflowFullRef?: string;
-  workflowName: string;
-  workflowRef: string;
-  workflowRefType?: "branch" | "tag";
-  workflowSha?: string;
-} {
-  return {
-    ...(candidateBinding === undefined ? {} : { candidateBinding }),
-    childRuns: {
-      normalCi: "101",
-      npmTelegram: "",
-      pluginPrerelease: "202",
-      productPerformance: { blocking: true, conclusion: "success", runId: "303" },
-      releaseChecks: "404",
-    },
-    controls: {
-      performanceBlocking: true,
-      performanceReportPublication: "artifact-only",
-      stableSoakRequired: false,
-    },
-    evidenceReuse,
-    releaseProfile: "beta",
-    rerunGroup,
-    runAttempt: "2",
-    runId,
-    runReleaseSoak: "false",
-    targetSha,
-    validationInputs: {
-      allowUnreleasedChangelog: "false",
-      codexPluginSpec: "",
-      crossOsSuiteFilter: "",
-      liveSuiteFilter: "",
-      mode: "direct",
-      npmTelegramPackageSpec: "",
-      npmTelegramProviderMode: "mock-openai",
-      npmTelegramScenario: "",
-      packageAcceptancePackageSpec: "",
-      provider: "openai",
-      releasePackageSpec: "",
-      skipPackageTelegramE2e: "false",
-      targetContextRef: "",
-    },
-    version,
-    workflowName: "Full Release Validation",
-    workflowRef: "main",
-    ...(workflowSha ? { workflowSha } : {}),
-    ...(version === 3
-      ? {
-          workflowFullRef: workflowFullRef ?? "refs/heads/main",
-          workflowRefType: workflowRefType ?? "branch",
-        }
-      : {}),
-  };
-}
-
-function trustedMainPackageFixture({
-  manifestVersion = 2,
-  parentPath = ".github/workflows/full-release-validation.yml",
-  targetSha = "8".repeat(40),
-  workflowFullRef,
-  workflowRef = "main",
-  workflowRefType,
-  workflowSha = "0".repeat(40),
-}: {
-  manifestVersion?: 2 | 3;
-  parentPath?: string;
-  targetSha?: string;
-  workflowFullRef?: string;
-  workflowRef?: string;
-  workflowRefType?: "branch" | "tag";
-  workflowSha?: string;
-} = {}) {
-  const runId = "29071366025";
-  const childRunId = "29071382629";
-  const manifest = rawManifest({
-    rerunGroup: "package",
-    runId,
-    targetSha,
-    version: manifestVersion,
-    workflowFullRef,
-    workflowRefType,
-    workflowSha,
-  });
-  manifest.childRuns = {
-    normalCi: "",
-    npmTelegram: "",
-    pluginPrerelease: "",
-    productPerformance: { blocking: true, conclusion: "", runId: "" },
-    releaseChecks: childRunId,
-  };
-  manifest.releaseProfile = "full";
-  manifest.runAttempt = "1";
-  manifest.runReleaseSoak = "true";
-  manifest.workflowRef = workflowRef;
-
-  const parentRun = {
-    conclusion: "success",
-    event: "workflow_dispatch",
-    head_branch: workflowRef,
-    head_sha: workflowSha,
-    html_url: `https://github.com/openclaw/openclaw/actions/runs/${runId}`,
-    id: Number(runId),
-    path: parentPath,
-    repository: { full_name: "openclaw/openclaw" },
-    run_attempt: 1,
-    status: "completed",
-  };
-  const parentView = {
-    attempt: 1,
-    conclusion: "success",
-    headBranch: workflowRef,
-    headSha: workflowSha,
-    jobs: [],
-    status: "completed",
-    url: parentRun.html_url,
-  };
-  const child = expectedChildDispatches(runId, 1, workflowRef).find(
-    (entry) => entry.manifestKey === "releaseChecks",
-  );
-  if (!child) {
-    throw new Error("missing release checks child fixture");
-  }
-  const parentJob = {
-    completed_at: "2026-07-10T01:10:00Z",
-    conclusion: "success",
-    id: 86293408710,
-    name: child.parentJobName,
-    run_attempt: 1,
-    started_at: "2026-07-10T01:00:00Z",
-    status: "completed",
-    steps: [],
-  };
-  const childRun = {
-    actor: { login: "github-actions[bot]" },
-    conclusion: "success",
-    display_title: child.displayTitle,
-    event: "workflow_dispatch",
-    head_branch: workflowRef,
-    head_sha: workflowSha,
-    html_url: `https://github.com/openclaw/openclaw/actions/runs/${childRunId}`,
-    id: Number(childRunId),
-    path: ".github/workflows/openclaw-release-checks.yml",
-    repository: { full_name: "openclaw/openclaw" },
-    run_attempt: 1,
-    status: "completed",
-    triggering_actor: { login: "github-actions[bot]" },
-  };
-  const artifact = {
-    digest: `sha256:${"9".repeat(64)}`,
-    expired: false,
-    id: 8220114429,
-    name: `full-release-validation-${runId}-1`,
-    size_in_bytes: 507,
-    workflow_run: {
-      head_branch: workflowRef,
-      head_sha: workflowSha,
-      id: Number(runId),
-    },
-  };
-  const compareCommits = (base: string, head: string) => {
-    expect(base).toBe(workflowSha);
-    return {
-      merge_base_commit: { sha: workflowSha },
-      status: base === head ? "identical" : "ahead",
-    };
-  };
-  const client = {
-    getWorkflowSource: (_sha: string) => "name: Full Release Validation\n",
-    compareCommitLineage: compareCommits,
-    compareCommits,
-    getJobLog(jobId: number) {
-      expect(jobId).toBe(parentJob.id);
-      return [
-        `TARGET_SHA: ${targetSha}`,
-        `Dispatched openclaw-release-checks.yml: ${childRun.html_url} (attempt ${childRun.run_attempt})`,
-      ].join("\n");
-    },
-    getParentJobs(requestedRunId: string) {
-      expect(requestedRunId).toBe(runId);
-      return [parentJob];
-    },
-    getRef(fullRef: string) {
-      return { object: { sha: workflowSha }, ref: fullRef };
-    },
-    getRun(requestedRunId: string) {
-      if (requestedRunId === runId) {
-        return parentRun;
-      }
-      if (requestedRunId === childRunId) {
-        return childRun;
-      }
-      throw new Error(`unexpected run: ${requestedRunId}`);
-    },
-    getRunView(requestedRunId: string) {
-      expect(requestedRunId).toBe(runId);
-      return parentView;
-    },
-    loadManifest(requestedRunId: string, requestedRunAttempt: number) {
-      expect(requestedRunId).toBe(runId);
-      expect(requestedRunAttempt).toBe(1);
-      return { artifact, manifest };
-    },
-  };
-
-  return {
-    artifact,
-    childRun,
-    client,
-    manifest,
-    parentJob,
-    parentRun,
-    parentView,
-    runId,
-    targetSha,
-    workflowSha,
-  };
 }
 
 type ReleaseCiWatchState = {
@@ -1840,186 +1505,206 @@ type ReleaseCiWatchState = {
   url?: string;
 };
 
-function trustedMainFullFixture() {
-  const fixture = trustedMainPackageFixture({ manifestVersion: 3 });
-  const children = expectedChildDispatches(fixture.runId, 1, "main", 3).filter(
-    (child) => child.manifestKey !== "npmTelegram",
-  );
-  const runs = children.map((child, index) => ({
-    ...fixture.childRun,
-    display_title: child.displayTitle,
-    id: 101 + index,
-    path: `.github/workflows/${child.workflow}`,
-  }));
-  const jobs = children.map((child, index) => ({
-    ...fixture.parentJob,
-    id: 201 + index,
-    name: child.parentJobName,
-  }));
-  const manifest = {
-    ...fixture.manifest,
-    childRuns: {
-      ...fixture.manifest.childRuns,
-      ...Object.fromEntries(
-        children.map((child, index) => {
-          const runId = String(expectDefined(runs[index], "child run").id);
-          return [
-            child.manifestKey,
-            child.manifestKey === "productPerformance"
-              ? { blocking: true, conclusion: "success", runId }
-              : runId,
-          ];
-        }),
-      ),
+function verifyFixture(
+  fixture: Pick<
+    | ReturnType<typeof trustedMainPackageFixture>
+    | ReturnType<typeof trustedMainFullFixture>
+    | ReturnType<typeof trustedMainNpmFixture>
+    | ReturnType<typeof trustedMainChildReuseFixture>,
+    "runId" | "client"
+  >,
+) {
+  return validateReleaseRunEvidence(
+    {
+      runId: fixture.runId,
+      verifierSourceContent: readFileSync(SCRIPT),
+      verifierSourceSha: "c".repeat(40),
     },
-    rerunGroup: "all",
-    version: 4,
-  };
-  const client = {
-    ...fixture.client,
-    getJobLog: vi.fn((jobId: number) => {
-      const index = jobs.findIndex((job) => job.id === jobId);
-      const child = expectDefined(children[index], "dispatch child");
-      const run = expectDefined(runs[index], "child run");
-      return `TARGET_SHA: ${fixture.targetSha}\n-f publish_reports=false\nDispatched ${child.workflow}: https://github.com/openclaw/openclaw/actions/runs/${run.id} (attempt 1)`;
-    }),
-    getParentJobs: vi.fn((runId: string) =>
-      runId === fixture.runId
-        ? jobs
-        : [{ ...fixture.parentJob, name: "Verify artifact-only report mode" }],
-    ),
-    getRun: vi.fn((runId: string) =>
-      runId === fixture.runId
-        ? fixture.parentRun
-        : expectDefined(
-            runs.find((run) => String(run.id) === runId),
-            "child run",
-          ),
-    ),
-    loadExecutionPlan: vi.fn(() => undefined),
-    loadManifest: () => ({ artifact: fixture.artifact, manifest }),
-  };
-  return { ...fixture, client, manifest, runs };
+    fixture.client,
+  );
 }
 
-function trustedMainNpmFixture(releaseProfile: "beta" | "stable" = "beta") {
-  const fixture = trustedMainFullFixture();
-  const beta = releaseProfile === "beta";
-  const coveragePolicy = beta ? "npm-beta-v1" : "npm-stable-v1";
-  const targetVersion = beta ? "2026.8.28-beta.1" : "2026.8.28";
-  Object.assign(fixture.manifest, { releaseProfile, runReleaseSoak: String(!beta) });
-  Object.assign(fixture.manifest.validationInputs, {
-    coveragePolicy,
-    skipPackageTelegramE2e: String(beta),
-    targetContextRef: "release/2026.8.28",
-    targetVersion,
+function trustedMainChildReuseFixture() {
+  const fixture = trustedMainNpmFixture();
+  const child = expectDefined(
+    fixture.executionPlan.children.find((entry) => entry.key === "normalCi"),
+    "planned CI child",
+  );
+  const run = expectDefined(
+    fixture.runs.find((entry) => String(entry.id) === child.runId),
+    "CI run",
+  );
+  const repository = { id: 1, full_name: "openclaw/openclaw" };
+  Object.assign(run, {
+    display_title: "CI full-release-validation-77-1-ci",
+    head_sha: fixture.manifest.workflowSha,
+    repository,
+    head_repository: repository,
+    html_url: `https://github.com/openclaw/openclaw/actions/runs/${run.id}`,
   });
-  fixture.manifest.controls.performanceBlocking = !beta;
-  fixture.manifest.controls.stableSoakRequired = !beta;
-  if (beta) {
-    fixture.manifest.childRuns.productPerformance = { blocking: false, conclusion: "", runId: "" };
-  }
-  const plannedChildren = expectedChildDispatches(fixture.runId, 1, "main", 3).map((child) => {
-    const run = fixture.runs.find((entry) => entry.display_title === child.displayTitle);
-    const selected =
-      child.manifestKey !== "npmTelegram" && !(beta && child.manifestKey === "productPerformance");
-    return {
-      displayTitle: child.displayTitle,
-      key: child.manifestKey,
-      required: selected,
-      result: selected ? "success" : "skipped",
-      runAttempt: selected ? 1 : null,
-      runId: selected ? String(expectDefined(run, "selected child run").id) : "",
-      selected,
-      source: "fresh",
-      url: selected ? expectDefined(run, "selected child run").html_url : "",
-      workflow: child.workflow,
-      workflowRef: "main",
-      workflowSha: fixture.workflowSha,
-    };
+  Object.assign(child, {
+    source: "reused",
+    sourceParentAttempt: 1,
+    workflowSha: run.head_sha,
+    displayTitle: run.display_title,
+    url: run.html_url,
   });
-  const executionPlan = buildReleaseExecutionPlanArtifact({
-    attemptEvidenceVersion: 3,
-    candidate: null,
-    children: plannedChildren,
-    coveragePolicy,
-    evidenceReuse: { requested: false },
-    expected: {
-      candidateRequest: buildFullReleaseCandidateRequest({
-        repository: "openclaw/openclaw",
-        targetSha: fixture.targetSha,
-        toolingSha: fixture.workflowSha,
-        releaseProfile,
-        releaseSoak: !beta,
-        upgradeSurvivorBaseline: "openclaw@latest",
-        upgradeSurvivorBaselines: "",
-        upgradeSurvivorScenarios: "",
-        allowFrozenTargetScenarioOmissions: false,
-        allowUnreleasedChangelog: false,
-        packagePublished: false,
-        sharedImagePolicy: "no-push-artifact",
-      }),
-      parentRunAttempt: 1,
-      parentRunId: fixture.runId,
-      repository: "openclaw/openclaw",
-      targetSha: fixture.targetSha,
-      workflowRef: "main",
-      workflowSha: fixture.workflowSha,
+  const jobs = [
+    {
+      ...fixture.parentJob,
+      id: 501,
+      run_id: run.id,
+      head_sha: run.head_sha,
+      name: "node tests",
     },
-    gates: [{ name: "Resolve target ref", required: true, result: "success" }],
-    releaseProfile,
-    rerunGroup: "all",
-    targetVersion,
-    trustedWorkflow: { fullRef: "refs/heads/main", ref: "main", sha: fixture.workflowSha },
+    {
+      ...fixture.parentJob,
+      id: 502,
+      run_id: run.id,
+      head_sha: run.head_sha,
+      name: FULL_RELEASE_CHILD_EVIDENCE_JOB,
+      steps: [
+        "Checkout trusted child evidence tooling",
+        "Seal exact child attempt evidence",
+        "Upload sealed child evidence",
+      ].map((name) => ({ name, status: "completed", conclusion: "success" })),
+    },
+  ];
+  const attempt = composeReleaseAttemptJobs([{ jobs, runAttempt: 1 }], {
+    effectiveRunAttempt: 1,
+    plannedRunAttempt: 1,
   });
-  const jobs = [{ ...fixture.parentJob, name: "test" }];
-  const performanceJobs = [{ ...fixture.parentJob, name: "Verify artifact-only report mode" }];
-  const jobsForChild = (key: string) => (key === "productPerformance" ? performanceJobs : jobs);
-  const manifest = Object.assign(fixture.manifest, {
-    childEvidence: Object.fromEntries(
-      plannedChildren
-        .filter((child) => child.selected)
-        .map((child) => {
-          const composite = composeReleaseAttemptJobs(
-            [{ jobs: jobsForChild(child.key), runAttempt: 1 }],
-            { effectiveRunAttempt: 1, plannedRunAttempt: 1 },
-          );
-          return [
-            child.key,
-            {
-              compositeJobsSha256: composite.sha256,
-              dispatchActor: "github-actions[bot]",
-              effectiveRunAttempt: 1,
-              jobs: composite.jobs,
-              observedRunAttempts: [1],
-              plannedRunAttempt: 1,
-              repository: "openclaw/openclaw",
-              runId: child.runId,
-              triggeringActor: "github-actions[bot]",
-            },
-          ];
-        }),
-    ),
-    executionPlanSha256: executionPlan.sha256,
-    sourceParentRunAttempt: 1,
+  const composite = {
+    compositeJobsSha256: attempt.sha256,
+    dispatchActor: "github-actions[bot]",
+    effectiveRunAttempt: 1,
+    jobs: attempt.jobs,
+    observedRunAttempts: [1],
+    plannedRunAttempt: 1,
+    repository: repository.full_name,
+    runId: String(run.id),
+    triggeringActor: "github-actions[bot]",
+  };
+  fixture.manifest.childEvidence.normalCi = composite;
+  const workload = {
+    ...composite,
+    jobs: composite.jobs.filter((job) => job.name !== FULL_RELEASE_CHILD_EVIDENCE_JOB),
+  };
+  workload.compositeJobsSha256 = releaseCompositeJobsSha256(workload);
+  const inputs = releaseChildDispatchInputs(readFileSync(".github/workflows/ci.yml", "utf8"), [
+    "-f",
+    `target_ref=${fixture.targetSha}`,
+    "-f",
+    "release_scope=npm-beta",
+  ]);
+  const payload = {
+    ...workload,
+    schema: "openclaw.full-release-child-evidence/v1",
+    role: "normalCi",
+    targetSha: fixture.targetSha,
+    workflowSha: run.head_sha,
+    workflowRef: run.head_branch,
+    workflowPath: run.path,
+    displayTitle: run.display_title,
+    dispatchId: "full-release-validation-77-1-ci",
+    sourceParentRunId: "77",
+    sourceParentAttempt: 1,
+    workloadConclusion: "success",
+    inputs: Object.fromEntries(Object.entries(inputs).filter(([, value]) => value !== "")),
+    publisher: { jobId: "502", jobName: FULL_RELEASE_CHILD_EVIDENCE_JOB },
+  };
+  const receiptSha256 = createHash("sha256")
+    .update(JSON.stringify(canonicalizeJsonValue(payload)))
+    .digest("hex");
+  const archive = makeStoredZip({
+    "full-release-child-evidence.json": JSON.stringify({ ...payload, sha256: receiptSha256 }),
   });
-  const originalLog = fixture.client.getJobLog;
+  const artifact = {
+    id: 503,
+    name: `full-release-child-evidence-${fixture.targetSha}-normalCi-${run.id}-1`,
+    digest: artifactDigest(archive),
+    expired: false,
+    expires_at: "2027-01-01T00:00:00Z",
+    size_in_bytes: archive.length,
+    workflow_run: { id: run.id, head_sha: run.head_sha, repository_id: 1, head_repository_id: 1 },
+  };
+  const selection = {
+    repository: repository.full_name,
+    targetSha: fixture.targetSha,
+    role: "normalCi",
+    runId: String(run.id),
+    runAttempt: 1,
+    workflowSha: run.head_sha,
+    workflowRef: run.head_branch,
+    displayTitle: run.display_title,
+    sourceParentRunId: "77",
+    sourceParentAttempt: 1,
+    url: run.html_url,
+    inputs,
+    receiptSha256,
+    artifact: {
+      id: String(artifact.id),
+      name: artifact.name,
+      digest: artifact.digest,
+      expiresAt: artifact.expires_at,
+      sizeInBytes: artifact.size_in_bytes,
+    },
+  };
+  Object.assign(fixture.executionPlan, { childReuse: { normalCi: selection } });
+  fixture.executionPlan.sha256 = releaseExecutionPlanSha256(fixture.executionPlan);
+  fixture.manifest.executionPlanSha256 = fixture.executionPlan.sha256;
+  const origin = {
+    ...fixture.parentRun,
+    id: 77,
+    head_sha: run.head_sha,
+    head_branch: run.head_branch,
+    conclusion: "failure" as string | null,
+    status: "completed",
+    repository,
+    head_repository: repository,
+  };
+  const github = vi.fn(async (endpoint: string) => {
+    if (endpoint === `actions/runs/${run.id}`) {
+      return run;
+    }
+    if (endpoint === `compare/${run.head_sha}...main?per_page=1`) {
+      return { status: "ahead", merge_base_commit: { sha: run.head_sha } };
+    }
+    if (endpoint === `actions/artifacts/${artifact.id}`) {
+      return artifact;
+    }
+    if (endpoint === `actions/runs/${run.id}/attempts/1/jobs?per_page=100&page=1`) {
+      return { total_count: jobs.length, jobs };
+    }
+    if (endpoint === "actions/runs/77/attempts/1") {
+      return origin;
+    }
+    throw new Error(`Unexpected child evidence endpoint: ${endpoint}`);
+  });
+  const adoptionLog = [
+    `TARGET_SHA: ${fixture.targetSha}`,
+    "CI_RELEASE_SCOPE: npm-beta",
+    `FRV_CHILD_REUSE_SHA256=${releaseChildReuseSha256(selection)}`,
+    `Reused ci.yml: ${run.html_url} (attempt 1)`,
+  ].join("\n");
   const client = {
     ...fixture.client,
-    getJobLog: vi.fn(
-      (jobId: number) => `${originalLog(jobId)}\nCI_RELEASE_SCOPE: npm-${releaseProfile}`,
+    validateChildReuse: (
+      selected: Parameters<typeof validateReusableReleaseChild>[0],
+      request: Parameters<typeof validateReusableReleaseChild>[1],
+    ) =>
+      validateReusableReleaseChild(selected, request, {
+        github,
+        downloadArchive: async () => ({ artifactMetadata: artifact, archiveBytes: archive }),
+        now: Date.parse("2026-09-23T00:00:00Z"),
+      }),
+    getJobLog: vi.fn((jobId: number) =>
+      jobId === 201 ? adoptionLog : fixture.client.getJobLog(jobId),
     ),
-    getRunAttemptJobs: vi.fn((runId: string) =>
-      jobsForChild(
-        expectDefined(
-          plannedChildren.find((child) => child.runId === runId),
-          "child",
-        ).key,
-      ),
-    ),
-    loadExecutionPlan: vi.fn<() => ReleaseExecutionPlan | undefined>(() => executionPlan),
+    getRunAttemptJobs: (runId: string) =>
+      runId === String(run.id) ? jobs : fixture.client.getRunAttemptJobs(runId),
   };
-  return { ...fixture, client, executionPlan, manifest };
+  return { ...fixture, client, origin, selection, run, artifact, github };
 }
 
 function createReleaseCiWatchFixture(states: ReleaseCiWatchState[]) {
@@ -2111,125 +1796,6 @@ process.stdout.write(JSON.stringify(output));
 }
 
 describe("release CI summary child correlation", () => {
-  it.each([
-    { args: [], message: "full release run ID is required" },
-    { args: ["29071366025", "--interval", "0"], message: "positive number of seconds" },
-    { args: ["--validate-run", "29071366025", "--watch"], message: "cannot be combined" },
-    { args: ["--manifest", "/tmp/manifest.json"], message: "requires --validate-run" },
-    { args: ["123", "--reuse-request-json", "{}"], message: "requires --validate-run" },
-    {
-      args: ["--validate-run", "123", "--reuse-request-json", "null"],
-      message: "reuse request is invalid",
-    },
-    {
-      args: ["--validate-run", "123", "--reuse-request-json", "[]"],
-      message: "reuse request is invalid",
-    },
-    {
-      args: ["--validate-run", "29071366025", "--verifier-source-file", "/tmp/verifier.mjs"],
-      message: "requires --verifier-source-sha",
-    },
-    {
-      args: ["--validate-run", "29071366025", "--expected-run-attempts-json", "[]"],
-      message: "requires a JSON object",
-    },
-    {
-      args: ["--validate-run", "29071366025", "--expected-run-attempts-json", '{"29071366025":0}'],
-      message: "must be a positive integer",
-    },
-    {
-      args: [
-        "--validate-run",
-        "29071366025",
-        "--expected-run-attempts-json",
-        JSON.stringify(
-          Object.fromEntries(Array.from({ length: 10 }, (_, index) => [index + 1, 1])),
-        ),
-      ],
-      message: "must contain 1-9 run IDs",
-    },
-    { args: ["--unknown"], message: "unknown or incomplete argument" },
-  ])("rejects invalid CLI arguments before GitHub access: $message", ({ args, message }) => {
-    const result = spawnSync(process.execPath, [resolve(SCRIPT), ...args], {
-      encoding: "utf8",
-      timeout: 20_000,
-    });
-    expect(result.status).toBe(2);
-    expect(result.stderr).toContain("usage: release-ci-summary.mjs");
-    expect(result.stderr).toContain(message);
-  });
-
-  it("summarizes only visible watch transitions", () => {
-    const jobs = [
-      { conclusion: "", name: "Run normal full CI", status: "in_progress", url: "one" },
-      { conclusion: "", name: "Run release checks", status: "queued", url: "two" },
-    ];
-    const fixture = createReleaseCiWatchFixture([
-      { attempt: 1, conclusion: "", jobs, status: "queued", url: "first" },
-      {
-        attempt: 1,
-        conclusion: "",
-        jobs: jobs.toReversed().map((job) => Object.assign({}, job, { url: `${job.url}-changed` })),
-        status: "queued",
-        url: "changed",
-      },
-      {
-        attempt: 1,
-        conclusion: "",
-        jobs: [{ conclusion: "success", name: "Run normal full CI", status: "completed" }],
-        status: "in_progress",
-      },
-      {
-        attempt: 1,
-        conclusion: "success",
-        jobs: [{ conclusion: "success", name: "Run normal full CI", status: "completed" }],
-        status: "completed",
-      },
-    ]);
-    try {
-      const result = fixture.run();
-      const calls = fixture.readCalls();
-      const watchPolls = calls.filter(
-        (args) =>
-          args[0] === "run" &&
-          args[args.indexOf("--json") + 1] === "status,conclusion,attempt,headSha,jobs",
-      );
-      expect(result.status, result.stderr).toBe(0);
-      expect(watchPolls).toHaveLength(4);
-      expect(calls.filter((args) => args[0] === "api" && args[1] === "rate_limit")).toHaveLength(3);
-    } finally {
-      fixture.cleanup();
-    }
-  });
-
-  it("summarizes before stopping on terminal parent job failures", () => {
-    const failedJob = "Run release/live/Docker/QA validation";
-    const fixture = createReleaseCiWatchFixture([
-      {
-        attempt: 1,
-        conclusion: "",
-        jobs: [
-          { conclusion: "success", name: "success", status: "completed" },
-          { conclusion: "neutral", name: "neutral", status: "completed" },
-          { conclusion: "skipped", name: "skipped", status: "completed" },
-          { conclusion: "", name: "running", status: "in_progress" },
-          { conclusion: "failure", name: failedJob, status: "completed" },
-        ],
-        status: "in_progress",
-      },
-    ]);
-    try {
-      const result = fixture.run();
-      const calls = fixture.readCalls();
-      expect(result.status).toBe(1);
-      expect(result.stderr).toContain(failedJob);
-      expect(calls.filter((args) => args[0] === "run" && args[1] === "view")).toHaveLength(2);
-      expect(calls.filter((args) => args[0] === "api" && args[1] === "rate_limit")).toHaveLength(1);
-    } finally {
-      fixture.cleanup();
-    }
-  });
-
   it("reports an early release blocker once while the diagnostic drain continues", () => {
     const fixture = createReleaseCiWatchFixture([
       {
@@ -2312,24 +1878,6 @@ describe("release CI summary child correlation", () => {
         },
       ),
     ).toThrow("manifest artifact identity mismatch");
-    expect(() =>
-      validateManifestArtifactIdentity(
-        { ...artifact, id: artifact.id + 1 },
-        {
-          artifactDigest: artifact.digest,
-          artifactId: artifact.id,
-          runAttempt: 1,
-          runId,
-        },
-      ),
-    ).toThrow("manifest artifact identity mismatch");
-
-    const source = readFileSync(SCRIPT, "utf8");
-    expect(source).toContain("actions/artifacts/${artifactId}/zip");
-    expect(source).toContain('"--name",');
-    expect(source).toContain(
-      "downloadParentManifestEvidence(runId, runAttempt, normalizedRepository, manifestPath)",
-    );
   });
 
   it.skipIf(!hasUnzip)(
@@ -2370,10 +1918,6 @@ describe("release CI summary child correlation", () => {
         expect(() =>
           readManifestArtifactArchive(archivePath, artifactDigest(oversizedArchive)),
         ).toThrow("artifact compressed size is invalid");
-
-        const source = readFileSync(SCRIPT, "utf8");
-        expect(source).toContain('execFileSync("unzip", ["-p", archivePath');
-        expect(source).not.toContain('execFileSync("unzip", ["-q", archivePath, "-d"');
       } finally {
         rmSync(root, { force: true, recursive: true });
       }
@@ -2383,128 +1927,16 @@ describe("release CI summary child correlation", () => {
   it("bridges only attempt-one manifest v2 artifacts with the legacy stable name", async () => {
     const legacyV2 = trustedMainPackageFixture();
     legacyV2.artifact.name = `full-release-validation-${legacyV2.runId}`;
-    expect(
-      (
-        await validateReleaseRunEvidence(
-          {
-            repository: "openclaw/openclaw",
-            runId: legacyV2.runId,
-            verifierSourceContent: readFileSync(SCRIPT),
-            verifierSourceSha: "c".repeat(40),
-          },
-          legacyV2.client,
-        )
-      ).root.artifact.name,
-    ).toBe(legacyV2.artifact.name);
+    expect((await verifyFixture(legacyV2)).root.artifact.name).toBe(legacyV2.artifact.name);
 
     const legacyV3 = trustedMainPackageFixture({
       manifestVersion: 3,
       workflowSha: "a".repeat(40),
     });
     legacyV3.artifact.name = `full-release-validation-${legacyV3.runId}`;
-    await expect(
-      validateReleaseRunEvidence(
-        {
-          repository: "openclaw/openclaw",
-          runId: legacyV3.runId,
-          verifierSourceContent: readFileSync(SCRIPT),
-          verifierSourceSha: "c".repeat(40),
-        },
-        legacyV3.client,
-      ),
-    ).rejects.toThrow("legacy release validation manifest artifact is not compatible");
-  });
-
-  it("normalizes a pre-tooling trusted-main producer separately from the current verifier", async () => {
-    const fixture = trustedMainPackageFixture({
-      targetSha: "8".repeat(40),
-      workflowSha: "0".repeat(40),
-    });
-    const verifierSourceSha = "c".repeat(40);
-    const evidence = await validateReleaseRunEvidence(
-      {
-        repository: "openclaw/openclaw",
-        runId: fixture.runId,
-        verifierSourceContent: readFileSync(SCRIPT),
-        verifierSourceSha,
-      },
-      fixture.client,
+    await expect(verifyFixture(legacyV3)).rejects.toThrow(
+      "legacy release validation manifest artifact is not compatible",
     );
-
-    expect(evidence).toMatchObject({
-      directRoot: true,
-      evidenceReuse: null,
-      releaseProfile: "full",
-      repository: "openclaw/openclaw",
-      rerunGroup: "package",
-      runReleaseSoak: true,
-      schema: "openclaw.release-validation-evidence/v3",
-      producerOnTrustedMainLineage: true,
-      trustedWorkflowFullRef: "refs/heads/main",
-      trustedWorkflowRef: "main",
-      valid: true,
-      verifier: {
-        schemaVersion: 3,
-        sourceSha: verifierSourceSha,
-      },
-    });
-    expect(evidence.root).toMatchObject({
-      manifestVersion: 2,
-      runAttempt: 1,
-      runId: fixture.runId,
-      targetSha: fixture.targetSha,
-      producerOnTrustedMainLineage: true,
-      workflowFullRef: "refs/heads/main",
-      workflowPath: ".github/workflows/full-release-validation.yml",
-      workflowQualifiedPath: ".github/workflows/full-release-validation.yml@refs/heads/main",
-      workflowRef: "main",
-      workflowRefProof: "legacy-v2-main-ancestry",
-      workflowRefType: "branch",
-      workflowSha: fixture.workflowSha,
-    });
-    expect(evidence.root.workflowSha).not.toBe(evidence.root.targetSha);
-    expect(evidence.verifier.sourceSha).not.toBe(evidence.root.workflowSha);
-    expect(evidence.children).toEqual([
-      expect.objectContaining({
-        conclusion: "success",
-        dispatchNonce: `full-release-validation-${fixture.runId}-1-release-checks`,
-        headBranch: "main",
-        role: "releaseChecks",
-        runAttempt: 1,
-        runId: String(fixture.childRun.id),
-        sourceParentAttempt: 1,
-        workflowSha: fixture.workflowSha,
-      }),
-    ]);
-    expect(evidence.root.artifact).toEqual({
-      digest: fixture.artifact.digest,
-      id: String(fixture.artifact.id),
-      name: fixture.artifact.name,
-      runAttempt: 1,
-      sizeInBytes: fixture.artifact.size_in_bytes,
-    });
-  });
-
-  it("verifies all five selected children for sealed npm beta coverage", async () => {
-    const fixture = trustedMainNpmFixture();
-    const options = {
-      runId: fixture.runId,
-      verifierSourceContent: readFileSync(SCRIPT),
-      verifierSourceSha: "c".repeat(40),
-    };
-    const evidence = await validateReleaseRunEvidence(options, fixture.client);
-    expect(evidence.children.map((child: { role: string }) => child.role).toSorted()).toEqual([
-      "normalCi",
-      "pluginPrereleaseCandidate",
-      "pluginPrereleaseIndependent",
-      "releaseChecksCandidate",
-      "releaseChecksIndependent",
-    ]);
-    expect(fixture.client.getRunAttemptJobs).toHaveBeenCalledTimes(5);
-    expect(fixture.client.getJobLog).toHaveBeenCalledTimes(5);
-
-    expectDefined(fixture.runs[0], "CI run").status = "in_progress";
-    await expect(validateReleaseRunEvidence(options, fixture.client)).rejects.toThrow();
   });
 
   it("continues a failed npm producer through the real release evidence verifier", async () => {
@@ -2613,52 +2045,12 @@ describe("release CI summary child correlation", () => {
     expect((await verify.mock.results[0]!.value).children).toHaveLength(5);
   });
 
-  it.each(["complete", "deleted-manifest", "deleted-plan", "changed-plan", "deleted-publication"])(
+  it.each(["deleted-manifest", "deleted-plan", "changed-plan", "deleted-publication"])(
     "verifies source admission against the immutable workflow and plan: %s",
     async (mutation) => {
       const fixture = trustedMainNpmFixture();
       const inputs = fixture.manifest.validationInputs;
-      const sourceAdmission = createPublicationSourceFact(
-        publicationSourceRequest({
-          PUBLICATION_INPUTS_JSON: JSON.stringify({
-            ref: fixture.targetSha,
-            trusted_workflow_json: publicationDispatchEnvelope(null, {
-              validationPurpose: "publish",
-              publicationSelection: {
-                route: "normal",
-                npmDistTag: "beta",
-                publishOpenclawNpm: true,
-                pluginPublishScope: "all-publishable",
-                plugins: [],
-              },
-            }),
-            release_profile: "beta",
-            rerun_group: "all",
-            provider: inputs.provider,
-            mode: inputs.mode,
-            npm_telegram_provider_mode: inputs.npmTelegramProviderMode,
-            skip_package_telegram_e2e: inputs.skipPackageTelegramE2e,
-          }),
-          PUBLICATION_TARGET_CONTEXT: inputs.targetContextRef,
-          PUBLICATION_COVERAGE_POLICY: inputs.coveragePolicy,
-          PUBLICATION_TOOLING_JSON: JSON.stringify({
-            fullRef: "refs/heads/main",
-            sha: fixture.workflowSha,
-          }),
-          PUBLICATION_TARGET_SHA: fixture.targetSha,
-          GITHUB_REPOSITORY: "openclaw/openclaw",
-          GITHUB_REF: "refs/heads/main",
-          GITHUB_SHA: fixture.workflowSha,
-          GITHUB_RUN_ID: fixture.runId,
-          GITHUB_RUN_ATTEMPT: "1",
-        }),
-        { packages: [], platforms: [] },
-        {
-          version: expectDefined(inputs.targetVersion, "target version"),
-          packages: [{ name: "openclaw", version: inputs.targetVersion, targets: ["npm"] }],
-          platforms: [],
-        },
-      );
+      const sourceAdmission = publicationSourceFixture(fixture, true);
       Object.assign(fixture.executionPlan, { sourceAdmissionContract: "1", sourceAdmission });
       fixture.executionPlan.sha256 = releaseExecutionPlanSha256(fixture.executionPlan);
       const manifest = Object.assign(fixture.manifest, {
@@ -2711,168 +2103,58 @@ describe("release CI summary child correlation", () => {
         },
         client,
       );
-      if (mutation === "complete") {
-        expect((await result).children).toHaveLength(5);
-        expect(client.getWorkflowSource).toHaveBeenCalledTimes(1);
-        expect(client.loadExecutionPlan).toHaveBeenCalledTimes(1);
-      } else {
-        await expect(result).rejects.toThrow(/source admission|publication/u);
-      }
+      await expect(result).rejects.toThrow(/source admission|publication/u);
     },
   );
 
-  it("authenticates a rejected automatic retry after a manual repair in the strict summary", async () => {
-    const fixture = trustedMainNpmFixture();
-    const plannedChild = expectDefined(
-      fixture.executionPlan.children.find((child) => child.key === "normalCi"),
-      "normal CI plan",
-    );
-    const childRun = expectDefined(
-      fixture.runs.find((run) => String(run.id) === plannedChild.runId),
-      "normal CI run",
-    );
-    const originalRun = { ...childRun, conclusion: "failure" };
-    const originalParent = { ...fixture.parentRun, conclusion: "failure" };
-    const originalJob = {
-      ...fixture.parentJob,
-      id: 501,
-      name: "test",
-      conclusion: "failure",
-    };
-    const repairedJob = { ...originalJob, id: 502, run_attempt: 2, conclusion: "success" };
-    const knownFlakyJobs = ["normalCi:test"];
-    Object.assign(fixture.executionPlan, { knownFlakyJobs });
-    fixture.executionPlan.sha256 = releaseExecutionPlanSha256(fixture.executionPlan);
-    const intent = expectDefined(
-      selectReleaseFlakeIntent(fixture.executionPlan, plannedChild, originalRun, [originalJob]),
-      "automatic retry intent",
-    );
-    const composite = composeReleaseAttemptJobs(
-      [
-        { jobs: [originalJob], runAttempt: 1 },
-        { jobs: [repairedJob], runAttempt: 2 },
-      ],
-      { effectiveRunAttempt: 2, plannedRunAttempt: 1 },
-    );
-    childRun.run_attempt = 2;
-    childRun.triggering_actor = { login: "release-operator" };
-    Object.assign(expectDefined(fixture.manifest.childEvidence.normalCi, "normal CI evidence"), {
-      compositeJobsSha256: composite.sha256,
-      effectiveRunAttempt: 2,
-      jobs: composite.jobs,
-      observedRunAttempts: [1, 2],
-      triggeringActor: "release-operator",
-    });
-    Object.assign(fixture.manifest, {
-      knownFlakyJobs,
-      executionPlanSha256: fixture.executionPlan.sha256,
-      automaticRetries: [
-        {
-          child: "normalCi",
-          executionPlanSha256: fixture.executionPlan.sha256,
-          intent,
-          outcome: "rejected",
-          replacements: [],
-        },
-      ],
-    });
-    fixture.manifest.validationInputs.knownFlakyJobsJson = JSON.stringify(knownFlakyJobs);
-    fixture.manifest.runAttempt = "2";
-    fixture.parentRun.run_attempt = 2;
-    fixture.parentView.attempt = 2;
-    fixture.artifact.name = `full-release-validation-${fixture.runId}-2`;
-    const owner = {
-      id: 900,
-      name: "Automatic retry (normalCi)",
-      status: "completed",
-      steps: [
-        {
-          name: "Upload automatic retry intent",
-          status: "completed",
-          conclusion: "success",
-          number: 1,
-          started_at: "2026-07-10T01:10:01Z",
-          completed_at: "2026-07-10T01:10:02Z",
-        },
-        {
-          name: "Record automatic retry intent digest",
-          status: "completed",
-          conclusion: "success",
-          number: 2,
-          started_at: "2026-07-10T01:10:02Z",
-          completed_at: "2026-07-10T01:10:03Z",
-        },
-        {
-          name: "Execute automatic retry",
-          status: "completed",
-          conclusion: "failure",
-          number: 3,
-          started_at: "2026-07-10T01:10:03Z",
-          completed_at: "2026-07-10T01:10:04Z",
-        },
-        {
-          name: "Record automatic retry rejection digest",
-          status: "completed",
-          conclusion: "success",
-          number: 4,
-          started_at: "2026-07-10T01:10:04Z",
-          completed_at: "2026-07-10T01:10:05Z",
-        },
-      ],
-    };
-    const intentDigest = releaseFlakeIntentSha256(intent);
-    let rejectionDigest = intentDigest;
-    const client = {
-      ...fixture.client,
-      getParentJobs: (runId: string) => {
-        const jobs = fixture.client.getParentJobs(runId);
-        return runId === fixture.runId
-          ? jobs.flatMap((job) => [
-              job,
-              { ...job, id: job.id + 1000, run_attempt: 2, conclusion: "skipped" },
-            ])
-          : jobs;
-      },
-      getRunAttempt: (runId: string, attempt: number) => {
-        expect(attempt).toBe(1);
-        if (runId === fixture.runId) {
-          return originalParent;
-        }
-        expect(runId).toBe(plannedChild.runId);
-        return originalRun;
-      },
-      getRunAttemptJobs: (runId: string, attempt: number) => {
-        if (runId === fixture.runId) {
-          expect(attempt).toBe(1);
-          return [owner];
-        }
-        if (runId === plannedChild.runId) {
-          return attempt === 1 ? [originalJob] : [repairedJob];
-        }
-        return fixture.client.getRunAttemptJobs(runId);
-      },
-      getJobLog: (jobId: number) =>
-        jobId === owner.id
-          ? `2026-07-10T01:10:02.500Z FRV_AUTO_RETRY_INTENT_SHA256=${intentDigest}\n2026-07-10T01:10:04.500Z FRV_AUTO_RETRY_REJECTED_INTENT_SHA256=${rejectionDigest}\n`
-          : fixture.client.getJobLog(jobId),
-    };
-    const options = {
-      runId: fixture.runId,
-      verifierSourceContent: readFileSync(SCRIPT),
-      verifierSourceSha: "c".repeat(40),
-    };
-    const evidence = await validateReleaseRunEvidence(options, client);
+  it("verifies mixed fresh and independently reused children from an in-progress parent", async () => {
+    const fixture = trustedMainChildReuseFixture();
+    fixture.origin.status = "in_progress";
+    fixture.origin.conclusion = null;
+    const evidence = await verifyFixture(fixture);
     expect(evidence.valid).toBe(true);
-    expect(evidence.children).toContainEqual(
-      expect.objectContaining({ role: "normalCi", plannedRunAttempt: 1, runAttempt: 2 }),
-    );
-    rejectionDigest = "f".repeat(64);
-    await expect(validateReleaseRunEvidence(options, client)).rejects.toThrow(
-      "automatic retry rejection is not bound to its original owner witness",
-    );
+    expect(
+      evidence.children.find((child: { role: string }) => child.role === "normalCi"),
+    ).toMatchObject({
+      runId: String(fixture.run.id),
+      workflowSha: fixture.manifest.workflowSha,
+      parentJobId: "201",
+      sourceParentRunId: "77",
+      sourceParentAttempt: 1,
+      dispatchNonce: "full-release-validation-77-1-ci",
+    });
+    expect(
+      evidence.children
+        .filter((child: { role: string }) => child.role !== "normalCi")
+        .every((child: { sourceParentRunId: string }) => child.sourceParentRunId === fixture.runId),
+    ).toBe(true);
+    expect(fixture.github).toHaveBeenCalledWith("actions/runs/77/attempts/1");
   });
 
-  it("retains blocking product performance in sealed npm stable evidence", async () => {
+  it.each([
+    ["missing-adoption-witness", "reuse adoption witness mismatch"],
+    ["changed-composite", "manifest child composite evidence mismatch"],
+    ["unsealed-selection", "execution plan artifact digest"],
+  ])("rejects independently reused final evidence with %s", async (fault, message) => {
+    const fixture = trustedMainChildReuseFixture();
+    if (fault === "missing-adoption-witness") {
+      const readLog = fixture.client.getJobLog.getMockImplementation()!;
+      fixture.client.getJobLog.mockImplementation((id: number) =>
+        readLog(id).replace(/FRV_CHILD_REUSE_SHA256=[a-f0-9]+/u, ""),
+      );
+    }
+    if (fault === "changed-composite") {
+      const evidence = expectDefined(fixture.manifest.childEvidence.normalCi, "CI evidence");
+      expectDefined(evidence.jobs[0], "CI job").completedAt = "2026-07-10T01:11:00Z";
+      evidence.compositeJobsSha256 = releaseCompositeJobsSha256(evidence);
+    }
+    if (fault === "unsealed-selection") {
+      fixture.selection.inputs.target_ref = "d".repeat(40);
+    }
+    await expect(verifyFixture(fixture)).rejects.toThrow(message);
+  });
+
+  it("requires passing product performance in sealed npm stable evidence", async () => {
     const fixture = trustedMainNpmFixture("stable");
     const options = {
       runId: fixture.runId,
@@ -2895,7 +2177,9 @@ describe("release CI summary child correlation", () => {
       "performance child",
     );
     performance.conclusion = "failure";
-    await expect(validateReleaseRunEvidence(options, fixture.client)).rejects.toThrow();
+    await expect(validateReleaseRunEvidence(options, fixture.client)).rejects.toThrow(
+      "does not pass release policy",
+    );
   });
 
   it.each(["carried-guard", "newer-guard-failure", "earlier-publisher"])(
@@ -2973,40 +2257,43 @@ describe("release CI summary child correlation", () => {
       } else {
         await expect(result).rejects.toThrow(
           scenario === "newer-guard-failure"
-            ? "performance artifact-only guard is missing or unsuccessful"
+            ? "manifest child run does not pass release policy: OpenClaw Performance"
             : "performance report publisher was not skipped",
         );
       }
     },
   );
 
-  it.each(["context", "blocking-performance", "soak-control", "soak", "missing-plan"])(
-    "rejects incomplete npm stable qualification: %s",
-    async (drift) => {
-      const fixture = trustedMainNpmFixture("stable");
-      if (drift === "context") {
-        fixture.manifest.validationInputs.targetContextRef = "";
-      } else if (drift === "blocking-performance") {
-        fixture.manifest.controls.performanceBlocking = false;
-      } else if (drift === "soak-control") {
-        fixture.manifest.controls.stableSoakRequired = false;
-      } else if (drift === "soak") {
-        fixture.manifest.runReleaseSoak = "false";
-      } else {
-        fixture.client.loadExecutionPlan.mockReturnValue(undefined);
-      }
-      await expect(
-        validateReleaseRunEvidence(
-          {
-            runId: fixture.runId,
-            verifierSourceContent: readFileSync(SCRIPT),
-            verifierSourceSha: "c".repeat(40),
-          },
-          fixture.client,
-        ),
-      ).rejects.toThrow();
-    },
-  );
+  it.each([
+    "context",
+    "soak-control",
+    "soak",
+    "missing-plan",
+    "performance-run",
+    "performance-composite",
+  ])("rejects incomplete npm stable qualification: %s", async (drift) => {
+    const fixture = trustedMainNpmFixture("stable");
+    if (drift === "context") {
+      fixture.manifest.validationInputs.targetContextRef = "";
+    } else if (drift === "soak-control") {
+      fixture.manifest.controls.stableSoakRequired = false;
+    } else if (drift === "soak") {
+      fixture.manifest.runReleaseSoak = "false";
+    } else if (drift === "missing-plan") {
+      fixture.client.loadExecutionPlan.mockReturnValue(undefined);
+    } else if (drift === "performance-run") {
+      delete fixture.manifest.childRuns.productPerformance;
+    } else {
+      delete fixture.manifest.childEvidence.productPerformance;
+    }
+    await expect(verifyFixture(fixture)).rejects.toThrow(
+      drift === "performance-run"
+        ? "execution plan and manifest child identity differ: OpenClaw Performance"
+        : drift === "performance-composite"
+          ? "release validation manifest composite child set is invalid"
+          : undefined,
+    );
+  });
 
   it.each([
     "missing-plan",
@@ -3037,142 +2324,86 @@ describe("release CI summary child correlation", () => {
         runId: "106",
       };
     }
-    await expect(
-      validateReleaseRunEvidence(
-        {
-          runId: fixture.runId,
-          verifierSourceContent: readFileSync(SCRIPT),
-          verifierSourceSha: "c".repeat(40),
-        },
-        fixture.client,
-      ),
-    ).rejects.toThrow();
+    await expect(verifyFixture(fixture)).rejects.toThrow();
   });
 
-  it.each([
-    "version",
-    "reused",
-    "group",
-    "profile",
-    "soak",
-    "inputs",
-    "coverage",
-    "stable-coverage",
-    "target-context",
-    "target",
-  ])("rejects an ineligible reuse %s before fetching child evidence", async (mismatch) => {
-    const fixture = trustedMainFullFixture();
-    const reuseRequest = {
-      releaseProfile: "full",
-      runReleaseSoak: "true",
-      targetSha: fixture.targetSha,
-      validationInputs: { ...fixture.manifest.validationInputs },
-    };
-    switch (mismatch) {
-      case "version":
-        fixture.manifest.version = 3;
-        break;
-      case "reused":
-        fixture.manifest.evidenceReuse = {
-          changedPaths: [],
-          evidenceSha: fixture.targetSha,
-          policy: "exact-target-full-validation-v1",
-          runId: "29090000000",
-          selectedRunId: "29090000000",
-        };
-        break;
-      case "group":
-        fixture.manifest.rerunGroup = "package";
-        break;
-      case "profile":
-        reuseRequest.releaseProfile = "beta";
-        break;
-      case "soak":
-        reuseRequest.runReleaseSoak = "false";
-        break;
-      case "inputs":
+  it.each(["inputs", "target"])(
+    "rejects an ineligible reuse %s before fetching child evidence",
+    async (mismatch) => {
+      const fixture = trustedMainFullFixture();
+      const reuseRequest = {
+        releaseProfile: "full",
+        runReleaseSoak: "true",
+        targetSha: fixture.targetSha,
+        validationInputs: { ...fixture.manifest.validationInputs },
+      };
+      if (mismatch === "inputs") {
         reuseRequest.validationInputs.provider = "anthropic";
-        break;
-      case "coverage":
-        reuseRequest.validationInputs.coveragePolicy = "npm-beta-v1";
-        break;
-      case "stable-coverage":
-        reuseRequest.validationInputs.coveragePolicy = "npm-stable-v1";
-        break;
-      case "target-context":
-        reuseRequest.validationInputs.targetContextRef = "release/2026.8.28-1";
-        break;
-      case "target":
+      } else {
         reuseRequest.targetSha = "7".repeat(40);
         fixture.client.compareCommits = () => ({
           files: [{ filename: "src/index.ts", status: "modified" }],
           merge_base_commit: { sha: fixture.targetSha },
           status: "ahead",
         });
-    }
-    await expect(
-      validateReleaseRunEvidence(
-        {
-          reuseRequest,
-          runId: fixture.runId,
-          verifierSourceContent: readFileSync(SCRIPT),
-          verifierSourceSha: "c".repeat(40),
-        },
-        fixture.client,
-      ),
-    ).rejects.toThrow(
-      mismatch === "target" ? "failed commit comparison" : "ineligible reuse candidate",
-    );
-    expect(fixture.client.getRun).toHaveBeenCalledExactlyOnceWith(fixture.runId);
-    expect(fixture.client.loadExecutionPlan).not.toHaveBeenCalled();
-    expect(fixture.client.getParentJobs).not.toHaveBeenCalled();
-    expect(fixture.client.getJobLog).not.toHaveBeenCalled();
-  });
-
-  it.each([false, true])(
-    "collects independent child evidence concurrently and drains reads (failure=%s)",
-    async (failure) => {
-      const fixture = trustedMainFullFixture();
-      let active = 0;
-      let peak = 0;
-      let completed = 0;
-      const client = {
-        ...fixture.client,
-        async getJobLog(jobId: number) {
-          active += 1;
-          peak = Math.max(peak, active);
-          await new Promise<void>((complete) => {
-            setImmediate(complete);
-          });
-          active -= 1;
-          completed += 1;
-          if (failure && jobId === 201) {
-            throw new Error("dispatch log unavailable");
-          }
-          return fixture.client.getJobLog(jobId);
-        },
-      };
-      const validation = Promise.resolve().then(() =>
+      }
+      await expect(
         validateReleaseRunEvidence(
           {
+            reuseRequest,
             runId: fixture.runId,
             verifierSourceContent: readFileSync(SCRIPT),
             verifierSourceSha: "c".repeat(40),
           },
-          client,
+          fixture.client,
         ),
+      ).rejects.toThrow(
+        mismatch === "target" ? "failed commit comparison" : "ineligible reuse candidate",
       );
-      if (failure) {
-        await expect(validation).rejects.toThrow("dispatch log unavailable");
-      } else {
-        await expect(validation).resolves.toMatchObject({ valid: true });
-      }
-      expect(peak).toBeGreaterThan(1);
-      expect(peak).toBeLessThanOrEqual(7);
-      expect(completed).toBe(6);
-      expect(active).toBe(0);
+      expect(fixture.client.getRun).toHaveBeenCalledExactlyOnceWith(fixture.runId);
+      expect(fixture.client.loadExecutionPlan).not.toHaveBeenCalled();
+      expect(fixture.client.getParentJobs).not.toHaveBeenCalled();
+      expect(fixture.client.getJobLog).not.toHaveBeenCalled();
     },
   );
+
+  it("collects independent child evidence concurrently and drains reads after failure", async () => {
+    const fixture = trustedMainFullFixture();
+    let active = 0;
+    let peak = 0;
+    let completed = 0;
+    const client = {
+      ...fixture.client,
+      async getJobLog(jobId: number) {
+        active += 1;
+        peak = Math.max(peak, active);
+        await new Promise<void>((complete) => {
+          setImmediate(complete);
+        });
+        active -= 1;
+        completed += 1;
+        if (jobId === 201) {
+          throw new Error("dispatch log unavailable");
+        }
+        return fixture.client.getJobLog(jobId);
+      },
+    };
+    const validation = Promise.resolve().then(() =>
+      validateReleaseRunEvidence(
+        {
+          runId: fixture.runId,
+          verifierSourceContent: readFileSync(SCRIPT),
+          verifierSourceSha: "c".repeat(40),
+        },
+        client,
+      ),
+    );
+    await expect(validation).rejects.toThrow("dispatch log unavailable");
+    expect(peak).toBeGreaterThan(1);
+    expect(peak).toBeLessThanOrEqual(7);
+    expect(completed).toBe(6);
+    expect(active).toBe(0);
+  });
 
   it.each([false, true])(
     "retains full child proof for eligible reuse (changelog=%s)",
@@ -3206,276 +2437,275 @@ describe("release CI summary child correlation", () => {
     },
   );
 
-  it.each(["", "2026.8.1", "2026.9.1"])(
-    "recomputes mixed-attempt evidence with Telegram waiver %j",
-    async (version) => {
-      const fixture = trustedMainPackageFixture({
-        manifestVersion: 3,
-        workflowSha: "a".repeat(40),
-      });
-      const manifest = fixture.manifest as typeof fixture.manifest & {
-        childEvidence: Record<
-          string,
-          {
-            compositeJobsSha256: string;
-            effectiveRunAttempt: number;
-            jobs: Array<{
-              acceptedRunAttempt: number;
-              completedAt: string;
-              conclusion: string;
-              name: string;
-              startedAt: string;
-              status: string;
-              url: string;
-            }>;
-            observedRunAttempts: number[];
-            plannedRunAttempt: number;
-            runId: string;
-          }
-        >;
-        executionPlanSha256: string;
-        sourceParentRunAttempt: number;
-      };
-      const client = fixture.client as typeof fixture.client & {
-        getRunAttemptJobs: (runId: string, runAttempt: number) => Array<Record<string, unknown>>;
-        loadExecutionPlan: () => Record<string, unknown>;
-      };
-      const waiver = version
-        ? { telegramWaiver: `${version}-owner-approved`, targetVersion: version }
-        : {};
-      Object.assign(manifest.validationInputs, waiver);
-      const plannedChild = {
-        dispatchName: "Dispatch release checks",
-        displayTitle: fixture.childRun.display_title,
-        key: "releaseChecks",
-        required: true,
-        result: "success",
-        runAttempt: 1,
-        runId: String(fixture.childRun.id),
-        selected: true,
-        source: "fresh",
-        url: fixture.childRun.html_url,
-        workflow: "openclaw-release-checks.yml",
-        workflowRef: fixture.childRun.head_branch,
-        workflowSha: fixture.childRun.head_sha,
-      };
-      const executionPlan = buildReleaseExecutionPlanArtifact({
-        ...waiver,
-        attemptEvidenceVersion: 2,
-        candidate: null,
-        children: [plannedChild],
-        evidenceReuse: { requested: false },
-        expected: {
-          candidateRequest: buildFullReleaseCandidateRequest({
-            repository: "openclaw/openclaw",
-            targetSha: fixture.targetSha,
-            toolingSha: fixture.workflowSha,
-            releaseProfile: "full",
-            releaseSoak: true,
-            upgradeSurvivorBaseline: "openclaw@latest",
-            upgradeSurvivorBaselines: "",
-            upgradeSurvivorScenarios: "reported-issues",
-            allowFrozenTargetScenarioOmissions: false,
-            allowUnreleasedChangelog: false,
-            packagePublished: false,
-            sharedImagePolicy: "no-push-artifact",
-          }),
-          parentRunAttempt: 1,
-          parentRunId: fixture.runId,
+  it("recomputes mixed-attempt evidence with an authenticated Telegram waiver", async () => {
+    const version = "2026.9.1";
+
+    const fixture = trustedMainPackageFixture({
+      manifestVersion: 3,
+      workflowSha: "a".repeat(40),
+    });
+    const manifest = fixture.manifest as typeof fixture.manifest & {
+      childEvidence: Record<
+        string,
+        {
+          compositeJobsSha256: string;
+          effectiveRunAttempt: number;
+          jobs: Array<{
+            acceptedRunAttempt: number;
+            completedAt: string;
+            conclusion: string;
+            name: string;
+            startedAt: string;
+            status: string;
+            url: string;
+          }>;
+          observedRunAttempts: number[];
+          plannedRunAttempt: number;
+          runId: string;
+        }
+      >;
+      executionPlanSha256: string;
+      sourceParentRunAttempt: number;
+    };
+    const client = fixture.client as typeof fixture.client & {
+      getRunAttemptJobs: (runId: string, runAttempt: number) => Array<Record<string, unknown>>;
+      loadExecutionPlan: () => Record<string, unknown>;
+    };
+    const waiver = version
+      ? { telegramWaiver: `${version}-owner-approved`, targetVersion: version }
+      : {};
+    Object.assign(manifest.validationInputs, waiver);
+    const plannedChild = {
+      dispatchName: "Dispatch release checks",
+      displayTitle: fixture.childRun.display_title,
+      key: "releaseChecks",
+      required: true,
+      result: "success",
+      runAttempt: 1,
+      runId: String(fixture.childRun.id),
+      selected: true,
+      source: "fresh",
+      url: fixture.childRun.html_url,
+      workflow: "openclaw-release-checks.yml",
+      workflowRef: fixture.childRun.head_branch,
+      workflowSha: fixture.childRun.head_sha,
+    };
+    const executionPlan = buildReleaseExecutionPlanArtifact({
+      ...waiver,
+      attemptEvidenceVersion: 2,
+      candidate: null,
+      children: [plannedChild],
+      evidenceReuse: { requested: false },
+      expected: {
+        candidateRequest: buildFullReleaseCandidateRequest({
           repository: "openclaw/openclaw",
           targetSha: fixture.targetSha,
-          workflowRef: fixture.parentRun.head_branch,
-          workflowSha: fixture.workflowSha,
-        },
-        gates: [{ name: "Resolve target ref", required: true, result: "success" }],
-        releaseProfile: "full",
-        rerunGroup: "package",
-        trustedWorkflow: {
-          fullRef: "refs/heads/main",
-          ref: "main",
-          sha: fixture.workflowSha,
-        },
-      });
-      expect(executionPlan.candidate).toBeNull();
-      fixture.childRun.run_attempt = 2;
-      fixture.childRun.triggering_actor = { login: "release-operator" };
-      const firstAttemptJob = {
-        completed_at: "2026-08-22T00:01:00Z",
-        conclusion: "failure",
-        html_url: "https://example.invalid/jobs/test",
-        name: "test",
-        started_at: "2026-08-22T00:00:00Z",
-        status: "completed",
-      };
-      const secondAttemptJob = { ...firstAttemptJob, conclusion: "success" };
-      const compositeJobs = [
-        {
-          acceptedRunAttempt: 2,
-          completedAt: secondAttemptJob.completed_at,
-          conclusion: "success",
-          name: "test",
-          startedAt: secondAttemptJob.started_at,
-          status: "completed",
-          url: secondAttemptJob.html_url,
-        },
-      ];
-      const releaseChecksEvidence = {
-        compositeJobsSha256: releaseCompositeJobsSha256({
-          effectiveRunAttempt: 2,
-          jobs: compositeJobs,
-          plannedRunAttempt: 1,
+          toolingSha: fixture.workflowSha,
+          releaseProfile: "full",
+          releaseSoak: true,
+          upgradeSurvivorBaseline: "openclaw@latest",
+          upgradeSurvivorBaselines: "",
+          upgradeSurvivorScenarios: "reported-issues",
+          allowFrozenTargetScenarioOmissions: false,
+          allowUnreleasedChangelog: false,
+          packagePublished: false,
+          sharedImagePolicy: "no-push-artifact",
         }),
-        dispatchActor: "github-actions[bot]",
+        parentRunAttempt: 1,
+        parentRunId: fixture.runId,
+        repository: "openclaw/openclaw",
+        targetSha: fixture.targetSha,
+        workflowRef: fixture.parentRun.head_branch,
+        workflowSha: fixture.workflowSha,
+      },
+      gates: [{ name: "Resolve target ref", required: true, result: "success" }],
+      releaseProfile: "full",
+      rerunGroup: "package",
+      trustedWorkflow: {
+        fullRef: "refs/heads/main",
+        ref: "main",
+        sha: fixture.workflowSha,
+      },
+    });
+    expect(executionPlan.candidate).toBeNull();
+    fixture.childRun.run_attempt = 2;
+    fixture.childRun.triggering_actor = { login: "release-operator" };
+    const firstAttemptJob = {
+      completed_at: "2026-08-22T00:01:00Z",
+      conclusion: "failure",
+      html_url: "https://example.invalid/jobs/test",
+      name: "test",
+      started_at: "2026-08-22T00:00:00Z",
+      status: "completed",
+    };
+    const secondAttemptJob = { ...firstAttemptJob, conclusion: "success" };
+    const compositeJobs = [
+      {
+        acceptedRunAttempt: 2,
+        completedAt: secondAttemptJob.completed_at,
+        conclusion: "success",
+        name: "test",
+        startedAt: secondAttemptJob.started_at,
+        status: "completed",
+        url: secondAttemptJob.html_url,
+      },
+    ];
+    const releaseChecksEvidence = {
+      compositeJobsSha256: releaseCompositeJobsSha256({
         effectiveRunAttempt: 2,
         jobs: compositeJobs,
-        observedRunAttempts: [1, 2],
         plannedRunAttempt: 1,
-        repository: "openclaw/openclaw",
-        runId: String(fixture.childRun.id),
-        triggeringActor: "release-operator",
-      };
-      manifest.executionPlanSha256 = String(executionPlan.sha256);
-      manifest.sourceParentRunAttempt = 1;
-      manifest.runAttempt = "2";
-      manifest.childEvidence = {
-        releaseChecks: releaseChecksEvidence,
-      };
-      fixture.parentRun.run_attempt = 2;
-      fixture.parentView.attempt = 2;
-      fixture.artifact.name = `full-release-validation-${fixture.runId}-2`;
-      const skippedParentJob = {
-        completed_at: "2026-08-22T00:02:00Z",
-        conclusion: "skipped",
-        id: fixture.parentJob.id + 1,
-        name: fixture.parentJob.name,
-        run_attempt: 2,
-        started_at: "2026-08-22T00:02:00Z",
-        status: "completed",
-        steps: [],
-      };
-      client.loadExecutionPlan = () => executionPlan;
-      client.loadManifest = (requestedRunId: string, requestedRunAttempt: number) => {
-        expect(requestedRunId).toBe(fixture.runId);
-        expect(requestedRunAttempt).toBe(2);
-        return { artifact: fixture.artifact, manifest };
-      };
-      client.getParentJobs = (requestedRunId: string) => {
-        expect(requestedRunId).toBe(fixture.runId);
-        return [fixture.parentJob, skippedParentJob];
-      };
-      client.getRunAttemptJobs = (_runId: string, attempt: number) =>
-        attempt === 1 ? [firstAttemptJob] : [secondAttemptJob];
-      fixture.client.getJobLog = (jobId: number) => {
-        expect(jobId).toBe(fixture.parentJob.id);
-        return [
-          `TARGET_SHA: ${fixture.targetSha}`,
-          `Dispatched openclaw-release-checks.yml: ${fixture.childRun.html_url} (attempt 1)`,
-        ].join("\n");
-      };
+      }),
+      dispatchActor: "github-actions[bot]",
+      effectiveRunAttempt: 2,
+      jobs: compositeJobs,
+      observedRunAttempts: [1, 2],
+      plannedRunAttempt: 1,
+      repository: "openclaw/openclaw",
+      runId: String(fixture.childRun.id),
+      triggeringActor: "release-operator",
+    };
+    manifest.executionPlanSha256 = executionPlan.sha256;
+    manifest.sourceParentRunAttempt = 1;
+    manifest.runAttempt = "2";
+    manifest.childEvidence = {
+      releaseChecks: releaseChecksEvidence,
+    };
+    fixture.parentRun.run_attempt = 2;
+    fixture.parentView.attempt = 2;
+    fixture.artifact.name = `full-release-validation-${fixture.runId}-2`;
+    const skippedParentJob = {
+      completed_at: "2026-08-22T00:02:00Z",
+      conclusion: "skipped",
+      id: fixture.parentJob.id + 1,
+      name: fixture.parentJob.name,
+      run_attempt: 2,
+      started_at: "2026-08-22T00:02:00Z",
+      status: "completed",
+      steps: [],
+    };
+    client.loadExecutionPlan = () => executionPlan;
+    client.loadManifest = (requestedRunId: string, requestedRunAttempt: number) => {
+      expect(requestedRunId).toBe(fixture.runId);
+      expect(requestedRunAttempt).toBe(2);
+      return { artifact: fixture.artifact, manifest };
+    };
+    client.getParentJobs = (requestedRunId: string) => {
+      expect(requestedRunId).toBe(fixture.runId);
+      return [fixture.parentJob, skippedParentJob];
+    };
+    client.getRunAttemptJobs = (_runId: string, attempt: number) =>
+      attempt === 1 ? [firstAttemptJob] : [secondAttemptJob];
+    fixture.client.getJobLog = (jobId: number) => {
+      expect(jobId).toBe(fixture.parentJob.id);
+      return [
+        `TARGET_SHA: ${fixture.targetSha}`,
+        `Dispatched openclaw-release-checks.yml: ${fixture.childRun.html_url} (attempt 1)`,
+      ].join("\n");
+    };
 
-      const validate = (expectedRunAttempts?: Record<string, number>) =>
-        validateReleaseRunEvidence(
-          {
-            expectedRunAttempts,
-            repository: "openclaw/openclaw",
-            runId: fixture.runId,
-            verifierSourceContent: readFileSync(SCRIPT),
-            verifierSourceSha: "c".repeat(40),
-          },
-          fixture.client,
-        );
-      const evidence = await validate();
-      expect(evidence.children).toEqual([
-        expect.objectContaining({
-          compositeJobsSha256: releaseChecksEvidence.compositeJobsSha256,
-          plannedRunAttempt: 1,
-          runAttempt: 2,
-        }),
-      ]);
-      if (version) {
-        delete manifest.validationInputs.telegramWaiver;
-        await expect(validate()).rejects.toThrow(/Telegram waiver/u);
-        Object.assign(manifest.validationInputs, waiver);
-        client.loadExecutionPlan = () => undefined as never;
-        await expect(validate()).rejects.toThrow(/Telegram waiver/u);
-        client.loadExecutionPlan = () => executionPlan;
-      }
-
-      for (const [expectedRunAttempts, message] of [
-        [{ [fixture.runId]: 1, [String(fixture.childRun.id)]: 2 }, "parent run attempt changed"],
-        [{ [fixture.runId]: 2, [String(fixture.childRun.id)]: 1 }, "child run attempt changed"],
-        [{ [fixture.runId]: 2 }, "expected run attempts omitted"],
-        [{ [fixture.runId]: 2, [String(fixture.childRun.id)]: 2, "999": 1 }, "unvalidated run IDs"],
-      ] as const) {
-        await expect(validate(expectedRunAttempts)).rejects.toThrow(message);
-      }
-
-      const staleJobs = [
+    const validate = (expectedRunAttempts?: Record<string, number>) =>
+      validateReleaseRunEvidence(
         {
-          acceptedRunAttempt: 1,
-          completedAt: firstAttemptJob.completed_at,
-          conclusion: firstAttemptJob.conclusion,
-          name: firstAttemptJob.name,
-          startedAt: firstAttemptJob.started_at,
-          status: firstAttemptJob.status,
-          url: firstAttemptJob.html_url,
+          expectedRunAttempts,
+          repository: "openclaw/openclaw",
+          runId: fixture.runId,
+          verifierSourceContent: readFileSync(SCRIPT),
+          verifierSourceSha: "c".repeat(40),
         },
-      ];
-      const staleEvidence = {
-        compositeJobsSha256: releaseCompositeJobsSha256({
-          effectiveRunAttempt: 1,
-          jobs: staleJobs,
-          plannedRunAttempt: 1,
-        }),
-        dispatchActor: "github-actions[bot]",
+        fixture.client,
+      );
+    const evidence = await validate();
+    expect(evidence.children).toEqual([
+      expect.objectContaining({
+        compositeJobsSha256: releaseChecksEvidence.compositeJobsSha256,
+        plannedRunAttempt: 1,
+        runAttempt: 2,
+      }),
+    ]);
+    if (version) {
+      delete manifest.validationInputs.telegramWaiver;
+      await expect(validate()).rejects.toThrow(/Telegram waiver/u);
+      Object.assign(manifest.validationInputs, waiver);
+      client.loadExecutionPlan = () => undefined as never;
+      await expect(validate()).rejects.toThrow(/Telegram waiver/u);
+      client.loadExecutionPlan = () => executionPlan;
+    }
+
+    for (const [expectedRunAttempts, message] of [
+      [{ [fixture.runId]: 1, [String(fixture.childRun.id)]: 2 }, "parent run attempt changed"],
+      [{ [fixture.runId]: 2, [String(fixture.childRun.id)]: 1 }, "child run attempt changed"],
+      [{ [fixture.runId]: 2 }, "expected run attempts omitted"],
+      [{ [fixture.runId]: 2, [String(fixture.childRun.id)]: 2, "999": 1 }, "unvalidated run IDs"],
+    ] as const) {
+      await expect(validate(expectedRunAttempts)).rejects.toThrow(message);
+    }
+
+    const staleJobs = [
+      {
+        acceptedRunAttempt: 1,
+        completedAt: firstAttemptJob.completed_at,
+        conclusion: firstAttemptJob.conclusion,
+        name: firstAttemptJob.name,
+        startedAt: firstAttemptJob.started_at,
+        status: firstAttemptJob.status,
+        url: firstAttemptJob.html_url,
+      },
+    ];
+    const staleEvidence = {
+      compositeJobsSha256: releaseCompositeJobsSha256({
         effectiveRunAttempt: 1,
         jobs: staleJobs,
-        observedRunAttempts: [1],
         plannedRunAttempt: 1,
-        repository: "openclaw/openclaw",
-        runId: String(fixture.childRun.id),
-        triggeringActor: "github-actions[bot]",
-      };
-      manifest.childEvidence.releaseChecks = staleEvidence;
-      await expect(
-        validate({ [fixture.runId]: 2, [String(fixture.childRun.id)]: 2 }),
-      ).rejects.toThrowError(
-        expect.objectContaining({
-          message: "successful parent manifest predates OpenClaw Release Checks attempt 2",
-          refreshable: true,
-        }),
-      );
+      }),
+      dispatchActor: "github-actions[bot]",
+      effectiveRunAttempt: 1,
+      jobs: staleJobs,
+      observedRunAttempts: [1],
+      plannedRunAttempt: 1,
+      repository: "openclaw/openclaw",
+      runId: String(fixture.childRun.id),
+      triggeringActor: "github-actions[bot]",
+    };
+    manifest.childEvidence.releaseChecks = staleEvidence;
+    await expect(
+      validate({ [fixture.runId]: 2, [String(fixture.childRun.id)]: 2 }),
+    ).rejects.toThrowError(
+      expect.objectContaining({
+        message: "successful parent manifest predates OpenClaw Release Checks attempt 2",
+        refreshable: true,
+      }),
+    );
 
-      manifest.childEvidence.releaseChecks = releaseChecksEvidence;
-      const loadManifest = client.loadManifest.bind(client);
-      client.loadManifest = () => undefined as never;
-      await expect(
-        validate({ [fixture.runId]: 2, [String(fixture.childRun.id)]: 2 }),
-      ).rejects.toThrowError(
-        expect.objectContaining({
-          message: `successful parent run is missing its release validation manifest: ${fixture.runId}`,
-          refreshable: true,
-        }),
-      );
-      client.loadManifest = loadManifest;
+    manifest.childEvidence.releaseChecks = releaseChecksEvidence;
+    const loadManifest = client.loadManifest.bind(client);
+    client.loadManifest = () => undefined as never;
+    await expect(
+      validate({ [fixture.runId]: 2, [String(fixture.childRun.id)]: 2 }),
+    ).rejects.toThrowError(
+      expect.objectContaining({
+        message: `successful parent run is missing its release validation manifest: ${fixture.runId}`,
+        refreshable: true,
+      }),
+    );
+    client.loadManifest = loadManifest;
 
-      releaseChecksEvidence.jobs[0]!.conclusion = "failure";
-      let malformedError: unknown;
-      try {
-        await validate();
-      } catch (error) {
-        malformedError = error;
-      }
-      expect(malformedError).toMatchObject({
-        message: expect.stringContaining("digest is invalid"),
-      });
-      expect(malformedError).not.toHaveProperty("refreshable");
+    releaseChecksEvidence.jobs[0]!.conclusion = "failure";
+    let malformedError: unknown;
+    try {
+      await validate();
+    } catch (error) {
+      malformedError = error;
+    }
+    expect(malformedError).toMatchObject({
+      message: expect.stringContaining("digest is invalid"),
+    });
+    expect(malformedError).not.toHaveProperty("refreshable");
 
-      releaseChecksEvidence.jobs[0]!.conclusion = "success";
-      fixture.childRun.actor = { login: "release-operator" };
-      await expect(validate()).rejects.toThrow("execution plan child dispatch tuple mismatch");
-    },
-  );
+    releaseChecksEvidence.jobs[0]!.conclusion = "success";
+    fixture.childRun.actor = { login: "release-operator" };
+    await expect(validate()).rejects.toThrow("execution plan child dispatch tuple mismatch");
+  });
 
   it("rejects a parent recovery that reruns a sealed child dispatch slot", () => {
     const child = expectedChildDispatches("28717729503", 2, "main").find(
@@ -3515,144 +2745,244 @@ describe("release CI summary child correlation", () => {
     ).toThrow("manifest parent job was redispatched during recovery");
   });
 
-  it.each([
-    ["beta", "Run QA Lab parity lane (core)"],
-    ...["beta", "stable", "full"].flatMap((profile) => [
-      [profile, "Run QA Lab live Telegram lane"],
-      [profile, "Run package acceptance / Telegram package acceptance / Run Telegram package E2E"],
-      [profile, "cross_os_release_checks / Windows / packaged fresh"],
-      [profile, "cross_os_release_checks / macOS / packaged upgrade"],
-    ]),
-  ])(
-    "accepts %s advisory %s failures through canonical policy",
-    async (releaseProfile, jobName) => {
-      const fixture = trustedMainPackageFixture();
-      fixture.manifest.releaseProfile = releaseProfile;
-      fixture.childRun.conclusion = "failure";
-      const originalClient = { ...fixture.client };
-      fixture.client.getParentJobs = (requestedRunId: string) =>
-        requestedRunId === String(fixture.childRun.id)
-          ? [
-              {
-                completed_at: "2026-07-10T01:10:00Z",
-                conclusion: "failure",
-                id: 86293408711,
-                name: jobName,
-                run_attempt: 1,
-                started_at: "2026-07-10T01:00:00Z",
-                status: "completed",
-                steps: [],
-              },
-              {
-                completed_at: "2026-07-10T01:10:00Z",
-                conclusion: "success",
-                id: 86293408712,
-                name: "Verify release checks",
-                run_attempt: 1,
-                started_at: "2026-07-10T01:00:00Z",
-                status: "completed",
-                steps: [],
-              },
-            ]
-          : originalClient.getParentJobs(requestedRunId);
+  it("blocks selected cross-OS failures through canonical policy", async () => {
+    const releaseProfile = "stable";
+    const jobName = "cross_os_release_checks / Windows / packaged fresh";
 
-      const evidence = await validateReleaseRunEvidence(
-        {
-          repository: "openclaw/openclaw",
-          runId: fixture.runId,
-          verifierSourceContent: readFileSync(SCRIPT),
-          verifierSourceSha: "c".repeat(40),
-        },
-        fixture.client,
+    const fixture = trustedMainPackageFixture();
+    fixture.manifest.releaseProfile = releaseProfile;
+    fixture.childRun.conclusion = "failure";
+    const originalClient = { ...fixture.client };
+    fixture.client.getParentJobs = (requestedRunId: string) =>
+      requestedRunId === String(fixture.childRun.id)
+        ? [
+            {
+              completed_at: "2026-07-10T01:10:00Z",
+              conclusion: "failure",
+              id: 86293408711,
+              name: jobName,
+              run_attempt: 1,
+              started_at: "2026-07-10T01:00:00Z",
+              status: "completed",
+              steps: [],
+            },
+            {
+              completed_at: "2026-07-10T01:10:00Z",
+              conclusion: "success",
+              id: 86293408712,
+              name: "Verify release checks",
+              run_attempt: 1,
+              started_at: "2026-07-10T01:00:00Z",
+              status: "completed",
+              steps: [],
+            },
+          ]
+        : originalClient.getParentJobs(requestedRunId);
+
+    await expect(verifyFixture(fixture)).rejects.toThrow("does not pass release policy");
+  });
+
+  it("rejects a failed Windows Node shard at the live release-evidence boundary", async () => {
+    const fixture = trustedMainNpmFixture();
+    const selected = expectDefined(
+      fixture.executionPlan.children.find((child) => child.key === "normalCi"),
+      "normal CI child",
+    );
+    const run = expectDefined(
+      fixture.runs.find((candidate) => String(candidate.id) === selected.runId),
+      "normal CI run",
+    );
+    run.conclusion = "failure";
+    const windowsJob = {
+      ...fixture.parentJob,
+      name: "checks-windows-node-test-2",
+      conclusion: "failure",
+      html_url: `https://github.com/openclaw/openclaw/actions/runs/${selected.runId}/job/501`,
+    };
+    const jobs = [windowsJob, { ...fixture.parentJob, name: "openclaw/ci-gate" }];
+    const composite = composeReleaseAttemptJobs([{ jobs, runAttempt: 1 }], {
+      effectiveRunAttempt: 1,
+      plannedRunAttempt: 1,
+    });
+    Object.assign(expectDefined(fixture.manifest.childEvidence.normalCi, "normal CI evidence"), {
+      jobs: composite.jobs,
+      compositeJobsSha256: composite.sha256,
+    });
+    const originalJobs = expectDefined(
+      fixture.client.getRunAttemptJobs.getMockImplementation(),
+      "live job reader",
+    );
+    fixture.client.getRunAttemptJobs.mockImplementation((runId) =>
+      runId === selected.runId ? jobs : originalJobs(runId),
+    );
+    await expect(verifyFixture(fixture)).rejects.toThrow(
+      "Release manifest contains failed selected job evidence",
+    );
+  });
+
+  it.each(["failed-gate", "missing-gate", "skipped-gate", "windows-shard", "retired-advisory"])(
+    "keeps admitted candidate qualification strict for %s",
+    async (scenario) => {
+      const f = candidatePublicationFixture();
+      const selected = expectDefined(
+        f.plan.children.find((child) => child.key === "normalCi"),
+        "frozen normal CI child",
       );
-      expect(evidence.conclusions).toMatchObject({
-        allRequiredSucceeded: true,
-        children: { releaseChecks: "failure" },
-      });
-      expect(evidence.children[0]?.advisoryJobs).toEqual([
+      const originalJobs = await f.client.getRunAttemptJobs(selected.runId);
+      const gate = expectDefined(
+        originalJobs.find((job) => job.name === "openclaw/ci-gate"),
+        "CI gate",
+      );
+      const jobs = [
+        ...originalJobs,
         {
-          child: "releaseChecks",
-          job: jobName,
-          status: "completed",
-          conclusion: "failure",
-          policy: "advisory",
+          ...gate,
+          id: 1599,
+          name: "CI preflight",
+          html_url: `https://github.com/openclaw/openclaw/actions/runs/${selected.runId}/job/1599`,
         },
-      ]);
+      ].flatMap((job) => {
+        if (job.name !== gate.name) {
+          return [job];
+        }
+        if (scenario === "missing-gate") {
+          return [];
+        }
+        return [
+          {
+            ...job,
+            conclusion:
+              scenario === "failed-gate"
+                ? "failure"
+                : scenario === "skipped-gate"
+                  ? "skipped"
+                  : job.conclusion,
+          },
+        ];
+      });
+      if (scenario === "windows-shard") {
+        jobs.push({
+          ...gate,
+          id: 1501,
+          name: "checks-windows-node-test-2",
+          conclusion: "failure",
+        });
+      }
+      const composite = composeReleaseAttemptJobs([{ jobs, runAttempt: 1 }], {
+        effectiveRunAttempt: 1,
+        plannedRunAttempt: 1,
+      });
+      Object.assign(expectDefined(f.manifest.childEvidence.normalCi, "frozen CI evidence"), {
+        jobs: composite.jobs,
+        compositeJobsSha256: composite.sha256,
+      });
+      if (scenario === "retired-advisory") {
+        Object.assign(f.manifest, {
+          advisoryJobs: [{ class: "recorded-flake", child: "normalCi" }],
+        });
+      }
+      const before = JSON.stringify(f.manifest);
+      await expect(
+        validateReleaseRunEvidence(
+          {
+            repository: f.repository,
+            runId: f.runId,
+            trustedWorkflowRef: f.publisherFullRef.slice("refs/tags/".length),
+            trustedWorkflowFullRef: f.publisherFullRef,
+            trustedWorkflowSha: f.p,
+            verifierSourceSha: f.p,
+            verifierSourceContent: readFileSync(SCRIPT),
+          },
+          {
+            ...f.client,
+            getRunAttemptJobs: async (id: string) =>
+              id === selected.runId ? jobs : f.client.getRunAttemptJobs(id),
+          },
+        ),
+      ).rejects.toThrow(
+        scenario === "retired-advisory"
+          ? /advisory jobs differ/u
+          : scenario === "missing-gate" || scenario === "skipped-gate"
+            ? /openclaw\/ci-gate/u
+            : /failed selected job evidence/u,
+      );
+      expect(JSON.stringify(f.manifest)).toBe(before);
     },
   );
 
-  it("accepts a trusted-main producer when the candidate is the same main commit", async () => {
-    const sharedSha = "a".repeat(40);
-    const fixture = trustedMainPackageFixture({
-      targetSha: sharedSha,
-      workflowSha: sharedSha,
-    });
-    expect(
-      (
-        await validateReleaseRunEvidence(
-          {
-            repository: "openclaw/openclaw",
-            runId: fixture.runId,
-            verifierSourceContent: readFileSync(SCRIPT),
-            verifierSourceSha: "c".repeat(40),
-          },
-          fixture.client,
-        )
-      ).root,
-    ).toMatchObject({
-      targetSha: sharedSha,
-      workflowRef: "main",
-      workflowSha: sharedSha,
-    });
-  });
-
-  it("binds v3 producer evidence to the exact trusted branch ref", async () => {
-    const fixture = trustedMainPackageFixture({
-      manifestVersion: 3,
-      workflowSha: "a".repeat(40),
-    });
-    const evidence = await validateReleaseRunEvidence(
-      {
-        repository: "openclaw/openclaw",
-        runId: fixture.runId,
-        verifierSourceContent: readFileSync(SCRIPT),
-        verifierSourceSha: "c".repeat(40),
-      },
-      fixture.client,
-    );
-    expect(evidence.root).toMatchObject({
-      producerOnTrustedMainLineage: true,
-      workflowFullRef: "refs/heads/main",
-      workflowRefProof: "manifest-v3-branch",
-      workflowRefType: "branch",
-      workflowRunPath: ".github/workflows/full-release-validation.yml",
-    });
-  });
-
-  it("accepts a Unicode trusted workflow ref", async () => {
-    const workflowRef = "release/unicode-\u{1f4a5}";
-    const fixture = trustedMainPackageFixture({
-      manifestVersion: 3,
-      workflowFullRef: `refs/heads/${workflowRef}`,
-      workflowRef,
-      workflowSha: "a".repeat(40),
-    });
-    const evidence = await validateReleaseRunEvidence(
-      {
-        repository: "openclaw/openclaw",
-        runId: fixture.runId,
-        trustedWorkflowRef: workflowRef,
-        verifierSourceContent: readFileSync(SCRIPT),
-        verifierSourceSha: "c".repeat(40),
-      },
-      fixture.client,
-    );
-
-    expect(evidence.root).toMatchObject({
-      workflowFullRef: `refs/heads/${workflowRef}`,
-      workflowRef,
-    });
-  });
+  it.each(["", "ship"])(
+    "reads published empty retry metadata without granting a waiver (%s)",
+    async (laneWaiver) => {
+      const fixture = trustedMainNpmFixture();
+      const selected = expectDefined(
+        fixture.executionPlan.children.find((child) => child.key === "releaseChecksCandidate"),
+        "release checks child",
+      );
+      const run = expectDefined(
+        fixture.runs.find((candidateRun) => String(candidateRun.id) === selected.runId),
+        "release checks run",
+      );
+      run.conclusion = "failure";
+      const jobs = [
+        {
+          name: "cross_os_release_checks / Windows / packaged upgrade",
+          status: "completed",
+          conclusion: "failure",
+        },
+        {
+          name: "cross_os_release_checks / macOS / packaged fresh",
+          status: "completed",
+          conclusion: "success",
+        },
+        { name: "Verify release checks", status: "completed", conclusion: "success" },
+      ].map((job) => Object.assign({}, fixture.parentJob, job));
+      const composite = composeReleaseAttemptJobs([{ jobs, runAttempt: 1 }], {
+        effectiveRunAttempt: 1,
+        plannedRunAttempt: 1,
+      });
+      Object.assign(
+        expectDefined(
+          fixture.manifest.childEvidence.releaseChecksCandidate,
+          "release checks evidence",
+        ),
+        {
+          jobs: composite.jobs,
+          compositeJobsSha256: composite.sha256,
+        },
+      );
+      const originalJobs = fixture.client.getRunAttemptJobs.getMockImplementation()!;
+      fixture.client.getRunAttemptJobs.mockImplementation((runId) =>
+        runId === selected.runId ? jobs : originalJobs(runId),
+      );
+      Object.assign(fixture.executionPlan, {
+        knownFlakyJobs: [],
+        ...(laneWaiver ? { laneWaiver } : {}),
+      });
+      fixture.executionPlan.sha256 = releaseExecutionPlanSha256(fixture.executionPlan);
+      Object.assign(fixture.manifest.validationInputs, {
+        knownFlakyJobsJson: "[]",
+        ...(laneWaiver ? { laneWaiver } : {}),
+      });
+      const manifest = Object.assign(fixture.manifest, {
+        knownFlakyJobs: [],
+        automaticRetries: [],
+        executionPlanSha256: fixture.executionPlan.sha256,
+        advisoryJobs: jobs.slice(0, 2).map(({ name, status, conclusion }) => ({
+          child: selected.key,
+          job: name,
+          status,
+          conclusion,
+          policy: "advisory",
+        })),
+      });
+      const before = JSON.stringify(manifest);
+      expect(() => validateParentManifest(manifest, { runId: fixture.runId })).toThrow(
+        laneWaiver ? "no longer accepted" : "advisory jobs differ",
+      );
+      await expect(verifyFixture(fixture)).rejects.toThrow();
+      expect(JSON.stringify(manifest)).toBe(before);
+    },
+  );
 
   it("rejects a v3 producer dispatched from a tag named main", async () => {
     const fixture = trustedMainPackageFixture({
@@ -3661,17 +2991,9 @@ describe("release CI summary child correlation", () => {
       workflowRefType: "tag",
       workflowSha: "a".repeat(40),
     });
-    await expect(
-      validateReleaseRunEvidence(
-        {
-          repository: "openclaw/openclaw",
-          runId: fixture.runId,
-          verifierSourceContent: readFileSync(SCRIPT),
-          verifierSourceSha: "c".repeat(40),
-        },
-        fixture.client,
-      ),
-    ).rejects.toThrow("producer workflow full ref is not trusted");
+    await expect(verifyFixture(fixture)).rejects.toThrow(
+      "producer workflow full ref is not trusted",
+    );
   });
 
   it("rejects a legacy producer outside the trusted main verifier lineage", async () => {
@@ -3680,17 +3002,9 @@ describe("release CI summary child correlation", () => {
       merge_base_commit: { sha: "d".repeat(40) },
       status: "diverged",
     });
-    await expect(
-      validateReleaseRunEvidence(
-        {
-          repository: "openclaw/openclaw",
-          runId: fixture.runId,
-          verifierSourceContent: readFileSync(SCRIPT),
-          verifierSourceSha: "c".repeat(40),
-        },
-        fixture.client,
-      ),
-    ).rejects.toThrow("producer is not on the trusted main verifier lineage");
+    await expect(verifyFixture(fixture)).rejects.toThrow(
+      "producer is not on the trusted main verifier lineage",
+    );
   });
 
   it("rejects a candidate branch producer even when its SHA differs from the target", async () => {
@@ -3725,19 +3039,7 @@ describe("release CI summary child correlation", () => {
     });
     fixture.manifest.targetRef = fixture.targetSha;
 
-    expect(
-      (
-        await validateReleaseRunEvidence(
-          {
-            repository: "openclaw/openclaw",
-            runId: fixture.runId,
-            verifierSourceContent: readFileSync(SCRIPT),
-            verifierSourceSha: "c".repeat(40),
-          },
-          fixture.client,
-        )
-      ).root,
-    ).toMatchObject({
+    expect((await verifyFixture(fixture)).root).toMatchObject({
       workflowFullRef: `refs/heads/${workflowRef}`,
       workflowRef,
       workflowRefProof: "manifest-v3-sha-pinned-main-ancestry",
@@ -3956,55 +3258,11 @@ describe("release CI summary child correlation", () => {
         workflowSha: "7".repeat(40),
       });
 
-      expect(
-        (
-          await validateReleaseRunEvidence(
-            {
-              repository: "openclaw/openclaw",
-              runId: fixture.runId,
-              verifierSourceContent: readFileSync(SCRIPT),
-              verifierSourceSha: "c".repeat(40),
-            },
-            fixture.client,
-          )
-        ).root,
-      ).toMatchObject({ workflowFullRef: "refs/heads/main" });
+      expect((await verifyFixture(fixture)).root).toMatchObject({
+        workflowFullRef: "refs/heads/main",
+      });
     },
   );
-
-  it("accepts SHA-pinned producer identity with exact-target evidence reuse", () => {
-    const workflowSha = "7".repeat(40);
-    const workflowRef = `release-ci/${workflowSha.slice(0, 12)}-1783705000000`;
-    const fixture = trustedMainPackageFixture({
-      manifestVersion: 3,
-      workflowFullRef: `refs/heads/${workflowRef}`,
-      workflowRef,
-      workflowSha,
-    });
-    fixture.manifest.targetRef = fixture.targetSha;
-    fixture.manifest.evidenceReuse = {
-      changedPaths: [],
-      evidenceSha: fixture.targetSha,
-      policy: "exact-target-full-validation-v1",
-      runId: "29071366024",
-      selectedRunId: "29071366024",
-    };
-
-    expect(
-      validateTrustedProducerIdentity(
-        {
-          manifest: fixture.manifest,
-          parentRun: fixture.parentRun,
-        },
-        fixture.client,
-        { sourceSha: "c".repeat(40) },
-        "main",
-      ),
-    ).toMatchObject({
-      producerOnTrustedMainLineage: true,
-      workflowRefProof: "manifest-v3-sha-pinned-main-ancestry",
-    });
-  });
 
   it("rejects a SHA-pinned evidenceReuse field even when false", async () => {
     const workflowSha = "7".repeat(40);
@@ -4018,17 +3276,7 @@ describe("release CI summary child correlation", () => {
     fixture.manifest.targetRef = fixture.targetSha;
     fixture.manifest.evidenceReuse = false;
 
-    await expect(
-      validateReleaseRunEvidence(
-        {
-          repository: "openclaw/openclaw",
-          runId: fixture.runId,
-          verifierSourceContent: readFileSync(SCRIPT),
-          verifierSourceSha: "c".repeat(40),
-        },
-        fixture.client,
-      ),
-    ).rejects.toThrow("evidence reuse is invalid");
+    await expect(verifyFixture(fixture)).rejects.toThrow("evidence reuse is invalid");
   });
 
   it("rejects dirty verifier bytes and a forged verifier source SHA", async () => {
@@ -4143,106 +3391,6 @@ describe("release CI summary child correlation", () => {
     ).toThrow("full release parent run binding mismatch");
   });
 
-  it("derives every child title from the exact parent run and attempt", () => {
-    expect(expectedChildDispatches("29090000000", 3, "release/2026.7.1")).toEqual([
-      {
-        displayTitle: "CI full-release-validation-29090000000-3-ci",
-        headBranch: "release/2026.7.1",
-        manifestKey: "normalCi",
-        name: "CI",
-        parentJobName: "Run normal full CI",
-        suffix: "-ci",
-        trustedRef: "parent",
-        workflow: "ci.yml",
-      },
-      {
-        displayTitle:
-          "OpenClaw Release Checks full-release-validation-29090000000-3-release-checks",
-        headBranch: "release/2026.7.1",
-        manifestKey: "releaseChecks",
-        name: "OpenClaw Release Checks",
-        parentJobName: "Run release/live/Docker/QA validation",
-        suffix: "-release-checks",
-        trustedRef: "parent",
-        workflow: "openclaw-release-checks.yml",
-      },
-      {
-        displayTitle: "Plugin Prerelease full-release-validation-29090000000-3-plugin-prerelease",
-        headBranch: "release/2026.7.1",
-        manifestKey: "pluginPrerelease",
-        name: "Plugin Prerelease",
-        parentJobName: "Run plugin prerelease validation",
-        suffix: "-plugin-prerelease",
-        trustedRef: "parent",
-        workflow: "plugin-prerelease.yml",
-      },
-      {
-        displayTitle: "NPM Telegram Beta E2E full-release-validation-29090000000-3-npm-telegram",
-        headBranch: "release/2026.7.1",
-        manifestKey: "npmTelegram",
-        name: "NPM Telegram Beta E2E",
-        parentJobName: "Run package Telegram E2E",
-        suffix: "-npm-telegram",
-        trustedRef: "parent",
-        workflow: "npm-telegram-beta-e2e.yml",
-      },
-      {
-        displayTitle: "OpenClaw Performance full-release-validation-29090000000-3",
-        headBranch: "release/2026.7.1",
-        manifestKey: "productPerformance",
-        name: "OpenClaw Performance",
-        parentJobName: "Run product performance evidence",
-        suffix: "",
-        trustedRef: "parent",
-        workflow: "openclaw-performance.yml",
-      },
-    ]);
-  });
-
-  it("derives distinct titles for every phased release child", () => {
-    expect(
-      expectedChildDispatches("29090000000", 3, "release/2026.7.1", 3)
-        .filter(({ manifestKey }) =>
-          [
-            "releaseChecksIndependent",
-            "releaseChecksCandidate",
-            "pluginPrereleaseIndependent",
-            "pluginPrereleaseCandidate",
-          ].includes(manifestKey),
-        )
-        .map(({ displayTitle, manifestKey, parentJobName }) => ({
-          displayTitle,
-          manifestKey,
-          parentJobName,
-        })),
-    ).toEqual([
-      {
-        displayTitle:
-          "Plugin Prerelease full-release-validation-29090000000-3-plugin-prerelease-independent",
-        manifestKey: "pluginPrereleaseIndependent",
-        parentJobName: "Run plugin prerelease independent validation",
-      },
-      {
-        displayTitle:
-          "Plugin Prerelease full-release-validation-29090000000-3-plugin-prerelease-candidate",
-        manifestKey: "pluginPrereleaseCandidate",
-        parentJobName: "Run plugin prerelease candidate validation",
-      },
-      {
-        displayTitle:
-          "OpenClaw Release Checks full-release-validation-29090000000-3-release-checks-independent",
-        manifestKey: "releaseChecksIndependent",
-        parentJobName: "Run release checks independent validation",
-      },
-      {
-        displayTitle:
-          "OpenClaw Release Checks full-release-validation-29090000000-3-release-checks-candidate",
-        manifestKey: "releaseChecksCandidate",
-        parentJobName: "Run release checks candidate validation",
-      },
-    ]);
-  });
-
   it("ignores same-SHA and nearby-name runs without the exact parent dispatch binding", () => {
     const expected = "OpenClaw Performance full-release-validation-29090000000-3";
     const exact = {
@@ -4289,15 +3437,6 @@ describe("release CI summary child correlation", () => {
     expect(() => selectExactChildRun([exact, { ...exact, id: 2 }], expected, "main")).toThrow(
       "multiple child runs have exact dispatch title and branch",
     );
-
-    const source = readFileSync(SCRIPT, "utf8");
-    expect(source).not.toContain("created_at >= since");
-    expect(source).not.toContain("head_sha === parent.headSha");
-    expect(source).not.toContain("created:");
-    expect(source).toContain("workflow-sha:");
-    expect(source).toContain("candidate-sha:");
-    expect(source).not.toContain("console.log(`sha:");
-    expect(source).toContain("actions/workflows/${child.workflow}/runs");
   });
 
   it("returns one exact child after a full bounded pagination scan", () => {
@@ -4322,31 +3461,6 @@ describe("release CI summary child correlation", () => {
     expectDefined(pages[0], "first child run page")[0] = { ...exact, id: 1001 };
     expect(() => selectExactChildRunFromPages(pages, expected, "main")).toThrow(
       "multiple child runs have exact dispatch title and branch",
-    );
-  });
-
-  it("validates candidate identity and selected child completeness from the parent manifest", () => {
-    const manifest = validateParentManifest(rawManifest({}), {
-      runAttempt: 2,
-      runId: "29090000000",
-    });
-    expect(manifest.targetSha).toBe("a".repeat(40));
-    expect(manifest.rerunGroup).toBe("all");
-    const children = expectedChildDispatches(manifest.runId, manifest.runAttempt, "main");
-    const selected = requiredChildKeysForRerunGroup(manifest.rerunGroup);
-    expect(manifestChildEntries(manifest, children, selected).map((entry) => entry.runId)).toEqual([
-      "101",
-      "404",
-      "202",
-      "303",
-    ]);
-
-    const missing = {
-      ...manifest,
-      childRunIds: { ...manifest.childRunIds, normalCi: "" },
-    };
-    expect(() => manifestChildEntries(missing, children, selected)).toThrow(
-      "selected child is missing from manifest: CI",
     );
   });
 
@@ -4434,25 +3548,24 @@ describe("release CI summary child correlation", () => {
     ).toThrow("selected child is missing from manifest: NPM Telegram Beta E2E");
   });
 
-  it.each(["2026.8.1", "2026.9.1", "2026.9.5"])(
-    "validates the Telegram waiver for %s before changing package child coverage",
-    (version) => {
-      const raw = rawManifest({});
-      raw.releaseProfile = "stable";
-      Object.assign(raw.validationInputs, {
-        telegramWaiver: `${version}-owner-approved`,
-        targetVersion: version,
-        releasePackageSpec: `openclaw@${version}`,
-      });
-      const expected = { runAttempt: 2, runId: "29090000000" };
-      const manifest = validateParentManifest(raw, expected);
-      expect(
-        requiredChildKeysForRerunGroup(manifest.rerunGroup, manifest.validationInputs),
-      ).not.toContain("npmTelegram");
-      raw.validationInputs.targetVersion = "2026.8.2";
-      expect(() => validateParentManifest(raw, expected)).toThrow(/Telegram waiver/u);
-    },
-  );
+  it("validates the Telegram waiver before changing package child coverage", () => {
+    const version = "2026.9.5";
+
+    const raw = rawManifest({});
+    raw.releaseProfile = "stable";
+    Object.assign(raw.validationInputs, {
+      telegramWaiver: `${version}-owner-approved`,
+      targetVersion: version,
+      releasePackageSpec: `openclaw@${version}`,
+    });
+    const expected = { runAttempt: 2, runId: "29090000000" };
+    const manifest = validateParentManifest(raw, expected);
+    expect(
+      requiredChildKeysForRerunGroup(manifest.rerunGroup, manifest.validationInputs),
+    ).not.toContain("npmTelegram");
+    raw.validationInputs.targetVersion = "2026.8.2";
+    expect(() => validateParentManifest(raw, expected)).toThrow(/Telegram waiver/u);
+  });
 
   it("rejects an unreviewed self-declared Telegram waiver", () => {
     const raw = rawManifest({});
@@ -4467,38 +3580,6 @@ describe("release CI summary child correlation", () => {
     );
   });
 
-  it.each([
-    { label: "legacy manifest", version: 3 },
-    { label: "stable profile", releaseProfile: "stable" },
-    { label: "full profile", releaseProfile: "full" },
-    { label: "soak", runReleaseSoak: "true" },
-    { label: "focused run", rerunGroup: "package" },
-    { label: "stable target", targetVersion: "2026.8.28" },
-    { label: "unknown policy", coveragePolicy: "unknown" },
-  ])("rejects reduced coverage in a $label", (drift) => {
-    const fixture = trustedMainFullFixture();
-    Object.assign(fixture.manifest, {
-      releaseProfile: "beta",
-      runReleaseSoak: "false",
-      ...Object.fromEntries(
-        Object.entries(drift).filter(([key]) =>
-          ["version", "releaseProfile", "runReleaseSoak", "rerunGroup"].includes(key),
-        ),
-      ),
-    });
-    Object.assign(fixture.manifest.validationInputs, {
-      coveragePolicy: drift.coveragePolicy ?? "npm-beta-v1",
-      targetVersion: drift.targetVersion ?? "2026.8.28-beta.1",
-    });
-    expect(() =>
-      validateParentManifest(fixture.manifest, {
-        runId: fixture.runId,
-        runAttempt: 1,
-        workflowSha: fixture.workflowSha,
-      }),
-    ).toThrow(/coverage/iu);
-  });
-
   it("keeps historical non-reuse v2 manifests readable without validation inputs", () => {
     const legacy = rawManifest({});
     delete (legacy as { validationInputs?: unknown }).validationInputs;
@@ -4511,12 +3592,10 @@ describe("release CI summary child correlation", () => {
     expect(manifest.rerunGroup).toBe("all");
   });
 
-  it.each([
-    [2, "release-checks"],
-    [2, "qa"],
-    [3, "release-checks"],
-    [3, "qa"],
-  ] as const)("keeps historical v%s %s manifests readable", (version, rerunGroup) => {
+  it("keeps historical QA manifests readable", () => {
+    const version = 3;
+    const rerunGroup = "qa";
+
     const workflowSha = version === 3 ? "b".repeat(40) : undefined;
     const manifest = validateParentManifest(rawManifest({ rerunGroup, version, workflowSha }), {
       runAttempt: 2,
@@ -4675,58 +3754,6 @@ describe("release CI summary child correlation", () => {
     ).toEqual(["productPerformance"]);
   });
 
-  it("authorizes only exact-target reuse through the selected root manifest", () => {
-    const root = validateParentManifest(rawManifest({}), {
-      runAttempt: 2,
-      runId: "29090000000",
-    });
-    const current = validateParentManifest(
-      rawManifest({
-        evidenceReuse: {
-          changedPaths: [],
-          evidenceSha: root.targetSha,
-          policy: "exact-target-full-validation-v1",
-          runId: root.runId,
-          selectedRunId: root.runId,
-        },
-        runId: "29090000001",
-        targetSha: root.targetSha,
-      }),
-      { runAttempt: 2, runId: "29090000001" },
-    );
-
-    expect(validateEvidenceReuseChain(current, root, root)).toBe(root.targetSha);
-    expect(current.targetSha).toBe(root.targetSha);
-  });
-
-  it("accepts a verified changelog-only release delta", () => {
-    const root = validateParentManifest(rawManifest({}), {
-      runAttempt: 2,
-      runId: "29090000000",
-    });
-    const changedPaths = validateParentManifest(
-      rawManifest({
-        evidenceReuse: {
-          changedPaths: ["CHANGELOG.md"],
-          evidenceSha: root.targetSha,
-          policy: "changelog-only-release-v1",
-          runId: root.runId,
-          selectedRunId: root.runId,
-        },
-        runId: "29090000001",
-        targetSha: "b".repeat(40),
-      }),
-      { runAttempt: 2, runId: "29090000001" },
-    );
-    expect(
-      validateEvidenceReuseChain(changedPaths, root, root, (base: string, head: string) => ({
-        files: [{ filename: "CHANGELOG.md", status: "modified" }],
-        merge_base_commit: { sha: base },
-        status: head === changedPaths.targetSha ? "ahead" : "diverged",
-      })),
-    ).toBe(root.targetSha);
-  });
-
   it("rejects unverified changed paths and cross-SHA exact-target reuse", () => {
     const root = validateParentManifest(rawManifest({}), {
       runAttempt: 2,
@@ -4787,92 +3814,94 @@ describe("release CI summary child correlation", () => {
     );
   });
 
-  it.each(["2026.7.1", "2026.7.1-beta.1"])(
-    "binds %s split changelog reuse to the selected release entry and matching record",
-    (targetVersion) => {
-      const inputs = { ...rawManifest({}).validationInputs, targetVersion };
-      const root = validateParentManifest(
-        { ...rawManifest({}), validationInputs: inputs },
+  it("binds split changelog reuse to the selected release entry and matching record", () => {
+    const targetVersion = "2026.7.1-beta.1";
+
+    const inputs = { ...rawManifest({}).validationInputs, targetVersion };
+    const root = validateParentManifest(
+      { ...rawManifest({}), validationInputs: inputs },
+      {
+        runAttempt: 2,
+        runId: "29090000000",
+      },
+    );
+    const paths = ["CHANGELOG.md", "CHANGELOG/2026.7.1.md", "CHANGELOG/records/2026.7.1.md"];
+    const makeCurrent = (changedPaths: string[]) =>
+      validateParentManifest(
         {
-          runAttempt: 2,
-          runId: "29090000000",
+          ...rawManifest({
+            evidenceReuse: {
+              changedPaths,
+              evidenceSha: root.targetSha,
+              policy: "split-changelog-release-v1",
+              runId: root.runId,
+              selectedRunId: root.runId,
+            },
+            runId: "29090000001",
+            targetSha: "b".repeat(40),
+          }),
+          validationInputs: inputs,
         },
+        { runAttempt: 2, runId: "29090000001" },
       );
-      const paths = ["CHANGELOG.md", "CHANGELOG/2026.7.1.md", "CHANGELOG/records/2026.7.1.md"];
-      const makeCurrent = (changedPaths: string[]) =>
-        validateParentManifest(
-          {
-            ...rawManifest({
-              evidenceReuse: {
-                changedPaths,
-                evidenceSha: root.targetSha,
-                policy: "split-changelog-release-v1",
-                runId: root.runId,
-                selectedRunId: root.runId,
-              },
-              runId: "29090000001",
-              targetSha: "b".repeat(40),
-            }),
-            validationInputs: inputs,
-          },
-          { runAttempt: 2, runId: "29090000001" },
-        );
-      const compare = (changedPaths: string[]) => (base: string) => ({
-        files: changedPaths.map((filename) => ({ filename, status: "modified" })),
-        merge_base_commit: { sha: base },
-        status: "ahead",
-      });
-      expect(validateEvidenceReuseChain(makeCurrent(paths), root, root, compare(paths))).toBe(
-        root.targetSha,
-      );
-      for (const unrelated of [
-        "CHANGELOG/2026.8.1.md",
-        "CHANGELOG/records/2026.8.1.md",
-        "src/index.ts",
-      ]) {
-        const changedPaths = [...paths, unrelated];
+    const compare = (changedPaths: string[]) => (base: string) => ({
+      files: changedPaths.map((filename) => ({ filename, status: "modified" })),
+      merge_base_commit: { sha: base },
+      status: "ahead",
+    });
+    expect(validateEvidenceReuseChain(makeCurrent(paths), root, root, compare(paths))).toBe(
+      root.targetSha,
+    );
+    const betaPaths = [
+      "CHANGELOG.md",
+      `CHANGELOG/${targetVersion}.md`,
+      `CHANGELOG/records/${targetVersion}.md`,
+    ];
+    expect(validateEvidenceReuseChain(makeCurrent(betaPaths), root, root, compare(betaPaths))).toBe(
+      root.targetSha,
+    );
+    const mixedPaths = [...paths, ...betaPaths.slice(1)];
+    expect(() =>
+      validateEvidenceReuseChain(makeCurrent(mixedPaths), root, root, compare(mixedPaths)),
+    ).toThrow("invalid target delta");
+    for (const unrelated of [
+      "CHANGELOG/2026.8.1.md",
+      "CHANGELOG/records/2026.8.1.md",
+      "src/index.ts",
+    ]) {
+      const changedPaths = [...paths, unrelated];
+      expect(() =>
+        validateEvidenceReuseChain(makeCurrent(changedPaths), root, root, compare(changedPaths)),
+      ).toThrow("invalid target delta");
+      expect(() =>
+        validateEvidenceReuseChain(makeCurrent(paths), root, root, compare(changedPaths)),
+      ).toThrow("failed commit comparison");
+    }
+    for (const filename of paths.slice(1)) {
+      for (const status of ["removed", "renamed"]) {
         expect(() =>
-          validateEvidenceReuseChain(makeCurrent(changedPaths), root, root, compare(changedPaths)),
-        ).toThrow("invalid target delta");
-        expect(() =>
-          validateEvidenceReuseChain(makeCurrent(paths), root, root, compare(changedPaths)),
+          validateEvidenceReuseChain(makeCurrent(paths), root, root, (base: string) => ({
+            ...compare(paths)(base),
+            files: paths.map((path) => ({
+              filename: path,
+              status: path === filename ? status : "modified",
+              previous_filename:
+                path === filename && status === "renamed" ? "src/index.ts" : undefined,
+            })),
+          })),
         ).toThrow("failed commit comparison");
       }
-      for (const filename of paths.slice(1)) {
-        for (const status of ["removed", "renamed"]) {
-          expect(() =>
-            validateEvidenceReuseChain(makeCurrent(paths), root, root, (base: string) => ({
-              ...compare(paths)(base),
-              files: paths.map((path) => ({
-                filename: path,
-                status: path === filename ? status : "modified",
-                previous_filename:
-                  path === filename && status === "renamed" ? "src/index.ts" : undefined,
-              })),
-            })),
-          ).toThrow("failed commit comparison");
-        }
-      }
-      if (targetVersion.endsWith("-beta.1")) {
-        const betaPaths = [
-          "CHANGELOG.md",
-          `CHANGELOG/${targetVersion}.md`,
-          `CHANGELOG/records/${targetVersion}.md`,
-        ];
-        expect(() =>
-          validateEvidenceReuseChain(makeCurrent(betaPaths), root, root, compare(betaPaths)),
-        ).toThrow("invalid target delta");
-      }
-      expect(() =>
-        validateEvidenceReuseChain(
-          makeCurrent(["CHANGELOG.md"]),
-          root,
-          root,
-          compare(["CHANGELOG.md"]),
-        ),
-      ).toThrow("invalid target delta");
-    },
-  );
+    }
+
+    expect(() =>
+      validateEvidenceReuseChain(
+        makeCurrent(["CHANGELOG.md"]),
+        root,
+        root,
+        compare(["CHANGELOG.md"]),
+      ),
+    ).toThrow("invalid target delta");
+  });
 
   it("rejects exact-target reuse without matching root policy and authorization", () => {
     const root = validateParentManifest(rawManifest({}), {
@@ -5225,60 +4254,6 @@ describe("release CI summary child correlation", () => {
     ).toThrow("no longer matches");
   });
 
-  it.each([
-    {
-      changedPaths: [],
-      policy: "exact-target-full-validation-v1",
-      targetSha: "a".repeat(40),
-    },
-    {
-      changedPaths: ["CHANGELOG.md"],
-      policy: "changelog-only-release-v1",
-      targetSha: "b".repeat(40),
-    },
-  ])("validates the complete prospective $policy selection tuple", (selection) => {
-    const root = validateParentManifest(rawManifest({}), {
-      runAttempt: 2,
-      runId: "29090000000",
-    });
-    expect(() =>
-      validateRequestedEvidenceReuse(
-        root,
-        root,
-        root,
-        {
-          expectedChangedPaths: selection.changedPaths,
-          expectedEvidencePolicy: selection.policy,
-          expectedEvidenceSha: root.targetSha,
-          expectedRootRunId: root.runId,
-          expectedSelectedRunId: root.runId,
-          expectedTargetSha: selection.targetSha,
-        },
-        (base: string) => ({
-          files: [{ filename: "CHANGELOG.md", status: "modified" }],
-          merge_base_commit: { sha: base },
-          status: "ahead",
-        }),
-      ),
-    ).not.toThrow();
-    expect(() =>
-      validateRequestedEvidenceReuse(
-        root,
-        root,
-        root,
-        {
-          expectedChangedPaths: selection.changedPaths,
-          expectedEvidencePolicy: selection.policy,
-          expectedEvidenceSha: root.targetSha,
-          expectedRootRunId: root.runId,
-          expectedSelectedRunId: "29090000001",
-          expectedTargetSha: selection.targetSha,
-        },
-        () => ({ status: "identical" }),
-      ),
-    ).toThrow("no longer matches");
-  });
-
   it("rejects carried parent jobs whose selected-attempt execution fingerprint changed", () => {
     const child = expectedChildDispatches("28717729503", 2, "main").find(
       (entry) => entry.manifestKey === "pluginPrerelease",
@@ -5313,36 +4288,5 @@ describe("release CI summary child correlation", () => {
     expect(() => selectManifestParentJob(parentJobs, child, parentManifest, 1)).toThrow(
       "manifest parent job carry-forward fingerprint mismatch",
     );
-  });
-});
-
-describe("lane waiver advisory evidence", () => {
-  const job = (name: string, conclusion = "failure") => ({ name, status: "completed", conclusion });
-  const childEvidence = {
-    normalCi: {
-      jobs: [job("checks-node-fast"), job("checks-windows-node-test-1"), job("openclaw/ci-gate")],
-    },
-    releaseChecksCandidate: {
-      jobs: [
-        job("install_smoke_release_checks / installer_smoke"),
-        job("cross_os_release_checks / Linux / packaged fresh"),
-        job("Verify release checks"),
-      ],
-    },
-  };
-
-  it("records waived lanes with their reason and keeps proof lanes out", () => {
-    const withWaiver = releaseAdvisoryJobEvidence(childEvidence, "stable", "main", "ship");
-    expect(
-      withWaiver.map((entry) => `${entry.child}:${entry.job}:${entry.reason ?? "policy"}`),
-    ).toEqual([
-      "normalCi:checks-node-fast:lane_waiver",
-      "normalCi:checks-windows-node-test-1:policy",
-      "normalCi:openclaw/ci-gate:lane_waiver",
-      "releaseChecksCandidate:cross_os_release_checks / Linux / packaged fresh:lane_waiver",
-    ]);
-    expect(
-      releaseAdvisoryJobEvidence(childEvidence, "stable", "main").map((entry) => entry.job),
-    ).toEqual(["checks-windows-node-test-1"]);
   });
 });

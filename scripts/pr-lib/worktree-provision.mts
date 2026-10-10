@@ -5,10 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { withWorktreeAllocationLease } from "../../src/agents/worktrees/allocation.js";
-import {
-  estimateWorktreeGitBytes,
-  requireWorktreeDiskSpace,
-} from "../../src/agents/worktrees/capacity.js";
+import { estimateWorktreeGitBytes } from "../../src/agents/worktrees/capacity.js";
 import { addManagedWorktree } from "../../src/agents/worktrees/checkout.js";
 import { WORKTREE_CHECKOUT_TIMEOUT_MS } from "../../src/agents/worktrees/git.js";
 import {
@@ -19,6 +16,7 @@ import {
   requireGitCommandOutput,
 } from "../../src/infra/git-exec.js";
 import { isDirectRunUrl } from "../lib/direct-run.mjs";
+import { formatProvisionError } from "./worktree-provision-error.mjs";
 
 type ProvisionParams = {
   root: string;
@@ -255,9 +253,8 @@ async function provisionPrWorktree(params: ProvisionParams): Promise<void> {
         );
         advertisedCleanupGrace = true;
       }
-      const requireSpace = (cloneBytes?: number) => {
-        assertCurrent();
-        requireWorktreeDiskSpace(
+      const requireSpace = (cloneBytes?: number) =>
+        guard.requireDiskSpace(
           [
             { path: destination, bytes: cloneBytes ?? 2 * gitBytes },
             { path: commonDir, bytes: 0 },
@@ -266,9 +263,9 @@ async function provisionPrWorktree(params: ProvisionParams): Promise<void> {
           ],
           "worktree allocation",
         );
-      };
       assertCurrent();
-      requireSpace(0);
+      await requireSpace(0);
+      assertCurrent();
       await fs.mkdir(worktreeRoot, { recursive: true });
       assertCurrent();
       if ((await fs.realpath(worktreeRoot)) !== resolvedWorktreeRoot) {
@@ -278,7 +275,8 @@ async function provisionPrWorktree(params: ProvisionParams): Promise<void> {
       let templateCloned = false;
       if (native) {
         // Exclusive reservation proves custody; an old damaged checkout is never adopted.
-        requireSpace();
+        await requireSpace();
+        assertCurrent();
         await fs.mkdir(destination);
         const reserved = await fs.lstat(destination);
         const removeReservation = async (recursive: boolean) => {
@@ -429,7 +427,7 @@ if (isDirectRunUrl(process.argv[1], import.meta.url)) {
     }
     await provisionPrWorktree({ root, pr, seed, lockRef, ownerOid, signal: controller.signal });
   } catch (error) {
-    console.error(error instanceof Error ? error.message : String(error));
+    console.error(formatProvisionError(error));
     process.exitCode = 1;
     console.error("[pr-worktree-provision] FAILED (exit 1)");
   } finally {

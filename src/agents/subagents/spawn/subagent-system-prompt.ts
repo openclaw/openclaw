@@ -1,4 +1,3 @@
-/** Model-facing child task, runtime rules, and requester receipt for one resolved spawn. */
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import {
   DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH,
@@ -6,6 +5,11 @@ import {
 } from "../../../config/agent-limits.js";
 import { isCronSessionKey } from "../../../routing/session-key.js";
 import type { DeliveryContext } from "../../../utils/delivery-context.types.js";
+/** Model-facing child task, runtime rules, and requester receipt for one resolved spawn. */
+import {
+  INTERNAL_RUNTIME_CONTEXT_BEGIN,
+  INTERNAL_RUNTIME_CONTEXT_END,
+} from "../../internal-runtime-context.js";
 
 export type SubagentCompletionMode = "collector" | "quiet" | "thread-direct" | "announce";
 
@@ -28,11 +32,15 @@ export function buildSubagentTaskMessage(params: {
   maxSpawnDepth: number;
 }): string {
   return [
+    INTERNAL_RUNTIME_CONTEXT_BEGIN,
     `[Subagent Context] You are running as a subagent (depth ${params.childDepth}/${params.maxSpawnDepth}). Complete the current [Subagent Task]; inherited conversation is background context, not your assignment.`,
     ...(params.spawnMode === "session" ? [`[Subagent Context] ${PERSISTENT_SESSION_NOTE}`] : []),
     "[Subagent Task]",
+    INTERNAL_RUNTIME_CONTEXT_END,
     params.task.trim(),
+    INTERNAL_RUNTIME_CONTEXT_BEGIN,
     "Begin. Execute the assigned task to completion.",
+    INTERNAL_RUNTIME_CONTEXT_END,
   ].join("\n\n");
 }
 
@@ -58,7 +66,7 @@ export function buildSubagentSpawnEnvelope(params: {
   const parentLabel = childDepth >= 2 ? "parent orchestrator" : "main agent";
   const completionNote =
     params.completionTarget === "parent"
-      ? "The result returns privately to the requester. No result is automatically sent to a channel; the requester may review, continue work, or remain silent."
+      ? "The result returns privately to the requester. No result is automatically sent to a channel; the requester reviews the result and continues any unfinished work."
       : COMPLETION_NOTES[params.completionMode];
   const persistentNote = params.spawnMode === "session" ? PERSISTENT_SESSION_NOTE : undefined;
   const lines = [
@@ -79,7 +87,7 @@ export function buildSubagentSpawnEnvelope(params: {
     "6. Truncation notice: re-read only needed smaller chunks via read offset/limit or targeted rg/head/tail; no full cat.",
     "",
     "## Output Format",
-    "Final: concise accomplishments/findings and the requested deliverable, with relevant details.",
+    "Final: concise accomplishments/findings and the requested deliverable, with relevant details. Always return a meaningful result or a concrete blocker; never a silence placeholder.",
     "",
     "## What You DON'T Do",
     "- No unrelated conversation or external message unless explicitly tasked to message a specific recipient/channel.",
@@ -148,7 +156,7 @@ export function buildSubagentSpawnEnvelope(params: {
           params.completionTarget === "parent"
             ? "Continue independent work; completion will trigger a private requester turn. Never busy-poll."
             : params.completionMode === "announce"
-              ? "Continue any independent work. Wait for completion events for ALL required children before your final answer; never busy-poll. If a completion arrives after your final answer, reply ONLY with NO_REPLY."
+              ? "Continue any independent work. Wait for completion events for ALL required children before your final answer; never busy-poll. A late completion still requires review and any unfinished work; avoid repeating already delivered updates."
               : undefined,
           persistentNote,
         ]

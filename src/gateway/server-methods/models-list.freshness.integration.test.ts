@@ -2,7 +2,7 @@ import { once } from "node:events";
 import { createServer, type ServerResponse } from "node:http";
 import { expect, it } from "vitest";
 import type { ModelsListResult } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
-import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { getPublishedPreparedModelCatalogOwnerSnapshot } from "../../agents/prepared-model-catalog.js";
 import { resolvePreparedModelRuntimeOwnerBySnapshot } from "../../agents/prepared-model-runtime.owner.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -10,12 +10,11 @@ import { disconnectGatewayClient, startGatewayWithClient } from "../test-helpers
 import { waitForCatalogPublication } from "./models-auth-catalog.test-support.js";
 
 it.for([
-  { withSibling: false, getterBacked: false, initiallyEmpty: false },
   { withSibling: true, getterBacked: false, initiallyEmpty: false },
   { withSibling: false, getterBacked: true, initiallyEmpty: false },
   { withSibling: true, getterBacked: false, initiallyEmpty: true },
 ])(
-  "models.list renews accepted inventory (sibling: $withSibling, getter-backed: $getterBacked, empty: $initiallyEmpty)",
+  "models.list reuses inventory until explicit refresh (sibling: $withSibling, getter-backed: $getterBacked, empty: $initiallyEmpty)",
   { timeout: 120_000 },
   async ({ withSibling, getterBacked, initiallyEmpty }, { signal }) => {
     const state = await createOpenClawTestState({
@@ -31,8 +30,8 @@ it.for([
       },
     });
     const provider = "freshness-fixture";
-    const sibling = "z-failing-fixture";
-    const providers = withSibling ? [provider, sibling] : [provider];
+    const sibling = "a-failing-fixture";
+    const providers = withSibling ? [sibling, provider] : [provider];
     let requests = 0;
     let hold = false;
     const renewal = createDeferred();
@@ -92,15 +91,16 @@ it.for([
               projectRows: rows => rows.map(id => ({ id, name: id, reasoning: false, input: ["text"],
                 cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 32768, maxTokens: 4096 })),
             });
+            const outcomes = [{ provider, profileId: auth.profileId, status: "ready" }];
             if (${getterBacked}) {
               let evaluated = false;
-              return { get providers() {
+              return { outcomes, get providers() {
                 if (evaluated) return { "unaccepted-projection": accepted };
                 evaluated = true;
                 return { [provider]: accepted };
               } };
             }
-            return { provider: accepted };
+            return { provider: accepted, outcomes };
           } },
         });
       },
@@ -110,7 +110,7 @@ it.for([
       const cfg = {
         agents: {
           defaults: { modelPolicy: { allow: providers.map((id) => `${id}/*`) } },
-          list: [{ id: "main", workspace: state.workspaceDir }],
+          entries: { main: { workspace: state.workspaceDir } },
         },
         plugins: { allow: [provider], load: { paths: [pluginPath] }, slots: { memory: "none" } },
         gateway: { mode: "local", auth: { mode: "token", token } },
@@ -137,6 +137,7 @@ it.for([
         token,
         scopes: ["operator.admin"],
       });
+      let requestedRefresh: Promise<unknown> | undefined;
       try {
         await server.startupSettled;
         const list = async (refresh = false) => {
@@ -166,10 +167,10 @@ it.for([
         });
         expect(initial.models.map((row) => row.id)).toEqual(original);
         const owner = getPublishedPreparedModelCatalogOwnerSnapshot({ agentId: "main" });
-        if (!owner?.readPublishedModelCatalog) {
+        if (!owner?.readFullModelCatalog) {
           throw new Error("Missing published freshness fixture inventory");
         }
-        const readPublished = async () => owner.readPublishedModelCatalog!();
+        const readPublished = async () => owner.readFullModelCatalog!();
         const expire = (providerIds: string[]) => {
           for (const id of providerIds) {
             const facts =
@@ -206,41 +207,36 @@ it.for([
           expect(requests).toBe(initialRequests);
         }
         // Arm the response hold before making any accepted inventory due.
+        failSibling = withSibling && !initiallyEmpty;
         expire(withSibling && !initiallyEmpty ? providers : [provider]);
-        const saved = await withTestTimeout(
-          list(),
-          1_000,
-          "models.list waited for expired provider inventory",
-        );
+        // Expiring a provider response cache does not invalidate the published Gateway view.
+        const saved = await withinTest(list(), signal);
         expect(saved.models.map((row) => row.id)).toEqual(original);
         expect(saved.siblingModels).toEqual(withSibling ? ["sibling"] : []);
-        await withTestTimeout(
-          renewal.promise,
-          3_000,
-          "models.list did not refresh the expired provider",
-        );
-        const concurrent = await withTestTimeout(
-          Promise.all([list(), list()]),
-          1_000,
-          "concurrent catalog reads waited for discovery",
-        );
+        expect(owner.readFullModelCatalog!()?.pendingProviders).toBeUndefined();
+        expect(requests).toBe(initialRequests);
+        requestedRefresh = list(true);
+        void requestedRefresh.catch(() => undefined);
+        await withinTest(renewal.promise, signal);
+        const concurrent = await withinTest(Promise.all([list(), list()]), signal);
         expect(concurrent.map((result) => result.models.map((row) => row.id))).toEqual([
           original,
           original,
         ]);
         expect(requests).toBe(initialRequests + 1);
-        failSibling = withSibling && !initiallyEmpty;
         const renewed = await acceptRenewal(() => {
           hold = false;
           for (const response of held.splice(0)) {
             reply(response);
           }
         });
+        await requestedRefresh;
         expect(renewed.models.map((row) => row.id)).toEqual(["newly-published", ...original]);
 
         if (!withSibling || initiallyEmpty) {
           fail = true;
           expire([provider]);
+          await list(true);
         }
         const failed = await waitForCatalogPublication({
           signal,
@@ -252,7 +248,7 @@ it.for([
           advertised = ["original", "newly-published", "after-sibling-failure"];
           const afterSiblingFailure = await acceptRenewal(() => {
             expire([provider]);
-            return list();
+            return list(true);
           });
           expect(afterSiblingFailure.models.map((row) => row.id)).toEqual([
             "after-sibling-failure",
@@ -284,6 +280,7 @@ it.for([
         for (const response of held.splice(0)) {
           reply(response);
         }
+        await requestedRefresh?.catch(() => undefined);
         await disconnectGatewayClient(client);
         await server.close();
       }

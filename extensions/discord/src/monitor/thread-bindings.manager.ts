@@ -1,7 +1,8 @@
 import { resolveSessionAgentIdStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
-// Discord plugin module implements thread bindings.manager behavior.
 import {
   registerSessionBindingAdapter,
+  resolveThreadBindingFarewellText,
+  resolveThreadBindingThreadName,
   unregisterSessionBindingAdapter,
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
@@ -10,7 +11,10 @@ import {
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  normalizeOptionalString,
+  normalizeOptionalStringifiedId,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { createDiscordRestClient } from "../client.js";
 import { getChannel } from "../internal/discord.js";
 import {
@@ -24,9 +28,15 @@ import {
   summarizeDiscordError,
 } from "./thread-bindings.discord-api.js";
 import {
-  resolveThreadBindingFarewellText,
-  resolveThreadBindingThreadName,
-} from "./thread-bindings.messages.js";
+  commitBindingRecord,
+  updateBindingRecordSync,
+  runThreadBindingMutation,
+  runThreadBindingAccountOperation,
+  drainThreadBindingAccountOperations,
+  drainThreadBindingMutations,
+  shouldPersistAnyBindingState,
+  snapshotThreadBindingMetadata,
+} from "./thread-bindings.persistence.js";
 import { createThreadBindingSessionAdapter } from "./thread-bindings.session-adapter.js";
 import {
   BINDINGS_BY_THREAD_ID,
@@ -34,21 +44,17 @@ import {
   getThreadBindingToken,
   MANAGERS_BY_ACCOUNT_ID,
   PERSIST_BY_ACCOUNT_ID,
-  ensureBindingsLoaded,
   ensureBindingsLoadedAsync,
   rememberThreadBindingToken,
   normalizeTargetKind,
   normalizeThreadBindingDurationMs,
-  normalizeThreadId,
   refreshUnboundThreadWebhookIdentity,
-  removeBindingRecord,
   resolveBindingIdsForSession,
   resolveBindingRecordKey,
+  toBindingRecordKey,
   resolveThreadBindingIdleTimeoutMs,
   resolvePreparedThreadBindingLifecycle,
   resolveThreadBindingMaxAgeMs,
-  saveBindingsToDisk,
-  setBindingRecord,
   THREAD_BINDING_TOUCH_PERSIST_MIN_INTERVAL_MS,
   shouldDefaultPersist,
 } from "./thread-bindings.state.js";
@@ -65,7 +71,15 @@ function isDirectConversationBindingId(value?: string | null): boolean {
   return Boolean(trimmed && /^(user:|channel:)/i.test(trimmed));
 }
 
-export function createThreadBindingManager(params: {
+function normalizeTouchTimestamp(at: number | undefined): number {
+  return typeof at === "number" && Number.isFinite(at) ? Math.max(0, Math.floor(at)) : Date.now();
+}
+
+function touchBindingRecord(record: ThreadBindingRecord, at: number): ThreadBindingRecord {
+  return { ...record, lastActivityAt: Math.max(record.lastActivityAt || 0, at) };
+}
+
+export async function createThreadBindingManager(input: {
   accountId?: string;
   token?: string;
   cfg: OpenClawConfig;
@@ -73,16 +87,28 @@ export function createThreadBindingManager(params: {
   enableSweeper?: boolean;
   idleTimeoutMs?: number;
   maxAgeMs?: number;
-}): ThreadBindingManager {
-  ensureBindingsLoaded();
+}): Promise<ThreadBindingManager> {
+  const params = { ...input };
+  await ensureBindingsLoadedAsync();
+  const manager = await runThreadBindingMutation(async () =>
+    createLoadedThreadBindingManager(params),
+  );
+  if (manager.isStopping()) {
+    await manager.stop();
+    return await createThreadBindingManager(params);
+  }
+  return manager;
+}
+
+function createLoadedThreadBindingManager(
+  params: Parameters<typeof createThreadBindingManager>[0],
+): ThreadBindingManager {
   const accountId = normalizeAccountId(params.accountId);
   const existing = MANAGERS_BY_ACCOUNT_ID.get(accountId);
+  rememberThreadBindingToken({ accountId, token: params.token });
   if (existing) {
-    rememberThreadBindingToken({ accountId, token: params.token });
     return existing;
   }
-
-  rememberThreadBindingToken({ accountId, token: params.token });
 
   const persist = params.persist ?? shouldDefaultPersist();
   PERSIST_BY_ACCOUNT_ID.set(accountId, persist);
@@ -98,20 +124,47 @@ export function createThreadBindingManager(params: {
   const resolveCurrentToken = () => getThreadBindingToken(accountId) ?? params.token;
   const getCurrentBinding = (threadId: string) =>
     MANAGERS_BY_ACCOUNT_ID.get(accountId) === manager ? manager.getByThreadId(threadId) : undefined;
+  const getBinding = (threadId: string) => {
+    const bindingKey = resolveBindingRecordKey({ accountId, threadId });
+    const record = bindingKey ? BINDINGS_BY_THREAD_ID.get(bindingKey) : undefined;
+    return bindingKey && record?.accountId === accountId ? { bindingKey, record } : undefined;
+  };
+
+  let stopping = false;
+  let stopPromise: Promise<void> | undefined;
+  let sweepPromise: Promise<void> | undefined;
+  const assertManagerCurrent = () => {
+    if (MANAGERS_BY_ACCOUNT_ID.get(accountId) !== manager) {
+      throw new Error("Discord thread binding manager was retired");
+    }
+  };
+  const runOwnedMutation = <T>(operation: () => Promise<T>): Promise<T> => {
+    if (stopping) {
+      return Promise.reject(new Error("Discord thread binding manager is stopping"));
+    }
+    return runThreadBindingAccountOperation([manager], async () => {
+      assertManagerCurrent();
+      return await operation();
+    });
+  };
+  const mutate = <T>(operation: () => Promise<T>): Promise<T> =>
+    runOwnedMutation(() =>
+      runThreadBindingMutation(async () => {
+        assertManagerCurrent();
+        return await operation();
+      }),
+    );
 
   let sweepTimer: NodeJS.Timeout | null = null;
   const runSweepOnce = async () => {
     const bindings = manager.listBindings();
-    if (bindings.length === 0) {
-      return;
-    }
     let rest: ReturnType<typeof createDiscordRestClient>["rest"] | null = null;
     for (const snapshotBinding of bindings) {
       // Re-read live state after any awaited work from earlier iterations.
       // This avoids unbinding based on stale snapshot data when activity touches
       // happen while the sweeper loop is in-flight.
       const binding = getCurrentBinding(snapshotBinding.threadId);
-      if (!binding) {
+      if (!binding || stopping) {
         continue;
       }
       const now = Date.now();
@@ -122,8 +175,9 @@ export function createThreadBindingManager(params: {
       });
       const { expiresAt, reason } = lifecycle;
       if (expiresAt != null && reason && now >= expiresAt) {
-        manager.unbindThread({
+        await manager.unbindThread({
           threadId: binding.threadId,
+          expected: binding,
           reason,
           sendFarewell: true,
           farewellText: resolveThreadBindingFarewellText({
@@ -139,9 +193,8 @@ export function createThreadBindingManager(params: {
       }
       if (!rest) {
         try {
-          const cfg = resolveCurrentCfg();
           rest = createDiscordRestClient({
-            cfg,
+            cfg: resolveCurrentCfg(),
             accountId,
             token: resolveCurrentToken(),
           }).rest;
@@ -157,13 +210,14 @@ export function createThreadBindingManager(params: {
         }
         if (!channel || typeof channel !== "object") {
           logVerbose(
-            `discord thread binding sweep probe returned invalid payload for ${binding.threadId}`,
+            `discord thread binding sweep check returned invalid payload for ${binding.threadId}`,
           );
           continue;
         }
         if (isThreadArchived(channel)) {
-          manager.unbindThread({
+          await manager.unbindThread({
             threadId: binding.threadId,
+            expected: binding,
             reason: "thread-archived",
             sendFarewell: true,
           });
@@ -176,250 +230,52 @@ export function createThreadBindingManager(params: {
           logVerbose(
             `discord thread binding sweep removing stale binding ${binding.threadId}: ${summarizeDiscordError(err)}`,
           );
-          manager.unbindThread({
+          await manager.unbindThread({
             threadId: binding.threadId,
+            expected: binding,
             reason: "thread-delete",
             sendFarewell: false,
           });
           continue;
         }
         logVerbose(
-          `discord thread binding sweep probe failed for ${binding.threadId}: ${summarizeDiscordError(err)}`,
+          `discord thread binding sweep check failed for ${binding.threadId}: ${summarizeDiscordError(err)}`,
         );
       }
     }
   };
+  const unbindThread = async (
+    unbindParams: Parameters<ThreadBindingManager["unbindThread"]>[0],
+  ) => {
+    const binding = getBinding(unbindParams.threadId);
+    if (!binding || (unbindParams.expected && binding.record !== unbindParams.expected)) {
+      return null;
+    }
+    const { bindingKey, record: existingLocal } = binding;
+    await commitBindingRecord({
+      bindingKey,
+      previous: existingLocal,
+      next: null,
+      persist: unbindParams.persist ?? persist,
+      assertCurrent: () => {
+        assertManagerCurrent();
+        unbindParams.assertCurrent?.();
+      },
+    });
+    manager.notifyUnbound(existingLocal, unbindParams);
+    return existingLocal;
+  };
+
   const manager: ThreadBindingManager = {
     accountId,
-    getIdleTimeoutMs: () => idleTimeoutMs,
-    getMaxAgeMs: () => maxAgeMs,
-    getByThreadId: (threadId) => {
-      const key = resolveBindingRecordKey({
-        accountId,
-        threadId,
-      });
-      if (!key) {
-        return undefined;
-      }
-      const entry = BINDINGS_BY_THREAD_ID.get(key);
-      if (!entry || entry.accountId !== accountId) {
-        return undefined;
-      }
-      return entry;
-    },
-    getBySessionKey: (targetSessionKey) => {
-      const all = manager.listBySessionKey(targetSessionKey);
-      return all[0];
-    },
-    listBySessionKey: (targetSessionKey) => {
-      const ids = resolveBindingIdsForSession({
-        targetSessionKey,
-        accountId,
-      });
-      return ids
-        .map((bindingKey) => BINDINGS_BY_THREAD_ID.get(bindingKey))
-        .filter((entry): entry is ThreadBindingRecord => Boolean(entry));
-    },
-    listBindings: () =>
-      [...BINDINGS_BY_THREAD_ID.values()].filter((entry) => entry.accountId === accountId),
-    touchThread: (touchParams) => {
-      const key = resolveBindingRecordKey({
-        accountId,
-        threadId: touchParams.threadId,
-      });
-      if (!key) {
-        return null;
-      }
-      const existingResult = BINDINGS_BY_THREAD_ID.get(key);
-      if (!existingResult || existingResult.accountId !== accountId) {
-        return null;
-      }
-      const now = Date.now();
-      const at =
-        typeof touchParams.at === "number" && Number.isFinite(touchParams.at)
-          ? Math.max(0, Math.floor(touchParams.at))
-          : now;
-      const nextRecord: ThreadBindingRecord = {
-        ...existingResult,
-        lastActivityAt: Math.max(existingResult.lastActivityAt || 0, at),
-      };
-      setBindingRecord(nextRecord);
-      if (touchParams.persist ?? persist) {
-        saveBindingsToDisk({
-          minIntervalMs: THREAD_BINDING_TOUCH_PERSIST_MIN_INTERVAL_MS,
-        });
-      }
-      return nextRecord;
-    },
-    bindTarget: async (input) => {
-      const bindParams = {
-        ...input,
-        metadata: input.metadata ? { ...input.metadata } : undefined,
-      };
-      const assertCurrent = bindParams.assertCurrent;
-      assertCurrent?.();
-      const cfg = resolveCurrentCfg();
-      let threadId = normalizeThreadId(bindParams.threadId);
-      let channelId = normalizeOptionalString(bindParams.channelId) ?? "";
-      const directConversationBinding =
-        isDirectConversationBindingId(threadId) || isDirectConversationBindingId(channelId);
-      let nativeBindingCreated = false;
-      const targetSessionKey = normalizeOptionalString(bindParams.targetSessionKey) ?? "";
-      if (!targetSessionKey) {
-        return null;
-      }
-      const targetKind = normalizeTargetKind(bindParams.targetKind, targetSessionKey);
-      let agentId = normalizeOptionalString(bindParams.agentId);
-
-      if (!threadId && bindParams.createThread) {
-        if (!channelId) {
-          return null;
-        }
-        agentId ??= resolveSessionAgentIdStrict({ config: cfg, sessionKey: targetSessionKey });
-        const threadName = resolveThreadBindingThreadName({
-          agentId: bindParams.agentId,
-          label: bindParams.label,
-        });
-        threadId =
-          (await createThreadForBinding({
-            cfg,
-            accountId,
-            token: resolveCurrentToken(),
-            channelId,
-            threadName: normalizeOptionalString(bindParams.threadName) ?? threadName,
-            ...(assertCurrent ? { assertCreateAllowed: assertCurrent } : {}),
-          })) ?? undefined;
-        nativeBindingCreated = Boolean(threadId);
-      }
-
-      if (!threadId) {
-        return null;
-      }
-
-      if (!channelId && directConversationBinding) {
-        channelId = threadId;
-      }
-
-      if (!channelId) {
-        channelId =
-          (await resolveChannelIdForBinding({
-            cfg,
-            accountId,
-            token: resolveCurrentToken(),
-            threadId,
-            channelId: bindParams.channelId,
-          })) ?? "";
-      }
-      if (!channelId) {
-        return null;
-      }
-
-      const existingValue = manager.getByThreadId(threadId);
-      const previous =
-        existingValue?.targetSessionKey === targetSessionKey &&
-        existingValue.targetKind === targetKind
-          ? existingValue
-          : undefined;
-      agentId ??=
-        normalizeOptionalString(previous?.agentId) ??
-        resolveSessionAgentIdStrict({ config: cfg, sessionKey: targetSessionKey });
-      let webhookId =
-        normalizeOptionalString(bindParams.webhookId) ??
-        normalizeOptionalString(existingValue?.webhookId) ??
-        "";
-      let webhookToken =
-        normalizeOptionalString(bindParams.webhookToken) ??
-        normalizeOptionalString(existingValue?.webhookToken) ??
-        "";
-      if (!directConversationBinding && (!webhookId || !webhookToken)) {
-        const cachedWebhook = findReusableWebhook({ accountId, channelId });
-        webhookId = cachedWebhook.webhookId ?? "";
-        webhookToken = cachedWebhook.webhookToken ?? "";
-      }
-      if (!directConversationBinding && (!webhookId || !webhookToken)) {
-        const createdWebhook = await createWebhookForChannel({
-          cfg,
-          accountId,
-          token: resolveCurrentToken(),
-          channelId,
-          ...(assertCurrent ? { assertCreateAllowed: assertCurrent } : {}),
-        });
-        webhookId = createdWebhook.webhookId ?? "";
-        webhookToken = createdWebhook.webhookToken ?? "";
-        nativeBindingCreated ||= Boolean(webhookId && webhookToken);
-      }
-
-      const now = Date.now();
-      const record: ThreadBindingRecord = {
-        accountId,
-        channelId,
-        threadId,
-        targetKind,
-        targetSessionKey,
-        agentId,
-        label:
-          normalizeOptionalString(bindParams.label) ?? normalizeOptionalString(previous?.label),
-        webhookId: webhookId || undefined,
-        webhookToken: webhookToken || undefined,
-        boundBy:
-          normalizeOptionalString(bindParams.boundBy) ??
-          normalizeOptionalString(previous?.boundBy) ??
-          "system",
-        boundAt: now,
-        lastActivityAt: now,
-        idleTimeoutMs:
-          typeof existingValue?.idleTimeoutMs === "number"
-            ? existingValue.idleTimeoutMs
-            : idleTimeoutMs,
-        maxAgeMs: typeof existingValue?.maxAgeMs === "number" ? existingValue.maxAgeMs : maxAgeMs,
-        metadata: { ...previous?.metadata, ...bindParams.metadata },
-      };
-
-      // A confirmed native create must be published even if its initiator was revoked in flight.
-      if (!nativeBindingCreated) {
-        assertCurrent?.();
-      }
-      setBindingRecord(record);
-      if (persist) {
-        saveBindingsToDisk();
-      }
-
-      const introText = bindParams.introText?.trim();
-      if (introText && cfg) {
-        void maybeSendBindingMessage({
-          cfg,
-          record,
-          text: introText,
-          ...(assertCurrent ? { assertCurrent } : {}),
-        });
-      }
-      return record;
-    },
-    unbindThread: (unbindParams) => {
-      const bindingKey = resolveBindingRecordKey({
-        accountId,
-        threadId: unbindParams.threadId,
-      });
-      if (!bindingKey) {
-        return null;
-      }
-      const existingLocal = BINDINGS_BY_THREAD_ID.get(bindingKey);
-      if (!existingLocal || existingLocal.accountId !== accountId) {
-        return null;
-      }
-      const removed = removeBindingRecord(bindingKey);
-      if (!removed) {
-        return null;
-      }
+    isStopping: () => stopping,
+    notifyUnbound: (removed, notification) => {
       refreshUnboundThreadWebhookIdentity(removed);
-      if (persist) {
-        saveBindingsToDisk();
-      }
-      if (unbindParams.sendFarewell !== false) {
+      if (notification.sendFarewell !== false) {
         const cfg = resolveCurrentCfg();
         const farewell = resolveThreadBindingFarewellText({
-          reason: unbindParams.reason,
-          farewellText: unbindParams.farewellText,
+          reason: notification.reason,
+          farewellText: notification.farewellText,
           idleTimeoutMs: resolveThreadBindingIdleTimeoutMs({
             record: removed,
             defaultIdleTimeoutMs: idleTimeoutMs,
@@ -431,68 +287,307 @@ export function createThreadBindingManager(params: {
         });
         // Use bot send path for farewell messages so unbound threads don't process
         // webhook echoes as fresh inbound events when allowBots is enabled.
-        if (cfg) {
+        void maybeSendBindingMessage({
+          cfg,
+          record: removed,
+          text: farewell,
+          preferWebhook: false,
+        });
+      }
+    },
+    getIdleTimeoutMs: () => idleTimeoutMs,
+    getMaxAgeMs: () => maxAgeMs,
+    getByThreadId: (threadId) => getBinding(threadId)?.record,
+    getBySessionKey: (targetSessionKey) => manager.listBySessionKey(targetSessionKey)[0],
+    listBySessionKey: (targetSessionKey) =>
+      resolveBindingIdsForSession({
+        targetSessionKey,
+        accountId,
+      })
+        .map((bindingKey) => BINDINGS_BY_THREAD_ID.get(bindingKey))
+        .filter((entry): entry is ThreadBindingRecord => Boolean(entry)),
+    listBindings: () =>
+      [...BINDINGS_BY_THREAD_ID.values()].filter((entry) => entry.accountId === accountId),
+    touchThreadSync: (input) => {
+      assertManagerCurrent();
+      if (stopping) {
+        throw new Error("Discord thread binding manager is stopping");
+      }
+      const key = resolveBindingRecordKey({ accountId, threadId: input.threadId });
+      if (!key) {
+        return null;
+      }
+      const at = normalizeTouchTimestamp(input.at);
+      return updateBindingRecordSync({
+        bindingKey: key,
+        transform: (record) => touchBindingRecord(record, at),
+        persist: (input.persist ?? persist) && shouldPersistAnyBindingState(),
+        minIntervalMs: THREAD_BINDING_TOUCH_PERSIST_MIN_INTERVAL_MS,
+      });
+    },
+    touchThread: (input) => {
+      const touchParams = {
+        ...input,
+        at: normalizeTouchTimestamp(input.at),
+      };
+      return mutate(async () => {
+        const binding = getBinding(touchParams.threadId);
+        if (!binding) {
+          return null;
+        }
+        const { bindingKey, record: existingResult } = binding;
+        const nextRecord = touchBindingRecord(existingResult, touchParams.at);
+        await commitBindingRecord({
+          bindingKey,
+          previous: existingResult,
+          next: nextRecord,
+          persist: (touchParams.persist ?? persist) && shouldPersistAnyBindingState(),
+          minIntervalMs: THREAD_BINDING_TOUCH_PERSIST_MIN_INTERVAL_MS,
+          assertCurrent: assertManagerCurrent,
+        });
+        return nextRecord;
+      });
+    },
+    bindTarget: async (input) => {
+      const bindParams = {
+        ...input,
+        metadata: snapshotThreadBindingMetadata(input),
+      };
+      return runOwnedMutation(async () => {
+        const assertCurrent = bindParams.assertCurrent;
+        assertCurrent?.();
+        const cfg = resolveCurrentCfg();
+        let threadId = normalizeOptionalStringifiedId(bindParams.threadId);
+        let channelId = normalizeOptionalString(bindParams.channelId) ?? "";
+        const directConversationBinding =
+          isDirectConversationBindingId(threadId) || isDirectConversationBindingId(channelId);
+        let nativeBindingCreated = false;
+        const targetSessionKey = normalizeOptionalString(bindParams.targetSessionKey) ?? "";
+        if (!targetSessionKey) {
+          return null;
+        }
+        const targetKind = normalizeTargetKind(bindParams.targetKind, targetSessionKey);
+        let agentId = normalizeOptionalString(bindParams.agentId);
+
+        if (!threadId && bindParams.createThread) {
+          if (!channelId) {
+            return null;
+          }
+          agentId ??= resolveSessionAgentIdStrict({ config: cfg, sessionKey: targetSessionKey });
+          const threadName = resolveThreadBindingThreadName({
+            agentId: bindParams.agentId,
+            label: bindParams.label,
+          });
+          threadId =
+            (await createThreadForBinding({
+              cfg,
+              accountId,
+              token: resolveCurrentToken(),
+              channelId,
+              threadName: normalizeOptionalString(bindParams.threadName) ?? threadName,
+              ...(assertCurrent ? { assertCreateAllowed: assertCurrent } : {}),
+            })) ?? undefined;
+          nativeBindingCreated = Boolean(threadId);
+        }
+
+        if (!threadId) {
+          return null;
+        }
+
+        if (!channelId && directConversationBinding) {
+          channelId = threadId;
+        }
+
+        if (!channelId) {
+          channelId =
+            (await resolveChannelIdForBinding({
+              cfg,
+              accountId,
+              token: resolveCurrentToken(),
+              threadId,
+              channelId: bindParams.channelId,
+            })) ?? "";
+        }
+        if (!channelId) {
+          return null;
+        }
+
+        const existingValue = manager.getByThreadId(threadId);
+        const previous =
+          existingValue?.targetSessionKey === targetSessionKey &&
+          existingValue.targetKind === targetKind
+            ? existingValue
+            : undefined;
+        agentId ??=
+          normalizeOptionalString(previous?.agentId) ??
+          resolveSessionAgentIdStrict({ config: cfg, sessionKey: targetSessionKey });
+        let webhookId =
+          normalizeOptionalString(bindParams.webhookId) ??
+          normalizeOptionalString(existingValue?.webhookId) ??
+          "";
+        let webhookToken =
+          normalizeOptionalString(bindParams.webhookToken) ??
+          normalizeOptionalString(existingValue?.webhookToken) ??
+          "";
+        if (!directConversationBinding && (!webhookId || !webhookToken)) {
+          const cachedWebhook = findReusableWebhook({ accountId, channelId });
+          webhookId = cachedWebhook.webhookId ?? "";
+          webhookToken = cachedWebhook.webhookToken ?? "";
+        }
+        if (!directConversationBinding && (!webhookId || !webhookToken)) {
+          const createdWebhook = await createWebhookForChannel({
+            cfg,
+            accountId,
+            token: resolveCurrentToken(),
+            channelId,
+            ...(assertCurrent ? { assertCreateAllowed: assertCurrent } : {}),
+          });
+          webhookId = createdWebhook.webhookId ?? "";
+          webhookToken = createdWebhook.webhookToken ?? "";
+          nativeBindingCreated ||= Boolean(webhookId && webhookToken);
+        }
+
+        const now = Date.now();
+        const record: ThreadBindingRecord = {
+          accountId,
+          channelId,
+          threadId,
+          targetKind,
+          targetSessionKey,
+          agentId,
+          label:
+            normalizeOptionalString(bindParams.label) ?? normalizeOptionalString(previous?.label),
+          webhookId: webhookId || undefined,
+          webhookToken: webhookToken || undefined,
+          boundBy:
+            normalizeOptionalString(bindParams.boundBy) ??
+            normalizeOptionalString(previous?.boundBy) ??
+            "system",
+          boundAt: now,
+          lastActivityAt: now,
+          idleTimeoutMs:
+            typeof existingValue?.idleTimeoutMs === "number"
+              ? existingValue.idleTimeoutMs
+              : idleTimeoutMs,
+          maxAgeMs: typeof existingValue?.maxAgeMs === "number" ? existingValue.maxAgeMs : maxAgeMs,
+          metadata: { ...previous?.metadata, ...bindParams.metadata },
+        };
+
+        // A confirmed native create must be published even if its initiator was revoked in flight.
+        if (!nativeBindingCreated) {
+          assertCurrent?.();
+        }
+        await runThreadBindingMutation(() =>
+          commitBindingRecord({
+            bindingKey: toBindingRecordKey({ accountId, threadId }),
+            previous: existingValue,
+            next: record,
+            persist,
+            assertCurrent: () => {
+              assertManagerCurrent();
+              if (!nativeBindingCreated) {
+                assertCurrent?.();
+              }
+            },
+          }),
+        );
+
+        const introText = bindParams.introText?.trim();
+        if (introText) {
           void maybeSendBindingMessage({
             cfg,
-            record: removed,
-            text: farewell,
-            preferWebhook: false,
+            record,
+            text: introText,
+            assertCurrent: () => {
+              assertCurrent?.();
+              const current = getCurrentBinding(record.threadId);
+              if (
+                !current ||
+                current.targetSessionKey !== record.targetSessionKey ||
+                current.targetKind !== record.targetKind
+              ) {
+                throw new Error("Discord thread binding changed before its intro");
+              }
+            },
           });
         }
-      }
-      return removed;
-    },
-    unbindBySessionKey: (unbindParams) => {
-      const ids = resolveBindingIdsForSession({
-        targetSessionKey: unbindParams.targetSessionKey,
-        accountId,
-        targetKind: unbindParams.targetKind,
+        return record;
       });
-      if (ids.length === 0) {
-        return [];
-      }
-      const removed: ThreadBindingRecord[] = [];
-      for (const bindingKey of ids) {
-        const binding = BINDINGS_BY_THREAD_ID.get(bindingKey);
-        if (!binding) {
-          continue;
-        }
-        const entry = manager.unbindThread({
-          threadId: binding.threadId,
-          reason: unbindParams.reason,
-          sendFarewell: unbindParams.sendFarewell,
-          farewellText: unbindParams.farewellText,
+    },
+    unbindThread: (input) => {
+      const unbindParams = { ...input };
+      return mutate(() => unbindThread(unbindParams));
+    },
+    unbindBySessionKey: (input) => {
+      const unbindParams = { ...input };
+      return mutate(async () => {
+        const ids = resolveBindingIdsForSession({
+          targetSessionKey: unbindParams.targetSessionKey,
+          accountId,
+          targetKind: unbindParams.targetKind,
         });
-        if (entry) {
-          removed.push(entry);
+        const removed: ThreadBindingRecord[] = [];
+        for (const bindingKey of ids) {
+          const binding = BINDINGS_BY_THREAD_ID.get(bindingKey);
+          if (!binding) {
+            continue;
+          }
+          const entry = await unbindThread({
+            threadId: binding.threadId,
+            reason: unbindParams.reason,
+            sendFarewell: unbindParams.sendFarewell,
+            farewellText: unbindParams.farewellText,
+          });
+          if (entry) {
+            removed.push(entry);
+          }
         }
-      }
-      return removed;
+        return removed;
+      });
     },
     stop: () => {
+      if (stopPromise) {
+        return stopPromise;
+      }
+      stopping = true;
       if (sweepTimer) {
         clearInterval(sweepTimer);
         sweepTimer = null;
       }
-      if (MANAGERS_BY_ACCOUNT_ID.get(accountId) === manager) {
-        MANAGERS_BY_ACCOUNT_ID.delete(accountId);
-        forgetThreadBindingToken(accountId);
-      }
-      unregisterSessionBindingAdapter({
-        channel: "discord",
-        accountId,
-        adapter: sessionBindingAdapter,
-      });
+      stopPromise = (async () => {
+        await sweepPromise;
+        await drainThreadBindingAccountOperations(manager);
+        await drainThreadBindingMutations();
+        if (MANAGERS_BY_ACCOUNT_ID.get(accountId) === manager) {
+          MANAGERS_BY_ACCOUNT_ID.delete(accountId);
+          forgetThreadBindingToken(accountId);
+        }
+        unregisterSessionBindingAdapter({
+          channel: "discord",
+          accountId,
+          adapter: sessionBindingAdapter,
+        });
+      })();
+      return stopPromise;
     },
   };
 
   if (params.enableSweeper !== false) {
     sweepTimer = setInterval(() => {
-      void runSweepOnce();
+      if (stopping || sweepPromise) {
+        return;
+      }
+      sweepPromise = runSweepOnce()
+        .catch((error: unknown) => {
+          logVerbose(`discord thread binding sweep failed: ${String(error)}`);
+        })
+        .finally(() => {
+          sweepPromise = undefined;
+        });
     }, THREAD_BINDINGS_SWEEP_INTERVAL_MS);
     // Keep the production process free to exit, but avoid breaking fake-timer
     // sweeper tests where unref'd intervals may never fire.
-    if (!(process.env.VITEST || process.env.NODE_ENV === "test")) {
+    if (shouldDefaultPersist()) {
       sweepTimer.unref?.();
     }
   }
@@ -511,14 +606,6 @@ export function createThreadBindingManager(params: {
   return manager;
 }
 
-export async function createThreadBindingManagerAsync(
-  params: Parameters<typeof createThreadBindingManager>[0],
-): Promise<ThreadBindingManager> {
-  await ensureBindingsLoadedAsync();
-  return createThreadBindingManager(params);
-}
-
 export function getThreadBindingManager(accountId?: string): ThreadBindingManager | null {
-  const normalized = normalizeAccountId(accountId);
-  return MANAGERS_BY_ACCOUNT_ID.get(normalized) ?? null;
+  return MANAGERS_BY_ACCOUNT_ID.get(normalizeAccountId(accountId)) ?? null;
 }

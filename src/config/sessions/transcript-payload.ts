@@ -1,6 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { sql, type Expression, type RawBuilder } from "kysely";
 import {
+  createSqliteQueryCache,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
   prepareSqliteQuerySync,
@@ -145,70 +146,66 @@ function navigationProjection(
 }
 
 type NavigationInput = { eventJson: string; reportJson: string };
-type NavigationReader = (input: NavigationInput) => { navigation_json: string | null } | undefined;
-const navigationReaders = new WeakMap<DatabaseSync, NavigationReader>();
-
-function readNavigation(database: DatabaseSync, input: NavigationInput): string | null {
-  let read = navigationReaders.get(database);
-  if (!read) {
-    read = prepareSqliteQueryTakeFirstSync<NavigationInput, { navigation_json: string | null }>(
-      database,
-      (parameter) => {
-        const db = getNodeSqliteKysely<Record<string, never>>(database);
-        const source = db
-          .selectFrom(
-            db
-              .selectNoFrom([
-                parameter((value) => value.eventJson).as("event_json"),
-                parameter((value) => value.reportJson).as("report_json"),
-              ])
-              .as("input"),
-          )
-          .select(["input.event_json", "input.report_json"])
-          .select((eb) =>
-            supportsNodeSqliteJsonb()
-              ? /* kysely-allow-raw: reuse native binary JSON only after the existing strict text validation. */ sql<
-                  string | Uint8Array
-                >`CASE WHEN json_valid(${eb.ref("input.event_json")})
+const navigationReader = createSqliteQueryCache((database) =>
+  prepareSqliteQueryTakeFirstSync<NavigationInput, { navigation_json: string | null }>(
+    database,
+    (parameter) => {
+      const db = getNodeSqliteKysely<Record<string, never>>(database);
+      const source = db
+        .selectFrom(
+          db
+            .selectNoFrom([
+              parameter((value) => value.eventJson).as("event_json"),
+              parameter((value) => value.reportJson).as("report_json"),
+            ])
+            .as("input"),
+        )
+        .select(["input.event_json", "input.report_json"])
+        .select((eb) =>
+          supportsNodeSqliteJsonb()
+            ? /* kysely-allow-raw: reuse native binary JSON only after the existing strict text validation. */ sql<
+                string | Uint8Array
+              >`CASE WHEN json_valid(${eb.ref("input.event_json")})
                   THEN jsonb(${eb.ref("input.event_json")}) ELSE ${eb.ref("input.event_json")} END`.as(
-                  "event_projection",
-                )
-              : eb.ref("input.event_json").as("event_projection"),
-          );
-        const admitted = /* kysely-allow-raw: reject oversized metadata natively before returning its text to JavaScript. */ sql<
-          string | null
-        >`CASE WHEN json_valid(metadata.navigation_json)
+                "event_projection",
+              )
+            : eb.ref("input.event_json").as("event_projection"),
+        );
+      const admitted = /* kysely-allow-raw: reject oversized metadata natively before returning its text to JavaScript. */ sql<
+        string | null
+      >`CASE WHEN json_valid(metadata.navigation_json)
           AND octet_length(metadata.navigation_json) <= ${MAX_NAVIGATION_BYTES}
           THEN metadata.navigation_json ELSE NULL END`;
-        return (
-          db
-            // Materialize the parsed input once across projections; canonical bytes stay text.
-            .with(
-              (cte) => cte("source").materialized(),
-              () => source,
-            )
-            // The size guard and returned value must reuse one envelope, not flatten into two projections.
-            .with(
-              (cte) => cte("metadata").materialized(),
-              (cteDb) =>
-                cteDb
-                  .selectFrom("source")
-                  .select((eb) =>
-                    navigationProjection(
-                      eb.ref("source.event_projection"),
-                      eb.ref("source.report_json"),
-                      eb.ref("source.event_json"),
-                    ).as("navigation_json"),
-                  ),
-            )
-            .selectFrom("metadata")
-            .select(admitted.as("navigation_json"))
-        );
-      },
-    );
-    navigationReaders.set(database, read);
-  }
-  const navigation = read(input)?.navigation_json ?? null;
+      return (
+        db
+          // Full JSON and JSONB intermediates can spill to disk when materialized.
+          .with(
+            (cte) => cte("source").notMaterialized(),
+            () => source,
+          )
+          // The size guard and returned value must reuse one envelope, not flatten into two projections.
+          .with(
+            (cte) => cte("metadata").materialized(),
+            (cteDb) =>
+              cteDb
+                .selectFrom("source")
+                .select((eb) =>
+                  navigationProjection(
+                    eb.ref("source.event_projection"),
+                    eb.ref("source.report_json"),
+                    eb.ref("source.event_json"),
+                  ).as("navigation_json"),
+                ),
+          )
+          .selectFrom("metadata")
+          .select(admitted.as("navigation_json"))
+      );
+    },
+  ),
+);
+
+function readNavigation(database: DatabaseSync, input: NavigationInput): string | null {
+  const navigation = navigationReader(database)(input)?.navigation_json ?? null;
   return navigation !== null && Buffer.byteLength(navigation, "utf8") <= MAX_NAVIGATION_BYTES
     ? navigation
     : null;
@@ -282,34 +279,39 @@ function registerDecoder(database: DatabaseSync): void {
   database.function(
     DECODE_FUNCTION,
     { deterministic: true, directOnly: true },
-    (bytes, rawBytes) => {
-      if (
-        !(bytes instanceof Uint8Array) ||
-        bytes.byteLength === 0 ||
-        bytes.byteLength > MAX_COMPRESSED_EVENT_BYTES ||
-        typeof rawBytes !== "number" ||
-        !Number.isSafeInteger(rawBytes) ||
-        rawBytes < 1 ||
-        rawBytes > MAX_COMPRESSED_EVENT_BYTES
-      ) {
-        throw new Error("Invalid compressed transcript payload bounds");
-      }
-      const codec = resolveZstdCodec();
-      if (!codec) {
-        throw new Error(
-          "Cannot decode compressed transcript payload: this runtime lacks zstd support",
-        );
-      }
-      const decoded = codec.decompress(bytes, rawBytes);
-      if (decoded.byteLength !== rawBytes) {
-        throw new Error(
-          "Compressed transcript payload length does not match its recorded UTF-8 size",
-        );
-      }
-      return utf8Decoder.decode(decoded);
-    },
+    decodeCompressedTranscriptPayload,
   );
   registeredDecoders.add(database);
+}
+
+function decodeCompressedTranscriptPayload(bytes: unknown, rawBytes: unknown): string {
+  if (
+    !(bytes instanceof Uint8Array) ||
+    bytes.byteLength === 0 ||
+    bytes.byteLength > MAX_COMPRESSED_EVENT_BYTES ||
+    typeof rawBytes !== "number" ||
+    !Number.isSafeInteger(rawBytes) ||
+    rawBytes < 1 ||
+    rawBytes > MAX_COMPRESSED_EVENT_BYTES
+  ) {
+    throw new Error("Invalid compressed transcript payload bounds");
+  }
+  const codec = resolveZstdCodec();
+  if (!codec) {
+    throw new Error("Cannot decode compressed transcript payload: this runtime lacks zstd support");
+  }
+  const decoded = codec.decompress(bytes, rawBytes);
+  if (decoded.byteLength !== rawBytes) {
+    throw new Error("Compressed transcript payload length does not match its recorded UTF-8 size");
+  }
+  return utf8Decoder.decode(decoded);
+}
+
+/** Decode selected rows without copying expanded payloads back through SQLite. */
+export function readTranscriptPayload(
+  row: Pick<TranscriptPayloadRecord, "event_json" | "event_zstd" | "event_utf8_bytes">,
+): string {
+  return row.event_json ?? decodeCompressedTranscriptPayload(row.event_zstd, row.event_utf8_bytes);
 }
 
 /** Only selected bodies decode; identity TEXT remains inside SQLite for native repairs. */
@@ -372,12 +374,13 @@ export function transcriptEventResetNavigationSql(
 
 export function transcriptEventModelNavigationSql(
   alias: TranscriptPayloadAlias = "transcript_events",
+  entryType?: Expression<unknown>,
 ): RawBuilder<string> {
   const identity =
     /* kysely-allow-raw: closed transcript aliases select the native identity fallback. */ sql.ref<string>(
       `${alias}.event_json`,
     );
-  return storedProjectionSql("model", projectModelContextNavigationSql(identity), alias);
+  return storedProjectionSql("model", projectModelContextNavigationSql(identity, entryType), alias);
 }
 
 /** Model admission retains projected byte costs, which can be much smaller than canonical JSON. */

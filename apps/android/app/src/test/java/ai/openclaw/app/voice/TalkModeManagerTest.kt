@@ -518,7 +518,7 @@ class TalkModeManagerTest {
 
     installRealtimeSession(manager, "relay-1")
     setMutableStateFlow(manager, "_isEnabled", true)
-    assertNull(manager.failureText.value)
+    assertNull(manager.failureNotice.value)
 
     manager.realtimeEvent("""{"relaySessionId":"relay-1","type":"close","reason":"error"}""")
 
@@ -529,7 +529,22 @@ class TalkModeManagerTest {
       manager.statusText.value,
     )
     // Chat renders this after Talk ends; the status line alone is not shown there.
-    assertEquals(manager.statusText.value, manager.failureText.value)
+    assertEquals(manager.statusText.value, manager.failureNotice.value?.text)
+  }
+
+  @Test
+  fun acknowledgingAnOlderFailureDoesNotHideAnIdenticalNewFailure() {
+    val manager = createManager()
+    val failure = verbatimText("Realtime provider authentication failed")
+    manager.stopAllCapture(failure = failure)
+    val first = checkNotNull(manager.failureNotice.value)
+    manager.stopAllCapture(failure = failure)
+    val second = checkNotNull(manager.failureNotice.value)
+
+    manager.acknowledgeFailure(first)
+    assertEquals(second, manager.failureNotice.value)
+    manager.acknowledgeFailure(second)
+    assertNull(manager.failureNotice.value)
   }
 
   @Test
@@ -595,13 +610,15 @@ class TalkModeManagerTest {
         createManager(
           scope = backgroundScope,
           realtimePlaybackDispatcher = StandardTestDispatcher(testScheduler),
-          realtimeMarkAcknowledger = { sessionId, markName ->
-            acknowledgements += sessionId to markName
-          },
         )
-      installRealtimeSession(manager, "relay-1")
+      installRealtimeSession(manager, "relay-1") { method, paramsJson ->
+        assertEquals("talk.session.acknowledgeMark", method)
+        val params = Json.parseToJsonElement(checkNotNull(paramsJson)).jsonObject
+        acknowledgements += params.getValue("sessionId").jsonPrimitive.content to params.getValue("markName").jsonPrimitive.content
+      }
 
       manager.realtimeEvent("""{"relaySessionId":"relay-1","type":"mark","markName":"audio-1"}""")
+      assertTrue(acknowledgements.isEmpty())
       runCurrent()
 
       assertEquals(listOf("relay-1" to "audio-1"), acknowledgements)
@@ -1077,7 +1094,7 @@ class TalkModeManagerTest {
         )
         proof.manager.setEnabled(false)
         assertEquals("Off", proof.manager.statusText.value)
-        assertNull(proof.manager.failureText.value)
+        assertNull(proof.manager.failureNotice.value)
       }
     }
 
@@ -1110,7 +1127,7 @@ class TalkModeManagerTest {
                 .contains("Native Talk:"),
             )
           }
-          assertNull(proof.manager.failureText.value)
+          assertNull(proof.manager.failureNotice.value)
           assertFalse(requests.any { it.getValue("method").jsonPrimitive.content in setOf("chat.send", "talk.speak") })
           assertFalse("Realtime audio must not synthesize a native TTS reply", proof.synthesizer.requested.isCompleted)
         }
@@ -1152,7 +1169,7 @@ class TalkModeManagerTest {
         proof.manager.setEnabled(true)
         awaitTalkWork(proof) { proof.manager.isListening.value }
         assertEquals("The replacement relay must not inherit a native fallback reason", "Listening", proof.manager.statusText.value)
-        assertNull(proof.manager.failureText.value)
+        assertNull(proof.manager.failureNotice.value)
       }
     }
 
@@ -1461,18 +1478,7 @@ class TalkModeManagerTest {
       assertEquals("Generating voice…", manager.statusText.value)
       assertFalse(manager.isSpeaking.value)
 
-      talkSpeakClient.result.complete(
-        TalkSpeakResult.Success(
-          TalkSpeakAudio(
-            bytes = byteArrayOf(1, 2, 3),
-            provider = "test",
-            outputFormat = "mp3_44100_128",
-            voiceCompatible = true,
-            mimeType = "audio/mpeg",
-            fileExtension = ".mp3",
-          ),
-        ),
-      )
+      completeRemoteSynthesis(talkSpeakClient)
       talkAudioPlayer.started.await()
 
       assertEquals("Speaking…", manager.statusText.value)
@@ -1508,18 +1514,7 @@ class TalkModeManagerTest {
     runTest {
       val audio = shadowOf(RuntimeEnvironment.getApplication().getSystemService(AudioManager::class.java))
       val synthesizer = FakeTalkSpeechSynthesizer()
-      synthesizer.result.complete(
-        TalkSpeakResult.Success(
-          TalkSpeakAudio(
-            bytes = byteArrayOf(1, 2, 3),
-            provider = "test",
-            outputFormat = "mp3_44100_128",
-            voiceCompatible = true,
-            mimeType = "audio/mpeg",
-            fileExtension = ".mp3",
-          ),
-        ),
-      )
+      completeRemoteSynthesis(synthesizer)
       val player = FakeTalkAudioPlayer()
       val managerJob = SupervisorJob()
       var callbackDepth = 0
@@ -1703,7 +1698,8 @@ class TalkModeManagerTest {
           proof.manager.statusText.value
             .contains("audio playback device error"),
         )
-        assertEquals(proof.manager.statusText.value, proof.manager.failureText.value)
+        val notice = proof.manager.failureNotice.value
+        assertEquals(proof.manager.statusText.value, notice?.text)
         assertFalse(proof.manager.isSpeaking.value)
       }
     }
@@ -2642,16 +2638,17 @@ class TalkModeManagerTest {
       }) { proof ->
         proof.manager.stopAllCapture()
         proof.drainCancelledCapture()
-        assertNull(proof.manager.failureText.value)
+        assertNull(proof.manager.failureNotice.value)
         proof.manager.setEnabled(true)
         awaitTalkWork(proof) { !proof.manager.isEnabled.value }
         assertFalse(proof.manager.isListening.value)
         // Chat shows this notice once Talk ends; without it a rejected start leaves no trace there.
-        assertEquals("Start failed: UNAVAILABLE: provider unavailable", proof.manager.failureText.value)
+        val notice = proof.manager.failureNotice.value
+        assertEquals("Start failed: UNAVAILABLE: provider unavailable", notice?.text)
 
         proof.manager.setEnabled(true)
         awaitTalkWork(proof) { proof.manager.isListening.value }
-        assertNull(proof.manager.failureText.value)
+        assertNull(proof.manager.failureNotice.value)
       }
     }
 
@@ -3130,7 +3127,7 @@ class TalkModeManagerTest {
   private fun completeRemoteSynthesis(synthesizer: FakeTalkSpeechSynthesizer) {
     synthesizer.result.complete(
       TalkSpeakResult.Success(
-        TalkSpeakAudio(byteArrayOf(1, 2, 3), "test", "mp3_44100_128", true, "audio/mpeg", ".mp3"),
+        TalkSpeakAudio(byteArrayOf(1, 2, 3), "mp3_44100_128", "audio/mpeg", ".mp3"),
       ),
     )
   }
@@ -3645,7 +3642,7 @@ class TalkModeManagerTest {
     }
 
   private fun createManager(
-    talkSpeakClient: TalkSpeechSynthesizing = TalkSpeakClient(),
+    talkSpeakClient: TalkSpeechSynthesizing = TalkSpeakClient(requestDetailed = { _, _, _ -> error("session missing") }),
     talkAudioPlayer: TalkAudioPlaying? = null,
     scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
     isConnected: () -> Boolean = { true },
@@ -3654,7 +3651,6 @@ class TalkModeManagerTest {
     onStoppedByRelay: (isCurrent: () -> Boolean) -> Unit = {},
     realtimeCaptureDispatcher: CoroutineDispatcher = Dispatchers.IO,
     realtimePlaybackDispatcher: CoroutineDispatcher = Dispatchers.IO,
-    realtimeMarkAcknowledger: (suspend (String, String) -> Unit)? = null,
   ): TalkModeManager {
     val app = RuntimeEnvironment.getApplication()
     val session =
@@ -3678,7 +3674,6 @@ class TalkModeManagerTest {
       talkAudioPlayer = talkAudioPlayer ?: TalkAudioPlayer(app),
       realtimeCaptureDispatcher = realtimeCaptureDispatcher,
       realtimePlaybackDispatcher = realtimePlaybackDispatcher,
-      realtimeMarkAcknowledger = realtimeMarkAcknowledger,
     ).also { setPrivateField(it, "relayStopNotification", onStoppedByRelay) }
   }
 
@@ -3722,6 +3717,7 @@ class TalkModeManagerTest {
   private fun installRealtimeSession(
     manager: TalkModeManager,
     id: String?,
+    onRequest: (String, String?) -> Unit = { _, _ -> },
   ) {
     setPrivateField(manager, "realtimeSessionId", id)
     val owner =
@@ -3729,8 +3725,8 @@ class TalkModeManagerTest {
         null
       } else {
         val lease =
-          GatewaySession.RequestLease("synthetic-gateway") { _, _, _, enqueue ->
-            enqueue {}
+          GatewaySession.RequestLease("synthetic-gateway") { method, paramsJson, _, enqueue ->
+            enqueue { onRequest(method, paramsJson) }
             "{}"
           }
         val method = TalkModeManager::class.java.getDeclaredMethod("createRealtimePlayoutSession", String::class.java, GatewaySession.RequestLease::class.java)

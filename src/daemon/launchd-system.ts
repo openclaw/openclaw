@@ -1,8 +1,7 @@
 /** Detects system-domain launchd ownership before mutating a user LaunchAgent. */
 import fs from "node:fs/promises";
 import path from "node:path";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
+import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { isMissingPathError } from "../infra/errors.js";
 import {
@@ -17,6 +16,7 @@ import {
   ServiceOwnershipRefusalError,
   type ServiceInspectionReason,
 } from "./service-inspection-error.js";
+import { formatServiceInspectionDetail } from "./service-runtime.js";
 
 const SYSTEM_LAUNCH_DAEMON_DIR = "/Library/LaunchDaemons";
 
@@ -34,15 +34,6 @@ type SystemLaunchDaemonOwnership =
 
 type SystemLaunchDaemonConflict = Exclude<SystemLaunchDaemonOwnership, { status: "absent" }>;
 
-function formatUnknownError(error: unknown): string {
-  const raw = error instanceof Error ? error.message : String(error);
-  return truncateUtf16Safe(sanitizeForLog(raw), 500);
-}
-
-function quotePosixArgument(value: string): string {
-  return /^[A-Za-z0-9_@%+=:,./-]+$/.test(value) ? value : `'${value.replaceAll("'", "'\\''")}'`;
-}
-
 /**
  * Renders the package-independent ownership probe used by detached restart helpers.
  * The caller must refuse activation when `openclaw_system_launchd_conflict` is non-empty.
@@ -51,9 +42,9 @@ export function renderSystemLaunchDaemonOwnershipShellProbe(label: string): stri
   const serviceTarget = `system/${label}`;
   return `openclaw_system_launchd_conflict=""
 openclaw_system_launchd_detail=""
-openclaw_system_launchd_target=${quotePosixArgument(serviceTarget)}
-openclaw_system_launchd_dir=${quotePosixArgument(SYSTEM_LAUNCH_DAEMON_DIR)}
-openclaw_system_launchd_label=${quotePosixArgument(label)}
+openclaw_system_launchd_target=${quoteCliArg(serviceTarget)}
+openclaw_system_launchd_dir=${quoteCliArg(SYSTEM_LAUNCH_DAEMON_DIR)}
+openclaw_system_launchd_label=${quoteCliArg(label)}
 openclaw_query_system_launchd() {
   openclaw_system_launchd_probe=$(launchctl print "$openclaw_system_launchd_target" 2>&1)
   openclaw_system_launchd_probe_status=$?
@@ -81,7 +72,7 @@ if [ -z "$openclaw_system_launchd_conflict" ]; then
       if /usr/bin/find "$openclaw_system_launchd_dir" -mindepth 1 -maxdepth 1 -name '*.plist' -print0 >"$openclaw_system_launchd_entries"; then
         while IFS= read -r -d '' openclaw_system_launchd_plist; do
           # Unreadable plists are treated as foreign: loaded same-label daemons are caught by the
-          # bracketing launchctl probes; an unloaded unreadable same-label plist is an accepted operator-created edge (#120481).
+          # bracketing launchctl checks; an unloaded unreadable same-label plist is an accepted operator-created edge (#120481).
           if [ ! -r "$openclaw_system_launchd_plist" ]; then
             continue
           fi
@@ -190,7 +181,7 @@ async function findInstalledSystemLaunchDaemon(
     if (isMissingPathError(error)) {
       return { status: "absent" };
     }
-    return { status: "unverifiable", detail: formatUnknownError(error) };
+    return { status: "unverifiable", detail: formatServiceInspectionDetail(error) };
   }
 
   for (const entry of entries.filter((candidate) => candidate.endsWith(".plist")).toSorted()) {
@@ -216,7 +207,10 @@ async function findInstalledSystemLaunchDaemon(
         return { status: "installed", plistPath };
       }
     } catch (error) {
-      return { status: "unverifiable", detail: `${plistPath}: ${formatUnknownError(error)}` };
+      return {
+        status: "unverifiable",
+        detail: `${plistPath}: ${formatServiceInspectionDetail(error)}`,
+      };
     }
   }
   return { status: "absent" };
@@ -303,7 +297,7 @@ function formatSystemLaunchDaemonOwnershipError(ownership: SystemLaunchDaemonCon
     ownership.status === "loaded"
       ? `Keep it as the sole gateway manager, or unload it with \`sudo launchctl bootout ${ownership.serviceTarget}\` and remove its plist before retrying.`
       : ownership.status === "installed"
-        ? `Keep it as the sole gateway manager, or remove or relocate ${quotePosixArgument(ownership.plistPath)} before retrying.`
+        ? `Keep it as the sole gateway manager, or remove or relocate ${quoteCliArg(ownership.plistPath)} before retrying.`
         : "Fix the reported launchctl or filesystem access error, then retry.";
   return [
     formatSystemLaunchDaemonOwnershipSummary(ownership),

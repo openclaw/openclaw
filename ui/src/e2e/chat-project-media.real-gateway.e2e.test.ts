@@ -7,7 +7,8 @@ import type { Locator } from "playwright";
 import { expect, it } from "vitest";
 import { appendTranscriptMessage } from "../../../src/config/sessions/session-accessor.js";
 import { saveMediaBuffer } from "../../../src/media/store.js";
-import { ensureGatewayOwnerProfile, setAvatar } from "../../../src/state/user-profiles.js";
+import { setAvatar } from "../../../src/state/user-profile-writes.worker.js";
+import { ensureGatewayOwnerProfile } from "../../../src/state/user-profiles.js";
 import { withEnvAsync } from "../../../src/test-utils/env.js";
 import {
   createOpenClawTestInstance,
@@ -16,6 +17,7 @@ import {
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e.ts";
+import { enterControlUiSession } from "../test-helpers/control-ui-session-entry.ts";
 import { createControlUiE2eSuite, tooltipTitleText } from "./control-ui-e2e-suite.test-support.ts";
 
 const captureEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
@@ -68,7 +70,7 @@ suite.define(() => {
         JSON.stringify(params),
         "--json",
       ]);
-      expect(result.code, result.stderr).toBe(0);
+      expect(result.code, result.stderr || result.stdout).toBe(0);
       return JSON.parse(result.stdout) as Record<string, unknown>;
     };
     const projectRoot = owner.state.path("project");
@@ -99,6 +101,7 @@ suite.define(() => {
       agentId: "main",
       projectId: project.id,
       worktree: true,
+      worktreeBaseRef: "main",
       worktreeName: "image-preview-proof",
       permissionMode: "workspace",
       label: "Synthetic image preview proof",
@@ -162,7 +165,8 @@ suite.define(() => {
           }
         };
         const open = async () => {
-          expect((await page.goto(url.toString()))?.status()).toBe(200);
+          expect((await page.goto(url.toString()))?.status()).toBe(404);
+          await enterControlUiSession(page);
           await waitForControlUiGatewayReady(page);
           await page
             .getByText(
@@ -273,13 +277,14 @@ suite.define(() => {
           .locator(".chat-assistant-attachment-card")
           .filter({ hasText: filename });
         const downloadFile = async (link: Locator) => {
+          // Focus keeps the action exposed while reloaded images move the card.
+          await link.focus();
           const [download] = await Promise.all([page.waitForEvent("download"), link.click()]);
           const downloadedPath = await download.path();
           expect(downloadedPath).not.toBeNull();
           expect(await readFile(downloadedPath!)).toEqual(bytes);
           expect(download.suggestedFilename()).toBe(filename);
         };
-        await fileCard.hover();
         await downloadFile(
           fileCard.getByRole("link", { name: `Download ${filename}`, exact: true }),
         );

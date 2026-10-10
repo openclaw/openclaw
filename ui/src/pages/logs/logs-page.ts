@@ -5,6 +5,7 @@ import { html, type PropertyValues } from "lit";
 import { state } from "lit/decorators.js";
 import { titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
+import { shellLayoutTraits } from "../../app/shell-layout-traits.ts";
 import {
   beginPanelRefresh,
   completePanelRefresh,
@@ -149,7 +150,13 @@ class LogsPage extends OpenClawLightDomElement {
       this.logsTaskQuiet = false;
       void this.logsTask.run([null, null, null, null, false]);
     },
-    onSnapshot: () => this.syncPolling(),
+    onSnapshot: () => {
+      if (this.gateway.connected && this.gateway.client) {
+        this.polling.start();
+      } else {
+        this.polling.stop();
+      }
+    },
     // Only connection/identity transitions own automatic resets. Metadata snapshots
     // must not supersede an in-flight tail or reload a successfully empty log.
     ensureInitialData: () => {
@@ -215,14 +222,6 @@ class LogsPage extends OpenClawLightDomElement {
     }
   }
 
-  private syncPolling() {
-    if (!this.gateway.connected || !this.gateway.client) {
-      this.polling.stop();
-      return;
-    }
-    this.polling.start();
-  }
-
   private async loadLogs(opts?: { reset?: boolean; quiet?: boolean }): Promise<boolean> {
     const quiet = opts?.quiet === true;
     const gateway = this.gateway.gateway;
@@ -273,7 +272,7 @@ class LogsPage extends OpenClawLightDomElement {
       onScroll: (event) => this.streamFollow.handleScroll(event),
     });
     return html`
-      <section class="content-header">
+      <section class="content-header" ${shellLayoutTraits({ toolbarHeader: true })}>
         <div>
           <div class="page-title">${titleForRoute("logs")}</div>
         </div>

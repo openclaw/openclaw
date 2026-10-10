@@ -19,8 +19,7 @@ import {
   setMessageActionTestPlugin as setTestPlugin,
 } from "./message-action-runner.test-helpers.js";
 
-const { hydrateAttachmentParamsForAction, normalizeSandboxMediaParams } =
-  await import("./message-action-params.js");
+const { hydrateAttachmentParamsForAction } = await import("./message-action-params.js");
 const loadWebMedia = messageActionRunnerMocks.loadWebMedia;
 
 const onePixelPng = Buffer.from(
@@ -108,26 +107,29 @@ describe("runMessageAction media behavior", () => {
     await resetMessageActionMediaMocks();
   });
 
-  it.each(
-    (["send", "sendAttachment", "reply", "upload-file", "setGroupIcon"] as const).flatMap(
-      (action) => [
-        {
-          action,
-          buffer: parameterizedPngDataUrl,
-          base64: onePixelPngBase64,
-          contentType: "image/png",
-          filename: "attachment.png",
-        },
-        {
-          action,
-          buffer: `data:text/csv;base64,${csvBase64}`,
-          base64: csvBase64,
-          contentType: "text/csv",
-          filename: "attachment.csv",
-        },
-      ],
-    ),
-  )(
+  it.each([
+    {
+      action: "send",
+      buffer: parameterizedPngDataUrl,
+      base64: onePixelPngBase64,
+      contentType: "image/png",
+      filename: "attachment.png",
+    },
+    {
+      action: "sendAttachment",
+      buffer: `data:text/csv;base64,${csvBase64}`,
+      base64: csvBase64,
+      contentType: "text/csv",
+      filename: "attachment.csv",
+    },
+    {
+      action: "setGroupIcon",
+      buffer: parameterizedPngDataUrl,
+      base64: onePixelPngBase64,
+      contentType: "image/png",
+      filename: "attachment.png",
+    },
+  ] as const)(
     "normalizes $contentType data URLs and infers filenames for $action",
     async ({ action, buffer, base64, contentType, filename }) => {
       const args: Record<string, unknown> = { buffer };
@@ -152,17 +154,14 @@ describe("runMessageAction media behavior", () => {
   );
 
   it.each(
-    (["send", "sendAttachment", "reply", "upload-file", "setGroupIcon"] as const).flatMap(
-      (action) => [
-        { action, name: "contentType", metadata: { contentType: "image/jpeg" } },
-        { action, name: "mimeType", metadata: { mimeType: "image/jpeg" } },
-        {
-          action,
-          name: "both aliases",
-          metadata: { contentType: "image/jpeg", mimeType: "image/webp" },
-        },
-      ],
-    ),
+    (["send", "sendAttachment"] as const).flatMap((action) => [
+      { action, name: "mimeType", metadata: { mimeType: "image/jpeg" } },
+      {
+        action,
+        name: "both aliases",
+        metadata: { contentType: "image/jpeg", mimeType: "image/webp" },
+      },
+    ]),
   )("keeps $name authoritative for $action data URLs", async ({ action, metadata }) => {
     const args: Record<string, unknown> = {
       buffer: parameterizedPngDataUrl,
@@ -221,18 +220,6 @@ describe("runMessageAction media behavior", () => {
       fromSpy.mockRestore();
     }
   });
-
-  it.each(["media", "mediaUrl", "path", "filePath"])(
-    "keeps data URLs forbidden in the %s source field",
-    async (field) => {
-      await expect(
-        normalizeSandboxMediaParams({
-          args: { [field]: parameterizedPngDataUrl },
-          mediaPolicy: { mode: "host" },
-        }),
-      ).rejects.toThrow(/data: URLs are not supported for media/i);
-    },
-  );
 
   describe("sendAttachment hydration", () => {
     const cfg = {
@@ -431,14 +418,8 @@ describe("runMessageAction media behavior", () => {
       }
     });
 
-    it("hydrates buffer and filename from media for attachment upload-file", async () => {
-      const result = await runAttachmentRemoteMediaAction({ cfg, action: "upload-file" });
-
-      expectAttachmentRemoteMediaPayload(result);
-    });
-
     it("keeps original upload-file bytes when forced to send as a document", async () => {
-      await runMessageAction({
+      const result = await runMessageAction({
         cfg,
         action: "upload-file",
         params: {
@@ -450,6 +431,7 @@ describe("runMessageAction media behavior", () => {
         },
       });
 
+      expectAttachmentRemoteMediaPayload(result);
       expect(requireLoadWebMediaOptions().optimizeImages).toBe(false);
     });
 

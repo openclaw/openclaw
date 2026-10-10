@@ -24,7 +24,6 @@ export type ProjectedCodexDynamicTool<T extends CodexToolDescriptor> = {
 };
 export type CodexDynamicToolSchemaQuarantine = { tool: string; violations: readonly string[] };
 
-/** Namespace attached to OpenClaw-owned dynamic tools exposed to Codex. */
 const CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE = "openclaw";
 const CODEX_DYNAMIC_TOOL_NAME_MAX_CHARS = 128;
 const CODEX_DYNAMIC_TOOL_NAME_PATTERN = /^[a-zA-Z0-9_-]+$/u;
@@ -48,6 +47,8 @@ export function createCodexDynamicToolSpecs(params: {
   entries: readonly ProjectedCodexDynamicTool<CodexToolDescriptor>[];
   loading: CodexDynamicToolsLoading;
   directToolNames?: Iterable<string>;
+  /** Direct loading still namespaces direct-only tools; SIWC requires plain function specs. */
+  functionToolsOnly?: boolean;
 }): CodexDynamicToolSpec[] {
   const directToolNames = new Set([
     ...ALWAYS_DIRECT_DYNAMIC_TOOL_NAMES,
@@ -75,7 +76,7 @@ export function createCodexDynamicToolSpecs(params: {
       specs.push(functionSpec);
       continue;
     }
-    if (entry.tool.catalogMode === "direct-only") {
+    if (entry.tool.catalogMode === "direct-only" && !params.functionToolsOnly) {
       directOnlyNamespaceTools.push(functionSpec);
       continue;
     }
@@ -85,21 +86,13 @@ export function createCodexDynamicToolSpecs(params: {
     }
     namespaceTools.push({ ...functionSpec, deferLoading: true });
   }
-  if (namespaceTools.length > 0) {
-    specs.push({
-      type: "namespace",
-      name: CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE,
-      description: "",
-      tools: namespaceTools,
-    });
-  }
-  if (directOnlyNamespaceTools.length > 0) {
-    specs.push({
-      type: "namespace",
-      name: CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE,
-      description: "",
-      tools: directOnlyNamespaceTools,
-    });
+  for (const [name, tools] of [
+    [CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE, namespaceTools],
+    [CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE, directOnlyNamespaceTools],
+  ] as const) {
+    if (tools.length > 0) {
+      specs.push({ type: "namespace", name, description: "", tools });
+    }
   }
   return specs;
 }
@@ -133,7 +126,7 @@ export function projectCodexDynamicTools<T extends CodexToolDescriptor>(
       continue;
     }
     const descriptor = readCodexDynamicToolDescriptor(tool, toolIndex);
-    if (!descriptor.ok) {
+    if ("diagnostic" in descriptor) {
       quarantinedTools.push(descriptor.diagnostic);
       continue;
     }
@@ -164,89 +157,54 @@ export function projectCodexDynamicTools<T extends CodexToolDescriptor>(
 }
 
 type CodexDynamicToolDescriptorRead =
-  | {
-      ok: true;
-      name: string;
-      description: string;
-      parameters: unknown;
-    }
-  | {
-      ok: false;
-      diagnostic: CodexDynamicToolSchemaQuarantine;
-    };
+  | Pick<CodexToolDescriptor, "name" | "description" | "parameters">
+  | { diagnostic: CodexDynamicToolSchemaQuarantine };
 
 function readCodexDynamicToolDescriptor(
   tool: CodexToolDescriptor,
   toolIndex: number,
 ): CodexDynamicToolDescriptorRead {
   const fallbackName = `tool[${toolIndex}]`;
+  const invalid = (name: string, violation: string): CodexDynamicToolDescriptorRead => ({
+    diagnostic: { tool: name, violations: [`${name}.${violation}`] },
+  });
   let name: string;
   try {
     const rawName = tool.name;
     if (typeof rawName !== "string" || !rawName) {
-      return {
-        ok: false,
-        diagnostic: {
-          tool: fallbackName,
-          violations: [`${fallbackName}.name must be a non-empty string`],
-        },
-      };
+      return invalid(fallbackName, "name must be a non-empty string");
     }
     const trimmedName = rawName.trim();
     let nameViolation: string | undefined;
     if (!trimmedName) {
-      nameViolation = `${rawName}.name must not be empty`;
+      nameViolation = "name must not be empty";
     } else if (trimmedName !== rawName) {
-      nameViolation = `${rawName}.name must not have leading or trailing whitespace`;
+      nameViolation = "name must not have leading or trailing whitespace";
     } else if (!CODEX_DYNAMIC_TOOL_NAME_PATTERN.test(rawName)) {
-      nameViolation = `${rawName}.name must match ^[a-zA-Z0-9_-]+$`;
+      nameViolation = "name must match ^[a-zA-Z0-9_-]+$";
     } else if (rawName.length > CODEX_DYNAMIC_TOOL_NAME_MAX_CHARS) {
-      nameViolation = `${rawName}.name must be at most ${CODEX_DYNAMIC_TOOL_NAME_MAX_CHARS} characters`;
+      nameViolation = `name must be at most ${CODEX_DYNAMIC_TOOL_NAME_MAX_CHARS} characters`;
     } else if (rawName === "mcp" || rawName.startsWith("mcp__")) {
-      nameViolation = `${rawName}.name is reserved by Codex app-server`;
+      nameViolation = "name is reserved by Codex app-server";
     }
     if (nameViolation) {
-      return {
-        ok: false,
-        diagnostic: {
-          tool: rawName,
-          violations: [nameViolation],
-        },
-      };
+      return invalid(rawName, nameViolation);
     }
     name = rawName;
   } catch {
-    return {
-      ok: false,
-      diagnostic: {
-        tool: fallbackName,
-        violations: [`${fallbackName}.name is unreadable`],
-      },
-    };
+    return invalid(fallbackName, "name is unreadable");
   }
   let description: string;
   try {
     description = typeof tool.description === "string" ? tool.description : "";
   } catch {
-    return {
-      ok: false,
-      diagnostic: {
-        tool: name,
-        violations: [`${name}.description is unreadable`],
-      },
-    };
+    return invalid(name, "description is unreadable");
   }
   let parameters: unknown;
   try {
     parameters = tool.parameters;
   } catch {
-    return {
-      ok: false,
-      diagnostic: {
-        tool: name,
-        violations: [`${name}.inputSchema is unreadable`],
-      },
-    };
+    return invalid(name, "inputSchema is unreadable");
   }
-  return { ok: true, name, description, parameters };
+  return { name, description, parameters };
 }

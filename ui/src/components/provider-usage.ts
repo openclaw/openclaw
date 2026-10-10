@@ -71,13 +71,7 @@ function formatProviderReset(resetAt: number | undefined): string | null {
 
 function renderProviderBilling(snapshot: ProviderUsageDetails) {
   return (snapshot.billing ?? []).map((entry) => {
-    const label =
-      entry.label ??
-      (entry.type === "balance"
-        ? t("usage.providerUsage.balance")
-        : entry.type === "spend"
-          ? t("usage.providerUsage.spend")
-          : t("usage.providerUsage.budget"));
+    const label = entry.label ?? t(`usage.providerUsage.${entry.type}`);
     const formatAmount = createProviderAmountFormatter(entry.unit);
     const value =
       entry.type === "budget"
@@ -92,11 +86,10 @@ function renderProviderBilling(snapshot: ProviderUsageDetails) {
   });
 }
 
-function providerHistoryAmount(snapshot: ProviderUsageDetails, days: number): number {
-  const history = snapshot.costHistory;
-  if (!history) {
-    return 0;
-  }
+function providerHistoryAmount(
+  history: NonNullable<ProviderUsageDetails["costHistory"]>,
+  days: number,
+): number {
   const now = new Date();
   const today = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
   const cutoff = today - (Math.max(1, days) - 1) * 86_400_000;
@@ -104,6 +97,25 @@ function providerHistoryAmount(snapshot: ProviderUsageDetails, days: number): nu
     const time = Date.parse(`${day.date}T00:00:00Z`);
     return Number.isFinite(time) && time >= cutoff && time <= today ? total + day.amount : total;
   }, 0);
+}
+
+function renderCostBreakdown<T extends { name: string }>(
+  title: string,
+  entries: T[],
+  formatValue: (entry: T) => string,
+) {
+  return entries.length > 0
+    ? html`<div class="provider-cost-breakdown">
+        <span class="provider-cost-breakdown__title">${title}</span>
+        ${entries
+          .slice(0, 3)
+          .map(
+            (entry) => html`<div>
+              <span>${entry.name}</span><strong>${formatValue(entry)}</strong>
+            </div>`,
+          )}
+      </div>`
+    : nothing;
 }
 
 function renderProviderCostHistory(snapshot: ProviderUsageDetails) {
@@ -126,8 +138,8 @@ function renderProviderCostHistory(snapshot: ProviderUsageDetails) {
   const cacheCount = formatCompactTokenCount(totals.cache);
   const outputCount = formatCompactTokenCount(totals.output);
   const windows = [
-    [t("usage.providerUsage.today"), providerHistoryAmount(snapshot, 1)],
-    [t("usage.providerUsage.last7Days"), providerHistoryAmount(snapshot, 7)],
+    [t("usage.providerUsage.today"), providerHistoryAmount(history, 1)],
+    [t("usage.providerUsage.last7Days"), providerHistoryAmount(history, 7)],
     [t("usage.providerUsage.lastDays", { count: String(history.periodDays) }), periodAmount],
   ] as const;
   const formatAmount = createProviderAmountFormatter(history.unit);
@@ -179,46 +191,14 @@ function renderProviderCostHistory(snapshot: ProviderUsageDetails) {
         history.models.length > 0 || history.categories.length > 0
           ? html`
               <div class="provider-cost-breakdowns">
-                ${
-                  history.models.length > 0
-                    ? html`
-                        <div class="provider-cost-breakdown">
-                          <span class="provider-cost-breakdown__title"
-                            >${t("usage.providerUsage.topModels")}</span
-                          >
-                          ${history.models
-                            .slice(0, 3)
-                            .map(
-                              (model) => html`
-                                <div>
-                                  <span>${model.name}</span
-                                  ><strong>${formatCompactTokenCount(model.totalTokens)}</strong>
-                                </div>
-                              `,
-                            )}
-                        </div>
-                      `
-                    : nothing
-                }
-                ${
-                  history.categories.length > 0
-                    ? html`
-                        <div class="provider-cost-breakdown">
-                          <span class="provider-cost-breakdown__title"
-                            >${t("usage.providerUsage.costCategories")}</span
-                          >
-                          ${history.categories.slice(0, 3).map(
-                            (category) => html`
-                              <div>
-                                <span>${category.name}</span>
-                                <strong>${formatAmount(category.amount)}</strong>
-                              </div>
-                            `,
-                          )}
-                        </div>
-                      `
-                    : nothing
-                }
+                ${renderCostBreakdown(t("usage.providerUsage.topModels"), history.models, (model) =>
+                  formatCompactTokenCount(model.totalTokens),
+                )}
+                ${renderCostBreakdown(
+                  t("usage.providerUsage.costCategories"),
+                  history.categories,
+                  (category) => formatAmount(category.amount),
+                )}
               </div>
             `
           : nothing
@@ -263,11 +243,7 @@ function renderProviderUsageWindow(window: UsageWindow) {
   `;
 }
 
-/**
- * Card body for one provider usage snapshot: quota windows with progress
- * bars, billing rows, provider cost history, and the provider summary line.
- * The surrounding card header (name, plan badge, icon) stays surface-owned.
- */
+/** The surrounding card header (name, plan badge, icon) stays surface-owned. */
 export function renderProviderUsageDetails(
   snapshot: ProviderUsageDetails,
   options: ProviderUsageDetailsOptions = {},

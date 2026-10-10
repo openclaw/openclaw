@@ -20,9 +20,7 @@ it.each(["timer", "event-loop"] as const)(
       run: async (currentSignal) => {
         signal = currentSignal;
         return await attemptMemoryCorpus({
-          corpus: "memory",
           signal: currentSignal,
-          unavailableValue: [],
           getPartialValue: () => partial,
           run: () => pending.promise,
         });
@@ -45,35 +43,24 @@ it.each(["timer", "event-loop"] as const)(
   },
 );
 
-it.each(["provider", "caller"] as const)(
-  "does not replace a %s failure with partial results",
-  async (source) => {
-    const parent = new AbortController();
-    const failure = new Error("memory_search timed out after 30s");
-    const result = runMemoryCorpusDeadline({
-      operation: "memory_search",
-      parentSignal: parent.signal,
-      run: async (signal) =>
-        await attemptMemoryCorpus({
-          corpus: "memory",
-          signal,
-          unavailableValue: [],
-          getPartialValue: () => ["keyword match"],
-          run: async () => {
-            if (source === "caller") {
-              parent.abort(failure);
-            }
-            throw failure;
-          },
-        }),
-    });
-    if (source === "caller") {
-      await expect(result).rejects.toBe(failure);
-    } else {
-      expect(await result).toMatchObject({ outcome: "unavailable", value: [], deadline: false });
-    }
-  },
-);
+it("does not replace a caller failure with partial results", async () => {
+  const parent = new AbortController();
+  const failure = new Error("memory_search timed out after 30s");
+  const result = runMemoryCorpusDeadline({
+    operation: "memory_search",
+    parentSignal: parent.signal,
+    run: async (signal) =>
+      await attemptMemoryCorpus({
+        signal,
+        getPartialValue: () => ["keyword match"],
+        run: async () => {
+          parent.abort(failure);
+          throw failure;
+        },
+      }),
+  });
+  await expect(result).rejects.toBe(failure);
+});
 
 it("exempts a paused owned phase from the corpus deadline", async () => {
   vi.useFakeTimers();

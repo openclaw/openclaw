@@ -13,10 +13,10 @@ export function isColdArchivedSessionRow(row: records.Row) {
 export function createSessionRowProjectionArchive(params: {
   rows: ReadonlyMap<string, records.Row>;
   dirty: Set<string>;
-  enqueue: (id: string, change?: SessionRowChange) => void;
+  invalidateTranscript: (id: string) => void;
   put: (row: records.Row) => void;
   release: (id: string) => void;
-  prepare: (row: records.Row) => records.Row | undefined;
+  invalidateFacts: (row: records.Row) => void;
   config: () => records.Inputs["cfg"];
   context: () => Parameters<typeof records.readSessionRowLineage>[3];
   referenced: NonNullable<Parameters<typeof records.readSessionRowLineage>[4]>;
@@ -31,6 +31,10 @@ export function createSessionRowProjectionArchive(params: {
     params.release(id);
     const cold = records.dematerialize(row);
     params.put(cold);
+    // Eviction releases display custody, not unresolved database-fact preparation.
+    if (cold.unresolvedDatabaseFacts === "category") {
+      params.dirty.add(id);
+    }
     return cold;
   }
   function trim() {
@@ -72,7 +76,7 @@ export function createSessionRowProjectionArchive(params: {
           params.referenced,
         );
         if (
-          records.sameParents(current.parents, lineage.parents) &&
+          isDeepStrictEqual(current.parents, lineage.parents) &&
           isDeepStrictEqual(current.entry, lineage.entry)
         ) {
           continue;
@@ -82,6 +86,7 @@ export function createSessionRowProjectionArchive(params: {
           ...current,
           ...lineage,
           pendingDatabaseFacts: undefined,
+          retainedDatabaseFacts: undefined,
           databaseFactsRevision: current.databaseFactsRevision + 1,
         };
         params.put(next);
@@ -99,25 +104,32 @@ export function createSessionRowProjectionArchive(params: {
       const id = records.identity(row);
       params.put(row);
       params.dirty.add(id);
-      params.enqueue(id);
       return undefined;
-    },
-    isCurrentMaterialization(row: records.Row) {
-      const current = params.rows.get(records.identity(row));
-      return (
-        records.ready(current) &&
-        (current.entry.archivedAt === undefined || current.materialized === row.materialized)
-      );
     },
     invalidateRows(
       change: Extract<SessionRowChange, { all: true }>,
       candidates: Iterable<records.Row>,
     ) {
+      const catalogOnly = change.scope === "catalog" && !change.factsInvalidated;
       for (const row of candidates) {
-        row.pendingDatabaseFacts = undefined;
+        if (change.factsInvalidated) {
+          params.invalidateFacts(row);
+        }
+        if (catalogOnly && row.entry?.archivedAt === undefined) {
+          if (!params.dirty.has(records.identity(row))) {
+            row.pendingDatabaseFacts = records.isPreparedSessionRowDatabaseFacts(
+              row.retainedDatabaseFacts,
+            )
+              ? row.retainedDatabaseFacts
+              : undefined;
+          }
+        } else {
+          row.pendingDatabaseFacts = undefined;
+          row.retainedDatabaseFacts = undefined;
+        }
         if (row.entry?.archivedAt !== undefined) {
           const current = row.materialized ? demote(row) : row;
-          if (change.scope !== "catalog") {
+          if (!catalogOnly) {
             records.invalidateDatabaseFacts(current);
           }
           if (current.preparedAcpMeta === undefined || current.hasBoard === undefined) {
@@ -126,7 +138,13 @@ export function createSessionRowProjectionArchive(params: {
           continue;
         }
         params.dirty.add(records.identity(row));
-        params.enqueue(records.identity(row), change);
+        if (
+          typeof change.scope !== "string" ||
+          change.factsInvalidated ||
+          ((change.scope === "config" || change.scope === "catalog") && row.entry?.fallbackNotice)
+        ) {
+          params.invalidateTranscript(records.identity(row));
+        }
       }
     },
     setPageSize: (size: number) => {
@@ -176,12 +194,11 @@ export function createSessionRowProjectionArchive(params: {
       readPins.clear();
       pinCounts.clear();
     },
-    describe(initial: records.Row | undefined) {
-      if (initial?.entry?.archivedAt === undefined) {
-        return initial;
+    describe(row: records.Row | undefined) {
+      if (row?.entry?.archivedAt === undefined) {
+        return row;
       }
-      const row = records.ready(initial) ? initial : params.prepare(initial);
-      if (records.ready(row) && row.entry.archivedAt !== undefined) {
+      if (records.ready(row)) {
         const id = records.identity(row);
         materialized.delete(id);
         materialized.add(id);

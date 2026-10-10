@@ -1,7 +1,12 @@
-import { createHash } from "node:crypto";
 import path from "node:path";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { getFileLockProcessStartTime, isPidDefinitelyDead } from "../shared/pid-alive.js";
+import {
+  collectProcessAncestorPids,
+  getFileLockProcessStartTime,
+  isPidDefinitelyDead,
+  readDarwinProcessIdentity,
+} from "../shared/pid-alive.js";
 import type { HandoffProcessIdentity } from "./update-managed-service-handoff-schema.js";
 import { readWindowsProcessArgsSync } from "./windows-port-pids.js";
 
@@ -13,10 +18,7 @@ function windowsArgvIdentity(argv: readonly string[]): string | null {
     return null;
   }
   const normalized = [path.win32.normalize(argv[0]).toLowerCase(), ...argv.slice(1)];
-  return (
-    WINDOWS_ARGV_IDENTITY_PREFIX +
-    createHash("sha256").update(JSON.stringify(normalized)).digest("hex")
-  );
+  return WINDOWS_ARGV_IDENTITY_PREFIX + sha256Hex(JSON.stringify(normalized));
 }
 
 /** Process facts shared by lease admission, live ownership, and cleanup. */
@@ -58,6 +60,42 @@ export function createManagedHandoffProcessIdentityReader(options: {
       : String(start);
   }
 
+  function validateDarwinAncestorProcesses(
+    requiredHelperPid: number,
+    validate: (
+      ancestors: ReadonlySet<number>,
+      isProcessIdentityCurrent: (identity: HandoffProcessIdentity) => boolean,
+    ) => boolean,
+  ): boolean {
+    const immediateParent = process.ppid;
+    // These facts belong to this synchronous validation only, never to the reader's lifetime.
+    const observed = new Map<number, ReturnType<typeof readDarwinProcessIdentity>>();
+    const read = (pid: number) => {
+      if (!observed.has(pid)) {
+        observed.set(pid, readDarwinProcessIdentity(pid, options.env));
+      }
+      return observed.get(pid) ?? null;
+    };
+    const ancestors = collectProcessAncestorPids(
+      immediateParent,
+      (pid) => read(pid)?.parentPid ?? null,
+      requiredHelperPid,
+    );
+    if (
+      !ancestors.has(requiredHelperPid) ||
+      !read(requiredHelperPid) ||
+      process.ppid !== immediateParent
+    ) {
+      return false;
+    }
+    return validate(ancestors, (value) => {
+      const facts = observed.get(value.pid);
+      return (
+        isPidAlive(value.pid) && facts != null && String(facts.startedAt) === value.startIdentity
+      );
+    });
+  }
+
   function readWindowsArgvIdentity(pid: number): string | null {
     if (pid !== process.pid) {
       const argv = readWindowsProcessArgsSync(pid, undefined, options.env);
@@ -81,18 +119,15 @@ export function createManagedHandoffProcessIdentityReader(options: {
     if (!isPidAlive(value.pid)) {
       return "dead";
     }
-    if (process.platform === "win32" && WINDOWS_ARGV_IDENTITY_PATTERN.test(value.startIdentity)) {
-      const argvIdentity = readWindowsArgvIdentity(value.pid);
-      return argvIdentity === null
-        ? ownedCustody
-          ? "live"
-          : "unknown"
-        : argvIdentity === value.startIdentity
-          ? "live"
-          : "mismatch";
+    const argvIdentity =
+      process.platform === "win32" && WINDOWS_ARGV_IDENTITY_PATTERN.test(value.startIdentity);
+    const start = argvIdentity
+      ? readWindowsArgvIdentity(value.pid)
+      : readProcessStartIdentity(value.pid);
+    if (start === null) {
+      return argvIdentity && ownedCustody ? "live" : "unknown";
     }
-    const start = readProcessStartIdentity(value.pid);
-    return start === null ? "unknown" : start === value.startIdentity ? "live" : "mismatch";
+    return start === value.startIdentity ? "live" : "mismatch";
   }
   function processState(value: HandoffProcessIdentity): "live" | "dead" | "unknown" {
     const state = inspectProcessIdentity(value);
@@ -173,6 +208,7 @@ export function createManagedHandoffProcessIdentityReader(options: {
     processState,
     inspectProcessIdentity,
     isProcessIdentityCurrent,
+    validateDarwinAncestorProcesses,
     acceptSelfIdentity,
   };
 }

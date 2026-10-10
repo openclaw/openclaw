@@ -1,4 +1,6 @@
 import type { LegacyConfigUpdatePlan } from "../../commands/doctor/legacy-config-repair.js";
+import { resolveConfigPath } from "../../config/paths.js";
+import { createUpdatePreflightFailure } from "../../infra/update-preflight-details.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { withCommandProcessScope } from "../../process/exec-spawn.js";
 import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
@@ -7,6 +9,7 @@ import {
   checkTargetDatabaseSchemasForContexts,
   formatSchemaRefusalLines,
   hasSchemaRefusal,
+  isCandidateAdmissionContextCovered,
 } from "./schema-preflight.js";
 import { UpdatePreMutationError } from "./shared.js";
 import {
@@ -15,124 +18,161 @@ import {
 } from "./update-command-handoff.js";
 import {
   captureOwnedManagedUpdatePreflightContext,
+  resolveOwnedManagedUpdatePreflightEnv,
   revalidateUpdateDatabaseContext,
 } from "./update-command-managed-context.js";
 import { collectServiceInspectionFailureFacts } from "./update-command-result.js";
-import {
-  GatewayServiceUpdateOwnershipError,
-  type ManagedServiceRootRedirect,
-} from "./update-command-service-plan.js";
+import type { ManagedServiceRootRedirect } from "./update-command-service-context-types.js";
+import { GatewayServiceUpdateOwnershipError } from "./update-command-service-plan.js";
 import {
   maybeStopManagedServiceBeforeMutableUpdate,
   type PreManagedServiceStop,
 } from "./update-command-service.js";
 
-export async function inspectUpdateDatabaseContexts(params: {
+type UpdateManagedServiceInspectionParams = {
   roots: readonly string[];
   updateInstallKind: "package" | "git";
   shouldRestart: boolean;
   jsonMode: boolean;
   timeoutMs: number;
   invocationCwd?: string;
-  legacyConfigPlan?: LegacyConfigUpdatePlan;
   managedServiceRootRedirect: ManagedServiceRootRedirect | null;
   managedServiceRoot?: string;
   expectedServices?: ReadonlyMap<string, PreManagedServiceStop>;
   expectedForeground?: true;
-}) {
-  return await withCommandProcessScope(async () => {
-    const foreground = await resolveForegroundUpdateAdmission({
-      root: params.roots[0],
-      expectedForeground: params.expectedForeground,
-    });
-    let service: PreManagedServiceStop | undefined;
-    const services = new Map<string, PreManagedServiceStop>();
-    const serviceRoots = params.managedServiceRoot ? [params.managedServiceRoot] : params.roots;
-    for (const root of new Set(serviceRoots)) {
-      const inspected = await maybeStopManagedServiceBeforeMutableUpdate({
-        root,
-        handoffRoot: params.managedServiceRoot ? params.roots[0] : undefined,
-        updateInstallKind: params.updateInstallKind,
-        shouldRestart: params.shouldRestart,
-        jsonMode: params.jsonMode,
-        timeoutMs: params.timeoutMs,
-        phase: "inspect",
-        expectedService: params.expectedServices?.get(root),
-      }).catch((error: unknown) => {
-        if (hasCommandProcessCleanupError(error)) {
-          throw error;
-        }
-        if (error instanceof GatewayServiceUpdateOwnershipError) {
-          throw new UpdatePreMutationError("managed-service-preflight", error.message, {
-            failureFacts: error.failureFacts,
-          });
-        }
+  assertCurrent?: () => void;
+  handoffFromGateway?: Parameters<
+    typeof maybeStopManagedServiceBeforeMutableUpdate
+  >[0]["handoffFromGateway"];
+};
+
+function managedServicePreflightError(code: Parameters<typeof createUpdatePreflightFailure>[0]) {
+  const failure = createUpdatePreflightFailure(code, undefined, "managed-service-preflight");
+  return new UpdatePreMutationError("managed-service-preflight", failure.message, failure);
+}
+
+/** The installed process owns ancestry and coordination inspection before candidate code runs. */
+export async function inspectUpdateManagedServices(params: UpdateManagedServiceInspectionParams) {
+  return await withCommandProcessScope(() => inspectUpdateManagedServicesInScope(params));
+}
+
+async function inspectUpdateManagedServicesInScope(params: UpdateManagedServiceInspectionParams) {
+  const foreground = await resolveForegroundUpdateAdmission({
+    root: params.roots[0],
+    expectedForeground: params.expectedForeground,
+  });
+  let service: PreManagedServiceStop | undefined;
+  const services = new Map<string, PreManagedServiceStop>();
+  const serviceRoots = params.managedServiceRoot ? [params.managedServiceRoot] : params.roots;
+  for (const root of new Set(serviceRoots)) {
+    const inspected = await maybeStopManagedServiceBeforeMutableUpdate({
+      root,
+      handoffRoot: params.managedServiceRoot ? params.roots[0] : undefined,
+      updateInstallKind: params.updateInstallKind,
+      shouldRestart: params.shouldRestart,
+      jsonMode: params.jsonMode,
+      timeoutMs: params.timeoutMs,
+      phase: "inspect",
+      expectedService: params.expectedServices?.get(root),
+      assertCurrent: params.assertCurrent,
+      handoffFromGateway: params.handoffFromGateway,
+    }).catch((error: unknown) => {
+      if (hasCommandProcessCleanupError(error)) {
         throw error;
-      });
-      if (inspected.blockMessage) {
-        throw new UpdatePreMutationError(
-          "managed-service-preflight",
-          formatUpdateAncestryBlockMessage(inspected.blockMessage),
-          { failureFacts: collectServiceInspectionFailureFacts(inspected.serviceUpdateVerdict) },
-        );
       }
-      if (
-        foreground &&
-        (inspected.serviceUpdateVerdict?.kind === "owned" ||
-          inspected.serviceUpdateVerdict?.kind === "unresolved") &&
-        inspected.offline !== true
-      ) {
-        throw new UpdatePreMutationError(
-          "managed-service-preflight",
-          "Another Gateway service uses this installation and is not verified offline. Stop it through its service owner before updating the foreground Gateway.",
-          { failureFacts: collectServiceInspectionFailureFacts(inspected.serviceUpdateVerdict) },
-        );
+      if (error instanceof GatewayServiceUpdateOwnershipError) {
+        throw new UpdatePreMutationError("managed-service-preflight", error.message, {
+          failureFacts: error.failureFacts,
+        });
       }
-      if (
-        params.managedServiceRoot &&
-        (inspected.serviceUpdateVerdict?.kind !== "owned" ||
-          !inspected.serviceUpdateVerdict.refreshDefinition)
-      ) {
-        throw new UpdatePreMutationError(
-          "managed-service-preflight",
-          "The Gateway cannot be rebound from its current installation: its owned service definition must be writable before this update can align it with the CLI.",
-        );
-      }
-      services.set(root, inspected);
-      if (inspected.serviceUpdateVerdict?.kind === "owned") {
-        service = inspected;
-        break;
-      }
+      throw error;
+    });
+    if (inspected.blockMessage) {
+      throw new UpdatePreMutationError(
+        "managed-service-preflight",
+        formatUpdateAncestryBlockMessage(inspected.blockMessage),
+        {
+          failureFacts:
+            inspected.blockFailureFacts ??
+            collectServiceInspectionFailureFacts(inspected.serviceUpdateVerdict),
+        },
+      );
     }
+    if (
+      foreground &&
+      (inspected.serviceUpdateVerdict?.kind === "owned" ||
+        inspected.serviceUpdateVerdict?.kind === "unresolved") &&
+      inspected.offline !== true
+    ) {
+      throw managedServicePreflightError("service-not-offline");
+    }
+    if (
+      params.managedServiceRoot &&
+      (inspected.serviceUpdateVerdict?.kind !== "owned" ||
+        !inspected.serviceUpdateVerdict.refreshDefinition)
+    ) {
+      throw managedServicePreflightError("service-definition-not-writable");
+    }
+    services.set(root, inspected);
+    if (inspected.serviceUpdateVerdict?.kind === "owned") {
+      service = inspected;
+      break;
+    }
+  }
+  const managedEnv = resolveOwnedManagedUpdatePreflightEnv({
+    stopState: service,
+    processEnv: process.env,
+    invocationCwd: params.invocationCwd,
+  });
+  if ((params.managedServiceRootRedirect || params.managedServiceRoot) && !managedEnv) {
+    throw managedServicePreflightError("service-context-changed");
+  }
+  return {
+    service,
+    services,
+    managedEnv,
+    ...(foreground ? { foreground: true as const } : {}),
+  };
+}
+
+export async function inspectUpdateDatabaseContexts(
+  params: UpdateManagedServiceInspectionParams & {
+    legacyConfigPlan?: LegacyConfigUpdatePlan;
+    callerLegacyConfigPlan?: LegacyConfigUpdatePlan;
+    candidateAdmissionChecks?: readonly string[];
+  },
+) {
+  return await withCommandProcessScope(async () => {
+    const inspected = await inspectUpdateManagedServicesInScope(params);
+    const configValidation = params.candidateAdmissionChecks?.includes("config")
+      ? ("candidate" as const)
+      : undefined;
     const managed = await captureOwnedManagedUpdatePreflightContext({
-      stopState: service,
+      stopState: inspected.service,
       processEnv: process.env,
       invocationCwd: params.invocationCwd,
       legacyConfigPlan: params.legacyConfigPlan,
+      configValidation,
     });
-    if ((params.managedServiceRootRedirect || params.managedServiceRoot) && !managed) {
-      throw new UpdatePreMutationError(
-        "managed-service-preflight",
-        "The managed Gateway service changed before database admission. Retry so its package root and state can be inspected together.",
-      );
-    }
     // Redirected package replacement does not own the invoking installation's stores.
     const contexts = params.managedServiceRootRedirect
       ? []
       : [
           await captureTargetDatabaseSchemaContext(process.env, {
-            legacyConfigPlan: params.legacyConfigPlan,
+            legacyConfigPlan:
+              params.callerLegacyConfigPlan?.snapshot.path === resolveConfigPath()
+                ? params.callerLegacyConfigPlan
+                : params.legacyConfigPlan,
+            configValidation,
           }),
         ];
     if (managed) {
       contexts.push(managed);
     }
     return {
-      service,
-      services,
+      ...inspected,
       contexts,
-      managedEnv: foreground ? undefined : managed?.env,
-      ...(foreground ? { foreground: true as const } : {}),
+      managedEnv: inspected.foreground ? undefined : managed?.env,
     };
   });
 }
@@ -149,14 +189,17 @@ export async function revalidateUpdateDatabaseContexts(
       "Database admission was not inspected.",
     );
   }
-  await inspectUpdateDatabaseContexts({
+  await inspectUpdateManagedServices({
     ...params,
     roots: [...admission.services.keys()],
     expectedServices: admission.services,
     expectedForeground: admission.foreground,
   });
   admission.contexts = await Promise.all(admission.contexts.map(revalidateUpdateDatabaseContext));
-  const schemas = await checkTargetDatabaseSchemasForContexts(versions, admission.contexts);
+  const installedContexts = params.candidateAdmissionChecks?.includes("database-schema")
+    ? admission.contexts.filter((context) => !isCandidateAdmissionContextCovered(context.env))
+    : admission.contexts;
+  const schemas = await checkTargetDatabaseSchemasForContexts(versions, installedContexts);
   if (hasSchemaRefusal(schemas)) {
     throw new UpdatePreMutationError(
       "database-schema-preflight",

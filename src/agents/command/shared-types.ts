@@ -16,6 +16,7 @@ import type { ImageContent } from "../../llm/types.js";
 import type { MediaFact } from "../../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import type { PluginHookChannelContext } from "../../plugins/hook-types.js";
+import type { CommandLaneConfiguration } from "../../process/lanes.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
 import type { SkillSnapshot } from "../../skills/types.js";
@@ -32,13 +33,11 @@ import type { SessionManager } from "../sessions/index.js";
 
 /** Best-effort provider stream parameter overrides for an agent command. */
 export type AgentStreamParams = {
-  /** Provider stream params override (best-effort). */
   temperature?: number;
   topP?: number;
   maxTokens?: number;
   /** Stop sequences forwarded to the provider (best-effort). */
   stop?: string[];
-  /** Provider fast-mode override (best-effort). */
   fastMode?: boolean;
   responseFormat?: Record<string, unknown>;
   frequencyPenalty?: number;
@@ -80,7 +79,6 @@ export type AgentRunMessageContext = {
   currentThreadTs?: string;
   /** Current inbound message id for action fallbacks (e.g. Telegram react). */
   currentMessageId?: string | number;
-  /** True when the current inbound turn carried audio media. */
   currentInboundAudio?: boolean;
   /** Reply-to mode for Slack auto-threading. */
   replyToMode?: "off" | "first" | "all" | "batched";
@@ -131,7 +129,6 @@ export type AgentRunModelOptions = {
   fastModeAutoOnSeconds?: number;
   /** Shared notification state for nested harnesses that can observe the same tool boundary. */
   fastModeAutoProgressState?: FastModeAutoProgressState;
-  /** True when the outer model fallback loop has reached its final candidate. */
   isFinalFallbackAttempt?: boolean;
   authProfileId?: string;
 };
@@ -165,9 +162,7 @@ export type AgentRunInputContext = {
   ownerNumbers?: string[];
   /** Seen bootstrap truncation warning signatures for this session (once mode dedupe). */
   bootstrapPromptWarningSignaturesSeen?: string[];
-  /** Last shown bootstrap truncation warning signature for this session. */
   bootstrapPromptWarningSignature?: string;
-  /** Run kind hint for context mode behavior. */
   bootstrapContextRunKind?: BootstrapContextRunKind;
 };
 
@@ -202,6 +197,7 @@ export type AgentRunLifecycle = {
   /** Immutable gateway lifecycle ownership captured when this execution was admitted. */
   lifecycleGeneration?: string;
   lane?: string;
+  swarmExecutionLane?: CommandLaneConfiguration;
   /** Stable cron job identifier populated for cron-triggered runs. */
   jobId?: string;
   /** Trusted server-stamped authority for an explicitly capped scheduled run. */

@@ -20,15 +20,13 @@ Edit English docs in `openclaw/openclaw` and push to `main`. The sync, translati
 ## Why the split exists
 
 - Keep generated locale output out of the main product repo.
-- Keep Mintlify on a single published docs tree.
-- Preserve the built-in language switcher for Mintlify-supported generated locales by letting the publish repo own generated locale trees.
-- Keep generated Thai (`th`) and Persian (`fa`) docs plus translation memory even though Mintlify does not accept those codes in `navigation.languages` (checked 2026-09-06). Their absence from the built-in docs language picker is a host limitation, not a failed translation run.
+- Assemble English sources and generated translations for the custom website owned by `openclaw/docs`.
 
 ## Locale visibility
 
 - Control UI supports `en`, `zh-CN`, `zh-TW`, `pt-BR`, `de`, `es`, `ja-JP`, `ko`, `fr`, `hi`, `ar`, `it`, `vi`, `nl`, `fa`, `ru`, `tr`, `uk`, `id`, `pl`, and `th`.
 - Docs translation workflows generate the same non-English locale set in `openclaw/docs`.
-- The Mintlify docs language picker can expose only the locales accepted by Mintlify `navigation.languages`. As of 2026-09-06, the publish configuration includes Russian (`ru`) and Hindi (`hi`).
+- The custom docs website supports the generated locale set, including Thai (`th`) and Persian (`fa`).
 - Do not treat locale visibility in generated `docs/docs.json` as proof that translation artifacts exist. Verify each generated locale folder and its translation memory in `openclaw/docs`.
 
 ## Files in this folder
@@ -40,34 +38,34 @@ Edit English docs in `openclaw/openclaw` and push to `main`. The sync, translati
 
 ### Locale code mapping
 
-Three different code families are in play and they do not always match. Mintlify
+Three different code families are in play and they do not always match. The docs
 `navigation.languages` uses the language code, the generated locale tree and the
 glossary/TM files use the directory code, and the navigation overlay file is named
 after the language code. `GENERATED_LOCALES` in `scripts/docs-sync-publish.mjs` is
 the source of truth for this mapping.
 
-| Mintlify language | Locale directory | Navigation file                         | Glossary file         | TM file          | Nav mode |
-| ----------------- | ---------------- | --------------------------------------- | --------------------- | ---------------- | -------- |
-| `zh-Hans`         | `docs/zh-CN/`    | `zh-Hans-navigation.json`               | `glossary.zh-CN.json` | `zh-CN.tm.jsonl` | overlay  |
-| `zh-Hant`         | `docs/zh-TW/`    | `zh-Hant-navigation.json` (not present) | `glossary.zh-TW.json` | `zh-TW.tm.jsonl` | clone-en |
-| `ja`              | `docs/ja-JP/`    | `ja-navigation.json`                    | `glossary.ja-JP.json` | `ja-JP.tm.jsonl` | clone-en |
-| `es`              | `docs/es/`       | `es-navigation.json`                    | `glossary.es.json`    | `es.tm.jsonl`    | clone-en |
-| `pt-BR`           | `docs/pt-BR/`    | `pt-BR-navigation.json`                 | `glossary.pt-BR.json` | `pt-BR.tm.jsonl` | clone-en |
-| `ko`              | `docs/ko/`       | `ko-navigation.json`                    | `glossary.ko.json`    | `ko.tm.jsonl`    | clone-en |
-| `de`              | `docs/de/`       | `de-navigation.json`                    | `glossary.de.json`    | `de.tm.jsonl`    | clone-en |
-| `fr`              | `docs/fr/`       | `fr-navigation.json`                    | `glossary.fr.json`    | `fr.tm.jsonl`    | clone-en |
-| `hi`              | `docs/hi/`       | `hi-navigation.json` (not present)      | `glossary.hi.json`    | `hi.tm.jsonl`    | clone-en |
-| `ar`              | `docs/ar/`       | `ar-navigation.json`                    | `glossary.ar.json`    | `ar.tm.jsonl`    | clone-en |
-| `it`              | `docs/it/`       | `it-navigation.json`                    | `glossary.it.json`    | `it.tm.jsonl`    | clone-en |
-| `vi`              | `docs/vi/`       | `vi-navigation.json` (not present)      | `glossary.vi.json`    | `vi.tm.jsonl`    | clone-en |
-| `nl`              | `docs/nl/`       | `nl-navigation.json` (not present)      | `glossary.nl.json`    | `nl.tm.jsonl`    | clone-en |
-| `fa`              | `docs/fa/`       | `fa-navigation.json` (not present)      | `glossary.fa.json`    | `fa.tm.jsonl`    | clone-en |
-| `tr`              | `docs/tr/`       | `tr-navigation.json`                    | `glossary.tr.json`    | `tr.tm.jsonl`    | clone-en |
-| `uk`              | `docs/uk/`       | `uk-navigation.json` (not present)      | `glossary.uk.json`    | `uk.tm.jsonl`    | clone-en |
-| `id`              | `docs/id/`       | `id-navigation.json`                    | `glossary.id.json`    | `id.tm.jsonl`    | clone-en |
-| `pl`              | `docs/pl/`       | `pl-navigation.json`                    | `glossary.pl.json`    | `pl.tm.jsonl`    | clone-en |
-| `th`              | `docs/th/`       | `th-navigation.json` (not present)      | `glossary.th.json`    | `th.tm.jsonl`    | clone-en |
-| `ru`              | `docs/ru/`       | `ru-navigation.json` (not present)      | `glossary.ru.json`    | `ru.tm.jsonl`    | clone-en |
+| Navigation language | Locale directory | Navigation file                         | Glossary file         | TM file          | Nav mode |
+| ------------------- | ---------------- | --------------------------------------- | --------------------- | ---------------- | -------- |
+| `zh-Hans`           | `docs/zh-CN/`    | `zh-Hans-navigation.json`               | `glossary.zh-CN.json` | `zh-CN.tm.jsonl` | overlay  |
+| `zh-Hant`           | `docs/zh-TW/`    | `zh-Hant-navigation.json` (not present) | `glossary.zh-TW.json` | `zh-TW.tm.jsonl` | clone-en |
+| `ja`                | `docs/ja-JP/`    | `ja-navigation.json`                    | `glossary.ja-JP.json` | `ja-JP.tm.jsonl` | clone-en |
+| `es`                | `docs/es/`       | `es-navigation.json`                    | `glossary.es.json`    | `es.tm.jsonl`    | clone-en |
+| `pt-BR`             | `docs/pt-BR/`    | `pt-BR-navigation.json`                 | `glossary.pt-BR.json` | `pt-BR.tm.jsonl` | clone-en |
+| `ko`                | `docs/ko/`       | `ko-navigation.json`                    | `glossary.ko.json`    | `ko.tm.jsonl`    | clone-en |
+| `de`                | `docs/de/`       | `de-navigation.json`                    | `glossary.de.json`    | `de.tm.jsonl`    | clone-en |
+| `fr`                | `docs/fr/`       | `fr-navigation.json`                    | `glossary.fr.json`    | `fr.tm.jsonl`    | clone-en |
+| `hi`                | `docs/hi/`       | `hi-navigation.json` (not present)      | `glossary.hi.json`    | `hi.tm.jsonl`    | clone-en |
+| `ar`                | `docs/ar/`       | `ar-navigation.json`                    | `glossary.ar.json`    | `ar.tm.jsonl`    | clone-en |
+| `it`                | `docs/it/`       | `it-navigation.json`                    | `glossary.it.json`    | `it.tm.jsonl`    | clone-en |
+| `vi`                | `docs/vi/`       | `vi-navigation.json` (not present)      | `glossary.vi.json`    | `vi.tm.jsonl`    | clone-en |
+| `nl`                | `docs/nl/`       | `nl-navigation.json` (not present)      | `glossary.nl.json`    | `nl.tm.jsonl`    | clone-en |
+| `fa`                | `docs/fa/`       | `fa-navigation.json` (not present)      | `glossary.fa.json`    | `fa.tm.jsonl`    | clone-en |
+| `tr`                | `docs/tr/`       | `tr-navigation.json`                    | `glossary.tr.json`    | `tr.tm.jsonl`    | clone-en |
+| `uk`                | `docs/uk/`       | `uk-navigation.json` (not present)      | `glossary.uk.json`    | `uk.tm.jsonl`    | clone-en |
+| `id`                | `docs/id/`       | `id-navigation.json`                    | `glossary.id.json`    | `id.tm.jsonl`    | clone-en |
+| `pl`                | `docs/pl/`       | `pl-navigation.json`                    | `glossary.pl.json`    | `pl.tm.jsonl`    | clone-en |
+| `th`                | `docs/th/`       | `th-navigation.json` (not present)      | `glossary.th.json`    | `th.tm.jsonl`    | clone-en |
+| `ru`                | `docs/ru/`       | `ru-navigation.json` (not present)      | `glossary.ru.json`    | `ru.tm.jsonl`    | clone-en |
 
 Only three locales differ between the two code families: `zh-Hans`/`zh-CN`,
 `zh-Hant`/`zh-TW`, and `ja`/`ja-JP`. Every other locale uses the same code in both

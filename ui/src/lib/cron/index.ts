@@ -1,8 +1,11 @@
 import { parseStrictFiniteNumber } from "@openclaw/normalization-core/number-coercion";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { asNullableObjectRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  normalizeLowercaseStringOrEmpty,
+  readNonEmptyStringPreservingWhitespace,
+} from "@openclaw/normalization-core/string-coerce";
 import { resolveCronTriggerMinIntervalMs } from "../../../../src/config/cron-limits.js";
+import { hasCanonicalCronDeliveryMode } from "../../../../src/cron/store/delivery-codec.js";
 import { isSystemMonitorDeclaration } from "../../../../src/cron/system-owned-declaration.js";
 import { isSystemOwnedCronPayloadKind } from "../../../../src/cron/types.js";
 import { createDeferredCore, type Deferred } from "../../../../src/shared/deferred.js";
@@ -34,6 +37,7 @@ import { resolveCronWebhookDeliveryError } from "./webhook-url.ts";
 export { loadCronScopeStats } from "./scope.ts";
 export { loadCronJobsPage } from "./jobs.ts";
 export { getCronJobPayload } from "./payload.ts";
+export { resolveConfiguredCronModelSuggestions } from "./model-suggestions.ts";
 
 const CRON_CHANNEL_LAST = "last";
 
@@ -232,6 +236,9 @@ export function validateCronForm(form: CronFormState): CronFieldErrors {
       }
     }
   }
+  if (!form.deliveryMode) {
+    errors.deliveryMode = "cron.errors.deliveryModeRequired";
+  }
   if (form.deliveryMode === "webhook") {
     const error = resolveCronWebhookDeliveryError(form.deliveryTo);
     if (error) {
@@ -364,75 +371,6 @@ export async function loadCronStatus(
   }
 }
 
-function addModelId(target: Set<string>, value: unknown) {
-  if (typeof value !== "string") {
-    return;
-  }
-  const trimmed = value.trim();
-  if (trimmed) {
-    target.add(trimmed);
-  }
-}
-
-function addModelConfigIds(target: Set<string>, modelConfig: unknown) {
-  if (!modelConfig) {
-    return;
-  }
-  if (typeof modelConfig === "string") {
-    addModelId(target, modelConfig);
-    return;
-  }
-  if (typeof modelConfig !== "object") {
-    return;
-  }
-  const record = modelConfig as Record<string, unknown>;
-  addModelId(target, record.primary);
-  addModelId(target, record.model);
-  addModelId(target, record.id);
-  addModelId(target, record.value);
-  const fallbacks = Array.isArray(record.fallbacks)
-    ? record.fallbacks
-    : Array.isArray(record.fallback)
-      ? record.fallback
-      : [];
-  for (const fallback of fallbacks) {
-    addModelId(target, fallback);
-  }
-}
-
-export function resolveConfiguredCronModelSuggestions(
-  configForm: Record<string, unknown> | null | undefined,
-): string[] {
-  if (!configForm || typeof configForm !== "object") {
-    return [];
-  }
-  const agents = configForm.agents;
-  if (!agents || typeof agents !== "object") {
-    return [];
-  }
-  const out = new Set<string>();
-  const defaults = (agents as { defaults?: unknown }).defaults;
-  if (defaults && typeof defaults === "object") {
-    const defaultsRecord = defaults as Record<string, unknown>;
-    addModelConfigIds(out, defaultsRecord.model);
-    const defaultsModels = defaultsRecord.models;
-    if (defaultsModels && typeof defaultsModels === "object") {
-      for (const modelId of Object.keys(defaultsModels as Record<string, unknown>)) {
-        addModelId(out, modelId);
-      }
-    }
-  }
-  const entries = (agents as { entries?: unknown }).entries;
-  if (entries && typeof entries === "object" && !Array.isArray(entries)) {
-    for (const entry of Object.values(entries as Record<string, unknown>)) {
-      if (entry && typeof entry === "object") {
-        addModelConfigIds(out, (entry as Record<string, unknown>).model);
-      }
-    }
-  }
-  return sortUniqueStrings([...out]);
-}
-
 async function withCronBusy(
   state: CronState,
   job: Pick<CronJob, "id" | "name" | "displayName"> | undefined,
@@ -537,6 +475,7 @@ function isReadOnlyCronPayload(payload: CronPayload | null, declarationKey?: str
 function jobToForm(job: CronJob, prev: CronFormState): CronFormState {
   const failureAlert = typeof job.failureAlert === "object" ? job.failureAlert : undefined;
   const payload = getCronJobPayload(job);
+  const agentTurn = payload?.kind === "agentTurn" ? payload : undefined;
   const payloadLocked = isReadOnlyCronPayload(payload, job.declarationKey);
   if (!isCronFormSessionTarget(job.sessionTarget)) {
     throw new TypeError(`Invalid cron session target: ${job.sessionTarget}`);
@@ -552,9 +491,6 @@ function jobToForm(job: CronJob, prev: CronFormState): CronFormState {
     deleteAfterRun: job.deleteAfterRun ?? job.schedule.kind === "at",
     scheduleKind: job.schedule.kind,
     scheduleAt: "",
-    everyAmount: prev.everyAmount,
-    everyUnit: prev.everyUnit,
-    cronExpr: prev.cronExpr,
     cronTz: "",
     scheduleExact: false,
     staggerAmount: "",
@@ -576,10 +512,10 @@ function jobToForm(job: CronJob, prev: CronFormState): CronFormState {
             : payload?.kind === "script"
               ? payload.script
               : "",
-    payloadModel: payload?.kind === "agentTurn" ? (payload.model ?? "") : "",
-    payloadThinking: payload?.kind === "agentTurn" ? (payload.thinking ?? "") : "",
-    payloadLightContext: payload?.kind === "agentTurn" ? payload.lightContext === true : false,
-    deliveryMode: job.delivery?.mode ?? "none",
+    payloadModel: agentTurn?.model ?? "",
+    payloadThinking: agentTurn?.thinking ?? "",
+    payloadLightContext: agentTurn?.lightContext === true,
+    deliveryMode: hasCanonicalCronDeliveryMode(job.delivery) ? (job.delivery?.mode ?? "none") : "",
     deliveryChannel: job.delivery?.channel ?? CRON_CHANNEL_LAST,
     deliveryTo: job.delivery?.to ?? "",
     deliveryAccountId: job.delivery?.accountId ?? "",
@@ -599,24 +535,17 @@ function jobToForm(job: CronJob, prev: CronFormState): CronFormState {
     failureAlertDeliveryMode: failureAlert?.mode ?? "",
     failureAlertAccountId: failureAlert?.accountId ?? "",
     timeoutSeconds:
-      payload?.kind === "agentTurn" && typeof payload.timeoutSeconds === "number"
-        ? String(payload.timeoutSeconds)
-        : "",
+      typeof agentTurn?.timeoutSeconds === "number" ? String(agentTurn.timeoutSeconds) : "",
   };
 
   if (job.schedule.kind === "at") {
     next.scheduleAt = formatDateTimeLocal(job.schedule.at);
   } else if (job.schedule.kind === "every") {
-    const parsed = parseEverySchedule(job.schedule.everyMs);
-    next.everyAmount = parsed.everyAmount;
-    next.everyUnit = parsed.everyUnit;
+    Object.assign(next, parseEverySchedule(job.schedule.everyMs));
   } else if (job.schedule.kind === "cron") {
     next.cronExpr = job.schedule.expr;
     next.cronTz = job.schedule.tz ?? "";
-    const staggerFields = parseStaggerSchedule(job.schedule.staggerMs);
-    next.scheduleExact = staggerFields.scheduleExact;
-    next.staggerAmount = staggerFields.staggerAmount;
-    next.staggerUnit = staggerFields.staggerUnit;
+    Object.assign(next, parseStaggerSchedule(job.schedule.staggerMs));
   }
   // Process-backed schedule kinds are shown read-only in the list and have no
   // editable schedule form fields; leave the cron/at/every fields at their defaults.
@@ -681,11 +610,8 @@ function normalizePersistedDeliveryChannel(
   options: { preserveLast?: boolean } = {},
 ) {
   const channel = value.trim();
-  if (!channel) {
+  if (!channel || (channel === CRON_CHANNEL_LAST && !options.preserveLast)) {
     return undefined;
-  }
-  if (channel === CRON_CHANNEL_LAST) {
-    return options.preserveLast ? CRON_CHANNEL_LAST : undefined;
   }
   return channel;
 }
@@ -742,15 +668,9 @@ type CronSaveResult = { saved: false } | { saved: true; jobId: string | null };
 
 // cron.add responds with either { created, job } or the bare job read view.
 function extractSavedCronJobId(response: unknown): string | null {
-  if (!response || typeof response !== "object") {
-    return null;
-  }
-  const container = "job" in response ? (response as { job?: unknown }).job : response;
-  if (!container || typeof container !== "object") {
-    return null;
-  }
-  const id = (container as { id?: unknown }).id;
-  return typeof id === "string" && id.length > 0 ? id : null;
+  const record = asNullableObjectRecord(response);
+  const container = record && "job" in record ? asNullableObjectRecord(record.job) : record;
+  return readNonEmptyStringPreservingWhitespace(container?.id) ?? null;
 }
 
 export async function addCronJob(state: CronState): Promise<CronSaveResult> {
@@ -778,7 +698,7 @@ export async function addCronJob(state: CronState): Promise<CronSaveResult> {
         ? editingJob
           ? undefined
           : sourceJob.schedule
-        : buildCronSchedule(form);
+        : buildCronSchedule(form, editingJob?.schedule);
     const preserveLockedPayload = Boolean(
       editingJob &&
       form.payloadLocked &&
@@ -795,39 +715,37 @@ export async function addCronJob(state: CronState): Promise<CronSaveResult> {
       selectedDeliveryMode === "announce"
         ? normalizedDeliveryAccountId || (editingJob?.delivery?.accountId ? null : undefined)
         : undefined;
-    const delivery =
-      selectedDeliveryMode && selectedDeliveryMode !== "none"
-        ? {
-            mode: selectedDeliveryMode,
-            channel:
-              selectedDeliveryMode === "announce"
-                ? normalizePersistedDeliveryChannel(form.deliveryChannel, {
-                    preserveLast: Boolean(editingJob?.delivery?.channel),
-                  })
-                : undefined,
-            to:
-              form.deliveryTo.trim() ||
-              (selectedDeliveryMode === "announce" && editingJob?.delivery?.to ? null : undefined),
-            accountId: deliveryAccountId,
-            bestEffort: form.deliveryBestEffort,
-            ...(form.deliveryThreadId !== undefined ? { threadId: form.deliveryThreadId } : {}),
-            ...(selectedDeliveryMode === "announce" && form.deliveryCompletionDestination
-              ? { completionDestination: form.deliveryCompletionDestination }
-              : {}),
-            ...(form.deliveryFailureDestination
-              ? { failureDestination: form.deliveryFailureDestination }
-              : {}),
-          }
-        : selectedDeliveryMode === "none"
-          ? ({
-              mode: "none",
-              ...(form.deliveryBestEffort ? { bestEffort: true } : {}),
-              ...(form.deliveryThreadId !== undefined ? { threadId: form.deliveryThreadId } : {}),
-              ...(form.deliveryFailureDestination
-                ? { failureDestination: form.deliveryFailureDestination }
-                : {}),
-            } as const)
-          : undefined;
+    const delivery = selectedDeliveryMode
+      ? {
+          mode: selectedDeliveryMode,
+          ...(selectedDeliveryMode === "none"
+            ? form.deliveryBestEffort
+              ? { bestEffort: true }
+              : {}
+            : {
+                channel:
+                  selectedDeliveryMode === "announce"
+                    ? normalizePersistedDeliveryChannel(form.deliveryChannel, {
+                        preserveLast: Boolean(editingJob?.delivery?.channel),
+                      })
+                    : undefined,
+                to:
+                  form.deliveryTo.trim() ||
+                  (selectedDeliveryMode === "announce" && editingJob?.delivery?.to
+                    ? null
+                    : undefined),
+                accountId: deliveryAccountId,
+                bestEffort: form.deliveryBestEffort,
+              }),
+          ...(form.deliveryThreadId !== undefined ? { threadId: form.deliveryThreadId } : {}),
+          ...(selectedDeliveryMode === "announce" && form.deliveryCompletionDestination
+            ? { completionDestination: form.deliveryCompletionDestination }
+            : {}),
+          ...(form.deliveryFailureDestination
+            ? { failureDestination: form.deliveryFailureDestination }
+            : {}),
+        }
+      : undefined;
     const failureAlert = buildFailureAlert(form, sourceJob?.failureAlert, Boolean(editingJob));
     const triggerScript = form.triggerScript.trim();
     const trigger = form.triggerEnabled
@@ -870,9 +788,6 @@ export async function addCronJob(state: CronState): Promise<CronSaveResult> {
     }
     if (payload) {
       job.payload = payload;
-    }
-    if (!job.name) {
-      throw new Error(t("cron.errors.nameRequiredShort"));
     }
     if (editingJob) {
       const editedJobId = editingJob.id;
@@ -1025,17 +940,11 @@ export function startCronEdit(state: CronState, job: CronJob) {
 
 function buildCloneName(name: string, existingNames: Set<string>) {
   const base = name.trim() || "Job";
-  const first = `${base} copy`;
-  if (!existingNames.has(normalizeLowercaseStringOrEmpty(first))) {
-    return first;
-  }
-  let index = 2;
-  while (index < 1000) {
-    const next = `${base} copy ${index}`;
+  for (let index = 1; index < 1000; index += 1) {
+    const next = index === 1 ? `${base} copy` : `${base} copy ${index}`;
     if (!existingNames.has(normalizeLowercaseStringOrEmpty(next))) {
       return next;
     }
-    index += 1;
   }
   return `${base} copy ${Date.now()}`;
 }

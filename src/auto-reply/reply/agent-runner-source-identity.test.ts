@@ -1,7 +1,7 @@
 import path from "node:path";
 import { afterEach, describe, expect, it, onTestFinished } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { isRestartRecoveryTerminalDeliveryFailClosed } from "../../config/sessions/restart-recovery-receipt.js";
+import { resolveRestartRecoverySteeringBlockReason } from "../../config/sessions/restart-recovery-receipt.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { createReplyAgentRestartRecoveryController } from "./agent-runner-execute.js";
@@ -21,7 +21,6 @@ describe("admitted Gateway source identity", () => {
       const sourceTurnId = admission === "recovered" ? "gateway-original-source" : admissionRunId;
       let entry: SessionEntry = {
         sessionId,
-        status: "running",
         updatedAt: 1,
         restartRecoveryTerminalRunIds: ["gateway-previous-run"],
         ...(admission === "recovered"
@@ -86,8 +85,8 @@ describe("admitted Gateway source identity", () => {
       const target = replyRunRegistry.resolveCurrentMessageInjectionTarget(sessionKey);
       expect(target).toMatchObject({ sourceTurnId });
       expect(
-        isRestartRecoveryTerminalDeliveryFailClosed(entry, sessionId, target?.sourceTurnId ?? ""),
-      ).toBe(false);
+        resolveRestartRecoverySteeringBlockReason(entry, sessionId, target?.sourceTurnId ?? ""),
+      ).toBeUndefined();
       expect(entry.restartRecoveryTerminalRunIds).toEqual(["gateway-previous-run"]);
     },
   );

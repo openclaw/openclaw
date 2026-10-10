@@ -1,11 +1,14 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 import { expect, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import * as serviceChildControl from "../process/supervisor/service-child-control-reader.js";
-import type { NodeWorkerLaunchClaim } from "./node-worker-launch-store.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { workerBackgroundExecEntrypoints } from "../worker/worker-runtime-background-exec-entrypoints.test-support.js";
+import { NodeWorkerJournalWorker } from "./node-worker-journal-worker.js";
+import { NodeWorkerLaunchStore, type NodeWorkerLaunchClaim } from "./node-worker-launch-store.js";
 import * as workerLaunchTransport from "./node-worker-launch-transport.js";
 import {
   inspectNodeWorkerProcessIdentity,
@@ -15,19 +18,23 @@ import {
 import { createNodeWorkerSupervisor } from "./node-worker-supervisor.js";
 import {
   testWorkerLaunchInput,
+  testNodeWorkerLaunchIdentity,
   writeNodeWorkerFixture,
 } from "./node-worker-supervisor.test-support.js";
+import { NodeWorkerTurnStore } from "./node-worker-turn-store.js";
+
+const supervisorUrl = resolveRuntimeWorkerUrl(workerBackgroundExecEntrypoints.supervisor);
+const turnsUrl = resolveRuntimeWorkerUrl(workerBackgroundExecEntrypoints.turnStore);
+const journalUrl = resolveRuntimeWorkerUrl(workerBackgroundExecEntrypoints.journalWorker);
 
 function writeSupervisorOwnerScript(root: string, waitForCompletedTurn: boolean): string {
-  const supervisorUrl = pathToFileURL(path.resolve("src/node-host/node-worker-supervisor.ts")).href;
-  const turnsUrl = pathToFileURL(path.resolve("src/node-host/node-worker-turn-store.ts")).href;
-  const scriptPath = path.join(root, "supervisor-owner.mts");
+  const scriptPath = path.join(root, "supervisor-owner.mjs");
   fs.writeFileSync(
     scriptPath,
     `
       import fs from "node:fs";
-      import { createNodeWorkerSupervisor } from ${JSON.stringify(supervisorUrl)};
-      import { NodeWorkerTurnStore } from ${JSON.stringify(turnsUrl)};
+      import { createNodeWorkerSupervisor } from ${JSON.stringify(supervisorUrl.href)};
+      import { NodeWorkerJournalWorker } from ${JSON.stringify(journalUrl.href)};
       const [bundleRoot, stateDir, inputPath] = process.argv.slice(2);
       const supervisor = createNodeWorkerSupervisor({
         bundleRoot,
@@ -42,11 +49,11 @@ function writeSupervisorOwnerScript(root: string, waitForCompletedTurn: boolean)
       const completed = Promise.withResolvers();
       void completed.promise.catch(() => undefined);
       if (${waitForCompletedTurn}) {
-        const finish = NodeWorkerTurnStore.prototype.finish;
-        NodeWorkerTurnStore.prototype.finish = function (params) {
-          const finishing = finish.call(this, params);
-          if (params.expected.launchId === input.launchId) {
-            NodeWorkerTurnStore.prototype.finish = finish;
+        const execute = NodeWorkerJournalWorker.prototype.execute;
+        NodeWorkerJournalWorker.prototype.execute = function (command, authority) {
+          const finishing = execute.call(this, command, authority);
+          if (command.type === "nodeWorker.turn.finish" && command.input[0].expected.launchId === input.launchId) {
+            NodeWorkerJournalWorker.prototype.execute = execute;
             void finishing.then(completed.resolve, completed.reject);
           }
           return finishing;
@@ -70,25 +77,19 @@ export function spawnPendingSupervisorOwner({
   env: NodeJS.ProcessEnv;
   claim: NodeWorkerLaunchClaim;
 }): ChildProcess {
-  const storeUrl = pathToFileURL(path.resolve("src/node-host/node-worker-launch-store.ts")).href;
-  const turnsUrl = pathToFileURL(path.resolve("src/node-host/node-worker-turn-store.ts")).href;
-  const journalUrl = pathToFileURL(
-    path.resolve("src/node-host/node-worker-journal-worker.ts"),
-  ).href;
-  const identityUrl = pathToFileURL(
-    path.resolve("src/node-host/node-worker-process-identity.ts"),
-  ).href;
+  const storeUrl = resolveRuntimeWorkerUrl(workerBackgroundExecEntrypoints.launchStore);
+  const identityUrl = resolveRuntimeWorkerUrl(workerBackgroundExecEntrypoints.processIdentity);
   const claimPath = path.join(root, "claim.json");
-  const scriptPath = path.join(root, "pending-owner.mts");
+  const scriptPath = path.join(root, "pending-owner.mjs");
   fs.writeFileSync(claimPath, JSON.stringify(claim));
   fs.writeFileSync(
     scriptPath,
     `
         import fs from "node:fs";
-        import { NodeWorkerJournalWorker } from ${JSON.stringify(journalUrl)};
-        import { NodeWorkerLaunchStore } from ${JSON.stringify(storeUrl)};
-        import { NodeWorkerTurnStore } from ${JSON.stringify(turnsUrl)};
-        import { requireNodeWorkerProcessIdentity } from ${JSON.stringify(identityUrl)};
+        import { NodeWorkerJournalWorker } from ${JSON.stringify(journalUrl.href)};
+        import { NodeWorkerLaunchStore } from ${JSON.stringify(storeUrl.href)};
+        import { NodeWorkerTurnStore } from ${JSON.stringify(turnsUrl.href)};
+        import { requireNodeWorkerProcessIdentity } from ${JSON.stringify(identityUrl.href)};
         const [stateDir, claimPath] = process.argv.slice(2);
         const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
         const journal = new NodeWorkerJournalWorker({ env });
@@ -109,7 +110,12 @@ export function spawnPendingSupervisorOwner({
   );
   return spawn(
     process.execPath,
-    ["--import", "tsx", scriptPath, env.OPENCLAW_STATE_DIR!, claimPath],
+    [
+      ...resolveRuntimeWorkerArgv(storeUrl).slice(0, -1),
+      scriptPath,
+      env.OPENCLAW_STATE_DIR!,
+      claimPath,
+    ],
     { stdio: ["ignore", "pipe", "pipe"] },
   );
 }
@@ -126,8 +132,7 @@ export function spawnSupervisorOwner(params: {
   const child = spawn(
     process.execPath,
     [
-      "--import",
-      "tsx",
+      ...resolveRuntimeWorkerArgv(supervisorUrl).slice(0, -1),
       writeSupervisorOwnerScript(params.root, params.waitForCompletedTurn ?? false),
       params.bundleRoot,
       params.env.OPENCLAW_STATE_DIR!,
@@ -279,4 +284,63 @@ export async function waitForNodeWorkerTerminal(
     throw new Error(`missing launch receipt ${launchId}`);
   }
   return receipt;
+}
+
+export async function insertNodeWorkerRecoveryLaunch(params: {
+  env: NodeJS.ProcessEnv;
+  input: ReturnType<typeof testWorkerLaunchInput>;
+  state: "pending" | "running";
+  supervisor: NodeWorkerProcessIdentity;
+  worker?: NodeWorkerProcessIdentity;
+  turn?: true;
+}) {
+  const database = openOpenClawStateDatabase({ env: params.env }).db;
+  const state = params.turn ? "pending" : params.state;
+  database
+    .prepare(
+      `INSERT INTO node_worker_launches (
+        launch_id, plan_hash, gateway_namespace, environment_id, session_id,
+        owner_epoch, placement_generation, run_id, state,
+        supervisor_pid, supervisor_start_time, worker_pid, worker_start_time,
+        result_json, error_text, completed_at_ms, created_at_ms, updated_at_ms
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, 1, 1)`,
+    )
+    .run(
+      params.input.launchId,
+      testNodeWorkerLaunchIdentity(params.input).planHash,
+      params.input.gatewayNamespace,
+      params.input.descriptor.admission.environmentId,
+      params.input.descriptor.admission.sessionId,
+      params.input.descriptor.admission.ownerEpoch,
+      params.input.placementGeneration,
+      params.input.descriptor.assignment.runId,
+      state,
+      params.supervisor.pid,
+      params.supervisor.startTime,
+      state === "running" ? (params.worker?.pid ?? null) : null,
+      state === "running" ? (params.worker?.startTime ?? null) : null,
+    );
+  if (params.turn) {
+    const journal = new NodeWorkerJournalWorker({ env: params.env });
+    await new NodeWorkerTurnStore(journal).claim({
+      claim: {
+        ...testNodeWorkerLaunchIdentity(params.input),
+        gatewayNamespace: params.input.gatewayNamespace,
+      },
+      ownerLaunchId: params.input.launchId,
+      supervisor: params.supervisor,
+    });
+    if (params.state === "running") {
+      await new NodeWorkerLaunchStore(journal).markRunning({
+        launchId: params.input.launchId,
+        planHash: testNodeWorkerLaunchIdentity(params.input).planHash,
+        supervisor: params.supervisor,
+        worker: params.worker!,
+        cleanupMode: "process-group",
+      });
+      database
+        .prepare("DELETE FROM node_worker_launch_cleanup WHERE launch_id = ?")
+        .run(params.input.launchId);
+    }
+  }
 }

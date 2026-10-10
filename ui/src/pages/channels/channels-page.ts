@@ -11,6 +11,7 @@ import { applicationContext, type ApplicationContext } from "../../app/context.t
 import { resolveControlUiAuthCandidates } from "../../app/control-ui-auth.ts";
 import { hasOperatorAdminAccess, hasOperatorPairingAccess } from "../../app/operator-access.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
+import { shellLayoutTraits } from "../../app/shell-layout-traits.ts";
 import { renderLearnMoreLink } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
@@ -151,13 +152,7 @@ class ChannelsPage extends OpenClawLightDomElement {
       },
     )
     // Republished theme settings keep channel forms in sync with the global advanced toggle.
-    .watch(
-      () => this.context?.theme,
-      (theme, notify) => theme.subscribe(notify),
-      () => {
-        this.requestUpdate();
-      },
-    );
+    .watchStore(() => this.context?.theme);
 
   private handleGatewaySnapshot(change: GatewayPageChange) {
     const snapshot = change.snapshot;
@@ -178,8 +173,7 @@ class ChannelsPage extends OpenClawLightDomElement {
       !pairingAccess
     ) {
       this.pairingPrompt = null;
-      this.pairingChannelFilter = null;
-      this.pairingAccountFilter = null;
+      this.setPairingFilter(null, null);
       this.pairingNotice = null;
     }
     this.gatewayPairingAuthSignature = pairingAuthSignature;
@@ -249,8 +243,7 @@ class ChannelsPage extends OpenClawLightDomElement {
     this.channelsSource = undefined;
     this.gatewayPairingAuthSignature = null;
     this.pairingPrompt = null;
-    this.pairingChannelFilter = null;
-    this.pairingAccountFilter = null;
+    this.setPairingFilter(null, null);
     this.pairingNotice = null;
     this.pairingPolling.stop();
     this.pluginPresentation.reset();
@@ -300,19 +293,6 @@ class ChannelsPage extends OpenClawLightDomElement {
     });
   }
 
-  private resolveNostrAccountId(): string {
-    const accounts = this.context?.channels.state.channelsSnapshot?.channelAccounts?.nostr ?? [];
-    return this.nostrProfileAccountId ?? accounts[0]?.accountId ?? "default";
-  }
-
-  private resolveGatewayHttpCredentials(gateway: ApplicationContext["gateway"]): string[] {
-    return resolveControlUiAuthCandidates({
-      hello: gateway.snapshot.hello,
-      settings: { token: gateway.connection.token },
-      password: gateway.connection.password,
-    });
-  }
-
   private clearNostrForm() {
     this.nostrProfileFormState = null;
     this.nostrProfileAccountId = null;
@@ -340,13 +320,18 @@ class ChannelsPage extends OpenClawLightDomElement {
     if (!scope) {
       return null;
     }
+    const accounts = channels.state.channelsSnapshot?.channelAccounts?.nostr ?? [];
     return {
       scope,
       gateway,
       channels,
       formAccountId: this.nostrProfileAccountId,
-      accountId: this.resolveNostrAccountId(),
-      authCandidates: this.resolveGatewayHttpCredentials(gateway),
+      accountId: this.nostrProfileAccountId ?? accounts[0]?.accountId ?? "default",
+      authCandidates: resolveControlUiAuthCandidates({
+        hello: gateway.snapshot.hello,
+        settings: { token: gateway.connection.token },
+        password: gateway.connection.password,
+      }),
     };
   }
 
@@ -371,31 +356,16 @@ class ChannelsPage extends OpenClawLightDomElement {
     this.nostrProfileFormState = createNostrProfileFormState(profile ?? undefined);
   }
 
-  private cancelNostrProfile() {
-    this.invalidateNostrForm();
-  }
-
-  private changeNostrProfileField(field: keyof NostrProfile, value: string) {
+  private editNostrForm(
+    update: (form: NonNullable<NostrProfileFormState>) => NonNullable<NostrProfileFormState>,
+  ) {
     const form = this.nostrProfileFormState;
-    if (!form) {
-      return;
+    if (form) {
+      this.nostrProfileFormState = update(form);
     }
-    this.nostrProfileFormState = {
-      ...form,
-      values: { ...form.values, [field]: value },
-      fieldErrors: { ...form.fieldErrors, [field]: "" },
-    };
   }
 
-  private toggleNostrProfileAdvanced() {
-    const form = this.nostrProfileFormState;
-    if (!form) {
-      return;
-    }
-    this.nostrProfileFormState = { ...form, showAdvanced: !form.showAdvanced };
-  }
-
-  private async saveNostrProfile() {
+  private async updateNostrProfile(action: "save" | "import") {
     const form = this.nostrProfileFormState;
     if (!form || form.saving || form.importing) {
       return;
@@ -404,120 +374,68 @@ class ChannelsPage extends OpenClawLightDomElement {
     if (!operation) {
       return;
     }
-    const pendingForm = {
-      ...form,
-      saving: true,
-      error: null,
-      success: null,
-      fieldErrors: {},
-    };
-    this.nostrProfileFormState = pendingForm;
-
-    try {
-      const { data, response, errorMessage } = await putNostrProfile({
-        accountId: operation.accountId,
-        authCandidates: operation.authCandidates,
-        isCurrent: () => this.currentNostrForm(operation) !== null,
-        values: form.values,
-      });
-      const currentForm = this.currentNostrForm(operation);
-      if (!currentForm) {
-        return;
-      }
-      if (!response.ok || data?.ok === false || !data) {
-        this.nostrProfileFormState = {
-          ...currentForm,
-          saving: false,
-          error: errorMessage,
-          success: null,
-          fieldErrors: parseValidationErrors(data?.details),
-        };
-        return;
-      }
-
-      if (!data.persisted) {
-        this.nostrProfileFormState = {
-          ...currentForm,
-          saving: false,
-          error: t("channels.nostr.notices.publishFailed"),
-          success: null,
-        };
-        return;
-      }
-
-      this.nostrProfileFormState = {
-        ...currentForm,
-        saving: false,
-        error: null,
-        success: t("channels.nostr.notices.published"),
-        fieldErrors: {},
-        original: { ...form.values },
-      };
-      await operation.channels.refresh(true);
-    } catch (err) {
-      const currentForm = this.currentNostrForm(operation);
-      if (!currentForm) {
-        return;
-      }
-      this.nostrProfileFormState = {
-        ...currentForm,
-        saving: false,
-        error: formatNostrProfileOperationError(err, t("channels.nostr.notices.updateFailed")),
-        success: null,
-      };
-    }
-  }
-
-  private async importNostrProfile() {
-    const form = this.nostrProfileFormState;
-    if (!form || form.importing || form.saving) {
-      return;
-    }
-    const operation = this.beginNostrOperation();
-    if (!operation) {
-      return;
-    }
+    const busyField = action === "save" ? "saving" : "importing";
     this.nostrProfileFormState = {
       ...form,
-      importing: true,
+      [busyField]: true,
       error: null,
       success: null,
+      ...(action === "save" ? { fieldErrors: {} } : {}),
     };
 
     try {
-      const { data, response, errorMessage } = await importNostrProfile({
+      const request = {
         accountId: operation.accountId,
         authCandidates: operation.authCandidates,
         isCurrent: () => this.currentNostrForm(operation) !== null,
-      });
+      };
+      const result =
+        action === "save"
+          ? { action, ...(await putNostrProfile({ ...request, values: form.values })) }
+          : { action, ...(await importNostrProfile(request)) };
       const currentForm = this.currentNostrForm(operation);
       if (!currentForm) {
         return;
       }
-      if (!response.ok || data?.ok === false || !data) {
+      const settledForm = { ...currentForm, [busyField]: false, error: null, success: null };
+      if (!result.response.ok || result.data?.ok === false || !result.data) {
         this.nostrProfileFormState = {
-          ...currentForm,
-          importing: false,
-          error: errorMessage,
-          success: null,
+          ...settledForm,
+          error: result.errorMessage,
+          ...(result.action === "save"
+            ? { fieldErrors: parseValidationErrors(result.data?.details) }
+            : {}),
         };
         return;
       }
 
-      const merged = data.merged ?? data.imported ?? null;
-      const values = merged ? { ...currentForm.values, ...merged } : currentForm.values;
-      this.nostrProfileFormState = {
-        ...currentForm,
-        importing: false,
-        values,
-        error: null,
-        success: data.saved
-          ? t("channels.nostr.notices.importedFromRelays")
-          : t("channels.nostr.notices.imported"),
-        showAdvanced: Boolean(values.banner || values.website || values.nip05 || values.lud16),
-      };
-
-      if (data.saved) {
+      if (result.action === "save") {
+        if (!result.data.persisted) {
+          this.nostrProfileFormState = {
+            ...settledForm,
+            error: t("channels.nostr.notices.publishFailed"),
+          };
+          return;
+        }
+        this.nostrProfileFormState = {
+          ...settledForm,
+          success: t("channels.nostr.notices.published"),
+          fieldErrors: {},
+          original: { ...form.values },
+        };
+      } else {
+        const merged = result.data.merged ?? result.data.imported ?? null;
+        const values = merged ? { ...currentForm.values, ...merged } : currentForm.values;
+        this.nostrProfileFormState = {
+          ...settledForm,
+          values,
+          success: result.data.saved
+            ? t("channels.nostr.notices.importedFromRelays")
+            : t("channels.nostr.notices.imported"),
+          showAdvanced: Boolean(values.banner || values.website || values.nip05 || values.lud16),
+        };
+      }
+      if (result.action === "save" || result.data.saved) {
         await operation.channels.refresh(true);
       }
     } catch (err) {
@@ -527,8 +445,15 @@ class ChannelsPage extends OpenClawLightDomElement {
       }
       this.nostrProfileFormState = {
         ...currentForm,
-        importing: false,
-        error: formatNostrProfileOperationError(err, t("channels.nostr.notices.importFailed")),
+        [busyField]: false,
+        error: formatNostrProfileOperationError(
+          err,
+          t(
+            action === "save"
+              ? "channels.nostr.notices.updateFailed"
+              : "channels.nostr.notices.importFailed",
+          ),
+        ),
         success: null,
       };
     }
@@ -542,8 +467,7 @@ class ChannelsPage extends OpenClawLightDomElement {
       (account) => account.channel === this.pairingChannelFilter,
     );
     if (channelAccounts.length === 0) {
-      this.pairingChannelFilter = null;
-      this.pairingAccountFilter = null;
+      this.setPairingFilter(null, null);
       return;
     }
     if (
@@ -597,12 +521,13 @@ class ChannelsPage extends OpenClawLightDomElement {
     if (!prompt) {
       return;
     }
+    const target = {
+      channel: prompt.request.channel,
+      accountId: prompt.request.accountId,
+      requestId: prompt.request.requestId,
+    };
     if (prompt.kind === "dismiss") {
-      const dismissed = await this.context.channels.dismissPairing({
-        channel: prompt.request.channel,
-        accountId: prompt.request.accountId,
-        requestId: prompt.request.requestId,
-      });
+      const dismissed = await this.context.channels.dismissPairing(target);
       if (dismissed && this.pairingPrompt === prompt) {
         this.pairingPrompt = null;
         this.pairingNotice = t("channels.pairing.dismissedNotice");
@@ -611,9 +536,7 @@ class ChannelsPage extends OpenClawLightDomElement {
     }
 
     const result = await this.context.channels.approvePairing({
-      channel: prompt.request.channel,
-      accountId: prompt.request.accountId,
-      requestId: prompt.request.requestId,
+      ...target,
       notify: prompt.notify,
       bootstrapCommandOwner: prompt.bootstrapCommandOwner,
     });
@@ -621,17 +544,17 @@ class ChannelsPage extends OpenClawLightDomElement {
       return;
     }
     this.pairingPrompt = null;
-    if (result.notification === "failed" && result.commandOwnerBootstrap === "unavailable") {
-      this.pairingNotice = t("channels.pairing.approvedFollowupsFailedNotice");
-    } else if (result.commandOwnerBootstrap === "unavailable") {
-      this.pairingNotice = t("channels.pairing.approvedOwnerFailedNotice");
-    } else if (result.notification === "failed") {
-      this.pairingNotice = t("channels.pairing.approvedNotificationFailedNotice");
-    } else if (result.commandOwnerBootstrap === "configured") {
-      this.pairingNotice = t("channels.pairing.approvedOwnerNotice");
-    } else {
-      this.pairingNotice = t("channels.pairing.approvedNotice");
-    }
+    this.pairingNotice = t(
+      result.commandOwnerBootstrap === "unavailable"
+        ? result.notification === "failed"
+          ? "channels.pairing.approvedFollowupsFailedNotice"
+          : "channels.pairing.approvedOwnerFailedNotice"
+        : result.notification === "failed"
+          ? "channels.pairing.approvedNotificationFailedNotice"
+          : result.commandOwnerBootstrap === "configured"
+            ? "channels.pairing.approvedOwnerNotice"
+            : "channels.pairing.approvedNotice",
+    );
   }
 
   override render() {
@@ -642,7 +565,7 @@ class ChannelsPage extends OpenClawLightDomElement {
     const canManagePairing = hasOperatorPairingAccess(auth);
     const canAdmin = hasOperatorAdminAccess(auth);
     return html`
-      <section class="content-header">
+      <section class="content-header" ${shellLayoutTraits({ toolbarHeader: true })}>
         <div>
           <div class="page-title">${titleForRoute("channels")}</div>
           <div class="page-subtitle">
@@ -699,11 +622,17 @@ class ChannelsPage extends OpenClawLightDomElement {
           onConfigSave: () => void this.saveChannelConfig(),
           onConfigReload: () => void this.reloadChannelConfig(),
           onNostrProfileEdit: (accountId, profile) => this.editNostrProfile(accountId, profile),
-          onNostrProfileCancel: () => this.cancelNostrProfile(),
-          onNostrProfileFieldChange: (field, value) => this.changeNostrProfileField(field, value),
-          onNostrProfileSave: () => void this.saveNostrProfile(),
-          onNostrProfileImport: () => void this.importNostrProfile(),
-          onNostrProfileToggleAdvanced: () => this.toggleNostrProfileAdvanced(),
+          onNostrProfileCancel: () => this.invalidateNostrForm(),
+          onNostrProfileFieldChange: (field, value) =>
+            this.editNostrForm((form) => ({
+              ...form,
+              values: { ...form.values, [field]: value },
+              fieldErrors: { ...form.fieldErrors, [field]: "" },
+            })),
+          onNostrProfileSave: () => void this.updateNostrProfile("save"),
+          onNostrProfileImport: () => void this.updateNostrProfile("import"),
+          onNostrProfileToggleAdvanced: () =>
+            this.editNostrForm((form) => ({ ...form, showAdvanced: !form.showAdvanced })),
         }),
       )}
     `;

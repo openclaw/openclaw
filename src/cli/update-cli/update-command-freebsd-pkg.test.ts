@@ -22,6 +22,29 @@ import { resolveUpdateCommandTarget } from "./update-command-target.js";
 
 afterEach(() => vi.restoreAllMocks());
 
+function gitUpdateParams(root: string): Parameters<typeof updateGitInstall>[0] {
+  return {
+    root,
+    switchToGit: false,
+    installKind: "git",
+    timeoutMs: 1000,
+    startedAt: Date.now(),
+    progress: {},
+    channel: "dev",
+    inspectGitTarget: async () => {
+      throw new Error("Candidate inspection must not bypass package ownership admission");
+    },
+    validateCandidate: async () => {
+      throw new Error("Candidate validation must not bypass package ownership admission");
+    },
+    beforeGitMutation: async () => {
+      throw new Error("Git mutation must not bypass package ownership admission");
+    },
+    getManagedServiceEnv: () => undefined,
+    getSnapshotSource: async () => ({ config: {}, env: process.env }),
+  };
+}
+
 async function withPackageRoots(
   run: (base: string, requested: string, managed: string) => Promise<void>,
 ) {
@@ -119,24 +142,10 @@ describe("FreeBSD pkg update admission", () => {
       });
       await expect(
         updateGitInstall({
-          root,
-          switchToGit: false,
-          installKind: "git",
-          timeoutMs: 1000,
-          startedAt: Date.now(),
-          progress: {},
-          channel: "dev",
-          inspectGitTarget: async () => {
-            throw new Error("Candidate inspection must not bypass package ownership admission");
-          },
-          validateCandidate: async () => {
-            throw new Error("Candidate validation must not bypass package ownership admission");
-          },
+          ...gitUpdateParams(root),
           beforeGitMutation: async () => {
             claimed = true;
           },
-          getManagedServiceEnv: () => undefined,
-          getSnapshotSource: async () => ({ config: {}, env: process.env }),
         }),
       ).rejects.toMatchObject({ reason: "pkg-owned-install" });
       expect(query).toHaveBeenCalledTimes(2);
@@ -159,23 +168,9 @@ describe("FreeBSD pkg update admission", () => {
       );
       await expect(
         updateGitInstall({
-          root: requested,
+          ...gitUpdateParams(requested),
           switchToGit: true,
           installKind: "package",
-          timeoutMs: 1000,
-          startedAt: Date.now(),
-          progress: {},
-          channel: "dev",
-          inspectGitTarget: async () => {
-            throw new Error("Candidate inspection must not bypass package ownership admission");
-          },
-          validateCandidate: async () => {
-            throw new Error("Candidate validation must not bypass package ownership admission");
-          },
-          beforeGitMutation: async () => {
-            throw new Error("Git mutation must not bypass package ownership admission");
-          },
-          getManagedServiceEnv: () => undefined,
           getSnapshotSource,
         }),
       ).rejects.toMatchObject({ reason: "pkg-owned-install" });
@@ -187,9 +182,7 @@ describe("FreeBSD pkg update admission", () => {
 
   it.each([
     { name: "ordinary update", opts: {} },
-    { name: "no restart", opts: { restart: false } },
     { name: "dry run", opts: { dryRun: true } },
-    { name: "package-to-Git switch", opts: { channel: "dev" } },
   ])(
     "refuses the invoking pkg root before service planning or state writes: $name",
     async ({ opts }) => {

@@ -80,8 +80,9 @@ describe("resolveToolSections", () => {
     expect(ids(fallback)).toEqual(ids(fetched));
     expect(ids(fallback)).toContain("openclaw");
     expect(ids(fallback)).not.toContain("agents_wait");
-    expect(ids(fallback)).not.toContain("github_publish");
-    expect(ids(fallback)).not.toContain("github_identity_status");
+    expect(ids(fallback)).toEqual(
+      expect.arrayContaining(["github_publish", "github_identity_status", "transcripts"]),
+    );
     expect(
       fallback.flatMap((section) => section.tools).find((tool) => tool.id === "openclaw")
         ?.description,

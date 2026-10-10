@@ -16,10 +16,13 @@ const policyMethods = new Set([
   "secrets.reload",
   "secrets.store.set",
   "secrets.store.delete",
+  "secrets.store.import",
+  "secrets.store.allowedHosts",
   "device.pair.remove",
   "device.token.rotate",
   "device.token.revoke",
   "users.setRole",
+  "users.merge",
 ]);
 type PolicyResponse = { readonly pending: boolean; hold: () => void; finish: () => void };
 type PolicyClientState = { pending: number; close?: () => void };

@@ -1,15 +1,25 @@
-// The handle lease outlives transactions and maintenance, including close-time WAL work.
+// Native open/close and physical identity admission share one owner.
 import type { DatabaseSync } from "node:sqlite";
+import { assertStateDatabaseAccessAllowed } from "../infra/gateway-state-owner.js";
+import { registerNodeSqliteDisposeCallback } from "../infra/kysely-sync-cache-state.js";
 import { openNodeSqliteDatabase, resolveExistingSqliteFileUri } from "../infra/node-sqlite.js";
 import { withSqliteNativeOpen } from "../infra/sqlite-error-diagnostics.js";
-import { assertExistingDatabaseIdentity } from "../infra/sqlite-worker-identity.js";
-import { acquireStateDatabaseHandleLease } from "../infra/state-database-coordinator.js";
+import {
+  assertExistingDatabaseIdentity,
+  readDatabasePathIdentitySync,
+  type DatabasePathIdentity,
+} from "../infra/sqlite-worker-identity.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
-const handleLeases = resolveGlobalSingleton(
-  Symbol.for("openclaw.stateDatabaseHandleLeases"),
-  () => new WeakMap<DatabaseSync, { release: () => void }>(),
+const identities = resolveGlobalSingleton(
+  Symbol.for("openclaw.stateNativeIdentities"),
+  () => new WeakMap<DatabaseSync, DatabasePathIdentity>(),
 );
+
+/** Physical identity admitted by the native opener, never a later pathname observation. */
+export function readTrackedStateDatabaseIdentity(database: DatabaseSync) {
+  return identities.get(database);
+}
 
 type StateDatabaseOpenOptions = {
   existingOnly?: boolean;
@@ -30,12 +40,12 @@ export function openTrackedStateDatabase(
   return result.database;
 }
 
-/** Only native open failure with a released lease is an ordinary read failure. */
+/** Native open failure is an ordinary read failure; admitted handles retain their own cleanup. */
 export function openTrackedStateDatabaseResult(
   pathname: string,
   options?: StateDatabaseOpenOptions,
 ): { status: "available"; database: DatabaseSync } | { status: "unavailable"; error: unknown } {
-  const lease = acquireStateDatabaseHandleLease({ databasePath: pathname, busyTimeoutMs: 0 });
+  assertStateDatabaseAccessAllowed(pathname);
   try {
     if (options?.expectedIdentity !== undefined) {
       assertExistingDatabaseIdentity(pathname, options.expectedIdentity);
@@ -47,25 +57,35 @@ export function openTrackedStateDatabaseResult(
     const nativeOptions = options?.readOnly
       ? { readOnly: true, timeout: options.timeout }
       : { enableForeignKeyConstraints: options?.enableForeignKeyConstraints };
+    const openingIdentity = readDatabasePathIdentitySync(pathname);
     const database = withSqliteNativeOpen(() => openNodeSqliteDatabase(location, nativeOptions));
-    handleLeases.set(database, lease);
+    try {
+      assertStateDatabaseAccessAllowed(pathname);
+      if (openingIdentity.key.startsWith("file:")) {
+        assertExistingDatabaseIdentity(pathname, openingIdentity.key, openingIdentity.birthtime);
+      }
+      const identity = openingIdentity.key.startsWith("file:")
+        ? openingIdentity
+        : readDatabasePathIdentitySync(pathname);
+      if (identity.key.startsWith("file:")) {
+        identities.set(database, identity);
+        const unregister = registerNodeSqliteDisposeCallback(database, () => {
+          identities.delete(database);
+          unregister();
+        });
+      }
+    } catch (error) {
+      database.close();
+      throw error;
+    }
     return { status: "available", database };
   } catch (error) {
-    lease.release();
     return { status: "unavailable", error };
   }
 }
 
 export function closeTrackedStateDatabase(database: DatabaseSync): void {
-  try {
-    if (database.isOpen) {
-      database.close();
-    }
-  } finally {
-    // A failed close that leaves SQLite live cannot surrender file protection.
-    if (!database.isOpen) {
-      handleLeases.get(database)?.release();
-      handleLeases.delete(database);
-    }
+  if (database.isOpen) {
+    database.close();
   }
 }

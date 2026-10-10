@@ -1,20 +1,24 @@
-import { throwSqliteLifecycleErrors } from "../infra/sqlite-coordinator.js";
+import {
+  finallyRetainedOperation,
+  flatMapRetainedOperation,
+  mapRetainedOperation,
+  type RetainedOperation,
+} from "@openclaw/worker-runtime/lifecycle";
+import {
+  createSqliteLifecycleAggregateError,
+  throwSqliteLifecycleErrors,
+} from "../infra/sqlite-lifecycle-errors.js";
 import { assertExistingDatabaseIdentity } from "../infra/sqlite-worker-identity.js";
 import type { SqliteWorkerOperationSettlement } from "../infra/sqlite-worker-operation-settlement.js";
-import {
-  acquireStateDatabaseHandleLease,
-  withStateDatabaseCoordinatorRuntimeDirectory,
-} from "../infra/state-database-coordinator.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   registerOpenClawStateDatabaseAsyncResource,
   retainOpenClawStateDatabaseForIndependentRead,
 } from "./openclaw-state-db-cache.js";
-import { createOpenClawStateReadTransport } from "./openclaw-state-read-worker.js";
+import { captureOpenClawStateReadSource } from "./openclaw-state-read-worker.js";
 import type {
   OpenClawStateReadAuthority,
   OpenClawStateReadCommand,
-  OpenClawStateReadOutcome,
 } from "./openclaw-state-read.types.js";
 import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
 import type { ProfileDisplayRow, UserProfileEmailBinding } from "./user-profiles.types.js";
@@ -24,10 +28,7 @@ type SettlementRead = {
   bind(
     command: SettlementReadCommand,
     settlement: Promise<SqliteWorkerOperationSettlement>,
-    publish: (
-      profile: ProfileDisplayRow | undefined,
-      bindings?: readonly UserProfileEmailBinding[],
-    ) => void,
+    publish: SettlementRead["acknowledge"],
     release: () => void,
   ): void;
   acknowledge(
@@ -45,12 +46,8 @@ export async function withOpenClawStateSettlementRead<T>(
   context.maintenanceScope?.assertAdmission();
   const pathname = context.admission.databasePath;
   const identity = { ...context.admission.identity };
+  const source = captureOpenClawStateReadSource();
   let borrowed = retainOpenClawStateDatabaseForIndependentRead(pathname);
-  let pin = borrowed
-    ? undefined
-    : withStateDatabaseCoordinatorRuntimeDirectory(context.coordinatorRuntime, () =>
-        acquireStateDatabaseHandleLease({ databasePath: pathname }),
-      );
   const producer = createDeferredCore();
   const controller = new AbortController();
   let active = true;
@@ -59,14 +56,13 @@ export async function withOpenClawStateSettlementRead<T>(
     | {
         command: SettlementReadCommand;
         settlement: Promise<SqliteWorkerOperationSettlement>;
-        publish: (
-          profile: ProfileDisplayRow | undefined,
-          bindings?: readonly UserProfileEmailBinding[],
-        ) => void;
+        publish: SettlementRead["acknowledge"];
         release: () => void;
       }
     | undefined;
-  let transport: ReturnType<typeof createOpenClawStateReadTransport> | undefined;
+  let transport: ReturnType<typeof source.createTransport> | undefined;
+  let tail: RetainedOperation<void> | undefined;
+  let nativeSettlement: SqliteWorkerOperationSettlement | undefined;
   let recovery: Promise<void> | undefined;
   let closing: Promise<void> | undefined;
   const authority: OpenClawStateReadAuthority = {
@@ -79,56 +75,71 @@ export async function withOpenClawStateSettlementRead<T>(
       assertExistingDatabaseIdentity(pathname, identity.key);
     },
   };
+  const startRecoveryRead = (read: NonNullable<typeof selected>): RetainedOperation<void> => {
+    authority.assertCurrent();
+    const readTransport = source.createTransport(read.command);
+    transport = readTransport;
+    const query = mapRetainedOperation(
+      readTransport.startRead(
+        {
+          context,
+          location: pathname,
+          checkFreshAdmission: false,
+          expectedIdentity: identity.key,
+        },
+        authority,
+      ),
+      (outcome) => {
+        if ("error" in outcome) {
+          throw outcome.error;
+        }
+        return outcome.value;
+      },
+    );
+    const released = finallyRetainedOperation(
+      query,
+      () =>
+        mapRetainedOperation(readTransport.startClose(), () => {
+          transport = undefined;
+        }),
+      (readError, cleanupError) =>
+        createSqliteLifecycleAggregateError(
+          [readError, cleanupError],
+          "Shared-state settlement read and cleanup failed",
+          readError,
+        ),
+    );
+    return mapRetainedOperation(released, (reply) => {
+      authority.assertCurrent();
+      if (reply.type !== "userProfiles.reconcile") {
+        throw new Error("Unexpected shared-state settlement read reply");
+      }
+      read.publish(reply.profile, reply.emailBindings);
+      pending = false;
+    });
+  };
   const recover = (): Promise<void> =>
     (recovery ??= (async () => {
       if (!pending || !selected) {
         return;
       }
-      const settled = await selected.settlement;
-      if (settled.kind === "not-entered") {
+      // Only the actual mutation producer supplies this fact. The wait stays asynchronous.
+      nativeSettlement ??= await selected.settlement;
+      if (nativeSettlement.kind === "not-entered") {
         pending = false;
         return;
       }
+      const read = selected;
       // A failed transport's retirement is sticky; join it before creating a retry.
-      if (transport) {
-        await transport.close();
-        transport = undefined;
-      }
-      authority.assertCurrent();
-      const readTransport = createOpenClawStateReadTransport(selected.command);
-      transport = readTransport;
-      let result: OpenClawStateReadOutcome | undefined;
-      const errors: unknown[] = [];
-      try {
-        result = await readTransport.read(
-          {
-            context,
-            location: pathname,
-            checkFreshAdmission: false,
-            expectedIdentity: identity.key,
-          },
-          authority,
-        );
-        if ("error" in result) {
-          errors.push(result.error);
-        }
-      } catch (error) {
-        errors.push(error);
-      }
-      try {
-        await readTransport.close();
-        transport = undefined;
-      } catch (error) {
-        errors.push(error);
-      }
-      throwSqliteLifecycleErrors(errors, "Shared-state settlement read and cleanup failed");
-      authority.assertCurrent();
-      if (!result || "error" in result || result.value.type !== "userProfiles.reconcile") {
-        throw new Error("Unexpected shared-state settlement read reply");
-      }
-      selected.publish(result.value.profile, result.value.emailBindings);
-      pending = false;
+      tail = transport
+        ? flatMapRetainedOperation(transport.startClose(), () => {
+            transport = undefined;
+            return startRecoveryRead(read);
+          })
+        : startRecoveryRead(read);
+      await tail.result;
     })().finally(() => {
+      tail = undefined;
       recovery = undefined;
     }));
   const close = (): Promise<void> =>
@@ -137,16 +148,18 @@ export async function withOpenClawStateSettlementRead<T>(
       await producer.promise;
       await recover();
       if (transport) {
-        await transport.close();
-        transport = undefined;
+        tail = mapRetainedOperation(transport.startClose(), () => {
+          transport = undefined;
+        });
+        await tail.result;
+        tail = undefined;
       }
       borrowed?.release();
       borrowed = undefined;
-      pin?.release();
-      pin = undefined;
       selected?.release();
       active = false;
       unregister();
+      releaseSource();
     })().finally(() => {
       closing = undefined;
     }));
@@ -161,6 +174,7 @@ export async function withOpenClawStateSettlementRead<T>(
       }
     },
   });
+  const releaseSource = source.own(() => tail?.service(), close);
   context.maintenanceScope?.own(producer, "shared-resources", close);
   const errors: unknown[] = [];
   let result!: T;

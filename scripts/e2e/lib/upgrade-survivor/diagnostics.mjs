@@ -4,7 +4,10 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { isMainThread } from "node:worker_threads";
-import { compareReleaseVersions } from "../../../lib/release-version.mjs";
+import { publishedBackupRollback } from "./backup-rollback-summary.mjs";
+import { publishedNativeAssignments } from "./native-assignment-summary.mjs";
+import { assertPackageRecoveryEvidence } from "./package-activation-recovery.mjs";
+import { publishedPluginPolicy } from "./plugin-policy-summary.mjs";
 
 // Capture and snapshot validation stay plain Node. The host entrypoint owns
 // the redactor; neither candidate code nor raw fixture data owns uploads.
@@ -20,33 +23,137 @@ const migrationLabels = {
   manifest: "session migration manifest",
   failureReport: "session migration failure report",
 };
+const siblingRefusalLogs = [
+  "sibling-refusal-update.json",
+  "sibling-refusal-update.err",
+  "sibling-refusal-status.json",
+  "sibling-refusal-status.err",
+  "sibling-refusal-baseline.json",
+  "sibling-refusal-worker.json",
+  "sibling-refusal-child.json",
+  "sibling-refusal-cleanup.json",
+  "sibling-refusal-registrations.jsonl",
+];
+const restoredIndexLogs = [
+  "legacy-operator-restored-index.json",
+  "restored-index-post-update.json",
+  "restored-index-candidate-import.json",
+  "restored-index-rollback.json",
+];
+const backupRollbackLogs = [
+  "backup-rollback.json",
+  "backup-rollback-create.json",
+  "backup-rollback-create.json.err",
+  "backup-rollback-restore.json",
+  "backup-rollback-restore.json.err",
+];
+const nativeAssignmentLogs = [
+  "native-assignment-eligibility.json",
+  "native-assignment-baseline.json",
+  "native-assignment-first-hop.json",
+  "native-assignment-inventory-after-first-hop.json",
+  "native-assignment-inventory-before-recovery.json",
+  "native-assignment-inventory-after-recovery.json",
+  "native-assignment-inventory-live-final.json",
+  "native-assignment-proof.json",
+  "native-assignment-messages.jsonl",
+  "native-assignment-server.log",
+  "native-recover.out",
+  "native-recover.err",
+  "native-recover-wait.out",
+  "native-recover-wait.err",
+];
+
+const pluginPolicyLogs = [
+  "webhooks-only-policy/result.json",
+  "webhooks-only-policy/update.json",
+  "webhooks-only-policy/baseline-runtime.out",
+  "webhooks-only-policy/candidate-runtime.out",
+];
 const logNames = [
   "baseline-install.log",
   "baseline-companion.json",
   "install.log",
   "update.json",
   "update.err",
+  "update-noop.json",
+  "update-noop.err",
+  ...siblingRefusalLogs,
+  ...restoredIndexLogs,
+  ...backupRollbackLogs,
   "repair.json",
   "repair.err",
   "recovery-update.json",
   "recovery-update.err",
+  "interrupted-update.json",
+  "interrupted-update.err",
+  "next-update.json",
+  "next-update.err",
+  "stranded-update.json",
+  "stranded-update.err",
   "post-update-validate.json",
   "post-update-validate.err",
   "doctor.log",
+  "volume-doctor-budget.json",
   "baseline-doctor.log",
   "workshop-doctor-recovery.json",
+  "update-report-recovery.json",
+  "update-report-baseline.json",
+  "update-report-retry.pty.log",
+  "update-report-pending.pty.log",
+  "update-report-retry.gh.jsonl",
+  "update-report-pending.gh.jsonl",
+  "update-report-retry-status.log",
+  "update-report-pending-status.log",
+  "update-report-retry-status.err",
+  "update-report-pending-status.err",
+  "update-report-retry.output.log",
+  "update-report-pending.output.log",
   "workshop-published-refusal.json",
   "workshop-baseline-doctor.json",
   "workshop-recovered-upgrade.json",
   "workshop-candidate-doctor.json",
+  "physical-baseline-update.json",
+  "physical-baseline-update.err",
+  "physical-baseline-refusal.json",
+  "physical-baseline-restoration.json",
+  "physical-candidate-doctor.log",
+  "physical-candidate-repair.json",
   "legacy-operator-cron-history-proof.json",
+  ...pluginPolicyLogs,
+  ...nativeAssignmentLogs,
+  "webhooks-only-policy/update.err",
+  "webhooks-only-policy/gateway.log",
+  "webhooks-only-policy/baseline-gateway.log",
+  "legacy-operator-post-update-cron-history.json",
+  "legacy-operator-candidate-cron-history.json",
+  "dreaming-cron-proof.json",
+  "cron-owner-proof.json",
   "legacy-operator-baseline-turn.out",
   "legacy-operator-baseline-turn.err",
   "legacy-operator-candidate-turn.out",
   "legacy-operator-candidate-turn.err",
+  "legacy-operator-add-survivor-default-owner.out",
+  "legacy-operator-add-survivor-default-owner.err",
+  "legacy-operator-add-survivor-ops-owner.out",
+  "legacy-operator-add-survivor-ops-owner.err",
+  "legacy-operator-run-survivor-default-owner.out",
+  "legacy-operator-run-survivor-default-owner.err",
+  "legacy-operator-run-survivor-ops-owner.out",
+  "legacy-operator-run-survivor-ops-owner.err",
+  ...["post-update", "candidate"].flatMap((stage) =>
+    [0, 1].flatMap((index) =>
+      ["", "-earlier"].flatMap((page) =>
+        ["out", "err"].map(
+          (extension) => `legacy-operator-${stage}-transcript-${index}${page}.${extension}`,
+        ),
+      ),
+    ),
+  ),
   "gateway.log",
   "gateway.log.doctor",
   "missing-load-path/baseline-gateway.log",
+  "missing-load-path/startup-readiness.log",
   "missing-load-path/baseline-gateway-convergence-refusal.log",
   "baseline-service-install.err",
   "systemctl-shim.log",
@@ -539,6 +646,22 @@ function migrationProjection(section, value, sanitize = (text) => text) {
   throw new Error();
 }
 
+function projectMigrationSections(read, sanitize) {
+  return Object.fromEntries(
+    ["doctor", "sessions", "archives", "sibling"].map((section) => {
+      try {
+        return [
+          section,
+          { availability: "captured", ...migrationProjection(section, read(section), sanitize) },
+        ];
+      } catch {
+        omissions[`migration-${section}`] ??= reasons[3];
+        return [section, { availability: "unavailable" }];
+      }
+    }),
+  );
+}
+
 // A native read-only open can create missing WAL sidecars or require journal recovery.
 // This bootstrap observer never copies operator databases or imports a migrating runtime reader.
 function assertNativeSqliteObservationSafe(handles, label) {
@@ -565,28 +688,45 @@ function assertNativeSqliteObservationSafe(handles, label) {
   }
 }
 
+const sqliteObservationFiles = [
+  "state/openclaw.sqlite",
+  "state/openclaw.sqlite-wal",
+  "state/openclaw.sqlite-shm",
+  "state/openclaw.sqlite-journal",
+];
+
+function openObservationSources(handles, root, files, requireDatabase = false) {
+  for (const relative of files) {
+    try {
+      const handle = openOwned(root, relative);
+      handles.push(handle);
+      if (handle.stat.size > (relative.endsWith(".json") ? indexLimit : 64 * 1024 * 1024)) {
+        throw new Error();
+      }
+    } catch (error) {
+      if ((requireDatabase && relative.endsWith(".sqlite")) || error.code !== "ENOENT") {
+        throw error;
+      }
+    }
+  }
+}
+
+function assertObservationSourcesUnchanged(handles) {
+  for (const { fd, stat, file } of handles) {
+    // SQLite readers update SHM read marks. Preserve identity checks without
+    // mistaking those cache timestamps for durable index mutations.
+    const matches = file.endsWith("-shm") ? sameFileIdentity : unchangedFile;
+    if (!matches(stat, fs.fstatSync(fd)) || !matches(stat, fs.lstatSync(file))) {
+      throw new Error();
+    }
+  }
+}
+
 function readMigrationSessions(stateRoot) {
   const handles = [];
   let db;
   try {
-    for (const relative of [
-      "state/openclaw.sqlite",
-      "state/openclaw.sqlite-wal",
-      "state/openclaw.sqlite-shm",
-      "state/openclaw.sqlite-journal",
-    ]) {
-      try {
-        const handle = openOwned(stateRoot, relative);
-        handles.push(handle);
-        if (handle.stat.size > 64 * 1024 * 1024) {
-          throw new Error();
-        }
-      } catch (error) {
-        if (relative.endsWith(".sqlite") || error.code !== "ENOENT") {
-          throw error;
-        }
-      }
-    }
+    openObservationSources(handles, stateRoot, sqliteObservationFiles, true);
     assertNativeSqliteObservationSafe(handles, "migration-sessions");
     db = new DatabaseSync(handles[0].file, { readOnly: true });
     db.exec("BEGIN");
@@ -644,12 +784,7 @@ function readMigrationSessions(stateRoot) {
     db.exec("COMMIT");
     db.close();
     db = undefined;
-    for (const { fd, stat, file } of handles) {
-      const matches = file.endsWith("-shm") ? sameFileIdentity : unchangedFile;
-      if (!matches(stat, fs.fstatSync(fd)) || !matches(stat, fs.lstatSync(file))) {
-        throw new Error();
-      }
-    }
+    assertObservationSourcesUnchanged(handles);
     return { deferred, imports };
   } finally {
     db?.close();
@@ -728,16 +863,7 @@ function captureMigrationEvidence(stateRoot, artifactRoot, observationRoot) {
       };
     },
   };
-  return Object.fromEntries(
-    Object.entries(sources).map(([section, read]) => {
-      try {
-        return [section, { availability: "captured", ...migrationProjection(section, read()) }];
-      } catch {
-        omissions[`migration-${section}`] ??= reasons[3];
-        return [section, { availability: "unavailable" }];
-      }
-    }),
-  );
+  return projectMigrationSections((section) => sources[section]());
 }
 
 function sessionMigrationProjection(raw, kind, runId, sanitize = (text) => text) {
@@ -881,8 +1007,21 @@ function publishedSessionMigration(snapshot, sanitize) {
   return report;
 }
 
+function isPostCoreProcess() {
+  return (
+    process.env.OPENCLAW_UPDATE_POST_CORE === "1" &&
+    (process.argv[2] === "update" ||
+      (process.argv[2] === "--post-core" &&
+        path.basename(process.argv[1] ?? "") === "update-migrated-finalize.worker.js"))
+  );
+}
+
 function armUpgradeProcessCapture() {
-  const command = process.argv[2];
+  const delegatedDoctor =
+    process.argv[2] === "--doctor" &&
+    path.basename(process.argv[1] ?? "") === "update-migrated-finalize.worker.js";
+  const postCore = isPostCoreProcess();
+  const command = delegatedDoctor ? "doctor" : postCore ? "update" : process.argv[2];
   const artifactRoot = process.env.OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT;
   if (!isMainThread || !artifactRoot || !["update", "doctor"].includes(command)) {
     return;
@@ -905,18 +1044,17 @@ function armUpgradeProcessCapture() {
     }
     if (
       typeof version !== "string" ||
-      !/^\d{4}\.\d{1,2}\.\d{1,3}(?:-(?:\d+|(?:alpha|beta)\.\d+))?$/.test(version)
+      !/^\d{4}\.\d{1,2}\.\d{1,3}(?:-(?:\d+|(?:alpha|beta)\.\d+))?$/.test(version) ||
+      !Number.isFinite(performance.timeOrigin)
     ) {
       return;
     }
     const identity = {
-      role:
-        command === "update" && process.env.OPENCLAW_UPDATE_POST_CORE === "1"
-          ? "post-core"
-          : command,
+      role: postCore ? "post-core" : command,
       packageVersion: version,
       pid: process.pid,
       parentPid: process.ppid,
+      timeOriginUnixMs: performance.timeOrigin,
     };
     const destination = path.join(artifactRoot, "diagnostics");
     writeReport(
@@ -955,11 +1093,7 @@ function armUpgradeProcessCapture() {
 }
 
 function armPostCoreCapture() {
-  if (
-    !isMainThread ||
-    process.argv[2] !== "update" ||
-    process.env.OPENCLAW_UPDATE_POST_CORE !== "1"
-  ) {
+  if (!isMainThread || !isPostCoreProcess()) {
     return;
   }
   try {
@@ -1009,47 +1143,29 @@ function armPostCoreCapture() {
   }
 }
 
-async function pluginIdentities(stateRoot, artifactRoot) {
-  const unavailable = {
+function unknownPluginIdentity() {
+  return {
     availability: "unknown",
     evidence: "persisted index + current bytes; not observed loaded modules",
     reader: "SQLite or historical fallback; missing/error is not absence",
     plugins: [],
   };
+}
+
+async function pluginIdentities(stateRoot, artifactRoot) {
+  const unavailable = unknownPluginIdentity();
   const handles = [];
   try {
     // The existing reader opens SQLite read-only. Fence every file it may read;
     // disable its config fallback rather than consulting failed-state CLI/config.
-    for (const relative of [
-      "state/openclaw.sqlite",
-      "state/openclaw.sqlite-wal",
-      "state/openclaw.sqlite-shm",
-      "state/openclaw.sqlite-journal",
+    openObservationSources(handles, stateRoot, [
+      ...sqliteObservationFiles,
       "plugins/installs.json",
-    ]) {
-      try {
-        const handle = openOwned(stateRoot, relative);
-        handles.push(handle);
-        if (handle.stat.size > (relative.endsWith(".json") ? indexLimit : 64 * 1024 * 1024)) {
-          throw new Error();
-        }
-      } catch (error) {
-        if (error.code !== "ENOENT") {
-          throw error;
-        }
-      }
-    }
+    ]);
     assertNativeSqliteObservationSafe(handles, "plugin identity");
     const { readPluginInstallIndex } = await import("../plugin-index-sqlite.mjs");
     const index = readPluginInstallIndex({ stateDir: stateRoot, configPath: null });
-    for (const { fd, stat, file } of handles) {
-      // SQLite readers update SHM read marks: its cache timestamps are not
-      // durable index mutations. Keep file identity checks on every source.
-      const matches = file.endsWith("-shm") ? sameFileIdentity : unchangedFile;
-      if (!matches(stat, fs.fstatSync(fd)) || !matches(stat, fs.lstatSync(file))) {
-        throw new Error();
-      }
-    }
+    assertObservationSourcesUnchanged(handles);
     if (Buffer.byteLength(JSON.stringify(index)) > indexLimit || !Array.isArray(index.plugins)) {
       throw new Error();
     }
@@ -1252,6 +1368,184 @@ function writeReport(artifactRoot, directory, name, report, limit) {
   }
 }
 
+function integrityObservation(value) {
+  if (
+    typeof value?.readerId !== "string" ||
+    !/^[1-9]\d{0,15}:[1-9]\d{0,15}$/.test(value.readerId) ||
+    !value.readerId.split(":").every((part) => Number.isSafeInteger(Number(part))) ||
+    !Number.isFinite(value.timeOriginUnixMs) ||
+    value.timeOriginUnixMs <= 0 ||
+    !["reader-started", "reader-settled"].includes(value.event) ||
+    !["baseline", "retained", "restored", "transaction"].includes(value.phase) ||
+    !Number.isFinite(value.budgetMs) ||
+    value.budgetMs <= 0
+  ) {
+    throw new Error();
+  }
+  const result = {
+    readerId: value.readerId,
+    timeOriginUnixMs: value.timeOriginUnixMs,
+    event: value.event,
+    phase: value.phase,
+    budgetMs: value.budgetMs,
+  };
+  if (value.event === "reader-settled") {
+    if (
+      !["completed", "failed", "timed-out"].includes(value.outcome) ||
+      !Number.isFinite(value.elapsedMs) ||
+      value.elapsedMs < 0 ||
+      !Number.isSafeInteger(value.pendingIo) ||
+      value.pendingIo < 0
+    ) {
+      throw new Error();
+    }
+    Object.assign(result, {
+      outcome: value.outcome,
+      elapsedMs: value.elapsedMs,
+      pendingIo: value.pendingIo,
+    });
+  } else if (
+    value.outcome !== undefined ||
+    value.elapsedMs !== undefined ||
+    value.pendingIo !== undefined
+  ) {
+    throw new Error();
+  }
+  return result;
+}
+
+function integrityProjection(value) {
+  if (
+    typeof value?.baselineVersion !== "string" ||
+    !/^\d{4}\.\d{1,2}\.\d{1,3}(?:-(?:\d+|(?:alpha|beta)\.\d+))?$/.test(value.baselineVersion)
+  ) {
+    throw new Error();
+  }
+  const processes = boundedList(value.processes);
+  for (const started of processes) {
+    if (
+      started?.role !== "update" ||
+      started.event !== "started" ||
+      started.packageVersion !== value.baselineVersion ||
+      !Number.isSafeInteger(started.pid) ||
+      started.pid <= 0 ||
+      !Number.isFinite(started.timeOriginUnixMs) ||
+      started.timeOriginUnixMs <= 0
+    ) {
+      throw new Error();
+    }
+  }
+  const observations = boundedList(value.observations).map((observation) => {
+    const { timeOriginUnixMs, ...projected } = integrityObservation(observation);
+    const pid = Number(projected.readerId.split(":")[0]);
+    if (
+      processes.filter(
+        (started) => started.pid === pid && started.timeOriginUnixMs === timeOriginUnixMs,
+      ).length !== 1
+    ) {
+      throw new Error();
+    }
+    return projected;
+  });
+  if (!observations.length) {
+    throw new Error();
+  }
+  const report = { availability: "captured", observations };
+  if (Buffer.byteLength(JSON.stringify(report)) > outputLimit) {
+    omissions["package integrity"] = reasons[1];
+    throw new Error();
+  }
+  return report;
+}
+
+function capturePackageIntegrity(observationRoot) {
+  const unavailable = { availability: "unavailable" };
+  try {
+    const raw = readOwned(
+      process.env.HOME,
+      path.join("openclaw-upgrade-survivor", "gateway.jsonl"),
+      "package integrity",
+    );
+    if (raw === null) {
+      return unavailable;
+    }
+    const baselineVersion = process.env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_VERSION;
+    const processes = [];
+    // Only the fresh update invocation's baseline receipts can bind a log event.
+    for (const name of boundedList(fs.readdirSync(ownedPath(observationRoot, "diagnostics")))) {
+      const match = /^process-(\d+)-started\.json$/.exec(name);
+      if (!match) {
+        continue;
+      }
+      const started = JSON.parse(
+        readOwned(observationRoot, `diagnostics/${name}`, "package integrity"),
+      );
+      if (started?.role !== "update" || started.packageVersion !== baselineVersion) {
+        continue;
+      }
+      if (started.pid !== Number(match[1])) {
+        throw new Error();
+      }
+      processes.push({
+        role: started.role,
+        event: started.event,
+        packageVersion: started.packageVersion,
+        pid: started.pid,
+        timeOriginUnixMs: started.timeOriginUnixMs,
+      });
+    }
+    const observations = [];
+    for (const line of raw.split("\n")) {
+      if (!line.trim()) {
+        continue;
+      }
+      const entry = JSON.parse(line);
+      if (typeof entry?.[0] !== "string" || !entry[0].startsWith("{")) {
+        continue;
+      }
+      let subsystem;
+      try {
+        subsystem = JSON.parse(entry[0])?.subsystem;
+      } catch {
+        continue;
+      }
+      if (subsystem !== "update/package-integrity") {
+        continue;
+      }
+      if (
+        entry._meta?.logLevelName !== "DEBUG" ||
+        entry[2] !== entry[1]?.event ||
+        entry.message !== entry[2]
+      ) {
+        throw new Error();
+      }
+      observations.push(integrityObservation(entry[1]));
+      boundedList(observations);
+    }
+    const snapshot = {
+      availability: "captured",
+      baselineVersion,
+      processes,
+      observations: observations.filter((observation) =>
+        processes.some(
+          (started) =>
+            started.pid === Number(observation.readerId.split(":")[0]) &&
+            started.timeOriginUnixMs === observation.timeOriginUnixMs,
+        ),
+      ),
+    };
+    integrityProjection(snapshot);
+    if (Buffer.byteLength(JSON.stringify(snapshot)) > outputLimit) {
+      omissions["package integrity"] = reasons[1];
+      throw new Error();
+    }
+    return snapshot;
+  } catch {
+    omissions["package integrity"] ??= reasons[3];
+    return unavailable;
+  }
+}
+
 async function capture(artifactRoot, phase, exitStatus, signal = "", observationRoot = "") {
   const report = {
     ...phaseResult(phase, Number(exitStatus), signal || null),
@@ -1267,6 +1561,7 @@ async function capture(artifactRoot, phase, exitStatus, signal = "", observation
         : readOwned(artifactRoot, name, name);
   }
   const stateRoot = process.env.OPENCLAW_STATE_DIR;
+  report.packageIntegrity = capturePackageIntegrity(observationRoot);
   report.pluginIdentity = await pluginIdentities(stateRoot, artifactRoot);
   report.migration = captureMigrationEvidence(stateRoot, artifactRoot, observationRoot);
   report.postCore = {
@@ -1384,160 +1679,6 @@ function publishedPostCore(snapshot, sanitize) {
   };
 }
 
-function publishedBackupRollback(snapshot, sanitize) {
-  const invalid = () => {
-    throw new Error("Invalid backup rollback evidence");
-  };
-  const proof = snapshot.backupRollback;
-  if (proof === undefined || proof === null) {
-    if (snapshot.scenario === "legacy-operator-state") {
-      const comparison =
-        typeof snapshot.baseline?.version === "string"
-          ? compareReleaseVersions(snapshot.baseline.version, "2026.9.4")
-          : null;
-      if (comparison === null || comparison >= 0) {
-        invalid();
-      }
-    }
-    return undefined;
-  }
-  const count = (value) => (Number.isSafeInteger(value) && value >= 0 ? value : invalid());
-  const digest = (value) =>
-    typeof value === "string" && /^[a-f0-9]{64}$/.test(value) ? value : invalid();
-  const name = (value) =>
-    typeof value === "string" && /^[a-z0-9_][a-z0-9_-]{0,127}$/.test(value)
-      ? sanitize(value, "backup rollback")
-      : invalid();
-  const versions = (value) => ({ state: count(value?.state), agent: count(value?.agent) });
-  const releaseVersion = (value) =>
-    typeof value === "string" &&
-    value.trim() === value &&
-    compareReleaseVersions(value, value) !== null
-      ? sanitize(value, "backup rollback")
-      : invalid();
-  if (
-    snapshot.scenario !== "legacy-operator-state" ||
-    proof.baselineVersion !== snapshot.baseline.version
-  ) {
-    invalid();
-  }
-  if (proof.status === "not-applicable") {
-    if (
-      proof.minimumBaseline !== "2026.9.4" ||
-      compareReleaseVersions(proof.baselineVersion, proof.minimumBaseline) >= 0
-    ) {
-      invalid();
-    }
-    return {
-      status: "not-applicable",
-      baselineVersion: releaseVersion(proof.baselineVersion),
-      minimumBaseline: releaseVersion(proof.minimumBaseline),
-    };
-  }
-  if (
-    proof.status !== "passed" ||
-    proof.runtime?.version !== proof.baselineVersion ||
-    proof.candidateVersion !== snapshot.candidate.version ||
-    proof.candidateVersion !== snapshot.installedVersion
-  ) {
-    invalid();
-  }
-  const baselineSchemaVersions = versions(proof.runtime.schemaVersions);
-  const preflights = boundedList(proof.preflights);
-  const sessionReads = boundedList(proof.sessionReads);
-  const databases = boundedList(proof.before?.databases).map((database) => {
-    if (!["state", "agent"].includes(database.kind) || typeof database.present !== "boolean") {
-      invalid();
-    }
-    const result = {
-      kind: database.kind,
-      present: database.present,
-    };
-    if (database.kind === "agent") {
-      result.agentId = name(database.agentId);
-    }
-    if (!database.present) {
-      return result;
-    }
-    for (const session of boundedList(database.sessions)) {
-      if (typeof session?.key !== "string" || typeof session.sessionId !== "string") {
-        invalid();
-      }
-    }
-    Object.assign(result, {
-      userVersion: count(database.userVersion),
-      contentVersion: count(database.contentVersion),
-      sessionCount: boundedList(database.sessions).length,
-      tables: boundedList(database.tables).map((table) => ({
-        table: name(table.table),
-        rows: count(table.rows),
-        sha256: digest(table.sha256),
-      })),
-    });
-    if (database.kind === "agent") {
-      const matchingPreflights = preflights.filter((entry) => entry.agentId === database.agentId);
-      const matchingReads = sessionReads.filter((entry) => entry.agentId === database.agentId);
-      const preflight = matchingPreflights[0];
-      const read = matchingReads[0];
-      if (
-        matchingPreflights.length !== 1 ||
-        matchingReads.length !== 1 ||
-        preflight?.status !== "exact" ||
-        preflight.foundVersion !== database.userVersion ||
-        preflight.targetVersion !== baselineSchemaVersions.agent ||
-        database.userVersion !== baselineSchemaVersions.agent ||
-        database.contentVersion !== database.userVersion ||
-        read?.count !== result.sessionCount
-      ) {
-        invalid();
-      }
-      Object.assign(result, {
-        preflight: {
-          status: "exact",
-          foundVersion: count(preflight.foundVersion),
-          targetVersion: count(preflight.targetVersion),
-        },
-        sessionRead: { count: count(read.count) },
-      });
-    }
-    return result;
-  });
-  const presentAgents = databases.filter(
-    (database) => database.kind === "agent" && database.present,
-  );
-  if (
-    preflights.length !== presentAgents.length ||
-    sessionReads.length !== presentAgents.length ||
-    new Set(presentAgents.map((database) => database.agentId)).size !== presentAgents.length ||
-    !presentAgents.some(
-      (database) =>
-        database.sessionCount > 0 &&
-        database.tables.some((table) => table.table === "transcript_events" && table.rows > 0),
-    )
-  ) {
-    invalid();
-  }
-  return {
-    status: "passed",
-    baselineVersion: releaseVersion(proof.baselineVersion),
-    candidateVersion: releaseVersion(proof.candidateVersion),
-    baselineSchemaVersions,
-    candidateSchemaVersions: versions(proof.candidateSchemaVersions),
-    archiveSha256: digest(proof.archive?.sha256),
-    baselineRuntime: {
-      manifestSha256: digest(proof.runtime.manifestSha256),
-      entrySha256: digest(proof.runtime.entrySha256),
-    },
-    databases,
-    files: boundedList(proof.before.files).map((file) => {
-      if (!["legacy-store", "transcript", "trajectory", "skill-prompt"].includes(file.kind)) {
-        invalid();
-      }
-      return { kind: file.kind, sha256: digest(file.sha256) };
-    }),
-  };
-}
-
 function publishedSuccessSummary(artifactRoot, sanitize) {
   const raw = readOwned(artifactRoot, "summary.json", "summary");
   if (raw === null) {
@@ -1546,6 +1687,38 @@ function publishedSuccessSummary(artifactRoot, sanitize) {
   const snapshot = JSON.parse(raw);
   if (snapshot.status !== "passed") {
     throw new Error();
+  }
+  const pluginPolicy = publishedPluginPolicy(snapshot, { sanitize, boundedList });
+  const nativeAssignments = publishedNativeAssignments(snapshot);
+  let packageActivationRecovery;
+  if (
+    ["package-publication-recovery", "package-verification-recovery"].includes(snapshot.scenario)
+  ) {
+    const proof = snapshot.packageActivationRecovery;
+    assertPackageRecoveryEvidence(proof);
+    packageActivationRecovery = {
+      status: proof.status,
+      cut: proof.interruption.cut,
+      phase: proof.interruption.phase,
+      writerVersion: proof.interruption.writerVersion,
+      candidateVersion: proof.candidate.version,
+      candidateSha256: proof.candidate.tarballSha256,
+      nextVersion: proof.nextUpdate.installed.version,
+      helperPreserved: true,
+      retainedBytesPreserved: true,
+      repeatRepairPassed: true,
+      distinctNextUpdatePassed: true,
+    };
+  } else if (snapshot.scenario === "package-stranded-first-hop") {
+    const proof = snapshot.packageActivationRecovery;
+    assertPackageRecoveryEvidence(proof);
+    packageActivationRecovery = {
+      status: proof.status,
+      writerVersion: "2026.9.7",
+      installedVersion: "2026.9.8",
+      firstHop: proof.firstHop,
+      newerCandidateInvoked: false,
+    };
   }
   for (const value of [
     snapshot.baseline?.spec,
@@ -1567,6 +1740,7 @@ function publishedSuccessSummary(artifactRoot, sanitize) {
     "startupSeconds",
     "updateRestartSeconds",
     "idempotenceSeconds",
+    "idempotenceBudgetSeconds",
     "healthzSeconds",
     "readyzSeconds",
     "statusSeconds",
@@ -1600,11 +1774,29 @@ function publishedSuccessSummary(artifactRoot, sanitize) {
       reason: sanitize(companion.reason, "baseline companion"),
     };
   }
+  let missingLoadPath = null;
+  const applicability = snapshot.missingLoadPath;
+  if (applicability !== null && applicability !== undefined) {
+    if (
+      !(applicability.applicability === "supported" && applicability.reason === null) &&
+      !(
+        applicability.applicability === "unsupported-driver" &&
+        applicability.reason === "published-cli-rejects-invalid-config-before-staging"
+      )
+    ) {
+      throw new Error();
+    }
+    missingLoadPath = {
+      applicability: applicability.applicability,
+      reason: applicability.reason,
+    };
+  }
   return {
     status: "passed",
     baseline: textFields(snapshot.baseline, ["spec", "version"], sanitize),
     candidate: textFields(snapshot.candidate, ["kind", "version"], sanitize),
     baselineCompanion,
+    missingLoadPath,
     ...textFields(
       snapshot,
       [
@@ -1619,7 +1811,10 @@ function publishedSuccessSummary(artifactRoot, sanitize) {
     updateRecovery: sanitize(snapshot.updateRecovery, "summary"),
     updateRestartSource: sanitize(snapshot.updateRestartSource, "summary"),
     firstHopPostCore: publishedPostCore(snapshot.firstHopPostCore, sanitize),
-    backupRollback: publishedBackupRollback(snapshot, sanitize),
+    backupRollback: publishedBackupRollback(snapshot, { sanitize, boundedList, textFields }),
+    ...(pluginPolicy ? { pluginPolicy } : {}),
+    ...(nativeAssignments ? { nativeAssignments } : {}),
+    ...(packageActivationRecovery ? { packageActivationRecovery } : {}),
     timings,
     phases: boundedList(snapshot.phases).map((event) => {
       if (
@@ -1638,18 +1833,112 @@ function publishedSuccessSummary(artifactRoot, sanitize) {
         "update.json",
         "repair.json",
         "recovery-update.json",
+        ...(snapshot.scenario === "custom-plugin-siblings" ? siblingRefusalLogs : []),
+        ...(snapshot.scenario === "legacy-operator-state" ? backupRollbackLogs : []),
+        ...(pluginPolicy ? pluginPolicyLogs : []),
+        ...(nativeAssignments?.status === "not-applicable"
+          ? ["native-assignment-eligibility.json"]
+          : nativeAssignments
+            ? nativeAssignmentLogs
+            : []),
         ...(snapshot.scenario === "workshop-doctor-recovery"
-          ? ["workshop-doctor-recovery.json", "baseline-doctor.log", "doctor.log"]
+          ? [
+              "workshop-doctor-recovery.json",
+              "baseline-doctor.log",
+              "doctor.log",
+              "physical-baseline-update.json",
+              "physical-baseline-refusal.json",
+              "physical-baseline-restoration.json",
+              "physical-candidate-doctor.log",
+              "physical-candidate-repair.json",
+            ]
           : []),
+        ...(snapshot.scenario === "update-report-recovery"
+          ? [
+              "update-report-recovery.json",
+              "update-report-baseline.json",
+              "update-report-retry-status.log",
+              "update-report-pending-status.log",
+              "update-report-retry.gh.jsonl",
+              "update-report-pending.gh.jsonl",
+            ]
+          : []),
+        ...(snapshot.scenario === "dreaming-cron-doctor" ? ["dreaming-cron-proof.json"] : []),
+        ...(snapshot.scenario === "cron-owner-doctor" ? ["cron-owner-proof.json"] : []),
         ...(snapshot.scenario === "legacy-operator-state" &&
         snapshot.updateRestartMode === "manual" &&
         ["2026.9.3", "2026.9.4"].includes(snapshot.baseline.version)
           ? ["legacy-operator-cron-history-proof.json"]
           : []),
+        ...(snapshot.scenario === "legacy-operator-state" &&
+        (snapshot.baseline.version === "2026.9.6" ||
+          (snapshot.updateRestartMode === "manual" &&
+            ["2026.9.3", "2026.9.4"].includes(snapshot.baseline.version)))
+          ? [
+              "legacy-operator-post-update-cron-history.json",
+              "legacy-operator-candidate-cron-history.json",
+            ]
+          : []),
+        ...(snapshot.scenario === "legacy-operator-state" &&
+        snapshot.updateRestartMode === "manual" &&
+        snapshot.baseline.version === "2026.9.4"
+          ? restoredIndexLogs
+          : []),
       ].map((name) => [name, sanitize(readOwned(artifactRoot, name, name), name)]),
     ),
     omissions,
   };
+}
+
+function failedUpdateContext(text, label) {
+  if (label !== "update.json" && label !== "recovery-update.json") {
+    return "";
+  }
+  try {
+    // Match the warning-prefixed updater JSON accepted by assertions.readUpdateJson.
+    const result = JSON.parse(text.slice(text.indexOf("{")));
+    if (result?.status !== "error" || !Array.isArray(result.steps)) {
+      return "";
+    }
+    const index = result.steps.findIndex(
+      (step) =>
+        step &&
+        typeof step.name === "string" &&
+        !step.advisory &&
+        // Serialized UpdateStepResult follows infra/update-run-step.isFailedUpdateStep:
+        // physical process success does not erase a failed inspection.
+        (step.exitCode !== 0 ||
+          Boolean(step.failureFacts?.length || step.killed || step.outputLimitExceeded) ||
+          (step.termination !== undefined && step.termination !== "exit")),
+    );
+    if (index < 0) {
+      return "";
+    }
+    const step = result.steps[index];
+    return [
+      `Reported failing update step ${index + 1} of ${result.steps.length}: ${JSON.stringify(step.name)}`,
+      JSON.stringify(
+        {
+          exitCode: step.exitCode,
+          signal: step.signal,
+          termination: step.termination,
+          killed: step.killed,
+          outputLimitExceeded: step.outputLimitExceeded,
+          durationMs: step.durationMs,
+          failureFacts: step.failureFacts,
+        },
+        null,
+        2,
+      ),
+      typeof step.stderrTail === "string" ? `stderrTail:\n${step.stderrTail}` : "",
+      typeof step.stdoutTail === "string" ? `stdoutTail:\n${step.stdoutTail}` : "",
+    ]
+      .filter(Boolean)
+      .join("\n");
+  } catch {
+    // Incomplete or non-JSON output keeps the existing bounded log representation.
+    return "";
+  }
 }
 
 export function publishDiagnostics(
@@ -1669,7 +1958,7 @@ export function publishDiagnostics(
       publishedSuccessSummary(artifactRoot, sanitize),
       publicLimit,
     );
-    return;
+    return undefined;
   }
   if (outcome !== "failed") {
     throw new Error();
@@ -1707,6 +1996,7 @@ export function publishDiagnostics(
     "successful update check",
     "successful update plugins",
     "plugin identity",
+    "package integrity",
     ...["doctor", "sessions", "archives", "sibling"].map((section) => `migration-${section}`),
     "session migration",
     ...Object.values(migrationLabels),
@@ -1722,14 +2012,30 @@ export function publishDiagnostics(
     if (typeof text !== "string" || Buffer.byteLength(text) > inputLimit) {
       throw new Error();
     }
-    const redacted = redactSensitiveText(text, { mode: "tools" });
+    let redacted = redactSensitiveText(text, { mode: "tools" });
+    if (outcome === "failed" && Buffer.byteLength(JSON.stringify(redacted)) > outputLimit) {
+      const context = failedUpdateContext(text, label);
+      if (context) {
+        // Keep execution order explicit; this is a diagnostic prelude, not reordered steps.
+        redacted = `${redactSensitiveText(context, { mode: "tools" })}\n\nCaptured update output (original order):\n${redacted}`;
+      }
+    }
+    // Keep the latest startup/native events after redacting the whole input.
+    const tail =
+      label === "missing-load-path/baseline-gateway.log" ||
+      label === "native-assignment-messages.jsonl";
+    const lines = redacted.split(/(?<=\n)/u);
+    if (tail) {
+      lines.reverse();
+    }
     let result = "";
-    for (const line of redacted.split(/(?<=\n)/u)) {
-      if (Buffer.byteLength(JSON.stringify(result + line)) > outputLimit) {
+    for (const line of lines) {
+      const next = tail ? line + result : result + line;
+      if (Buffer.byteLength(JSON.stringify(next)) > outputLimit) {
         omissions[label] = "redacted output truncated at a complete line (16 KiB)";
         break;
       }
-      result += line;
+      result = next;
     }
     return result;
   }
@@ -1758,6 +2064,14 @@ export function publishDiagnostics(
     report.config.sha256 = snapshot.config.sha256;
   }
   report.postCore = publishedPostCore(snapshot.postCore, sanitize);
+  report.packageIntegrity = { availability: "unavailable" };
+  if (snapshot.packageIntegrity?.availability === "captured") {
+    try {
+      report.packageIntegrity = integrityProjection(snapshot.packageIntegrity);
+    } catch {
+      omissions["package integrity"] ??= reasons[3];
+    }
+  }
   report.successfulUpdateCheck = successfulUpdateCheck(snapshot.successfulUpdateCheck, sanitize);
   report.sessionMigration = publishedSessionMigration(snapshot.sessionMigration, sanitize);
   report.doctorResults = { availability: "unknown", observations: [] };
@@ -1771,12 +2085,7 @@ export function publishDiagnostics(
   } catch {
     // Do not promote a partial or unbound receipt into a reported Doctor outcome.
   }
-  report.pluginIdentity = {
-    availability: "unknown",
-    evidence: "persisted index + current bytes; not observed loaded modules",
-    reader: "SQLite or historical fallback; missing/error is not absence",
-    plugins: [],
-  };
+  report.pluginIdentity = unknownPluginIdentity();
   if (snapshot.pluginIdentity?.availability === "observed") {
     try {
       const plugins = boundedList(snapshot.pluginIdentity.plugins).map((entry) => {
@@ -1817,29 +2126,25 @@ export function publishDiagnostics(
       omissions["plugin identity"] = reasons[3];
     }
   }
-  report.migration = Object.fromEntries(
-    ["doctor", "sessions", "archives", "sibling"].map((section) => {
-      try {
-        const value = snapshot.migration?.[section];
-        if (value?.availability !== "captured") {
-          throw new Error();
-        }
-        return [
-          section,
-          { availability: "captured", ...migrationProjection(section, value, sanitize) },
-        ];
-      } catch {
-        omissions[`migration-${section}`] ??= reasons[3];
-        return [section, { availability: "unavailable" }];
-      }
-    }),
-  );
+  report.migration = projectMigrationSections((section) => {
+    const value = snapshot.migration?.[section];
+    if (value?.availability !== "captured") {
+      throw new Error();
+    }
+    return value;
+  }, sanitize);
   writeReport(artifactRoot, destination, "failure.json", report, publicLimit);
   if (Object.keys(omissions).length) {
     process.stderr.write(
       "Upgrade survivor diagnostics: some inputs omitted; see failure.json omissions.\n",
     );
   }
+  // Return only published failure coordinates; logs and configuration stay in the artifact.
+  return {
+    phase: sanitize(report.phase, "phase"),
+    exitStatus: report.exitStatus,
+    signal: report.signal,
+  };
 }
 
 if (import.meta.main) {

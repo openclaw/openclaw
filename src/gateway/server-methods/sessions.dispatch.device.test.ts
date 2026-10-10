@@ -1,6 +1,3 @@
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   GATEWAY_CLIENT_IDS,
@@ -47,16 +44,17 @@ import {
   makeFailedPlacement,
   makeSessionTarget,
 } from "./sessions-dispatch.test-support.js";
+import { registerNativeDeviceDispatchTests } from "./sessions.dispatch.native-device.suite.js";
 
 // Install session-store fixtures before environment handlers load their session accessors.
 const environmentMethods = await import("./environments.js");
 const dispatchTestMocks = getDispatchTestMocks();
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-function useDeviceSession(agentRuntimeOverride?: string): void {
+function useDeviceSession(agentRuntimeOverride?: string, sessionId = dispatchTestSessionId): void {
   dispatchTestMocks.resolveTarget.mockReturnValue(
     makeSessionTarget({
-      sessionId: dispatchTestSessionId,
+      sessionId,
       ...(agentRuntimeOverride
         ? {
             agentHarnessId: agentRuntimeOverride,
@@ -95,7 +93,7 @@ function pairedNode(deviceId: string): PairedDevice {
   };
 }
 
-function connectedNode(deviceId: string, available: number) {
+function connectedNode(deviceId: string, available: number): NodeWorkerSupervisorNodeProof {
   return {
     nodeId: deviceId,
     connId: `conn-${deviceId}`,
@@ -108,12 +106,15 @@ function connectedNode(deviceId: string, available: number) {
       enabled: true,
       capacity: { total: Math.max(2, available), available },
       capturedExecPolicy: true,
+      promptContext: 1,
     },
     commands: ["system.run"],
   } satisfies NodeWorkerSupervisorNodeProof;
 }
 
-function activeDevicePlacement(deviceId: string): WorkerSessionPlacementRecord {
+function activeDevicePlacement(
+  deviceId: string,
+): Extract<WorkerSessionPlacementRecord, { state: "active" }> {
   return {
     sessionId: dispatchTestSessionId,
     agentId: "main",
@@ -156,64 +157,11 @@ describe("sessions.dispatch device targets", () => {
     dispatchTestMocks.resolveTarget.mockReturnValue(makeSessionTarget());
   });
 
-  it("synthesizes the core device-provider target for a connected session-capable node", async () => {
-    useDeviceSession();
-    const dispatch = vi.fn().mockResolvedValue(activeDevicePlacement("device-1"));
-    const respond = await invokeSessionDispatch(
-      makeDispatchTestContext({
-        workerPlacementDispatchService: { dispatch },
-        workerSessionPlacementService: { getMany: () => new Map() },
-      }),
-      { deviceId: "device-1" },
-    );
-
-    expect(dispatch).toHaveBeenCalledWith(
-      expect.objectContaining({
-        profileId: "device:device-1",
-        deviceId: "device-1",
-        inheritedProfile: {
-          providerId: "device",
-          profileSnapshot: { install: "bundle", settings: { device: "device-1" } },
-        },
-      }),
-      expect.any(Function),
-      undefined,
-      undefined,
-    );
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({
-        ok: true,
-        placement: expect.objectContaining({ state: "active" }),
-      }),
-      undefined,
-    );
-  });
-
-  it("returns a device dispatch failure to the operator", async () => {
-    useDeviceSession();
-    const dispatch = vi
-      .fn()
-      .mockRejectedValue(
-        new Error("device worker node is not connected: device-1; reconnect it before retrying"),
-      );
-    const respond = await invokeSessionDispatch(
-      makeDispatchTestContext({
-        workerPlacementDispatchService: { dispatch },
-        workerSessionPlacementService: { getMany: () => new Map() },
-      }),
-      { deviceId: "device-1" },
-    );
-
-    expect(dispatch).toHaveBeenCalledOnce();
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: ErrorCodes.UNAVAILABLE,
-        message: expect.stringContaining("reconnect"),
-      }),
-    );
+  registerNativeDeviceDispatchTests({
+    connectedNode,
+    pairedNode,
+    useDeviceSession,
+    activeDevicePlacement,
   });
 
   describe("automatic paired-device selection", () => {
@@ -221,39 +169,33 @@ describe("sessions.dispatch device targets", () => {
       vi.restoreAllMocks();
     });
 
-    it("dispatches to the highest-capacity eligible host and identifies it in the response", async () => {
+    it("dispatches to a capacity-one host whose occupied slot is reclaimable idle", async () => {
       useDeviceSession();
-      const nodes = [connectedNode("smaller", 1), connectedNode("largest", 4)];
+      const node = connectedNode("idle-host", 0);
+      node.workerHost.capacity = { total: 1, available: 0, reclaimableIdle: 1 };
+      node.workerHost.idleRetention = true;
       vi.spyOn(environmentMethods, "listGatewayEnvironments").mockResolvedValue(
-        deviceEnvironments(nodes),
+        deviceEnvironments([node]),
       );
-      const dispatch = vi.fn().mockResolvedValue(activeDevicePlacement("largest"));
-      const respond = await invokeSessionDispatch(
-        makeDispatchTestContext({
-          nodeRegistry: {
-            get: (deviceId: string) => nodes.find((node) => node.nodeId === deviceId),
-          } as never,
-          workerPlacementDispatchService: { dispatch },
-          workerSessionPlacementService: { getMany: () => new Map() },
-        }),
-        { autoDevice: true },
-      );
-
+      const dispatch = vi.fn().mockResolvedValue(activeDevicePlacement(node.nodeId));
+      const context = makeDispatchTestContext({
+        nodeRegistry: { get: () => node } as never,
+        workerPlacementDispatchService: { dispatch },
+        workerSessionPlacementService: { getMany: () => new Map() },
+      });
+      bindDeviceWorkerAvailability(context.workerEnvironmentService!, async () => ({
+        available: true,
+        node,
+      }));
+      const respond = await invokeSessionDispatch(context, { autoDevice: true });
       expect(dispatch).toHaveBeenCalledWith(
-        expect.objectContaining({ profileId: "device:largest", deviceId: "largest" }),
+        expect.objectContaining({ deviceId: node.nodeId }),
         expect.any(Function),
         undefined,
         undefined,
       );
-      expect(respond).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({
-          placement: expect.objectContaining({
-            runner: { kind: "device", status: "available", deviceId: "largest" },
-          }),
-        }),
-        undefined,
-      );
+      expect(respond).toHaveBeenCalledWith(true, expect.objectContaining({ ok: true }), undefined);
+      expect(node.workerHost.capacity.available).toBe(0);
     });
 
     it.each([
@@ -441,9 +383,7 @@ describe("sessions.dispatch device targets", () => {
     );
 
     it("redispatches to the next host when the first disappears at the inner eligibility fence", async () => {
-      const root = await fs.mkdtemp(
-        path.join(await fs.realpath(os.tmpdir()), "openclaw-session-auto-device-"),
-      );
+      const root = tempDirs.make("openclaw-session-auto-device-");
       try {
         const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
         const placements = createWorkerSessionPlacementStore({ database, now: () => 1_000 });
@@ -479,17 +419,7 @@ describe("sessions.dispatch device targets", () => {
           harness.markEnvironmentNodeDeviceId("second");
           return minted as Awaited<ReturnType<typeof harness.environments.attachSession>>;
         });
-        dispatchTestMocks.resolveTarget.mockReturnValue(
-          makeSessionTarget({
-            sessionId: "session-1",
-            worktree: { id: "worktree-1", branch: "openclaw/device-test", repoRoot: "/repo" },
-          }),
-        );
-        dispatchTestMocks.findLiveByOwner.mockReturnValue({
-          id: "worktree-1",
-          ownerKind: "session",
-          ownerId: dispatchTestSessionKey,
-        });
+        useDeviceSession(undefined, "session-1");
 
         const respond = await invokeSessionDispatch(
           makeDispatchTestContext({
@@ -524,7 +454,6 @@ describe("sessions.dispatch device targets", () => {
         expect(placements.get("session-1")).toMatchObject({ state: "active" });
       } finally {
         closeOpenClawStateDatabaseForTest();
-        await fs.rm(root, { recursive: true, force: true });
       }
     });
 
@@ -586,13 +515,7 @@ describe("sessions.dispatch device targets", () => {
                   : undefined,
           };
           bindDeviceWorkerAvailability(environments, availability);
-          useDeviceSession();
-          dispatchTestMocks.resolveTarget.mockReturnValue(
-            makeSessionTarget({
-              sessionId: "session-1",
-              worktree: { id: "worktree-1", branch: "openclaw/device-test", repoRoot: "/repo" },
-            }),
-          );
+          useDeviceSession(undefined, "session-1");
           const respond = await invokeSessionDispatch(
             makeDispatchTestContext({
               nodeRegistry: {
@@ -696,38 +619,6 @@ describe("sessions.dispatch device targets", () => {
       );
     });
 
-    it.each([
-      "workspace synchronization failed",
-      "Worker dispatch lost its current node authority before attachment",
-    ])("does not retry an unclassified failure: %s", async (message) => {
-      useDeviceSession();
-      const nodes = [connectedNode("first", 3), connectedNode("second", 2)];
-      vi.spyOn(environmentMethods, "listGatewayEnvironments").mockResolvedValue(
-        deviceEnvironments(nodes),
-      );
-      const dispatch = vi.fn().mockRejectedValue(new Error(message));
-      const respond = await invokeSessionDispatch(
-        makeDispatchTestContext({
-          nodeRegistry: {
-            get: (deviceId: string) => nodes.find((node) => node.nodeId === deviceId),
-          } as never,
-          workerPlacementDispatchService: { dispatch },
-          workerSessionPlacementService: { getMany: () => new Map() },
-        }),
-        { autoDevice: true },
-      );
-
-      expect(dispatch).toHaveBeenCalledOnce();
-      expect(respond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({
-          code: ErrorCodes.UNAVAILABLE,
-          message,
-        }),
-      );
-    });
-
     it("never rotates an allocated environment on an unclassified node failure", async () => {
       useDeviceSession();
       const nodes = [connectedNode("first", 3), connectedNode("second", 2)];
@@ -818,11 +709,15 @@ describe("sessions.dispatch device targets", () => {
         name: "missing",
         declaredCommands: ["system.run"],
         commandPolicy: { allow: ["codex.exec-server.stdio.v1"] },
+        expectedMessage:
+          "paired-device command codex.exec-server.stdio.v1 is not advertised by node device-1; enable the plugin or node capability that provides this command on that node, then restart the node (openclaw node restart) and approve its updated command surface",
       },
       {
         name: "declared but denied",
         declaredCommands: ["system.run", "codex.exec-server.stdio.v1"],
         commandPolicy: { deny: ["codex.exec-server.stdio.v1"] },
+        expectedMessage:
+          "paired-device command codex.exec-server.stdio.v1 is blocked by Gateway policy for node device-1; allow it in gateway.nodes.commands.allow and remove any matching gateway.nodes.commands.deny entry",
       },
     ])("rejects a $name required paired-node command before dispatch", async (scenario) => {
       useDeviceSession("codex");
@@ -852,7 +747,7 @@ describe("sessions.dispatch device targets", () => {
         undefined,
         expect.objectContaining({
           code: ErrorCodes.INVALID_REQUEST,
-          message: expect.stringMatching(/command.*(enabled|approved|declared)/i),
+          message: scenario.expectedMessage,
         }),
       );
     });
@@ -910,44 +805,6 @@ describe("sessions.dispatch device targets", () => {
         }),
       );
     });
-
-    it("carries runtime-owned node command requirements into cloud-profile dispatch", async () => {
-      useDeviceSession("codex");
-      const dispatch = vi.fn().mockRejectedValue(new Error("cloud-profile dispatch reached"));
-
-      const respond = await invokeSessionDispatch(
-        makeDispatchTestContext({
-          getRuntimeConfig: () => ({
-            cloudWorkers: { profiles: { test: { provider: "multimode-cloud" } } },
-            gateway: { nodes: { commands: { allow: ["codex.exec-server.stdio.v1"] } } },
-          }),
-          workerPlacementDispatchService: { dispatch },
-          workerSessionPlacementService: { getMany: () => new Map() },
-        }),
-      );
-
-      expect(dispatch).toHaveBeenCalledWith(
-        expect.objectContaining({
-          executionMode: "remote-exec",
-          profileId: "test",
-          devicePlacement: {
-            requiredNodeCommands: ["codex.exec-server.stdio.v1"],
-            consumesWorkerSlot: false,
-          },
-        }),
-        expect.any(Function),
-        undefined,
-        undefined,
-      );
-      expect(respond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({
-          code: ErrorCodes.UNAVAILABLE,
-          message: "cloud-profile dispatch reached",
-        }),
-      );
-    });
   });
 
   it.each([
@@ -966,9 +823,7 @@ describe("sessions.dispatch device targets", () => {
   ])(
     "rejects a $name node before mutating placement or provisioning",
     async ({ nodes, expectedMessage, rejectedMessage }) => {
-      const root = await fs.mkdtemp(
-        path.join(await fs.realpath(os.tmpdir()), "openclaw-session-dispatch-device-"),
-      );
+      const root = tempDirs.make("openclaw-session-dispatch-device-");
       try {
         const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
         const placements = createWorkerSessionPlacementStore({ database, now: () => 1_000 });
@@ -1014,7 +869,6 @@ describe("sessions.dispatch device targets", () => {
         );
       } finally {
         closeOpenClawStateDatabaseForTest();
-        await fs.rm(root, { recursive: true, force: true });
       }
     },
   );

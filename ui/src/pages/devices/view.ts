@@ -1,4 +1,4 @@
-// Devices page renders its screen content.
+import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
 import { html, nothing } from "lit";
 import { live } from "lit/directives/live.js";
 import { repeat } from "lit/directives/repeat.js";
@@ -10,11 +10,14 @@ import {
   renderSettingsSection,
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
+import { registerDevicesEnglish } from "../../i18n/locales/en-devices.ts";
 import "../../styles/devices.css";
 import { renderExecApprovals, resolveExecApprovalsState } from "./view-exec-approvals.ts";
 import { renderDeviceInventory } from "./view-inventory.ts";
 import { resolveConfigAgents, resolveNodeTargets } from "./view-shared.ts";
 import type { DevicesProps } from "./view.types.ts";
+
+registerDevicesEnglish();
 
 export function renderDevices(props: DevicesProps) {
   const bindingState = resolveBindingsState(props);
@@ -95,11 +98,7 @@ function renderBindings(state: BindingState) {
                 : html`${t("devices.binding.defaultBindingHint")} ${t("devices.binding.noNodes")}`,
               control: renderBindingSelect(null, state),
             })}
-            ${
-              state.agents.length === 0
-                ? renderSettingsRow({ title: t("devices.binding.noAgents") })
-                : state.agents.map((agent) => renderAgentBinding(agent, state))
-            }
+            ${state.agents.map((agent) => renderAgentBinding(agent, state))}
           `
     }
   `;
@@ -202,30 +201,23 @@ function resolveAgentBindings(config: Record<string, unknown> | null) {
     isDefault: true,
     binding: null,
   };
-  if (!config || typeof config !== "object") {
+  if (!config) {
     return { defaultBinding: null, agents: [fallbackAgent] };
   }
   const tools = (config.tools ?? {}) as Record<string, unknown>;
   const exec = (tools.exec ?? {}) as Record<string, unknown>;
-  const defaultBinding =
-    typeof exec.node === "string" && exec.node.trim() ? exec.node.trim() : null;
+  const defaultBinding = normalizeNullableString(exec.node);
 
   const agents = resolveConfigAgents(config).map((entry) => {
     const toolsEntry = (entry.record.tools ?? {}) as Record<string, unknown>;
     const execEntry = (toolsEntry.exec ?? {}) as Record<string, unknown>;
-    const binding =
-      typeof execEntry.node === "string" && execEntry.node.trim() ? execEntry.node.trim() : null;
     return {
       id: entry.id,
       name: entry.name,
       isDefault: entry.isDefault,
-      binding,
+      binding: normalizeNullableString(execEntry.node),
     };
   });
 
-  if (agents.length === 0) {
-    return { defaultBinding, agents: [fallbackAgent] };
-  }
-
-  return { defaultBinding, agents };
+  return { defaultBinding, agents: agents.length === 0 ? [fallbackAgent] : agents };
 }

@@ -3,7 +3,10 @@ import path from "node:path";
 import type { Page } from "playwright";
 import { beforeEach, expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import {
+  defaultControlUiFeatureMethods,
+  installMockGateway,
+} from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -93,7 +96,7 @@ suite.define(() => {
         await sidebar.getByRole("button", { name: /Switch agent/ }).click();
         const emojiRow = sidebar
           .locator("wa-dropdown.sidebar-agent-menu")
-          .getByRole("menuitemradio", { name: "🚀Rocket", exact: true });
+          .getByRole("menuitem", { name: "🚀Rocket", exact: true });
         const menuAvatar = emojiRow.locator(".identity-avatar__text");
         await expect.poll(() => menuAvatar.getAttribute("data-avatar")).toBe(emojiGrapheme);
         // The shared picker paints its text through CSS, not a text node.
@@ -170,11 +173,19 @@ suite.define(() => {
         viewport: { height: 900, width: 1440 },
       },
       async ({ page }) => {
-        const config = { agents: { list: [{ id: "main" }, { id: "emoji" }] } };
+        await page.addInitScript(() => {
+          Object.defineProperty(Crypto.prototype, "randomUUID", {
+            configurable: true,
+            value: undefined,
+          });
+        });
+        const config = { agents: { entries: { main: {}, emoji: {} } } };
         const hydratedEmojiAgent = { id: "emoji", identity: { name: "Rocket" }, name: "Rocket" };
         const gateway = await installMockGateway(page, {
           defaultAgentId: "main",
+          featureMethods: [...defaultControlUiFeatureMethods, "agents.update"],
           methodResponses: {
+            "agents.update": { ok: true },
             "agent.identity.get": {
               cases: [
                 {
@@ -204,6 +215,8 @@ suite.define(() => {
 
         const response = await page.goto(`${suite.server.baseUrl}settings/agents/main/tools`);
         expect(response?.status()).toBe(200);
+        expect(await page.evaluate(() => typeof crypto.randomUUID)).toBe("undefined");
+        expect(await page.evaluate(() => typeof crypto.getRandomValues)).toBe("function");
         await gateway.waitForRequest("agents.list");
         await gateway.waitForRequest("config.get");
         const agentSelect = page.locator(".settings-sidebar__agent openclaw-agent-select");
@@ -214,13 +227,42 @@ suite.define(() => {
         await expect
           .poll(() => new URL(page.url()).pathname)
           .toBe("/settings/agents/emoji/overview");
-        await expect
-          .poll(() => page.locator(".agent-identity-editor__emoji input").inputValue())
-          .toBe(emojiGrapheme);
-        await screenshot(
-          page,
-          `03-agents-overview-${process.env.OPENCLAW_UI_PROOF_LABEL ?? "emoji"}.png`,
-        );
+        const picker = page.locator("openclaw-agent-emoji-picker");
+        const emojiInput = page.locator(".agent-identity-editor__emoji").getByRole("textbox", {
+          name: "Emoji",
+        });
+        await expect.poll(() => emojiInput.inputValue()).toBe(emojiGrapheme);
+        await picker.getByRole("button", { name: "Choose emoji" }).click();
+        await expect.poll(() => picker.getByRole("button", { name: "lobster" }).count()).toBe(1);
+        await screenshot(page, "03-agents-emoji-picker-open.png");
+        expect(await picker.getByRole("textbox", { name: "Paste another emoji" }).count()).toBe(0);
+        expect(await picker.getByRole("button", { name: "Use", exact: true }).count()).toBe(0);
+        await picker.getByRole("searchbox", { name: "Search emoji…" }).fill("dolphin");
+        await picker.getByRole("button", { name: "dolphin", exact: true }).click();
+        await expect.poll(() => emojiInput.inputValue()).toBe("🐬");
+        await screenshot(page, "04-agents-emoji-selected.png");
+        await emojiInput.fill("🪿".repeat(20));
+        await expect.poll(() => emojiInput.inputValue()).toBe("🪿".repeat(4));
+        const beforeBoundedSave = (await gateway.getRequests("agents.update")).length;
+        await page
+          .locator(".agent-identity-editor__actions")
+          .getByRole("button", { name: "Save" })
+          .click();
+        const boundedUpdate = await gateway.waitForRequest("agents.update", {
+          after: beforeBoundedSave,
+        });
+        expect(boundedUpdate.params).toMatchObject({ agentId: "emoji", emoji: "🪿".repeat(4) });
+        await emojiInput.fill("👨‍👩‍👧‍👦".repeat(3));
+        await expect.poll(() => emojiInput.inputValue()).toBe("👨‍👩‍👧‍👦");
+        await emojiInput.fill("🪿");
+        await expect.poll(() => emojiInput.inputValue()).toBe("🪿");
+        const beforeTypedSave = (await gateway.getRequests("agents.update")).length;
+        await page
+          .locator(".agent-identity-editor__actions")
+          .getByRole("button", { name: "Save" })
+          .click();
+        const update = await gateway.waitForRequest("agents.update", { after: beforeTypedSave });
+        expect(update.params).toMatchObject({ agentId: "emoji", emoji: "🪿" });
         await expect
           .poll(() =>
             page

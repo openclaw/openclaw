@@ -19,7 +19,13 @@ import {
 } from "./plugin-publication-collector.ts";
 import { isRecord } from "./record-shared.mjs";
 import type { ReleasePublishGate } from "./release-publish-gates.mts";
-import { readPublishPreflightRelease } from "./release-publish-preflight-evidence.mts";
+import type { ReleaseNpmDecision } from "./release-publish-inputs.mjs";
+import {
+  createPublishPreflightGh,
+  publishPreflightGhError,
+  readPublishPreflightRelease,
+  type PublishPreflightGh,
+} from "./release-publish-preflight-evidence.mts";
 import { collectReleaseVersionFloorErrors } from "./release-version.mjs";
 
 export function readReleasePublicationPackages(input: {
@@ -125,6 +131,7 @@ export async function observeReleaseNpmState(input: {
   plugins: readonly PublishablePluginPackage[];
   corePackages?: readonly { packageName: string; version: string }[];
   publishOpenclawNpm?: boolean;
+  npmDecisions?: readonly ReleaseNpmDecision[];
 }) {
   const gates: ReleasePublishGate[] = [];
   const corePackages = input.publishOpenclawNpm === false ? [] : (input.corePackages ?? []);
@@ -156,56 +163,79 @@ export async function observeReleaseNpmState(input: {
     tasks: packages.map((pkg) => async () => {
       const id = `npm.package.${pkg.packageName}`;
       try {
-        const registry = await fetchNpmRegistryPackumentWithRetry({
-          packageName: pkg.packageName,
-          packageUrl: `https://registry.npmjs.org/${encodeURIComponent(pkg.packageName)}`,
-          maxBytes: 16 * 1024 * 1024,
-          timeoutMs: 15_000,
-          attempts: 2,
-          redirect: "manual",
-        });
-        if (
-          registry.status !== 404 &&
-          (!registry.ok || !isRecord(registry.packument) || !isRecord(registry.packument.versions))
-        ) {
-          throw new Error(`npm returned HTTP ${registry.status} or an invalid package inventory.`);
-        }
-        const packument = isRecord(registry.packument) ? registry.packument : {};
-        const versions = isRecord(packument.versions) ? packument.versions : {};
-        const published = Object.hasOwn(versions, pkg.version);
-        const bootstrap = registry.status === 404;
         const core = coreNames.has(pkg.packageName);
-        const tags = isRecord(packument["dist-tags"]) ? packument["dist-tags"] : {};
-        const plan = resolveNpmPublishPlan(
-          pkg.version,
-          typeof tags.beta === "string" ? tags.beta : undefined,
-          input.npmDistTag === "extended-stable" ? input.npmDistTag : undefined,
+        const sealed = input.npmDecisions?.find(
+          (entry) => entry.packageName === pkg.packageName && entry.packageVersion === pkg.version,
         );
-        if (core) {
-          validateNpmPublishBoundary(pkg.version, input.npmDistTag);
-          if (input.npmDistTag === "beta") {
-            plan.publishTag = "beta";
-            plan.mirrorDistTags = [];
+        if (input.npmDecisions && !sealed) {
+          throw new Error("Selected package is absent from the sealed publication decisions.");
+        }
+        let published: boolean;
+        let bootstrap: boolean;
+        let plan: ReturnType<typeof resolveNpmPublishPlan>;
+        let route: ReleaseNpmDecision["route"];
+        let supersededBy: string | null;
+        if (sealed) {
+          published = sealed.decision !== "plan";
+          bootstrap = sealed.bootstrap;
+          plan = sealed.plan;
+          route = sealed.route;
+          supersededBy = sealed.supersededBy;
+        } else {
+          const registry = await fetchNpmRegistryPackumentWithRetry({
+            packageName: pkg.packageName,
+            packageUrl: `https://registry.npmjs.org/${encodeURIComponent(pkg.packageName)}`,
+            maxBytes: 16 * 1024 * 1024,
+            timeoutMs: 15_000,
+            attempts: 2,
+            redirect: "manual",
+          });
+          if (
+            registry.status !== 404 &&
+            (!registry.ok ||
+              !isRecord(registry.packument) ||
+              !isRecord(registry.packument.versions))
+          ) {
+            throw new Error(
+              `npm returned HTTP ${registry.status} or an invalid package inventory.`,
+            );
           }
-        }
-        if (!bootstrap && Object.keys(versions).length === 0) {
-          throw new Error(
-            "The package exists with empty version history; missing-package bootstrap cannot be inferred.",
+          const packument = isRecord(registry.packument) ? registry.packument : {};
+          const versions = isRecord(packument.versions) ? packument.versions : {};
+          published = Object.hasOwn(versions, pkg.version);
+          bootstrap = registry.status === 404;
+          const tags = isRecord(packument["dist-tags"]) ? packument["dist-tags"] : {};
+          plan = resolveNpmPublishPlan(
+            pkg.version,
+            typeof tags.beta === "string" ? tags.beta : undefined,
+            input.npmDistTag === "extended-stable" ? input.npmDistTag : undefined,
           );
+          if (core) {
+            validateNpmPublishBoundary(pkg.version, input.npmDistTag);
+            if (input.npmDistTag === "beta") {
+              plan.publishTag = "beta";
+              plan.mirrorDistTags = [];
+            }
+          }
+          if (!bootstrap && Object.keys(versions).length === 0) {
+            throw new Error(
+              "The package exists with empty version history; missing-package bootstrap cannot be inferred.",
+            );
+          }
+          if (bootstrap && core) {
+            throw new Error(
+              "Core publication requires an existing package configured for trusted publishing; plugin token-bootstrap approval does not apply.",
+            );
+          }
+          ({ route, supersededBy } = bootstrap
+            ? { route: null, supersededBy: null }
+            : resolveNpmVersionPublicationDecision({
+                packageVersion: pkg.version,
+                publishPlan: plan,
+                distTags: tags,
+                published,
+              }));
         }
-        if (bootstrap && core) {
-          throw new Error(
-            "Core publication requires an existing package configured for trusted publishing; plugin token-bootstrap approval does not apply.",
-          );
-        }
-        const { route, supersededBy } = bootstrap
-          ? { route: null, supersededBy: null }
-          : resolveNpmVersionPublicationDecision({
-              packageVersion: pkg.version,
-              publishPlan: plan,
-              distTags: tags,
-              published,
-            });
         // Existing plugin versions take the readback path; this workflow does
         // not repair selectors with its OIDC identity. Surface that owner action.
         const pluginSelectorRepair = !core && route && route !== "npm-readback";
@@ -276,38 +306,50 @@ export function observeReleaseGitHubState(input: {
   releaseTag: string;
   sourceSha: string;
   npmDistTag: string;
-  runGh?: (args: string[]) => string;
+  runGh?: PublishPreflightGh;
+  budgetMs?: number;
+  now?: () => number;
+  onProgress?: (message: string) => void;
 }) {
   const gates: ReleasePublishGate[] = [];
-  const runGh =
-    input.runGh ??
-    ((args: string[]) =>
-      execFileSync("gh", args, {
-        encoding: "utf8",
-        stdio: ["ignore", "pipe", "pipe"],
-        timeout: 60_000,
-        maxBuffer: 8 * 1024 * 1024,
-      }));
-  const cache = new Map<string, string>();
-  const raw = (endpoint: string) => {
-    const cached = cache.get(endpoint);
-    if (cached !== undefined) {
-      return cached;
+  const now = input.now ?? Date.now;
+  const budgetMs =
+    input.budgetMs ?? Number(process.env.OPENCLAW_RELEASE_OBSERVATION_BUDGET_MS ?? 180_000);
+  if (!Number.isSafeInteger(budgetMs) || budgetMs < 1) {
+    throw new Error("GitHub observation budget must be a positive integer in milliseconds.");
+  }
+  const deadline = now() + budgetMs;
+  const progress =
+    input.onProgress ??
+    ((message: string) =>
+      process.stderr.write(`[release-publish-preflight] github.observation ${message}\n`));
+  const execute = input.runGh ?? createPublishPreflightGh();
+  let readCommand = "";
+  const runGh: PublishPreflightGh = (args) => {
+    // Replay the exact read, including any --jq filter, so remediation stays cheap.
+    readCommand = ["gh", ...args]
+      .map((arg) => (/^[-\w]+$/u.test(arg) ? arg : `'${arg.replaceAll("'", "'\\''")}'`))
+      .join(" ");
+    const remaining = deadline - now();
+    if (remaining <= 0) {
+      throw new Error(
+        `GitHub observation budget exhausted (${budgetMs} ms); not inspected: ${readCommand}`,
+      );
     }
-    const value = runGh([
+    return execute(args, { timeoutMs: Math.min(60_000, remaining) });
+  };
+  const raw = (endpoint: string) =>
+    runGh([
       "api",
       `repos/${input.repository}/${endpoint}`,
       "--method",
       "GET",
       ...(endpoint.endsWith("/logs") ? ["--allow-escape-sequences"] : []),
     ]);
-    cache.set(endpoint, value);
-    return value;
-  };
   const api = (endpoint: string): unknown => JSON.parse(raw(endpoint));
   let release: Record<string, unknown> | undefined;
   try {
-    const lookup = readPublishPreflightRelease(runGh, input.repository, input.releaseTag);
+    const lookup = readPublishPreflightRelease(runGh, input.repository, input.releaseTag, progress);
     release = lookup.state === "found" ? lookup.release : undefined;
     gates.push({
       id: "github.release",
@@ -324,12 +366,12 @@ export function observeReleaseGitHubState(input: {
           ? "Inspect the release with credentials that can view drafts before dispatch."
           : "",
     });
-  } catch {
+  } catch (error) {
     gates.push({
       id: "github.release",
       status: "WARN",
-      message: "GitHub release state could not be read.",
-      remediation: `Inspect authenticated release visibility and exact tag ${input.releaseTag}: gh api 'repos/${input.repository}/releases?per_page=100&page=1' --method GET`,
+      message: `GitHub release state could not be read: ${publishPreflightGhError(error)}`,
+      remediation: `Inspect authenticated release visibility and exact tag ${input.releaseTag}: ${readCommand}`,
     });
   }
   for (const workflow of [
@@ -339,7 +381,8 @@ export function observeReleaseGitHubState(input: {
     "plugin-clawhub-new.yml",
   ]) {
     const runs = new Map<number, Run>();
-    let complete = true;
+    const unresolved: string[] = [];
+    const unreadCommands: string[] = [];
     for (const status of [
       "in_progress",
       "queued",
@@ -349,6 +392,7 @@ export function observeReleaseGitHubState(input: {
       "action_required",
     ]) {
       const endpoint = `actions/workflows/${workflow}/runs?status=${status}&per_page=100`;
+      progress(`workflow ${workflow} inventory ${status} (${runs.size} active runs found)`);
       try {
         const response = api(endpoint);
         if (
@@ -373,19 +417,19 @@ export function observeReleaseGitHubState(input: {
           runs.set(run.id, run as Run);
         }
         if (response.total_count > 100) {
-          complete = false;
+          throw new Error("Active-run inventory exceeds the bounded first page.");
         }
-      } catch {
-        complete = false;
+      } catch (error) {
+        unresolved.push(`${status}: ${publishPreflightGhError(error)}`);
+        unreadCommands.push(`gh api 'repos/${input.repository}/${endpoint}' --method GET`);
       }
     }
-    if (!complete) {
+    if (unresolved.length) {
       gates.push({
         id: `concurrency.${workflow}.inventory`,
         status: "WARN",
-        message:
-          "Active-run inventory is unavailable or exceeds the bounded first page; concurrency is unresolved.",
-        remediation: `gh api 'repos/${input.repository}/actions/workflows/${workflow}/runs?status=waiting&per_page=100' --method GET`,
+        message: `Active-run inventory unresolved: ${unresolved.join("; ")}`,
+        remediation: unreadCommands.join("\n"),
       });
     }
     let candidates = 0;
@@ -407,6 +451,9 @@ export function observeReleaseGitHubState(input: {
       let evidence = match ? "exact workflow run title" : "dispatch inputs unavailable";
       let parentRunId: string | undefined;
       if (!match && candidates++ < 10) {
+        progress(
+          `workflow ${workflow}: inspecting candidate run ${run.id} ${candidates}/${runs.size} via job log (attempt ${run.run_attempt})`,
+        );
         try {
           const jobs = api(`actions/runs/${run.id}/attempts/${run.run_attempt}/jobs?per_page=100`);
           const job =
@@ -440,19 +487,27 @@ export function observeReleaseGitHubState(input: {
               : "dispatch inputs incomplete in available job log";
             parentRunId = env("RELEASE_PUBLISH_RUN_ID");
           }
-        } catch {
-          evidence = "dispatch inputs unavailable from completed job logs";
+        } catch (error) {
+          evidence = `dispatch inputs unavailable: ${publishPreflightGhError(error)}; read: ${readCommand}`;
         }
+      } else if (!match) {
+        evidence = "candidate inspection limit (10) reached; dispatch inputs not inspected";
       }
       let orphan = "";
       if (match && parentRunId && /^[1-9][0-9]*$/u.test(parentRunId)) {
         try {
+          progress(`candidate run ${run.id}: inspecting parent ${parentRunId}`);
           const producer = api(`actions/runs/${parentRunId}`);
           if (isRecord(producer) && producer.status === "completed") {
             orphan = ` Parent ${parentRunId} is terminal (${String(producer.conclusion)}); this may be a detached child or orphan.`;
           }
-        } catch {
-          /* An unavailable parent cannot establish an orphan. */
+        } catch (error) {
+          gates.push({
+            id: `concurrency.${workflow}.${run.id}.parent`,
+            status: "WARN",
+            message: `Parent ${parentRunId} ownership unresolved: ${publishPreflightGhError(error)}`,
+            remediation: readCommand,
+          });
         }
       }
       gates.push({
@@ -464,7 +519,10 @@ export function observeReleaseGitHubState(input: {
           : `Resolve the run's exact ${parent ? "npm_dist_tag" : "ref and dry_run"} inputs before dispatch: gh api 'repos/${input.repository}/actions/runs/${run.id}/jobs?per_page=100' --method GET`,
       });
     }
-    if (complete && !gates.some((gate) => gate.id.startsWith(`concurrency.${workflow}.`))) {
+    if (
+      !unresolved.length &&
+      !gates.some((gate) => gate.id.startsWith(`concurrency.${workflow}.`))
+    ) {
       gates.push({
         id: `concurrency.${workflow}.clear`,
         status: "PASS",

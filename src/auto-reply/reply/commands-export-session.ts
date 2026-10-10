@@ -1,8 +1,6 @@
-// Builds export bundles for a session transcript and runtime context.
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { expectDefined } from "@openclaw/normalization-core";
 import { hasNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import { readAcpSessionMetaForEntry } from "../../acp/runtime/session-meta-readonly.js";
 import { isSessionFileEntry } from "../../agents/sessions/session-file-parser.js";
@@ -11,7 +9,6 @@ import {
   type FileEntry as SessionFileEntry,
   type SessionEntry as AgentSessionEntry,
   type SessionHeader,
-  type SessionMessageEntry,
 } from "../../agents/sessions/session-manager.js";
 import { loadTranscriptEvents } from "../../config/sessions/session-accessor.js";
 import { scanSessionTranscriptTree } from "../../config/sessions/transcript-tree.js";
@@ -19,7 +16,6 @@ import type { SessionEntry as StoredSessionEntry } from "../../config/sessions/t
 import { FsSafeError } from "../../infra/fs-safe.js";
 import type { ReplyPayload } from "../types.js";
 import {
-  isReplyPayload,
   parseExportCommandOutputPath,
   resolveExportCommandSessionTarget,
 } from "./commands-export-common.js";
@@ -27,7 +23,6 @@ import { writeSessionExportFile } from "./commands-export-session-file.js";
 import { resolveCommandsSystemPromptBundle } from "./commands-system-prompt.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
-// Export HTML templates are bundled with this module
 const EXPORT_HTML_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "export-html");
 
 interface SessionData {
@@ -42,17 +37,6 @@ interface SessionData {
 
 const BACKEND_DELEGATED_WARNING =
   "This session was handled by a backend runtime (e.g. CLI/ACP). Assistant replies, tool calls, and usage data are stored in the backend transcript and are not included in this export.";
-
-function hasBackendSession(entry: StoredSessionEntry, hasStoredAcpSession: boolean): boolean {
-  return (
-    hasStoredAcpSession ||
-    hasNonEmptyString(entry.claudeCliSessionId) ||
-    Object.values(entry.cliSessionBindings ?? {}).some((binding) =>
-      hasNonEmptyString(binding?.sessionId),
-    ) ||
-    Object.values(entry.cliSessionIds ?? {}).some(hasNonEmptyString)
-  );
-}
 
 function hasPersistedAcpSession(params: {
   sessionKey: string;
@@ -69,22 +53,23 @@ function hasPersistedAcpSession(params: {
 }
 
 function isBackendDelegatedSession(
-  entry: StoredSessionEntry,
+  storedEntry: StoredSessionEntry,
   entries: AgentSessionEntry[],
   hasStoredAcpSession: boolean,
 ): boolean {
-  if (!hasBackendSession(entry, hasStoredAcpSession)) {
+  const hasBackendSession =
+    hasStoredAcpSession ||
+    hasNonEmptyString(storedEntry.claudeCliSessionId) ||
+    Object.values(storedEntry.cliSessionBindings ?? {}).some((binding) =>
+      hasNonEmptyString(binding?.sessionId),
+    ) ||
+    Object.values(storedEntry.cliSessionIds ?? {}).some(hasNonEmptyString);
+  if (!hasBackendSession) {
     return false;
   }
-  if (entries.length === 0) {
-    return false;
-  }
-  const messages = entries.filter(
-    (transcriptEntry): transcriptEntry is SessionMessageEntry => transcriptEntry.type === "message",
-  );
   return (
-    messages.length > 0 &&
-    messages.every((transcriptEntry) => transcriptEntry.message.role === "user")
+    entries.some((entry) => entry.type === "message") &&
+    entries.every((entry) => entry.type !== "message" || entry.message.role === "user")
   );
 }
 
@@ -125,7 +110,6 @@ async function generateHtml(sessionData: SessionData): Promise<string> {
     loadTemplate(path.join("vendor", "highlight.min.js")),
   ]);
 
-  // Use the bundled dark session-export palette
   const themeVars = `
     --cyan: #00d7ff;
     --blue: #5f87ff;
@@ -165,39 +149,25 @@ async function generateHtml(sessionData: SessionData): Promise<string> {
     --mdCode: #8abeb7;
     --mdCodeBlock: #b5bd68;
   `;
-  const bodyBg = "#1e1e28";
-  const containerBg = "#282832";
-  const infoBg = "#343541";
-
-  // Base64 encode session data
   const sessionDataBase64 = Buffer.from(JSON.stringify(sessionData)).toString("base64");
 
-  // Build CSS with theme variables
   const css = templateCss
     .replace("/* {{THEME_VARS}} */", themeVars.trim())
-    .replace("/* {{BODY_BG_DECL}} */", `--body-bg: ${bodyBg};`)
-    .replace("/* {{CONTAINER_BG_DECL}} */", `--container-bg: ${containerBg};`)
-    .replace("/* {{INFO_BG_DECL}} */", `--info-bg: ${infoBg};`);
+    .replace("/* {{BODY_BG_DECL}} */", "--body-bg: #1e1e28;")
+    .replace("/* {{CONTAINER_BG_DECL}} */", "--container-bg: #282832;")
+    .replace("/* {{INFO_BG_DECL}} */", "--info-bg: #343541;");
 
-  return [
+  const replacements: Array<[string, string]> = [
     ["CSS", css],
     ["SESSION_DATA", sessionDataBase64],
     ["MARKED_JS", markedJs],
     ["HIGHLIGHT_JS", hljsJs],
     ["JS", templateJs],
-  ].reduce(
-    (html, [name, value]) =>
-      replaceHtmlPlaceholder(
-        html,
-        expectDefined(name, "commands export session name"),
-        expectDefined(value, "commands export session value"),
-      ),
+  ];
+  return replacements.reduce(
+    (html, [name, value]) => replaceHtmlPlaceholder(html, name, value),
     template,
   );
-}
-
-function formatSkippedRows(count: number): string {
-  return `${count.toLocaleString()} malformed transcript ${count === 1 ? "row" : "rows"}`;
 }
 
 function formatSessionExportWarning(summary: SessionExportWarningSummary): string {
@@ -205,9 +175,9 @@ function formatSessionExportWarning(summary: SessionExportWarningSummary): strin
     summary.rows.length > 0
       ? ` rows ${summary.rows.join(", ")}${summary.count > summary.rows.length ? ", …" : ""}`
       : "";
-  return summary.count === 1
-    ? `⚠️ Skipped ${formatSkippedRows(summary.count)} that was not a session entry.${rows}`
-    : `⚠️ Skipped ${formatSkippedRows(summary.count)} that were not session entries.${rows}`;
+  const entryDescription =
+    summary.count === 1 ? "row that was not a session entry" : "rows that were not session entries";
+  return `⚠️ Skipped ${summary.count.toLocaleString()} malformed transcript ${entryDescription}.${rows}`;
 }
 
 async function readSessionDataFromIdentity(params: {
@@ -215,13 +185,11 @@ async function readSessionDataFromIdentity(params: {
   sessionId: string;
   sessionKey: string;
   storePath: string;
-}): Promise<{
-  header: SessionHeader | null;
-  entries: AgentSessionEntry[];
-  leafId: string | null;
-  hasLeafControl: boolean;
-  warnings: SessionExportWarningSummary[];
-}> {
+}): Promise<
+  Pick<SessionData, "header" | "entries" | "leafId" | "hasLeafControl"> & {
+    warnings: SessionExportWarningSummary[];
+  }
+> {
   const events = await loadTranscriptEvents(params);
   const fileEntries: SessionFileEntry[] = [];
   const skippedRows: SessionExportWarningSummary = { count: 0, rows: [] };
@@ -247,7 +215,7 @@ async function readSessionDataFromIdentity(params: {
     ? rawEntries.map((entry) => {
         const node = tree.byId.get(entry.id);
         return node && entry.parentId !== node.parentId
-          ? ({ ...entry, parentId: node.parentId } as AgentSessionEntry)
+          ? { ...entry, parentId: node.parentId }
           : entry;
       })
     : rawEntries;
@@ -269,7 +237,7 @@ export async function buildExportSessionReply(params: HandleCommandsParams): Pro
     return { text: args.error };
   }
   const sessionTarget = resolveExportCommandSessionTarget(params);
-  if (isReplyPayload(sessionTarget)) {
+  if ("text" in sessionTarget) {
     return sessionTarget;
   }
   const { entry } = sessionTarget;
@@ -283,13 +251,11 @@ export async function buildExportSessionReply(params: HandleCommandsParams): Pro
     storePath: sessionTarget.storePath,
   });
 
-  // 3. Build full system prompt
   const { systemPrompt, tools } = await resolveCommandsSystemPromptBundle({
     ...params,
-    sessionEntry: entry as HandleCommandsParams["sessionEntry"],
+    sessionEntry: entry,
   });
 
-  // 4. Prepare session data
   const hasStoredAcpSession = hasPersistedAcpSession({
     sessionKey: params.sessionKey,
     entry,
@@ -311,10 +277,8 @@ export async function buildExportSessionReply(params: HandleCommandsParams): Pro
     warning: backendWarning,
   };
 
-  // 5. Generate HTML
   const html = await generateHtml(sessionData);
 
-  // 6. Determine output path
   const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
   const defaultFileName = `openclaw-session-${entry.sessionId.slice(0, 8)}-${timestamp}.html`;
   let displayPath: string;

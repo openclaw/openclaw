@@ -1,5 +1,6 @@
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
+import { captureIncognitoSessionSource } from "../../config/sessions/session-incognito-binding.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveSessionPinnedHarnessId } from "../../sessions/agent-harness-session-key.js";
@@ -18,6 +19,8 @@ export function readSessionRuntimeOwnership(params: {
     Pick<SessionEntry, "sessionId" | "agentHarnessId" | "modelSelectionLocked" | "pluginOwnerId">
   >;
   assertCurrent?: () => void;
+  /** Caller retains the fresh row through this synchronous ownership invocation. */
+  readPreparedPreviousSessionId?: () => string | undefined;
 }): AgentHarnessSessionRuntimeOwnership | undefined {
   const entry = params.sessionEntry;
   const sessionId = entry?.sessionId;
@@ -30,9 +33,23 @@ export function readSessionRuntimeOwnership(params: {
     return undefined;
   }
   const { config, agentId, sessionKey, storePath } = params;
+  const privateSource = sessionKey
+    ? captureIncognitoSessionSource({ agentId, sessionKey, storePath })
+    : undefined;
+  const claim =
+    privateSource && !("kind" in privateSource)
+      ? privateSource.actor.sessions.captureCurrent(sessionKey!)
+      : undefined;
   let active = true;
   const assertCurrent = () => {
-    params.assertCurrent?.();
+    if (active) {
+      params.assertCurrent?.();
+      privateSource?.admissionSignal?.throwIfAborted();
+      if (privateSource && "kind" in privateSource) {
+        privateSource.assertCurrent();
+      }
+      claim?.assertCurrent();
+    }
     if (
       !active ||
       getRegisteredAgentHarness(harnessId)?.harness !== harness ||
@@ -55,9 +72,22 @@ export function readSessionRuntimeOwnership(params: {
       // Binding hits need no row read. A miss must observe lineage after any awaited metadata work.
       readPreviousSessionId: () => {
         assertCurrent();
+        if (params.readPreparedPreviousSessionId) {
+          const previousSessionId = params.readPreparedPreviousSessionId();
+          assertCurrent();
+          return previousSessionId;
+        }
         const key = sessionKey?.trim();
         if (!key) {
           return undefined;
+        }
+        if (privateSource) {
+          const current =
+            "kind" in privateSource
+              ? undefined
+              : privateSource.actor.sessions.readSharing(key)?.entry;
+          assertCurrent();
+          return current?.sessionId === sessionId ? current.previousSessionId : undefined;
         }
         const { sessionAgentId } = resolveSessionAgentIdsStrict({ config, agentId, sessionKey });
         const current = loadSessionEntryReadOnly({

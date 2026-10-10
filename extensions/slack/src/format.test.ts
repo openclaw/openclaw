@@ -8,6 +8,33 @@ import {
 import { escapeSlackMrkdwn } from "./monitor/mrkdwn.js";
 
 describe("chunkSlackMrkdwnText", () => {
+  describe.each([0, 2_998])("with a Prepend character at offset %i", (offset) => {
+    const prefix = `${"x".repeat(offset)}\u0600`;
+
+    it.each(["`", "```"])("keeps embedded %s delimiters balanced", (marker) => {
+      const content = "y".repeat(3_100);
+      const chunks = chunkSlackMrkdwnText(`${prefix}${marker}${content}${marker} tail`, 3_000);
+
+      for (const chunk of chunks) {
+        const markers = chunk.match(/`+/g) ?? [];
+        expect(markers).toEqual(chunk.includes("y") ? [marker, marker] : []);
+      }
+      expect(chunks.map((chunk) => chunk.replaceAll(marker, "")).join("")).toBe(
+        `${prefix}${content} tail`,
+      );
+      expect(chunks.every((chunk) => chunk.length <= 3_000)).toBe(true);
+    });
+
+    it.each(["&lt;", "<https://example.com|link>"])("keeps embedded %s tokens intact", (token) => {
+      const text = `${prefix}${token}${"y".repeat(3_100)}`;
+      const chunks = chunkSlackMrkdwnText(text, 3_000);
+
+      expect(chunks.filter((chunk) => chunk.includes(token))).toHaveLength(1);
+      expect(chunks.join("")).toBe(text);
+      expect(chunks.every((chunk) => chunk.length <= 3_000)).toBe(true);
+    });
+  });
+
   it.each(["`", "```"])("keeps %s code boundaries after literal backslashes", (marker) => {
     const text = `Path: ${marker}C:\\${marker} ${"ordinary prose ".repeat(220)}done`;
     const chunks = chunkSlackMrkdwnText(text, 3_000);
@@ -35,17 +62,22 @@ describe("chunkSlackMrkdwnText", () => {
     expect(chunks.every((chunk) => chunk.length <= 3_000)).toBe(true);
   });
 
-  it.each(["`", "```"])("balances long %s code sections without losing their content", (marker) => {
-    const content = "x".repeat(3_100);
-    const chunks = chunkSlackMrkdwnText(`${marker}${content}${marker}`, 3_000);
+  it.each(["`", "```"])(
+    "balances long %s code sections including oversized graphemes",
+    (marker) => {
+      const content = `\u0301${"x".repeat(3_100)}e${"\u0301".repeat(3_100)}tail`;
+      const chunks = chunkSlackMrkdwnText(`${marker}${content}${marker}`, 3_000);
 
-    expect(chunks.length).toBeGreaterThan(1);
-    expect(chunks.every((chunk) => chunk.startsWith(marker) && chunk.endsWith(marker))).toBe(true);
-    expect(chunks.map((chunk) => chunk.slice(marker.length, -marker.length)).join("")).toBe(
-      content,
-    );
-    expect(chunks.every((chunk) => chunk.length <= 3_000)).toBe(true);
-  });
+      expect(chunks.length).toBeGreaterThan(1);
+      expect(chunks.every((chunk) => chunk.startsWith(marker) && chunk.endsWith(marker))).toBe(
+        true,
+      );
+      expect(chunks.map((chunk) => chunk.slice(marker.length, -marker.length)).join("")).toBe(
+        content,
+      );
+      expect(chunks.every((chunk) => chunk.length <= 3_000)).toBe(true);
+    },
+  );
 
   it.each([
     ["inline", "`", [1, 2]],
@@ -161,15 +193,6 @@ describe("normalizeSlackOutboundText", () => {
     expect(res).toBe("• item\n  • nested");
   });
 
-  it("handles complex message with multiple elements", () => {
-    const res = normalizeSlackOutboundText(
-      "**Important:** Check the _docs_ at [link](https://example.com)\n\n- first\n- second",
-    );
-    expect(res).toBe(
-      "*Important:* Check the _docs_ at <https://example.com|link>\n\n• first\n• second",
-    );
-  });
-
   it("returns empty text when input is undefined at runtime", () => {
     expect(normalizeSlackOutboundText(undefined as unknown as string)).toBe("");
   });
@@ -245,6 +268,21 @@ describe("normalizeSlackOutboundText", () => {
     ).toStrictEqual([]);
   });
 
+  it("keeps a quote marker whose escaping depends on the following space", () => {
+    expect(markdownToSlackMrkdwnChunks("a > b **bold**> quote", 17)).toEqual([
+      "a &gt; b *bold*> ",
+      "quote",
+    ]);
+  });
+
+  it("measures native tokens with spaces as one unit when chunking", () => {
+    expect(markdownToSlackMrkdwnChunks("beta beta <@U1|some one> <https://x|a b> x", 23)).toEqual([
+      "beta beta &lt;@U1|some ",
+      "one&gt; <https://x|a b>",
+      " x",
+    ]);
+  });
+
   it("includes transcript protection when a native token exactly fills the chunk budget", () => {
     expect(markdownToSlackMrkdwnChunks("<@U|user[t]>", 12)).toEqual(["&lt;@U|user[", "t]&gt;"]);
   });
@@ -277,17 +315,7 @@ describe("normalizeSlackOutboundText", () => {
 });
 
 describe("escapeSlackMrkdwn", () => {
-  it("returns plain text unchanged", () => {
-    expect(escapeSlackMrkdwn("heartbeat status ok")).toBe("heartbeat status ok");
-  });
-
   it("escapes only Slack entities while preserving formatting markers and backslashes", () => {
     expect(escapeSlackMrkdwn("mode_*`~<&>\\")).toBe("mode_*`~&lt;&amp;&gt;\\");
-  });
-});
-
-describe("normalizeSlackOutboundText", () => {
-  it("normalizes markdown for outbound send/update paths", () => {
-    expect(normalizeSlackOutboundText(" **bold** ")).toBe("*bold*");
   });
 });

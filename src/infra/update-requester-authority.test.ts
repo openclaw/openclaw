@@ -9,20 +9,28 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createTestPluginRegistry } from "../plugins/registry-runtime.test-helpers.js";
 import { clearActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
+import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import {
   linkUserChannelIdentity,
   unlinkUserChannelIdentity,
 } from "../state/user-channel-identities.js";
-import { ensureProfileForEmail, setUserProfileRole } from "../state/user-profiles.js";
+import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { runUpdateRepairLoop } from "./update-repair-agent.js";
 import { updateRepairParentMessageSchema } from "./update-repair-protocol.js";
 import {
   createManagedUpdateRequesterAuthority,
   createManagedUpdateRequesterContinuationAuthority,
+  prepareManagedUpdateRequesterIdentity,
   UpdateRequesterRevokedError,
 } from "./update-requester-authority.js";
-import { createUpdateRun, getUpdateRun } from "./update-run-ledger.js";
+import {
+  createUpdateRun,
+  finishUpdateRun,
+  getUpdateRun,
+  recordUpdateRunStep,
+} from "./update-run-ledger.js";
 
 vi.mock("../cli/plugin-registry-loader.js", () => ({
   ensureCliPluginRegistryLoaded: vi.fn(),
@@ -104,53 +112,69 @@ describe("managed update requester authority", () => {
     };
   }
 
-  it("preserves the admitted profile through ledger and worker handoffs and refuses effects after reassignment", async () => {
-    const fixture = await linkedAdmins();
-    const authority = await createManagedUpdateRequesterAuthority(fixture.requester, env);
-    expect(authority.isCurrent()).toBe(true);
-    const run = createUpdateRun(
-      { trigger: "chat", origin: { requester: authority.requester } },
-      { env },
-    );
-    const retained = getUpdateRun(run.runId, { env })?.origin.requester;
-    expect(retained).toEqual(fixture.requester);
-    const message = updateRepairParentMessageSchema.parse({
-      type: "start",
-      runId: run.runId,
-      requester: retained,
-      target: { installRoot: root, stateDir: root, configPath, workspaceDir: root },
-      failure: { error: "Synthetic validation failure" },
-      context: { phase: "validating" },
-      budget: {},
-    });
-    expect(message.type).toBe("start");
-    if (message.type !== "start" || !message.requester) {
-      throw new Error("repair start lost its requester");
-    }
-    unlinkUserChannelIdentity(fixture.ada.id, fixture.identity, fixture.options);
-    linkUserChannelIdentity(fixture.grace.id, fixture.identity, fixture.options);
-    expect(
-      resolveCommandOwnerAuthority(fixture.config, fixture.channelRequester, fixture.options)
-        .source,
-    ).toBe(`profile:${fixture.grace.id}`);
-    const delegated = await createManagedUpdateRequesterAuthority(message.requester, env);
-    expect(authority.isCurrent()).toBe(false);
-    expect(delegated.isCurrent()).toBe(false);
-    const validate = vi.fn();
-    const result = await runUpdateRepairLoop({
-      target: message.target,
-      context: { error: "Synthetic validation failure", phase: "validating" },
-      isCurrent: () => {
-        if (!delegated.isCurrent()) {
-          throw new UpdateRequesterRevokedError();
-        }
-        return true;
-      },
-      validate,
-    });
-    expect(result).toMatchObject({ status: "aborted", reason: "requester-revoked", attempts: [] });
-    expect(validate).not.toHaveBeenCalled();
-  });
+  it.each(["reassignment", "role change in original state"])(
+    "preserves admitted profile handoffs and refuses effects after %s",
+    async (change) => {
+      const fixture = await linkedAdmins();
+      if (change !== "reassignment") {
+        const copied = tempDirs.make("update-requester-copy-");
+        vi.stubEnv("OPENCLAW_STATE_DIR", copied);
+        vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(copied, "openclaw.json"));
+      }
+      const authority = await createManagedUpdateRequesterAuthority(fixture.requester, env);
+      expect(authority.isCurrent()).toBe(true);
+      const run = createUpdateRun(
+        { trigger: "chat", origin: { requester: authority.requester } },
+        { env },
+      );
+      const retained = getUpdateRun(run.runId, { env })?.origin.requester;
+      expect(retained).toEqual(fixture.requester);
+      const message = updateRepairParentMessageSchema.parse({
+        type: "start",
+        runId: run.runId,
+        requester: retained,
+        target: { installRoot: root, stateDir: root, configPath, workspaceDir: root },
+        failure: { error: "Synthetic validation failure" },
+        context: { phase: "validating" },
+        budget: {},
+      });
+      expect(message.type).toBe("start");
+      if (message.type !== "start" || !message.requester) {
+        throw new Error("repair start lost its requester");
+      }
+      if (change === "reassignment") {
+        unlinkUserChannelIdentity(fixture.ada.id, fixture.identity, fixture.options);
+        linkUserChannelIdentity(fixture.grace.id, fixture.identity, fixture.options);
+        expect(
+          resolveCommandOwnerAuthority(fixture.config, fixture.channelRequester, fixture.options)
+            .source,
+        ).toBe(`profile:${fixture.grace.id}`);
+      } else {
+        setUserProfileRole(fixture.ada.id, "member", fixture.options);
+      }
+      const delegated = await createManagedUpdateRequesterAuthority(message.requester, env);
+      expect(authority.isCurrent()).toBe(false);
+      expect(delegated.isCurrent()).toBe(false);
+      const validate = vi.fn();
+      const result = await runUpdateRepairLoop({
+        target: message.target,
+        context: { error: "Synthetic validation failure", phase: "validating" },
+        isCurrent: () => {
+          if (!delegated.isCurrent()) {
+            throw new UpdateRequesterRevokedError();
+          }
+          return true;
+        },
+        validate,
+      });
+      expect(result).toMatchObject({
+        status: "aborted",
+        reason: "requester-revoked",
+        attempts: [],
+      });
+      expect(validate).not.toHaveBeenCalled();
+    },
+  );
 
   it("retains the original person-policy grant across updater checks and restoration", async () => {
     const fixture = await linkedAdmins();
@@ -205,6 +229,66 @@ describe("managed update requester authority", () => {
     }
   });
 
+  it.each([
+    { source: "profile", retainedRuns: 2 },
+    { source: "configured-owner", retainedRuns: 500 },
+  ])(
+    "reads $retainedRuns retained runs under $source Doctor authority and rejects revocation",
+    async ({ source, retainedRuns }) => {
+      const fixture = await linkedAdmins();
+      if (source === "configured-owner") {
+        await fs.writeFile(configPath, allowed);
+      }
+      const identity = await prepareManagedUpdateRequesterIdentity(
+        source === "profile" ? fixture.requester : requester,
+        env,
+      );
+      for (let index = 2; index < retainedRuns; index++) {
+        const historical = createUpdateRun({ trigger: "chat" }, { env });
+        finishUpdateRun(historical.runId, { status: "failed", reason: "doctor-failed" }, { env });
+      }
+      const previous = createUpdateRun({ trigger: "chat" }, { env });
+      finishUpdateRun(previous.runId, { status: "failed", reason: "doctor-failed" }, { env });
+      const current = createUpdateRun(
+        { trigger: "chat", origin: { requester: fixture.requester } },
+        { env },
+      );
+      recordUpdateRunStep(
+        current.runId,
+        {
+          step: "warning:openclaw doctor",
+          status: "completed",
+          detail: `Previous update ${previous.runId} rolled back; migrationWarnings: /Users/migrated/.openclaw/agents/main/sessions/sessions.json: entry_invalid, transcript_missing`,
+        },
+        { env },
+      );
+      const maintenance = createOpenClawDatabaseMaintenanceScope({
+        assertOwnerCurrent: () => {
+          if (!identity.isCurrentIdentity()) {
+            throw new UpdateRequesterRevokedError();
+          }
+        },
+      });
+      try {
+        expect(maintenance.run(() => getUpdateRun(current.runId, { env }))).toMatchObject({
+          runId: current.runId,
+          status: "running",
+          steps: expect.arrayContaining([
+            expect.objectContaining({ detail: expect.stringContaining(previous.runId) }),
+          ]),
+        });
+        expect(getUpdateRun(previous.runId, { env })?.status).toBe("failed");
+        unlinkUserChannelIdentity(fixture.ada.id, fixture.identity, fixture.options);
+        await fs.writeFile(configPath, JSON.stringify({ commands: { ownerAllowFrom: ["other"] } }));
+        expect(() => maintenance.run(() => getUpdateRun(current.runId, { env }))).toThrow(
+          UpdateRequesterRevokedError,
+        );
+      } finally {
+        await maintenance.close();
+      }
+    },
+  );
+
   it("does not infer linked-profile authority for a source-less released driver", async () => {
     const fixture = await linkedAdmins();
     const legacy = await createManagedUpdateRequesterAuthority(fixture.channelRequester, env);
@@ -252,54 +336,44 @@ describe("managed update requester authority", () => {
     },
   );
 
-  it("rechecks linked profile state in the original installation while a worker uses copied state", async () => {
-    const fixture = await linkedAdmins();
-    const copied = tempDirs.make("update-requester-copy-");
-    vi.stubEnv("OPENCLAW_STATE_DIR", copied);
-    vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(copied, "openclaw.json"));
-    const authority = await createManagedUpdateRequesterAuthority(fixture.requester, env);
-    expect(authority.isCurrent()).toBe(true);
-    setUserProfileRole(fixture.ada.id, "member", fixture.options);
-    expect(authority.isCurrent()).toBe(false);
-  });
-
-  it("preserves registry load failures instead of reporting revocation", async () => {
-    const error = new Error("Synthetic plugin bundle unavailable");
-    vi.mocked(ensureCliPluginRegistryLoaded).mockRejectedValueOnce(error);
-    const authority = await createManagedUpdateRequesterAuthority(requester, env);
-    expect(() => authority.isCurrent()).toThrow(error);
-    const validate = vi.fn();
-    const onEvent = vi.fn();
-    const result = await runUpdateRepairLoop({
-      target: { installRoot: root, stateDir: root, configPath, workspaceDir: root },
-      context: { error: "Synthetic validation failure", phase: "validating" },
-      isCurrent: authority.isCurrent,
-      validate,
-      onEvent,
-    });
-    expect(result).toMatchObject({ status: "aborted", reason: error.message, attempts: [] });
-    expect(onEvent).toHaveBeenCalledWith({
-      type: "stopped",
-      status: "aborted",
-      reason: error.message,
-    });
-    expect(validate).not.toHaveBeenCalled();
-  });
-
-  it("preserves config load failures during preparation", async () => {
-    await fs.writeFile(configPath, "{");
-    const authority = await createManagedUpdateRequesterAuthority(requester, env);
-    expect(() => authority.isCurrent()).toThrow("JSON5");
-  });
-
-  it("distinguishes a failed policy recheck from revocation and reads recovered policy", async () => {
-    const authority = await createManagedUpdateRequesterAuthority(requester, env);
-    expect(authority.isCurrent()).toBe(true);
-    await fs.writeFile(configPath, "{");
-    expect(() => authority.isCurrent()).toThrow();
-    await fs.writeFile(configPath, allowed);
-    expect(authority.isCurrent()).toBe(true);
-    await fs.writeFile(configPath, JSON.stringify({ commands: { ownerAllowFrom: ["other"] } }));
-    expect(authority.isCurrent()).toBe(false);
-  });
+  it.each(["registry", "config preparation", "config recheck"])(
+    "preserves %s failures instead of reporting revocation",
+    async (failure) => {
+      const error = new Error("Synthetic plugin bundle unavailable");
+      if (failure === "registry") {
+        vi.mocked(ensureCliPluginRegistryLoaded).mockRejectedValueOnce(error);
+      } else if (failure === "config preparation") {
+        await fs.writeFile(configPath, "{");
+      }
+      const authority = await createManagedUpdateRequesterAuthority(requester, env);
+      if (failure === "config recheck") {
+        expect(authority.isCurrent()).toBe(true);
+        await fs.writeFile(configPath, "{");
+      }
+      expect(() => authority.isCurrent()).toThrow(failure === "registry" ? error : "JSON5");
+      if (failure === "registry") {
+        const validate = vi.fn();
+        const onEvent = vi.fn();
+        const result = await runUpdateRepairLoop({
+          target: { installRoot: root, stateDir: root, configPath, workspaceDir: root },
+          context: { error: "Synthetic validation failure", phase: "validating" },
+          isCurrent: authority.isCurrent,
+          validate,
+          onEvent,
+        });
+        expect(result).toMatchObject({ status: "aborted", reason: error.message, attempts: [] });
+        expect(onEvent).toHaveBeenCalledWith({
+          type: "stopped",
+          status: "aborted",
+          reason: error.message,
+        });
+        expect(validate).not.toHaveBeenCalled();
+      } else if (failure === "config recheck") {
+        await fs.writeFile(configPath, allowed);
+        expect(authority.isCurrent()).toBe(true);
+        await fs.writeFile(configPath, JSON.stringify({ commands: { ownerAllowFrom: ["other"] } }));
+        expect(authority.isCurrent()).toBe(false);
+      }
+    },
+  );
 });

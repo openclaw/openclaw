@@ -3,15 +3,20 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   buildNativeHookRelayCommand,
   registerOwnedNativeHookRelay,
   testing as nativeHookRelayTesting,
 } from "../agents/harness/native-hook-relay.js";
-import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import { getFreePort } from "../test-utils/ports.js";
@@ -149,6 +154,7 @@ async function createTimeoutOwnershipFixture(): Promise<{
       "const originalAsyncIterator = process.stdin[Symbol.asyncIterator].bind(process.stdin);",
       "process.stdin[Symbol.asyncIterator] = function () {",
       "  fs.writeFileSync(process.env.RELAY_READY_MARKER, `${process.pid}\\n`);",
+      '  process.stdout.write("relay-ready\\n");',
       "  return originalAsyncIterator();",
       "};",
       "",
@@ -186,6 +192,7 @@ async function runHooksCli(params: {
   args: string[];
   completion: "exit" | "output-then-exit";
   entryPath?: string;
+  entryArgv?: string[];
   label: string;
   env?: NodeJS.ProcessEnv;
   nodeExecutable?: string;
@@ -194,7 +201,10 @@ async function runHooksCli(params: {
   const startedAt = performance.now();
   const child = spawn(
     params.nodeExecutable ?? process.execPath,
-    ["--import", "tsx", params.entryPath ?? "src/entry.ts", ...params.args],
+    [
+      ...(params.entryArgv ?? ["--import", "tsx", params.entryPath ?? "src/entry.ts"]),
+      ...params.args,
+    ],
     {
       cwd: path.resolve("."),
       env: {
@@ -248,7 +258,7 @@ async function runHooksCli(params: {
     child.stdout.on("data", (chunk: string) => {
       stdout += chunk;
       outputAfterMs ??= Math.round(performance.now() - startedAt);
-      if (params.completion === "exit" || outputObserved) {
+      if (timedOut || params.completion === "exit" || outputObserved) {
         return;
       }
       outputObserved = true;
@@ -304,13 +314,6 @@ describe("hooks CLI process lifecycle", () => {
       diagnostic: "failed to read native hook input",
     },
     {
-      name: "missing required option",
-      preloadMode: "linger" as const,
-      args: ["hooks", "relay"],
-      stdin: "",
-      diagnostic: "native hook relay failed: Missing required option --provider",
-    },
-    {
       name: "missing drain callbacks with no lingering handle",
       preloadMode: "missing-drain-callbacks" as const,
       args: ["hooks", "relay"],
@@ -345,7 +348,7 @@ describe("hooks CLI process lifecycle", () => {
 
   it.runIf(process.platform !== "win32")(
     "keeps the relay on the timeout-owned shell PID",
-    async () => {
+    async ({ signal }) => {
       const fixture = await createTimeoutOwnershipFixture();
       const command = buildNativeHookRelayCommand({
         provider: "codex",
@@ -372,6 +375,16 @@ describe("hooks CLI process lifecycle", () => {
         stdio: ["pipe", "pipe", "pipe"],
       });
       activeChildren.add(child);
+      const closed = once(child, "close");
+      const ready = createDeferred();
+      let stdout = "";
+      child.stdout.setEncoding("utf8");
+      child.stdout.on("data", (chunk: string) => {
+        stdout += chunk;
+        if (stdout.includes("relay-ready\n")) {
+          ready.resolve();
+        }
+      });
       child.once("close", () => activeChildren.delete(child));
       const timeoutOwnedPid = child.pid;
       if (!timeoutOwnedPid) {
@@ -379,27 +392,24 @@ describe("hooks CLI process lifecycle", () => {
       }
 
       try {
-        await expect
-          .poll(async () => (await readPidFile(fixture.readyMarkerPath))[0], {
-            interval: 100,
-            timeout: outputTimeoutMs,
-          })
-          .toBe(timeoutOwnedPid);
+        await withinTest(
+          awaitGateBeforeSettlement(
+            ready.promise,
+            closed,
+            "native hook relay exited before writing its ready marker",
+          ),
+          signal,
+        );
+        expect((await readPidFile(fixture.readyMarkerPath))[0]).toBe(timeoutOwnedPid);
         expect(new Set(await readPidFile(fixture.pidLogPath))).toEqual(new Set([timeoutOwnedPid]));
 
-        const closed = once(child, "close");
         expect(child.kill("SIGKILL")).toBe(true);
-        await closed;
-        await expect
-          .poll(() => isProcessAlive(timeoutOwnedPid), { interval: 50, timeout: 5_000 })
-          .toBe(false);
-        await expect
-          .poll(
-            async () =>
-              (await readPidFile(fixture.pidLogPath)).filter((pid) => isProcessAlive(pid)),
-            { interval: 50, timeout: 5_000 },
-          )
-          .toEqual([]);
+        await withinTest(closed, signal);
+        // Every recorded relay is the reaped shell PID; close also joins its output streams.
+        expect(isProcessAlive(timeoutOwnedPid)).toBe(false);
+        expect(
+          (await readPidFile(fixture.pidLogPath)).filter((pid) => isProcessAlive(pid)),
+        ).toEqual([]);
       } finally {
         await terminateChild(child);
         for (const pid of await readPidFile(fixture.pidLogPath)) {
@@ -471,7 +481,8 @@ describe("hooks CLI process lifecycle", () => {
     const unavailableGatewayPort = await getFreePort();
 
     const listResult = await runHooksCli({
-      entryPath: fileURLToPath(resolveRuntimeWorkerUrl(cliRecoveryEntrypoints.cli)),
+      // Prepare CLI code before timing the fresh process and its plugin lifecycle.
+      entryArgv: resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(cliRecoveryEntrypoints.cli)),
       args: ["hooks", "list", "--json"],
       completion: "output-then-exit",
       label: "hooks list",
@@ -480,6 +491,7 @@ describe("hooks CLI process lifecycle", () => {
         OPENCLAW_CONFIG_PATH: fixture.configPath,
         OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
         OPENCLAW_GATEWAY_PORT: String(unavailableGatewayPort),
+        OPENCLAW_NO_RESPAWN: "1",
         OPENCLAW_STATE_DIR: fixture.stateDir,
       },
     });

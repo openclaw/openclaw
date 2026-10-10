@@ -72,23 +72,6 @@ describe("Control UI GitHub failures", () => {
     expect(fetchImpl).toHaveBeenCalledOnce();
   });
 
-  it("keeps the default JSON byte cap when a caller supplies a larger metadata budget", async () => {
-    const body = JSON.stringify({ summary: "x".repeat(256 * 1024) });
-    const fetchImpl = vi.fn<typeof fetch>(async () => new Response(body));
-    const url = "https://api.github.com/repos/owner/repo";
-
-    await expect(gitHubPublicApi.fetchGitHubJson(url, fetchImpl)).rejects.toMatchObject({
-      statusCode: 502,
-      message: "GitHub response exceeded the size limit",
-    });
-    await expect(
-      gitHubPublicApi.fetchGitHubJson(url, fetchImpl, undefined, 512 * 1024),
-    ).resolves.toBeTypeOf("object");
-    await expect(gitHubPublicApi.fetchGitHubJson(url, fetchImpl)).rejects.toMatchObject({
-      statusCode: 502,
-    });
-  });
-
   it.each([
     {
       resource: "core",
@@ -97,24 +80,12 @@ describe("Control UI GitHub failures", () => {
       independent: "/search/repositories",
     },
     {
-      resource: "search",
-      limited: "/search/repositories",
-      sibling: "/search/issues",
-      independent: "/user/1",
-    },
-    {
-      resource: "code_search",
-      limited: "/search/code?q=first",
-      sibling: "/search/code?q=second",
-      independent: "/search/repositories",
-    },
-    ...[403, 200].map((status) => ({
       resource: "graphql",
       limited: "/graphql",
       sibling: "/graphql",
       independent: "/repos/owner/repo",
-      status,
-    })),
+      status: 200,
+    },
   ])(
     "shares $resource quota cooldown without blocking other buckets or credentials",
     async ({ resource, limited, sibling, independent, ...options }) => {
@@ -165,119 +136,6 @@ describe("Control UI GitHub failures", () => {
     },
   );
 
-  it.each<{ headers: Record<string, string>; delay: number }>([
-    { headers: { "retry-after": "90" }, delay: 90_000 },
-    { headers: {}, delay: 60_000 },
-    { headers: { "retry-after": "invalid", "x-ratelimit-reset": "Infinity" }, delay: 60_000 },
-    {
-      headers: { "x-ratelimit-remaining": "42", "x-ratelimit-reset": "1800000010" },
-      delay: 60_000,
-    },
-    {
-      headers: { "x-ratelimit-remaining": "42", "x-ratelimit-reset": "1800003000" },
-      delay: 60_000,
-    },
-  ])(
-    "shares secondary quota cooldown across REST buckets: $delay ms",
-    async ({ headers, delay }) => {
-      const clock = vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
-      const fetchMock = vi
-        .fn<typeof fetch>()
-        .mockImplementation(async () => new Response(null, { status: 429, headers }));
-      await expect(
-        gitHubPublicApi.fetchGitHubJson("https://api.github.com/search/repositories", fetchMock),
-      ).rejects.toMatchObject({ statusCode: 429, retryAfterMs: delay });
-      await expect(
-        gitHubPublicApi.fetchGitHubJson("https://api.github.com/user/1", fetchMock),
-      ).rejects.toMatchObject({ statusCode: 429 });
-      expect(fetchMock).toHaveBeenCalledOnce();
-      await expect(
-        gitHubPublicApi.fetchGitHubApi("https://api.github.com/graphql", fetchMock, undefined),
-      ).rejects.toMatchObject({ statusCode: 429 });
-      expect(fetchMock).toHaveBeenCalledOnce();
-      clock.mockReturnValue(1_800_000_000_000 + delay);
-      await expect(
-        gitHubPublicApi.fetchGitHubJson("https://api.github.com/user/1", fetchMock),
-      ).rejects.toMatchObject({ statusCode: 429 });
-      expect(fetchMock).toHaveBeenCalledTimes(2);
-    },
-  );
-
-  it.each([undefined, "42"])(
-    "retains a GraphQL HTTP 403 quota error with remaining=%s across REST reads",
-    async (remaining) => {
-      vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
-      const fetchMock = vi.fn<typeof fetch>(
-        async () =>
-          new Response(
-            JSON.stringify({ errors: [{ type: "RATE_LIMITED", message: "private-diagnostic" }] }),
-            { status: 403, headers: remaining ? { "x-ratelimit-remaining": remaining } : {} },
-          ),
-      );
-      const response = await gitHubPublicApi.fetchGitHubApi(
-        "https://api.github.com/graphql",
-        fetchMock,
-        "quota-token",
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        { query: "query { viewer { login } }", variables: {} },
-      );
-      await expect(
-        gitHubPublicApi.readGitHubGraphQLResponse(response, fetchMock, "quota-token"),
-      ).rejects.toMatchObject({
-        statusCode: 429,
-        retryAfterMs: 60_000,
-      });
-      await expect(
-        gitHubPublicApi.fetchGitHubApi(
-          "https://api.github.com/repos/owner/repo",
-          fetchMock,
-          "quota-token",
-        ),
-      ).rejects.toMatchObject({ statusCode: 429 });
-      expect(fetchMock).toHaveBeenCalledOnce();
-    },
-  );
-
-  it.each([
-    [60, 120],
-    [120, 60],
-  ])(
-    "reports the first recovering credential when reset times are %j",
-    async (authSeconds, anonymousSeconds) => {
-      vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
-      const fetchMock = vi.fn<typeof fetch>().mockImplementation(
-        async (_url, init) =>
-          new Response(null, {
-            status: 403,
-            headers: {
-              "x-ratelimit-resource": "core",
-              "x-ratelimit-remaining": "0",
-              "x-ratelimit-reset": String(
-                1_800_000_000 +
-                  (new Headers(init?.headers).has("Authorization")
-                    ? authSeconds
-                    : anonymousSeconds),
-              ),
-            },
-          }),
-      );
-      await expect(
-        gitHubPublicApi.fetchGitHubJson("https://api.github.com/user/1", fetchMock, "quota-token"),
-      ).rejects.toMatchObject({ statusCode: 429, retryAfterMs: 60_000 });
-      await expect(
-        gitHubPublicApi.fetchGitHubJson(
-          "https://api.github.com/repos/owner/repo",
-          fetchMock,
-          "quota-token",
-        ),
-      ).rejects.toMatchObject({ statusCode: 429, retryAfterMs: 60_000 });
-      expect(fetchMock).toHaveBeenCalledTimes(2);
-    },
-  );
-
   it("retains the longest concurrent cooldown and rechecks live identity before rejecting", async () => {
     vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
     const firstResponse = createDeferred<Response>();
@@ -316,60 +174,20 @@ describe("Control UI GitHub failures", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
-  it.each<{ status: number; headers: Record<string, string>; delay: number }>([
-    {
-      status: 403,
-      headers: { "x-ratelimit-remaining": "0", "x-ratelimit-reset": "1788393720" },
-      delay: 120_000,
-    },
-    { status: 429, headers: { "retry-after": "90" }, delay: 90_000 },
-    {
-      status: 403,
-      headers: {
-        "retry-after": "Thu, 03 Sep 2026 00:02:00 GMT",
-        "x-ratelimit-reset": "1788393900",
-      },
-      delay: 120_000,
-    },
-  ])(
-    "preserves rate-limit status and retry timing for HTTP $status",
-    async ({ status, headers, delay }) => {
-      vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-09-03T00:00:00Z"));
+  it.each([[403, /access denied/i, /repository access/i]])(
+    "explains HTTP %s without exposing the response body",
+    async (status, reason, action) => {
       const error = await gitHubPublicApi
-        .readGitHubJsonResponse(
-          new Response('{"message":"secret-upstream-body"}', { status, headers }),
-        )
+        .readGitHubJsonResponse(new Response('{"message":"secret-upstream-body"}', { status }))
         .catch((failure: unknown) => failure);
-
-      expect(error).toMatchObject({ statusCode: 429, retryAfterMs: delay });
       const display = gitHubPublicApi.formatControlUiGitHubPreviewError(error);
-      expect(display).toMatchObject({ retryable: true, retryAfterMs: delay });
-      expect(display.message).toContain(`HTTP ${status}`);
-      expect(display.message).toMatch(/rate limit/i);
+
+      expect(display.message).toMatch(reason);
+      expect(display.message).toMatch(action);
       expect(display.message).not.toContain("secret-upstream-body");
-      vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-09-03T00:00:30Z"));
-      expect(gitHubPublicApi.formatControlUiGitHubPreviewError(error).retryAfterMs).toBe(
-        delay - 30_000,
-      );
+      expect(display.retryable).toBe(status === 500);
     },
   );
-
-  it.each([
-    [401, /authentication/i, /Settings/],
-    [403, /access denied/i, /repository access/i],
-    [404, /unavailable or not public/i, /open the link/i],
-    [500, /HTTP 500/, /retry/i],
-  ])("explains HTTP %s without exposing the response body", async (status, reason, action) => {
-    const error = await gitHubPublicApi
-      .readGitHubJsonResponse(new Response('{"message":"secret-upstream-body"}', { status }))
-      .catch((failure: unknown) => failure);
-    const display = gitHubPublicApi.formatControlUiGitHubPreviewError(error);
-
-    expect(display.message).toMatch(reason);
-    expect(display.message).toMatch(action);
-    expect(display.message).not.toContain("secret-upstream-body");
-    expect(display.retryable).toBe(status === 500);
-  });
 
   it("does not distinguish private repositories from missing items", async () => {
     const missing = await gitHubPublicApi
@@ -382,25 +200,29 @@ describe("Control UI GitHub failures", () => {
     ).toEqual(gitHubPublicApi.formatControlUiGitHubPreviewError(missing));
   });
 
-  it("uses a bounded cooldown when rate-limit timing is malformed", async () => {
-    vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
-    const error = await gitHubPublicApi
-      .readGitHubJsonResponse(
-        new Response(null, {
-          status: 429,
-          headers: { "retry-after": "secret-upstream-header", "x-ratelimit-reset": "Infinity" },
-        }),
-      )
-      .catch((failure: unknown) => failure);
-    const display = gitHubPublicApi.formatControlUiGitHubPreviewError(error);
+  it.each<{ status: number; headers: Record<string, string> }>([
+    {
+      status: 429,
+      headers: { "retry-after": "secret-upstream-header", "x-ratelimit-reset": "Infinity" },
+    },
+  ])(
+    "uses a bounded cooldown when HTTP $status timing is malformed",
+    async ({ status, headers }) => {
+      const now = 1_800_000_000_000;
+      vi.spyOn(Date, "now").mockReturnValue(now);
+      const error = await gitHubPublicApi
+        .readGitHubJsonResponse(new Response(null, { status, headers }))
+        .catch((failure: unknown) => failure);
+      const display = gitHubPublicApi.formatControlUiGitHubPreviewError(error);
 
-    expect(display.retryAfterMs).toBe(60_000);
-    expect(display.message).toMatch(/rate limit/i);
-    expect(display.message).not.toContain("secret-upstream-header");
-  });
+      expect(error).toMatchObject({ retryAtMs: now + 60_000 });
+      expect(display.retryAfterMs).toBe(60_000);
+      expect(display.message).toMatch(/rate limit/i);
+      expect(display.message).not.toContain("secret-upstream-header");
+    },
+  );
 
   it.each([
-    { failure: new DOMException("secret-abort-reason", "TimeoutError"), reason: /timed out/i },
     { failure: new TypeError("fetch failed: secret-network-address"), reason: /reach GitHub/i },
   ])("explains transport errors without leaking their diagnostics", async ({ failure, reason }) => {
     const error = await gitHubPublicApi

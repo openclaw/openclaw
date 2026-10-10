@@ -21,7 +21,6 @@ import {
 } from "./browser/server-context.lifecycle.js";
 import { startBrowserControlServiceFromConfig } from "./control-service.js";
 
-type SessionBorrow = ReturnType<SessionBrowserAuthority["retainSession"]>;
 const MAX_SESSION_DASHBOARDS = 64;
 
 function keyFor(definition: BrowserDashboardDefinition) {
@@ -64,26 +63,23 @@ async function createResource(
       "The Gateway has reached its isolated dashboard limit. Remove an unused browser widget and retry.",
     );
   }
-  const session: SessionBorrow = authority.retainSession();
+  const session = authority.retainSession();
   const controller = new AbortController();
   const key = keyFor(definition);
-  let retired = false;
-  let definitionPending = false;
   let definitionEpoch = 0;
-  let page: SessionBrowserDashboard["page"];
+  let verifiedDefinitionEpoch = 0;
   let assertProfileCurrent: (() => void) | undefined;
   let removeProfileAbort: (() => void) | undefined;
   let closing: Promise<void> | undefined;
   const close = () => {
-    retired = true;
     controller.abort(new Error("The isolated browser dashboard was retired."));
-    session.signal.removeEventListener("abort", onSessionAbort);
+    session.signal.removeEventListener("abort", onAbort);
     session.release();
     removeProfileAbort?.();
     removeProfileAbort = undefined;
     if (!closing) {
       closing = (async () => {
-        await page?.close();
+        await resource.page?.close();
         if (resources.get(key) === resource) {
           resources.delete(key);
         }
@@ -96,11 +92,15 @@ async function createResource(
   };
   const assertCurrent = () => {
     session.assertCurrent();
-    if (retired || getOptionalBrowserStateRuntime() !== runtime || (page && !page.isCurrent())) {
+    if (
+      controller.signal.aborted ||
+      getOptionalBrowserStateRuntime() !== runtime ||
+      (resource.page && !resource.page.isCurrent())
+    ) {
       throw new Error("The isolated browser context is no longer available. Reopen the dashboard.");
     }
     assertProfileCurrent?.();
-    if (definitionPending) {
+    if (verifiedDefinitionEpoch !== definitionEpoch) {
       throw new Error("The dashboard definition changed. Refresh the dashboard before continuing.");
     }
   };
@@ -125,19 +125,18 @@ async function createResource(
         await close();
         throw new Error("The dashboard was removed or replaced. Open its current definition.");
       }
-      definitionPending = false;
+      verifiedDefinitionEpoch = epoch;
       assertCurrent();
     },
     definitionChanged: () => {
-      definitionPending = true;
       definitionEpoch += 1;
     },
     close,
   };
-  const onSessionAbort = () => {
+  const onAbort = () => {
     void close().catch(() => {});
   };
-  session.signal.addEventListener("abort", onSessionAbort, { once: true });
+  session.signal.addEventListener("abort", onAbort, { once: true });
   resources.set(key, resource);
   try {
     authority.assertCurrent();
@@ -180,19 +179,15 @@ async function createResource(
           throw new Error("The browser profile changed. Reopen the dashboard.");
         }
       };
-      const onProfileAbort = () => {
-        void close().catch(() => {});
-      };
-      lifecycle.controller.signal.addEventListener("abort", onProfileAbort, { once: true });
-      removeProfileAbort = () =>
-        lifecycle.controller.signal.removeEventListener("abort", onProfileAbort);
+      lifecycle.controller.signal.addEventListener("abort", onAbort, { once: true });
+      removeProfileAbort = () => lifecycle.controller.signal.removeEventListener("abort", onAbort);
       const playwright = await getPwAiModule({ mode: "strict" });
       authority.assertCurrent();
       assertProfileCurrent();
       if (!playwright) {
         throw new Error("Isolated session dashboards require Playwright in this Gateway build.");
       }
-      page = await playwright.createPageViaPlaywright({
+      resource.page = await playwright.createPageViaPlaywright({
         cdpUrl: profileContext.profile.cdpUrl,
         url: definition.url,
         isolatedContext: true,
@@ -206,9 +201,8 @@ async function createResource(
           ? AbortSignal.any([signal, session.signal, controller.signal])
           : AbortSignal.any([session.signal, controller.signal]),
       });
-      resource.page = page;
-      if (retired) {
-        await page.close();
+      if (controller.signal.aborted) {
+        await resource.page.close();
         throw new Error("The session browser was retired during startup.");
       }
       authority.assertCurrent();
@@ -261,24 +255,23 @@ export async function accessSessionBrowserDashboard(
   const key = keyFor(definition);
   const operationKey = `session:${key}`;
   const previous = runtime.dashboardOperations.get(operationKey)?.promise;
-  const promise = (async () => {
-    await previous?.catch(() => {});
+  const assertOperationCurrent = () => {
     authority.assertCurrent();
     options.signal?.throwIfAborted();
     if (getOptionalBrowserStateRuntime() !== runtime) {
       throw new Error("Browser runtime changed.");
     }
+  };
+  const promise = (async () => {
+    await previous?.catch(() => {});
+    assertOperationCurrent();
     // The first read selects the queue, not authority to replace its resource.
     // A delayed reader must not close a newer collaborator's context or visit an old URL.
     const currentDefinition = await readBrowserDashboardDefinition(
       { ...request, instanceId: definition.instanceId },
       getBrowserControlState()?.resolved.defaultProfile,
     );
-    authority.assertCurrent();
-    options.signal?.throwIfAborted();
-    if (getOptionalBrowserStateRuntime() !== runtime) {
-      throw new Error("Browser runtime changed.");
-    }
+    assertOperationCurrent();
     if (!sameBrowserDashboardDefinition(definition, currentDefinition)) {
       throw new Error("The dashboard changed before this operation. Open its current definition.");
     }

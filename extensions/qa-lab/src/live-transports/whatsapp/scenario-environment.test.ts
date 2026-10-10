@@ -2,24 +2,18 @@ import { WhatsAppChannelConfigSchema } from "@openclaw/whatsapp/channel-config-a
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { validateJsonSchemaValue } from "openclaw/plugin-sdk/json-schema-runtime";
 import { describe, expect, it, vi } from "vitest";
+import { readQaScenarioById } from "../../scenario-catalog.js";
 import { createWhatsAppQaScenarioEnvironment } from "./scenario-environment.js";
-import { whatsappQaCanaryScenario } from "./whatsapp-live.scenario-implementations.conversation.js";
-import {
-  whatsappQaStatusReactionLifecycleScenario,
-  whatsappQaStatusReactionsScenario,
-} from "./whatsapp-live.scenario-implementations.delivery.js";
-import { whatsappQaAgentMessageActionReactScenario } from "./whatsapp-live.scenario-implementations.user-path.js";
 
 type FlowPreparationInput = Parameters<
   ReturnType<typeof createWhatsAppQaScenarioEnvironment>["prepareFlow"]
 >[0];
 
-async function prepareWhatsAppFlowFixture(params: {
-  config: FlowPreparationInput["config"];
-  gatewayCall: FlowPreparationInput["gateway"]["call"];
-  scenarioId: string;
-  scenarioTitle: string;
-}) {
+async function prepareWhatsAppFlowFixture(
+  scenarioId: string,
+  gatewayCall: FlowPreparationInput["gateway"]["call"],
+) {
+  const scenario = readQaScenarioById(scenarioId);
   const { prepareFlow } = createWhatsAppQaScenarioEnvironment({
     accountId: "work",
     driverAuthDir: "/tmp/whatsapp-driver",
@@ -37,18 +31,18 @@ async function prepareWhatsAppFlowFixture(params: {
     sutAuthDir: "/tmp/whatsapp-sut",
   });
   return await prepareFlow({
-    config: params.config,
+    config: scenario.execution.config ?? {},
     gateway: {
       baseUrl: "http://127.0.0.1:1",
       tempRoot: "/tmp/whatsapp-gateway",
       workspaceDir: "/tmp/whatsapp-workspace",
       runtimeEnv: {},
-      call: params.gatewayCall,
+      call: gatewayCall,
     },
     outputDir: "/tmp/whatsapp-output",
     primaryModel: "mock-openai/gpt-5.6-luna",
-    scenarioId: params.scenarioId,
-    scenarioTitle: params.scenarioTitle,
+    scenarioId,
+    scenarioTitle: scenario.title,
     timeoutMs: 60_000,
     waitForConfigRestartSettle: vi.fn(),
   });
@@ -56,101 +50,76 @@ async function prepareWhatsAppFlowFixture(params: {
 
 describe("WhatsApp QA scenario environment", () => {
   it.each([
-    { id: "whatsapp-canary", implementation: whatsappQaCanaryScenario, statusReactions: false },
-    {
-      id: "whatsapp-agent-message-action-react",
-      implementation: whatsappQaAgentMessageActionReactScenario,
-      statusReactions: false,
-    },
-    {
-      id: "whatsapp-status-reactions",
-      implementation: whatsappQaStatusReactionsScenario,
-      statusReactions: true,
-    },
-    {
-      id: "whatsapp-status-reaction-lifecycle",
-      implementation: whatsappQaStatusReactionLifecycleScenario,
-      statusReactions: true,
-    },
-  ])(
-    "configures $id through the current WhatsApp schema",
-    async ({ id, implementation, statusReactions }) => {
-      const baseMessages = {
-        ackReaction: "💬",
-        ackReactionScope: "group-mentions" as const,
-        statusReactions: { enabled: false },
-      };
-      const gatewayCall = vi.fn(async (method: string, _params?: unknown) => {
-        if (method === "config.get") {
-          return { config: { messages: baseMessages }, hash: "config-hash" };
-        }
-        if (method === "config.patch") {
-          const { raw } = _params as { raw: string };
-          const cfg = JSON.parse(raw) as OpenClawConfig;
-          const validation = validateJsonSchemaValue({
-            schema: WhatsAppChannelConfigSchema.schema,
-            value: cfg.channels?.whatsapp,
-            applyDefaults: true,
-          });
-          expect(validation.ok, JSON.stringify(validation)).toBe(true);
-          expect(cfg.messages).toEqual(
-            statusReactions
-              ? {
-                  ackReaction: "👀",
-                  ackReactionScope: "direct",
-                  statusReactions: { enabled: true },
-                }
-              : baseMessages,
-          );
-          return { noop: true };
-        }
-        if (method === "channels.status") {
-          return {
-            channelAccounts: {
-              whatsapp: [
-                {
-                  accountId: "work",
-                  busy: false,
-                  connected: true,
-                  lastConnectedAt: Date.now() - 30_000,
-                  restartPending: false,
-                  running: true,
-                },
-              ],
-            },
-          };
-        }
-        throw new Error(`unexpected gateway method: ${method}`);
-      });
-      const prepared = await prepareWhatsAppFlowFixture({
-        config: {},
-        gatewayCall,
-        scenarioId: id,
-        scenarioTitle: id,
-      });
-      await prepared.whatsappScenarioContext.configureScenario(implementation);
-
-      const patchCall = gatewayCall.mock.calls.find(([method]) => method === "config.patch");
-      if (!patchCall) {
-        throw new Error("config.patch was not called");
+    { id: "whatsapp-agent-message-action-react", statusReactions: false },
+    { id: "whatsapp-status-reaction-lifecycle", statusReactions: true },
+  ])("configures $id through the current WhatsApp schema", async ({ id, statusReactions }) => {
+    const baseMessages = {
+      ackReaction: "💬",
+      ackReactionScope: "group-mentions" as const,
+      statusReactions: { enabled: false },
+    };
+    const gatewayCall = vi.fn(async (method: string, _params?: unknown) => {
+      if (method === "config.get") {
+        return { config: { messages: baseMessages }, hash: "config-hash" };
       }
-      expect(patchCall[1]).toMatchObject({
-        replacePaths: expect.arrayContaining(["channels.whatsapp.accounts.work.allowFrom"]),
-      });
-      expect((patchCall[1] as { replacePaths?: string[] }).replacePaths).not.toContain(
-        "channels.whatsapp.accounts.sut.allowFrom",
-      );
-    },
-  );
+      if (method === "config.patch") {
+        const { raw } = _params as { raw: string };
+        const cfg = JSON.parse(raw) as OpenClawConfig;
+        const validation = validateJsonSchemaValue({
+          schema: WhatsAppChannelConfigSchema.schema,
+          value: cfg.channels?.whatsapp,
+          applyDefaults: true,
+        });
+        expect(validation.ok, JSON.stringify(validation)).toBe(true);
+        expect(cfg.messages).toEqual(
+          statusReactions
+            ? {
+                ackReaction: "👀",
+                ackReactionScope: "direct",
+                statusReactions: { enabled: true },
+              }
+            : baseMessages,
+        );
+        return { noop: true };
+      }
+      if (method === "channels.status") {
+        return {
+          channelAccounts: {
+            whatsapp: [
+              {
+                accountId: "work",
+                busy: false,
+                connected: true,
+                lastConnectedAt: Date.now() - 30_000,
+                restartPending: false,
+                running: true,
+              },
+            ],
+          },
+        };
+      }
+      throw new Error(`unexpected gateway method: ${method}`);
+    });
+    await prepareWhatsAppFlowFixture(id, gatewayCall);
+
+    const patchCall = gatewayCall.mock.calls.find(([method]) => method === "config.patch");
+    if (!patchCall) {
+      throw new Error("config.patch was not called");
+    }
+    expect(patchCall[1]).toMatchObject({
+      replacePaths: expect.arrayContaining(["channels.whatsapp.accounts.work.allowFrom"]),
+    });
+    expect((patchCall[1] as { replacePaths?: string[] }).replacePaths).not.toContain(
+      "channels.whatsapp.accounts.sut.allowFrom",
+    );
+  });
 
   it("leaves generic declarative flows to their own config preparation", async () => {
     const gatewayCall = vi.fn();
-    const prepared = await prepareWhatsAppFlowFixture({
-      config: { policyKey: "dmPolicy", policyValue: "disabled" },
+    const prepared = await prepareWhatsAppFlowFixture(
+      "whatsapp-access-control-dm-disabled",
       gatewayCall,
-      scenarioId: "whatsapp-access-control-dm-disabled",
-      scenarioTitle: "WhatsApp dmPolicy disabled stays quiet",
-    });
+    );
     expect(prepared.whatsappScenarioContext.scenario.id).toBe(
       "whatsapp-access-control-dm-disabled",
     );

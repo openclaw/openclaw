@@ -45,16 +45,22 @@ export function resolveBedrockCachePoint(
   if (!policy || retention === "none") {
     return undefined;
   }
+  const supportsLongTtl = getModelMatchCandidates(
+    resolveClaudeModelIdentity(model),
+    model.name,
+  ).some((candidate) =>
+    /claude-(?:haiku-(?:4-5|5-5)|sonnet-(?:4-[56]|5(?:-5)?)|opus-(?:4-[5-8]|5(?:-5)?)|(?:fable|mythos)-5(?:-1)?)(?:$|-v\d|-\d{8}(?:-|$))/.test(
+      candidate,
+    ),
+  );
   return {
     type: "default",
-    ...(policy === "claude" && retention === "long" ? { ttl: "1h" } : {}),
+    ...(policy === "claude" && retention === "long" && supportsLongTtl ? { ttl: "1h" } : {}),
   };
 }
 
-/** How Bedrock thinking output should be displayed to users. */
 type BedrockThinkingDisplay = "summarized" | "omitted";
 
-/** Extra Bedrock-specific stream options accepted by the provider runtime. */
 export interface BedrockOptions extends StreamOptions {
   region?: string;
   profile?: string;
@@ -75,7 +81,6 @@ function getModelMatchCandidates(modelId: string, modelName?: string): string[] 
   });
 }
 
-/** Return whether a Bedrock model is known to support Anthropic prompt caching. */
 export function supportsBedrockClaudePromptCaching(modelId: string, modelName?: string): boolean {
   const candidates = getModelMatchCandidates(modelId, modelName);
   const hasClaudeRef = candidates.some((s) => s.includes("claude"));
@@ -85,25 +90,9 @@ export function supportsBedrockClaudePromptCaching(modelId: string, modelName?: 
     }
     return false;
   }
-  if (candidates.some((s) => s.includes("-4-"))) {
-    return true;
-  }
-  if (
-    candidates.some(
-      (candidate) =>
-        candidate.includes("claude-fable-5") ||
-        candidate.includes("claude-mythos-5") ||
-        candidate.includes("claude-opus-5") ||
-        candidate.includes("claude-sonnet-5"),
-    )
-  ) {
-    return true;
-  }
-  if (candidates.some((s) => s.includes("claude-3-7-sonnet"))) {
-    return true;
-  }
-  if (candidates.some((s) => s.includes("claude-3-5-haiku"))) {
-    return true;
-  }
-  return false;
+  return candidates.some(
+    (candidate) =>
+      candidate.includes("-4-") ||
+      /claude-(?:fable-5|mythos-5|opus-5|sonnet-5|3-7-sonnet|3-5-haiku)/.test(candidate),
+  );
 }

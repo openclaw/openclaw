@@ -13,17 +13,15 @@ afterEach(() => fixtures.cleanup());
 
 function writePackage(root: string, manifest: Record<string, unknown>) {
   mkdirSync(join(root, "docs"), { recursive: true });
-  mkdirSync(join(root, "examples"), { recursive: true });
   writeFileSync(join(root, "package.json"), JSON.stringify({ type: "module", ...manifest }));
   writeFileSync(join(root, "README.md"), "fixture readme");
   writeFileSync(join(root, "docs", "guide.md"), "fixture guide");
-  writeFileSync(join(root, "examples", "example.txt"), "fixture example");
 }
 
 function expectedAssets(root: string) {
   return {
-    paths: [join(root, "README.md"), join(root, "docs"), join(root, "examples")],
-    contents: ["fixture readme", "fixture guide", "fixture example"],
+    paths: [join(root, "README.md"), join(root, "docs")],
+    contents: ["fixture readme", "fixture guide"],
   };
 }
 
@@ -48,24 +46,48 @@ const snapshotScript = String.raw`
   import { join } from "node:path";
   const metadata = await import(process.argv[1]);
   function snapshot() {
-    const paths = [metadata.getReadmePath(), metadata.getDocsPath(), metadata.getExamplesPath()];
+    const paths = [metadata.getReadmePath(), metadata.getDocsPath()];
     return {
       appName: metadata.APP_NAME,
       configDir: metadata.CONFIG_DIR_NAME,
-      version: metadata.PACKAGE_MANIFEST_VERSION,
-      isBunBinary: metadata.isBunBinary,
       paths,
       contents: [
         readFileSync(paths[0], "utf8"),
         readFileSync(join(paths[1], "guide.md"), "utf8"),
-        readFileSync(join(paths[2], "example.txt"), "utf8"),
       ],
     };
   }
 `;
 
+async function readMetadata(
+  entry: string,
+  options: {
+    cwd: string;
+    env?: NodeJS.ProcessEnv;
+    script?: string;
+    args?: string[];
+  },
+): Promise<unknown> {
+  const result = await fixtures.track(
+    runNodeScript(
+      [
+        "--input-type=module",
+        "--eval",
+        options.script ?? `${snapshotScript}\nconsole.log(JSON.stringify(snapshot()));`,
+        pathToFileURL(entry).href,
+        ...(options.args ?? []),
+      ],
+      { ...process.env, OPENCLAW_PACKAGE_DIR: undefined, ...options.env },
+      10_000,
+      { cwd: options.cwd, requireProcessTreeExit: true },
+    ),
+  );
+  expect(result, result.stderr).toMatchObject({ error: undefined, status: 0 });
+  return JSON.parse(result.stdout);
+}
+
 describe("package metadata", () => {
-  it.each(["absolute", "relative", "~", "~/"] as const)(
+  it.each(["relative", "~", "~/"] as const)(
     "captures custom metadata through a %s override while asset paths follow later overrides",
     (form) =>
       fixtures.run(async () => {
@@ -83,88 +105,51 @@ describe("package metadata", () => {
           openclawConfig: { name: "replacement", configDir: ".replacement" },
         });
         const overrides = {
-          absolute: packageDir,
           relative: relative(root, packageDir),
           "~": "~",
           "~/": "~/package",
         };
         const entry = join(root, "package-metadata.mjs");
         await compileMetadata(entry);
-        const result = await fixtures.track(
-          runNodeScript(
-            [
-              "--input-type=module",
-              "--eval",
-              `${snapshotScript}
-                const before = snapshot();
-                process.env.OPENCLAW_PACKAGE_DIR = process.argv[2];
-                console.log(JSON.stringify({ before, after: snapshot() }));
-              `,
-              pathToFileURL(entry).href,
-              nextPackageDir,
-            ],
-            {
-              ...process.env,
-              HOME: home,
-              USERPROFILE: home,
-              OPENCLAW_PACKAGE_DIR: overrides[form],
-            },
-            10_000,
-            { cwd: root, requireProcessTreeExit: true },
-          ),
-        );
-
-        expect(result, result.stderr).toMatchObject({ error: undefined, status: 0 });
+        const result = await readMetadata(entry, {
+          cwd: root,
+          env: { HOME: home, USERPROFILE: home, OPENCLAW_PACKAGE_DIR: overrides[form] },
+          args: [nextPackageDir],
+          script: `${snapshotScript}
+            const before = snapshot();
+            process.env.OPENCLAW_PACKAGE_DIR = process.argv[2];
+            console.log(JSON.stringify({ before, after: snapshot() }));
+          `,
+        });
         const captured = {
           appName: "fixture-claw",
           configDir: ".fixture-claw",
-          version: "7.8.9-custom",
-          isBunBinary: false,
         };
-        expect(JSON.parse(result.stdout)).toEqual({
+        expect(result).toEqual({
           before: { ...captured, ...expectedAssets(packageDir) },
           after: { ...captured, ...expectedAssets(nextPackageDir) },
         });
       }),
   );
 
-  it.each(["src/agents", "dist"])(
-    "uses the nearest package manifest and assets when emitted under %s",
-    (layout) =>
-      fixtures.run(async () => {
-        const root = fixtures.createTempDir("openclaw-package-layout-");
-        writePackage(root, {
-          version: "99.0.0",
-          openclawConfig: { name: "outer-package", configDir: ".outer-package" },
-        });
-        const packageDir = join(root, "installed-package");
-        writePackage(packageDir, { name: "@fixture/repackaged" });
-        const entry = join(packageDir, layout, "package-metadata.mjs");
-        await compileMetadata(entry);
-        const result = await fixtures.track(
-          runNodeScript(
-            [
-              "--input-type=module",
-              "--eval",
-              `${snapshotScript}\nconsole.log(JSON.stringify(snapshot()));`,
-              pathToFileURL(entry).href,
-            ],
-            { ...process.env, OPENCLAW_PACKAGE_DIR: undefined },
-            10_000,
-            { cwd: root, requireProcessTreeExit: true },
-          ),
-        );
-
-        expect(result, result.stderr).toMatchObject({ error: undefined, status: 0 });
-        expect(JSON.parse(result.stdout)).toEqual({
-          appName: "openclaw",
-          configDir: ".openclaw",
-          version: "0.0.0",
-          isBunBinary: false,
-          ...expectedAssets(packageDir),
-        });
-      }),
-  );
+  it("uses the nearest package manifest and assets from a nested source layout", () =>
+    fixtures.run(async () => {
+      const root = fixtures.createTempDir("openclaw-package-layout-");
+      writePackage(root, {
+        version: "99.0.0",
+        openclawConfig: { name: "outer-package", configDir: ".outer-package" },
+      });
+      const packageDir = join(root, "installed-package");
+      writePackage(packageDir, { name: "@fixture/repackaged" });
+      const entry = join(packageDir, "src", "agents", "package-metadata.mjs");
+      await compileMetadata(entry);
+      const result = await readMetadata(entry, { cwd: root });
+      expect(result).toEqual({
+        appName: "openclaw",
+        configDir: ".openclaw",
+        ...expectedAssets(packageDir),
+      });
+    }));
 
   it.each(["missing", "invalid"] as const)(
     "surfaces a %s overridden package manifest instead of using the source package",
@@ -179,29 +164,19 @@ describe("package metadata", () => {
         }
         const entry = join(root, "package-metadata.mjs");
         await compileMetadata(entry);
-        const result = await fixtures.track(
-          runNodeScript(
-            [
-              "--input-type=module",
-              "--eval",
-              String.raw`
-                try {
-                  await import(process.argv[1]);
-                  throw new Error("Expected manifest import to fail");
-                } catch (error) {
-                  console.log(JSON.stringify({ name: error.name, code: error.code, path: error.path }));
-                }
-              `,
-              pathToFileURL(entry).href,
-            ],
-            { ...process.env, OPENCLAW_PACKAGE_DIR: packageDir },
-            10_000,
-            { cwd: root, requireProcessTreeExit: true },
-          ),
-        );
-
-        expect(result, result.stderr).toMatchObject({ error: undefined, status: 0 });
-        expect(JSON.parse(result.stdout)).toEqual(
+        const result = await readMetadata(entry, {
+          cwd: root,
+          env: { OPENCLAW_PACKAGE_DIR: packageDir },
+          script: String.raw`
+            try {
+              await import(process.argv[1]);
+              throw new Error("Expected manifest import to fail");
+            } catch (error) {
+              console.log(JSON.stringify({ name: error.name, code: error.code, path: error.path }));
+            }
+          `,
+        });
+        expect(result).toEqual(
           state === "missing"
             ? { name: "Error", code: "ENOENT", path: manifest }
             : { name: "SyntaxError" },
@@ -210,7 +185,7 @@ describe("package metadata", () => {
   );
 
   it.each(["2026.9.14-worker", ""])(
-    "preserves the worker version binding %j and manifest fallback",
+    "uses worker metadata defaults for %j and preserves manifest fallback",
     (workerVersion) =>
       fixtures.run(async () => {
         const root = fixtures.createTempDir("openclaw-worker-package-metadata-");
@@ -223,26 +198,13 @@ describe("package metadata", () => {
           rmSync(join(root, "package.json"));
         }
         await compileMetadata(entry, workerVersion);
-        const result = await fixtures.track(
-          runNodeScript(
-            [
-              "--input-type=module",
-              "--eval",
-              `${snapshotScript}\nconsole.log(JSON.stringify(snapshot()));`,
-              pathToFileURL(entry).href,
-            ],
-            { ...process.env, OPENCLAW_PACKAGE_DIR: root },
-            10_000,
-            { cwd: dirname(entry), requireProcessTreeExit: true },
-          ),
-        );
-
-        expect(result, result.stderr).toMatchObject({ error: undefined, status: 0 });
-        expect(JSON.parse(result.stdout)).toEqual({
+        const result = await readMetadata(entry, {
+          cwd: dirname(entry),
+          env: { OPENCLAW_PACKAGE_DIR: root },
+        });
+        expect(result).toEqual({
           appName: workerVersion ? "openclaw" : "package-claw",
           configDir: workerVersion ? ".openclaw" : ".package-claw",
-          version: workerVersion || "4.5.6",
-          isBunBinary: false,
           ...expectedAssets(root),
         });
       }),

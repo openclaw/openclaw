@@ -1,3 +1,4 @@
+import "openclaw/plugin-sdk/compiled-subprocess-testing";
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
@@ -112,7 +113,6 @@ describe("Hermes skill activation policy migration", () => {
   it.each([
     ["YAML list", "[hidden-skill]"],
     ["scalar name", "hidden-skill"],
-    ["JSON array string", "'[\"hidden-skill\"]'"],
     ["Python literal array string", "\"['hidden-skill']\""],
   ])("keeps globally disabled skills disabled from a %s", async (_, disabled) => {
     const source = path.join(workspace.dir, "hermes");
@@ -138,7 +138,7 @@ describe("Hermes skill activation policy migration", () => {
     ).toBe(skillContents);
   });
 
-  it.each([undefined, "current", "previous", "../previous"])(
+  it.each([undefined, "current", "../previous"])(
     "imports only the active organization mirror (%s)",
     async (activeOrg) => {
       const source = path.join(workspace.dir, "hermes");

@@ -1,6 +1,8 @@
 import type { IncomingMessage } from "node:http";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { createDedupeCache } from "../infra/dedupe.js";
 import { readTailscaleWhoisIdentity, type TailscaleWhoisIdentity } from "../infra/tailscale.js";
+import { firstHeaderValue } from "./http-header-value.js";
 import {
   hasForwardedRequestHeaders,
   isLoopbackAddress,
@@ -12,6 +14,11 @@ import {
 export const PROXY_ATTRIBUTION_REQUIRED_REASON = "proxy_attribution_required";
 export const PROXY_ATTRIBUTION_GUIDANCE =
   "Configure gateway.trustedProxies narrowly and make the proxy overwrite or safely rebuild forwarded client headers.";
+// Surface a small fleet's distinct peers while capping hostile unique-source log growth.
+// Each source waits out its own window before warning again, so long-lived Gateways keep
+// reporting later incidents without one noisy peer spending the whole budget.
+const UNATTRIBUTABLE_PROXY_WARNING_WINDOW_MS = 5 * 60_000;
+const UNATTRIBUTABLE_PROXY_WARNING_MAX_SOURCES = 16;
 
 export type GatewayTailscaleIngressMode = "serve" | "funnel";
 
@@ -92,10 +99,6 @@ export function markGatewayIngressTransport(
   requestTransport.set(req, transport);
 }
 
-function headerValue(value: string | string[] | undefined): string | undefined {
-  return Array.isArray(value) ? value[0] : value;
-}
-
 function unattributableProxy(remoteAddress: string): GatewayIngressAttribution {
   return {
     kind: "unattributable-proxy",
@@ -141,7 +144,7 @@ function hasTailscaleOwnedHeaders(req: IncomingMessage): boolean {
 function resolveTailscaleClientIp(req: IncomingMessage): string | undefined {
   return resolveClientIp({
     remoteAddr: req.socket?.remoteAddress,
-    forwardedFor: headerValue(req.headers?.["x-forwarded-for"]),
+    forwardedFor: firstHeaderValue(req.headers?.["x-forwarded-for"]),
     trustedProxies: ["127.0.0.1", "::1"],
   });
 }
@@ -160,7 +163,7 @@ function resolveManagedTailscaleIngress(params: {
   if (!clientIp || isLoopbackAddress(clientIp)) {
     return unattributableProxy(remoteAddress);
   }
-  const funnelMarker = headerValue(req.headers?.["tailscale-funnel-request"]);
+  const funnelMarker = firstHeaderValue(req.headers?.["tailscale-funnel-request"]);
   if (mode === "funnel") {
     return !funnelMarker || funnelMarker === "?1"
       ? attributed("tailscale-funnel", clientIp)
@@ -236,7 +239,7 @@ function resolveGatewayIngressAttribution(params: {
     }
     return {
       ...attributed("trusted-proxy", clientIp),
-      ...(headerValue(req.headers?.["tailscale-funnel-request"]) === "?1"
+      ...(firstHeaderValue(req.headers?.["tailscale-funnel-request"]) === "?1"
         ? { externalTailscaleExposure: "funnel" as const }
         : {}),
     };
@@ -271,16 +274,40 @@ export type GatewayUnattributableProxyReporter = (
   attribution: Extract<GatewayIngressAttribution, { kind: "unattributable-proxy" }>,
 ) => void;
 
-/** Emits one actionable warning per runtime without attacker-controlled log growth. */
+/** Emits bounded, per-source warnings so one rejected peer cannot hide every later peer. */
 export function createGatewayUnattributableProxyReporter(log: {
   warn: (message: string) => void;
 }): GatewayUnattributableProxyReporter {
-  let emitted = false;
+  const reportedSources = createDedupeCache({
+    ttlMs: UNATTRIBUTABLE_PROXY_WARNING_WINDOW_MS,
+    // A source TTL can straddle an aggregate reset, so retain both adjacent budgets.
+    maxSize: UNATTRIBUTABLE_PROXY_WARNING_MAX_SOURCES * 2,
+  });
+  let windowStartedAt = Date.now();
+  let lastObservedAt = windowStartedAt;
+  let emittedInWindow = 0;
   return (attribution) => {
-    if (emitted) {
+    const now = Date.now();
+    // Reset the aggregate budget on expiry or rollback. Only rollback invalidates
+    // per-source TTLs; an ordinary refill must retain peers warned beside it.
+    if (now < lastObservedAt || now - windowStartedAt >= UNATTRIBUTABLE_PROXY_WARNING_WINDOW_MS) {
+      windowStartedAt = now;
+      emittedInWindow = 0;
+      if (now < lastObservedAt) {
+        reportedSources.clear();
+      }
+    }
+    lastObservedAt = now;
+    if (
+      emittedInWindow >= UNATTRIBUTABLE_PROXY_WARNING_MAX_SOURCES ||
+      // Peek rather than check: continued traffic from a suppressed peer must not keep
+      // refreshing its record, or a persistent source would never be reported again.
+      reportedSources.peek(attribution.remoteAddress, now)
+    ) {
       return;
     }
-    emitted = true;
+    reportedSources.check(attribution.remoteAddress, now);
+    emittedInWindow += 1;
     log.warn(
       `gateway: observed unattributable proxy-shaped traffic from ${attribution.remoteAddress}; Gateway-authenticated routes reject it, while plugin-authenticated routes ignore forwarded claims. ${attribution.guidance}`,
     );

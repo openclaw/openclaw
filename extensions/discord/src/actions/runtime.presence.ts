@@ -4,7 +4,7 @@ import { jsonResult, readStringParam } from "openclaw/plugin-sdk/channel-actions
 import type { DiscordActionConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveDefaultDiscordAccountId } from "../accounts.js";
-import type { Activity, UpdatePresenceData } from "../internal/gateway.js";
+import type { Activity, UpdatePresenceData } from "../internal/plugin-contract.js";
 import { getGateway } from "../monitor/gateway-registry.js";
 
 const ACTIVITY_TYPE_MAP = new Map<string, number>([
@@ -91,14 +91,12 @@ export async function handleDiscordPresenceAction(
     activities.push(activity);
   }
 
-  const presenceData: UpdatePresenceData = {
+  gateway.updatePresence({
     since: null,
     activities,
     status,
     afk: false,
-  };
-
-  gateway.updatePresence(presenceData);
+  });
 
   return jsonResult({
     ok: true,

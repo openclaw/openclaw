@@ -3,10 +3,11 @@ import { EventEmitter } from "node:events";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { RunningChrome } from "./chrome.js";
-import { makeBrowserProfile } from "./server-context.test-harness.js";
+import { makeBrowserProfile, makeBrowserServerState } from "./server-context.test-harness.js";
 import type { BrowserServerState } from "./server-context.types.js";
 
 const mocks = vi.hoisted(() => ({
+  chunksRemoved: false,
   closeChromeMcpSession: vi.fn(async () => false),
   stopOpenClawChrome: vi.fn(async (_running: RunningChrome) => {}),
 }));
@@ -15,18 +16,22 @@ vi.mock("./chrome.js", () => ({
   stopOpenClawChrome: mocks.stopOpenClawChrome,
 }));
 
-vi.mock("./chrome-mcp.runtime.js", () => ({
-  getChromeMcpModule: async () => ({
+vi.mock("./chrome-mcp.js", () => {
+  if (mocks.chunksRemoved) {
+    throw new Error("installed Chrome MCP chunk was removed");
+  }
+  return {
     closeChromeMcpSession: mocks.closeChromeMcpSession,
-  }),
-}));
+  };
+});
 
 vi.mock("./pw-ai-module.js", () => ({
   getLoadedPwAiModule: () => null,
   getPwAiModule: async () => null,
 }));
 
-const { stopBrowserBridgeRuntime } = await import("./runtime-lifecycle.js");
+const { stopBrowserBridgeRuntime, stopBrowserRuntime } = await import("./runtime-lifecycle.js");
+const { getChromeMcpModule } = await import("./chrome-mcp.runtime.js");
 const {
   enqueueProfileStart,
   getProfileLifecycle,
@@ -40,17 +45,37 @@ function fakeRunning(pid: number): RunningChrome {
     exe: { kind: "chromium", path: "/usr/bin/chromium" },
     userDataDir: `/tmp/profile-${pid}`,
     cdpPort: 18_800 + pid,
-    startedAt: Date.now(),
     proc: new EventEmitter() as unknown as ChildProcessWithoutNullStreams,
   };
 }
 
 beforeEach(() => {
+  getChromeMcpModule.clear();
+  mocks.chunksRemoved = false;
   mocks.closeChromeMcpSession.mockReset().mockResolvedValue(false);
   mocks.stopOpenClawChrome.mockReset().mockResolvedValue(undefined);
 });
 
 describe("browser runtime shutdown profile races", () => {
+  it("closes an unused existing-session profile after its installation is replaced", async () => {
+    const profile = makeBrowserProfile({ name: "user", driver: "existing-session" });
+    const state = makeBrowserServerState({ profile });
+    getOrCreateProfileRuntime(state, profile);
+    mocks.chunksRemoved = true;
+    const clearState = vi.fn();
+    try {
+      await stopBrowserRuntime({
+        current: state,
+        clearState,
+        onWarn: vi.fn(),
+      });
+      expect(clearState).toHaveBeenCalledOnce();
+      expect(mocks.closeChromeMcpSession).not.toHaveBeenCalled();
+    } finally {
+      mocks.chunksRemoved = false;
+    }
+  });
+
   it("invalidates every deferred start before draining late children and clearing state", async () => {
     const profiles = [
       makeBrowserProfile({ name: "alpha", cdpPort: 18_801 }),
@@ -94,7 +119,6 @@ describe("browser runtime shutdown profile races", () => {
 
     const stopping = stopBrowserBridgeRuntime({
       current: state,
-      getState: () => state,
       clearState,
       onWarn: vi.fn(),
     });

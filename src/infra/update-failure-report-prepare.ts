@@ -1,10 +1,11 @@
 /** Sanitizes and prepares one explicitly reviewed update-failure report. */
-import { createHash } from "node:crypto";
 import { isIP } from "node:net";
+import { constants } from "node:os";
 import path from "node:path";
 import { valid as validSemver } from "semver";
 import { resolveStateDir } from "../config/paths.js";
 import {
+  redactPublicSupportConfigKey,
   redactPublicSupportDiagnosticLine,
   redactPublicSupportVersion,
   redactSupportDiagnosticLine,
@@ -16,21 +17,23 @@ import {
 } from "../shared/update-outcome.js";
 import { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
 import { VERSION } from "../version.js";
+import { sha256Hex } from "./crypto-digest.js";
 import { prepareGithubIssue, type PreparedGithubIssue } from "./github-issue.js";
 import { normalizeUpdateChannel } from "./update-channels.js";
-import { UPDATE_DESTINATION_RECOVERY } from "./update-destination-failure.js";
 import { normalizeUpdateDoctorLintFindings } from "./update-doctor-lint.js";
 import {
   formatUpdateFailureFact,
   selectUpdateFailureReportSteps,
+  UPDATE_DESTINATION_RECOVERY,
 } from "./update-failure-facts-format.js";
 import { normalizeUpdateFailureFacts } from "./update-failure-facts.js";
-import {
-  isPublicUpdateFailureCode,
-  projectPublicUpdateFailureIdentifiers,
-} from "./update-failure-public-identifiers.js";
+import { isPublicUpdateFailureCode } from "./update-failure-public-codes.js";
+import { projectPublicUpdateFailureIdentifiers } from "./update-failure-public-identifiers.js";
 import { formatNpmFailureFacts } from "./update-npm-failure.js";
-import { updatePreflightDetailMessage } from "./update-preflight-details.js";
+import {
+  updatePreflightDetailMessage,
+  UPDATE_HANDOFF_BEFORE_TRANSFER_DETAIL,
+} from "./update-preflight-details.js";
 import {
   LEGACY_UPDATE_RUN_ADVISORY,
   LEGACY_UPDATE_RUN_EXPIRED_REASON,
@@ -45,8 +48,9 @@ import {
 } from "./update-run-report.js";
 import { updateRunStepKey } from "./update-run-step-key.js";
 import { isFailedUpdateStep, updateRunWarningMessages } from "./update-run-step.js";
-import type { UpdateRunResult, UpdateStepResult } from "./update-runner-types.js";
+import type { UpdateRunResult } from "./update-runner-types.js";
 import { resolvePublicUpdateStepId } from "./update-step-identity.js";
+import type { UpdateStepResult } from "./update-step-result.js";
 
 const UPDATE_REPORT_BODY_MAX_BYTES = 16_000;
 const UPDATE_REPORT_FIELD_MAX_BYTES = 512;
@@ -107,10 +111,7 @@ function sanitizeReportField(
     typeof value === "bigint"
       ? String(value)
       : "unknown";
-  const redacted = redactSupportString(redactDiagnosticLines(text), {
-    env: context.env,
-    stateDir: context.stateDir,
-  });
+  const redacted = redactSupportString(redactDiagnosticLines(text), context);
   return truncateUtf8Prefix(redacted.trim(), maxBytes);
 }
 
@@ -126,22 +127,10 @@ function sanitizeFactIdentifier(value: string, context: UpdateFailureReportConte
     : sanitizeReportField(value, context);
 }
 
-function sanitizeFactConfigKey(value: string): string {
-  // Validation paths can contain operator-defined record keys at any depth.
-  const anchor =
-    /^(mcp\.servers|models\.providers|plugins\.entries|skills\.entries|auth\.profiles|cron\.jobs|agents\.list|hooks\.internal\.entries|engines\.node)(?:\.|$)/u.exec(
-      value,
-    )?.[1] ??
-    /^(agents|auth|channels|commands|cron|engines|gateway|hooks|mcp|messages|models|plugins|session|skills|stateDir|tools)(?:\.|$)/u.exec(
-      value,
-    )?.[1];
-  return anchor ? (value === anchor ? anchor : `${anchor}.*`) : "[redacted-key]";
-}
-
 type ReportedFailedStep = Pick<
   UpdateStepResult,
   "name" | "exitCode" | "termination" | "failureFacts" | "stderrTail"
-> & { detail?: string };
+> & { detail?: string; signal?: string | null };
 
 function resolveFailedSteps(input: UpdateFailureReportInput): ReportedFailedStep[] {
   const direct = new Map(input.result.steps.map((step) => [updateRunStepKey(step.name), step]));
@@ -166,6 +155,9 @@ function resolveFailedSteps(input: UpdateFailureReportInput): ReportedFailedStep
               exitCode: step.exitCode ?? null,
               failureFacts: step.failureFacts,
               detail: step.detail,
+              termination: step.termination,
+              signal: step.signal,
+              stderrTail: step.stderrTail,
             },
           ]
         : [];
@@ -211,10 +203,9 @@ function resolveUpdateMode(input: UpdateFailureReportInput): string {
 }
 
 function resolveRecoveryOutcome(
-  input: UpdateFailureReportInput,
+  { verification, steps }: ReturnType<typeof updateRunReportInputFromResult>,
   context: UpdateFailureReportContext,
 ): string {
-  const { verification, steps } = updateRunReportInputFromResult(input.result, input.recordedRun);
   const recovery = verification.recovery;
   const observation = steps.findLast((step) => step.step === "gateway recovery verification");
   return (
@@ -237,6 +228,10 @@ function resolveRecoveryOutcome(
       },
       sanitizeReportField(recovery?.reason ?? "not-recorded", context, 96),
     ) ??
+    (verification.rollbackOutcome?.status === "not-needed" &&
+    verification.rollbackOutcome.reason === UPDATE_HANDOFF_BEFORE_TRANSFER_DETAIL
+      ? UPDATE_HANDOFF_BEFORE_TRANSFER_DETAIL
+      : undefined) ??
     (steps.some(
       (step) => step.step === "finalize:package-rollback-not-needed" && step.status === "skipped",
     )
@@ -291,7 +286,11 @@ async function renderBoundedDiagnostics(
   }
   for (const step of selectUpdateFailureReportSteps(steps)) {
     const phase = sanitizeFactIdentifier(step.name, context);
-    const termination = step.termination ? `, termination ${step.termination}` : "";
+    const signal =
+      step.signal && Object.hasOwn(constants.signals, step.signal) ? step.signal : null;
+    const termination = step.termination
+      ? `, termination ${step.termination}${signal ? ` (${signal})` : ""}`
+      : "";
     const message = [
       ...(step.failureFacts ?? []).flatMap((fact) => [fact.message, fact.code]),
       step.detail,
@@ -299,26 +298,37 @@ async function renderBoundedDiagnostics(
     ]
       .filter(Boolean)
       .join("\n");
-    const diagnostic = redactPublicSupportDiagnosticLine(message, context);
+    const facts = normalizeUpdateFailureFacts(step.failureFacts ?? [], context.env);
+    const npm = facts.find(
+      (fact) => (fact.check === "npm" || fact.check === "bun") && fact.npmErrorCode,
+    );
+    const diagnostic = npm
+      ? [npm.npmErrorCode, npm.packageSpec].filter(Boolean).join(" ")
+      : redactPublicSupportDiagnosticLine(message, context);
     const exit = `exit ${step.exitCode ?? "unknown"}`;
-    const detail =
+    const publicDetail =
       diagnostic === "[redacted-diagnostic]"
-        ? exit
-        : step.exitCode == null
-          ? diagnostic
-          : `${exit} (${diagnostic})`;
+        ? facts.map((fact) => updatePreflightDetailMessage(fact.code)).find(Boolean)
+        : diagnostic;
+    const detail = !publicDetail
+      ? exit
+      : step.exitCode == null
+        ? publicDetail
+        : `${exit} (${publicDetail})`;
     diagnostics.push(`Failed phase ${phase}: ${detail}${termination}`);
-    diagnostics.push(...formatNpmFailureFacts(step.failureFacts ?? [], context));
+    diagnostics.push(...formatNpmFailureFacts(facts, context));
     diagnostics.push(
       ...(await Promise.all(
-        normalizeUpdateFailureFacts(step.failureFacts ?? [], context.env)
-          .filter((fact) => fact.check !== "npm")
+        facts
+          .filter((fact) => fact.check !== "npm" && fact.check !== "bun")
           .map(async (fact) =>
             formatUpdateFailureFact({
               ...(await projectPublicUpdateFailureIdentifiers(fact)),
               ...(fact.location ? { location: fact.location } : {}),
               ...(fact.destination ? { destination: fact.destination } : {}),
-              ...(fact.affectedKey ? { affectedKey: sanitizeFactConfigKey(fact.affectedKey) } : {}),
+              ...(fact.affectedKey
+                ? { affectedKey: redactPublicSupportConfigKey(fact.affectedKey) }
+                : {}),
               ...(fact.message
                 ? {
                     message:
@@ -366,17 +376,15 @@ export async function prepareUpdateFailureReport(
   const target = resolveUpdateTarget(input, context);
   const steps = resolveFailedSteps(input);
   const phase = sanitizeFactIdentifier(steps.at(-1)?.name ?? "not-recorded", context);
-  const recovery = resolveRecoveryOutcome(input, context);
+  const projection = updateRunReportInputFromResult(input.result, recordedRun);
+  const recovery = resolveRecoveryOutcome(projection, context);
   const rollback = input.result.rollbackOutcome ?? recordedRun?.verification?.rollbackOutcome;
   const action = recordedRun?.trigger ?? input.action;
   const installation = recordedRun?.target?.installationMethod;
-  const projection =
-    input.result.verification || recordedRun?.verification
-      ? updateRunReportInputFromResult(input.result, recordedRun)
-      : undefined;
-  const verification = projection?.verification;
-  const identity = projection
-    ? formatUpdateRunIdentity(projection.verification, projection.after)
+  const verification =
+    input.result.verification || recordedRun?.verification ? projection.verification : undefined;
+  const identity = verification
+    ? formatUpdateRunIdentity(verification, projection.after)
     : undefined;
   const currentHealth = verification
     ? await readUpdateRunReportHealth(verification, { env })
@@ -448,9 +456,7 @@ export async function prepareUpdateFailureReport(
     ...(await renderBoundedDiagnostics(input, context, steps)).map((line) => `- ${line}`),
     "",
   ].join("\n");
-  const reconciliationMarker = `openclaw-update-report:${createHash("sha256")
-    .update(`${input.attemptId}\0${bodyWithoutMarker}`)
-    .digest("hex")}`;
+  const reconciliationMarker = `openclaw-update-report:${sha256Hex(`${input.attemptId}\0${bodyWithoutMarker}`)}`;
   const body = truncateUtf8Prefix(
     bodyWithoutMarker.replace(
       "This report was explicitly reviewed and confirmed in OpenClaw.\n",
@@ -466,12 +472,8 @@ export async function prepareUpdateFailureReport(
   return {
     ...issue,
     attemptId: input.attemptId,
-    previewDigest: createHash("sha256").update(issue.body).digest("hex"),
-    savedReportPath: path.join(
-      stateDir,
-      "update-reports",
-      `${createHash("sha256").update(input.attemptId).digest("hex")}.md`,
-    ),
+    previewDigest: sha256Hex(issue.body),
+    savedReportPath: path.join(stateDir, "update-reports", `${sha256Hex(input.attemptId)}.md`),
     ...(issue.browserFallback.status === "available" ? { url: issue.browserFallback.url } : {}),
   };
 }

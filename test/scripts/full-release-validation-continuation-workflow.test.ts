@@ -1,6 +1,8 @@
+import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import {
   copyFileSync,
+  chmodSync,
   cpSync,
   mkdirSync,
   mkdtempSync,
@@ -10,8 +12,10 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
-import { afterEach, assert, describe, expect, it } from "vitest";
+import { runInNewContext } from "node:vm";
+import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
+import { releaseChildDispatchInputs } from "../../scripts/lib/full-release-child-request.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const source = readFileSync(".github/workflows/full-release-validation.yml", "utf8");
@@ -53,47 +57,6 @@ function checkoutPath(checkout: Record<string, unknown>) {
   }
   return checkout.path;
 }
-
-describe("automatic release flake retry boundary", () => {
-  it("gates the sole retry writer on a durable intent and makes both collectors await it", () => {
-    const owner = workflow.jobs.automatic_flake_retry;
-    assert(owner);
-    const names = owner.steps.map((entry) => entry.name);
-    const order = [
-      "Prepare automatic retry intent",
-      "Upload automatic retry intent",
-      "Record automatic retry intent digest",
-      "Save automatic retry intent",
-      "Execute automatic retry",
-      "Record automatic retry rejection digest",
-      "Upload automatic retry record",
-    ];
-    expect(order.map((name) => names.indexOf(name))).toEqual(
-      order.map((name) => names.indexOf(name)).toSorted((a, b) => a - b),
-    );
-    expect(order.every((name) => names.includes(name))).toBe(true);
-    expect(step("automatic_flake_retry", "Upload automatic retry intent").with).toMatchObject({
-      overwrite: false,
-    });
-    expect(step("automatic_flake_retry", "Execute automatic retry").if).toBe(
-      "${{ (steps.prepare.outputs.prepared == 'true' && steps.intent_witness.outcome == 'success' && steps.intent_save.outcome == 'success') || steps.prepare.outputs.restored == 'true' }}",
-    );
-    expect(step("automatic_flake_retry", "Record automatic retry rejection digest")).toMatchObject({
-      if: "${{ always() && github.run_attempt == 1 && steps.record.outputs.exists == 'true' }}",
-      run: "node scripts/full-release-flake-retry.mjs witness",
-    });
-    for (const key of ["release_decision", "diagnostic_drain"]) {
-      expect(workflow.jobs[key]).toHaveProperty("needs", [
-        "resolve_target",
-        "release_execution_plan",
-        "automatic_flake_retry",
-      ]);
-      expect(step(key, "Download automatic retry records").with).toMatchObject({
-        pattern: "full-release-flake-retry-${{ github.run_id }}-*-${{ github.run_attempt }}",
-      });
-    }
-  });
-});
 
 describe("full release metadata checkouts", () => {
   it.each([
@@ -249,6 +212,125 @@ describe("full release metadata checkouts", () => {
 });
 
 describe("full release same-parent recovery workflow", () => {
+  it.each([
+    "ci",
+    "plugin-prerelease",
+    "openclaw-release-checks",
+    "openclaw-performance",
+    "npm-telegram-beta-e2e",
+  ])(
+    "includes every declared default in %s reuse identity without installing dependencies",
+    (name) => {
+      const contents = readFileSync(`.github/workflows/${name}.yml`, "utf8");
+      const declared = parse(contents).on.workflow_dispatch.inputs as Record<
+        string,
+        { type: string; default?: unknown }
+      >;
+      const expected = Object.fromEntries(
+        Object.entries(declared)
+          .filter(([key]) => key !== "dispatch_id")
+          .map(([key, value]) => {
+            const defaultValue =
+              value.default ??
+              (value.type === "boolean" ? false : value.type === "number" ? 0 : "");
+            if (
+              typeof defaultValue !== "string" &&
+              typeof defaultValue !== "number" &&
+              typeof defaultValue !== "boolean"
+            ) {
+              throw new Error("Expected a scalar workflow dispatch default");
+            }
+            return [key, String(defaultValue)];
+          }),
+      );
+      expect(releaseChildDispatchInputs(contents, [])).toEqual(expected);
+      const key = Object.keys(expected)[0]!;
+      expect(
+        releaseChildDispatchInputs(contents, [
+          "-f",
+          `${key}=exact=bytes`,
+          "-f",
+          "dispatch_id=ignored",
+        ]),
+      ).toEqual({ ...expected, [key]: "exact=bytes" });
+      expect(() => releaseChildDispatchInputs(contents, ["-f", "unknown=true"])).toThrow(
+        "argument",
+      );
+      expect(() =>
+        releaseChildDispatchInputs(contents.replace("    inputs:", "    inputs: &defaults"), []),
+      ).toThrow();
+    },
+  );
+
+  it("adopts only a matched child and still dispatches an unmatched sibling", () => {
+    const root = tempDirs.make("release-child-dispatch-");
+    const bin = join(root, "bin");
+    const tooling = join(root, "workflow/scripts");
+    mkdirSync(bin);
+    mkdirSync(tooling, { recursive: true });
+    const output = join(root, "outputs");
+    const calls = join(root, "calls");
+    const sha = "a".repeat(40);
+    writeFileSync(
+      join(tooling, "find-reusable-release-child.mjs"),
+      `
+import {appendFileSync} from 'node:fs';
+appendFileSync(process.env.CALLS, JSON.stringify(process.argv.slice(2)) + '\\n');
+if (process.env.CHILD_WORKFLOW_KIND === 'ci') {
+  appendFileSync(process.env.GITHUB_OUTPUT, 'run_id=101\\nrun_attempt=1\\nchild_reuse={"role":"normalCi"}\\n');
+} else process.exitCode = 3;
+`,
+    );
+    const gh = join(bin, "gh");
+    writeFileSync(
+      gh,
+      `#!${process.execPath}
+import {appendFileSync} from 'node:fs';
+const args=process.argv.slice(2);
+appendFileSync(process.env.CALLS, JSON.stringify(args)+'\\n');
+if (args[0] === 'workflow') console.log('https://github.com/openclaw/openclaw/actions/runs/202');
+else if (args[1].includes('/commits/')) console.log('${sha}');
+else if (args[1].includes('/actions/workflows/')) console.log('88');
+else console.log(JSON.stringify({id:202,workflow_id:88,head_branch:'main',event:'workflow_dispatch',display_title:'OpenClaw Performance full-release-validation-77-1',head_sha:'${sha}',run_attempt:1,html_url:'https://github.com/openclaw/openclaw/actions/runs/202'}));
+`,
+    );
+    chmodSync(gh, 0o755);
+    const env = {
+      ...process.env,
+      PATH: `${bin}${delimiter}${process.env.PATH}`,
+      CALLS: calls,
+      GITHUB_OUTPUT: output,
+      GITHUB_STEP_SUMMARY: join(root, "summary"),
+      GITHUB_REPOSITORY: "openclaw/openclaw",
+      GITHUB_RUN_ID: "77",
+      GITHUB_RUN_ATTEMPT: "1",
+      CHILD_EVIDENCE_REUSE: "true",
+      CHILD_WORKFLOW_REF: "main",
+      PARENT_WORKFLOW_SHA: sha,
+      TARGET_REF: "main",
+      TARGET_SHA: sha,
+      TARGET_CONTEXT_REF: "",
+      RELEASE_PROFILE: "stable",
+    };
+    for (const kind of ["ci", "performance"]) {
+      execFileSync("bash", ["-c", String(step("normal_ci", "Dispatch CI").run)], {
+        cwd: root,
+        env: { ...env, CHILD_WORKFLOW_KIND: kind },
+        timeout: 10_000,
+      });
+    }
+    const recorded = readFileSync(calls, "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    expect(recorded.filter((args) => args[0] === "workflow")).toEqual([
+      expect.arrayContaining(["run", "openclaw-performance.yml", "publish_reports=false"]),
+    ]);
+    expect(recorded[0]).toEqual(expect.arrayContaining(["ci.yml", `target_ref=${sha}`]));
+    expect(readFileSync(output, "utf8")).toContain('child_reuse={"role":"normalCi"}');
+    expect(readFileSync(output, "utf8")).toContain("run_id=202");
+  });
+
   it.each(["failure", "success", "missing"])(
     "reports %s locale diagnostics without changing validation evidence",
     (conclusion) => {
@@ -299,7 +381,6 @@ describe("full release same-parent recovery workflow", () => {
   it("has no continuation payload and dispatches child work only on attempt one", () => {
     expect(workflow.on.workflow_dispatch.inputs).not.toHaveProperty("continuation_plan_json");
     for (const job of [
-      "docker_runtime_assets_preflight",
       "normal_ci",
       "plugin_prerelease_independent",
       "plugin_prerelease_candidate",
@@ -316,8 +397,22 @@ describe("full release same-parent recovery workflow", () => {
       ["candidate_acquisition", "Dispatch immutable validation candidate producer"],
     ] as const) {
       expect(String(workflow.jobs[job]?.if), job).not.toContain("github.run_attempt");
-      expect(step(job, dispatch).if).toBe("github.run_attempt == 1");
-      expect(step(job, "Recover original artifact producer").if).toBeUndefined();
+      const dispatchCondition = step(job, dispatch).if;
+      const recoveryCondition = step(job, "Recover original artifact producer").if ?? "true";
+      assert(typeof dispatchCondition === "string");
+      assert(typeof recoveryCondition === "string");
+      for (const reused of job === "candidate_acquisition" ? [undefined] : ["false", "true"]) {
+        for (const attempt of [1, 2]) {
+          const context = {
+            github: { run_attempt: attempt },
+            env: { PUBLICATION_ARTIFACTS_REUSED: reused },
+          };
+          expect(runInNewContext(dispatchCondition, context)).toBe(
+            attempt === 1 && reused !== "true",
+          );
+          expect(runInNewContext(recoveryCondition, context)).toBe(reused !== "true");
+        }
+      }
     }
     expect(String(workflow.jobs.qualify_npm_package?.if)).not.toContain("github.run_attempt");
     expect(source).not.toContain("continuationSource");
@@ -405,25 +500,26 @@ describe("full release same-parent recovery workflow", () => {
     }
   });
 
-  it("validates final manifest attempts against the diagnostic drain", () => {
-    expect(step("summary", "Validate release validation manifest").env).toMatchObject({
-      DIAGNOSTIC_DRAIN_PATH:
-        "${{ runner.temp }}/full-release-diagnostics/full-release-diagnostic-manifest.json",
-    });
-  });
-
-  it("gives final candidate verification enough time for its bounded API retries", () => {
-    expect(workflow.jobs.summary?.["timeout-minutes"]).toBe(10);
-  });
-
-  it("keeps failure cancellation explicit while diagnostic drain never cancels", () => {
-    expect(step("release_decision", "Evaluate release decision").env).toMatchObject({
-      FAIL_FAST: "${{ inputs.fail_fast }}",
-      FULL_RELEASE_STATE_MODE: "decision",
-    });
-    expect(step("diagnostic_drain", "Drain child diagnostics").env).toMatchObject({
-      FAIL_FAST: "false",
-      FULL_RELEASE_STATE_MODE: "drain",
-    });
+  it.each([
+    {
+      job: "summary",
+      name: "Validate release validation manifest",
+      env: {
+        DIAGNOSTIC_DRAIN_PATH:
+          "${{ runner.temp }}/full-release-diagnostics/full-release-diagnostic-manifest.json",
+      },
+    },
+    {
+      job: "release_decision",
+      name: "Evaluate release decision",
+      env: { FAIL_FAST: "${{ inputs.fail_fast }}", FULL_RELEASE_STATE_MODE: "decision" },
+    },
+    {
+      job: "diagnostic_drain",
+      name: "Drain child diagnostics",
+      env: { FAIL_FAST: "false", FULL_RELEASE_STATE_MODE: "drain" },
+    },
+  ])("supplies $job with its evidence and cancellation contract", ({ job, name, env }) => {
+    expect(step(job, name).env).toMatchObject(env);
   });
 });

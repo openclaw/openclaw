@@ -21,9 +21,9 @@ export function npmRegistryReadbackDeadline() {
 
 /**
  * @typedef {object} NpmPublishPlan
- * @property {"stable" | "alpha" | "beta"} channel
- * @property {"latest" | "alpha" | "beta" | "extended-stable"} publishTag
- * @property {("latest" | "alpha" | "beta")[]} mirrorDistTags
+ * @property {"stable" | "beta"} channel
+ * @property {"latest" | "beta" | "extended-stable"} publishTag
+ * @property {("latest" | "beta")[]} mirrorDistTags
  */
 
 /**
@@ -112,6 +112,8 @@ function retryAfterMilliseconds(response) {
  * @returns {Promise<{ status: number; ok: boolean; body: T | null }>}
  */
 async function fetchNpmRegistryWithRetry(params, reader) {
+  const endpoint = new URL(params.packageUrl);
+  const label = `${reader.label} (${endpoint.origin}${endpoint.pathname})`;
   const attempts = boundedReadLimit(params.attempts, 3, 5, "read attempts");
   const timeoutMs = boundedReadLimit(params.timeoutMs, 20_000, 60_000, "read timeout");
   const deadlineMs = Math.min(
@@ -133,7 +135,9 @@ async function fetchNpmRegistryWithRetry(params, reader) {
     let response;
     const remainingMs = deadlineMs - Date.now();
     if (remainingMs <= 0) {
-      throw new NpmRegistryUnavailableError(`${reader.label} deadline exceeded.`);
+      throw new NpmRegistryUnavailableError(
+        `${label} deadline exceeded. Retry readback, not publication.`,
+      );
     }
     try {
       const attemptSignal = createSignal(Math.min(timeoutMs, remainingMs));
@@ -147,7 +151,9 @@ async function fetchNpmRegistryWithRetry(params, reader) {
       });
       if (Date.now() >= deadlineMs) {
         await cancelNpmRegistryResponseBody(response);
-        throw new NpmRegistryUnavailableError(`${reader.label} deadline exceeded.`);
+        throw new NpmRegistryUnavailableError(
+          `${label} deadline exceeded. Retry readback, not publication.`,
+        );
       }
       if ([408, 429, 500, 502, 503, 504].includes(response.status)) {
         await cancelNpmRegistryResponseBody(response);
@@ -163,7 +169,9 @@ async function fetchNpmRegistryWithRetry(params, reader) {
       const body = await reader.read(response, signal);
       params.signal?.throwIfAborted();
       if (Date.now() >= deadlineMs) {
-        throw new NpmRegistryUnavailableError(`${reader.label} deadline exceeded.`);
+        throw new NpmRegistryUnavailableError(
+          `${label} deadline exceeded. Retry readback, not publication.`,
+        );
       }
       return { status: response.status, ok: true, body };
     } catch (error) {
@@ -174,8 +182,17 @@ async function fetchNpmRegistryWithRetry(params, reader) {
       params.signal?.throwIfAborted();
       if (
         !(error instanceof RetryableNpmRegistryError) &&
-        !["AbortError", "TimeoutError", "TypeError"].includes(error?.name) &&
-        !["ECONNRESET", "ETIMEDOUT", "EAI_AGAIN", "UND_ERR_SOCKET"].includes(error?.code)
+        !["AbortError", "TimeoutError"].includes(error?.name) &&
+        ![
+          "ECONNRESET",
+          "ECONNREFUSED",
+          "ETIMEDOUT",
+          "EAI_AGAIN",
+          "UND_ERR_SOCKET",
+          "UND_ERR_CONNECT_TIMEOUT",
+          "UND_ERR_HEADERS_TIMEOUT",
+          "UND_ERR_BODY_TIMEOUT",
+        ].some((code) => code === error?.code || code === error?.cause?.code)
       ) {
         throw error;
       }
@@ -185,7 +202,7 @@ async function fetchNpmRegistryWithRetry(params, reader) {
       const retryDelayMs = Math.max(attempt * 1000, lastError?.retryAfterMs ?? 0);
       if (retryDelayMs >= deadlineMs - Date.now()) {
         throw new NpmRegistryUnavailableError(
-          `${reader.label} deadline would be exceeded before the permitted retry.`,
+          `${label} deadline would be exceeded before the permitted retry. Retry readback, not publication.`,
           {
             cause: lastError,
           },
@@ -202,7 +219,7 @@ async function fetchNpmRegistryWithRetry(params, reader) {
 
   const message = lastError instanceof Error ? lastError.message : String(lastError);
   throw new NpmRegistryUnavailableError(
-    `${reader.label} did not return a stable response: ${message}.`,
+    `${label} did not return a stable response: ${message}. Retry readback, not publication.`,
     {
       cause: lastError,
     },
@@ -240,8 +257,11 @@ export async function fetchNpmRegistryPackumentWithRetry(params) {
       try {
         return JSON.parse(body);
       } catch (error) {
-        throw new RetryableNpmRegistryError(
-          `${params.packageName}: npm publication-route probe returned invalid JSON: ${error instanceof Error ? error.message : String(error)}.`,
+        // A completed response with invalid content is not registry propagation
+        // or a transport failure; never turn it into deferred publication success.
+        throw new Error(
+          `${params.packageName}: npm publication-route probe returned invalid JSON.`,
+          { cause: error },
         );
       }
     },
@@ -291,6 +311,9 @@ export function resolveNpmPublishPlan(version, currentBetaVersion, publishTagOve
   if (parsedVersion === null) {
     throw new Error(`Unsupported release version "${version}".`);
   }
+  if (parsedVersion.channel === "alpha" || publishTagOverride?.trim() === "alpha") {
+    throw new Error("Alpha releases are retired; use a beta prerelease instead.");
+  }
   const releaseTrain = classifyReleaseTrain(parsedVersion);
 
   const normalizedOverride = publishTagOverride?.trim();
@@ -316,13 +339,6 @@ export function resolveNpmPublishPlan(version, currentBetaVersion, publishTagOve
     return {
       channel: "beta",
       publishTag: "beta",
-      mirrorDistTags: [],
-    };
-  }
-  if (parsedVersion.channel === "alpha") {
-    return {
-      channel: "alpha",
-      publishTag: "alpha",
       mirrorDistTags: [],
     };
   }

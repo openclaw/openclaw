@@ -21,7 +21,7 @@ import {
 import { readChatInputRunIds } from "./chat-pending-inputs.ts";
 import type { ChatRunStartupPhase } from "./chat-run-startup.ts";
 import type { ChatHistoryHost, ChatState } from "./chat-state-contract.ts";
-import { readChatSessionSnapshot } from "./session-message-cache.ts";
+import { readChatHistoryCursor } from "./session-message-cache.ts";
 
 type LoadChatHistoryOptions = {
   deferBranches?: boolean;
@@ -54,6 +54,14 @@ export async function loadChatHistory(
   const client = state.client;
   const sessions = state.sessions;
   const connectionEpoch = state.connectionEpoch;
+  const connectionIsCurrent = () =>
+    state.connected &&
+    state.client === client &&
+    state.sessions === sessions &&
+    state.connectionEpoch === connectionEpoch;
+  const agentIsCurrent = () =>
+    !isUiSelectedGlobalSessionKey(state, sessionKey) ||
+    resolveUiSelectedSessionAgentId(state) === requestAgentId;
   const hydration = startup ? waitForInitialChatSnapshot(state) : undefined;
   if (hydration) {
     const version = requests.historyVersion;
@@ -62,13 +70,9 @@ export async function loadChatHistory(
     const current = await hydration;
     if (
       !current ||
-      !state.connected ||
-      state.client !== client ||
-      state.sessions !== sessions ||
-      state.connectionEpoch !== connectionEpoch ||
+      !connectionIsCurrent() ||
       !areUiSessionKeysEquivalent(state.sessionKey, sessionKey) ||
-      (isUiSelectedGlobalSessionKey(state, sessionKey) &&
-        resolveUiSelectedSessionAgentId(state) !== requestAgentId)
+      !agentIsCurrent()
     ) {
       return undefined;
     }
@@ -92,12 +96,7 @@ export async function loadChatHistory(
       }
     }
   }
-  const deltaCursor = state.chatMessagesBySession
-    ? readChatSessionSnapshot(state.chatMessagesBySession, state, {
-        sessionKey,
-        agentId: requestAgentId,
-      })?.deltaCursor
-    : undefined;
+  const deltaCursor = readChatHistoryCursor(state);
   const requestModeKey = deltaCursor === undefined ? "page" : `cursor:${deltaCursor}`;
   const inputRunIds = readChatInputRunIds(state);
   const requestKeyPrefix = JSON.stringify([
@@ -137,13 +136,9 @@ export async function loadChatHistory(
     refresh.promise = inFlight.promise.then(() => {
       if (
         requests.historyVersion !== version ||
-        !state.connected ||
-        state.client !== client ||
-        state.sessions !== sessions ||
-        state.connectionEpoch !== connectionEpoch ||
+        !connectionIsCurrent() ||
         state.sessionKey !== sessionKey ||
-        (isUiSelectedGlobalSessionKey(state, sessionKey) &&
-          resolveUiSelectedSessionAgentId(state) !== requestAgentId)
+        !agentIsCurrent()
       ) {
         return undefined;
       }
@@ -189,8 +184,7 @@ export async function loadChatHistory(
         });
       } else if (
         state.sessionKey === sessionKey &&
-        (!isUiSelectedGlobalSessionKey(state, sessionKey) ||
-          resolveUiSelectedSessionAgentId(state) === requestAgentId) &&
+        agentIsCurrent() &&
         (!state.connected ||
           current.client !== state.client ||
           current.sessions !== state.sessions ||

@@ -1,4 +1,6 @@
+import { StatementSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createCodexSessionInitializationFixtureForTest } from "../extensions/codex/test-api.js";
@@ -10,8 +12,11 @@ import {
 import { writeSessionEntry } from "../src/config/sessions/session-accessor.sqlite-entry-store.js";
 import { sessionRewindHandlers } from "../src/gateway/server-methods/sessions-rewind.js";
 import type { GatewayRequestContext } from "../src/gateway/server-methods/types.js";
+import * as sqliteAdmission from "../src/infra/sqlite-worker-operation-admission.js";
 import {
+  createPluginStateKeyedStore,
   createPluginStateSyncKeyedStore,
+  type OpenAsyncKeyedStoreOptions,
   type OpenKeyedStoreOptions,
 } from "../src/plugin-state/plugin-state-store.js";
 import { createEmptyPluginRegistry } from "../src/plugins/registry-empty.js";
@@ -22,17 +27,18 @@ import {
 import { withPluginRuntimeRegistryScope } from "../src/plugins/runtime/gateway-request-scope.js";
 import { createRuntimeAgent } from "../src/plugins/runtime/runtime-agent.js";
 import { createPluginRecord } from "../src/plugins/status.test-helpers.js";
-import {
-  readSessionUpstreamLink,
-  upsertSessionUpstreamLink,
-} from "../src/sessions/session-upstream-links.js";
+import { sessionChanges } from "../src/sessions/session-row-changes.js";
+import * as upstreamLinks from "../src/sessions/session-upstream-links.js";
+import { readSessionUpstreamLinkInDatabase } from "../src/sessions/session-upstream-links.kernel.js";
 import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
-  deferOpenClawAgentPostCommitPublication,
 } from "../src/state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../src/state/openclaw-state-db.js";
+import { observeMainThreadReads } from "../src/test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../src/test-utils/openclaw-test-state.js";
+
+const { upsertSessionUpstreamLink } = upstreamLinks;
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -52,6 +58,7 @@ describe("Codex initialization through the registered session deletion owner", (
       "source successor",
       "source successor during link write",
       "source successor during link cleanup",
+      "source link successor",
       "registry rotation",
       "rollback commit",
       "native cleanup",
@@ -67,8 +74,10 @@ describe("Codex initialization through the registered session deletion owner", (
         const runtime = createPluginRuntimeMock({
           agent,
           state: {
+            openKeyedStore: <T>(options: OpenAsyncKeyedStoreOptions) =>
+              createPluginStateKeyedStore<T>("codex", { ...options, env: state.env }),
             openSyncKeyedStore: <T>(options: OpenKeyedStoreOptions) =>
-              createPluginStateSyncKeyedStore<T>("codex", options),
+              createPluginStateSyncKeyedStore<T>("codex", { ...options, env: state.env }),
           },
         });
         const fixture = await createCodexSessionInitializationFixtureForTest({
@@ -76,7 +85,7 @@ describe("Codex initialization through the registered session deletion owner", (
           workspaceDir: state.workspaceDir,
         });
         const { params, sourceThread, forkedThread, native, bindingStore, harness } = fixture;
-        const sourceBinding = await bindingStore.read(fixture.sourceIdentity);
+        const sourceBinding = bindingStore.read(fixture.sourceIdentity);
         const sourceEntry = loadSessionEntry(params.source);
         let expectedSourceEntry = sourceEntry;
         const replaceSource = () => {
@@ -92,6 +101,105 @@ describe("Codex initialization through the registered session deletion owner", (
           expectedSourceEntry = loadSessionEntry({ ...params.source, readConsistency: "latest" });
         };
         const sourceHistory = await loadTranscriptEvents(params.source);
+        let linkOperation: "write" | "cleanup" | undefined;
+        let linkFailureInjected = false;
+        let linkGrantCount = 0;
+        let linkGrantReads = 0;
+        let rollbackCommitRefused = false;
+        let rejectReadinessCommit = false;
+        let readinessCommitRefused = false;
+        let readinessPublicationRefused = false;
+        let readyAtPublication: ReturnType<typeof loadSessionEntry>;
+        let stopReadinessPublication: (() => void) | undefined;
+        const reads = observeMainThreadReads();
+        const upsertAsync = upstreamLinks.upsertSessionUpstreamLinkWithCurrentSource;
+        const deleteAsync = upstreamLinks.deleteSessionUpstreamLinkAsync;
+        vi.spyOn(upstreamLinks, "upsertSessionUpstreamLinkWithCurrentSource").mockImplementation(
+          async (...args) => {
+            linkOperation = "write";
+            try {
+              return await upsertAsync(...args);
+            } finally {
+              linkOperation = undefined;
+            }
+          },
+        );
+        vi.spyOn(upstreamLinks, "deleteSessionUpstreamLinkAsync").mockImplementation(
+          async (...args) => {
+            linkOperation = "cleanup";
+            try {
+              return await deleteAsync(...args);
+            } finally {
+              linkOperation = undefined;
+            }
+          },
+        );
+        const createAdmission = sqliteAdmission.createSqliteWorkerOperationAdmission;
+        vi.spyOn(sqliteAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
+          (admit, attachment) => {
+            const operation = linkOperation;
+            if (
+              operation === "write" &&
+              failure === "source link successor" &&
+              !linkFailureInjected
+            ) {
+              // Replace the source after its command is captured, before the worker locks it.
+              expect(
+                upsertSessionUpstreamLink({
+                  ...expectDefined(
+                    readSessionUpstreamLinkInDatabase(
+                      openOpenClawStateDatabase().db,
+                      params.source.sessionKey,
+                      "main",
+                    ),
+                    "source link",
+                  ),
+                  threadId: "source-link-successor",
+                }),
+              ).toBe(true);
+              linkFailureInjected = true;
+            }
+            return createAdmission((request, grant) => {
+              if (
+                rejectReadinessCommit &&
+                request.stage === "commit" &&
+                isRecord(request.facts) &&
+                isRecord(request.facts.publication) &&
+                request.facts.publication.kind === "session-entry-patch-committed"
+              ) {
+                rejectReadinessCommit = false;
+                readinessCommitRefused = true;
+                throw new Error("injected readiness failure");
+              }
+              if (
+                operation &&
+                request.stage === "commit" &&
+                failure === `source successor during link ${operation}` &&
+                !linkFailureInjected
+              ) {
+                replaceSource();
+                linkFailureInjected = true;
+              }
+              const offsets = reads.calls.map((call) => call.mock.contexts.length);
+              try {
+                admit(request, grant);
+              } finally {
+                if (operation && (request.stage === "transaction" || request.stage === "commit")) {
+                  linkGrantCount++;
+                  for (const [index, call] of reads.calls.entries()) {
+                    linkGrantReads += call.mock.contexts
+                      .slice(offsets[index])
+                      .filter(
+                        (statement) =>
+                          statement instanceof StatementSync &&
+                          statement.sourceSQL.includes("session_upstream_links"),
+                      ).length;
+                  }
+                }
+              }
+            }, attachment);
+          },
+        );
         const registry = createEmptyPluginRegistry();
         registry.plugins.push(createPluginRecord({ id: "codex" }));
         registry.agentHarnesses.push({ pluginId: "codex", source: "runtime", harness });
@@ -155,17 +263,6 @@ describe("Codex initialization through the registered session deletion owner", (
               childSessionId = context.sessionId;
               params.targetKey = context.key;
               retained = context.initialization;
-              if (failure.startsWith("source successor during link")) {
-                const database = openOpenClawStateDatabase();
-                database.db.function("replace_initialization_source", () => {
-                  replaceSource();
-                  return 0;
-                });
-                const operation = failure.endsWith("write") ? "INSERT" : "DELETE";
-                database.db.exec(
-                  `CREATE TEMP TRIGGER replace_source AFTER ${operation} ON session_upstream_links BEGIN SELECT replace_initialization_source(); END`,
-                );
-              }
               if (failure === "callback") {
                 throw new Error("injected callback failure");
               }
@@ -182,7 +279,11 @@ describe("Codex initialization through the registered session deletion owner", (
                     marker: null,
                   }),
                 ).toBe(true);
-                successorLink = readSessionUpstreamLink(context.key, context.agentId);
+                successorLink = readSessionUpstreamLinkInDatabase(
+                  openOpenClawStateDatabase().db,
+                  context.key,
+                  context.agentId,
+                );
               }
               if (failure === "import") {
                 openOpenClawAgentDatabase({ agentId: "main" }).db.exec(
@@ -193,6 +294,7 @@ describe("Codex initialization through the registered session deletion owner", (
               if (!patch) {
                 throw new Error("Codex initializer did not return its final patch");
               }
+              rejectReadinessCommit = failure === "final readiness";
               return patch;
             },
           });
@@ -203,7 +305,7 @@ describe("Codex initialization through the registered session deletion owner", (
           return created;
         });
         let successorBinding: Awaited<ReturnType<typeof bindingStore.read>>;
-        let successorLink: ReturnType<typeof readSessionUpstreamLink>;
+        let successorLink: ReturnType<typeof readSessionUpstreamLinkInDatabase>;
         if (failure === "native cleanup") {
           native.archiveThread.mockRejectedValue(new Error("injected archive failure"));
           native.control.retireConnection = vi.fn();
@@ -233,21 +335,37 @@ describe("Codex initialization through the registered session deletion owner", (
               threadId: forkedThread.id,
               patch: { model: "successor-model" },
             });
-            successorBinding = await bindingStore.read(identity);
+            successorBinding = bindingStore.read(identity);
           }
           if (failure === "successor link") {
             expect(
               upsertSessionUpstreamLink({
-                ...expectDefined(readSessionUpstreamLink(params.targetKey, "main"), "created link"),
+                ...expectDefined(
+                  readSessionUpstreamLinkInDatabase(
+                    openOpenClawStateDatabase().db,
+                    params.targetKey,
+                    "main",
+                  ),
+                  "created link",
+                ),
                 marker: { turnId: "successor-turn", userMessageCount: 2 },
                 threadId: "successor-thread",
               }),
             ).toBe(true);
-            successorLink = readSessionUpstreamLink(params.targetKey, "main");
+            successorLink = readSessionUpstreamLinkInDatabase(
+              openOpenClawStateDatabase().db,
+              params.targetKey,
+              "main",
+            );
           }
           if (failure === "rollback commit") {
-            openOpenClawAgentDatabase({ agentId: "main" }).db.exec(
-              "CREATE TEMP TRIGGER reject_rollback BEFORE DELETE ON session_nodes BEGIN SELECT RAISE(ABORT, 'injected rollback failure'); END",
+            const database = openOpenClawAgentDatabase({ agentId: "main" });
+            database.db.function("observe_rollback_refusal", () => {
+              rollbackCommitRefused = true;
+              return 0;
+            });
+            database.db.exec(
+              "CREATE TEMP TRIGGER reject_rollback BEFORE DELETE ON session_nodes WHEN json_extract(OLD.entry_json, '$.initializationPending') = 1 BEGIN SELECT observe_rollback_refusal(); SELECT RAISE(ABORT, 'injected rollback failure'); END",
             );
           }
           if (
@@ -262,22 +380,31 @@ describe("Codex initialization through the registered session deletion owner", (
           ) {
             throw new Error("injected post-write failure");
           }
-          if (failure === "final readiness") {
-            openOpenClawAgentDatabase({ agentId: "main" }).db.exec(
-              "CREATE TEMP TRIGGER reject_readiness BEFORE UPDATE OF entry_json ON session_nodes WHEN json_extract(OLD.entry_json, '$.initializationPending') = 1 AND json_extract(NEW.entry_json, '$.initializationPending') IS NULL BEGIN SELECT RAISE(ABORT, 'injected readiness failure'); END",
-            );
-          }
           if (failure === "readiness publication") {
-            const database = openOpenClawAgentDatabase({ agentId: "main" });
-            database.db.function("inject_publication_failure", () => {
-              deferOpenClawAgentPostCommitPublication(database, () => {
-                throw new Error("injected readiness publication failure");
+            stopReadinessPublication = sessionChanges.subscribe((change) => {
+              if (
+                readinessPublicationRefused ||
+                !("sessionKey" in change) ||
+                change.sessionKey !== params.targetKey
+              ) {
+                return;
+              }
+              const ready = loadSessionEntry({
+                agentId: "main",
+                sessionKey: params.targetKey,
+                readConsistency: "latest",
               });
-              return 0;
+              if (
+                !ready ||
+                ready.sessionId !== childSessionId ||
+                ready.initializationPending === true
+              ) {
+                return;
+              }
+              readyAtPublication = ready;
+              readinessPublicationRefused = true;
+              throw new Error("injected readiness publication failure");
             });
-            database.db.exec(
-              "CREATE TEMP TRIGGER reject_publication AFTER UPDATE OF entry_json ON session_nodes WHEN json_extract(OLD.entry_json, '$.initializationPending') = 1 AND json_extract(NEW.entry_json, '$.initializationPending') IS NULL BEGIN SELECT inject_publication_failure(); END",
-            );
           }
           return attached;
         });
@@ -285,9 +412,39 @@ describe("Codex initialization through the registered session deletion owner", (
         const result = await withPluginRuntimeRegistryScope(
           registry,
           flow === "fork" ? invokeFork : fixture.adopt,
-        );
+        ).finally(() => stopReadinessPublication?.());
 
-        expect(result).toMatchObject({ status: "failed" });
+        if (failure === "rollback commit") {
+          expect(rollbackCommitRefused).toBe(true);
+        }
+        if (failure === "final readiness") {
+          expect(readinessCommitRefused).toBe(true);
+          expect(result.message).toContain("injected readiness failure");
+        }
+        if (failure === "readiness publication") {
+          expect(readinessPublicationRefused).toBe(true);
+          expect(readyAtPublication?.sessionId).toBe(childSessionId);
+          expect(readyAtPublication?.initializationPending).toBeUndefined();
+        }
+        if (failure.startsWith("source successor during link")) {
+          expect(linkFailureInjected).toBe(true);
+          expect(linkGrantCount).toBeGreaterThan(0);
+        }
+        if (failure === "source link successor") {
+          expect(linkFailureInjected).toBe(true);
+          expect(result.message).toContain("Session upstream source changed during initialization");
+          expect(
+            readSessionUpstreamLinkInDatabase(
+              openOpenClawStateDatabase().db,
+              params.source.sessionKey,
+              "main",
+            )?.threadId,
+          ).toBe("source-link-successor");
+        }
+        expect(linkGrantReads).toBe(0);
+        expect(result).toMatchObject({
+          status: failure === "readiness publication" ? "created" : "failed",
+        });
         const identity = {
           kind: "session" as const,
           agentId: "main",
@@ -295,8 +452,12 @@ describe("Codex initialization through the registered session deletion owner", (
           sessionId: expectDefined(childSessionId, "created child identity"),
         };
         const child = loadSessionEntry(identity);
-        const binding = await bindingStore.read(identity);
-        const link = readSessionUpstreamLink(params.targetKey, "main");
+        const binding = bindingStore.read(identity);
+        const link = readSessionUpstreamLinkInDatabase(
+          openOpenClawStateDatabase().db,
+          params.targetKey,
+          "main",
+        );
         if (failure === "lost response" || failure === "readiness publication") {
           expect(child?.initializationPending).toBeUndefined();
           expect(child?.sessionId).toBe(childSessionId);
@@ -363,9 +524,9 @@ describe("Codex initialization through the registered session deletion owner", (
             ),
           ).rejects.toThrow("owned by supervision");
           expect(loadSessionEntry(identity)).toEqual(child);
-          expect(await bindingStore.read(identity)).toEqual(binding);
+          expect(bindingStore.read(identity)).toEqual(binding);
         }
-        expect(await bindingStore.read(fixture.sourceIdentity)).toEqual(sourceBinding);
+        expect(bindingStore.read(fixture.sourceIdentity)).toEqual(sourceBinding);
         expect(loadSessionEntry(params.source)).toEqual(expectedSourceEntry);
         expect(await loadTranscriptEvents(params.source)).toEqual(sourceHistory);
         expect(native.archiveThread.mock.calls).not.toEqual(

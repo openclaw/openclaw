@@ -9,9 +9,7 @@ import { buildDiscordMessageProcessContext } from "./message-handler.context.js"
 import { hydrateDiscordMessageIfNeeded } from "./message-handler.hydration.js";
 import { createBaseDiscordMessageContext } from "./message-handler.test-harness.js";
 
-const TEST_TIMESTAMP = "2026-01-01T00:00:00.000Z";
-
-function createMessagePayload(overrides = {}) {
+function payload(overrides = {}) {
   return {
     id: "1001",
     channel_id: "c1",
@@ -21,15 +19,9 @@ function createMessagePayload(overrides = {}) {
     mentions: [],
     mention_roles: [],
     mention_everyone: false,
-    timestamp: TEST_TIMESTAMP,
+    timestamp: "2026-01-01T00:00:00.000Z",
     edited_timestamp: null,
-    author: {
-      id: "u1",
-      username: "alice",
-      global_name: null,
-      discriminator: "0",
-      avatar: null,
-    },
+    author: { id: "u1", username: "alice", global_name: null, discriminator: "0", avatar: null },
     type: MessageType.Default,
     tts: false,
     pinned: false,
@@ -37,37 +29,56 @@ function createMessagePayload(overrides = {}) {
     ...overrides,
   };
 }
-
-function createDefaultReplyPayload(overrides = {}) {
-  return createMessagePayload({
-    message_reference: {
-      type: MessageReferenceType.Default,
-      message_id: "1000",
-      channel_id: "c1",
-    },
+function reply(overrides = {}) {
+  return payload({
+    message_reference: { type: MessageReferenceType.Default, message_id: "1000", channel_id: "c1" },
     type: MessageType.Reply,
     ...overrides,
   });
 }
-
-function createReferencedMessagePayload(content: string) {
-  return createMessagePayload({
+function referenced(content: string, overrides = {}) {
+  return payload({
     id: "1000",
     content,
-    author: {
-      id: "u2",
-      username: "bob",
-      discriminator: "0",
-      avatar: null,
-    },
+    author: { id: "u2", username: "bob", bot: true, discriminator: "0", avatar: null },
+    ...overrides,
   });
+}
+function fixture(raw: ConstructorParameters<typeof Message>[1], responses: unknown[] = []) {
+  const client = createInternalTestClient();
+  const rest = createFakeRestClient(responses);
+  client.rest = rest;
+  const message = new Message(client, raw);
+  return {
+    rest,
+    message,
+    hydrate: () => hydrateDiscordMessageIfNeeded({ client, message, messageChannelId: "c1" }),
+  };
+}
+async function context(message: Message) {
+  const ctx = await createBaseDiscordMessageContext({
+    discordConfig: { allowBots: false },
+    botUserId: "bot",
+    message,
+    author: message.author,
+    baseText: message.content,
+    messageText: message.content,
+  });
+  const result = await buildDiscordMessageProcessContext({
+    ctx,
+    text: message.content,
+    mediaList: [],
+  });
+  if (!result) {
+    throw new Error("expected a built Discord message context");
+  }
+  return result.ctxPayload;
 }
 
 describe("hydrateDiscordMessageIfNeeded", () => {
   it("hydrates partial internal messages without assigning over getters", async () => {
-    const client = createInternalTestClient();
-    const rest = createFakeRestClient([
-      createMessagePayload({
+    const { hydrate } = fixture({ id: "1001", channelId: "c1" }, [
+      payload({
         content: "hello <@u2>",
         attachments: [{ id: "a1", filename: "note.txt" }],
         embeds: [{ title: "Embed" }],
@@ -81,289 +92,97 @@ describe("hydrateDiscordMessageIfNeeded", () => {
           },
         ],
         mention_roles: ["role1"],
-        mention_everyone: false,
-        referenced_message: createMessagePayload({
-          id: "1000",
-          content: "earlier",
-          author: {
-            id: "u3",
-            username: "carol",
-            discriminator: "0",
-            avatar: null,
-          },
-        }),
+        referenced_message: referenced("earlier"),
       }),
     ]);
-    const message = new Message<true>(client, {
-      id: "1001",
-      channelId: "c1",
-    }) as unknown as Message;
-
-    const { message: hydrated } = await hydrateDiscordMessageIfNeeded({
-      client: { rest },
-      message,
-      messageChannelId: "c1",
-    });
-
-    expect(hydrated).toBeInstanceOf(Message);
-    expect(hydrated.content).toBe("hello <@u2>");
-    expect(hydrated.attachments).toHaveLength(1);
-    expect(hydrated.embeds).toHaveLength(1);
-    expect(hydrated.mentionedUsers[0]?.globalName).toBe("Bob Builder");
-    expect(hydrated.mentionedRoles).toEqual(["role1"]);
-    expect(hydrated.referencedMessage?.content).toBe("earlier");
+    const { message } = await hydrate();
+    expect(message).toBeInstanceOf(Message);
+    expect(message.content).toBe("hello <@u2>");
+    expect(message.attachments).toHaveLength(1);
+    expect(message.embeds).toHaveLength(1);
+    expect(message.mentionedUsers[0]?.globalName).toBe("Bob Builder");
+    expect(message.mentionedRoles).toEqual(["role1"]);
+    expect(message.referencedMessage?.content).toBe("earlier");
   });
 
   it("reports current-message hydration failures as unavailable", async () => {
-    const client = createInternalTestClient();
-    const rest = createFakeRestClient();
-    rest.get = vi.fn(async () => {
-      throw new Error("Discord REST unavailable");
-    });
-    const message = new Message(
-      client,
-      createMessagePayload({
-        content: "hello <@123>",
-      }),
-    );
-
-    const outcome = await hydrateDiscordMessageIfNeeded({
-      client: { rest },
-      message,
-      messageChannelId: "c1",
-    });
-
-    expect(outcome).toEqual({ kind: "unavailable", message });
+    const { rest, message, hydrate } = fixture(payload({ content: "hello <@123>" }));
+    rest.get = vi.fn().mockRejectedValue(new Error("Discord REST unavailable"));
+    expect(await hydrate()).toEqual({ kind: "unavailable", message });
   });
 
-  it("uses referenced messages supplied by current-message hydration", async () => {
-    const client = createInternalTestClient();
-    const rest = createFakeRestClient([
-      createDefaultReplyPayload({
-        content: "hello <@123>",
-        mentions: [
-          {
-            id: "123",
-            username: "bob",
-            global_name: null,
-            discriminator: "0",
-            avatar: null,
-          },
-        ],
-        referenced_message: createReferencedMessagePayload("the replied-to message"),
-      }),
-    ]);
-    const message = new Message(
-      client,
-      createDefaultReplyPayload({
-        content: "hello <@123>",
-      }),
-    );
-
-    const { message: hydrated } = await hydrateDiscordMessageIfNeeded({
-      client: { rest },
-      message,
-      messageChannelId: "c1",
-    });
-
-    expect(rest.calls.map((call) => call.path)).toEqual(["/channels/c1/messages/1001"]);
-    expect(hydrated.referencedMessage?.content).toBe("the replied-to message");
-  });
-
-  it.each([undefined, "u2"])("fetches missing reply context (botUserId=%s)", async (botUserId) => {
-    const client = createInternalTestClient();
-    const rest = createFakeRestClient([
-      createReferencedMessagePayload("the directly fetched message"),
-    ]);
-    const message = new Message(
-      client,
-      createDefaultReplyPayload({
+  it("fetches empty bot reply context from its referenced channel", async () => {
+    const text = "Release repair: https://github.com/example/project/pull/42";
+    const { rest, hydrate } = fixture(
+      reply({
+        referenced_message: referenced(""),
+        message_reference: {
+          type: MessageReferenceType.Default,
+          message_id: "1000",
+          channel_id: "c2",
+        },
         content: "<@bot> ok do it",
         mentions: [
-          {
-            id: "bot",
-            username: "openclaw",
-            global_name: null,
-            discriminator: "0",
-            avatar: null,
-          },
+          { id: "bot", username: "openclaw", global_name: null, discriminator: "0", avatar: null },
         ],
       }),
+      [referenced(text)],
     );
-
-    const { message: hydrated } = await hydrateDiscordMessageIfNeeded({
-      client: { rest },
-      message,
-      messageChannelId: "c1",
-    });
-
-    expect(rest.calls.map((call) => call.path)).toEqual(["/channels/c1/messages/1000"]);
-    expect(hydrated.referencedMessage?.content).toBe("the directly fetched message");
-
-    const ctx = await createBaseDiscordMessageContext({
-      botUserId,
-      message: hydrated,
-      author: hydrated.author,
-      baseText: hydrated.content,
-      messageText: hydrated.content,
-    });
-    const result = await buildDiscordMessageProcessContext({
-      ctx,
-      text: hydrated.content,
-      mediaList: [],
-    });
-    if (!result) {
-      throw new Error("expected a built Discord message context");
-    }
-
-    expect(result.ctxPayload.ReplyToId).toBe("1000");
-    expect(result.ctxPayload.ReplyToBody).toBe("the directly fetched message");
+    const { message } = await hydrate();
+    expect(rest.calls.map((call) => call.path)).toEqual(["/channels/c2/messages/1000"]);
+    expect(message.referencedMessage?.content).toBe(text);
+    expect(await context(message)).toMatchObject({ ReplyToId: "1000", ReplyToBody: text });
   });
 
   it("replaces a mismatched nested reply with the canonical referenced message", async () => {
-    const client = createInternalTestClient();
-    const rest = createFakeRestClient([
-      createReferencedMessagePayload("the canonical reply target"),
-    ]);
-    const message = new Message(
-      client,
-      createDefaultReplyPayload({
-        referenced_message: createMessagePayload({
-          id: "stale-message",
-          content: "unrelated older context",
-        }),
+    const { rest, hydrate } = fixture(
+      reply({
+        referenced_message: referenced("unrelated older context", { id: "stale-message" }),
       }),
+      [referenced("the canonical reply target")],
     );
-
-    const { message: hydrated } = await hydrateDiscordMessageIfNeeded({
-      client: { rest },
-      message,
-      messageChannelId: "c1",
-    });
-
+    const { message } = await hydrate();
     expect(rest.calls.map((call) => call.path)).toEqual(["/channels/c1/messages/1000"]);
-    expect(hydrated.referencedMessage?.id).toBe("1000");
-    expect(hydrated.referencedMessage?.content).toBe("the canonical reply target");
-
-    const ctx = await createBaseDiscordMessageContext({
-      message: hydrated,
-      author: hydrated.author,
-      baseText: hydrated.content,
-      messageText: hydrated.content,
+    expect(message.referencedMessage?.id).toBe("1000");
+    expect(message.referencedMessage?.content).toBe("the canonical reply target");
+    expect(await context(message)).toMatchObject({
+      ReplyToId: "1000",
+      ReplyToBody: "the canonical reply target",
     });
-    const result = await buildDiscordMessageProcessContext({
-      ctx,
-      text: hydrated.content,
-      mediaList: [],
-    });
-    if (!result) {
-      throw new Error("expected a built Discord message context");
-    }
-
-    expect(result.ctxPayload.ReplyToId).toBe("1000");
-    expect(result.ctxPayload.ReplyToBody).toBe("the canonical reply target");
-    expect(result.ctxPayload.ReplyToBody).not.toContain("unrelated older context");
   });
 
   it("discards a mismatched nested reply when canonical hydration fails", async () => {
-    const client = createInternalTestClient();
-    const rest = createFakeRestClient();
-    rest.get = vi.fn(async () => {
-      throw Object.assign(new Error("Missing Access"), { status: 403 });
-    });
-    const message = new Message(
-      client,
-      createDefaultReplyPayload({
-        referenced_message: createMessagePayload({
-          id: "stale-message",
-          content: "unrelated older context",
-        }),
+    const { rest, hydrate } = fixture(
+      reply({
+        referenced_message: referenced("unrelated older context", { id: "stale-message" }),
       }),
     );
-
-    const { message: hydrated } = await hydrateDiscordMessageIfNeeded({
-      client: { rest },
-      message,
-      messageChannelId: "c1",
-    });
-
-    expect(hydrated.referencedMessage).toBeNull();
-
-    const ctx = await createBaseDiscordMessageContext({
-      message: hydrated,
-      author: hydrated.author,
-      baseText: hydrated.content,
-      messageText: hydrated.content,
-    });
-    const result = await buildDiscordMessageProcessContext({
-      ctx,
-      text: hydrated.content,
-      mediaList: [],
-    });
-    if (!result) {
-      throw new Error("expected a built Discord message context");
-    }
-
-    expect(result.ctxPayload.ReplyToId).toBeUndefined();
-    expect(result.ctxPayload.ReplyToBody).toBeUndefined();
-  });
-
-  it("uses the referenced channel when directly hydrating a cross-channel reply", async () => {
-    const client = createInternalTestClient();
-    const reply = createDefaultReplyPayload({
-      message_reference: {
-        type: MessageReferenceType.Default,
-        message_id: "1000",
-        channel_id: "c2",
-      },
-    });
-    const rest = createFakeRestClient([
-      createReferencedMessagePayload("the cross-channel message"),
-    ]);
-    const message = new Message(client, reply);
-
-    const { message: hydrated } = await hydrateDiscordMessageIfNeeded({
-      client: { rest },
-      message,
-      messageChannelId: "c1",
-    });
-
-    expect(rest.calls[0]?.path).toBe("/channels/c2/messages/1000");
-    expect(hydrated.referencedMessage?.content).toBe("the cross-channel message");
+    rest.get = vi
+      .fn()
+      .mockRejectedValue(Object.assign(new Error("Missing Access"), { status: 403 }));
+    const { message } = await hydrate();
+    expect(message.referencedMessage).toBeNull();
+    const result = await context(message);
+    expect(result.ReplyToId).toBe("1000");
+    expect(result.ReplyToBody).toBeUndefined();
   });
 
   it("keeps the original reply message when hydration fetch fails", async () => {
-    const client = createInternalTestClient();
-    const rest = createFakeRestClient();
-    const get = vi.fn(async () => {
-      throw Object.assign(new Error("Missing Access"), { status: 403 });
-    });
+    const { rest, message, hydrate } = fixture(reply());
+    const get = vi
+      .fn()
+      .mockRejectedValue(Object.assign(new Error("Missing Access"), { status: 403 }));
     rest.get = get;
-    const message = new Message(client, createDefaultReplyPayload());
-
-    const { message: hydrated } = await hydrateDiscordMessageIfNeeded({
-      client: { rest },
-      message,
-      messageChannelId: "c1",
-    });
-
+    const hydrated = await hydrate();
     expect(get).toHaveBeenCalledOnce();
-    expect(hydrated).toBe(message);
-    expect(hydrated.referencedMessage).toBeNull();
+    expect(hydrated.message).toBe(message);
+    expect(hydrated.message.referencedMessage).toBeNull();
   });
 
   it("does not hydrate known-deleted or forwarded references", async () => {
-    const client = createInternalTestClient();
-    const rest = createFakeRestClient();
-    const deletedReply = new Message(
-      client,
-      createDefaultReplyPayload({
-        referenced_message: null,
-      }),
-    );
-    const forwardedMessage = new Message(
-      client,
-      createMessagePayload({
+    const deleted = fixture(reply({ referenced_message: null }));
+    const forwarded = fixture(
+      payload({
         message_reference: {
           type: MessageReferenceType.Forward,
           message_id: "1000",
@@ -371,18 +190,9 @@ describe("hydrateDiscordMessageIfNeeded", () => {
         },
       }),
     );
-
-    await hydrateDiscordMessageIfNeeded({
-      client: { rest },
-      message: deletedReply,
-      messageChannelId: "c1",
-    });
-    await hydrateDiscordMessageIfNeeded({
-      client: { rest },
-      message: forwardedMessage,
-      messageChannelId: "c1",
-    });
-
-    expect(rest.calls).toHaveLength(0);
+    await deleted.hydrate();
+    await forwarded.hydrate();
+    expect(deleted.rest.calls).toHaveLength(0);
+    expect(forwarded.rest.calls).toHaveLength(0);
   });
 });

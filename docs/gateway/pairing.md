@@ -107,9 +107,9 @@ openclaw devices list
 openclaw devices approve <deviceRequestId>
 ```
 
-Restart the installed node with `openclaw node restart`, or stop and rerun its
-foreground command. A node paused on `PAIRING_REQUIRED` does not resume after
-manual approval. Its reconnect creates the separate command-surface request:
+Headless node hosts keep reconnecting while device approval is pending, with
+exponential backoff capped at 30 seconds. After approval, the next reconnect
+creates the separate command-surface request:
 
 ```bash
 openclaw nodes pending
@@ -117,6 +117,10 @@ openclaw nodes approve <nodeRequestId>
 openclaw nodes status
 openclaw nodes describe --node <idOrNameOrIp>
 ```
+
+If an older client already reports that reconnect is paused, restart the
+installed node with `openclaw node restart`, or stop and rerun its foreground
+command once.
 
 The device and node request IDs are distinct. To reject a surface request or
 manage an existing node instead:
@@ -233,8 +237,22 @@ Gateway token.
 
 By default, trusted local connections silently approve first-time device
 pairing plus role and scope upgrades. This keeps normal same-host and SSH
-tunnel reconnects convenient. Operators using shell-less, port-forward-only
-SSH keys or a multi-user Mac can require explicit approval for every device:
+tunnel reconnects convenient. A native app that already paired as an operator
+can add its first node role with the same device identity without a device
+approval prompt, including retries of a pending request labeled as a repair.
+This preserves its operator token. The Gateway also approves the initial node
+capability surface directly for a silently paired, non-browser local device,
+including a native app using remote mode to connect to a Gateway on the same
+machine. No app-side SSH check or approval panel is needed.
+
+This uses the same-machine, same-user trust boundary. Gateway command denies
+and node-local OS permissions and exec approvals still apply. Later capability
+surface upgrades and explicitly revoked node tokens still require approval.
+Remote, trusted-CIDR, browser, and proxy connections do not gain local approval
+from a device's earlier silent pairing.
+
+Operators using shell-less, port-forward-only SSH keys or a multi-user Mac can
+require explicit approval for every device:
 
 ```json5
 {
@@ -248,9 +266,11 @@ SSH keys or a multi-user Mac can require explicit approval for every device:
 }
 ```
 
-With this setting, new pairing requests, role upgrades, and scope upgrades use
-the normal approval flow even when the connection is local. Metadata-only
-reconnect refreshes remain automatic so routine client or OS metadata changes
+With this setting, new pairing requests, role upgrades, scope upgrades, and
+initial node capability requests use the normal approval flow even when the
+connection is local. Re-enabling local auto-approval allows an unapproved initial
+surface to be approved on reconnect, including one previously rejected.
+Metadata-only reconnect refreshes remain automatic so routine client or OS metadata changes
 do not create approval churn.
 
 ## SSH-verified device auto-approval (default)
@@ -275,15 +295,15 @@ Enabled by default. Requirements for it to fire:
 - Same eligibility floor as trusted-CIDR approval: fresh scopeless node
   pairing only; upgrades, browsers, Control UI, and WebChat always prompt.
 
-While a probe is running, the node client is told to keep retrying
-(`wait_then_retry`) instead of pausing for manual approval; if the probe
-fails, the next attempt falls back to the normal prompt flow. Failed targets
-get a short cooldown (5 minutes after a key mismatch).
+While device approval is pending, the node client is told to keep retrying
+(`wait_then_retry`), including while an SSH check is running. If the check fails,
+the request remains available for manual approval and the node keeps retrying.
+Failed SSH targets get a short cooldown (5 minutes after a key mismatch).
 
 Pairing settings hot-apply without restarting the Gateway. Automatic approvals
 recheck the current policy immediately before granting access, even if an SSH
-probe or store lock was already pending when the policy changed. Changes to SSH
-verification settings use a fresh probe and do not inherit the previous policy’s
+check or store lock was already pending when the policy changed. Changes to SSH
+verification settings use a fresh check and do not inherit the previous policy’s
 cooldown. Already paired devices remain paired.
 
 Approved devices record `approvedVia: "ssh-verified"` and their first declared
@@ -301,8 +321,8 @@ Harden or disable:
       pairing: {
         // Disable entirely:
         sshVerify: false,
-        // ...or scope/tune the probe:
-        // sshVerify: { user: "me", identity: "~/.ssh/probe", timeoutMs: 7000, cidrs: ["10.0.0.0/8"] },
+        // ...or scope/tune the check:
+        // sshVerify: { user: "me", identity: "~/.ssh/check", timeoutMs: 7000, cidrs: ["10.0.0.0/8"] },
       },
     },
   },

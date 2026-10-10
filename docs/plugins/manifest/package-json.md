@@ -90,7 +90,7 @@ Runtime entrypoint fields do not override package-boundary checks for source ent
 }
 ```
 
-Use it when setup, doctor, status, or read-only presence flows need a cheap yes/no auth probe before the full channel plugin loads. Persisted auth state is not configured channel state: do not use this metadata to auto-enable plugins, repair runtime dependencies, or decide whether a channel runtime should load. The target export should be a small function that reads persisted state only; do not route it through the full channel runtime barrel.
+Use it when setup, doctor, status, or read-only presence flows need a cheap yes/no auth check before the full channel plugin loads. Persisted auth state is not configured channel state: do not use this metadata to auto-enable plugins, repair runtime dependencies, or decide whether a channel runtime should load. The target export should be a small function that reads persisted state only; do not route it through the full channel runtime barrel.
 
 A `persistedAuthState` checker whose data comes exclusively from the host's keyed plugin-state store may declare `"backingStore": "plugin-state"`. Before loading that checker, OpenClaw asks the existing state-read owner whether the backing database is definitely absent. An active retained snapshot, cached open handle, existing file or symlink, or uncertain filesystem result keeps the normal checker path. The absence result is not cached, so state created later in the same process is still discovered. This fact does not establish authentication or grant state access; the checker still validates existing records. Omit it for checkers that can find persisted auth in other stores or files. Older hosts ignore the optional fact and run the checker normally.
 
@@ -111,7 +111,7 @@ A `persistedAuthState` checker whose data comes exclusively from the host's keye
 }
 ```
 
-Use `env.allOf` when every listed variable is required and `env.anyOf` when any one non-empty variable is enough. If a tiny non-runtime check needs more than environment metadata, use `specifier` plus `exportName` as shown for `persistedAuthState`. A complete, non-empty `specifier` and `exportName` pair takes precedence over `env`. If either field is absent or blank, the probe uses its `env` metadata without loading a module.
+Use `env.allOf` when every listed variable is required and `env.anyOf` when any one non-empty variable is enough. If a tiny non-runtime check needs more than environment metadata, use `specifier` plus `exportName` as shown for `persistedAuthState`. A complete, non-empty `specifier` and `exportName` pair takes precedence over `env`. If either field is absent or blank, the check uses its `env` metadata without loading a module.
 
 Declared `configuredState` metadata owns both positive and negative bootstrap
 results. A negative result does not fall through to runtime hooks or stored
@@ -120,7 +120,7 @@ credentials. Channels without that declaration retain the legacy
 stored credentials use `config.hasConfiguredStateAsync`; keep them separate
 from activation based on config and environment variables.
 
-For both state probes, OpenClaw builds rewrite source specifiers only for complete module pairs, naming the exact emitted JavaScript artifact, including its `.js` or `.cjs` extension. Env-backed incomplete pairs are preserved unchanged. Built checkout metadata uses paths relative to the plugin root; standalone packages use the plugin-local `dist/` directory.
+For both state checks, OpenClaw builds rewrite source specifiers only for complete module pairs, naming the exact emitted JavaScript artifact, including its `.js` or `.cjs` extension. Env-backed incomplete pairs are preserved unchanged. Built checkout metadata uses paths relative to the plugin root; standalone packages use the plugin-local `dist/` directory.
 
 ## Discovery precedence (duplicate plugin ids)
 
@@ -139,4 +139,4 @@ Implications:
 
 - An auto-discovered workspace or untracked global copy will not shadow a bundled plugin, even when its id is enabled or allowlisted. `plugins.allow` and `plugins.entries.<id>.enabled` control load permission, not source selection.
 - To override a bundled plugin intentionally, select its path via `plugins.load.paths`. A tracked global install can also override an ordinary bundled copy, but not a development-source bundled copy.
-- Duplicate warnings identify the discarded copy and selected source, with config-selected winners labeled as explicit overrides. Intentional tracked-install overrides of ordinary bundled copies do not emit duplicate warnings.
+- Explicit config-selected overrides emit one informational diagnostic per plugin per discovery generation, without a config warning. Ambiguous selections and other unexpected duplicates still warn and identify the discarded copy and selected source. Intentional tracked-install overrides of ordinary bundled copies do not emit duplicate warnings.

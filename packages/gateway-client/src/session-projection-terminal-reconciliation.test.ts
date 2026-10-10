@@ -23,6 +23,18 @@ function createAssistantMessage(text: string, metadata?: Record<string, unknown>
   };
 }
 
+function projectTerminal(runId: string, message: unknown, cloneLive = false) {
+  const state = reduceSessionProjection(createSessionProjection(scope), {
+    type: "runTerminal",
+    runId,
+    status: "completed",
+    message,
+  });
+  return projectLiveSessionMessage(state, cloneLive ? structuredClone(message) : message, {
+    runId,
+  });
+}
+
 describe("terminal snapshot reconciliation", () => {
   it("adopts a durable answer when its live terminal also carries a status notice", () => {
     const runId = "fallback-status-run";
@@ -150,13 +162,7 @@ describe("terminal snapshot reconciliation", () => {
       content: [{ text: "The repair is complete.", type: "text" }],
       __openclaw: { id: "assistant-final", seq: 4, runId, runTerminal: true },
     };
-    let state = reduceSessionProjection(createSessionProjection(scope), {
-      type: "runTerminal",
-      runId,
-      status: "completed",
-      message: synthetic,
-    });
-    state = projectLiveSessionMessage(state, structuredClone(synthetic), { runId });
+    const state = projectTerminal(runId, synthetic, true);
 
     expect(
       reconcileSessionProjectionSnapshot(state, [toolBoundary, persisted], scope).messages,
@@ -174,42 +180,9 @@ describe("terminal snapshot reconciliation", () => {
       stopReason: "stop",
       __openclaw: { id: "assistant-final", seq: 4 },
     };
-    let state = reduceSessionProjection(createSessionProjection(scope), {
-      type: "runTerminal",
-      runId,
-      status: "completed",
-      message: synthetic,
-    });
-    state = projectLiveSessionMessage(state, structuredClone(synthetic), { runId });
+    const state = projectTerminal(runId, synthetic, true);
 
     expect(reconcileSessionProjectionSnapshot(state, [persisted], scope).messages).toEqual([
-      persisted,
-    ]);
-  });
-
-  it("promotes a trailing unmarked terminal after the durable same-run user turn", () => {
-    const runId = "browser-run";
-    const user = {
-      role: "user",
-      content: [{ text: "Please finish the repair.", type: "text" }],
-      __openclaw: { id: "user-prompt", idempotencyKey: `${runId}:user`, seq: 1 },
-    };
-    const synthetic = createAssistantMessage("The browser repair is complete.");
-    const persisted = createAssistantMessage("The browser repair is complete.", {
-      id: "assistant-final",
-      seq: 2,
-      runId,
-    });
-    let state = reduceSessionProjection(createSessionProjection(scope), {
-      type: "runTerminal",
-      runId,
-      status: "completed",
-      message: synthetic,
-    });
-    state = projectLiveSessionMessage(state, structuredClone(synthetic), { runId });
-
-    expect(reconcileSessionProjectionSnapshot(state, [user, persisted], scope).messages).toEqual([
-      user,
       persisted,
     ]);
   });
@@ -230,9 +203,13 @@ describe("terminal snapshot reconciliation", () => {
       type: "runTerminal",
       runId,
       status: "completed",
-      message: "The repair is complete.",
+      message: { role: "assistant", content: "The repair is complete." },
     });
-    state = projectLiveSessionMessage(state, "The repair is complete.", { runId });
+    state = projectLiveSessionMessage(
+      state,
+      { role: "assistant", content: "The repair is complete." },
+      { runId },
+    );
 
     expect(reconcileSessionProjectionSnapshot(state, [user, persisted], scope).messages).toEqual([
       user,
@@ -261,13 +238,7 @@ describe("terminal snapshot reconciliation", () => {
       ],
       __openclaw: { id: "assistant-tool-boundary", seq: 3, runId },
     };
-    let state = reduceSessionProjection(createSessionProjection(scope), {
-      type: "runTerminal",
-      runId,
-      status: "completed",
-      message: synthetic,
-    });
-    state = projectLiveSessionMessage(state, synthetic, { runId });
+    let state = projectTerminal(runId, synthetic);
     state = reconcileSessionProjectionSnapshot(state, [user, earlier], scope);
     expect(state.messages).toEqual([user, earlier]);
 
@@ -295,13 +266,7 @@ describe("terminal snapshot reconciliation", () => {
         }),
         ...(evidence === "stopReason" ? { stopReason: "stop" } : {}),
       };
-      let state = reduceSessionProjection(createSessionProjection(scope), {
-        type: "runTerminal",
-        runId,
-        status: "completed",
-        message: synthetic,
-      });
-      state = projectLiveSessionMessage(state, synthetic, { runId });
+      let state = projectTerminal(runId, synthetic);
       state = reconcileSessionProjectionSnapshot(state, [user, persisted], scope);
       expect(state.messages).toEqual([user, persisted]);
 
@@ -337,13 +302,7 @@ describe("terminal snapshot reconciliation", () => {
       ],
       __openclaw: { id: "assistant-tool-boundary", seq: 3, runId },
     };
-    let state = reduceSessionProjection(createSessionProjection(scope), {
-      type: "runTerminal",
-      runId,
-      status: "completed",
-      message: synthetic,
-    });
-    state = projectLiveSessionMessage(state, synthetic, { runId });
+    const state = projectTerminal(runId, synthetic);
 
     expect(
       reconcileSessionProjectionSnapshot(state, [user, earlier, laterToolBoundary], scope).messages,
@@ -358,13 +317,7 @@ describe("terminal snapshot reconciliation", () => {
       seq: 2,
       runId,
     });
-    let state = reduceSessionProjection(createSessionProjection(scope), {
-      type: "runTerminal",
-      runId,
-      status: "completed",
-      message: synthetic,
-    });
-    state = projectLiveSessionMessage(state, synthetic, { runId });
+    const state = projectTerminal(runId, synthetic);
 
     expect(reconcileSessionProjectionSnapshot(state, [earlier], scope).messages).toEqual([
       earlier,
@@ -385,13 +338,7 @@ describe("terminal snapshot reconciliation", () => {
       seq: 3,
       runId,
     });
-    let state = reduceSessionProjection(createSessionProjection(scope), {
-      type: "runTerminal",
-      runId,
-      status: "completed",
-      message: synthetic,
-    });
-    state = projectLiveSessionMessage(state, synthetic, { runId });
+    const state = projectTerminal(runId, synthetic);
 
     expect(reconcileSessionProjectionSnapshot(state, [first, second], scope).messages).toEqual([
       first,

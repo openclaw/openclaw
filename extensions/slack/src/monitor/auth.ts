@@ -12,17 +12,22 @@ import {
   resolveExpiresAtMsFromDurationMs,
 } from "openclaw/plugin-sdk/number-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { normalizeStringEntriesLower } from "openclaw/plugin-sdk/string-normalization-runtime";
 import { collectSlackCursorPages } from "../cursor-pages.js";
 import { getSlackRuntime } from "../runtime.js";
 import {
   allowListMatches,
-  normalizeAllowListLower,
   normalizeSlackAllowOwnerEntry,
   resolveSlackUserAllowListForTeam,
 } from "./allow-list.js";
 import { resolveSlackChannelConfig } from "./channel-config.js";
-import { inferSlackChannelType, resolveSlackChatType } from "./channel-type.js";
-import { normalizeSlackChannelType, type SlackMonitorContext } from "./context.js";
+import {
+  inferSlackChannelType,
+  normalizeSlackChannelType,
+  parseSlackChannelType,
+  resolveSlackChatType,
+} from "./channel-type.js";
+import type { SlackMonitorContext } from "./context.js";
 import type { SlackEventScope } from "./event-scope.js";
 import {
   createSlackIngressSubject,
@@ -45,7 +50,7 @@ const slackChannelMembersCache = new WeakMap<
   SlackMonitorContext,
   Map<string, SlackChannelMembersCacheEntry>
 >();
-const DEFAULT_CHANNEL_MEMBERS_CACHE_TTL_MS = 60_000;
+const CHANNEL_MEMBERS_CACHE_TTL_MS = 60_000;
 const CHANNEL_MEMBERS_CACHE_MAX = 512;
 const SLACK_CHANNEL_ID = "slack";
 export class SlackSystemEventAuthRetryError extends Error {}
@@ -57,15 +62,6 @@ function createSlackIngressResolver(ctx: SlackMonitorContext) {
     identity: slackIngressIdentity,
     cfg: ctx.cfg,
   });
-}
-
-function readSlackCacheTtlMs(envName: string, fallback: number): number {
-  const raw = process.env[envName]?.trim();
-  if (!raw) {
-    return fallback;
-  }
-  const parsed = /^\d+$/.test(raw) ? Number(raw) : Number.NaN;
-  return Number.isSafeInteger(parsed) ? parsed : fallback;
 }
 
 function getChannelMembersCache(
@@ -119,7 +115,7 @@ async function fetchSlackChannelMemberIds(
         limit: 999,
         ...(cursor ? { cursor } : {}),
       }),
-    collectPageItems: (response) => normalizeAllowListLower(response.members),
+    collectPageItems: (response) => normalizeStringEntriesLower(response.members),
   });
   return new Set(members);
 }
@@ -131,15 +127,11 @@ async function resolveSlackChannelMemberIds(
 ): Promise<Set<string>> {
   const cache = getChannelMembersCache(ctx);
   const key = `${ctx.accountId}:${eventScope ? `${eventScope.teamId}:` : ""}${channelId}`;
-  const ttlMs = readSlackCacheTtlMs(
-    "OPENCLAW_SLACK_CHANNEL_MEMBERS_CACHE_TTL_MS",
-    DEFAULT_CHANNEL_MEMBERS_CACHE_TTL_MS,
-  );
   const rawNowMs = Date.now();
   const nowMs = asDateTimestampMs(rawNowMs);
   const cached = cache.get(key);
   if (cached?.members) {
-    if (ttlMs > 0 && nowMs !== undefined && cached.expiresAtMs >= nowMs) {
+    if (nowMs !== undefined && cached.expiresAtMs >= nowMs) {
       return cached.members;
     }
     cache.delete(key);
@@ -149,8 +141,9 @@ async function resolveSlackChannelMemberIds(
   }
 
   const pending = fetchSlackChannelMemberIds(ctx, channelId, eventScope);
-  const pendingExpiresAtMs =
-    ttlMs > 0 ? resolveExpiresAtMsFromDurationMs(ttlMs, { nowMs: rawNowMs }) : undefined;
+  const pendingExpiresAtMs = resolveExpiresAtMsFromDurationMs(CHANNEL_MEMBERS_CACHE_TTL_MS, {
+    nowMs: rawNowMs,
+  });
   cache.set(key, {
     expiresAtMs: pendingExpiresAtMs ?? 0,
     pending,
@@ -158,7 +151,7 @@ async function resolveSlackChannelMemberIds(
   pruneMapToMaxSize(cache, CHANNEL_MEMBERS_CACHE_MAX);
   try {
     const members = await pending;
-    const membersExpiresAtMs = ttlMs > 0 ? resolveExpiresAtMsFromDurationMs(ttlMs) : undefined;
+    const membersExpiresAtMs = resolveExpiresAtMsFromDurationMs(CHANNEL_MEMBERS_CACHE_TTL_MS);
     if (membersExpiresAtMs !== undefined) {
       cache.set(key, {
         expiresAtMs: membersExpiresAtMs,
@@ -197,7 +190,7 @@ export async function authorizeSlackBotRoomMessage(params: {
   allowFromLower: string[];
   eventScope?: SlackEventScope;
 }): Promise<boolean> {
-  const channelUserAllowList = normalizeAllowListLower(params.channelUsers).filter(
+  const channelUserAllowList = normalizeStringEntriesLower(params.channelUsers).filter(
     (entry) => entry !== "*",
   );
   if (
@@ -249,6 +242,7 @@ export async function resolveSlackCommandIngress(params: {
   ctx: SlackMonitorContext;
   teamId?: string;
   senderId: string;
+  senderAuthentication?: "verified" | "asserted";
   senderName?: string;
   channelType: SlackIngressChannelType;
   channelId: string;
@@ -277,13 +271,14 @@ export async function resolveSlackCommandIngress(params: {
     teamId,
   });
   const channelUsersConfigured =
-    !isDirectMessage && !isGroupDm && normalizeAllowListLower(params.channelUsers).length > 0;
+    !isDirectMessage && !isGroupDm && normalizeStringEntriesLower(params.channelUsers).length > 0;
   // MPIM ingress is group-shaped, but its sender policy is DM-owned. Callers
   // pass configured allowFrom without pairing-store approvals for this path.
   const groupAllowFrom = isGroupDm ? ownerAllowFrom : channelUsersConfigured ? channelUsers : [];
   return await createSlackIngressResolver(params.ctx).message({
     subject: createSlackIngressSubject({
       senderId: params.senderId,
+      senderAuthentication: params.senderAuthentication,
       senderName: params.senderName,
       teamId,
     }),
@@ -342,7 +337,7 @@ async function decideSlackSystemIngress(params: {
     teamId,
   });
   const channelUsersConfigured =
-    !isDirectMessage && !isGroupDm && normalizeAllowListLower(params.channelUsers).length > 0;
+    !isDirectMessage && !isGroupDm && normalizeStringEntriesLower(params.channelUsers).length > 0;
   const ownerAllowFrom =
     params.interactiveEvent && channelUsersConfigured
       ? ownerAllowFromLower.filter((entry) => entry !== "*")
@@ -485,16 +480,7 @@ export async function authorizeSlackSystemEventSender(params: {
     // DM-specific authorization.
     if (params.interactiveEvent) {
       const inferredFromId = inferSlackChannelType(channelId);
-      const sourceNormalized =
-        typeof resolvedTypeSource === "string"
-          ? resolvedTypeSource.toLowerCase().trim()
-          : undefined;
-      const sourceIsKnownType =
-        sourceNormalized === "im" ||
-        sourceNormalized === "mpim" ||
-        sourceNormalized === "channel" ||
-        sourceNormalized === "group";
-      if (inferredFromId === undefined && !sourceIsKnownType) {
+      if (inferredFromId === undefined && !parseSlackChannelType(resolvedTypeSource)) {
         return {
           allowed: false,
           reason: "ambiguous-channel-type",

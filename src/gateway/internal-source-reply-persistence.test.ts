@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it } from "vitest";
 import { createEmbeddedAttemptTranscriptLifecycle } from "../agents/embedded-agent-runner/run/attempt-transcript-lifecycle.js";
 import {
@@ -13,6 +14,8 @@ import {
   readTranscriptEventMessage,
 } from "../config/sessions/session-accessor.sqlite-read.js";
 import { withOwnedSessionTranscriptWrites } from "../config/sessions/transcript-write-context.js";
+import * as operationAdmission from "../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import {
   onSessionTranscriptUpdate,
   type SessionTranscriptUpdate,
@@ -33,7 +36,7 @@ import {
   claimManagedImageRecordCleanupIfCurrent,
   listManagedImageRecordEntries,
 } from "./managed-image-record-store.js";
-import { listManagedImageRecordEntriesInDatabase } from "./managed-image-record-store.kernel.js";
+import { managedImageRecordOperations } from "./managed-image-record-store.kernel.js";
 
 const TINY_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZQmcAAAAASUVORK5CYII=";
@@ -78,7 +81,11 @@ async function createSourceReplyFixture(state: OpenClawTestState) {
     }
     updates.push(update);
     // Observe records at publication, before a wrongly late write could make the test pass.
-    for (const { record } of listManagedImageRecordEntriesInDatabase(database.db, sessionKey)) {
+    const entries = managedImageRecordOperations["managedImages.entries"](
+      { sessionKey },
+      { open: () => database, stateOptions: () => ({ path: database.path, env: state.env }) },
+    );
+    for (const { record } of entries) {
       const pending = resolveManagedOutgoingMediaArtifactDownload({
         sessionKey,
         agentId: "main",
@@ -120,7 +127,7 @@ async function createSourceReplyFixture(state: OpenClawTestState) {
       },
       () =>
         persistInternalSourceReply({
-          cfg: { agents: { entries: { main: { default: true, workspace: state.workspaceDir } } } },
+          cfg: { agents: { entries: { main: { workspace: state.workspaceDir } } } },
           sessionKey: options.sessionKey ?? sessionKey,
           expectedSessionId: sessionId,
           agentId: "main",
@@ -139,8 +146,11 @@ async function createSourceReplyFixture(state: OpenClawTestState) {
           },
         }),
     );
-  const removePromotionFault = () =>
-    database.db.exec("DROP TRIGGER IF EXISTS fail_second_media_promotion");
+  let restorePromotionAdmission: (() => void) | undefined;
+  const removePromotionFault = () => {
+    restorePromotionAdmission?.();
+    restorePromotionAdmission = undefined;
+  };
   return {
     state,
     scope,
@@ -153,11 +163,22 @@ async function createSourceReplyFixture(state: OpenClawTestState) {
     failNextDrain: () => {
       failDrain = true;
     },
-    failSecondPromotion: () =>
-      database.db.exec(`CREATE TEMP TRIGGER fail_second_media_promotion
-      BEFORE UPDATE OF message_id ON managed_outgoing_image_records
-      WHEN OLD.original_filename = 'second.png' AND NEW.message_id IS NOT NULL
-      BEGIN SELECT RAISE(ABORT, 'second media promotion failed'); END`),
+    failSecondPromotion: () => {
+      let promotions = 0;
+      const spy = probe.admission(operationAdmission, (request, grant, admit) => {
+        // Refuse the second native commit, retaining the real update and rollback.
+        if (
+          request.stage === "commit" &&
+          isRecord(request.facts) &&
+          request.facts.type === "managedImages.attach" &&
+          ++promotions === 2
+        ) {
+          throw new Error("second media promotion failed");
+        }
+        admit(request, grant);
+      });
+      restorePromotionAdmission = () => spy.mockRestore();
+    },
     removePromotionFault,
     holdWrites: async () => {
       const entered = createDeferredCore();
@@ -221,7 +242,7 @@ async function createPartialPromotion(fixture: Fixture) {
 }
 
 describe("internal source reply persistence", () => {
-  it.each(["partial-promotion", "owned-drain", "ordinary", "canonical-key", "text-only"] as const)(
+  it.each(["partial-promotion", "owned-drain", "canonical-key", "text-only"] as const)(
     "completes exact replay and refreshes history after %s",
     async (mode) => {
       await withOpenClawTestState(
@@ -352,7 +373,9 @@ describe("internal source reply persistence", () => {
                 throw new Error("expected second prepared media record");
               }
               if (changed === "cleanup-pending") {
-                expect(claimManagedImageRecordCleanupIfCurrent(pending, state.stateDir)).toBe(true);
+                expect(await claimManagedImageRecordCleanupIfCurrent(pending, state.stateDir)).toBe(
+                  true,
+                );
               } else {
                 await removeManagedOutgoingMediaBlocks({
                   stateDir: state.stateDir,

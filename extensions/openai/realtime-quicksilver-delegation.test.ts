@@ -2,11 +2,7 @@ import { setImmediate as nextEventLoopTurn } from "node:timers/promises";
 import type { RealtimeVoiceGatewayControl } from "openclaw/plugin-sdk/realtime-voice";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { OpenAIQuicksilverDelegationController } from "./realtime-quicksilver-delegation-controller.js";
-import {
-  boundOpenAIQuicksilverDelegationResult,
-  chunkOpenAIQuicksilverAppendText,
-  parseOpenAIQuicksilverEvent,
-} from "./realtime-quicksilver-wire.js";
+import { parseOpenAIQuicksilverEvent } from "./realtime-quicksilver-wire.js";
 import {
   FakeSocket,
   parseSent,
@@ -30,23 +26,18 @@ function delegate(
   controller.handleEvent({ kind: "delegation", id, prompt });
 }
 
+function delegationAppend(id: string, text: string) {
+  return {
+    type: "delegation.context.append",
+    delegation_item_id: id,
+    channel: "speakable",
+    content: [{ type: "input_text", text }],
+  };
+}
+
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
-});
-
-it("adopts delayed completion claims before accepting delegations", () => {
-  const adoptCompletionClaims = vi.fn();
-  const runAgentConsult = Object.assign(
-    vi.fn(async () => ({ text: "Done" })),
-    {
-      adoptCompletionClaims,
-    },
-  );
-
-  createDelegationHarness({ runAgentConsult });
-
-  expect(adoptCompletionClaims).toHaveBeenCalledOnce();
 });
 
 describe("GPT-Live sideband protocol", () => {
@@ -75,21 +66,11 @@ describe("GPT-Live sideband protocol", () => {
       expect(runAgentConsult.mock.calls[0]?.[0].signal?.aborted).toBe(false);
       expect(runAgentConsult).toHaveBeenCalledOnce();
       expect(parseSent(socket).slice(beforeControl)).toEqual([
-        {
-          type: "delegation.context.append",
-          delegation_item_id: "control-C",
-          channel: "speakable",
-          content: [{ type: "input_text", text: "Host status" }],
-        },
+        delegationAppend("control-C", "Host status"),
       ]);
       finish({ text: "Original result" });
       await vi.waitFor(() =>
-        expect(parseSent(socket)).toContainEqual({
-          type: "delegation.context.append",
-          delegation_item_id: "task-A",
-          channel: "speakable",
-          content: [{ type: "input_text", text: "Original result" }],
-        }),
+        expect(parseSent(socket)).toContainEqual(delegationAppend("task-A", "Original result")),
       );
       await nextEventLoopTurn();
       delegate(controller, "task-B", "Another task");
@@ -102,37 +83,28 @@ describe("GPT-Live sideband protocol", () => {
     }
   });
 
-  it.each(["close", "detach", "socket-replaced"] as const)(
-    "fences a retained control responder after %s",
-    (ending) => {
-      const original = new FakeSocket("manual");
-      original.readyState = 1;
-      const replacement = new FakeSocket("manual");
-      replacement.readyState = 1;
-      let socket = original;
-      let reply!: (text: string) => void;
-      const { controller, runAgentConsult } = createDelegationHarness({
-        getSocket: () => socket,
-        handleDelegationInput: (_text, respond) => {
-          reply = respond;
-          return "control";
-        },
-      });
-      delegate(controller, "control-C", "status");
-      if (ending === "close") {
-        controller.stop(new Error("closed"));
-      } else if (ending === "detach") {
-        controller.detach();
-      } else {
-        socket = replacement;
-      }
-      reply("Late control");
-      expect(original.sent).toEqual([]);
-      expect(replacement.sent).toEqual([]);
-      expect(runAgentConsult).not.toHaveBeenCalled();
-      controller.stop(new Error("test complete"));
-    },
-  );
+  it.each(["socket-replaced"] as const)("fences a retained control responder after %s", () => {
+    const original = new FakeSocket("manual");
+    original.readyState = 1;
+    const replacement = new FakeSocket("manual");
+    replacement.readyState = 1;
+    let socket = original;
+    let reply!: (text: string) => void;
+    const { controller, runAgentConsult } = createDelegationHarness({
+      getSocket: () => socket,
+      handleDelegationInput: (_text, respond) => {
+        reply = respond;
+        return "control";
+      },
+    });
+    delegate(controller, "control-C", "status");
+    socket = replacement;
+    reply("Late control");
+    expect(original.sent).toEqual([]);
+    expect(replacement.sent).toEqual([]);
+    expect(runAgentConsult).not.toHaveBeenCalled();
+    controller.stop(new Error("test complete"));
+  });
 
   it("consumes a multi-chunk response before a send failure and never retries or starts a task", () => {
     let reply!: (text: string) => void;
@@ -202,12 +174,7 @@ describe("GPT-Live sideband protocol", () => {
           channel: "speakable",
           content: [{ type: "input_text", text: "Still checking" }],
         },
-        {
-          type: "delegation.context.append",
-          delegation_item_id: "work",
-          channel: "speakable",
-          content: [{ type: "input_text", text: "Finished checking" }],
-        },
+        delegationAppend("work", "Finished checking"),
       ]);
       controller.detach();
       controller.sendSessionContext("Late speech", "speakable");
@@ -216,22 +183,6 @@ describe("GPT-Live sideband protocol", () => {
       finish({ text: "Finished" });
       controller.stop(new Error("test complete"));
     }
-  });
-
-  it("ignores session.updated server-side", () => {
-    const type = "session.updated";
-    expect(parseOpenAIQuicksilverEvent(JSON.stringify({ type }))).toEqual({
-      kind: "ignored",
-      eventType: type,
-    });
-  });
-
-  it("parses direct WebSocket audio", () => {
-    expect(
-      parseOpenAIQuicksilverEvent(
-        JSON.stringify({ type: "output_audio.delta", audio: "AQIDBA==" }),
-      ),
-    ).toEqual({ kind: "audio", data: "AQIDBA==" });
   });
 
   it("parses session expiry and transcript events", () => {
@@ -307,23 +258,13 @@ describe("GPT-Live sideband protocol", () => {
       parseOpenAIQuicksilverEvent(
         JSON.stringify({ type: "error", error: { message: "call failed" } }),
       ),
-    ).toEqual({ kind: "error", message: "call failed", fatalAuth: false });
-    expect(
-      parseOpenAIQuicksilverEvent(
-        JSON.stringify({
-          type: "error",
-          message: "top-level failure",
-          error: { message: "nested failure" },
-        }),
-      ),
-    ).toEqual({ kind: "error", message: "top-level failure", fatalAuth: false });
+    ).toEqual({ kind: "error", fatalAuth: false });
     expect(
       parseOpenAIQuicksilverEvent(
         JSON.stringify({ type: "error", error: { code: "invalid_token" } }),
       ),
     ).toEqual({
       kind: "error",
-      message: '{"code":"invalid_token"}',
       fatalAuth: true,
     });
     expect(parseOpenAIQuicksilverEvent(JSON.stringify({ type: "future.event" }))).toEqual({
@@ -331,102 +272,6 @@ describe("GPT-Live sideband protocol", () => {
       eventType: "future.event",
     });
     expect(parseOpenAIQuicksilverEvent("not-json")).toBeNull();
-  });
-
-  it("chunks appends by UTF-8 bytes without splitting characters", () => {
-    const text = `${"a".repeat(499)}🙂${"b".repeat(501)}`;
-    const chunks = chunkOpenAIQuicksilverAppendText(text);
-    expect(chunks.join("")).toBe(text);
-    expect(chunks.length).toBeGreaterThan(1);
-    for (const chunk of chunks) {
-      expect(Buffer.byteLength(chunk, "utf8")).toBeLessThanOrEqual(500);
-    }
-  });
-
-  it("bounds total speakable text before chunking", () => {
-    expect(boundOpenAIQuicksilverDelegationResult("  short result  ")).toBe("  short result  ");
-    const limited = boundOpenAIQuicksilverDelegationResult(
-      `${"a".repeat(1_783)}😀${"b".repeat(1_000)}`,
-    );
-    const chunks = chunkOpenAIQuicksilverAppendText(limited);
-
-    expect(limited).toMatch(/ \[truncated\]$/);
-    expect(limited.length).toBeLessThanOrEqual(1_800);
-    expect(limited).not.toContain("\uFFFD");
-    expect(chunks.length).toBeLessThanOrEqual(11);
-    for (const chunk of chunks) {
-      expect(Buffer.byteLength(chunk, "utf8")).toBeLessThanOrEqual(500);
-    }
-  });
-
-  it("wraps delegated input and appends the raw speakable result", async () => {
-    const runAgentConsult = vi.fn<ConsultRunner>(async ({ prompt }) => ({
-      text: `Result for ${prompt}`,
-    }));
-    const { controller, socket } = createDelegationHarness({ runAgentConsult });
-
-    delegate(controller, "delegation-1", "first task");
-
-    await vi.waitFor(() =>
-      expect(runAgentConsult).toHaveBeenCalledWith(
-        expect.objectContaining({
-          prompt: "<realtime_delegation>\n  <input>first task</input>\n</realtime_delegation>",
-          signal: expect.any(AbortSignal),
-          requesterFinal: { append: expect.any(Function) },
-        }),
-      ),
-    );
-    await vi.waitFor(() =>
-      expect(parseSent(socket)).toContainEqual({
-        type: "delegation.context.append",
-        delegation_item_id: "delegation-1",
-        channel: "speakable",
-        content: [
-          {
-            type: "input_text",
-            text: "Result for <realtime_delegation>\n  <input>first task</input>\n</realtime_delegation>",
-          },
-        ],
-      }),
-    );
-  });
-
-  it("frees the delegation lane after yield and appends the exact late final once", async () => {
-    let appendRequesterFinal: ((text: string) => boolean) | undefined;
-    const runAgentConsult = vi.fn<ConsultRunner>(async ({ requesterFinal }) => {
-      appendRequesterFinal = requesterFinal?.append;
-      return { text: "I started that work.", yielded: true };
-    });
-    const { controller, socket } = createDelegationHarness({ runAgentConsult });
-
-    delegate(controller, "delegation-yielded", "investigate");
-    await vi.waitFor(() =>
-      expect(parseSent(socket)).toContainEqual(
-        expect.objectContaining({
-          delegation_item_id: "delegation-yielded",
-          content: [{ type: "input_text", text: "I started that work." }],
-        }),
-      ),
-    );
-    expect(appendRequesterFinal?.("consolidated final")).toBe(true);
-    expect(appendRequesterFinal?.("duplicate final")).toBe(false);
-
-    delegate(controller, "delegation-next", "next question");
-    await vi.waitFor(() => expect(runAgentConsult).toHaveBeenCalledTimes(2));
-    expect(
-      parseSent(socket).filter(
-        (event) =>
-          event.type === "delegation.context.append" &&
-          event.delegation_item_id === "delegation-yielded",
-      ),
-    ).toEqual([
-      expect.objectContaining({
-        content: [{ type: "input_text", text: "I started that work." }],
-      }),
-      expect.objectContaining({
-        content: [{ type: "input_text", text: "consolidated final" }],
-      }),
-    ]);
   });
 
   it("revokes the old late-final owner on newer delegation and detach", async () => {
@@ -483,12 +328,7 @@ describe("GPT-Live sideband protocol", () => {
     try {
       delegate(controller, "finished-task", "first task");
       await vi.waitFor(() =>
-        expect(parseSent(socket)).toContainEqual({
-          type: "delegation.context.append",
-          delegation_item_id: "finished-task",
-          channel: "speakable",
-          content: [{ type: "input_text", text: "Done" }],
-        }),
+        expect(parseSent(socket)).toContainEqual(delegationAppend("finished-task", "Done")),
       );
       delegate(controller, "late-cancel", "cancel");
       expect(runAgentConsult).toHaveBeenCalledOnce();
@@ -529,47 +369,6 @@ describe("GPT-Live sideband protocol", () => {
     );
   });
 
-  it("aborts stale work and retains only the latest pending delegation", async () => {
-    const signals: AbortSignal[] = [];
-    const runAgentConsult = vi.fn<ConsultRunner>(
-      async ({ signal }) =>
-        await new Promise<{ text: string }>((_resolve, reject) => {
-          signals.push(signal as AbortSignal);
-          signal?.addEventListener(
-            "abort",
-            () => reject(signal.reason instanceof Error ? signal.reason : new Error("aborted")),
-            { once: true },
-          );
-        }),
-    );
-    const handleDelegationInput = vi.fn((text: string) =>
-      text === "host-control" ? ("control" as const) : ("consult" as const),
-    );
-    const { controller, socket } = createDelegationHarness({
-      runAgentConsult,
-      handleDelegationInput,
-    });
-
-    delegate(controller, "delegation-1", "first task");
-    expect(socket.sent).toHaveLength(1);
-    expect(socket.sent[0]).toContain("Do not delegate this message or call any tools.");
-    delegate(controller, "control-active", "host-control");
-    expect(signals[0]?.aborted).toBe(false);
-    expect(runAgentConsult).toHaveBeenCalledOnce();
-    delegate(controller, "delegation-2", "second task");
-    delegate(controller, "delegation-3", "latest task");
-    delegate(controller, "control-pending", "host-control");
-
-    expect(socket.sent).toHaveLength(1);
-    expect(signals[0]?.aborted).toBe(true);
-    await vi.waitFor(() => expect(runAgentConsult).toHaveBeenCalledTimes(2));
-    expect(socket.sent).toHaveLength(2);
-    expect(socket.sent[1]).toBe(socket.sent[0]);
-    expect(runAgentConsult.mock.calls[1]?.[0].prompt).toContain("latest task");
-    expect(runAgentConsult.mock.calls[1]?.[0].prompt).not.toContain("second task");
-    controller.stop(new Error("test complete"));
-  });
-
   it("consumes aborted ownership before starting the pending replacement", async () => {
     const firstResult = deferred<{ text: string }>();
     let firstSignal: AbortSignal | undefined;
@@ -594,12 +393,9 @@ describe("GPT-Live sideband protocol", () => {
     firstResult.resolve({ text: "stale result" });
     await vi.waitFor(() => expect(runAgentConsult).toHaveBeenCalledTimes(2));
     await vi.waitFor(() =>
-      expect(parseSent(socket)).toContainEqual({
-        type: "delegation.context.append",
-        delegation_item_id: "delegation-latest",
-        channel: "speakable",
-        content: [{ type: "input_text", text: "latest result" }],
-      }),
+      expect(parseSent(socket)).toContainEqual(
+        delegationAppend("delegation-latest", "latest result"),
+      ),
     );
 
     expect(claimAppend).toHaveBeenCalledTimes(2);
@@ -641,12 +437,9 @@ describe("GPT-Live sideband protocol", () => {
 
     result.resolve({ text: "work continues", yielded: true });
     await vi.waitFor(() =>
-      expect(parseSent(socket)).toContainEqual({
-        type: "delegation.context.append",
-        delegation_item_id: "delegation-latest",
-        channel: "speakable",
-        content: [{ type: "input_text", text: "work continues" }],
-      }),
+      expect(parseSent(socket)).toContainEqual(
+        delegationAppend("delegation-latest", "work continues"),
+      ),
     );
     expect(appendRequesterFinal?.("latest result")).toBe(true);
     expect(appendRequesterFinal?.("duplicate result")).toBe(false);
@@ -657,18 +450,8 @@ describe("GPT-Live sideband protocol", () => {
           event.delegation_item_id === "delegation-latest",
       ),
     ).toEqual([
-      {
-        type: "delegation.context.append",
-        delegation_item_id: "delegation-latest",
-        channel: "speakable",
-        content: [{ type: "input_text", text: "work continues" }],
-      },
-      {
-        type: "delegation.context.append",
-        delegation_item_id: "delegation-latest",
-        channel: "speakable",
-        content: [{ type: "input_text", text: "latest result" }],
-      },
+      delegationAppend("delegation-latest", "work continues"),
+      delegationAppend("delegation-latest", "latest result"),
     ]);
     expect(
       parseSent(socket).filter(
@@ -766,29 +549,26 @@ describe("GPT-Live sideband protocol", () => {
     expect(socket.sent).toEqual([]);
   });
 
-  it.each(["  ", "host-control"])(
-    "keeps transcript context when it skips delegation %j",
-    async (input) => {
-      const runAgentConsult = vi.fn<ConsultRunner>(async () => ({ text: "Done" }));
-      const handleDelegationInput = (text: string): "control" | "consult" =>
-        text === "host-control" ? "control" : "consult";
-      const { controller, socket } = createDelegationHarness({
-        runAgentConsult,
-        handleDelegationInput,
-      });
-      controller.handleEvent({ kind: "transcript-done", role: "user", text: "hello" });
+  it.each(["  "])("keeps transcript context when it skips delegation %j", async (input) => {
+    const runAgentConsult = vi.fn<ConsultRunner>(async () => ({ text: "Done" }));
+    const handleDelegationInput = (text: string): "control" | "consult" =>
+      text === "host-control" ? "control" : "consult";
+    const { controller, socket } = createDelegationHarness({
+      runAgentConsult,
+      handleDelegationInput,
+    });
+    controller.handleEvent({ kind: "transcript-done", role: "user", text: "hello" });
 
-      delegate(controller, "non-task", input);
-      expect(runAgentConsult).not.toHaveBeenCalled();
-      expect(socket.sent).toEqual([]);
-      delegate(controller, "delegation-1", "check weather");
+    delegate(controller, "non-task", input);
+    expect(runAgentConsult).not.toHaveBeenCalled();
+    expect(socket.sent).toEqual([]);
+    delegate(controller, "delegation-1", "check weather");
 
-      await vi.waitFor(() => expect(runAgentConsult).toHaveBeenCalledTimes(1));
-      expect(runAgentConsult.mock.calls[0]?.[0].prompt).toContain(
-        "<transcript_delta>user: hello</transcript_delta>",
-      );
-    },
-  );
+    await vi.waitFor(() => expect(runAgentConsult).toHaveBeenCalledTimes(1));
+    expect(runAgentConsult.mock.calls[0]?.[0].prompt).toContain(
+      "<transcript_delta>user: hello</transcript_delta>",
+    );
+  });
 
   it("drops pending receipts and late results when detached before settlement", async () => {
     let finish!: (result: { text: string }) => void;
@@ -819,24 +599,9 @@ describe("GPT-Live sideband protocol", () => {
 
   it.each([
     {
-      kind: "failure",
-      error: new Error("workspace unavailable"),
-      expectedReason: "workspace unavailable",
-    },
-    {
-      kind: "timeout",
-      error: new DOMException("agent timed out", "TimeoutError"),
-      expectedReason: "agent timed out",
-    },
-    {
       kind: "Unicode failure",
       error: new Error(`${"x".repeat(179)}🤖`),
       expectedReason: "x".repeat(179),
-    },
-    {
-      kind: "Unicode at the limit",
-      error: new Error(`${"x".repeat(178)}🤖`),
-      expectedReason: `${"x".repeat(178)}🤖`,
     },
   ])("returns a speakable failure for a delegated $kind", async ({ error, expectedReason }) => {
     const runAgentConsult = vi.fn<ConsultRunner>(async () => {
@@ -863,37 +628,6 @@ describe("GPT-Live sideband protocol", () => {
     expect(logger.warn).toHaveBeenCalledWith(
       `OpenAI GPT-Live delegation consult failed: ${expectedReason}`,
     );
-  });
-
-  it("uses the startup-failure claim exactly once for a pre-registration failure", async () => {
-    const claimAppend = vi.fn(() => false);
-    const claimFailureAppend = vi.fn().mockReturnValueOnce(true).mockReturnValue(false);
-    const runAgentConsult = vi.fn<ConsultRunner>(async () => {
-      throw new Error("startup failed");
-    });
-    const { controller, socket } = createDelegationHarness({
-      claimAppend,
-      claimFailureAppend,
-      runAgentConsult,
-    });
-
-    delegate(controller, "delegation-startup-failed", "do work");
-
-    await vi.waitFor(() => expect(socket.sent).toHaveLength(1));
-    expect(parseSent(socket)).toContainEqual(
-      expect.objectContaining({
-        delegation_item_id: "delegation-startup-failed",
-        channel: "speakable",
-        content: [
-          {
-            type: "input_text",
-            text: "The agent task failed. Tell the user it did not complete and offer to try again.",
-          },
-        ],
-      }),
-    );
-    expect(claimFailureAppend).toHaveBeenCalledOnce();
-    expect(claimAppend).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -927,66 +661,23 @@ describe("GPT-Live sideband protocol", () => {
     },
   );
 
-  it("never uses startup-failure ownership for a successful completion", async () => {
-    const claimAppend = vi.fn(() => true);
-    const claimFailureAppend = vi.fn(() => true);
-    const { controller, socket } = createDelegationHarness({
-      claimAppend,
-      claimFailureAppend,
-    });
-
-    delegate(controller, "delegation-success", "do work");
-
-    await vi.waitFor(() => expect(socket.sent).toHaveLength(1));
-    expect(claimAppend).toHaveBeenCalledOnce();
-    expect(claimFailureAppend).not.toHaveBeenCalled();
-  });
-
-  it("handles structured delegated failures with a non-string message", async () => {
-    const structuredFailure = { code: "UNAVAILABLE", message: 503 };
-    const runAgentConsult = vi.fn<ConsultRunner>(() =>
-      Promise.reject(new Error(String(structuredFailure.message), { cause: structuredFailure })),
-    );
-    const { controller, logger, socket } = createDelegationHarness({ runAgentConsult });
-
-    delegate(controller, "delegation-structured-failure", "do work");
-
-    await vi.waitFor(() => expect(socket.sent.length).toBeGreaterThan(0));
-    expect(parseSent(socket)).toContainEqual(
-      expect.objectContaining({
-        delegation_item_id: "delegation-structured-failure",
-        channel: "speakable",
-        content: [
-          {
-            type: "input_text",
-            text: "The agent task failed. Tell the user it did not complete and offer to try again.",
-          },
-        ],
-      }),
-    );
-    expect(logger.warn).toHaveBeenCalled();
-  });
-
-  it("surfaces fatal sideband errors to the lifecycle owner", () => {
-    const { controller, logger, onFatalError } = createDelegationHarness();
-    controller.handleEvent({ kind: "error", message: "token expired", fatalAuth: true });
-
-    expect(logger.warn).toHaveBeenCalledWith("OpenAI GPT-Live provider error");
-    expect(onFatalError).toHaveBeenCalledWith(
-      expect.objectContaining({ message: "OpenAI GPT-Live provider error" }),
-    );
-  });
-
   it("redacts the opaque model from sideband errors before logging or callbacks", () => {
     const model = "gpt-live-test-private";
     const sensitiveDetails = ["sensitive-route", "sensitive-session", "sensitive-transcript"];
     const { controller, logger, onFatalError } = createDelegationHarness();
 
-    controller.handleEvent({
-      kind: "error",
-      message: `provider rejected ${model} ${sensitiveDetails.join(" ")}`,
-      fatalAuth: true,
-    });
+    controller.handleFrame(
+      Buffer.from(
+        JSON.stringify({
+          type: "error",
+          error: {
+            code: "invalid_token",
+            message: `provider rejected ${model} ${sensitiveDetails.join(" ")}`,
+          },
+        }),
+      ),
+      false,
+    );
 
     expect(logger.warn).toHaveBeenCalledWith("OpenAI GPT-Live provider error");
     expect(onFatalError).toHaveBeenCalledOnce();

@@ -640,6 +640,7 @@ describe("AgentSession compaction", () => {
     expect(compactionEvents[0]).toEqual({
       stream: "compaction",
       data: { phase: "start", itemId: expect.any(String) },
+      transcriptStart: null,
     });
     expect(compactionEvents.at(-1)).toEqual({
       stream: "compaction",
@@ -684,7 +685,7 @@ describe("AgentSession compaction", () => {
     expect(manualRequestState).toBeUndefined();
   });
 
-  it.each(Array.from({ length: MAX_OVERFLOW_COMPACTION_ATTEMPTS }, (_, index) => index + 1))(
+  it.each([1, MAX_OVERFLOW_COMPACTION_ATTEMPTS])(
     "recovers when the provider accepts overflow compaction attempt %i",
     async (overflowCount) => {
       let agentRequests = 0;

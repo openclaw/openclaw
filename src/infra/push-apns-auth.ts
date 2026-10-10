@@ -1,8 +1,8 @@
 // Resolves APNs provider credentials and owns provider-token signing/cache state.
 import { createHash, createPrivateKey, sign as signJwt } from "node:crypto";
+import { readSecretFile } from "@openclaw/fs-safe/secret";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { formatErrorMessage } from "./errors.js";
-import { readSecretFile } from "./fs-safe-advanced.js";
 
 /** Direct APNs provider authentication used to mint ES256 bearer tokens. */
 export type ApnsAuthConfig = {
@@ -71,15 +71,12 @@ export async function resolveApnsAuthConfigFromEnv(
   const inlineKeyRaw =
     normalizeOptionalString(env.OPENCLAW_APNS_PRIVATE_KEY_P8) ??
     normalizeOptionalString(env.OPENCLAW_APNS_PRIVATE_KEY);
+  const resolved = (privateKey: string): ApnsAuthConfigResolution => ({
+    ok: true,
+    value: { teamId, keyId, privateKey },
+  });
   if (inlineKeyRaw) {
-    return {
-      ok: true,
-      value: {
-        teamId,
-        keyId,
-        privateKey: normalizePrivateKey(inlineKeyRaw),
-      },
-    };
+    return resolved(normalizePrivateKey(inlineKeyRaw));
   }
 
   const keyPath = normalizeOptionalString(env.OPENCLAW_APNS_PRIVATE_KEY_PATH);
@@ -92,14 +89,7 @@ export async function resolveApnsAuthConfigFromEnv(
   }
   try {
     const privateKey = normalizePrivateKey(await readSecretFile(keyPath, "APNs private key"));
-    return {
-      ok: true,
-      value: {
-        teamId,
-        keyId,
-        privateKey,
-      },
-    };
+    return resolved(privateKey);
   } catch (err) {
     return {
       ok: false,
