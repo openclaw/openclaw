@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { getSessionBindingService } from "openclaw/plugin-sdk/conversation-runtime";
+import { useProviderCatalogMetadata } from "openclaw/plugin-sdk/plugin-test-runtime";
 import {
   observeHostDataSql,
   openIncognitoTestActor,
@@ -20,6 +21,7 @@ import {
 } from "./thread-bindings.test-support.js";
 
 const fixture = useTelegramThreadBindingsFixture();
+useProviderCatalogMetadata(new URL("../../openai", import.meta.url));
 const dirs = useSessionStoreTempDirs(afterAll, "telegram-bound-session-");
 const authority = { assertCurrent() {} };
 

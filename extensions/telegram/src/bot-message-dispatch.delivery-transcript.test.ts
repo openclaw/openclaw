@@ -15,10 +15,6 @@ import {
 import { makeAgentAssistantMessage } from "openclaw/plugin-sdk/test-fixtures";
 import { expect, it, vi } from "vitest";
 import {
-  createCurrentTurnTranscriptFinalResolver,
-  createFreshTelegramSessionEntryLoader,
-} from "./bot-message-dispatch-session.js";
-import {
   appendAssistantMirrorMessageByIdentity,
   createBot,
   createContext,
@@ -34,7 +30,6 @@ import {
   deliverInboundReplyWithMessageSendContext,
   expectDeliveredReply,
   expectDraftStreamParams,
-  mockDefaultSessionEntry,
   setupDraftStreams,
 } from "./bot-message-dispatch.test-harness.js";
 import type * as TelegramDelivery from "./bot/delivery.replies.js";
@@ -44,6 +39,8 @@ import type * as TelegramSendEdit from "./send-edit.js";
 
 describeTelegramDispatch("dispatchTelegramMessage delivery-transcript", () => {
   it("discards a final transcript read when the session resets before it completes", async () => {
+    const { createCurrentTurnTranscriptFinalResolver, createFreshTelegramSessionEntryLoader } =
+      await import("./bot-message-dispatch-session.js");
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "telegram-final-reset-"));
     const scope = {
       agentId: "default",
@@ -347,7 +344,13 @@ describeTelegramDispatch("dispatchTelegramMessage directive delivery", () => {
     const context = createContext();
     context.ctxPayload.SessionKey = "agent:default:telegram:direct:123";
     context.ctxPayload.MessageSid = "456";
-    mockDefaultSessionEntry();
+    await patchSessionEntry({
+      agentId: "default",
+      sessionKey: context.ctxPayload.SessionKey,
+      storePath: telegramDepsForTest.resolveStorePath(undefined, { agentId: "default" }),
+      fallbackEntry: { sessionId: "s1", updatedAt: 1 },
+      update: () => ({ sessionId: "s1" }),
+    });
     const prefix = "The recovered answer includes the remaining explanation after this opening";
     const fullText = `${prefix} paragraph with the complete explanation.`;
     const previewText = current ? prefix : `${fullText} The preview also includes the last step.`;
