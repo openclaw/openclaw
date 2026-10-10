@@ -553,9 +553,14 @@ export type PluginRuntimeCore = {
     openKeyedStore: <T>(
       options: OpenAsyncKeyedStoreOptions,
     ) => import("../../plugin-state/plugin-state-store.types.js").PluginStateKeyedStore<T>;
+    /** Data-only worker store; operations retain this runtime and optional action authority. */
+    openKeyedStoreV2: <T>(
+      options: OpenAsyncKeyedStoreOptions,
+      authority?: import("../../plugin-state/plugin-state-store.types.js").PluginStateActionAuthority,
+    ) => import("../../plugin-state/plugin-state-store.types.js").PluginStateKeyedStore<T, 2>;
     /**
-     * @deprecated Use openKeyedStore and await its operations. The synchronous
-     * compatibility adapter remains through the next Plugin SDK major.
+     * @deprecated Use openKeyedStoreV2 and await its operations. This synchronous
+     * compatibility adapter will be removed in the next Plugin SDK major.
      */
     openSyncKeyedStore: <T>(
       options: import("../../plugin-state/plugin-state-store.types.js").OpenKeyedStoreOptions,

@@ -1,5 +1,8 @@
+import { isDeepStrictEqual } from "node:util";
+import { createAsyncLock } from "openclaw/plugin-sdk/async-lock-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import type {
+  PluginStateComparisonCondition,
   PluginStateKeyedStore,
   PluginStateSyncKeyedStore,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
@@ -47,11 +50,7 @@ export function bindingMatchesActiveSessionIncarnation(
 
 export async function readDiscussionSessionEntry(runtime: PluginRuntime, sessionKey: string) {
   const params = { sessionKey, readConsistency: "latest" } as const;
-  // Released hosts predate the worker companion. Select their native contract
-  // before reading; a failed worker read never falls back to native storage.
-  return runtime.agent.session.getSessionEntryAsync
-    ? await runtime.agent.session.getSessionEntryAsync(params)
-    : runtime.agent.session.getSessionEntry(params);
+  return await runtime.agent.session.getSessionEntryAsync(params);
 }
 
 /**
@@ -59,16 +58,13 @@ export async function readDiscussionSessionEntry(runtime: PluginRuntime, session
  * The store registers persisted state before reindexing, so a failed write leaves the
  * previous attachment authoritative in both persistence and memory.
  */
-export function attachBindingToCurrentActiveSession(params: {
+export async function attachBindingToCurrentActiveSession(params: {
   runtime: PluginRuntime;
   store: ClickClackDiscussionBindingStore;
   sessionKey: string;
   binding: ClickClackDiscussionBinding;
-}): ClickClackDiscussionBinding | undefined {
-  const entry = params.runtime.agent.session.getSessionEntry({
-    sessionKey: params.sessionKey,
-    readConsistency: "latest",
-  });
+}): Promise<ClickClackDiscussionBinding | undefined> {
+  const entry = await readDiscussionSessionEntry(params.runtime, params.sessionKey);
   if (!entry?.sessionId || entry.archivedAt !== undefined) {
     return undefined;
   }
@@ -77,8 +73,21 @@ export function attachBindingToCurrentActiveSession(params: {
   }
   const { detachedAt: _detachedAt, ...retained } = params.binding;
   const attached = { ...retained, sessionId: entry.sessionId };
-  params.store.set(params.sessionKey, attached);
-  return attached;
+  const applied = await params.store.setIfCurrent(params.sessionKey, params.binding, attached, {
+    assertCurrent: () => {
+      const current = params.store.get(params.sessionKey);
+      if (
+        !current ||
+        current.externalRef !== params.binding.externalRef ||
+        current.serverBaseUrl !== params.binding.serverBaseUrl ||
+        current.channelId !== params.binding.channelId ||
+        !bindingMatchesActiveSessionIncarnation(params.runtime, params.sessionKey, attached)
+      ) {
+        throw new Error("ClickClack discussion session changed before attachment committed");
+      }
+    },
+  });
+  return applied ? attached : undefined;
 }
 
 const DISCUSSION_BINDINGS_NAMESPACE = "discussion-bindings";
@@ -97,12 +106,13 @@ function channelKey(serverBaseUrl: string, channelId: string): string {
 
 /** SQLite-backed session/channel bindings with a process-local inbound lookup index. */
 export class ClickClackDiscussionBindingStore {
-  readonly #store: PluginStateSyncKeyedStore<ClickClackDiscussionBinding>;
-  #asyncStore: PluginStateKeyedStore<ClickClackDiscussionBinding> | undefined;
+  #nativeStore: PluginStateSyncKeyedStore<ClickClackDiscussionBinding> | undefined;
+  #store: PluginStateKeyedStore<ClickClackDiscussionBinding, 2> | undefined;
   readonly #sessionByChannel = new Map<string, string>();
   readonly #detachedAtBySession = new Map<string, number>();
   readonly #channelBySession = new Map<string, string>();
   readonly #runtime: PluginRuntime;
+  readonly #withMutation = createAsyncLock();
   #prepared = false;
   #preparing:
     | Promise<Array<{ sessionKey: string; binding: ClickClackDiscussionBinding }>>
@@ -111,8 +121,6 @@ export class ClickClackDiscussionBindingStore {
 
   constructor(runtime: PluginRuntime) {
     this.#runtime = runtime;
-    this.#store =
-      runtime.state.openSyncKeyedStore<ClickClackDiscussionBinding>(BINDING_STORE_OPTIONS);
   }
 
   async prepare(): Promise<void> {
@@ -126,7 +134,10 @@ export class ClickClackDiscussionBindingStore {
   }
 
   get(sessionKey: string): ClickClackDiscussionBinding | undefined {
-    return this.#store.lookup(sessionKey);
+    // Final tool/disclosure authority stays native until synchronous SDK writers retire.
+    this.#nativeStore ??=
+      this.#runtime.state.openSyncKeyedStore<ClickClackDiscussionBinding>(BINDING_STORE_OPTIONS);
+    return this.#nativeStore.lookup(sessionKey);
   }
 
   async hasCapacity(sessionKey: string): Promise<boolean> {
@@ -136,41 +147,123 @@ export class ClickClackDiscussionBindingStore {
     );
   }
 
-  getByChannel(
+  async getByChannel(
     serverBaseUrl: string,
     channelId: string,
-  ): { sessionKey: string; binding: ClickClackDiscussionBinding } | undefined {
+  ): Promise<{ sessionKey: string; binding: ClickClackDiscussionBinding } | undefined> {
     const key = channelKey(serverBaseUrl, channelId);
     const sessionKey = this.#sessionByChannel.get(key);
     if (!sessionKey) {
       return undefined;
     }
-    const binding = this.get(sessionKey);
+    const binding = await this.getAsync(sessionKey);
     if (!binding || channelKey(binding.serverBaseUrl, binding.channelId) !== key) {
-      this.#sessionByChannel.delete(key);
+      if (this.#sessionByChannel.get(key) === sessionKey) {
+        this.#sessionByChannel.delete(key);
+      }
       return undefined;
     }
     return { sessionKey, binding };
   }
 
-  set(sessionKey: string, binding: ClickClackDiscussionBinding): void {
-    this.#store.register(sessionKey, binding);
+  async setIfCurrent(
+    sessionKey: string,
+    expected: ClickClackDiscussionBinding | undefined,
+    binding: ClickClackDiscussionBinding,
+    options?: { assertCurrent?: () => void },
+  ): Promise<boolean> {
+    return await this.#mutateIfCurrent(sessionKey, expected, binding, options);
+  }
+
+  async observeCurrent(sessionKey: string): Promise<{
+    binding: ClickClackDiscussionBinding | undefined;
+    condition: PluginStateComparisonCondition;
+  }> {
+    return await this.#withMutation(async () => {
+      const observed = await this.#workerStore().observe(sessionKey);
+      this.#publish(sessionKey, observed.value);
+      return {
+        binding: observed.value,
+        condition: {
+          namespace: DISCUSSION_BINDINGS_NAMESPACE,
+          key: sessionKey,
+          comparison: observed.comparison,
+        },
+      };
+    });
+  }
+
+  async deleteIfCurrent(
+    sessionKey: string,
+    expected: ClickClackDiscussionBinding,
+    options?: { assertCurrent?: () => void },
+  ): Promise<boolean> {
+    return await this.#mutateIfCurrent(sessionKey, expected, undefined, options);
+  }
+
+  async #mutateIfCurrent(
+    sessionKey: string,
+    expected: ClickClackDiscussionBinding | undefined,
+    next: ClickClackDiscussionBinding | undefined,
+    options?: { assertCurrent?: () => void },
+  ): Promise<boolean> {
+    return await this.#withMutation(async () => {
+      const worker = this.#workerStore();
+      const observed = await worker.observe(sessionKey);
+      if (!isDeepStrictEqual(observed.value, expected)) {
+        this.#publish(sessionKey, observed.value);
+        return false;
+      }
+      let authorityRejected = false;
+      try {
+        const guarded = options?.assertCurrent
+          ? this.#runtime.state.openKeyedStoreV2<ClickClackDiscussionBinding>(
+              BINDING_STORE_OPTIONS,
+              {
+                assertCurrent: () => {
+                  try {
+                    options.assertCurrent?.();
+                  } catch (error) {
+                    authorityRejected = true;
+                    throw error;
+                  }
+                },
+              },
+            )
+          : worker;
+        const result = await guarded.compareAndApply(
+          sessionKey,
+          observed.comparison,
+          next
+            ? { operation: "update", action: "set", value: next }
+            : { operation: "delete", action: "delete" },
+        );
+        this.#publish(sessionKey, result.status === "conflict" ? result.current.value : next);
+        return result.status === "applied";
+      } catch (error) {
+        // An old session guard can lose authority while its worker request waits.
+        // Only an observed replacement makes that failure an obsolete operation.
+        if (!authorityRejected) {
+          throw error;
+        }
+        const current = await worker.observe(sessionKey);
+        if (current.comparison === observed.comparison) {
+          throw error;
+        }
+        this.#publish(sessionKey, current.value);
+        return false;
+      }
+    });
+  }
+
+  #publish(sessionKey: string, binding: ClickClackDiscussionBinding | undefined): void {
     if (!this.#prepared) {
       this.#changedDuringPreparation.add(sessionKey);
     }
     this.#unindex(sessionKey);
-    this.#index(sessionKey, binding);
-  }
-
-  delete(sessionKey: string): boolean {
-    const deleted = this.#store.delete(sessionKey);
-    if (deleted && !this.#prepared) {
-      this.#changedDuringPreparation.add(sessionKey);
+    if (binding) {
+      this.#index(sessionKey, binding);
     }
-    if (deleted) {
-      this.#unindex(sessionKey);
-    }
-    return deleted;
   }
 
   async entries(): Promise<Array<{ sessionKey: string; binding: ClickClackDiscussionBinding }>> {
@@ -185,7 +278,7 @@ export class ClickClackDiscussionBindingStore {
     this.#preparing ??= load()
       .then((entries) => {
         for (const { sessionKey, binding } of entries) {
-          // A synchronous mutation may commit while the worker snapshot is in flight.
+          // A mutation may commit while the worker snapshot is in flight.
           if (!this.#changedDuringPreparation.has(sessionKey)) {
             this.#index(sessionKey, binding);
           }
@@ -201,20 +294,21 @@ export class ClickClackDiscussionBindingStore {
   }
 
   async countAsync(): Promise<number> {
-    const store = this.#workerStore();
-    return store.count ? await store.count() : (await this.entries()).length;
+    return await this.#workerStore().count();
   }
 
   detachedCount(): number {
     return this.#detachedAtBySession.size;
   }
 
-  #workerStore(): PluginStateKeyedStore<ClickClackDiscussionBinding> {
-    return (this.#asyncStore ??=
-      this.#runtime.state.openKeyedStore<ClickClackDiscussionBinding>(BINDING_STORE_OPTIONS));
+  #workerStore(): PluginStateKeyedStore<ClickClackDiscussionBinding, 2> {
+    return (this.#store ??=
+      this.#runtime.state.openKeyedStoreV2<ClickClackDiscussionBinding>(BINDING_STORE_OPTIONS));
   }
 
-  oldestDetached(): { sessionKey: string; binding: ClickClackDiscussionBinding } | undefined {
+  async oldestDetached(): Promise<
+    { sessionKey: string; binding: ClickClackDiscussionBinding } | undefined
+  > {
     let oldestSessionKey: string | undefined;
     let oldestDetachedAt = Number.POSITIVE_INFINITY;
     for (const [sessionKey, detachedAt] of this.#detachedAtBySession) {
@@ -230,9 +324,11 @@ export class ClickClackDiscussionBindingStore {
     if (!oldestSessionKey) {
       return undefined;
     }
-    const binding = this.get(oldestSessionKey);
+    const binding = await this.getAsync(oldestSessionKey);
     if (!binding || binding.detachedAt === undefined) {
-      this.#detachedAtBySession.delete(oldestSessionKey);
+      if (this.#detachedAtBySession.get(oldestSessionKey) === oldestDetachedAt) {
+        this.#detachedAtBySession.delete(oldestSessionKey);
+      }
       return this.oldestDetached();
     }
     return { sessionKey: oldestSessionKey, binding };

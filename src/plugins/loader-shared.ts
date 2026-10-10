@@ -440,24 +440,17 @@ export function activatePluginRegistry(
     if (!isCurrentStage()) {
       throw new Error("Plugin registry activation was superseded");
     }
-    const activationAuthority = trackActivationCleanup
-      ? capturePluginLifecycleAuthority(registry)
-      : undefined;
+    const activationAuthority = capturePluginLifecycleAuthority(registry);
     initializeGlobalHookRunner(registry);
-    activateContextEngineRegistrations(
-      registry,
-      trackActivationCleanup
-        ? {
-            trackCleanup: trackActivationCleanup,
-            assertCurrent: () => {
-              // A peer Gateway can change the process projection while this owner stays live.
-              if (stagedVersion === undefined || !activationAuthority?.()) {
-                throw new Error("Plugin registry activation was superseded");
-              }
-            },
-          }
-        : undefined,
-    );
+    void activateContextEngineRegistrations(registry, {
+      trackCleanup: (completion) => trackActivationCleanup?.(completion),
+      assertCurrent: () => {
+        // A peer Gateway can change the process projection while this owner stays live.
+        if (stagedVersion === undefined || !activationAuthority?.()) {
+          throw new Error("Plugin registry activation was superseded");
+        }
+      },
+    });
     commitStagedPluginRegistry(retainedRegistry, registry);
     if (!isCurrentStage()) {
       throw new Error("Plugin registry activation was superseded");

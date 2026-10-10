@@ -21,6 +21,7 @@ import {
 } from "./plugin-state-store.retention.js";
 import type {
   PluginStateCompareResult,
+  PluginStateComparisonCondition,
   PluginStateObservation,
 } from "./plugin-state-store.types.js";
 
@@ -31,6 +32,7 @@ export type PluginStatePreparedComparison = Key & {
   comparison: string;
   /** The Gateway's receipt-maintained snapshot; SQL still compares the exact stored image. */
   current?: { row: PluginStateReadRow | undefined };
+  conditions?: readonly PluginStateComparisonCondition[];
 } & (
     | { operation: "update"; action: "set"; valueJson: string; ttlMs?: number }
     | { operation: "update" | "delete"; action: "keep" }
@@ -173,6 +175,28 @@ export function compareAndApplyPluginStateEntry(
   );
   if (current.comparison !== params.comparison) {
     return { status: "conflict", current };
+  }
+  for (const condition of params.conditions ?? []) {
+    const conditionKey = { pluginId: params.pluginId, ...condition };
+    if (
+      validatePluginStateComparison(
+        condition.comparison,
+        params.operation === "update" ? "register" : "delete",
+      ) !== pluginStateComparisonScope(storeIdentity, conditionKey)
+    ) {
+      throw createPluginStateError({
+        code: "PLUGIN_STATE_INVALID_INPUT",
+        operation: params.operation === "update" ? "register" : "delete",
+        path: store.path,
+        message: "Plugin state condition belongs to another database, namespace or key.",
+      });
+    }
+    if (
+      observePluginStateEntry(store, conditionKey, storeIdentity).comparison !==
+      condition.comparison
+    ) {
+      return { status: "conflict", current };
+    }
   }
   const result = applyComparedEntry(store, params, now, row);
   if (result) {
