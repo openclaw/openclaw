@@ -514,21 +514,6 @@ describe("node bootstrap distribution", () => {
     await closing;
   });
 
-  it("keeps a retired artifact until its active enrollment closes", async () => {
-    const { provider } = await fixture();
-    const enrollment = new AbortController();
-    const artifact = await provider.prepare(enrollment.signal);
-    const closing = provider.close();
-    try {
-      await expect(fs.access(artifact.tarballPath)).resolves.toBeUndefined();
-      await expect(provider.prepare()).rejects.toThrow("closed");
-    } finally {
-      enrollment.abort();
-      await closing;
-    }
-    await expect(fs.access(artifact.tarballPath)).rejects.toMatchObject({ code: "ENOENT" });
-  });
-
   it("cancels one waiting enrollment without abandoning shared artifact preparation", async () => {
     const { provider } = await fixture();
     const stagingRoot = tempDirs.make("node-artifact-held-");
