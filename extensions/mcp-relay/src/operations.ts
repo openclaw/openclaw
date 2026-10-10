@@ -79,7 +79,7 @@ function messageId(value: unknown): string | undefined {
   if (!isRecord(value)) {
     return undefined;
   }
-  const metadata = isRecord(value.__openclaw) ? value.__openclaw : undefined;
+  const metadata = isRecord(value["__openclaw"]) ? value["__openclaw"] : undefined;
   return typeof metadata?.id === "string"
     ? metadata.id
     : typeof value.id === "string"
@@ -91,7 +91,7 @@ function conversationMessage(value: unknown): HistoryMessage | undefined {
   if (!isRecord(value) || (value.role !== "user" && value.role !== "assistant")) {
     return undefined;
   }
-  const metadata = isRecord(value.__openclaw) ? value.__openclaw : undefined;
+  const metadata = isRecord(value["__openclaw"]) ? value["__openclaw"] : undefined;
   const text =
     typeof value.content === "string"
       ? value.content
@@ -225,7 +225,9 @@ export function createOperations({
   ) {
     const base = { conversationId, runId };
     try {
-      if (waitMs === 0 && justSubmitted) return { ...base, status: "running" };
+      if (waitMs === 0 && justSubmitted) {
+        return { ...base, status: "running" };
+      }
       await assertAuthority();
       const result = await request(
         "agent.wait",
@@ -234,11 +236,12 @@ export function createOperations({
       );
       await assertAuthority();
       await findSession(conversationId);
-      if (!isRecord(result))
+      if (!isRecord(result)) {
         throw new RelayError(
           "unavailable",
           "Run status is unavailable. Open the conversation in OpenClaw.",
         );
+      }
       const terminalTimeout =
         result.status === "timeout" &&
         result.pendingError !== true &&
@@ -257,13 +260,15 @@ export function createOperations({
             "The agent run failed. Open the conversation in OpenClaw to inspect the error and retry.",
         };
       }
-      if (result.status === "timeout" || result.status === "pending")
+      if (result.status === "timeout" || result.status === "pending") {
         return { ...base, status: "running" };
-      if (result.status !== "ok")
+      }
+      if (result.status !== "ok") {
         throw new RelayError(
           "unavailable",
           "Run status is unavailable. Open the conversation in OpenClaw.",
         );
+      }
       const terminal = isRecord(result.terminalReply) ? result.terminalReply : undefined;
       return {
         ...base,
@@ -278,8 +283,9 @@ export function createOperations({
             : {}),
       };
     } catch (error) {
-      if (error instanceof RelayError && error.code === "timeout")
+      if (error instanceof RelayError && error.code === "timeout") {
         return { ...base, status: "running" };
+      }
       throw error;
     }
   }
@@ -333,15 +339,19 @@ export function createOperations({
                     right.lastActivityAt - left.lastActivityAt || left.key.localeCompare(right.key),
                 )
                 .slice(0, limit)
-                .map((session) => ({
-                  conversationId: session.key,
-                  title: title(session),
-                  agentId: session.agentId,
-                  updatedAt: new Date(session.lastActivityAt).toISOString(),
-                  ...(session.lastMessagePreview
-                    ? { preview: truncateText(session.lastMessagePreview) }
-                    : {}),
-                })),
+                .map((session) =>
+                  Object.assign(
+                    {
+                      conversationId: session.key,
+                      title: title(session),
+                      agentId: session.agentId,
+                      updatedAt: new Date(session.lastActivityAt).toISOString(),
+                    },
+                    session.lastMessagePreview
+                      ? { preview: truncateText(session.lastMessagePreview) }
+                      : {},
+                  ),
+                ),
             }),
         );
       }
@@ -394,8 +404,9 @@ export function createOperations({
         if (conversationId) {
           const session = await findSession(conversationId);
           resolvedConversationId = session.key;
-          if (requestedAgentId && requestedAgentId !== session.agentId)
+          if (requestedAgentId && requestedAgentId !== session.agentId) {
             invalid("agentId does not own this conversation. Select the conversation's agent.");
+          }
           await assertAuthority();
           accepted = await request(
             "chat.send",
@@ -411,32 +422,36 @@ export function createOperations({
         } else {
           const config = runtime.config.current();
           const agentId = requestedAgentId ?? configuredAgentId ?? tryResolveDefaultAgentId(config);
-          if (!agentId)
+          if (!agentId) {
             invalid(
               "No default agent is configured. Supply agentId or set the MCP relay plugin's agentId.",
             );
-          if (!listAgentIds(config).includes(agentId))
+          }
+          if (!listAgentIds(config).includes(agentId)) {
             invalid(
               "The selected agent does not exist. Get the Gateway status and choose an available agent.",
             );
+          }
           await assertAuthority();
           accepted = await request("sessions.create", { agentId, message }, { timeoutMs: 15_000 });
           await assertAuthority();
-          if (!isRecord(accepted) || typeof accepted.key !== "string")
+          if (!isRecord(accepted) || typeof accepted.key !== "string") {
             throw new RelayError(
               "unavailable",
               "Conversation creation did not return a conversation ID. Check OpenClaw before trying again.",
             );
+          }
           if (accepted.runStarted === false || accepted.runError !== undefined) {
             const error =
               "The conversation was created, but the message did not start. Open it in OpenClaw and retry there.";
-            if (typeof accepted.runId === "string" && accepted.runId)
+            if (typeof accepted.runId === "string" && accepted.runId) {
               return {
                 conversationId: accepted.key,
                 runId: accepted.runId,
                 status: "failed",
                 error,
               };
+            }
             throw new RelayError(
               "unavailable",
               `Conversation ${accepted.key} was created, but the message did not start. Open it in OpenClaw and retry there.`,
@@ -445,11 +460,12 @@ export function createOperations({
           resolvedConversationId = accepted.key;
         }
         await assertAuthority();
-        if (!isRecord(accepted) || typeof accepted.runId !== "string" || !accepted.runId)
+        if (!isRecord(accepted) || typeof accepted.runId !== "string" || !accepted.runId) {
           throw new RelayError(
             "unavailable",
             "The Gateway did not return a run ID. Check the conversation in OpenClaw before sending again.",
           );
+        }
         return await observeRun(
           resolvedConversationId,
           accepted.runId,
@@ -468,7 +484,7 @@ export function createOperations({
         return await observeRun(conversationId, runId, waitMs, assertAuthority, request);
       }
       default:
-        invalid("This operation is not supported.");
+        return invalid("This operation is not supported.");
     }
   }
   return async (
@@ -488,7 +504,9 @@ export function createOperations({
     let gatewayMethod = "none";
     let logged = false;
     const logFailure = (error: unknown) => {
-      if (logged) return;
+      if (logged) {
+        return;
+      }
       logged = true;
       const code = isRecord(error) && typeof error.code === "string" ? error.code : "unknown";
       const message = error instanceof Error ? error.message : "Unexpected failure";
@@ -498,7 +516,7 @@ export function createOperations({
         .flatMap((value) =>
           typeof value === "string" && value ? [value, JSON.stringify(value).slice(1, -1)] : [],
         )
-        .sort((left, right) => right.length - left.length);
+        .toSorted((left, right) => right.length - left.length);
       if (values.length) {
         diagnostic = diagnostic.replace(
           new RegExp(values.map(escapeRegExp).join("|"), "g"),
@@ -528,7 +546,9 @@ export function createOperations({
       await assertAuthority();
       return capResult(result);
     } catch (error) {
-      if (!(error instanceof RelayError) || error.code === "internal") logFailure(error);
+      if (!(error instanceof RelayError) || error.code === "internal") {
+        logFailure(error);
+      }
       throw error;
     }
   };

@@ -451,7 +451,9 @@ describe("MCP relay data operations", () => {
         return { status: "ok" };
       });
     const assertAuthority = async () => {
-      if (!authorized) throw new Error("grant revoked");
+      if (!authorized) {
+        throw new Error("grant revoked");
+      }
     };
     await expect(
       operations(

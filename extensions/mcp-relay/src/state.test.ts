@@ -54,7 +54,7 @@ describe("MCP relay durable authority", () => {
         f.open().createGrant({ grantId, codeHash: "hash", client: CLIENT }, 10),
       ),
     );
-    expect(results.toSorted()).toEqual([false, true]);
+    expect(results.toSorted((left, right) => Number(left) - Number(right))).toEqual([false, true]);
     const grants = await f.open().grants();
     expect(grants).toHaveLength(1);
     expect(grants[0]).toMatchObject({

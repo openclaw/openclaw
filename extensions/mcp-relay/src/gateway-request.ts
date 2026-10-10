@@ -20,7 +20,9 @@ export function createDeadlineGatewayRequest(
   return async (method, params, options) => {
     const startedAt = now();
     const remaining = Math.floor(deadline - startedAt);
-    if (remaining <= 0) throw deadlineError();
+    if (remaining <= 0) {
+      throw deadlineError();
+    }
     const timeoutMs = Math.min(options?.timeoutMs ?? remaining, remaining);
     const rpcDeadline = startedAt + timeoutMs;
     // Let agent.wait publish its observation before the surrounding RPC timer wins.
@@ -31,7 +33,9 @@ export function createDeadlineGatewayRequest(
     try {
       return await request(method, boundedParams, { ...options, timeoutMs });
     } catch (error) {
-      if (error instanceof RelayError) throw error;
+      if (error instanceof RelayError) {
+        throw error;
+      }
       const code = isRecord(error) ? error.code : undefined;
       if (
         code === "CLIENT_TIMEOUT" ||

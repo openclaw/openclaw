@@ -456,7 +456,7 @@ export class RelayService {
       } catch (error) {
         timer.cancel();
         this.#pending.delete(id);
-        reject(error);
+        throw error;
       }
     });
   }

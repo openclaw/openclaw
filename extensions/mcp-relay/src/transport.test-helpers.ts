@@ -71,7 +71,11 @@ export class FakeRelaySocket extends EventEmitter implements RelaySocket {
 
   nextFrame(): Promise<Record<string, unknown>> {
     const frame = this.#queue.shift();
-    return frame ? Promise.resolve(frame) : new Promise((resolve) => this.#readers.push(resolve));
+    return frame
+      ? Promise.resolve(frame)
+      : new Promise((resolve) => {
+          this.#readers.push(resolve);
+        });
   }
 
   acknowledge(frame: Record<string, unknown>): void {
