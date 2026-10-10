@@ -236,13 +236,11 @@ describe("hook request delivery normalization", () => {
     });
 
     expect(optedOutResponse.res.statusCode).toBe(200);
-    expect(optedOut.dispatchAgentHook).toHaveBeenCalledWith(
-      expect.objectContaining({
-        deliver: false,
-        channel: "delivery-test",
-        delivery: { mode: "none" },
-      }),
-    );
+    expect(optedOut.dispatchAgentHook.mock.calls[0]?.[0]).toMatchObject({
+      deliver: false,
+      channel: "delivery-test",
+      delivery: { mode: "none" },
+    });
   });
 
   test.each([
@@ -278,9 +276,10 @@ describe("hook request delivery normalization", () => {
       payload: {},
     });
     expect(mapping.res.statusCode).toBe(200);
-    expect(dispatchAgentHook).toHaveBeenCalledWith(
-      expect.objectContaining({ agentId: "main", effectiveAgentId: "main" }),
-    );
+    expect(dispatchAgentHook.mock.calls[0]?.[0]).toMatchObject({
+      agentId: "main",
+      effectiveAgentId: "main",
+    });
   });
 
   test.each([
