@@ -1,4 +1,4 @@
-import path from "node:path";
+import { resolve as resolvePath } from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -596,8 +596,8 @@ export const sessionsFilesHandlers: GatewayRequestHandlers = {
     if (
       workspaceDir &&
       update.file.workspacePath &&
-      path.resolve(update.root, update.file.workspacePath) ===
-        path.resolve(workspaceDir, DEFAULT_IDENTITY_FILENAME)
+      resolvePath(update.root, update.file.workspacePath) ===
+        resolvePath(workspaceDir, DEFAULT_IDENTITY_FILENAME)
     ) {
       // A pre-write worker reply must settle before the event admits a new identity read.
       await loadAgentIdentityFromWorkspaceAsync(workspaceDir);
