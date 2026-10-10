@@ -168,7 +168,7 @@ describe("proxy command cleanup errors", () => {
   );
 
   it("forwards a parent-only SIGTERM and settles capture after the child exits", async () => {
-    const launched = createDeferred<void>();
+    const launched = createDeferred();
     const before = new Set(process.listeners("SIGTERM"));
     const order: string[] = [];
     const child = Object.assign(new EventEmitter(), {

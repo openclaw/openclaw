@@ -102,6 +102,7 @@ export function withProxyCaptureOwner<T>(
             throw new AggregateError(
               [...errors, error],
               "Debug proxy command and capture cleanup failed.",
+              { cause: error },
             );
           }
           if (!outcome.ok) {

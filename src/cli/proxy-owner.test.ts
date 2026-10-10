@@ -92,8 +92,8 @@ describe("standalone proxy owner routing", () => {
     if (mode === "online") {
       await startOwner();
     }
-    const stopping = createDeferred<void>();
-    const resume = createDeferred<void>();
+    const stopping = createDeferred();
+    const resume = createDeferred();
     stopServer.mockImplementation(async () => {
       stopping.resolve();
       await resume.promise;
@@ -211,7 +211,9 @@ describe("standalone proxy owner routing", () => {
             upstream(req.headers);
             res.end("upstream response");
           });
-          await new Promise<void>((resolve) => origin.listen(0, "127.0.0.1", resolve));
+          await new Promise<void>((resolve) => {
+            origin.listen(0, "127.0.0.1", resolve);
+          });
           const address = origin.address();
           if (!address || typeof address === "string") {
             throw new Error("Fixture origin address unavailable");
@@ -227,7 +229,9 @@ describe("standalone proxy owner routing", () => {
             expect(upstream.mock.calls[0]?.[0]).not.toHaveProperty("proxy-authorization");
             expect(JSON.stringify(upstream.mock.calls)).not.toContain(token);
           } finally {
-            await new Promise<void>((resolve) => origin.close(() => resolve()));
+            await new Promise<void>((resolve) => {
+              origin.close(() => resolve());
+            });
           }
           expect(await store.listSessions()).toEqual([
             expect.objectContaining({

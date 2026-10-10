@@ -145,9 +145,9 @@ export async function runDebugProxyRunCommand(opts: {
           cleanupSignals();
           reject(error);
         });
-        child.once("exit", (code, signal) => {
+        child.once("exit", (code, childSignal) => {
           cleanupSignals();
-          process.exitCode = resolveSubprocessExitCode(code, signal);
+          process.exitCode = resolveSubprocessExitCode(code, childSignal);
           resolve();
         });
       });

@@ -91,17 +91,22 @@ export function createDebugProxyChildCaptureStore(settings: DebugProxySettings) 
         }),
       close: () => {
         closing = true;
-        return (completion ??= finalizeCaptureStoreAsync(
-          store,
-          writer(() => {
-            if (closed) {
-              throw new Error("Debug proxy child capture is closed");
-            }
-          }),
-        ).finally(async () => {
-          await queue;
-          closed = true;
-        }));
+        completion ??= (async () => {
+          try {
+            await finalizeCaptureStoreAsync(
+              store,
+              writer(() => {
+                if (closed) {
+                  throw new Error("Debug proxy child capture is closed");
+                }
+              }),
+            );
+          } finally {
+            await queue;
+            closed = true;
+          }
+        })();
+        return completion;
       },
     };
   };

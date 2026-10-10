@@ -16,7 +16,7 @@ await captureWsEventAsync({
 });
 const target = process.argv[2];
 if (target) {
-  const agent = createAmbientNodeProxyAgent({ protocol: "http", env: process.env });
+  const agent = createAmbientNodeProxyAgent({ protocol: "http" });
   try {
     await new Promise<void>((resolve, reject) => {
       get(target, { agent }, (res) => {
