@@ -3,9 +3,16 @@
  * synthetic auth for catalog/runtime discovery without full Anthropic registration.
  */
 import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
+import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { probeClaudeCliAuthStatus } from "./cli-auth-seam.js";
 import { CLAUDE_CLI_BACKEND_ID, CLAUDE_CLI_NATIVE_AUTH_MARKER } from "./cli-constants.js";
+import { discoverClaudeCliModels } from "./cli-model-discovery.js";
+
+const modelCaptures = new WeakMap<
+  object,
+  WeakMap<object, WeakMap<object, Promise<ModelDefinitionConfig[]>>>
+>();
 
 type NativeAvailability = ReturnType<typeof probeClaudeCliAuthStatus>;
 const availability = new WeakMap<object, WeakMap<object, WeakMap<object, NativeAvailability>>>();
@@ -15,6 +22,61 @@ const anthropicProviderDiscovery: ProviderPlugin = {
   label: "Claude CLI",
   docsPath: "/providers/models",
   auth: [],
+  catalog: {
+    order: "simple",
+    async run(ctx) {
+      if (ctx.providerIds && !ctx.providerIds.includes(CLAUDE_CLI_BACKEND_ID)) {
+        return null;
+      }
+      if (
+        !ctx.resolveProviderAuth(CLAUDE_CLI_BACKEND_ID, {
+          oauthMarker: CLAUDE_CLI_NATIVE_AUTH_MARKER,
+        }).apiKey
+      ) {
+        return null;
+      }
+      ctx.signal?.throwIfAborted();
+      const environments = modelCaptures.get(ctx.config) ?? new WeakMap();
+      modelCaptures.set(ctx.config, environments);
+      const captures = environments.get(ctx.env) ?? new WeakMap();
+      environments.set(ctx.env, captures);
+      const owner = ctx.signal ?? ctx.config;
+      const pending = captures.get(owner) ?? discoverClaudeCliModels(ctx);
+      captures.set(owner, pending);
+      try {
+        const models = await pending;
+        ctx.signal?.throwIfAborted();
+        return {
+          providers: {
+            [CLAUDE_CLI_BACKEND_ID]: {
+              baseUrl: "https://api.anthropic.com",
+              api: "anthropic-messages",
+              models,
+            },
+          },
+          outcomes: [
+            {
+              provider: CLAUDE_CLI_BACKEND_ID,
+              status: "ready",
+              listedModelIds: models.map((model) => model.id),
+            },
+          ],
+        };
+      } catch {
+        ctx.signal?.throwIfAborted();
+        return {
+          providers: {
+            [CLAUDE_CLI_BACKEND_ID]: {
+              baseUrl: "https://api.anthropic.com",
+              api: "anthropic-messages",
+              models: [],
+            },
+          },
+          outcomes: [{ provider: CLAUDE_CLI_BACKEND_ID, status: "unavailable" }],
+        };
+      }
+    },
+  },
   async prepareSyntheticAuth({ config, provider, env = process.env, signal }) {
     signal?.throwIfAborted();
     if (!config || normalizeLowercaseStringOrEmpty(provider) !== CLAUDE_CLI_BACKEND_ID) {

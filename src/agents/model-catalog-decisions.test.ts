@@ -20,6 +20,7 @@ import {
   routeResolverFactory,
   subscriptionRoute,
 } from "./model-auth-availability.test-support.js";
+import { projectClaudeCliNativeCatalog } from "./model-catalog-cli-wildcard.js";
 import {
   createModelCatalogDecisions,
   prepareModelCatalogDecisions,
@@ -766,10 +767,17 @@ describe("catalog decisions with prepared CLI auth directories", () => {
           workspaceDir: state.workspaceDir,
           snapshot: {
             entries: [
-              { provider: "claude-cli", id: "claude-listed", name: "Listed" },
+              { provider: "claude-cli", id: "claude-stale", name: "Stale static row" },
               { provider: "google-gemini-cli", id: "gemini-listed", name: "Listed" },
             ],
             routeVariants: [],
+            providerOutcomes: [
+              {
+                provider: "claude-cli",
+                status: "ready",
+                listedModelIds: ["claude-listed"],
+              },
+            ],
           },
           metadataSnapshot: cliMetadata,
           preparedAuthStore: {
@@ -789,6 +797,7 @@ describe("catalog decisions with prepared CLI auth directories", () => {
         owner.evaluateEntry({ provider, id }).availability;
 
       expect(availability("anthropic", "claude-listed")).toBe(true);
+      expect(availability("anthropic", "claude-stale")).toBe(false);
       // API-only rows stay out of a Claude CLI picker without a sign-in prompt.
       const apiOnly = owner.evaluateEntry({ provider: "anthropic", id: "claude-mythos-5" });
       expect(apiOnly.availability).toBe(false);
@@ -814,4 +823,44 @@ describe("catalog decisions with prepared CLI auth directories", () => {
       ).toBe(false);
     });
   });
+});
+
+it("projects exact native IDs and effort levels without expanding a restricted menu", () => {
+  const native: ModelCatalogEntry = {
+    provider: "claude-cli",
+    id: "claude-future",
+    name: "Future",
+    reasoning: true,
+    thinkingLevelMap: { low: "low", max: "max" },
+  };
+  const donor: ModelCatalogEntry = {
+    provider: "anthropic",
+    id: "claude-future",
+    name: "Hosted metadata",
+    contextWindow: 456_000,
+    thinkingLevelMap: { high: "high" },
+  };
+  const snapshot = {
+    entries: [native, donor, { provider: "claude-cli", id: "claude-stale", name: "Stale" }],
+    routeVariants: [],
+    staticEntries: [donor],
+    providerOutcomes: [
+      {
+        provider: "claude-cli",
+        status: "ready" as const,
+        listedModelIds: [native.id],
+      },
+    ],
+  };
+  const projected = projectClaudeCliNativeCatalog(snapshot, true);
+  expect(projected.entries.find((row) => row.provider === "anthropic")).toMatchObject({
+    id: native.id,
+    contextWindow: 456_000,
+    thinkingLevelMap: native.thinkingLevelMap,
+  });
+  expect(projected.entries.some((row) => row.id === "claude-stale")).toBe(false);
+  expect(projectClaudeCliNativeCatalog(snapshot, false).entries).toContain(donor);
+  expect(
+    projectClaudeCliNativeCatalog({ ...snapshot, providerOutcomes: [] }, true).entries,
+  ).toEqual([donor]);
 });

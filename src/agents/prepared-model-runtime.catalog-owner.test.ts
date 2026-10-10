@@ -609,6 +609,41 @@ describe("legacy provider catalog retention", () => {
     });
   });
 
+  it("refreshes native Claude inventory with the canonical Anthropic scope", async () => {
+    const native = { provider: "anthropic", id: "claude-new", name: "Native" };
+    mocks.runPreparedModelCatalogWorker.mockImplementation(async (providers) => {
+      const discovered: ModelCatalogSnapshot = {
+        entries: providers?.includes("claude-cli") ? [native] : [],
+        routeVariants: [],
+        providerOutcomes: providers?.includes("claude-cli")
+          ? [{ provider: "claude-cli", status: "ready", listedModelIds: [native.id] }]
+          : [],
+      };
+      setPreparedModelFullCatalogAuth(discovered, {
+        providerAuthLabels: new Map(),
+        authStore: { version: 1, profiles: {} },
+        authModes: {},
+        credentials: {},
+      });
+      return discovered;
+    });
+    mocks.configuredAgentIds = ["pro"];
+    const config: OpenClawConfig = { agents: { entries: { pro: {} } } };
+    const owner = await publishPreparedModelRuntimeSnapshot(fixture.agentInput("pro", config), {
+      catalogMode: "static",
+    });
+    const catalog = await owner.loadFullModelCatalog!({
+      refresh: true,
+      providerIds: ["anthropic"],
+    });
+    expect(catalog.entries).toContainEqual(expect.objectContaining(native));
+    expect(catalog.providerOutcomes).toContainEqual({
+      provider: "claude-cli",
+      status: "ready",
+      listedModelIds: [native.id],
+    });
+  });
+
   it("reacquires discovered providers that a config rebuild cannot retain", async () => {
     // Claude CLI shape: only discovery observes the native sign-in, so a rebuild's agent facts
     // cannot prove the same account and the retained inventory drops the provider.

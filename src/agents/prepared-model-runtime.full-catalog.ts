@@ -15,6 +15,7 @@ import {
 import { loadBundledProviderStaticCatalogContextModels } from "./embedded-agent-runner/model.static-catalog.js";
 import { createPreparedConfiguredRuntimeModelLookup } from "./embedded-agent-runner/model.static-id.js";
 import { augmentPreparedModelCatalogWithAgentHarness } from "./harness/model-catalog.js";
+import { projectClaudeCliNativeCatalog } from "./model-catalog-cli-wildcard.js";
 import {
   enrichHarnessRows,
   modelCatalogRouteVariantKey,
@@ -196,22 +197,25 @@ export async function prepareFullCatalogFacts(
       input.config,
       input.env,
     );
-    const completeModelCatalog = {
-      ...modelCatalog,
-      staticEntries:
-        input.config.models?.mode === "replace"
-          ? []
-          : dedupeByKey(
-              // Static hooks also answer runtime provider aliases; publish canonical rows once.
-              [...providerStaticModels, ...manifestStaticModels].map((model) => {
-                const entry = modelCatalogRowToEntry(model);
-                entry.provider = normalizeProvider(entry.provider);
-                return entry;
-              }),
-              createModelCatalogIdentityKeyResolver(),
-            ),
-      ...(providerOutcomes.length > 0 ? { providerOutcomes } : {}),
-    };
+    const completeModelCatalog = projectClaudeCliNativeCatalog(
+      {
+        ...modelCatalog,
+        staticEntries:
+          input.config.models?.mode === "replace"
+            ? []
+            : dedupeByKey(
+                // Static hooks also answer runtime provider aliases; publish canonical rows once.
+                [...providerStaticModels, ...manifestStaticModels].map((model) => {
+                  const entry = modelCatalogRowToEntry(model);
+                  entry.provider = normalizeProvider(entry.provider);
+                  return entry;
+                }),
+                createModelCatalogIdentityKeyResolver(),
+              ),
+        ...(providerOutcomes.length > 0 ? { providerOutcomes } : {}),
+      },
+      !agentFacts.credentials.anthropic,
+    );
     if (catalogMode === "live") {
       fullModelCatalogSnapshots.add(completeModelCatalog);
     }
