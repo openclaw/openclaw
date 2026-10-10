@@ -361,6 +361,19 @@ requested channel. Discussion tools validate the persisted target directly; no
 discussion reverse index remains. Replacing a primary key cannot reuse an obsolete
 channel or discussion route.
 
+ClickClack cleanup and metadata reconciliation condition binding mutations on
+the captured room and session attachment. The keyed-state worker compares the
+observed row inside the mutation transaction. A replacement wins: cleanup keeps
+its routing index, open stops instead of overwriting it, and late reconciliation
+discards the old result. Opening a new room publishes only while the binding is
+still absent; an unbound remote room remains quarantined for recovery. These
+checks preserve the existing SQLite schema and update behavior. Cleanup
+revocations carry their captured binding and are conditional on that owner in
+the same worker transaction. They remain effective after removal, but do not
+revoke a successor using the same channel. Existing unscoped tombstones and
+quarantine markers still revoke the entire channel and cannot be narrowed by
+cleanup.
+
 Coverage remains scoped to these managed kernels. Session-entry worker envelopes
 still need to compose conversation association facts and compound native-binding
 deletion/compensation facts with their session receipt. Raw handles, trigger or

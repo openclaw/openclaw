@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import {
   readDiscussionSessionEntry,
@@ -23,12 +24,13 @@ export class DetachedDiscussionBindingRetention {
 
   async mark(sessionKey: string, binding: ClickClackDiscussionBinding): Promise<void> {
     const current = await this.#store.getAsync(sessionKey);
-    if (!current || !this.#sameRoom(current, binding)) {
+    if (!current || !isDeepStrictEqual(current, binding)) {
       return;
     }
     if (current.detachedAt === undefined) {
-      await this.#store.set(
+      await this.#store.setIfCurrent(
         sessionKey,
+        current,
         { ...current, detachedAt: Date.now() },
         {
           assertCurrent: () => this.#assertDetached(sessionKey, current),
@@ -47,17 +49,17 @@ export class DetachedDiscussionBindingRetention {
     binding: ClickClackDiscussionBinding,
   ): Promise<ClickClackDiscussionBinding | undefined> {
     const current = await this.#store.getAsync(sessionKey);
-    if (!current || !this.#sameRoom(current, binding)) {
+    if (!current || !isDeepStrictEqual(current, binding)) {
       return undefined;
     }
     if (current.detachedAt === undefined) {
       return current;
     }
     const { detachedAt: _detachedAt, ...retained } = current;
-    await this.#store.set(sessionKey, retained, {
+    const applied = await this.#store.setIfCurrent(sessionKey, current, retained, {
       assertCurrent: () => this.#assertRoomCurrent(sessionKey, current),
     });
-    return retained;
+    return applied ? retained : undefined;
   }
 
   async ensureCapacity(sessionKey: string): Promise<void> {
@@ -84,9 +86,19 @@ export class DetachedDiscussionBindingRetention {
       const authority = {
         assertCurrent: () => this.#assertDetached(oldest.sessionKey, current),
       };
-      await markClickClackDiscussionChannelRevoked(this.#runtime, current, authority);
-      await this.#store.delete(oldest.sessionKey, authority);
-      return true;
+      if (
+        !(await markClickClackDiscussionChannelRevoked(
+          this.#runtime,
+          oldest.sessionKey,
+          current,
+          authority,
+        ))
+      ) {
+        continue;
+      }
+      if (await this.#store.deleteIfCurrent(oldest.sessionKey, current, authority)) {
+        return true;
+      }
     }
   }
 
