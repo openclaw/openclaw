@@ -182,7 +182,7 @@
   min-width: 180px;
 }
 
-.sessions-toolbar__search > svg {
+.sessions-toolbar__search svg {
   position: absolute;
   top: 50%;
   inset-inline-start: 9px;

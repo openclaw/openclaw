@@ -3,5 +3,5 @@ import { routePageSpec } from "../../app-route-paths.ts";
 
 export const page = definePage({
   ...routePageSpec("agents-home"),
-  component: () => import("./agents-home-page.ts"),
+  component: () => import("./agents-home-page.tsx"),
 });

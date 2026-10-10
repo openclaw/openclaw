@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { patchSettings } from "../../app/settings.ts";
 import { rosterActivityStore } from "../../lib/agents/roster-activity-store.ts";
-import "../../pages/agents-home/agents-home-page.ts";
+import "../../pages/agents-home/agents-home-page.tsx";
 import {
   agentIds,
   mountRoster,

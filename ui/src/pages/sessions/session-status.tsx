@@ -1,8 +1,8 @@
-import { html } from "lit";
 import type { GatewaySessionRow, SessionRunStatus } from "../../api/types.ts";
 import { renderSettingsStatus } from "../../components/settings-ui.ts";
-import { t } from "../../i18n/index.ts";
+import { t } from "../../lib/reactive/i18n.ts";
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
+import { LitContent } from "../../lit/template-content.tsx";
 
 const SESSION_RUN_STATUS_LABELS = {
   queued: "sessionsView.statusQueued",
@@ -35,9 +35,9 @@ export function renderSessionStatusBadge(row: GatewaySessionRow) {
           ? "muted"
           : "danger";
   const title = `${t("sessionsView.status")}: ${label}`;
-  return html`
-    <openclaw-tooltip .content=${title}>
-      ${renderSettingsStatus({ kind, label })}
+  return (
+    <openclaw-tooltip prop:content={title}>
+      <LitContent render={() => renderSettingsStatus({ kind, label })} />
     </openclaw-tooltip>
-  `;
+  );
 }

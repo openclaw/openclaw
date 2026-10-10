@@ -13,6 +13,7 @@ import { i18n } from "../../i18n/index.ts";
 import { createAgentIdentityCapability } from "../../lib/agents/identity.ts";
 import { createAgentCapability } from "../../lib/agents/index.ts";
 import { createSessionCapability } from "../../lib/sessions/index.ts";
+import { defineSolidBridge } from "../../lit/solid-bridge.ts";
 import { createContext } from "../../test-helpers/app-sidebar.ts";
 import {
   createApplicationContextProvider,
@@ -22,10 +23,10 @@ import {
   createGatewayRequestMock,
   createTestGatewayClient,
 } from "../../test-helpers/gateway-client.ts";
-import { AgentsHomePage } from "./agents-home-page.ts";
+import { AgentsHomePage } from "./agents-home-page.tsx";
 
 const elementName = `test-agents-home-${crypto.randomUUID()}`;
-customElements.define(elementName, class extends AgentsHomePage {});
+defineSolidBridge(elementName, AgentsHomePage);
 
 const roster: AgentsListResult = {
   defaultId: "harbor",
@@ -144,7 +145,7 @@ function createPage() {
   };
   const baselineEventListeners = eventListeners.size;
   const provider = createApplicationContextProvider(context);
-  const page = new (customElements.get(elementName) ?? AgentsHomePage)();
+  const page = document.createElement(elementName);
   provider.append(page);
   document.body.append(provider);
   disposers.push(() => {
@@ -221,7 +222,7 @@ describe("AgentsHomePage", () => {
     const { page, provider, request, rosterListenerCount, updateSessions, emitChange } =
       createPage();
     await vi.waitFor(() => expect(page.querySelectorAll(".agents-home__card")).toHaveLength(2));
-    const second = new (customElements.get(elementName) ?? AgentsHomePage)();
+    const second = document.createElement(elementName);
     provider.append(second);
     await vi.waitFor(() => expect(second.querySelectorAll(".agents-home__card")).toHaveLength(2));
     const calls = (method: string) =>
