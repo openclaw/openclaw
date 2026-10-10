@@ -1,12 +1,15 @@
 import {
   completeSimple,
+  streamSimple,
   type AssistantMessage,
   type Model,
   type Tool,
 } from "openclaw/plugin-sdk/llm";
+import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { extractNonEmptyAssistantText, isLiveTestEnabled } from "openclaw/plugin-sdk/test-live";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
+import plugin from "./index.js";
 import {
   buildOpencodeZenLiveProviderConfig,
   listOpencodeZenModelCatalogEntries,
@@ -178,4 +181,60 @@ describeLive("opencode plugin live", () => {
 
     expect(extractNonEmptyAssistantText(second.content)).toMatch(/^ok[.!]?$/i);
   }, 120_000);
+});
+
+(LIVE && LIVE_MODEL_ID === "kimi-k3" ? describe : describe.skip)("Kimi K3 live thinking", () => {
+  it.each(["off", "low", "high", "max"] as const)(
+    "honors %s through the registered Zen provider",
+    async (reasoning) => {
+      const { model } = await resolveOpencodeToolLiveModel();
+      const provider = await registerSingleProviderPlugin(plugin);
+      const streamFn = provider.wrapStreamFn?.({
+        provider: provider.id,
+        modelId: model.id,
+        model,
+        thinkingLevel: reasoning,
+        streamFn: streamSimple,
+      });
+      if (!streamFn) {
+        throw new Error("Registered Zen stream wrapper missing");
+      }
+      let sentEffort: unknown;
+      const stream = await streamFn(
+        model,
+        {
+          messages: [
+            {
+              role: "user",
+              content: "What is 17 times 23? Reply with the number only.",
+              timestamp: Date.now(),
+            },
+          ],
+        },
+        {
+          apiKey: OPENCODE_API_KEY,
+          sessionId: `openclaw-kimi-live-${reasoning}`,
+          reasoning,
+          maxTokens: 1024,
+          onPayload: (payload) => {
+            sentEffort = (payload as { reasoning_effort?: unknown }).reasoning_effort;
+          },
+        },
+      );
+      const result = await stream.result();
+      expect(result.stopReason, result.errorMessage).toBe("stop");
+      expect(sentEffort).toBe(reasoning === "off" ? "none" : reasoning);
+      expect(extractNonEmptyAssistantText(result.content)).toMatch(/^391[.!]?$/);
+      const thinking = result.content
+        .filter((block) => block.type === "thinking")
+        .map((block) => block.thinking)
+        .join("");
+      if (reasoning === "off") {
+        expect(thinking).toBe("");
+      } else {
+        expect(thinking.length).toBeGreaterThan(0);
+      }
+    },
+    120_000,
+  );
 });
