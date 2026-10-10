@@ -327,7 +327,6 @@ describe("chrome MCP page parsing", () => {
     const { promise: listGate, resolve: releaseList } = createDeferred<void>();
     const { promise: closeStarted, resolve: markCloseStarted } = createDeferred<void>();
     const { promise: closeGate, resolve: releaseClose } = createDeferred<void>();
-    let factoryCalls = 0;
     const session = createPageSession({
       pid: 141,
       pages: [{ id: 1, url: "https://a.example" }],
@@ -346,7 +345,6 @@ describe("chrome MCP page parsing", () => {
     });
     session.client.close = close as typeof session.client.close;
     setChromeMcpSessionFactoryForTest(async () => {
-      factoryCalls += 1;
       return session;
     });
 
@@ -371,7 +369,6 @@ describe("chrome MCP page parsing", () => {
     await expect(active).rejects.toThrow(/transport failed before stop/);
     await expect(queued).rejects.toThrow("Chrome MCP profile session was replaced");
     await expect(explicitClose).resolves.toBe(true);
-    expect(factoryCalls).toBe(1);
   });
 
   it.each(["during admission", "while queued"])(

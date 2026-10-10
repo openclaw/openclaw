@@ -158,7 +158,6 @@ type NativeConsultState = {
   promise: Promise<unknown>;
   readonly cancelled: boolean;
   cancel: () => void;
-  transcript?: TranscriptSnapshot;
 };
 
 function captureNativeConsultTranscript(state: UserTranscriptState): NativeConsultTranscript {
@@ -1775,6 +1774,7 @@ export class RealtimeCallHandler {
         return await submitFinalToolResult(result);
       }
 
+      let transcript: TranscriptSnapshot | undefined;
       const abortController = new AbortController();
       const state: NativeConsultState = {
         owner: bridge,
@@ -1786,12 +1786,11 @@ export class RealtimeCallHandler {
           if (abortController.signal.aborted || !this.isActiveBridgeOwner(callId, bridge)) {
             return undefined;
           }
-          const transcript = consultTranscript?.();
+          transcript = consultTranscript?.();
           const context = {
             partialUserTranscript: transcript?.text,
             abortSignal: abortController.signal,
           };
-          state.transcript = transcript;
           const handlerArgs = withFallbackConsultQuestion(args, context.partialUserTranscript);
           return await invokeHandler(handlerArgs, context);
         })().catch(buildRealtimeVoiceAgentErrorProviderResult),
@@ -1816,7 +1815,7 @@ export class RealtimeCallHandler {
         const failed = logResult(result);
         await submitFinalToolResult(result);
         if (!failed) {
-          consumeUserTranscript(userTranscriptOwner, state.transcript);
+          consumeUserTranscript(userTranscriptOwner, transcript);
         }
         return result;
       } finally {
