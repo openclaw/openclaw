@@ -196,7 +196,7 @@ export async function maybeApplyTtsToPayloadCore(
     return nextPayload;
   }
 
-  const maxLength = getTtsMaxLength(prefsPath);
+  const maxLength = Math.min(getTtsMaxLength(prefsPath), config.maxTextLength);
   let textForAudio = ttsText;
   let wasSummarized = false;
 

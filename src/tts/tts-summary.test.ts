@@ -212,6 +212,22 @@ describe("TTS summary visible text", () => {
     expect(result.text).toBe(originalText);
   });
 
+  it("fits auto speech under tts.maxTextLength when it is below the prefs limit", async () => {
+    cfg = { ...cfg, tts: { ...cfg.tts, maxTextLength: 1000 } };
+    const text = "x".repeat(1200);
+    completion.complete.mockResolvedValue(
+      assistant([{ type: "text", text: "<think>Private only</think>" }]),
+    );
+    const result = await maybeApplyTtsToPayloadCore(
+      { payload: { text }, cfg, channel: "telegram", kind: "final" },
+      persistAudio,
+    );
+    expect(synthesizeMock).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ text: `${text.slice(0, 997)}...` }),
+    );
+    expect(result).toMatchObject({ text, mediaUrl: "/tmp/synthetic-summary.ogg" });
+  });
+
   it("does not sanitize explicitly requested TTS text as model-generated summary output", async () => {
     const text = "Say the literal marker <think>example</think> out loud.";
     const result = await textToSpeechCore({ text, cfg, channel: "telegram" }, persistAudio);
