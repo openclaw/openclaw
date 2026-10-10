@@ -496,7 +496,7 @@ export function createChangedCheckPlan(
     "check:control-ui-lit-ratchet",
     ...(options.staged ? ["--staged"] : []),
     "--base",
-    options.base ?? (options.staged ? "HEAD" : "origin/main"),
+    options.base ?? (options.staged ? "HEAD" : baseEnv.CHECKOUT_BASE_SHA || "origin/main"),
   ];
   delete baseEnv.OPENCLAW_OXLINT_CHANGED_PATHS;
   const cwd = process.cwd();

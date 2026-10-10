@@ -425,11 +425,17 @@ describe("CI changed lint", () => {
     "retains the Lit ratchet and its Git scope when CI splits lint for %s",
     (file) => {
       const result = detectChangedLanes([file]);
-      for (const staged of [false, true]) {
+      for (const { base, staged, expectedBase } of [
+        { base: "fixture-base", staged: false, expectedBase: "fixture-base" },
+        { base: "fixture-base", staged: true, expectedBase: "fixture-base" },
+        { base: undefined, staged: false, expectedBase: "ci-base" },
+        { base: undefined, staged: true, expectedBase: "HEAD" },
+      ]) {
         const commands = createChangedCheckPlan(result, {
           lintOnly: true,
-          base: "fixture-base",
+          base,
           staged,
+          env: { ...process.env, CHECKOUT_BASE_SHA: "ci-base" },
           lintSelection: {
             files: [],
             coreStripes: [],
@@ -445,7 +451,7 @@ describe("CI changed lint", () => {
           "check:control-ui-lit-ratchet",
           ...(staged ? ["--staged"] : []),
           "--base",
-          "fixture-base",
+          expectedBase,
         ]);
       }
     },
