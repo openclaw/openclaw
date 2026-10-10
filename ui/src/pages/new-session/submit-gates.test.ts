@@ -4,6 +4,7 @@ import type {
   ProjectsListResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
+import { GatewayRequestError } from "../../api/gateway.ts";
 import { CHAT_ROUTE_READY_EVENT } from "../chat/chat-history-events.ts";
 import { createDraftFixture } from "./draft-submission-flow.test-support.ts";
 import { renderControl } from "./model-control.test-support.ts";
@@ -389,7 +390,7 @@ describe("DraftSubmissionFlow submit gates", () => {
     expectGate(flow);
   });
 
-  it.each(["unavailable", "rejected"] as const)(
+  it.each(["unavailable", "rejected", "write-denied", "admin-denied", "forbidden"] as const)(
     "keeps saved worktree submission gated until discovery succeeds (%s)",
     async (result) => {
       replaceBrowserPreference("ws://gateway.example", "main", {
@@ -399,7 +400,10 @@ describe("DraftSubmissionFlow submit gates", () => {
       const discovery = createDeferred<unknown>();
       let branches = discovery.promise;
       const { context, flow, place } = withMessage({
-        scopes: adminScopes,
+        scopes:
+          result === "forbidden" || result === "write-denied"
+            ? ["operator.sessions.read", "operator.sessions.write"]
+            : ["operator.read", "operator.write"],
         agents: [agent({ workspaceGit: true, model: { primary: "openai/gpt-5.6-luna" } })],
         request: replies({ "worktrees.branches": () => branches }),
       });
@@ -413,30 +417,63 @@ describe("DraftSubmissionFlow submit gates", () => {
       expect(flow.blockedSubmitNotice()).toBe(flow.submitDisabledReason());
 
       const git = { repositoryStatus: "git", branches: ["main"], defaultBranch: "main" };
-      if (result === "rejected") {
+      const missingScope =
+        result === "write-denied"
+          ? "operator.write"
+          : result === "admin-denied"
+            ? "operator.admin"
+            : undefined;
+      if (missingScope) {
+        discovery.reject(
+          new GatewayRequestError({
+            code: "FORBIDDEN",
+            message: `missing scope: ${missingScope}`,
+            details: { code: "MISSING_SCOPE", missingScope, requiredScopes: [missingScope] },
+          }),
+        );
+      } else if (result === "forbidden") {
+        discovery.reject(
+          new GatewayRequestError({ code: "FORBIDDEN", message: "Git discovery not allowed" }),
+        );
+      } else if (result === "rejected") {
         discovery.reject(new Error("branch lookup unavailable"));
       } else {
         discovery.resolve({ ...git, repositoryStatus: result });
       }
       await discovery.promise.catch(() => undefined);
-      expect(place.repository.kind).toBe("unavailable");
+      expect(place.repository.kind).toBe(
+        missingScope || result === "forbidden" ? "forbidden" : "unavailable",
+      );
       expect(place.preferenceSelection().worktree).toBe(true);
       expect(flow.submitBlock()).toEqual({
         gate: "worktree-unavailable",
-        reason: "Couldn't verify Git for this folder. Choose it again to retry.",
+        reason: missingScope
+          ? `Checking Git for this folder requires ${missingScope} access. Ask the person who manages OpenClaw for access.`
+          : result === "forbidden"
+            ? "You don't have permission to check Git for this folder. Ask the person who manages OpenClaw for access."
+            : "Couldn't verify Git for this folder. Choose it again to retry.",
       });
       await flow.submit();
       await flow.submit(undefined, true);
+      expect(flow.message).toBe("hello");
       flow.setMessage("");
       flow.attachmentDraft.replace([
         { id: "notes", mimeType: "text/plain", fileName: "notes.txt" },
       ]);
       await flow.submit();
       expect(context.sessions.createResult).not.toHaveBeenCalled();
+      expect(place.worktree).toBe(true);
+      expect(flow.attachmentDraft.attachments).toHaveLength(1);
       flow.attachmentDraft.replace([]);
       flow.setMessage("start something");
       branches = Promise.resolve(git);
-      place.clearProjectSelection();
+      if (missingScope || result === "forbidden") {
+        context.gateway.snapshot.hello!.auth!.scopes = adminScopes;
+        place.invalidateGatewayDiscovery(false);
+        place.adoptAgentDefaults();
+      } else {
+        place.clearProjectSelection();
+      }
       await branches;
       await vi.waitFor(() => expect(flow.canSubmit()).toBe(true));
       expect(flow.blockedSubmitNotice()).toBeUndefined();
