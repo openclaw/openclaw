@@ -56,10 +56,33 @@ describe("codex conversation turn input", () => {
       ],
       [
         { type: "image", url: "https://example.test/first.webp" },
+        {
+          type: "text",
+          text: '[Inbound audio attachment: "/tmp/voice"]',
+          text_elements: [],
+        },
         { type: "localImage", path: "/tmp/photo" },
         { type: "image", url: inlineImage },
       ],
     );
+  });
+
+  it("does not silently discard an inbound voice attachment", () => {
+    const input = buildCodexConversationTurnInput({
+      prompt: "Please answer the attached voice note.",
+      event: {
+        content: "Please answer the attached voice note.",
+        channel: "telegram",
+        isGroup: true,
+        metadata: {
+          mediaPath: "/tmp/voice.ogg",
+          mediaPaths: ["/tmp/voice.ogg"],
+          mediaType: "audio/ogg",
+          mediaTypes: ["audio/ogg"],
+        },
+      },
+    });
+    expect(JSON.stringify(input)).toContain("/tmp/voice.ogg");
   });
 
   it("preserves separately attached copies of the same image", () => {
