@@ -4,17 +4,23 @@ import type {
 } from "openclaw/plugin-sdk/plugin-entry";
 import { withServer } from "openclaw/plugin-sdk/test-env";
 import { expect, it } from "vitest";
-import { discoverLlamaServerProvider } from "./provider.js";
+import llamaCppProviderDiscovery from "../../provider-discovery.js";
 import { prepareLlamaServerSetup } from "./setup.js";
 
 async function refresh(config: ProviderCatalogContext["config"]) {
   const context: ProviderCatalogContext = {
     config,
     env: {},
-    resolveProviderApiKey: () => ({ apiKey: undefined }),
+    resolveProviderApiKey: () => ({
+      apiKey: llamaCppProviderDiscovery.resolveSyntheticAuth({
+        config,
+        provider: "llama-cpp",
+        providerConfig: config.models?.providers?.["llama-cpp"],
+      })?.apiKey,
+    }),
     resolveProviderAuth: () => ({ apiKey: undefined, mode: "none", source: "none" }),
   };
-  const result = await discoverLlamaServerProvider(context);
+  const result = await llamaCppProviderDiscovery.catalog.run(context);
   if (!result || !("provider" in result)) {
     throw new Error("Expected a successful llama-server catalog refresh");
   }
