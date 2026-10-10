@@ -9,10 +9,10 @@ import {
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
-import * as agentDatabase from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { buildAgentSessionPatch } from "../server-methods/agent-session-patch.js";
 import { prepareAgentSession } from "../server-methods/agent-session-prepare.js";
+import * as sessionReader from "../session-utils-store-worker.js";
 
 type PatchParams = Parameters<typeof buildAgentSessionPatch>[0];
 const now = 120_001;
@@ -28,7 +28,9 @@ const resetPolicy = resolveSessionResetPolicy({
   resetType: "direct",
 });
 
-function buildReusePatch(input: Partial<PatchParams>) {
+type ReuseInput = Partial<PatchParams> & { transcriptMissing?: boolean };
+function buildReusePatch(input: ReuseInput) {
+  const entry = "freshEntry" in input ? input.freshEntry : expiredEntry;
   return buildAgentSessionPatch({
     freshEntry: expiredEntry,
     initialEntry: expiredEntry,
@@ -45,7 +47,10 @@ function buildReusePatch(input: Partial<PatchParams>) {
     visibleRequest: true,
     fallbackSessionId: "replacement",
     touchInteraction: true,
-    failedSessionTranscriptMissing: () => false,
+    preparedTranscript: entry && {
+      entry,
+      metadata: { present: !input.transcriptMissing, observedAt: null, updatedAt: null },
+    },
     ...input,
   });
 }
@@ -134,7 +139,7 @@ describe("agent session reuse at mutation", () => {
       name: "missing failed transcript",
       input: {
         freshEntry: { ...freshEntry, status: "failed" },
-        failedSessionTranscriptMissing: () => true,
+        transcriptMissing: true,
       },
       sessionId: "replacement",
       isNew: true,
@@ -159,7 +164,7 @@ describe("agent session reuse at mutation", () => {
     },
   ] satisfies Array<{
     name: string;
-    input: Partial<PatchParams>;
+    input: ReuseInput;
     sessionId: string;
     isNew: boolean;
   }>)("preserves $name", async ({ input, sessionId, isNew }) => {
@@ -226,7 +231,7 @@ describe("agent session reuse at mutation", () => {
     });
   });
 
-  it("refuses a replaced expected session after database admission yields", async () => {
+  it("refuses a replaced expected session after the worker read yields", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const cfg = {};
       await state.writeConfig(cfg);
@@ -236,12 +241,12 @@ describe("agent session reuse at mutation", () => {
         storePath: state.statePath("agents", "main", "sessions", "sessions.json"),
       };
       await upsertSessionEntryCore(scope, { ...freshEntry, sessionId: "original" });
-      const open = agentDatabase.withOpenClawAgentDatabaseRuntime;
+      const read = sessionReader.loadGatewaySessionEntryReadOnlyInWorker;
       const admission = vi
-        .spyOn(agentDatabase, "withOpenClawAgentDatabaseRuntime")
+        .spyOn(sessionReader, "loadGatewaySessionEntryReadOnlyInWorker")
         .mockImplementationOnce(async (...args) => {
           await upsertSessionEntryCore(scope, { ...freshEntry, sessionId: "successor" });
-          return open(...args);
+          return read(...args);
         });
       const respond = vi.fn();
       try {

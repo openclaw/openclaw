@@ -40,7 +40,7 @@ async function buildPatch(
       visibleRequest: true,
       fallbackSessionId: "fallback",
       touchInteraction,
-      failedSessionTranscriptMissing: () => false,
+      preparedTranscript: { entry, metadata: { present: true, observedAt: null, updatedAt: null } },
     })
   ).patch;
 }
@@ -71,7 +71,10 @@ async function buildCreationPatch(opts: {
     visibleRequest: opts.visibleRequest ?? true,
     fallbackSessionId: "fallback",
     touchInteraction: false,
-    failedSessionTranscriptMissing: () => false,
+    preparedTranscript: opts.freshEntry && {
+      entry: opts.freshEntry,
+      metadata: { present: true, observedAt: null, updatedAt: null },
+    },
   });
 }
 
