@@ -2,6 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { err, ok } from "@openclaw/normalization-core/result";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
+import { WorkerTaskError } from "../../infra/worker-task-pool.js";
 import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
 import { decodeSessionTranscriptWorkerReadError } from "./session-history-worker-errors.js";
 import {
@@ -24,6 +25,7 @@ export type SessionHistoryWorkerRequestRunner = <TResult>(
   receive: (value: SessionTranscriptWorkerValues[SessionHistoryWorkerInput["kind"]]) => TResult,
   signal?: AbortSignal,
   onRequest?: (value: unknown) => void,
+  timeoutMs?: number,
 ) => Promise<TResult>;
 
 type SessionHistoryWorkerValue = SessionTranscriptWorkerValues[SessionHistoryWorkerInput["kind"]];
@@ -60,7 +62,7 @@ export function createSessionHistoryWorkerReaders(
       );
   }
   return {
-    readTranscriptPage: async (input, signal) => {
+    readTranscriptPage: async (input, signal, timeoutMs) => {
       const captured = {
         request: {
           ...input.request,
@@ -96,11 +98,19 @@ export function createSessionHistoryWorkerReaders(
             return value.result;
           },
           signal,
+          undefined,
+          timeoutMs,
         );
       } catch (error) {
         return {
           ok: false,
-          error: error instanceof TranscriptPageIdentityError ? error.reason : "read_failed",
+          error:
+            error instanceof TranscriptPageIdentityError
+              ? error.reason
+              : error instanceof WorkerTaskError &&
+                  (error.code === "timeout" || signal?.aborted === true)
+                ? "timed_out"
+                : "read_failed",
           budget,
         };
       }

@@ -1,3 +1,4 @@
+import type { DatabaseFileIdentity } from "../../infra/sqlite-worker-identity.js";
 import type { ResolvedTranscriptScope } from "./session-accessor.sqlite-scope-helpers.js";
 
 export type TranscriptPageReadLimits = {
@@ -63,3 +64,18 @@ export type TranscriptPageReadResult = (
     }
   | { ok: false; error: TranscriptPageReadFailure }
 ) & { budget: TranscriptReadAccounting };
+
+export type TranscriptPageReadOperationInput = {
+  request: TranscriptPageReadRequest;
+  expectedIdentity: DatabaseFileIdentity;
+  /** performance.now()-based absolute deadline established before any preparation. */
+  deadlineAt: number;
+  signal?: AbortSignal;
+};
+
+export type TranscriptPageReadOperation = {
+  response: Promise<TranscriptPageReadResult>;
+  /** Resolves only with verified accounting after owned cleanup completed. */
+  settled: Promise<TranscriptReadAccounting>;
+  cancel: () => void;
+};

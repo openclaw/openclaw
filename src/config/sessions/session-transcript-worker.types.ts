@@ -553,10 +553,12 @@ type CancellableSessionHistoryReader<
 > = (input: Omit<Input, "kind" | "database">, signal?: AbortSignal) => Promise<Value>;
 
 export type SessionHistoryWorkerDatabase = SessionTranscriptInventoryReaders & {
-  readTranscriptPage: CancellableSessionHistoryReader<
-    SessionTranscriptPageReadWorkerInput,
-    TranscriptPageReadResult
-  >;
+  readTranscriptPage: (
+    input: Omit<SessionTranscriptPageReadWorkerInput, "kind" | "database">,
+    signal?: AbortSignal,
+    /** Shares the caller's single operation deadline instead of the lane default. */
+    timeoutMs?: number,
+  ) => Promise<TranscriptPageReadResult>;
   readMessagePresence: CancellableSessionHistoryReader<
     SessionTranscriptMessagePresenceWorkerInput,
     boolean

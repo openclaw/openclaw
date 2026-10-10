@@ -214,9 +214,11 @@ export function retainSessionHistoryWorkerDatabase(
       receive,
       signal,
       onRequest,
+      timeoutMs,
     ) => {
       assertCurrent();
-      const deadline = performance.now() + 60_000;
+      const timeout = timeoutMs ?? 60_000;
+      const deadline = performance.now() + timeout;
       let sequence = 0;
       let executionRetired = false;
       try {
@@ -231,7 +233,7 @@ export function retainSessionHistoryWorkerDatabase(
           },
           {
             inputBytes,
-            timeoutMs: 60_000,
+            timeoutMs: timeout,
             signal,
             onRequest: onRequest
               ? async (value, context) => {
