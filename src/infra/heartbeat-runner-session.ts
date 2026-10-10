@@ -35,14 +35,14 @@ export function resolveHeartbeatSessionKey(
     agentId: resolvedAgentId,
     env,
   });
-  const mainSession = (suppressOriginatingContext = false) => ({
-    sessionKey: mainSessionKey,
+  const selectSession = (sessionKey = mainSessionKey, suppressOriginatingContext = false) => ({
+    sessionKey,
     storePath,
     suppressOriginatingContext,
   });
 
   if (scope === "global") {
-    return mainSession();
+    return selectSession();
   }
 
   const resolveCandidate = (requestKey: string) => {
@@ -69,37 +69,31 @@ export function resolveHeartbeatSessionKey(
   // Guard: never route heartbeats to subagent sessions, regardless of entry path.
   const forced = forcedSessionKey?.trim();
   if (forced && isSubagentSessionKey(forced)) {
-    return mainSession(true);
+    return selectSession(mainSessionKey, true);
   }
 
   const forcedCanonical = forced ? resolveCandidate(forced) : undefined;
   if (forcedCanonical) {
-    return {
-      sessionKey:
-        resolveMainScopedEventSessionKey({
-          cfg,
-          sessionKey: forcedCanonical,
-          agentId: resolvedAgentId,
-        }) ?? forcedCanonical,
-      storePath,
-      suppressOriginatingContext: false,
-    };
+    return selectSession(
+      resolveMainScopedEventSessionKey({
+        cfg,
+        sessionKey: forcedCanonical,
+        agentId: resolvedAgentId,
+      }) ?? forcedCanonical,
+    );
   }
 
   const trimmed = heartbeat?.session?.trim() ?? "";
   if (!trimmed || isSubagentSessionKey(trimmed)) {
-    return mainSession();
+    return selectSession();
   }
 
   const normalized = normalizeLowercaseStringOrEmpty(trimmed);
   if (normalized === "main" || normalized === "global") {
-    return mainSession();
+    return selectSession();
   }
 
-  const canonical = resolveCandidate(trimmed);
-  return canonical
-    ? { sessionKey: canonical, storePath, suppressOriginatingContext: false }
-    : mainSession();
+  return selectSession(resolveCandidate(trimmed) || mainSessionKey);
 }
 
 /** The heartbeat's event queue session and its stored row. */

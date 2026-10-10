@@ -7,6 +7,7 @@ import {
   resolveLivePluginConfigObject,
 } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { definePluginEntry, type OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import { rethrowIncognitoSessionError } from "openclaw/plugin-sdk/session-store-runtime";
 import {
   applyCliRuntimeRecallTimeoutDefault,
   hasDeprecatedModelFallbackPolicy,
@@ -36,8 +37,9 @@ import {
 } from "./session-policy.js";
 import {
   persistPluginStatusLines,
-  resolveCanonicalSessionKeyFromSessionId,
+  prepareActiveMemorySession,
   resolveStatusUpdateAgentId,
+  type ActiveMemorySessionSnapshot,
 } from "./session.js";
 import { createActiveMemoryHookDeadline } from "./transcript.js";
 import {
@@ -159,7 +161,7 @@ export default definePluginEntry({
             return { text: `Active Memory: ${enabled ? "on" : "off"} globally.` };
           }
         }
-        const sessionKey = resolveCommandSessionKey({
+        const sessionKey = await resolveCommandSessionKey({
           api,
           config,
           sessionKey: ctx.sessionKey,
@@ -268,15 +270,23 @@ export default definePluginEntry({
         const handlerPromise = (async () => {
           try {
             const resolvedAgentId = resolveStatusUpdateAgentId(ctx);
-            const resolvedSessionKey =
-              ctx.sessionKey?.trim() ||
-              (resolvedAgentId
-                ? resolveCanonicalSessionKeyFromSessionId({
-                    api,
-                    agentId: resolvedAgentId,
-                    sessionId: ctx.sessionId,
-                  })
-                : undefined);
+            const storePath = api.runtime.agent.session.resolveStorePath(
+              liveConfig.session?.store,
+              {
+                agentId: resolvedAgentId || undefined,
+              },
+            );
+            let preparedSession: ActiveMemorySessionSnapshot | undefined;
+            let resolvedSessionKey = ctx.sessionKey?.trim() || undefined;
+            if (!resolvedSessionKey && resolvedAgentId) {
+              preparedSession = await prepareActiveMemorySession({
+                api,
+                agentId: resolvedAgentId,
+                sessionId: ctx.sessionId,
+                storePath,
+              });
+              resolvedSessionKey = preparedSession.sessionKey;
+            }
             const effectiveAgentId =
               resolvedAgentId || resolveStatusUpdateAgentId({ sessionKey: resolvedSessionKey });
             // Publication is the final boundary: recall that settled after its deadline,
@@ -311,13 +321,15 @@ export default definePluginEntry({
               toolAuthority.assertActive();
               return undefined;
             }
-            if (
-              shouldSkipActiveMemoryForHarnessSession({
-                api,
-                agentId: effectiveAgentId,
-                sessionKey: resolvedSessionKey,
-              })
-            ) {
+            preparedSession ??= resolvedSessionKey
+              ? await prepareActiveMemorySession({
+                  api,
+                  agentId: effectiveAgentId,
+                  sessionKey: resolvedSessionKey,
+                  storePath,
+                })
+              : { entry: undefined, readFailed: false };
+            if (shouldSkipActiveMemoryForHarnessSession(preparedSession)) {
               logRecallSkipped("harness-session");
               return undefined;
             }
@@ -439,6 +451,7 @@ export default definePluginEntry({
                   authorityFingerprint: toolAuthority.fingerprint,
                   debug: (message) => api.logger.debug?.(message),
                 }).catch((error: unknown) => {
+                  rethrowIncognitoSessionError(error);
                   api.logger.debug?.(
                     `active-memory: lane-1 trigger recall failed: ${toSingleLineErrorMessage(error)}`,
                   );
@@ -534,6 +547,8 @@ export default definePluginEntry({
               agentId: effectiveAgentId,
               sessionKey: resolvedSessionKey,
               sessionId: ctx.sessionId,
+              sessionEntry: preparedSession.entry,
+              storePath,
               messageProvider: ctx.messageProvider,
               channelId: ctx.channelId,
               query,
@@ -557,6 +572,7 @@ export default definePluginEntry({
                 : undefined;
             return publishPrependContext([laneOneContext, recallContext]);
           } catch (error) {
+            rethrowIncognitoSessionError(error);
             if (deadlineController.signal.aborted) {
               return undefined;
             }

@@ -336,6 +336,7 @@ describe("memory entry origins", () => {
       createdAt: 1_000,
     });
     const reads: Array<{ rows: number; bytes: number }> = [];
+    // oxlint-disable-next-line typescript/unbound-method -- Reflect.apply preserves the intercepted statement receiver.
     const all = StatementSync.prototype.all;
     const observed = vi.spyOn(StatementSync.prototype, "all").mockImplementation(function (
       this: StatementSync,

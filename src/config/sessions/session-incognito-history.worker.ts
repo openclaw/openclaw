@@ -33,7 +33,10 @@ import {
   readVisibleMessageRange,
   resolveVisibleMessagePositions,
 } from "./session-accessor.sqlite-reset-window.js";
-import { hasSessionTranscriptMessageInDatabase } from "./session-accessor.sqlite-transcript-metadata-read.js";
+import {
+  hasSessionTranscriptMessageInDatabase,
+  readLatestAssistantTextFromDatabase,
+} from "./session-accessor.sqlite-transcript-metadata-read.js";
 import { readTranscriptStatsFromDatabase } from "./session-accessor.sqlite-transcript-stats.js";
 import { readHarnessCompletionSourceInDatabase } from "./session-harness-completion-source.kernel.js";
 import {
@@ -366,6 +369,13 @@ export function createIncognitoHistoryWorker(
           ),
         );
         return;
+      case "session.history.latest-assistant":
+        prepared = prepareHistoryRead(command.type, () =>
+          runWithSessionTranscriptReadFence(admission, () =>
+            readLatestAssistantTextFromDatabase(database, resolvedScope),
+          ),
+        );
+        return;
       case "session.history.latest-active-message":
         prepared = prepareHistoryRead(command.type, () =>
           runWithSessionTranscriptReadFence(admission, () =>
@@ -668,7 +678,13 @@ export function createIncognitoHistoryWorker(
             (command.type !== "session.history.context" &&
               command.type !== "session.history.native-context" &&
               command.type !== "session.history.native-context-current" &&
-              command.type !== "session.history.anchors")
+              command.type !== "session.history.anchors" &&
+              command.type !== "session.history.raw-delta" &&
+              command.type !== "session.history.visible-delta" &&
+              command.type !== "session.history.latest-assistant" &&
+              command.type !== "session.history.hydrate" &&
+              command.type !== "session.history.stats" &&
+              command.type !== "session.history.watermark")
           ) {
             throw new Error("Incognito missing context no longer matches its captured session");
           }

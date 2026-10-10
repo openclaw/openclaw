@@ -117,15 +117,10 @@ function advancePosition(
   let column = position.column;
   for (let index = 0; index < text.length; index += 1) {
     const ch = text[index];
-    if (ch === "\r") {
-      if (text[index + 1] === "\n") {
+    if (ch === "\r" || ch === "\n") {
+      if (ch === "\r" && text[index + 1] === "\n") {
         index += 1;
       }
-      row += 1;
-      column = 0;
-      continue;
-    }
-    if (ch === "\n") {
       row += 1;
       column = 0;
       continue;

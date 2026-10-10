@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
+import { IncognitoSessionEndedError } from "openclaw/plugin-sdk/acp-runtime";
 import { toErrorObject as toLintErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
@@ -21,6 +22,7 @@ import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawStateDatabaseAsync,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { awaitGateBeforeSettlement } from "openclaw/plugin-sdk/test-fixtures";
 import {
   afterAll,
   afterEach,
@@ -336,14 +338,21 @@ describe("active-memory plugin", () => {
         resolveCliBackendDispatchEligibility,
         session: {
           resolveStorePath: vi.fn(() => path.join(stateDir, "sessions.json")),
-          getSessionEntry: vi.fn(
-            (params: { sessionKey: string }) => hoisted.sessionStore[params.sessionKey],
+          getSessionEntryAsync: vi.fn(
+            async (params: { sessionKey: string }) => hoisted.sessionStore[params.sessionKey],
           ),
-          listSessionEntries: vi.fn(() =>
-            Object.entries(hoisted.sessionStore).map(([sessionKey, entry]) => ({
-              sessionKey,
-              entry,
-            })),
+          getSessionEntryByIdAsync: vi.fn(
+            async (params: { sessionId: string; orderBy?: "updatedAt" }) => {
+              const matches = Object.entries(hoisted.sessionStore)
+                .filter(([, entry]) => String(entry.sessionId).trim() === params.sessionId)
+                .toSorted(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+              const match =
+                params.orderBy === "updatedAt"
+                  ? matches.toSorted(([, a], [, b]) => Number(b.updatedAt) - Number(a.updatedAt))[0]
+                  : (matches.find(([, entry]) => entry.sessionId === params.sessionId) ??
+                    matches[0]);
+              return match ? { sessionKey: match[0], entry: match[1] } : undefined;
+            },
           ),
           patchSessionEntry: vi.fn(
             async (params: {
@@ -1692,6 +1701,60 @@ describe("active-memory plugin", () => {
     },
   );
 
+  it("propagates lost incognito ownership instead of treating eligibility as an optional miss", async () => {
+    const ended = new IncognitoSessionEndedError();
+    api.runtime.agent.session.getSessionEntryAsync.mockRejectedValueOnce(ended);
+    const openKeyedStore = vi.spyOn(api.runtime.state, "openKeyedStore");
+
+    await expect(
+      runPromptBuild(
+        { prompt: "what did we decide?" },
+        { sessionKey: "agent:main:incognito:test" },
+      ),
+    ).rejects.toBe(ended);
+
+    expect(openKeyedStore).not.toHaveBeenCalled();
+    expect(runEmbeddedAgent).not.toHaveBeenCalled();
+    expect(hoisted.updateSessionStore).not.toHaveBeenCalled();
+  });
+
+  it("rechecks the audience after asynchronous parent metadata preparation", async () => {
+    registerPluginConfig({ mode: "always" });
+    const prepared = createDeferred<void>();
+    const resume = createDeferred<Record<string, unknown>>();
+    let audienceCurrent = true;
+    api.runtime.agent.session.getSessionEntryAsync.mockImplementationOnce(() => {
+      prepared.resolve();
+      return resume.promise;
+    });
+    const pending = runPromptBuild(
+      { prompt: "what did we decide?" },
+      {
+        sessionKey: "agent:main:main",
+        assertMemoryAudienceCurrent: () => {
+          if (!audienceCurrent) {
+            throw new Error("memory audience ended");
+          }
+        },
+      },
+    );
+    try {
+      await awaitGateBeforeSettlement(
+        prepared.promise,
+        pending,
+        "Parent metadata preparation did not start",
+      );
+      audienceCurrent = false;
+      resume.resolve(expectDefined(hoisted.sessionStore["agent:main:main"], "main session"));
+      expect(await pending).toBeUndefined();
+      expect(runEmbeddedAgent).not.toHaveBeenCalled();
+      expect(hoisted.patchSessionEntry).not.toHaveBeenCalled();
+    } finally {
+      resume.resolve(expectDefined(hoisted.sessionStore["agent:main:main"], "main session"));
+      await Promise.allSettled([pending]);
+    }
+  });
+
   it.each(
     // prettier-ignore
     [
@@ -2183,8 +2246,65 @@ describe("active-memory plugin", () => {
           },
         };
         expectDefined(hoisted.sessionStore["agent:main:main"], "parent session").fastMode = false;
+        hoisted.sessionStore["agent:main:a-old"] = {
+          sessionId: "s-main",
+          updatedAt: -1,
+          fastMode: true,
+        };
       }
-      await runPromptBuild({ prompt: "What is my favorite food? initial mode" });
+      const parent = expectDefined(hoisted.sessionStore["agent:main:main"], "parent session");
+      parent.delivery = {
+        kind: "external",
+        route: { channel: "telegram" },
+        context: { channel: "telegram" },
+        origin: { provider: "telegram" },
+      };
+      const prepared = createDeferred<void>();
+      const resume = createDeferred<void>();
+      const patch = expectDefined(
+        hoisted.patchSessionEntry.getMockImplementation(),
+        "recall creation",
+      );
+      hoisted.patchSessionEntry.mockImplementationOnce(async (...args) => {
+        const result = await patch(...args);
+        prepared.resolve();
+        await resume.promise;
+        return result;
+      });
+      const pending = runPromptBuild(
+        { prompt: "What is my favorite food? initial mode" },
+        sessionDefault ? { sessionId: "s-main" } : { sessionKey: "agent:main:main" },
+      );
+      try {
+        await awaitGateBeforeSettlement(
+          prepared.promise,
+          pending,
+          "Recall preparation did not start",
+        );
+        hoisted.sessionStore["agent:main:main"] = {
+          ...parent,
+          fastMode: true,
+          delivery: {
+            kind: "external",
+            route: { channel: "slack" },
+            context: { channel: "slack" },
+            origin: { provider: "slack" },
+          },
+        };
+        resume.resolve();
+        await pending;
+      } finally {
+        resume.resolve();
+        await Promise.allSettled([pending]);
+      }
+      expectEmbeddedChannel("telegram");
+      if (sessionDefault) {
+        expect(api.runtime.agent.session.getSessionEntryByIdAsync).toHaveBeenCalledOnce();
+        expect(api.runtime.agent.session.getSessionEntryAsync).not.toHaveBeenCalled();
+      } else {
+        expect(api.runtime.agent.session.getSessionEntryAsync).toHaveBeenCalledOnce();
+        expect(api.runtime.agent.session.getSessionEntryByIdAsync).not.toHaveBeenCalled();
+      }
       expect(lastEmbeddedRunParams().fastMode).toBe(initialFast);
       if (sessionDefault) {
         expectLinesToContain(getInfoLines(), "fast=off start");
@@ -2198,6 +2318,7 @@ describe("active-memory plugin", () => {
         registerPluginConfig({ thinking, fastMode: true, logging: true });
       }
       await runPromptBuild({ prompt: "What is my favorite food? changed mode" });
+      expectEmbeddedChannel("slack");
       expect(lastEmbeddedRunParams().fastMode).toBe(true);
       if (sessionDefault) {
         expectLinesToContain(getInfoLines(), "fast=on start");
@@ -4139,6 +4260,27 @@ describe("active-memory plugin", () => {
       }
     },
   );
+
+  it("keeps incognito recall helpers private and suppresses debugging exports", async () => {
+    registerPluginConfig({ persistTranscripts: true, mode: "always" });
+    const sessionKey = "agent:main:dashboard:incognito-private-recall";
+    seedSession(sessionKey, "private-parent");
+
+    await runPromptBuild({ prompt: "what did we decide?" }, { sessionKey });
+
+    const childKey = lastEmbeddedSessionKey();
+    expect(childKey).toMatch(/^agent:main:subagent:incognito-[a-f0-9]{12}$/);
+    expect(hoisted.patchSessionEntry).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: childKey,
+        fallbackEntry: expect.objectContaining({ incognito: true }),
+      }),
+    );
+    expect(hoisted.sessionStore[childKey]).toBeUndefined();
+    await expect(
+      fs.stat(path.join(stateDir, "plugins", "active-memory", "transcripts")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+  });
 
   it("caps the active-memory cache size and evicts the oldest entries", () => {
     const sessionKey = "agent:main:cache-cap";

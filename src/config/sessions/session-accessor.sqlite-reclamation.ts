@@ -426,6 +426,10 @@ export function createSessionMaintenanceFinalizationOperation(params: {
 }): Extract<SqliteSessionReclamationPlan, { kind: "maintenance-finalize" }> {
   return {
     ...params,
+    entries: params.entries.map((removal) => ({
+      ...removal,
+      expectedEntry: removal.expectedEntry && { ...removal.expectedEntry },
+    })),
     databaseOptions: resolveSessionReclamationDatabaseOptions(params.databaseOptions),
     kind: "maintenance-finalize",
   };

@@ -280,6 +280,7 @@ type PreparedModelCatalogWorker = Readonly<{
   loadCatalog: (
     providerIds?: readonly string[],
     onRecovery?: (error: Error) => void,
+    refresh?: boolean,
   ) => Promise<
     Pick<PreparedModelRuntimeCatalogFacts, "modelCatalog" | "configuredRuntimeModels"> & {
       runtimeModels: Map<string, Model[]>;
@@ -562,11 +563,8 @@ export function createPreparedModelCatalogWorker(
   };
 
   return {
-    loadCatalog: async (providerIds, onRecovery) => {
-      const message = await request(
-        { kind: "catalog", ...(providerIds ? { providerIds } : {}) },
-        onRecovery,
-      );
+    loadCatalog: async (providerIds, onRecovery, refresh) => {
+      const message = await request({ kind: "catalog", providerIds, refresh }, onRecovery);
       if (message.kind !== "catalog") {
         throw new Error("prepared model catalog worker returned an auth refresh result");
       }

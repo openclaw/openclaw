@@ -60,9 +60,10 @@ function queryOrigins(
       .selectFrom(sqliteStringSetEntries(encodeSqliteStringSet(request.sessionIds)).as("selected"))
       .select("selected.key")
       .where("selected.key", "<", MEMORY_SESSION_TOMBSTONE_BATCH_SIZE)
-      .where(({ exists, selectFrom }) =>
-        exists(
-          selectFrom("memory_session_tombstones")
+      .where((expression) =>
+        expression.exists(
+          expression
+            .selectFrom("memory_session_tombstones")
             .select("session_id")
             .where("agent_id", "=", request.agentId)
             .whereRef("session_id", "=", "selected.value"),

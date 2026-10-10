@@ -670,6 +670,18 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
           const scopedSession = {
             resolveStorePath: session.resolveStorePath,
             getSessionEntry: session.getSessionEntry,
+            getSessionEntryAsync: (params) =>
+              runWithPluginScope(async () => {
+                const entry = await session.getSessionEntryAsync(params);
+                assertRuntimeCurrent();
+                return entry;
+              }),
+            getSessionEntryByIdAsync: (params) =>
+              runWithPluginScope(async () => {
+                const entry = await session.getSessionEntryByIdAsync(params);
+                assertRuntimeCurrent();
+                return entry;
+              }),
             listSessionEntries: session.listSessionEntries,
             createSessionEntryListReader: (params) =>
               runWithPluginScope(async () => {
