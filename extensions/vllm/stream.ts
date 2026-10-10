@@ -34,7 +34,7 @@ export function normalizeVllmResolvedModel({
   | undefined {
   if (
     model.api !== "openai-completions" ||
-    model.reasoning === false ||
+    !model.reasoning ||
     !resolveVllmQwenThinkingFormatFromCompat(model.compat)
   ) {
     return undefined;
@@ -79,7 +79,7 @@ export function createVllmQwenThinkingWrapper(params: {
   return createPayloadPatchStreamWrapper(
     params.baseStreamFn,
     ({ payload: payloadObj, model, options }) => {
-      if (!isCompletionsModel(model) || model.reasoning === false) {
+      if (!isCompletionsModel(model) || !(model.reasoning ?? true)) {
         return;
       }
       const reasoning = resolveOpenAIRequestReasoning(
