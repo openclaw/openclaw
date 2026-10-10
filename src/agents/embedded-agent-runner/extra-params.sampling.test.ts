@@ -45,7 +45,7 @@ function captureStreamOptions(
   agent: { streamFn?: StreamFn },
   underlying: StreamFn,
   model: Parameters<StreamFn>[0],
-  options: Parameters<StreamFn>[2],
+  options: (NonNullable<Parameters<StreamFn>[2]> & { topP?: number }) | undefined,
 ) {
   if (!agent.streamFn) {
     throw new Error("expected extra params to wrap streamFn");
@@ -100,7 +100,7 @@ describe("createStreamFnWithExtraParams sampling overrides", () => {
         { id: "model", api: "openai-completions", provider: "local" } as Model,
         options,
       );
-      expect(callOptions?.topP).toBe(expected);
+      expect(callOptions).toMatchObject({ topP: expected });
     },
   );
 
