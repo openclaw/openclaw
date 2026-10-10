@@ -146,6 +146,7 @@ export async function executeFollowupTurn(params: {
           ownedEntry !== undefined &&
           loadedEntry.sessionId === ownedEntry.sessionId &&
           loadedEntry.lifecycleRevision === ownedEntry.lifecycleRevision &&
+          typeof loadedEntry.updatedAt === "number" &&
           loadedEntry.updatedAt >= ownedEntry.updatedAt;
         if (loadedGenerationMatches) {
           const level = loadedEntry.verboseLevel;

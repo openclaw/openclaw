@@ -267,6 +267,7 @@ describe("cron session preparation", () => {
           prepared.context.sessionWorkAdmission.release();
           await prepared.context.workspaceLease?.release();
         }
+        let sourceEntry = entry;
         for (const sessionTarget of ["current", "isolated"] as const) {
           resetRunCronIsolatedAgentTurnHarness();
           resolveCronSessionMock.mockImplementation(actualSession.prepareCronSession);
@@ -287,8 +288,8 @@ describe("cron session preparation", () => {
                 sessionKey: sourceKey,
                 sourceConversation: {
                   sessionKey: sourceKey,
-                  sessionId: entry.sessionId,
-                  lifecycleRevision: entry.lifecycleRevision,
+                  sessionId: sourceEntry.sessionId,
+                  lifecycleRevision: sourceEntry.lifecycleRevision,
                 },
                 delivery: { mode: "none" },
               }),
@@ -303,31 +304,50 @@ describe("cron session preparation", () => {
             }),
           ]);
           try {
-            await actualAccessor.replaceSessionEntry(
-              { agentId: "source", storePath: actor.path, sessionKey: sourceKey },
-              sessionTarget === "current"
-                ? { ...entry, createdActor: { type: "system" } }
-                : {
-                    ...entry,
-                    skillLibrarySelections: [
-                      {
-                        skillId: "00000000-0000-0000-0000-000000000001",
-                        revision: "a".repeat(64),
-                        name: "changed-skill",
-                        ownerProfileId: null,
-                      },
-                    ],
-                  },
-            );
+            if (sessionTarget === "current") {
+              const replacement = await actualAccessor.replaceSessionEntry(
+                { agentId: "source", storePath: actor.path, sessionKey: sourceKey },
+                {
+                  ...sourceEntry,
+                  sessionId: "private-scheduled-replacement",
+                  lifecycleRevision: "private-scheduled-replacement-generation",
+                },
+              );
+              expect(replacement).not.toBeNull();
+              if (!replacement) {
+                throw new Error("Cron source generation replacement failed");
+              }
+              sourceEntry = replacement;
+              expect(actor.sessions.readSharing(sourceKey)?.entry).toMatchObject({
+                sessionId: "private-scheduled-replacement",
+                lifecycleRevision: "private-scheduled-replacement-generation",
+              });
+            } else {
+              const selections = [
+                {
+                  skillId: "00000000-0000-0000-0000-000000000001",
+                  revision: "a".repeat(64),
+                  name: "changed-skill",
+                  ownerProfileId: null,
+                },
+              ];
+              await actualAccessor.replaceSessionEntry(
+                { agentId: "source", storePath: actor.path, sessionKey: sourceKey },
+                { ...sourceEntry, skillLibrarySelections: selections },
+              );
+              expect(actor.sessions.readPolicy(sourceKey)?.skillLibrarySelections).toEqual(
+                selections,
+              );
+            }
           } finally {
             releasePreflight.resolve();
           }
-          await expect(preparation).rejects.toThrow("Cron source authority changed");
-          expect(patchSessionEntryMock).not.toHaveBeenCalled();
-          await actualAccessor.replaceSessionEntry(
-            { agentId: "source", storePath: actor.path, sessionKey: sourceKey },
-            entry,
+          await expect(preparation).rejects.toThrow(
+            sessionTarget === "current"
+              ? "Incognito session generation is no longer current"
+              : "Cron source authority changed",
           );
+          expect(patchSessionEntryMock).not.toHaveBeenCalled();
         }
       });
     } finally {

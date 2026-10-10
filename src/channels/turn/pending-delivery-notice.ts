@@ -1,6 +1,6 @@
 import {
   loadSessionEntryReadOnly,
-  updateSessionEntry,
+  patchSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { captureIncognitoSessionSource } from "../../config/sessions/session-incognito-binding.js";
 import { appendAssistantMessageToSessionTranscript } from "../../config/sessions/transcript.js";
@@ -86,23 +86,26 @@ async function deliverNotice(
   let delivered: boolean;
   try {
     assertCurrent();
-    const outcome = await runtime.sendRecoveryNotice({
+    const request = {
       channel: context.channel,
       to: context.to,
       accountId: context.accountId,
       threadId: context.threadId,
       text: PENDING_DELIVERY_NOTICE,
       idempotencyKey,
-      ...(liveOnly
+    };
+    const outcome = await runtime.sendRecoveryNotice(
+      liveOnly
         ? {
-            liveOnly: true as const,
+            ...request,
+            liveOnly: true,
             isCurrent: () => {
               assertCurrent();
               return true;
             },
           }
-        : {}),
-    });
+        : request,
+    );
     delivered = !outcome.suppressed;
   } catch {
     assertCurrent();
@@ -127,7 +130,7 @@ async function deliverNotice(
   ) {
     return;
   }
-  await updateSessionEntry(
+  await patchSessionEntryCore(
     { sessionKey, storePath },
     (current) =>
       current.sessionId === entry.sessionId &&
@@ -143,6 +146,10 @@ async function deliverNotice(
             updatedAt: Date.now(),
           }
         : null,
-    { skipMaintenance: true, takeCacheOwnership: true, assertCommitAllowed: assertCurrent },
+    {
+      skipMaintenance: true,
+      takeCacheOwnership: true,
+      ...(liveOnly ? { assertCommitAllowed: assertCurrent } : {}),
+    },
   );
 }

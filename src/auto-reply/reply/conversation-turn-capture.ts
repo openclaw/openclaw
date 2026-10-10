@@ -233,7 +233,7 @@ async function capturePendingConversationTurnReplyUnsafe(params: {
             storePath: source.actor.path,
             sessionId: sessionEntry.sessionId,
             sessionKey,
-            expectedLifecycleRevision: sessionEntry.lifecycleRevision ?? null,
+            expectedLifecycleRevision: sessionEntry.lifecycleRevision,
           },
           event,
           () => {

@@ -145,7 +145,7 @@ async function deliverClientVoiceMutationDigest(
     };
     const incognito = isIncognitoSessionKey(record.sessionKey) ? conversation.incognito : undefined;
     if (incognito) {
-      await withIncognitoSessionEntry(
+      const confirmed = await withIncognitoSessionEntry(
         incognito,
         record.sessionKey,
         assertCurrent,
@@ -155,10 +155,11 @@ async function deliverClientVoiceMutationDigest(
           }
           const deliver = () => send(entry, assertReadCurrent);
           await ("kind" in incognito ? deliver() : withIncognitoSessionBinding(incognito, deliver));
+          return delivery.confirmed;
         },
       );
-      if (delivery.confirmed) {
-        await writer.mutate({ ...delivery.confirmed, kind: "delivered", now: Date.now() });
+      if (confirmed) {
+        await writer.mutate({ ...confirmed, kind: "delivered", now: Date.now() });
       }
       return;
     }

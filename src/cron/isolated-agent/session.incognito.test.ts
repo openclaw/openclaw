@@ -130,8 +130,13 @@ it("captures creator and Talk authority from the selected actor without native d
         {
           ...entry,
           createdActor: { type: "human", source: "profile", id: "new-owner" },
+          skillLibrarySelections: [],
         },
       );
+      expect(actor.sessions.readPolicy(sessionKey)).toMatchObject({
+        createdActor: entry.createdActor,
+        skillLibrarySelections: [],
+      });
       expect(() => creator.assertCurrent()).toThrow("Creator session changed");
       expect(sql.queries).toEqual([]);
     } finally {
