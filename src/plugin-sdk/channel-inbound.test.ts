@@ -82,6 +82,7 @@ describe("channel-inbound public helpers", () => {
         isHeartbeat: true,
         internalEventExecution: { onStarted: callback },
         onReplyOperationOwned: callback,
+        assertChannelAuthority: callback,
       };
       let dispatched = false;
       const turn = {
@@ -104,6 +105,7 @@ describe("channel-inbound public helpers", () => {
           dispatched = true;
           expect(params.replyOptions).not.toHaveProperty("internalEventExecution");
           expect(params.replyOptions).not.toHaveProperty("onReplyOperationOwned");
+          expect(params.replyOptions).not.toHaveProperty("assertChannelAuthority");
           expect(params.replyOptions?.isHeartbeat).toBe(true);
           return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
         },
@@ -122,6 +124,7 @@ describe("channel-inbound public helpers", () => {
       expect(result.dispatched).toBe(true);
       expect(dispatched).toBe(true);
       expect(replyOptions.onReplyOperationOwned).toBe(callback);
+      expect(replyOptions.assertChannelAuthority).toBe(callback);
     },
   );
 

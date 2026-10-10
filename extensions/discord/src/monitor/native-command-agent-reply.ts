@@ -41,6 +41,7 @@ export async function dispatchDiscordNativeAgentReply(params: {
   dispatchReplyFromConfig?: DiscordDispatchReplyFromConfig;
   log: ReturnType<typeof createSubsystemLogger>;
   pluginCommandDispatch: PluginCommandCatalogDecision;
+  assertAuthority?: () => void;
 }) {
   const blockStreamingEnabled = resolveChannelStreamingBlockEnabled(params.discordConfig);
 
@@ -56,6 +57,7 @@ export async function dispatchDiscordNativeAgentReply(params: {
       sessionKey: params.ctxPayload.SessionKey ?? params.effectiveRoute.sessionKey,
     },
     ctxPayload: params.ctxPayload,
+    assertAuthority: params.assertAuthority,
     dispatchReplyFromConfig: params.dispatchReplyFromConfig,
     delivery: {
       deliver: async (payload) => {

@@ -230,6 +230,7 @@ export function createDispatchReplyOperationCoordinator(params: {
       const assertCommandOwnerCurrent = captureCommandOwnerAssertion(params.ctx);
       const assertRestoreCurrent = () => {
         params.assertCurrent?.();
+        params.replyOptions?.assertChannelAuthority?.();
         assertCommandOwnerCurrent?.();
         params.replyOptions?.operatorAuthority?.assertCurrent();
         params.replyOptions?.abortSignal?.throwIfAborted();

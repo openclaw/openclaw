@@ -383,6 +383,8 @@ async function dispatchChannelTurnWithDeliveryOwner(
   const onAgentRunStart = replyPipeline.replyOptions?.onAgentRunStart;
   const replyOptions: NonNullable<AssembledChannelTurn["replyOptions"]> = {
     ...replyPipeline.replyOptions,
+    // The channel owns live ingress authority; retain it through reply preparation.
+    ...(params.assertAuthority ? { assertChannelAuthority: params.assertAuthority } : {}),
     onAgentRunStart: (...runStartArgs) => {
       agentRun = [runStartArgs[0], runStartArgs[1]];
       return onAgentRunStart?.(...runStartArgs);

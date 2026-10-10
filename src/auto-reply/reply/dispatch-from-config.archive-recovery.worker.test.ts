@@ -6,6 +6,7 @@ import {
   createDeferred,
   withinTest,
 } from "../../../test/helpers/promise.js";
+import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import {
   loadSessionEntryReadOnly,
   replaceSessionEntrySync,
@@ -76,6 +77,27 @@ async function prepare(crossStore = false) {
   });
   return { ctx, source, target, targetGuard, sourceScope, targetScope };
 }
+
+it("reads the durable archived source through the worker on the host thread", async () => {
+  expect(isMainThread).toBe(true);
+  const fixture = await prepare();
+  vi.spyOn(sessionAccessor, "loadSessionEntryReadOnly").mockImplementation(() => {
+    throw new Error("Gateway-thread source read");
+  });
+  const restored = await restoreArchivedDispatchSession({
+    ctx: fixture.ctx,
+    entry: fixture.source,
+    hasPluginOwnedBinding: false,
+    allowNativeCommandRestore: true,
+    requireSnapshotMatch: true,
+    placementContext: { workerSessionPlacementService: { getMany: () => new Map() } },
+    sessionKey: sourceKey,
+    storePath: fixture.sourceScope.storePath,
+  });
+  expect(restored?.archivedAt).toBeUndefined();
+  vi.restoreAllMocks();
+  expect(loadSessionEntryReadOnly(fixture.sourceScope)?.archivedAt).toBeUndefined();
+});
 
 it("refuses a worker-committed source restore when a direct writer replaces the target", async () => {
   expect(isMainThread).toBe(true);

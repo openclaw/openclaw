@@ -624,6 +624,7 @@ async function dispatchDiscordCommandInteraction(
     dispatchReplyFromConfig,
     log,
     pluginCommandDispatch: params.pluginCommandDispatch,
+    assertAuthority: authority.assertActive,
   });
 
   return { accepted: dispatched, effectiveRoute, hiddenFinalReply };

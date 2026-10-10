@@ -1,9 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { isRestartRecoveryTombstone } from "../../config/sessions/lifecycle.js";
-import {
-  loadSessionEntryReadOnly,
-  patchSessionEntryCore,
-} from "../../config/sessions/session-accessor.js";
+import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { captureSessionEntryMetadataRead } from "../../config/sessions/session-entry-source-authority.js";
 import { captureIncognitoSessionSource } from "../../config/sessions/session-incognito-binding.js";
@@ -152,7 +149,10 @@ export async function restoreArchivedDispatchSession(params: {
                 actor.admissionSignal,
               )
             ).entry
-        : loadSessionEntryReadOnly(scope);
+        : await readSessionEntryReadOnlyInWorker(
+            { ...scope, readConsistency: "latest", clone: false },
+            params.assertCurrent ?? (() => {}),
+          );
       params.assertCurrent?.();
       metadata?.assertCurrent();
       if (

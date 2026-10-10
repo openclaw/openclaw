@@ -7,7 +7,10 @@ import {
   InteractionType,
 } from "discord-api-types/v10";
 import * as channelInbound from "openclaw/plugin-sdk/channel-inbound";
-import { withRegisteredChannelIngress } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
+import {
+  loadSessionWorktreeLifecycleForTest,
+  withRegisteredChannelIngress,
+} from "openclaw/plugin-sdk/channel-ingress-test-runtime";
 import "openclaw/plugin-sdk/compiled-subprocess-testing";
 import * as commandStatus from "openclaw/plugin-sdk/command-status-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -421,6 +424,113 @@ describe("Client.handleInteraction native command channel identity", () => {
         expect(sessionStore.getSessionEntry(source)).toMatchObject({ sessionId: "command-source" });
         expect(sessionStore.getSessionEntry(source)?.archivedAt).toBeUndefined();
       }
+    },
+  );
+
+  it.each(["source", "reset target"] as const)(
+    "refuses archived %s recovery after live command policy revocation",
+    async (held) => {
+      const root = tempDirs.make("openclaw-discord-revoked-archive-");
+      const storePath = join(root, "sessions.json");
+      const cfg: OpenClawConfig = { ...createConfig(), session: { store: storePath } };
+      const source = { storePath, sessionKey: `agent:main:discord:slash:${USER}` };
+      const target = { storePath, sessionKey: `agent:main:discord:channel:${CHANNEL}` };
+      const sourceId = "retained-hidden-history";
+      const targetId = "retained-conversation-history";
+      await sessionStore.upsertSessionEntry({
+        ...source,
+        entry: {
+          sessionId: sourceId,
+          updatedAt: 1,
+          ...(held === "source"
+            ? {
+                archivedAt: 2,
+                worktree: { id: "held-source", branch: "test", repoRoot: root },
+              }
+            : {}),
+        },
+      });
+      await sessionStore.upsertSessionEntry({
+        ...target,
+        entry: {
+          sessionId: targetId,
+          updatedAt: 1,
+          ...(held === "reset target"
+            ? {
+                archivedAt: 2,
+                worktree: { id: "held-target", branch: "test", repoRoot: root },
+              }
+            : {}),
+        },
+      });
+      for (const [scope, sessionId] of [
+        [source, sourceId],
+        [target, targetId],
+      ] as const) {
+        await appendSessionTranscriptMessageByIdentity({
+          ...scope,
+          sessionId,
+          message: { role: "user", content: `Keep ${sessionId}`, timestamp: 1 },
+        });
+      }
+      const beforeSource = sessionStore.getSessionEntry(source);
+      const beforeTarget = sessionStore.getSessionEntry(target);
+      const sourceHistory = sessionStore.loadTranscriptEventsSync({
+        ...source,
+        sessionId: sourceId,
+      });
+      const targetHistory = sessionStore.loadTranscriptEventsSync({
+        ...target,
+        sessionId: targetId,
+      });
+      const entered = createDeferred<void>();
+      const release = createDeferred<void>();
+      const worktreeLifecycle = await loadSessionWorktreeLifecycleForTest();
+      vi.spyOn(worktreeLifecycle, "restoreSessionWorktree").mockImplementation(async () => {
+        entered.resolve();
+        await release.promise;
+        return () => {};
+      });
+      const harness = createHarness(cfg);
+      harness.dispatch.mockRestore();
+      harness.session.mockRestore();
+      const pending = withRegisteredChannelIngress(
+        { plugin: discordPlugin, config: cfg, setRuntime: setDiscordRuntime },
+        () =>
+          harness.client.handleInteraction(
+            createInternalInteractionPayload({
+              ...payload(CHANNEL),
+              id: `revoked-archive-${held}`,
+              type: InteractionType.ApplicationCommand,
+              data: {
+                id: "revoked-command",
+                name: held === "source" ? "compact" : "reset",
+                type: 1,
+              },
+            }),
+          ),
+      );
+      try {
+        await entered.promise;
+        harness.replacePolicy();
+      } finally {
+        release.resolve();
+      }
+      await expect(pending).rejects.toThrow("Discord command authority changed");
+      expect(sessionStore.getSessionEntry(source)).toMatchObject({
+        sessionId: beforeSource?.sessionId,
+      });
+      expect(sessionStore.getSessionEntry(target)).toMatchObject({
+        sessionId: beforeTarget?.sessionId,
+      });
+      expect(sessionStore.getSessionEntry(source)?.archivedAt).toBe(beforeSource?.archivedAt);
+      expect(sessionStore.getSessionEntry(target)?.archivedAt).toBe(beforeTarget?.archivedAt);
+      expect(sessionStore.loadTranscriptEventsSync({ ...source, sessionId: sourceId })).toEqual(
+        sourceHistory,
+      );
+      expect(sessionStore.loadTranscriptEventsSync({ ...target, sessionId: targetId })).toEqual(
+        targetHistory,
+      );
     },
   );
 
