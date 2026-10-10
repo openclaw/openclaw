@@ -1,4 +1,5 @@
 import type { OpenClawStateDatabase } from "../../state/openclaw-state-db-contract.js";
+import { planCommandFailureRecovery } from "../service/command-failure-recovery.js";
 import { recomputeJobNextRunAtMs } from "../service/jobs-scheduling.js";
 import { findCronRunRecoveryInDatabase } from "../service/run-history-recovery.js";
 import { resolveCronRunReceiptTerminalStatus } from "../service/run-receipts.js";
@@ -8,7 +9,13 @@ import {
 } from "../service/startup-run-repair.js";
 import type { CronJobPolicyContext, DeferredCronNotifications } from "../service/state.js";
 import type { CronJob } from "../types.js";
-import { deleteCronJobRowInDatabase, updateCronRuntimeRow } from "./row-codec.js";
+import {
+  deleteCronJobRowInDatabase,
+  updateCronRuntimeRow,
+  loadCronRows,
+  loadedCronStoreFromRows,
+  upsertCronJobRow,
+} from "./row-codec.js";
 import { readCronDeliveryAttemptStateInDatabase } from "./run-receipt-delivery.js";
 import {
   findActiveCronRunReceiptInDatabase,
@@ -150,6 +157,7 @@ export function repairCronRunInDatabase(params: {
         runningAtMs: proposal.runningAtMs,
         nowMs,
         recoverInterruptedOneShot:
+          job.state.commandRecoveryOrigin?.startedAtMs === undefined &&
           params.mode === "startup" &&
           readCronDeliveryAttemptStateInDatabase({
             database: database.db,
@@ -176,6 +184,39 @@ export function repairCronRunInDatabase(params: {
       }
     }
     if (proposal.receipt) {
+      const previousChildId = job.state.failureRecovery?.jobId;
+      const previousChildren = previousChildId
+        ? loadedCronStoreFromRows(loadCronRows(database.db, storeKey, new Set([previousChildId])))
+            .store.jobs
+        : [];
+      // An interrupted command has unknown effects. Only an exact finalized
+      // outcome is evidence that can admit a new corrective action.
+      const child =
+        restored && finalized
+          ? planCommandFailureRecovery(
+              state,
+              job,
+              {
+                status: finalized.entry.status,
+                endedAt: finalized.entry.ts,
+                completionStatus: finalized.entry.completionStatus,
+                runReceipt: proposal.receipt,
+              },
+              new Map(previousChildren.map((current) => [current.id, current])),
+              previousChildId !== undefined &&
+                findActiveCronRunReceiptInDatabase({
+                  database: database.db,
+                  storePath: storeKey,
+                  jobId: previousChildId,
+                }) !== undefined,
+            )
+          : undefined;
+      if (child) {
+        if (loadCronRows(database.db, storeKey, new Set([child.id])).length > 0) {
+          throw new Error("Command recovery identity already exists");
+        }
+        upsertCronJobRow(database.db, storeKey, child, row.sort_order);
+      }
       finishCronRunReceiptInDatabase({
         receiptSchema: params.receiptSchema,
         database: database.db,

@@ -4,7 +4,7 @@ import { typeCheckSources } from "../../test/helpers/typescript.js";
 import { createCodeModeToolApiFile } from "./code-mode-tool-api.js";
 import { defineToolOutputSchema } from "./schema/tool-output-schema.js";
 
-it("preserves extended action results within the shared declaration allowance", async () => {
+it("preserves extended and union action results within the shared declaration allowance", async () => {
   const fields = {
     id: Type.String(),
     ...Object.fromEntries(
@@ -21,6 +21,13 @@ it("preserves extended action results within the shared declaration allowance", 
       inputProperty: "action",
       variants: {
         get: Type.Object(fields, { additionalProperties: false }),
+        add: Type.Union([
+          Type.Object(
+            { ...structuredClone(fields), preview: Type.Optional(Type.String()) },
+            { additionalProperties: false },
+          ),
+          Type.Object({ missing: Type.Literal(true) }, { additionalProperties: false }),
+        ]),
         update: Type.Object(
           { ...structuredClone(fields), warning: Type.Optional(Type.String()) },
           { additionalProperties: false },
@@ -44,6 +51,17 @@ async function consume() {
   updated.warning.toUpperCase();
   const warned = await records({ action: "warn" });
   const warning: string = warned.warning;
+  const added = await records({ action: "add" });
+  if ("id" in added) {
+    const createdId: string = added.id;
+    const preview: string | undefined = added.preview;
+    // @ts-expect-error The object alternative has no missing discriminator.
+    added.missing;
+  } else {
+    const missing: true = added.missing;
+    // @ts-expect-error The alternate result has no object identity.
+    added.id;
+  }
   const numeric = await records({ action: "numeric" });
   const numericId: number = numeric.id;
   // @ts-expect-error The alternate result changes the inherited field type.

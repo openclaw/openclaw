@@ -294,6 +294,13 @@ export type CronJobState = Omit<
   };
   /** Fences notification settlement when multiple cycles share a timestamp. */
   lastFailureNotificationId?: string;
+  /** Scheduler-only child relation; its consumed start survives interruption and edits. */
+  commandRecoveryOrigin?: {
+    jobId: string;
+    failedReceiptId: string;
+    parentConfigRevision: string;
+    startedAtMs?: number;
+  };
   /** Number of consecutive schedule computation errors. Auto-disables job after threshold. */
   scheduleErrorCount?: number;
   /** @deprecated Use lastRunStatus. */
@@ -346,6 +353,13 @@ export type CronJob = CronJobBase<
   };
   /** Server-authored provenance for requester-scoped scheduled tool authority. */
   scheduledToolPolicy?: CronScheduledToolPolicy;
+  /** Operator-authored recovery authority; independent of human failure alerts. */
+  failureRecovery?: {
+    agentId: string;
+    message: string;
+    toolsAllow?: string[];
+    timeoutSeconds?: number;
+  };
   trigger?: CronTrigger;
   state: CronJobState;
 };
@@ -410,6 +424,8 @@ type CronJobStateInput = Partial<
     | "streamSourceIdentity"
     | "runningReceiptId"
     | "runningScheduleChangeId"
+    | "failureRecovery"
+    | "commandRecoveryOrigin"
   >
 >;
 
@@ -433,6 +449,7 @@ export type CronJobPatch = Partial<
     | "payload"
     | "delivery"
     | "failureAlert"
+    | "failureRecovery"
     | "declarationKey"
     | "displayName"
     | "owner"
@@ -447,5 +464,6 @@ export type CronJobPatch = Partial<
   payload?: CronPayloadPatch;
   delivery?: CronDeliveryPatch;
   failureAlert?: CronFailureAlertPatch | false | null;
+  failureRecovery?: CronJob["failureRecovery"] | null;
   state?: CronJobStateInput;
 };

@@ -177,6 +177,7 @@ it.each(["confirmed", "aborted-open"] as const)(
             {
               defaultAgentId: "main",
               jobs: [{ ...job, state: { lastRunStatus: "ok" } }],
+              createdJobs: [],
               deletedJobIds: [],
               deferredReceiptIds: [],
             },

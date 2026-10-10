@@ -232,6 +232,9 @@ async function inspectManualRunPreflight(
   if (!job || (opts?.onExit && !matchesOnExitSchedule(job, opts.onExit.schedule))) {
     return { ok: true, ran: false, reason: "not-due" };
   }
+  if (job.state.commandRecoveryOrigin?.startedAtMs !== undefined) {
+    return { ok: true, ran: false, reason: "not-due" };
+  }
   assertCanonicalCronDeliveryMode(job.delivery);
   if (opts?.onExit && (!isJobEnabled(job) || job.state.autoDisabled)) {
     return { ok: true, ran: false, reason: "disabled" };

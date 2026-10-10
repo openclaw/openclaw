@@ -137,13 +137,14 @@ export type CronRuntimeMutationContracts = {
   "cron.finishReceipt": {
     input: CronRuntimeMutationInputs["cron.finishReceipt"];
     facts: Record<string, never>;
-    preparation: Record<string, never>;
-    outcome: Record<string, never>;
+    preparation: { nowMs: number };
+    outcome: { changed: boolean; logs: CronRunRecoveryOutcome["logs"] };
   };
   "cron.finalizeRuns": {
     input: CronRuntimeMutationInputs["cron.finalizeRuns"];
     facts: {
       jobs: CronJob[];
+      activeReceiptJobIds: string[];
       receipts: Array<{
         receiptId: string;
         deletionBlocked: boolean;
@@ -153,6 +154,7 @@ export type CronRuntimeMutationContracts = {
     preparation: {
       defaultAgentId?: string;
       jobs: CronJob[];
+      createdJobs: CronJob[];
       deletedJobIds: string[];
       deferredReceiptIds: string[];
     };

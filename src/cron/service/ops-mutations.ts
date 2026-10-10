@@ -109,6 +109,13 @@ export async function add(
     }
     await ensureLoadedForOperation(state);
     const agentId = resolveCronJobEffectiveAgentId(input, resolveCurrentDefaultAgentId(state));
+    if (
+      input.failureRecovery &&
+      state.deps.isAgentAvailable &&
+      !state.deps.isAgentAvailable(normalizeOptionalAgentId(input.failureRecovery.agentId)!)
+    ) {
+      throw new Error("command failure recovery agent is unavailable");
+    }
     const normalizedId = normalizeOptionalString(input.id);
     if (input.id !== undefined && !normalizedId) {
       throw new Error("cron job id must not be blank");
@@ -321,6 +328,23 @@ async function updateLoadedJob(params: {
   }
   await ensureLoadedForOperation(state);
   const job = findJobOrThrow(state, id);
+  if (
+    opts?.preserveRunning &&
+    (job.payload.kind !== "command" ||
+      Object.keys(patch).length !== 1 ||
+      patch.enabled !== false ||
+      !opts.expectedConfigRevision ||
+      resolveCronJobConfigRevision(job) !== opts.expectedConfigRevision)
+  ) {
+    throw new TypeError("preserveRunning requires an exact revision-checked command disable");
+  }
+  if (
+    patch.failureRecovery &&
+    state.deps.isAgentAvailable &&
+    !state.deps.isAgentAvailable(normalizeOptionalAgentId(patch.failureRecovery.agentId)!)
+  ) {
+    throw new Error("command failure recovery agent is unavailable");
+  }
   // Existing monitors are config-driven: any patch (disable, reschedule,
   // repurpose) would silently diverge from its owner until the next reconcile,
   // so updates are rejected outright. Removal stays allowed only to the owner.
@@ -388,7 +412,8 @@ async function updateLoadedJob(params: {
       patch.agentId !== undefined
         ? resolveCronJobEffectiveAgentId(nextJob, resolveCurrentDefaultAgentId(state))
         : undefined,
-    preconditionJob: precondition ? job : undefined,
+    preconditionJob: precondition || opts?.preserveRunning ? job : undefined,
+    preserveRunning: opts?.preserveRunning,
     mutationMethod: "cron.update",
     ownerMutation,
   });

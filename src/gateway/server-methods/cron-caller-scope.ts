@@ -299,6 +299,7 @@ export function resolveCronJobOwnerAgentId(job: Pick<CronJob, "owner">): string 
 function isOperatorCommandCronJob(job: CronJob): boolean {
   return (
     job.payload.kind === "command" ||
+    job.state.commandRecoveryOrigin !== undefined ||
     job.schedule.kind === "on-exit" ||
     job.schedule.kind === "stream"
   );
@@ -402,6 +403,9 @@ export function cronCreateMatchesCallerScope(params: {
 }): boolean {
   if (!params.callerScope) {
     return true;
+  }
+  if (params.job.failureRecovery !== undefined) {
+    return false;
   }
   const effectiveAgentId = resolveCronJobEffectiveAgentId(params.job, params.defaultAgentId);
   if (effectiveAgentId !== params.callerScope.agentId) {

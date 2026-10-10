@@ -71,10 +71,13 @@ export function prepareCronStateWorkerCommand(type: PropertyKey): Promise<void> 
       "cron.finalizeRuns",
       "cron.removeStaleFamily",
     ].includes(String(type)) &&
-    !admission
+    (!admission || type === "cron.finishReceipt")
   ) {
-    return loadAdmission().then((loaded) => {
+    return loadAdmission().then(async (loaded) => {
       admission = loaded;
+      if (type === "cron.finishReceipt") {
+        await loaded.prepareCronReceiptRecoveryInWorker();
+      }
     });
   }
   if (

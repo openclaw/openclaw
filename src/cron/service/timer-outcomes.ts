@@ -245,6 +245,11 @@ export function applyJobResult(
     job.state.nextRunAtMs = nextRunAtMs === undefined ? undefined : scheduleNextRun(nextRunAtMs);
   };
   const finish = () => {
+    if (job.state.commandRecoveryOrigin?.startedAtMs !== undefined) {
+      // A consumed recovery start is terminal even after provider failure or interruption.
+      job.enabled = false;
+      job.state.nextRunAtMs = undefined;
+    }
     if (opts.replaySchedule && job.schedule.kind !== "at") {
       applyReplaySchedule();
     }

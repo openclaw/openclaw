@@ -298,6 +298,14 @@ const CronFailureAlertPatchSchema = closedObject({
   accountId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
 });
 
+/** Operator opt-in for one bounded, silent repair of a failed command. */
+const CronFailureRecoverySchema = closedObject({
+  agentId: NonEmptyString,
+  message: Type.String({ minLength: 1, maxLength: 8_000 }),
+  toolsAllow: Type.Optional(Type.Array(NonEmptyString)),
+  timeoutSeconds: Type.Optional(Type.Integer({ minimum: 1, maximum: 2_400 })),
+});
+
 /** Delivery destination used when failure alerts need a separate target. */
 const CronFailureDestinationSchema = closedObject({
   channel: Type.Optional(CronAnnounceChannelSchema),
@@ -439,6 +447,22 @@ const CronJobRuntimeFeedbackProperties = {
 
 /** Scheduler-maintained state for the latest run/delivery outcome. */
 export const CronJobStateSchema = closedObject({
+  // Scheduler-owned link. Child execution success is not command verification.
+  failureRecovery: Type.Optional(
+    closedObject({
+      jobId: NonEmptyString,
+      failedReceiptId: NonEmptyString,
+      recoveredAtMs: Type.Optional(CronDateTimestampMsSchema),
+    }),
+  ),
+  commandRecoveryOrigin: Type.Optional(
+    closedObject({
+      jobId: NonEmptyString,
+      failedReceiptId: NonEmptyString,
+      parentConfigRevision: NonEmptyString,
+      startedAtMs: Type.Optional(CronDateTimestampMsSchema),
+    }),
+  ),
   nextRunAtMs: Type.Optional(CronDateTimestampMsSchema),
   scheduleActivatedAtMs: Type.Optional(CronDateTimestampMsSchema),
   runningAtMs: Type.Optional(CronDateTimestampMsSchema),
@@ -518,6 +542,7 @@ export const CronJobSchema = closedObject({
   payload: CronReportedPayloadSchema,
   delivery: Type.Optional(CronDeliverySchema),
   failureAlert: Type.Optional(Type.Union([Type.Literal(false), CronFailureAlertSchema])),
+  failureRecovery: Type.Optional(CronFailureRecoverySchema),
   state: CronJobStateSchema,
   nextRunAtMs: Type.Optional(CronDateTimestampMsSchema),
   lastRunAtMs: Type.Optional(CronDateTimestampMsSchema),
@@ -604,6 +629,7 @@ export const CronAddParamsSchema = closedObject({
   payload: CronPayloadSchema,
   delivery: Type.Optional(CronDeliverySchema),
   failureAlert: Type.Optional(Type.Union([Type.Literal(false), CronFailureAlertSchema])),
+  failureRecovery: Type.Optional(CronFailureRecoverySchema),
 });
 
 /** Dry-run delivery route shown at create and list time without sending. */
@@ -647,6 +673,7 @@ const CronJobPatchSchema = closedObject({
   failureAlert: Type.Optional(
     Type.Union([Type.Literal(false), CronFailureAlertPatchSchema, Type.Null()]),
   ),
+  failureRecovery: Type.Optional(Type.Union([CronFailureRecoverySchema, Type.Null()])),
   state: Type.Optional(CronJobStatePatchSchema),
 });
 
@@ -655,6 +682,8 @@ export const CronUpdateParamsSchema = cronIdOrJobIdParams({
   patch: CronJobPatchSchema,
   /** Rejects the patch when the current definition does not match the caller's token. */
   expectedConfigRevision: Type.Optional(CronConfigRevisionSchema),
+  /** Pauses only command recurrence without cancelling an already-admitted invocation. */
+  preserveRunning: Type.Optional(Type.Literal(true)),
 });
 
 /** Removes a cron job by id or legacy jobId alias. */

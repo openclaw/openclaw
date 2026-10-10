@@ -209,6 +209,61 @@ Delivered text is derived from process output: non-empty stdout wins; if stdout 
 
 When the run deadline stops a command, run history retains its captured output and command timeout reason after bounded process cleanup. Completion delivery does not start after that deadline.
 
+#### Command failure recovery
+
+For command maintenance, an authenticated operator can call `cron.update` with
+`preserveRunning: true`, `expectedConfigRevision` and the exact patch
+`{"enabled":false}`. This disables future recurrence and retires queued admission
+without cancelling an already-admitted command. Its original result remains in
+native run history, and finalization cannot re-enable the disabled definition.
+The option applies only to command jobs and is not stored on the job. Ordinary
+disable continues to cancel active work. Explicit operator force-run semantics
+remain unchanged; restoring enablement selects the next native schedule slot.
+
+An authenticated operator can opt a recurring `command` job into one bounded
+recovery turn through `cron.add` or `cron.update`:
+
+```json
+{
+  "id": "command-job-id",
+  "patch": {
+    "failureRecovery": {
+      "agentId": "maintenance",
+      "message": "Inspect the authorized health artifact in your workspace and repair its source if permitted. Record any blocker there.",
+      "timeoutSeconds": 300
+    }
+  }
+}
+```
+
+The recovery agent uses its existing native tool policy. Optional `toolsAllow`
+narrows that policy. The timeout defaults to 2,400 seconds and must be between
+1 and 2,400. Set `failureRecovery: null` to remove the opt-in. Ordinary model
+callers cannot author the policy or see the command or its generated recovery job.
+Provide usable, authorized evidence paths in `message`; OpenClaw does not copy
+the command arguments, environment, output, or error into the recovery prompt.
+
+Healthy command runs never start a model turn. A finalized failed receipt and
+its retained one-shot recovery job commit in the same native transaction.
+The generated turn has no human creator, no delivery destination, and no failure
+alert. It grants no additional operator authority. Its first native activation
+durably consumes the attempt before execution. Provider failure, interruption,
+restart, or a lost response cannot start it again. An interrupted command whose
+effects are unknown does not admit corrective work; an exact finalized outcome
+can be restored during restart. Definition changes fence pending recovery and
+prevent an older command occurrence from admitting recovery under a new policy.
+
+Operator `cron.get` and `cron.list` responses expose the parent's
+`state.failureRecovery` (`jobId`, `failedReceiptId`, optional `recoveredAtMs`)
+and the child's `state.commandRecoveryOrigin` (`jobId`, `failedReceiptId`,
+`parentConfigRevision`, optional `startedAtMs`). These fields are read-only;
+public add, update, and state patches cannot forge or clear them. Use existing
+`cron.runs` history to inspect both executions. The original command failure
+stays failed. A completed recovery turn is not proof of repair: `recoveredAtMs`
+is recorded only after the original command subsequently succeeds. A new failure
+can admit another recovery only after that success and the previous child has
+settled, preserving one active recovery owner.
+
 ### Script payloads
 
 Script payloads run headlessly in the same code-mode executor as trigger scripts, without starting a conversational agent turn. They are available by default; setting `cron.triggers.enabled: false` disables creation and execution of script payloads together with condition-trigger scripts and stream schedules. Script jobs support only `main` and `isolated` session targets.

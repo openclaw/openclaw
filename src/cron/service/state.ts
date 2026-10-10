@@ -508,6 +508,9 @@ export type CronUpdateOptions = Pick<
   CronAddOptions,
   "toolsAllowProvenance" | "toolsAllowExecTarget" | "commitGuard" | "captureRuntimeAuthority"
 > & {
+  /** Operator maintenance: exact revision-checked command disable, without cancellation. */
+  preserveRunning?: true;
+  expectedConfigRevision?: string;
   /** Null forbids policy adoption; undefined retains in-process operator defaults. */
   scheduledToolPolicy?: CronScheduledToolPolicy | null;
 };

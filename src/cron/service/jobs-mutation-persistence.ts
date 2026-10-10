@@ -36,6 +36,7 @@ export async function persistUpdatedJob(params: {
   commitGuard?: () => void;
   agentId?: string;
   preconditionJob?: CronJob;
+  preserveRunning?: true;
 }) {
   const { state, snapshot, previousJob, nextJob } = params;
   if (!snapshot.store) {
@@ -118,7 +119,7 @@ export async function persistUpdatedJob(params: {
         scheduleChanged,
       });
       try {
-        if (isJobEnabled(previousJob) && !isJobEnabled(nextJob)) {
+        if (!params.preserveRunning && isJobEnabled(previousJob) && !isJobEnabled(nextJob)) {
           requestActiveCronJobCancellation(nextJob.id, "Cron job disabled by operator.");
         }
       } finally {

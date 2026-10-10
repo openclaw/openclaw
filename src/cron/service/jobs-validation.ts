@@ -15,6 +15,32 @@ import { normalizeHttpWebhookUrl } from "../webhook-url.js";
 import { computeJobNextRunAtMs } from "./jobs-scheduling.js";
 import type { CronServiceState } from "./state.js";
 
+export function assertCommandFailureRecoverySupport(job: CronJob): void {
+  const recovery = job.failureRecovery;
+  if (
+    recovery &&
+    (!recovery.agentId?.trim() ||
+      !recovery.message?.trim() ||
+      recovery.message.length > 8_000 ||
+      (recovery.toolsAllow !== undefined &&
+        (!Array.isArray(recovery.toolsAllow) ||
+          recovery.toolsAllow.some((tool) => typeof tool !== "string" || !tool.trim()))) ||
+      (recovery.timeoutSeconds !== undefined &&
+        (!Number.isInteger(recovery.timeoutSeconds) ||
+          recovery.timeoutSeconds < 1 ||
+          recovery.timeoutSeconds > 2_400)))
+  ) {
+    throw new Error("invalid command failure recovery policy");
+  }
+  if (
+    job.failureRecovery &&
+    (job.payload.kind !== "command" ||
+      (job.schedule.kind !== "every" && job.schedule.kind !== "cron"))
+  ) {
+    throw new Error("failure recovery requires a recurring command job");
+  }
+}
+
 export async function resolveConfiguredChannelsForValidation(
   state: CronServiceState,
 ): Promise<readonly string[] | undefined> {

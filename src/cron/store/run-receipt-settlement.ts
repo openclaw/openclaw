@@ -1,7 +1,11 @@
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 import { runCronRuntimeMutation } from "../service/runtime-mutation.js";
+import { noteCronJobsStoreCommit } from "../store.js";
 import type { CronRunReceiptHandle, CronRunReceiptStatus } from "./run-receipt.types.js";
+
+const log = createSubsystemLogger("cron/receipts");
 
 type CronRunReceiptFinish = {
   handle: CronRunReceiptHandle;
@@ -171,11 +175,19 @@ export function createCronRunReceiptSettlementOwner(callbacks: {
             );
           }
         },
-        prepare: () => ({ value: {}, assertCurrent() {} }),
+        prepare: () => ({ value: { nowMs: Date.now() }, assertCurrent() {} }),
         onSettled(outcome) {
           retrySafe = outcome === "not-committed";
         },
-        publish() {
+        publish(outcome) {
+          if (outcome.changed) {
+            noteCronJobsStoreCommit(params.handle.storeKey);
+          }
+          for (const entry of outcome.logs) {
+            log[entry.level](entry.message ?? "Cron receipt recovery admission", {
+              detail: entry.fields,
+            });
+          }
           clearCronRunReceiptFinishRetry(params.handle.receiptId);
           locallyOwnedReceipts.delete(params.handle.receiptId);
         },

@@ -120,44 +120,63 @@ function createVariantDeclarations(params: {
   const objects: ObjectDeclaration[] = [];
   for (const [index, schema] of variants.variants.entries()) {
     const name = `${prefix}Output${index}`;
-    // Preserve root shape constraints; unsupported types stay unknown.
-    let output = toolSchemaDeclaration({ ...outputSchema, anyOf: [schema] });
-    const object = output === "unknown" ? undefined : readObjectDeclaration(name, schema);
-    if (object) {
-      // Extended results share their already-declared fields without widening either contract.
-      for (const base of objects) {
-        if (
-          !Object.entries(base.properties).every(
-            ([key, value]) =>
-              Object.hasOwn(object.properties, key) &&
-              base.required.has(key) === object.required.has(key) &&
-              isDeepStrictEqual(value, object.properties[key]),
-          )
-        ) {
-          continue;
+    // Only a bare union can share its closed-object alternatives independently.
+    const alternatives =
+      isRecord(schema) &&
+      Array.isArray(schema.anyOf) &&
+      schema.anyOf.length > 0 &&
+      Object.keys(schema).every((key) => key === "anyOf")
+        ? schema.anyOf
+        : [schema];
+    const outputs: string[] = [];
+    for (const alternative of alternatives) {
+      let output = toolSchemaDeclaration({ ...outputSchema, anyOf: [alternative] });
+      const object = output === "unknown" ? undefined : readObjectDeclaration(name, alternative);
+      if (object) {
+        // Extended results share their already-declared fields without widening either contract.
+        for (const base of objects) {
+          if (
+            !Object.entries(base.properties).every(
+              ([key, value]) =>
+                Object.hasOwn(object.properties, key) &&
+                base.required.has(key) === object.required.has(key) &&
+                isDeepStrictEqual(value, object.properties[key]),
+            )
+          ) {
+            continue;
+          }
+          const properties = Object.fromEntries(
+            Object.entries(object.properties).filter(
+              ([key]) => !Object.hasOwn(base.properties, key),
+            ),
+          );
+          const extension = toolSchemaDeclaration({
+            ...outputSchema,
+            anyOf: [
+              {
+                type: "object",
+                properties,
+                required: [...object.required].filter((key) => Object.hasOwn(properties, key)),
+                additionalProperties: false,
+              },
+            ],
+          });
+          const factored =
+            Object.keys(properties).length === 0 ? base.name : `${base.name} & ${extension}`;
+          if (extension !== "unknown" && factored.length < output.length) {
+            output = factored;
+          }
         }
-        const properties = Object.fromEntries(
-          Object.entries(object.properties).filter(([key]) => !Object.hasOwn(base.properties, key)),
-        );
-        const extension = toolSchemaDeclaration({
-          ...outputSchema,
-          anyOf: [
-            {
-              type: "object",
-              properties,
-              required: [...object.required].filter((key) => Object.hasOwn(properties, key)),
-              additionalProperties: false,
-            },
-          ],
-        });
-        const factored =
-          Object.keys(properties).length === 0 ? base.name : `${base.name} & ${extension}`;
-        if (extension !== "unknown" && factored.length < output.length) {
-          output = factored;
+        if (alternatives.length === 1) {
+          objects.push(object);
         }
       }
-      objects.push(object);
+      outputs.push(output);
     }
+    const output =
+      outputs.length === 1
+        ? (outputs[0] ?? "unknown")
+        : outputs.map((part) => `(${part})`).join(" | ");
     if (!append(`type ${name} = ${output};`)) {
       return undefined;
     }
