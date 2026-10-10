@@ -233,7 +233,9 @@ export function createSecretsHandlers(params: {
         const result = {
           ok: true as const,
           ...(await params.storeWriteService.reloadReference(names)),
-          ...(action === "set" && (mutationResult === "secret" || mutationResult === "env")
+          ...(requestParams.expectedOwnerId &&
+          action === "set" &&
+          (mutationResult === "secret" || mutationResult === "env")
             ? { kind: mutationResult }
             : {}),
         };

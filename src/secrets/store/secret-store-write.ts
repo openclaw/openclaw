@@ -17,6 +17,7 @@ import { withMissingSecretStoreFallback } from "./secret-store-sqlite.js";
 import { SecretStoreValidationError } from "./secret-store-validation-error.js";
 import {
   assertSecretStoreMutationName,
+  assertSecretStoreEnvName,
   assertSecretStoreWriteShape,
   normalizeSecretAllowedHosts,
   type SecretStoreKind,
@@ -271,7 +272,7 @@ export function updateSecretStoreAllowedHostsInDatabase(
   },
   admit: (stage: "transaction" | "commit") => void,
 ): void {
-  assertSecretStoreMutationName(params.name);
+  assertSecretStoreEnvName(params.name);
   const allowedHosts = normalizeSecretAllowedHosts(params.allowedHosts);
   const { now } = params;
   runOpenClawStateWriteTransaction(

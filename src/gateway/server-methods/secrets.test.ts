@@ -479,6 +479,7 @@ describe("secrets handlers", () => {
       return expiry.promise;
     });
 
+    storeMocks.writeEntry.mockResolvedValueOnce("secret");
     const setRespond = vi.fn();
     const mutation = invokeStoreMethod({
       handlers,
