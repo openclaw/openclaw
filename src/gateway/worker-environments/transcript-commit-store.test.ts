@@ -256,6 +256,9 @@ describe("worker transcript commit store", () => {
         await store.begin(input);
       }
       if (outcome === "unknown") {
+        vi.spyOn(operationAdmission, "observeSqliteWorkerCommittedFacts").mockImplementationOnce(
+          () => {},
+        );
         const createAdmission = operationAdmission.createSqliteWorkerOperationAdmission;
         vi.spyOn(operationAdmission, "createSqliteWorkerOperationAdmission").mockImplementationOnce(
           (admit, attachment) => {

@@ -31,6 +31,7 @@ import type {
 import { assertMemoryShadowIdentity, type MemoryShadowFailure } from "./manager-shadow-task.js";
 import {
   MemorySourceIndexKernel,
+  readMemorySourceChunks,
   readMemorySourceHash,
   type MemorySourceIndexHeader,
   type MemorySourceIndexRow,
@@ -221,6 +222,9 @@ function createPublicationBackend(
         if (command.type === "source.hash") {
           return readMemorySourceHash(db, command.input.source, command.input.path);
         }
+        if (command.type === "source.chunks") {
+          return readMemorySourceChunks(db, command.input.source, command.input.path);
+        }
         if (command.type === "source.state") {
           return loadMemorySourceFileState({ db, ...command.input });
         }
@@ -374,11 +378,15 @@ function createPublicationBackend(
             );
           }
           const beforeRevision = readMemoryDatabaseRevision(db);
-          new MemorySourceIndexKernel(db, command.input.state).replaceRows(
-            header,
-            readStagedRows<MemorySourceIndexRow>(db),
-          );
-          return { beforeRevision, databaseRevision: readMemoryDatabaseRevision(db) };
+          const { retainedDrift } = new MemorySourceIndexKernel(
+            db,
+            command.input.state,
+          ).replaceRows(header, readStagedRows<MemorySourceIndexRow>(db));
+          return {
+            beforeRevision,
+            databaseRevision: readMemoryDatabaseRevision(db),
+            retainedDrift,
+          };
         });
         return finish(outcome);
       },

@@ -1,14 +1,12 @@
 import { isMainThread } from "node:worker_threads";
 import type { IncognitoSessionOperations } from "../config/sessions/session-incognito-contract.js";
 import { createSqliteLifecycleAggregateError } from "../infra/sqlite-lifecycle-errors.js";
-import type {
-  SqliteWorkerEphemeralTarget,
-  SqliteWorkerPreparedBackend,
-} from "../infra/sqlite-worker-contract.js";
 import {
-  requestSqliteWorkerOperationAdmission,
   SqliteWorkerOpenRefusedError,
-} from "../infra/sqlite-worker-operation-admission.js";
+  type SqliteWorkerEphemeralTarget,
+  type SqliteWorkerPreparedBackend,
+} from "../infra/sqlite-worker-contract.js";
+import { requestSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import {
   closeOpenClawAgentDatabaseByPath,
   retainAgentDatabase,

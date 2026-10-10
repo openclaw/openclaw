@@ -98,6 +98,11 @@ export async function prepareWorkerProjectSnapshot(params: {
   if (!COMMIT_PATTERN.test(baseCommit)) {
     throw new Error("Worker workspace Git base is not a commit id");
   }
+  if ((await requireGit(root, ["cat-file", "-s", `${baseCommit}^{tree}`], options)) === "0") {
+    // Empty session repositories have no reusable project content. Keep their
+    // isolated Git metadata in ordinary workspace sync, outside the warm image.
+    return undefined;
+  }
   const { canonicalRoot, commonDir } = await resolveGitRepositoryPaths(root, options);
   const origin = await runGit(root, ["remote", "get-url", "origin"], options);
   const label =

@@ -78,22 +78,33 @@ function expectedUnsafeSqliteError(version: string, shared: boolean): string {
 
 describe("node SQLite locations", () => {
   const dirs = useAutoCleanupTempDirTracker(afterEach);
-  it("writes existing URI-escaped paths but never creates a missing database", () => {
-    const pathname = path.join(dirs.make("sqlite-existing-uri-"), "state ?#%.sqlite");
-    const uri = resolveExistingSqliteFileUri(pathname);
-    expect(() => openNodeSqliteDatabase(uri)).toThrow();
-    expect(fs.existsSync(pathname)).toBe(false);
-    const initial = openNodeSqliteDatabase(pathname);
-    initial.exec("CREATE TABLE retained(value TEXT) STRICT");
-    initial.close();
-    const existing = openNodeSqliteDatabase(uri);
-    try {
-      existing.prepare("INSERT INTO retained(value) VALUES(?)").run("written");
-      expect(existing.prepare("SELECT value FROM retained").all()).toEqual([{ value: "written" }]);
-    } finally {
-      existing.close();
-    }
-  });
+  it.each(["absolute", "relative"])(
+    "writes existing %s URI-escaped paths without creating missing databases",
+    (kind) => {
+      const pathname = path.join(
+        dirs.make(".sqlite-existing-uri-", kind === "relative" ? process.cwd() : undefined),
+        "state ?#%.sqlite",
+      );
+      const uri =
+        kind === "relative"
+          ? `file:${path.relative(process.cwd(), pathname).split(path.sep).map(encodeURIComponent).join("/")}?mode=rw`
+          : resolveExistingSqliteFileUri(pathname);
+      expect(() => openNodeSqliteDatabase(uri)).toThrow();
+      expect(fs.existsSync(pathname)).toBe(false);
+      const initial = openNodeSqliteDatabase(uri.replace(/\?mode=rw$/u, ""));
+      initial.exec("CREATE TABLE retained(value TEXT) STRICT");
+      initial.close();
+      const existing = openNodeSqliteDatabase(uri);
+      try {
+        existing.prepare("INSERT INTO retained(value) VALUES(?)").run("written");
+        expect(existing.prepare("SELECT value FROM retained").all()).toEqual([
+          { value: "written" },
+        ]);
+      } finally {
+        existing.close();
+      }
+    },
+  );
   it("preserves Windows long paths in non-creating writable URIs", () => {
     const pathname = String.raw`C:\deep state\openclaw.sqlite`;
     expect(resolveExistingSqliteFileUri(pathname, "win32")).toBe(
@@ -117,8 +128,21 @@ describe("node SQLite locations", () => {
     expect(resolveNodeSqliteLocation("relative/openclaw.sqlite")).toBe("relative/openclaw.sqlite");
   });
 
-  it("opens special locations through the shared connection boundary", () => {
-    const database = openNodeSqliteDatabase(":memory:", { timeout: 5000 });
+  it.each([
+    ":memory:",
+    "file::memory:",
+    "file::memory:?cache=shared",
+    "file:checkonce-memory?mode=memory&cache=shared",
+  ])("opens in-memory location %s without creating a disk file", (location) => {
+    const open = fs.openSync;
+    vi.spyOn(fs, "openSync").mockImplementation((filename, flags, mode) => {
+      // Keep the regression from leaving a literal :memory: file in the checkout.
+      if (filename === ":memory:") {
+        throw new Error("In-memory SQLite attempted to create a disk file");
+      }
+      return open(filename, flags, mode);
+    });
+    const database = openNodeSqliteDatabase(location, { timeout: 5000 });
     try {
       expect(database.prepare("PRAGMA busy_timeout").get()).toEqual({ timeout: 5000 });
       const identity = " a\0🦞 ";
@@ -214,6 +238,10 @@ describe("node SQLite safety", () => {
       expect(captureSqliteNativeRuntimeAdmission()).toMatchObject({
         version: "3.51.3",
         extensionLoadingSupported: omitted === 0,
+        iteratorBehavior: {
+          nextAfterDoneIsTerminal: expect.any(Boolean),
+          returnAfterDoneIsInert: expect.any(Boolean),
+        },
       });
       expect(prepare).toHaveBeenCalledOnce();
     },
@@ -297,6 +325,7 @@ describe("node SQLite safety", () => {
       const native = mockBunSqliteNativeBoundary({ isBun: false });
       const parent = await loadNodeSqliteWithVersion("3.44.6", 1);
       parent.requireNodeSqlite();
+      const iteratorBehavior = parent.captureSqliteNativeRuntimeAdmission()?.iteratorBehavior;
       parent.prepare.mockRestore();
       const receiptKey = "openclaw.sqliteNativeRuntimeAdmission";
       const receipt = native.environment.get(receiptKey);
@@ -343,6 +372,9 @@ describe("node SQLite safety", () => {
       expect(worker.supportsNodeSqliteWalCheckpointNoop()).toBe(changed !== "unchanged");
       if (changed === "unchanged") {
         expect(worker.prepare).not.toHaveBeenCalled();
+        expect(worker.captureSqliteNativeRuntimeAdmission()?.iteratorBehavior).toEqual(
+          iteratorBehavior,
+        );
       } else {
         expect(worker.prepare).toHaveBeenCalled();
       }

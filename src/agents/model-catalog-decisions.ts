@@ -37,7 +37,8 @@ import {
 } from "./model-auth-availability.js";
 import { createUnlistedClaudeCliWildcardCheck } from "./model-catalog-cli-wildcard.js";
 import {
-  createModelCatalogView,
+  createModelCatalogSnapshotView,
+  listModelCatalogObservedRoutes,
   prepareModelCatalogView,
   selectModelCatalogRuntimeEntry,
 } from "./model-catalog-view.js";
@@ -342,7 +343,7 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
     runtimeId?: string,
   ): ModelAuthAvailabilityEvaluation => {
     const identity = openAIModelCatalogRoutePolicy.resolveIdentity(entry);
-    const observedRoutes = (routeVariants ?? [entry]).map(({ api, baseUrl }) => ({ api, baseUrl }));
+    const observedRoutes = listModelCatalogObservedRoutes(routeVariants ?? [entry]);
     const cacheKey = JSON.stringify([
       resolveModelCatalogIdentityKey(entry),
       runtimeId,
@@ -514,12 +515,7 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
         if (projectedCatalog) {
           return projectedCatalog;
         }
-        const view = createModelCatalogView({
-          cfg: params.cfg,
-          catalog: snapshot.entries,
-          routeVariants:
-            snapshot.routeVariants.length > 0 ? snapshot.routeVariants : snapshot.entries,
-        });
+        const view = createModelCatalogSnapshotView(params.cfg, snapshot);
         const projection = view.logicalEntries.map((entry) => {
           const routeVariants = view.variantsOf(entry) ?? [entry];
           const host = evaluateEntry(entry, routeVariants);

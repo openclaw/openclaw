@@ -146,6 +146,10 @@ import type {
   SessionRepositoryWorkspaceRecord,
 } from "./session-repository-workspaces.types.js";
 import type {
+  UserBackgroundReadCommand,
+  UserBackgroundReadReply,
+} from "./user-background.types.js";
+import type {
   UserProfileAvatarReadCommand,
   UserProfileAvatarReadReply,
 } from "./user-profiles-avatar.types.js";
@@ -234,6 +238,7 @@ export type OpenClawStateReadCommand =
   | { type: "sessionGroups.members"; cfg: OpenClawConfig }
   | { type: "onboardingRecommendations.read"; configKey: string }
   | { type: "userProfiles.reconcile"; profileId: string }
+  | UserBackgroundReadCommand
   | UserProfileAvatarReadCommand
   | { type: "userProfiles.channelIdentity.list"; profileId: string }
   | { type: "userProfiles.channelIdentity.resolve"; identity: UserChannelIdentitySelector }
@@ -511,6 +516,7 @@ export type OpenClawStateReadResult =
       profile: ProfileDisplayRow | undefined;
       emailBindings: UserProfileEmailBinding[];
     }
+  | UserBackgroundReadReply
   | UserProfileAvatarReadReply
   | {
       type: "userProfiles.channelIdentity.list";

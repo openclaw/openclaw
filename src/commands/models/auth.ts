@@ -47,7 +47,7 @@ import type {
   ProviderAuthResult,
   ProviderPlugin,
 } from "../../plugins/types.js";
-import type { RuntimeEnv } from "../../runtime.js";
+import { ExitError, type RuntimeEnv } from "../../runtime.js";
 import {
   ProviderAuthConfigApplyError,
   ProviderCredentialsSavedError,
@@ -120,7 +120,7 @@ function requireManualAuthProvider(raw: string | undefined): string {
 function guardCancel<T>(value: T | typeof import("@clack/prompts").CANCEL_SYMBOL): T {
   if (typeof value === "symbol") {
     cancel("Cancelled.");
-    process.exit(0);
+    throw new ExitError(0);
   }
   return value;
 }
