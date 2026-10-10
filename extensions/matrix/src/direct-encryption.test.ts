@@ -6,7 +6,8 @@ import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { matrixPlugin } from "./channel.js";
 import { registerMatrixCli } from "./cli.js";
-import { loadMatrixCredentials, saveMatrixCredentials } from "./matrix/credentials.js";
+import { loadMatrixCredentialsAsync } from "./matrix/credentials-read.js";
+import { saveMatrixCredentials } from "./matrix/credentials.js";
 import { installMatrixTestRuntime } from "./test-runtime.js";
 import type { CoreConfig } from "./types.js";
 
@@ -113,7 +114,7 @@ async function seed(cfg: CoreConfig) {
     process.env,
     "ops",
   );
-  expect(loadMatrixCredentials(process.env, "ops")?.userId).toBe("@ops:example.org");
+  expect((await loadMatrixCredentialsAsync(process.env, "ops"))?.userId).toBe("@ops:example.org");
 }
 
 function expectRepair(client: ReturnType<typeof createClient>, encrypted: boolean) {
@@ -133,11 +134,11 @@ function expectRepair(client: ReturnType<typeof createClient>, encrypted: boolea
 describe.each([true, false])(
   "registered Matrix direct repair with named encryption=%s",
   (encrypted) => {
-    it("prepares the native approval target without reading credentials for encryption", async () => {
+    it("prepares native approval eligibility and targets with saved credentials off-thread", async () => {
       const cfg = config(encrypted);
       await seed(cfg);
       const client = createClient();
-      const runtime = matrixPlugin.approvalCapability?.nativeRuntime;
+      const runtime = matrixPlugin.approvalCapability?.nativeRuntimeAsync;
       expect(runtime).toBeDefined();
       if (!runtime) {
         throw new Error("Matrix native approval runtime missing");
@@ -145,9 +146,17 @@ describe.each([true, false])(
       const counters = recordHostSql();
       try {
         expect(
-          runtime.availability.isConfigured({ cfg, accountId: "ops", context: { client } }),
+          await runtime.availability.isConfigured({ cfg, accountId: "ops", context: { client } }),
         ).toBe(true);
+        expect(
+          await matrixPlugin.approvalCapability?.getExecInitiatingSurfaceStateAsync?.({
+            cfg,
+            accountId: "ops",
+            action: "approve",
+          }),
+        ).toEqual({ kind: "enabled" });
         const availability = counters.counts();
+        expect(availability).toEqual([0, 0, 0, 0, 0, 0]);
         const result = await runtime.transport.prepareTarget({
           cfg,
           accountId: "ops",

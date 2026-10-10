@@ -48,6 +48,7 @@ import {
   resolveAgentAccountId,
   resolveEffectiveCurrentChannelContext,
   resolveMessageToolActionSchemaActions,
+  resolveMessageToolDiscoveryAsync,
 } from "./message-tool-discovery.js";
 import { createMessageToolExplicitTargetGuard } from "./message-tool-explicit-target.js";
 import { createMessageToolGateway } from "./message-tool-gateway.js";
@@ -131,6 +132,31 @@ type MessageToolOptions = {
 };
 
 export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
+  const steps = createMessageToolSteps(options);
+  let next = steps.next();
+  while (!next.done) {
+    const actions = resolveMessageToolActionSchemaActions(next.value);
+    next = steps.next({ actions, schema: buildMessageToolSchema(next.value, actions) });
+  }
+  return next.value;
+}
+
+export async function createMessageToolAsync(options?: MessageToolOptions): Promise<AnyAgentTool> {
+  const steps = createMessageToolSteps(options);
+  let next = steps.next();
+  while (!next.done) {
+    next = steps.next(await resolveMessageToolDiscoveryAsync(next.value));
+  }
+  return next.value;
+}
+
+function* createMessageToolSteps(
+  options?: MessageToolOptions,
+): Generator<
+  MessageToolDiscoveryParams,
+  AnyAgentTool,
+  Awaited<ReturnType<typeof resolveMessageToolDiscoveryAsync>>
+> {
   const loadConfigForTool = options?.getRuntimeConfig ?? getRuntimeConfig;
   const getScopedSecretTargetsForTool =
     options?.getScopedChannelsCommandSecretTargets ?? getScopedChannelsCommandSecretTargets;
@@ -210,13 +236,12 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
     : undefined;
   // Schema and prompt must use the same snapshot; repeated discovery can drift
   // across plugin hooks while needlessly loading channel action metadata twice.
-  const actions = messageToolDiscoveryParams
-    ? resolveMessageToolActionSchemaActions(messageToolDiscoveryParams)
-    : undefined;
+  const discovered = messageToolDiscoveryParams ? yield messageToolDiscoveryParams : undefined;
+  const actions = discovered?.actions;
   const baseSchema = options?.sourceReplyOnly
     ? SOURCE_REPLY_ONLY_MESSAGE_SCHEMA
-    : messageToolDiscoveryParams
-      ? buildMessageToolSchema(messageToolDiscoveryParams, actions ?? [])
+    : discovered
+      ? discovered.schema
       : MessageToolSchema;
   const schema = addSourceReplyFinalControl(baseSchema);
   const description = options?.sourceReplyOnly
