@@ -66,9 +66,14 @@ export async function buildOllamaThinkingLevelMap(
     maxTokens: OLLAMA_DEFAULT_MAX_TOKENS,
     thinkingLevelMap: nativeMap,
   };
-  return Object.fromEntries(
-    levels.map((level) => [level, nativeMap[clampThinkingLevel(model, level)]]),
-  );
+  return {
+    ...Object.fromEntries(
+      levels.map((level) => [level, nativeMap[clampThinkingLevel(model, level)]]),
+    ),
+    // These entries also opt shared capability readers into additional controls.
+    minimal: nativeMap.minimal,
+    xhigh: nativeMap.xhigh,
+  };
 }
 
 // Each id below was verified on 2026-09-22 against the `thinking` descriptor

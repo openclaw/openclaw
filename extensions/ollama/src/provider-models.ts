@@ -23,6 +23,7 @@ import {
 } from "./defaults.js";
 import {
   buildOllamaThinkingLevelMap,
+  readOllamaThinkingMapValue,
   supportsOllamaCloudFullThinkingEffort,
 } from "./model-reasoning.js";
 import { readProviderBaseUrl } from "./provider-base-url.js";
@@ -424,7 +425,9 @@ export function buildOllamaModelDefinition(
     id: modelId,
     name: modelId,
     reasoning: opts?.thinkingLevelMap
-      ? Object.values(opts.thinkingLevelMap).some((value) => value !== "false")
+      ? Object.values(opts.thinkingLevelMap).some((value) =>
+          Boolean(readOllamaThinkingMapValue(value)),
+        )
       : supportsOllamaCloudFullThinkingEffort(modelId) ||
         (capabilities === undefined
           ? isReasoningModelHeuristic(modelId)

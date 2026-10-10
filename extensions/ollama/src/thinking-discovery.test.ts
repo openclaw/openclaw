@@ -1,4 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
+import { clampThinkingLevel } from "openclaw/plugin-sdk/llm";
 import type {
   ProviderRuntimeModel,
   ProviderWrapStreamFnContext,
@@ -146,39 +147,58 @@ describe("Ollama discovered thinking contracts", () => {
       xhigh: false,
     },
     {
+      name: "native minimal",
+      thinking: { values: [false, "minimal", "low", "high"], default: "low" },
+      expected: [false, "low", "high", "high"],
+      xhigh: false,
+      minimal: true,
+      minimalFallback: "minimal",
+    },
+    {
       name: "missing descriptor",
       thinking: undefined,
       expected: [false, "low", "high", "high"],
       xhigh: false,
+      minimalFallback: "minimal",
     },
     {
       name: "malformed descriptor",
       thinking: { values: "xhigh", default: "xhigh" },
       expected: [false, "low", "high", "high"],
       xhigh: false,
+      minimalFallback: "minimal",
     },
-  ])("maps $name discovery to native requests", async ({ name, thinking, expected, xhigh }) => {
-    const fixture = mockOllama(`thinking-${name.replaceAll(" ", "-")}:latest`, thinking);
-    const model = await fixture.discover();
-    const profile = profileFor(model);
-    expect(profile.levels.map(({ id }) => id)).toEqual(
-      xhigh
-        ? ["off", "low", "medium", "high", "xhigh", "max"]
-        : ["off", "low", "medium", "high", "max"],
-    );
-    for (const level of ["off", "low", "high", "max"] as const) {
-      await sendThinking(model, level);
-    }
-    expect(fixture.chatBodies.map((body) => body.think)).toEqual(expected);
-    for (const body of fixture.chatBodies) {
-      expect(body.options).not.toHaveProperty("think");
-    }
-    if (xhigh) {
-      await sendThinking(model, "xhigh");
-      expect(fixture.chatBodies.at(-1)?.think).toBe("xhigh");
-    }
-    expect(fixture.requests.filter((path) => path === "/api/show")).toHaveLength(1);
-  });
+  ])(
+    "maps $name discovery to native requests",
+    async ({ name, thinking, expected, xhigh, minimal = false, minimalFallback = "low" }) => {
+      const fixture = mockOllama(`thinking-${name.replaceAll(" ", "-")}:latest`, thinking);
+      const model = await fixture.discover();
+      const profile = profileFor(model);
+      expect(clampThinkingLevel(model, "xhigh")).toBe(xhigh ? "xhigh" : "high");
+      expect(clampThinkingLevel(model, "minimal")).toBe(minimalFallback);
+      expect(profile.levels.map(({ id }) => id)).toEqual([
+        "off",
+        ...(minimal ? ["minimal"] : []),
+        "low",
+        "medium",
+        "high",
+        ...(xhigh ? ["xhigh"] : []),
+        "max",
+      ]);
+      for (const level of ["off", "low", "high", "max"] as const) {
+        await sendThinking(model, level);
+      }
+      expect(fixture.chatBodies.map((body) => body.think)).toEqual(expected);
+      for (const body of fixture.chatBodies) {
+        expect(body.options).not.toHaveProperty("think");
+      }
+      if (xhigh) {
+        await sendThinking(model, "xhigh");
+        expect(fixture.chatBodies.at(-1)?.think).toBe("xhigh");
+      }
+      expect(fixture.requests.filter((path) => path === "/api/show")).toHaveLength(1);
+    },
+  );
 
   it("preserves explicit native think with implicit off and lets an enabled runtime level win", async () => {
     const fixture = mockOllama("thinking-precedence:latest", {
