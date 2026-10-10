@@ -124,14 +124,10 @@ function deleteExpiredSkillSelectionAuditEvents(db: DatabaseSync, retainedAfter:
     db,
     kysely.deleteFrom("audit_skill_selection_events").where("sequence", "in", expiredSequences),
   );
-  const deleted = Number(result.numAffectedRows ?? 0n);
-  // Maintenance ticks share this path, so keep a warm count honest here
-  // instead of letting it drift until the next insert.
-  const cachedCount = skillSelectionAuditRowCounts.get(db);
-  if (cachedCount !== undefined) {
-    skillSelectionAuditRowCounts.set(db, Math.max(0, cachedCount - deleted));
-  }
-  return deleted;
+  // Single-owner accounting: this deleter never touches the warm count.
+  // Each caller (insert prune, maintenance tick) adjusts the cache from
+  // the returned count exactly once.
+  return Number(result.numAffectedRows ?? 0n);
 }
 
 function pruneSkillSelectionAuditEventsAfterInsert(db: DatabaseSync, retainedAfter: number): void {
@@ -341,5 +337,12 @@ export function pruneExpiredSkillSelectionAuditEvents(params: {
   db: DatabaseSync;
   retainedAfter: number;
 }): number {
-  return deleteExpiredSkillSelectionAuditEvents(params.db, params.retainedAfter);
+  const deleted = deleteExpiredSkillSelectionAuditEvents(params.db, params.retainedAfter);
+  // Maintenance ticks own their accounting: a warm count drops by exactly
+  // the rows this tick removed.
+  const cachedCount = skillSelectionAuditRowCounts.get(params.db);
+  if (cachedCount !== undefined) {
+    skillSelectionAuditRowCounts.set(params.db, Math.max(0, cachedCount - deleted));
+  }
+  return deleted;
 }

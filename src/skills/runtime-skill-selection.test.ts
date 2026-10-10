@@ -40,6 +40,9 @@ describe("runtime skill selection marker", () => {
     ["___", "___"],
     ["-", "x---"],
     ["debug-toolkit", "debug--toolkit"],
+    // Regression: late-hyphen names must keep their suffix.
+    ["skill-a", "skill--a"],
+    ["skill-b", "skill--b"],
   ])("preserves a distinguishable identity for %s", (skillName, expected) => {
     const marker = buildRuntimeSkillSelectionMarker({
       skillName,
@@ -47,6 +50,19 @@ describe("runtime skill selection marker", () => {
       activation: "read",
     });
     expect(marker.selectedSkill).toBe(expected);
+  });
+
+  it("builds long identities from complete tokens only", () => {
+    // 64 CJK chars encode to 768 chars, forcing the 128-char bound.
+    const marker = buildRuntimeSkillSelectionMarker({
+      skillName: "\u4e2d".repeat(64),
+      skillSource: "workspace",
+      activation: "read",
+    });
+    // Bounded to 128 chars, never cut inside a `-hh-` escape.
+    expect(marker.selectedSkill.length).toBeLessThanOrEqual(128);
+    expect(marker.selectedSkill).not.toMatch(/-[0-9a-f]{1,2}$/u);
+    expect(marker.selectedSkill).toMatch(/^[A-Za-z0-9._][A-Za-z0-9._-]*$/u);
   });
 
   it("returns unknown for empty skill names", () => {

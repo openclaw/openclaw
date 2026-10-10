@@ -252,4 +252,57 @@ describe("audit event skill-selection persistence", () => {
       count: AUDIT_EVENT_MAX_ROWS_CONTRACT - AUDIT_EVENT_PRUNE_BATCH_ROWS_CONTRACT,
     });
   });
+
+  it("accounts warm-cache expiry exactly once through overflow", () => {
+    const database = createDatabaseOptions();
+    const occurredAt = Date.now();
+    const { db } = openOpenClawStateDatabase(database);
+    pruneExpiredSkillSelectionAuditEvents({ db, retainedAfter: occurredAt });
+    // Seed MAX - 10 fresh rows, then warm the per-connection count honestly
+    // with 10 API inserts so the cache reads exactly MAX.
+    db.prepare(
+      `WITH digits(d) AS (VALUES (0),(1),(2),(3),(4),(5),(6),(7),(8),(9)),
+            numbers(n) AS (
+              SELECT 1 + a.d + 10*b.d + 100*c.d + 1000*d.d + 10000*e.d + 100000*f.d
+              FROM digits a, digits b, digits c, digits d, digits e, digits f
+            )
+       INSERT INTO audit_skill_selection_events (
+         sequence, event_id, source_id, source_sequence, occurred_at, action, status,
+         actor_type, actor_id, agent_id, run_id, tool_name
+       )
+       SELECT n, 'warm-event-' || n, 'warm-source-' || n, n, ? + n,
+              'skill.selection.observed', 'observed', 'agent', 'main', 'main',
+              'run-' || n, 'debug-toolkit'
+       FROM numbers
+       WHERE n <= ?`,
+    ).run(occurredAt, AUDIT_EVENT_MAX_ROWS_CONTRACT - 10);
+    let freshCounter = 0;
+    const insertFresh = (tag: string) => {
+      freshCounter += 1;
+      return recordAuditEventInDatabase(
+        skillSelectionInput({
+          sourceId: `warm-api-${tag}`,
+          sourceSequence: AUDIT_EVENT_MAX_ROWS_CONTRACT + 10 + freshCounter,
+          occurredAt: Date.now(),
+        }),
+        { ...database, database: openOpenClawStateDatabase(database) },
+      );
+    };
+    for (let index = 0; index < 10; index += 1) {
+      expect(insertFresh(`seed-${index}`)).toBeDefined();
+    }
+    // Expire the 1,030 oldest rows, then insert past the cap: exact
+    // single-subtraction accounting trims to MAX - 1,024. Subtracting the
+    // expiry twice would leave the cache 1,030 low and skip the trim.
+    db.prepare(
+      "UPDATE audit_skill_selection_events SET occurred_at = 0 WHERE sequence <= 1030",
+    ).run();
+    expect(insertFresh("overflow-0")).toBeDefined();
+    for (let index = 1; index <= 1030; index += 1) {
+      expect(insertFresh(`overflow-${index}`)).toBeDefined();
+    }
+    expect(db.prepare("SELECT COUNT(*) AS count FROM audit_skill_selection_events").get()).toEqual({
+      count: AUDIT_EVENT_MAX_ROWS_CONTRACT - AUDIT_EVENT_PRUNE_BATCH_ROWS_CONTRACT,
+    });
+  });
 });

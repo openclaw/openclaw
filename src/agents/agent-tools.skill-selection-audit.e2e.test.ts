@@ -129,7 +129,9 @@ describe("before_tool_call skill selection audit", () => {
             sessionKey: "session-key",
             sessionId: "session-id",
             runId: "run-1",
-            selectedSkill: "demo-skill",
+            // Runtime encoder doubles `-`, while the run-usage receipt
+            // below keeps the original skill name.
+            selectedSkill: "demo--skill",
             selectionSource: "observed_runtime",
             selectionConfidence: "observed",
             selectionRule: "tool_invocation",
