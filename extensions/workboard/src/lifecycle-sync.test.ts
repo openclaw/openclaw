@@ -70,6 +70,7 @@ async function runSessionSweep(params: {
   }>;
   complete?: boolean;
   now?: number;
+  onMatched?: Parameters<typeof createWorkboardLifecycleService>[0]["onMatched"];
 }) {
   const readSessions = vi.fn().mockResolvedValue({
     sessions: params.sessions,
@@ -79,6 +80,7 @@ async function runSessionSweep(params: {
   const service = createWorkboardLifecycleService({
     store: params.store,
     readSessions,
+    ...(params.onMatched ? { onMatched: params.onMatched } : {}),
     ...(now === undefined ? {} : { now: () => now }),
   });
   const runOperation = vi.spyOn(params.store, "runOperation");
@@ -121,6 +123,53 @@ describe("Workboard gateway lifecycle sync", () => {
     );
     expect(request).toHaveBeenCalledOnce();
     expect(request).toHaveBeenCalledWith("job-categorize-planning", "if-enabled");
+  });
+
+  it.each([
+    ["agent:main:dashboard:deferred-completion", 1],
+    ["agent:main:cron:deferred-completion", 0],
+  ] as const)("nudges deferred completion for %s exactly %s times", async (sessionKey, calls) => {
+    const store = createWorkboardSqliteTestStore();
+    await store.upsertBoard({ id: "planning", automationJobId: "job-planning" });
+    const card = await createLinkedCard(store, { boardId: "planning", sessionKey });
+    const enqueueRun = vi.fn().mockResolvedValue({ ok: true, queued: true });
+    const automation = createWorkboardAutomationNudgeService({ store });
+    await automation.start(nudgeContext(enqueueRun));
+    try {
+      await syncWorkboardAgentEnded({
+        store,
+        event: { success: true },
+        context: { sessionKey },
+        readSessions: async () => ({
+          sessions: [{ key: sessionKey, status: "running", hasActiveRun: true }],
+          complete: true,
+        }),
+        onMatched: automation.nudge,
+      });
+      expect((await store.get(card.id))?.status).toBe("running");
+      expect(enqueueRun).not.toHaveBeenCalled();
+      for (let sweep = 0; sweep < 2; sweep += 1) {
+        await runSessionSweep({
+          store,
+          sessions: [
+            {
+              key: sessionKey,
+              status: "done",
+              hasActiveRun: false,
+              updatedAt: card.updatedAt + 1,
+            },
+          ],
+          onMatched: automation.nudge,
+        });
+      }
+      expect((await store.get(card.id))?.status).toBe("review");
+      expect(enqueueRun).toHaveBeenCalledTimes(calls);
+      if (calls) {
+        expect(enqueueRun).toHaveBeenCalledWith("job-planning", "if-enabled");
+      }
+    } finally {
+      automation.stop();
+    }
   });
 
   it("fences a board lookup across service restart", async () => {
@@ -874,6 +923,49 @@ function createSessionReader(sessionKey: string, updatedAt: number) {
 }
 
 describe("Workboard lifecycle service", () => {
+  it("uses the active service reader from prepared hooks and fences replacement", async () => {
+    const store = createWorkboardSqliteTestStore();
+    const delayed = createDeferred<{ sessions: []; complete: boolean }>();
+    const original = createWorkboardLifecycleService({
+      store,
+      readSessions: async () => delayed.promise,
+    });
+    const readReplacement = vi.fn(async () => ({ sessions: [], complete: true }));
+    const replacement = createWorkboardLifecycleService({ store, readSessions: readReplacement });
+    const preparedReader = vi.fn(async () => ({ sessions: [], complete: true }));
+    const prepared = createWorkboardLifecycleService({ store, readSessions: preparedReader });
+    const context = {
+      config: {},
+      stateDir: ".",
+      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+    };
+    try {
+      await original.start(context);
+      const pending = prepared.readSessions({ includeUnknown: false });
+      original.stop();
+      await replacement.start(context);
+      delayed.resolve({ sessions: [], complete: true });
+      await expect(pending).resolves.toEqual({ sessions: [], complete: false });
+      original.stop();
+      await expect(prepared.readSessions({ includeUnknown: false })).resolves.toEqual({
+        sessions: [],
+        complete: true,
+      });
+      expect(readReplacement).toHaveBeenCalledOnce();
+      expect(preparedReader).not.toHaveBeenCalled();
+      replacement.stop();
+      await expect(prepared.readSessions({ includeUnknown: false })).resolves.toEqual({
+        sessions: [],
+        complete: false,
+      });
+      expect(readReplacement).toHaveBeenCalledOnce();
+    } finally {
+      delayed.resolve({ sessions: [], complete: false });
+      original.stop();
+      replacement.onGatewayStop();
+    }
+  });
+
   it.each(["interval", "plugin reload"] as const)(
     "waits for Gateway readiness and reconciles again after %s until drain",
     async (trigger) => {

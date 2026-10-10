@@ -1,3 +1,4 @@
+import { AsyncResource } from "node:async_hooks";
 import type { WorkboardCard } from "@openclaw/workboard-contract";
 import { resolveGlobalSingleton } from "openclaw/plugin-sdk/global-singleton";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -19,17 +20,19 @@ const WORKBOARD_LIFECYCLE_SWEEP_MS = 60_000;
 const WORKBOARD_STALE_SESSION_MS = 30 * 60 * 1000;
 const WORKBOARD_SESSION_SWEEP_LIMIT = 10_000;
 const WORKBOARD_WORKTREE_CLEANUP_SWEEP_LIMIT = 32;
-// Keep readiness across plugin-only reloads, while the singleton lifecycle
-// clears it before an in-process Gateway restart starts replacement services.
+// Prepared hook generations share the active service reader, never a worker's
+// caller authority. Gateway restart clears both readiness and that reader.
 const workboardLifecycleGatewayState = resolveGlobalSingleton<{
   ready: boolean;
   abortSignal?: AbortSignal;
+  readSessions?: WorkboardLifecycleSessionReader;
 }>(
   Symbol.for("openclaw.workboard.lifecycleGatewayState"),
   () => ({ ready: false }),
   (state) => {
     state.ready = false;
     state.abortSignal = undefined;
+    state.readSessions = undefined;
   },
 );
 
@@ -67,6 +70,10 @@ type WorkboardLifecycleSessionReadOptions = {
   includeUnknown: boolean;
 };
 
+type WorkboardLifecycleSessionReader = (
+  options: WorkboardLifecycleSessionReadOptions,
+) => Promise<WorkboardLifecycleSessionSnapshot>;
+
 type WorkboardLifecycleMatchHandler = (input: {
   cards: readonly WorkboardCard[];
   sessionKey?: string;
@@ -76,6 +83,7 @@ type WorkboardLifecycleService = OpenClawPluginService & {
   stop: () => void;
   onGatewayStart: (abortSignal?: AbortSignal) => void;
   onGatewayStop: () => void;
+  readSessions: WorkboardLifecycleSessionReader;
 };
 
 function needsWorkboardLifecycleReconciliation(card: WorkboardCard): boolean {
@@ -266,6 +274,7 @@ async function syncWorkboardLifecycleSessions(params: {
   sessions: readonly WorkboardLifecycleSession[];
   complete?: boolean;
   now?: number;
+  onMatched?: WorkboardLifecycleMatchHandler;
 }): Promise<number> {
   const now = params.now ?? Date.now();
   const sessionsByKey = new Map<string, WorkboardLifecycleSession>();
@@ -348,6 +357,9 @@ async function syncWorkboardLifecycleSessions(params: {
       })
     ) {
       count += 1;
+      if (observation.state === "succeeded" || observation.state === "failed") {
+        await params.onMatched?.({ cards: [card], sessionKey: session.key });
+      }
     }
   }
   return count;
@@ -424,12 +436,14 @@ export function createWorkboardLifecycleService(params: {
     options: WorkboardLifecycleSessionReadOptions,
   ) => Promise<WorkboardLifecycleSessionSnapshot>;
   now?: () => number;
+  onMatched?: WorkboardLifecycleMatchHandler;
 }): WorkboardLifecycleService {
   let generation = 0;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let begin: (() => void) | undefined;
   let removeDrainListener: (() => void) | undefined;
   let cleanupCursor = 0;
+  let serviceReader: WorkboardLifecycleSessionReader | undefined;
   const cleanupWorktrees = async (
     cards: readonly WorkboardCard[],
     warn: (message: string) => void,
@@ -455,6 +469,10 @@ export function createWorkboardLifecycleService(params: {
     }
   };
   const stop = () => {
+    if (workboardLifecycleGatewayState.readSessions === serviceReader) {
+      workboardLifecycleGatewayState.readSessions = undefined;
+    }
+    serviceReader = undefined;
     removeDrainListener?.();
     removeDrainListener = undefined;
     generation += 1;
@@ -485,9 +503,26 @@ export function createWorkboardLifecycleService(params: {
   };
   return {
     id: "workboard-lifecycle-sync",
+    async readSessions(options) {
+      const reader = workboardLifecycleGatewayState.readSessions;
+      if (!reader) {
+        return { sessions: [], complete: false };
+      }
+      const snapshot = await reader(options);
+      return workboardLifecycleGatewayState.readSessions === reader
+        ? snapshot
+        : { sessions: [], complete: false };
+    },
     start(ctx) {
       const owner = ++generation;
+      serviceReader = AsyncResource.bind(params.readSessions);
+      workboardLifecycleGatewayState.readSessions = serviceReader;
       let begun = false;
+      const onMatched: WorkboardLifecycleMatchHandler = async (input) => {
+        if (generation === owner) {
+          await params.onMatched?.(input);
+        }
+      };
       const reconcile = async () => {
         try {
           await params.store.runOperation(async () => {
@@ -510,6 +545,7 @@ export function createWorkboardLifecycleService(params: {
                   cards,
                   ...snapshot,
                   now: params.now?.() ?? Date.now(),
+                  onMatched,
                 });
                 if (generation !== owner) {
                   return;

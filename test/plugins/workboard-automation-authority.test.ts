@@ -111,22 +111,34 @@ describe("Workboard terminal hook automation ownership", () => {
         });
       },
     });
-    const service = services.find((entry) => entry.id === "workboard-automation-nudge")!;
     const warn = vi.fn();
     const registry = createEmptyPluginRegistry();
     bindGatewayContextResolver(captured.api.runtime, () => gatewayContext);
     bindPluginRegistryRuntime(registry, captured.api.runtime);
-    registry.services.push({
-      pluginId: "workboard",
-      origin: "bundled",
-      source: "test",
-      id: service.id,
-      service: {
-        ...service,
-        apiVersion: 2,
-        start: (ctx) => service.start({ ...ctx, logger: { ...ctx.logger, warn } }),
-      },
-    });
+    for (const service of services.filter((entry) =>
+      ["workboard-automation-nudge", "workboard-lifecycle-sync"].includes(entry.id),
+    )) {
+      registry.services.push({
+        pluginId: "workboard",
+        origin: "bundled",
+        source: "test",
+        id: service.id,
+        service: {
+          ...service,
+          apiVersion: 2,
+          start: (ctx) =>
+            withPluginRuntimeGatewayRequestScope(
+              {
+                pluginId: "workboard",
+                pluginOrigin: "bundled",
+                context: gatewayContext,
+                isWebchatConnect: () => false,
+              },
+              () => service.start({ ...ctx, logger: { ...ctx.logger, warn } }),
+            ),
+        },
+      });
+    }
     const handle = await startPluginServices({
       scheduler,
       registry,
@@ -139,6 +151,24 @@ describe("Workboard terminal hook automation ownership", () => {
     gatewayContext.getGatewayMethodRegistry = () =>
       createGatewayMethodRegistry([
         ...methods,
+        {
+          name: "sessions.list",
+          scope: "operator.read",
+          owner: { kind: "core", area: "sessions" },
+          handler: ({ respond }) => {
+            expect(getGatewayToolCallerIdentity()).toBeUndefined();
+            respond(true, {
+              sessions: [
+                {
+                  key: sessionKey,
+                  status: "done",
+                  hasActiveRun: false,
+                  updatedAt: Date.now(),
+                },
+              ],
+            });
+          },
+        },
         {
           name: "cron.run",
           scope: "operator.admin",
