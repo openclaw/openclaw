@@ -8,7 +8,6 @@ import { t } from "../i18n/index.ts";
 import { icons } from "./icons.ts";
 import { renderKbd, renderShortcutText } from "./kbd.ts";
 import { resolveSessionIconGraphic } from "./session-icon-glyph-registry.ts";
-import type { SessionMenuActionsState, SessionManagementAction } from "./session-menu-actions.ts";
 import { renderSessionColorOptions } from "./session-menu-options.ts";
 
 const SESSION_ICON_EMOJI_CHOICES = [
@@ -281,16 +280,16 @@ export class SessionMenuAppearance {
   constructor(
     private readonly host: ReactiveControllerHost &
       HTMLElement & { updateComplete: Promise<unknown> },
-    private readonly readState: () => Pick<
-      SessionMenuActionsState,
-      "session" | "actionDisabledReasons"
-    >,
+    private readonly readState: () => {
+      session: { icon: string | null; color: string | null };
+      actionDisabledReasons: Partial<Record<"set-icon" | "set-color", string>>;
+    },
     private readonly actionDisabled: (kind: "set-icon" | "set-color") => boolean,
     private readonly runAction: (
-      action: Extract<
-        SessionManagementAction,
-        { kind: "set-icon" | "set-color" | "reset-appearance" }
-      >,
+      action:
+        | { kind: "set-icon"; icon: string | null }
+        | { kind: "set-color"; color: string | null }
+        | { kind: "reset-appearance" },
     ) => void,
   ) {}
 

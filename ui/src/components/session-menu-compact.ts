@@ -37,6 +37,7 @@ export function renderCompactSessionMenuNavigationItem(params: {
   icon: TemplateResult;
   details?: TemplateResult;
   accessibleLabel?: string;
+  shortcut?: string;
   disabled?: boolean;
   title?: string;
 }) {
@@ -45,6 +46,8 @@ export function renderCompactSessionMenuNavigationItem(params: {
       class=${`session-menu__item${params.details ? " session-menu__item--compact-details" : ""}`}
       value=${params.value}
       aria-label=${params.accessibleLabel ?? nothing}
+      data-shortcut=${params.shortcut ?? nothing}
+      aria-keyshortcuts=${params.shortcut?.toUpperCase() ?? nothing}
       ?disabled=${params.disabled ?? false}
       title=${params.title ?? nothing}
     >

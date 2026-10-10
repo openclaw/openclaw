@@ -103,7 +103,7 @@ export const EMPTY_SESSION_MENU_DATA: SessionMenuData = {
 type SessionMenuActionsHost = ReactiveControllerHost &
   HTMLElement & { updateComplete: Promise<unknown> };
 
-export type SessionMenuActionsState = {
+type SessionMenuActionsState = {
   involvingMeContext?: boolean;
   session: SessionMenuData;
   selectionCount: number;
@@ -465,6 +465,11 @@ export class SessionMenuActions {
     if (this.readState().compact) {
       return renderCompactSessionMenuNavigationItem({
         value: `compact:open-${view}`,
+        shortcut: view === "archive" ? "a" : undefined,
+        details:
+          view === "archive"
+            ? menuShortcutHint("a", sessionArchiveShortcut(this.readState()))
+            : undefined,
         label,
         icon,
         disabled,

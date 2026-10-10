@@ -270,6 +270,7 @@ suite.define(() => {
       await expect
         .poll(() => page.getByRole("menuitem", { name: "Archive session" }).isDisabled())
         .toBe(false);
+      await page.getByRole("menuitem", { name: "Advanced", exact: true }).click();
       await expect
         .poll(() => page.getByRole("menuitem", { name: "Delete…" }).isDisabled())
         .toBe(true);
