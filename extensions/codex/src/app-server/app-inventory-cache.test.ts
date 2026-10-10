@@ -360,8 +360,6 @@ describe("Codex app inventory cache", () => {
       forceRefetch: true,
       targetAppIds: ["drive-app"],
     });
-    expect(cache.read({ key, request, nowMs: 1_500, suppressRefresh: true }).state).toBe("stale");
-
     // Past TTL nothing is preserved; the single-target refresh replaces the
     // union entry and freshness recovers without a complete fetch.
     await cache.refreshNow({

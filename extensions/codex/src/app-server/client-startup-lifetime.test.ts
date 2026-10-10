@@ -61,7 +61,7 @@ afterEach(async () => {
   await fs.rm(home, { recursive: true, force: true });
 });
 
-describe("guarded startup request lifetime", () => {
+describe("startup request lifetime", () => {
   it("fork timeout preserves a peer through the exact late response", async () => {
     const method = "thread/fork";
     const old = createHarness();
@@ -92,6 +92,7 @@ describe("guarded startup request lifetime", () => {
     await expect(peer).resolves.toEqual({ turn: { id: "peer-turn" } });
     expect(old.stdinDestroyed).toBe(false);
 
+    retireSharedCodexAppServerClientIfCurrent(old.client);
     expect(releaseLeasedSharedCodexAppServerClient(old.client)).toBe(true);
     expect(old.stdinDestroyed).toBe(true);
     old.emitExit();
@@ -160,6 +161,7 @@ describe("guarded startup request lifetime", () => {
     });
     expect(await startup).toMatchObject({ reason: "aborted", mayHaveWritten: true });
     expect(await pendingAcquire).toBe(old.client);
+    retireSharedCodexAppServerClientIfCurrent(old.client);
     expect(await acquire()).toBe(replacement.client);
     releaseLeasedSharedCodexAppServerClient(old.client);
     expect(old.stdinDestroyed).toBe(false);

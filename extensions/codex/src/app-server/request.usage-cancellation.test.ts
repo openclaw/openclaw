@@ -5,7 +5,8 @@ const { createIsolatedCodexAppServerClient } = vi.hoisted(() => ({
   createIsolatedCodexAppServerClient: vi.fn(),
 }));
 
-vi.mock("./shared-client.js", () => ({
+vi.mock("./shared-client.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./shared-client.js")>()),
   createIsolatedCodexAppServerClient,
   getLeasedSharedCodexAppServerClient: vi.fn(),
   releaseLeasedSharedCodexAppServerClient: vi.fn(),

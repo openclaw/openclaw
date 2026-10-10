@@ -48,7 +48,8 @@ import { createClientHarness, stubCodexInferenceTransportEnv } from "./test-supp
 import { createCodexLifecycleHarness } from "./thread-lifecycle.test-fixtures.js";
 import { retainCodexAppServerBindingSubscription } from "./thread-ownership.js";
 
-vi.mock("./desktop-generation.js", () => ({
+vi.mock("./desktop-generation.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./desktop-generation.js")>()),
   waitForCodexDesktopGeneration: async () => undefined,
 }));
 

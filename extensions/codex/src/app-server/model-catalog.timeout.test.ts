@@ -3,7 +3,8 @@ import { createCodexAppServerModelCatalog } from "./model-catalog.js";
 import { listAllCodexAppServerModels } from "./models.js";
 
 const transport = vi.hoisted(() => ({ request: vi.fn(), release: vi.fn() }));
-vi.mock("./shared-client.js", () => ({
+vi.mock("./shared-client.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./shared-client.js")>()),
   getLeasedSharedCodexAppServerClient: async () => ({ request: transport.request }),
   createIsolatedCodexAppServerClient: vi.fn(),
   captureSharedCodexAppServerCatalogLifetime: () => () => true,

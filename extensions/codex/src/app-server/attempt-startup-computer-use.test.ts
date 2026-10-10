@@ -21,7 +21,8 @@ import { clearSharedCodexAppServerClientAndWait } from "./shared-client.js";
 import { createInferenceReadyClientHarness } from "./test-support.js";
 import { CODEX_APP_SERVER_VERSION } from "./version.js";
 
-vi.mock("./desktop-generation.js", () => ({
+vi.mock("./desktop-generation.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./desktop-generation.js")>()),
   waitForCodexDesktopGeneration: async () => undefined,
 }));
 

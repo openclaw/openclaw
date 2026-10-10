@@ -12,7 +12,8 @@ const shared = vi.hoisted(() => ({
   release: vi.fn(),
   retire: vi.fn(),
 }));
-vi.mock("./shared-client.js", () => ({
+vi.mock("./shared-client.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./shared-client.js")>()),
   createIsolatedCodexAppServerClient: shared.acquire,
   getLeasedSharedCodexAppServerClient: shared.acquire,
   releaseLeasedSharedCodexAppServerClient: shared.release,

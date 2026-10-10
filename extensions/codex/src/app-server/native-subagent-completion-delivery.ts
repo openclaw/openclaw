@@ -40,7 +40,8 @@ export class CodexNativeSubagentCompletionDelivery {
     if (existing) {
       return existing;
     }
-    const attempt = this.deliverAttempt(state, childState);
+    // Publish the shared attempt before releasing a client can synchronously close it.
+    const attempt = Promise.resolve().then(() => this.deliverAttempt(state, childState));
     this.attempts.set(childState, attempt);
     const release = () => {
       if (this.attempts.get(childState) === attempt) {

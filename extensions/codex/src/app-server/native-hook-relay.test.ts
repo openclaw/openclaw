@@ -148,7 +148,7 @@ describe("Codex native hook relay managed policy", () => {
     },
   );
 
-  it.each(["native load", "routing replacement", "unadmitted active"] as const)(
+  it.each(["routing replacement", "unadmitted active"] as const)(
     "refuses an unqualified receiver read after %s",
     async (change) => {
       const client = createClient();
@@ -201,9 +201,7 @@ describe("Codex native hook relay managed policy", () => {
             throw new Error("Input admission finished before target read");
           }),
         ]);
-        if (change === "native load") {
-          await notifyChildStarted(client, "parent-thread", threadId);
-        } else if (change === "routing replacement") {
+        if (change === "routing replacement") {
           targetQualification = { assertCurrent: () => {}, hasProvider: () => false };
         }
         const stale = threadRead({

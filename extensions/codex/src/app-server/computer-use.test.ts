@@ -170,45 +170,49 @@ describe("Codex Computer Use setup", () => {
   });
 
   it.each(["abort", "timeout", "stdin", "stdout"] as const)(
-    "closes the install client after a post-write %s failure",
+    "releases the install lease after a post-write %s failure",
     async (mode) => {
       const harness = createClientHarness();
-      sharedClientMocks.getLeasedSharedCodexAppServerClient.mockResolvedValueOnce(harness.client);
-      const agentDir = `/tmp/openclaw-computer-use-${mode}-agent`;
-      const abortController = new AbortController();
-      const install = installCodexComputerUse({
-        pluginConfig: {},
-        agentDir,
-        timeoutMs: mode === "timeout" ? 150 : 1_000,
-        ...(mode === "abort" || mode === "timeout" ? { signal: abortController.signal } : {}),
-      });
-      await vi.waitFor(() => {
-        const methods = harness.writes.map(
-          (line) => (JSON.parse(line) as { method?: string }).method,
-        );
-        expect(methods).toContain("experimentalFeature/enablement/set");
-      });
-
       const events: string[] = [];
       harness.process.once("exit", () => events.push("exit"));
-      expect(events).toEqual([]);
+      try {
+        sharedClientMocks.getLeasedSharedCodexAppServerClient.mockResolvedValueOnce(harness.client);
+        const agentDir = `/tmp/openclaw-computer-use-${mode}-agent`;
+        const abortController = new AbortController();
+        const install = installCodexComputerUse({
+          pluginConfig: {},
+          agentDir,
+          timeoutMs: mode === "timeout" ? 150 : 1_000,
+          ...(mode === "abort" || mode === "timeout" ? { signal: abortController.signal } : {}),
+        });
+        await vi.waitFor(() => {
+          const methods = harness.writes.map(
+            (line) => (JSON.parse(line) as { method?: string }).method,
+          );
+          expect(methods).toContain("experimentalFeature/enablement/set");
+        });
 
-      let failureMessage: string;
-      if (mode === "stdin" || mode === "stdout") {
-        failureMessage = mode === "stdin" ? "write EPIPE" : "stdout pipe broke";
-        harness.process[mode].emit("error", new Error(failureMessage));
-      } else {
-        failureMessage = `experimentalFeature/enablement/set ${mode === "abort" ? "aborted" : "timed out"}`;
-        if (mode === "abort") {
-          abortController.abort();
+        expect(events).toEqual([]);
+
+        let failureMessage: string;
+        if (mode === "stdin" || mode === "stdout") {
+          failureMessage = mode === "stdin" ? "write EPIPE" : "stdout pipe broke";
+          harness.process[mode].emit("error", new Error(failureMessage));
+        } else {
+          failureMessage = `experimentalFeature/enablement/set ${mode === "abort" ? "aborted" : "timed out"}`;
+          if (mode === "abort") {
+            abortController.abort();
+          }
         }
+        await expect(install).rejects.toThrow(failureMessage);
+        expect(harness.stdinDestroyed).toBe(mode === "stdin" || mode === "stdout");
+        expect(sharedClientMocks.releaseLeasedSharedCodexAppServerClient).toHaveBeenCalledWith(
+          harness.client,
+        );
+      } finally {
+        await harness.client.closeAndWait();
       }
-      await expect(install).rejects.toThrow(failureMessage);
-      expect(harness.stdinDestroyed).toBe(true);
       expect(events).toEqual(["exit"]);
-      expect(sharedClientMocks.releaseLeasedSharedCodexAppServerClient).toHaveBeenCalledWith(
-        harness.client,
-      );
     },
   );
 
