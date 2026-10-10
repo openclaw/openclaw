@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { resolveEmbeddingInputFormatVersion } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import {
   createSubsystemLogger,
   resolveAgentDir,
@@ -544,16 +545,13 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
             ftsTokenizer: this.settings.store.fts.tokenizer,
           });
 
-          const shouldSyncMemory = shouldRetryMemoryOnFailure;
-          const shouldSyncSessions = shouldRetrySessionsOnFailure;
-
           await this.executeSourceSync({
-            shouldSyncMemory,
-            shouldSyncSessions,
+            shouldSyncMemory: shouldRetryMemoryOnFailure,
+            shouldSyncSessions: shouldRetrySessionsOnFailure,
             needsFullReindex: true,
             progress,
           });
-          if (!shouldSyncMemory) {
+          if (!shouldRetryMemoryOnFailure) {
             this.clearMemoryRetryState();
           }
           const syncProvider = this.syncProviderGeneration
@@ -575,6 +573,9 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
             chunkTokens: this.settings.chunking.tokens,
             chunkOverlap: this.settings.chunking.overlap,
             chunkingVersion: MEMORY_CHUNKING_VERSION,
+            embeddingInputFormatVersion: resolveEmbeddingInputFormatVersion(
+              syncProvider?.model ?? "",
+            ),
             ftsTokenizer: this.settings.store.fts.tokenizer,
             provenanceVersion: MEMORY_INDEX_PROVENANCE_VERSION,
           };

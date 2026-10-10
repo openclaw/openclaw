@@ -195,7 +195,7 @@ it("restores cleared activity alongside an owned run's current text", async () =
 });
 
 it.each(["fresh mirror", "retained idempotency"])(
-  "keeps complete persisted and live replies above a steer (%s)",
+  "keeps saved replies before an accepted steer and the live tail after it (%s)",
   async (mode) => {
     const history = activeHistory("active-run");
     const identity = (seq: number) =>
@@ -246,8 +246,8 @@ it.each(["fresh mirror", "retained idempotency"])(
     expect(tail(state)).toBe("After steer.");
     expect(renderedText(state)).toEqual([
       ...persistedText,
-      "After steer.",
       "Steer prompt",
+      "After steer.",
       "Queued follow-up.",
     ]);
     emit(state, "active-run", {
@@ -257,8 +257,8 @@ it.each(["fresh mirror", "retained idempotency"])(
     });
     expect(renderedText(state)).toEqual([
       ...persistedText,
-      "After steer. Continued.",
       "Steer prompt",
+      "After steer. Continued.",
       "Queued follow-up.",
     ]);
     expect(state.chatStream).toBe("After steer. Continued.");
@@ -271,8 +271,8 @@ it.each(["fresh mirror", "retained idempotency"])(
     });
     const expected = [
       ...persistedText,
-      "After steer. Continued. Final suffix.",
       "Steer prompt",
+      "After steer. Continued. Final suffix.",
       "Queued follow-up.",
     ];
     expect(renderedText(state)).toEqual(expected);
@@ -305,7 +305,7 @@ it.each(["fresh mirror", "retained idempotency"])(
 );
 
 it.each([false, true])(
-  "keeps the steer below the whole assistant message (history=%s)",
+  "keeps the accepted steer before the whole unpersisted assistant message (history=%s)",
   async (reload) => {
     const runId = "active-run";
     const { original, steer } = steerPrompts(2);
@@ -325,7 +325,7 @@ it.each([false, true])(
       true,
       { kind: "live", activeRunId: runId },
     );
-    expect(renderedText(state)).toEqual(["Original prompt", "Before steer.", "Steer prompt"]);
+    expect(renderedText(state)).toEqual(["Original prompt", "Steer prompt", "Before steer."]);
     if (reload) {
       await loadChatHistory(state);
     } else {
@@ -338,8 +338,8 @@ it.each([false, true])(
     expect(state.chatRunId).toBe(runId);
     expect(renderedText(state)).toEqual([
       "Original prompt",
-      "Before steer. After steer.",
       "Steer prompt",
+      "Before steer. After steer.",
     ]);
   },
 );
@@ -364,8 +364,8 @@ it("keeps streaming one message after a live steer is published", async () => {
   });
   expect(renderedText(state)).toEqual([
     "Original prompt",
-    "Before steer. After steer.",
     "Steer prompt",
+    "Before steer. After steer.",
   ]);
 });
 
@@ -446,21 +446,21 @@ it.each([false, true])(
       );
       expect(renderedText(state)).toEqual([
         "Repeat the answer",
-        "Repeated answer.",
         "Steer prompt",
+        "Repeated answer.",
       ]);
     }
     await loadChatHistory(state);
     expect(state.chatRunId).toBe("active-run");
     const persisted = ["Repeat the answer", "Repeated answer."];
     const steers = steered ? ["Steer prompt"] : [];
-    expect(renderedText(state)).toEqual([...persisted, "Repeated answer.", ...steers]);
+    expect(renderedText(state)).toEqual([...persisted, ...steers, "Repeated answer."]);
     emit(state, "active-run", {
       state: "delta",
       deltaText: " Continued.",
       message: message("assistant", "Repeated answer. Continued."),
     });
-    expect(renderedText(state)).toEqual([...persisted, "Repeated answer. Continued.", ...steers]);
+    expect(renderedText(state)).toEqual([...persisted, ...steers, "Repeated answer. Continued."]);
   },
 );
 
@@ -536,8 +536,8 @@ it.each(["live replacement", "history adoption", "steer then history"])(
     expect(state.chatRunId).toBe(runId);
     expect(renderedText(state)).toEqual([
       ...expected,
-      text,
       ...(delivery === "steer then history" ? ["Steer prompt"] : []),
+      text,
     ]);
   },
 );
