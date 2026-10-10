@@ -86,6 +86,22 @@ session-owned managed workspace, dispatches it with the exact
 device placement becomes active. New Session does not bind `execNode` or browse
 the device filesystem.
 
+The selected model's **harness** must also support the chosen device. OpenAI
+models using the Codex harness require the official Codex plugin on that node;
+installing it only on the Gateway is not enough. On the node, run:
+
+```bash
+openclaw plugins install @openclaw/codex
+openclaw node restart
+```
+
+If the plugin is already installed but disabled, explicitly enable it with
+`openclaw plugins enable codex` before restarting. Approve the node's updated
+command surface on the Gateway. The picker keeps the device unavailable for
+Codex until it advertises the command and approval is complete. Alternatively,
+choose a model using the OpenClaw harness; OpenClaw does not switch harnesses
+silently or install Codex when you enable session hosting.
+
 On POSIX hosts, OpenClaw keeps its managed workspace directories private (`0700`),
 including when the host uses umask `0002`. Existing node-owned workspace ancestry
 is tightened when reopened, so transfers can recover after an update without

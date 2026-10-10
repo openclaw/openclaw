@@ -85,6 +85,22 @@ install/upgrade combinations across Linux, Windows, and macOS. Coverage otherwis
 varies by profile and selected operating systems. Check the release's recorded
 coverage: skipped or deferred checks are not passes.
 
+The default stable/full live-provider coverage includes the blocking `live-cache`
+suite; beta includes it when repo/live coverage is selected. Its assertions
+require serialized prompt-prefix stability and provider cache reuse through
+Anthropic Messages and OpenAI Responses, plus OpenRouter when its credential is
+available. Live agent scenarios exercise instruction refresh, activated prompt
+hooks, and persisted prompt-projection rehydration while forcing full-history
+requests through a cold provider transport. This is not a Gateway process-restart
+or retained HTTP continuation check. Focused verification uses
+`rerun_group=live-e2e` and `live_suite_filter=live-cache`; the cross-OS `provider`
+and `mode` inputs do not narrow these cache checks. Offline coverage also compares
+requests across authenticated Gateway chat, a spawned child's private completion, an
+in-process server stop/start, and subsequent authenticated chat in the same
+persisted session. It does not restart the OS process. Deterministic admitted-agent and Gateway
+regressions supply separate evidence from successful live-provider measurements; see
+[Prompt-cache regression coverage](/help/testing/suites#prompt-cache-regression-coverage).
+
 For selected official npm plugins, Full Release Validation packs and qualifies
 the exact tarballs intended for publication and records their immutable artifact
 descriptors. Publication consumes those same bytes. Unpacked source fixtures do
