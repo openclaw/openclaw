@@ -1,13 +1,10 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
+import { createSignal, flush } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
 import type { SessionsListResult } from "../../api/types.ts";
-import {
-  renderDashboards,
-  type DashboardGalleryFilters,
-  type DashboardsRouteData,
-} from "./view.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { DashboardsView, type DashboardGalleryFilters, type DashboardsRouteData } from "./view.tsx";
 
 const filters: DashboardGalleryFilters = { query: "", ownerId: "", sort: "updated" };
 const handlers = {
@@ -35,8 +32,10 @@ describe("dashboards index", () => {
   it.each(["gallery", "empty", "error"] as const)(
     "replaces the accessible loading skeleton with the resolved %s state",
     (outcome) => {
-      const container = document.createElement("div");
-      render(renderDashboards(undefined, filters, handlers), container);
+      const [value, setValue] = createSignal<DashboardsRouteData>();
+      const { container } = mountSolid(() => (
+        <DashboardsView data={value()} filters={filters} handlers={handlers} />
+      ));
 
       const busy = container.querySelector('[aria-busy="true"]');
       expect(busy).not.toBeNull();
@@ -61,7 +60,8 @@ describe("dashboards index", () => {
         data.result = null;
         data.error = "Dashboard service unavailable";
       }
-      render(renderDashboards(data, filters, handlers), container);
+      setValue(data);
+      flush();
 
       expect(container.querySelector('[aria-busy="true"]')).toBeNull();
       expect(container.querySelector(".skeleton")).toBeNull();
@@ -85,11 +85,10 @@ describe("dashboards index", () => {
   it.each(["", "/openclaw"])(
     "links each dashboard to an ordinary open that respects presentation defaults at %s",
     (basePath) => {
-      const container = document.createElement("div");
       const onNavigate = vi.fn();
-      render(
-        renderDashboards(
-          routeData(
+      const { container } = mountSolid(() => (
+        <DashboardsView
+          data={routeData(
             [
               {
                 key: "agent:main:dashboard:12345678-90ab-cdef-1234-567890abcdef",
@@ -100,15 +99,11 @@ describe("dashboards index", () => {
               },
             ],
             basePath,
-          ),
-          filters,
-          {
-            onFilterChange: vi.fn(),
-            onNavigate,
-          },
-        ),
-        container,
-      );
+          )}
+          filters={filters}
+          handlers={{ onFilterChange: vi.fn(), onNavigate }}
+        />
+      ));
 
       const row = container.querySelector<HTMLElement>("[data-dashboard-session]");
       expect(row?.textContent).toContain("Deploy monitor");
@@ -154,8 +149,9 @@ describe("dashboards index", () => {
   );
 
   it("explains how to create a dashboard when the list is empty", () => {
-    const container = document.createElement("div");
-    render(renderDashboards(routeData([]), filters, handlers), container);
+    const { container } = mountSolid(() => (
+      <DashboardsView data={routeData([])} filters={filters} handlers={handlers} />
+    ));
 
     const empty = container.querySelector("[data-dashboards-empty]");
     expect(empty?.textContent).toContain("No dashboards yet");

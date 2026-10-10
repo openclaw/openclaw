@@ -1,4 +1,4 @@
-import { render, type LitElement } from "lit";
+import { render } from "lit";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import type { ControlUiHost, ControlUiNavigationItem } from "../../../src/plugin-sdk/control-ui.js";
 import type { ApplicationContext } from "../app/context.ts";
@@ -51,7 +51,7 @@ it("opens navigation actions through the sidebar menu owner for pointer and keyb
   await controller.preloadMenuRenderer();
   const menuRoot = document.createElement("div");
   const contributions = ["boards", "child", "plain"].map((id) =>
-    Object.assign(document.createElement("openclaw-plugin-contributions") as LitElement, {
+    Object.assign(document.createElement("openclaw-plugin-contributions"), {
       kind: "navigation",
       navigationKey: `example/${id}`,
       navigationMenus: controller,
@@ -187,7 +187,7 @@ it("shows the active plugin section's ordered children and leaves pinned childre
     router: { subscribe },
   } as unknown as ApplicationContext);
   const contribution = (key: string) =>
-    Object.assign(document.createElement("openclaw-plugin-contributions") as LitElement, {
+    Object.assign(document.createElement("openclaw-plugin-contributions"), {
       kind: "navigation",
       navigationKey: key,
     });

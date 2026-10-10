@@ -1,11 +1,11 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, expect, it, vi } from "vitest";
+import { flush } from "../../test-helpers/solid-settle.ts";
 import "./dashboard-preview.ts";
 
 type DashboardPreviewElement = HTMLElement & {
   error: string | null;
-  updateComplete: Promise<boolean>;
 };
 
 afterEach(() => {
@@ -25,15 +25,15 @@ it("resumes near-viewport rendering after being detached and reattached", async 
 
   document.body.append(element);
   frames.shift()?.(0);
-  await element.updateComplete;
+  flush();
   expect(element.textContent).toContain("Preview unavailable");
 
   element.remove();
-  await element.updateComplete;
+  flush();
   expect(element.textContent).not.toContain("Preview unavailable");
 
   document.body.append(element);
   frames.shift()?.(0);
-  await element.updateComplete;
+  flush();
   expect(element.textContent).toContain("Preview unavailable");
 });

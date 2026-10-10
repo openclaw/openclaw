@@ -1596,7 +1596,7 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
       "ui/src/components/desktop/desktop-client.ts",
       "ui/src/components/desktop/desktop-panel.ts",
       "ui/src/components/panel-loading-skeleton.ts",
-      "ui/src/pages/portals/portals-page.ts",
+      "ui/src/pages/portals/portals-page.tsx",
     ],
     ["ui/src/pages/portals/portals.css"],
   ),

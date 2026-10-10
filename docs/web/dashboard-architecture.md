@@ -30,7 +30,7 @@ Principles:
 - **Agent parity.** Everything the user can do on a board, the agent can do
   with tools: add/update/remove widgets, arrange them, manage tabs, switch the
   visible tab, and request split or expanded presentation.
-- **Native shell.** The board is Lit components in the Control UI shell
+- **Native shell.** The board uses Solid components in the Control UI shell
   (the same design system as the rest of the app). Data reports render directly.
   Custom executable widgets use sandboxed iframes; Browser dashboards reuse the
   Browser panel and its navigation controls.

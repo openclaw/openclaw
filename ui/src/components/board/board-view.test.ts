@@ -312,15 +312,22 @@ describe("openclaw-board-view", () => {
 
   it("retries proactive ticket refresh without replacing the current view", async () => {
     vi.useFakeTimers();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("<p>Current widget</p>")),
+    );
     const frameLoadFailed = vi
       .fn<() => Promise<void>>()
       .mockRejectedValueOnce(new Error("gateway reconnecting"))
       .mockResolvedValue(undefined);
     const view = await mount({
+      context: gatewayContext(null),
       callbacks: callbacks({ frameLoadFailed }),
       snapshot: snapshot({
         widgets: [
           boardWidget({
+            sandboxUrl: "/mcp-app-sandbox",
+            sandboxPort: 18790,
             viewTicket: "ticket",
             viewTicketTtlMs: 15_000,
           }),
@@ -328,14 +335,20 @@ describe("openclaw-board-view", () => {
       }),
     });
     const cell = view.querySelector("openclaw-board-widget-cell")!;
+    const frame = cell.querySelector("iframe");
+    expect(frame).not.toBeNull();
 
     await vi.advanceTimersByTimeAsync(1_000);
     expect(frameLoadFailed).toHaveBeenCalledTimes(1);
-    expect((cell as unknown as { frame: { error: string } }).frame.error).toBe("");
+    await settleCells(view);
+    expect(cell.querySelector("iframe")).toBe(frame);
+    expect(cell.querySelector('[data-test-id="board-widget-error"]')).toBeNull();
 
     await vi.advanceTimersByTimeAsync(1_000);
     expect(frameLoadFailed).toHaveBeenCalledTimes(2);
-    expect((cell as unknown as { frame: { error: string } }).frame.error).toBe("");
+    await settleCells(view);
+    expect(cell.querySelector("iframe")).toBe(frame);
+    expect(cell.querySelector('[data-test-id="board-widget-error"]')).toBeNull();
 
     await vi.advanceTimersByTimeAsync(1_999);
     expect(frameLoadFailed).toHaveBeenCalledTimes(2);
@@ -372,6 +385,10 @@ describe("openclaw-board-view", () => {
 
   it("keeps retrying proactive ticket refresh after the initial outage", async () => {
     vi.useFakeTimers();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("<p>Current widget</p>")),
+    );
     const frameLoadFailed = vi
       .fn<() => Promise<void>>()
       .mockRejectedValueOnce(new Error("gateway reconnecting"))
@@ -380,10 +397,13 @@ describe("openclaw-board-view", () => {
       .mockRejectedValueOnce(new Error("gateway reconnecting"))
       .mockResolvedValue(undefined);
     const view = await mount({
+      context: gatewayContext(null),
       callbacks: callbacks({ frameLoadFailed }),
       snapshot: snapshot({
         widgets: [
           boardWidget({
+            sandboxUrl: "/mcp-app-sandbox",
+            sandboxPort: 18790,
             viewTicket: "ticket",
             viewTicketTtlMs: 15_000,
           }),
@@ -391,6 +411,8 @@ describe("openclaw-board-view", () => {
       }),
     });
     const cell = view.querySelector("openclaw-board-widget-cell")!;
+    const frame = cell.querySelector("iframe");
+    expect(frame).not.toBeNull();
 
     await vi.advanceTimersByTimeAsync(1_000);
     await vi.advanceTimersByTimeAsync(1_000);
@@ -399,7 +421,9 @@ describe("openclaw-board-view", () => {
     await vi.advanceTimersByTimeAsync(4_000);
 
     expect(frameLoadFailed).toHaveBeenCalledTimes(5);
-    expect((cell as unknown as { frame: { error: string } }).frame.error).toBe("");
+    await settleCells(view);
+    expect(cell.querySelector("iframe")).toBe(frame);
+    expect(cell.querySelector('[data-test-id="board-widget-error"]')).toBeNull();
   });
 
   it("bounds repeated frame ticket refreshes after persistent 401 responses", async () => {
@@ -949,7 +973,7 @@ describe("openclaw-board-view", () => {
     await view.updateComplete;
     const firstAnnouncement = view.querySelector(".board-announcer > span");
     const cell = secondCell?.closest("openclaw-board-widget-cell");
-    await vi.waitFor(() => expect(Reflect.get(cell ?? {}, "actionPending")).toBe(false));
+    await vi.waitFor(() => expect(cell?.querySelector("wa-dropdown-item")?.disabled).toBe(false));
 
     move();
     await vi.waitFor(() => expect(applyOps).toHaveBeenCalledTimes(2));

@@ -5,8 +5,14 @@ import type { ApplicationGateway } from "../../app/gateway.ts";
 import { t } from "../../i18n/index.ts";
 import type { BoardWidget } from "../../lib/board/types.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import type { BoardWidgetCellCallbacks } from "./board-widget-cell.ts";
 import "./board-widget-cell.ts";
+
+const disposers: Array<() => void> = [];
+function mount(element: HTMLElement): void {
+  disposers.push(mountSolid(() => element, { container: document.body }).unmount);
+}
 
 function callbacks(): BoardWidgetCellCallbacks {
   const noAction = vi.fn(async () => undefined);
@@ -30,6 +36,9 @@ function callbacks(): BoardWidgetCellCallbacks {
 }
 
 afterEach(() => {
+  for (const dispose of disposers.splice(0)) {
+    dispose();
+  }
   document.body.replaceChildren();
 });
 
@@ -82,7 +91,7 @@ describe("plugin board widget cells", () => {
       cell.sessionKey = "agent:main:test";
       cell.callbacks = cellCallbacks;
       provider.append(cell);
-      document.body.append(provider);
+      mount(provider);
       await cell.updateComplete;
 
       const placeholder = cell.querySelector('[data-test-id="board-disabled-plugin"]');
@@ -143,7 +152,7 @@ describe("plugin board widget cells", () => {
     cell.sessionKey = "agent:main:dashboard";
     cell.callbacks = callbacks();
     provider.append(cell);
-    document.body.append(provider);
+    mount(provider);
     await vi.waitFor(
       () =>
         expect(cell.querySelector("openclaw-report-widget")?.textContent).toContain(
@@ -315,7 +324,7 @@ describe("plugin board widget cells", () => {
       cell.active = index !== 0;
       cell.callbacks = callbacks();
       provider.append(cell);
-      document.body.append(provider);
+      mount(provider);
 
       if (index === 0) {
         await cell.updateComplete;
@@ -436,7 +445,7 @@ describe("plugin board widget cells", () => {
     cell.session = { sessionKey: "agent:main:dashboard", agentId: "main" };
     cell.callbacks = callbacks();
     provider.append(cell);
-    document.body.append(provider);
+    mount(provider);
 
     await vi.waitFor(
       () => expect(cell.querySelector('[data-test-id="session-progress-error"]')).not.toBeNull(),
@@ -600,7 +609,7 @@ describe("plugin board widget cells", () => {
     cell.active = true;
     cell.callbacks = callbacks();
     provider.append(cell);
-    document.body.append(provider);
+    mount(provider);
 
     await vi.waitFor(
       () =>

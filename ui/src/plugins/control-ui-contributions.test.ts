@@ -1,4 +1,3 @@
-import type { LitElement } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PluginControlUiDiagnostic } from "../../../packages/gateway-protocol/src/schema/plugins.js";
 import type { ControlUiAction } from "../../../src/plugin-sdk/control-ui.js";
@@ -20,12 +19,7 @@ import type { ControlUiPluginOwner, ControlUiPluginRuntime } from "./control-ui-
 import "./control-ui-contributions.ts";
 import "./control-ui-view.runtime.ts";
 
-type ContributionsElement = LitElement & {
-  kind: "header" | "composer";
-  sessionKey: string;
-  agentId?: string;
-  presented: boolean;
-};
+type ContributionsElement = HTMLElementTagNameMap["openclaw-plugin-contributions"];
 const sessionKey = "agent:main:main";
 const cleanups: (() => void)[] = [];
 
@@ -69,8 +63,8 @@ it("renders customization inline and retains pending reload state", async () => 
     basePath: "/console",
     navigate,
   } as unknown as ApplicationContext);
-  // SAFETY: the imported contributions module registers this Lit element.
-  const manager = document.createElement("openclaw-plugin-manager") as LitElement;
+  // The compatibility entry registers the Solid-backed custom element.
+  const manager = document.createElement("openclaw-plugin-manager");
   const button = (label: string) => {
     const found = [...manager.querySelectorAll("button")].find(
       (element) => element.textContent?.trim() === label,

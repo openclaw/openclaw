@@ -192,7 +192,13 @@ describe("native UI built-in delegation", () => {
     { label: "another agent", nextAgents: ["writer"] },
     { label: "the original agent after a same-turn switch", nextAgents: ["writer", "main"] },
     { label: "the same replacement after a same-turn deselection" },
-  ])("retires composer callbacks before rendering $label", async ({ nextAgents }) => {
+    { label: "the same surface after a same-turn selector change", selector: "surface" },
+    { label: "the same contribution kind after a same-turn selector change", selector: "kind" },
+    {
+      label: "the same contribution key after a same-turn selector change",
+      selector: "contributionKey",
+    },
+  ])("retires composer callbacks before rendering $label", async ({ nextAgents, selector }) => {
     const contexts: ControlUiViewContext<ControlUiSurfaceProps["composer"]>[] = [];
     const roots: HTMLElement[] = [];
     const dispose = vi.fn();
@@ -211,9 +217,8 @@ describe("native UI built-in delegation", () => {
     host.sessionKey = "global";
     await vi.waitFor(() => expect(contexts).toHaveLength(1));
     const current = contexts[0];
-    const view = host.querySelector<LitElement & { props: ControlUiSurfaceProps["composer"] }>(
-      "openclaw-plugin-view",
-    );
+    const view =
+      host.querySelector<HTMLElementTagNameMap["openclaw-plugin-view"]>("openclaw-plugin-view");
     if (!current || !view) {
       throw new Error("Expected the composer replacement to mount");
     }
@@ -221,10 +226,19 @@ describe("native UI built-in delegation", () => {
     expect(host.draft).toBe("Current draft");
 
     if (nextAgents) {
-      const props = view.props;
+      const props = view.props as ControlUiSurfaceProps["composer"];
       for (const agentId of nextAgents) {
         view.props = { ...props, agentId };
       }
+    } else if (selector === "surface") {
+      view.surface = "workspace";
+      view.surface = "composer";
+    } else if (selector === "kind") {
+      view.kind = "panels";
+      view.kind = "replacements";
+    } else if (selector === "contributionKey") {
+      view.contributionKey = "review/other";
+      view.contributionKey = "";
     } else {
       select();
       select(replacement);
@@ -279,7 +293,8 @@ describe("native UI built-in delegation", () => {
       }
       await vi.waitFor(() => expect(roots).toHaveLength(1));
       const current = contexts.at(-1);
-      const view = host.querySelector<LitElement & { presented: boolean }>("openclaw-plugin-view");
+      const view =
+        host.querySelector<HTMLElementTagNameMap["openclaw-plugin-view"]>("openclaw-plugin-view");
       if (!current || !view) {
         throw new Error("Expected the composer replacement to mount");
       }
@@ -365,7 +380,8 @@ describe("native UI built-in delegation", () => {
       },
     });
     await vi.waitFor(() => expect(host.textContent).toBe("Custom workspace"));
-    const retired = host.querySelector<LitElement>("openclaw-plugin-view")!;
+    const retired =
+      host.querySelector<HTMLElementTagNameMap["openclaw-plugin-view"]>("openclaw-plugin-view")!;
     expect(link.isConnected).toBe(false);
 
     select();
@@ -427,6 +443,7 @@ describe("native UI built-in delegation", () => {
     expect(host.count).toBe(4);
     expect(reportError).toHaveBeenCalledWith("review", failure);
     host.remove();
+    await Promise.resolve();
     expect(listeners.size).toBe(0);
   });
 
@@ -457,7 +474,8 @@ describe("native UI built-in delegation", () => {
       },
     });
     await host.updateComplete;
-    const view = host.querySelector<LitElement>("openclaw-plugin-view")!;
+    const view =
+      host.querySelector<HTMLElementTagNameMap["openclaw-plugin-view"]>("openclaw-plugin-view")!;
     await view.updateComplete;
     failUpdate = true;
     invalidate();
@@ -507,13 +525,15 @@ describe("native UI built-in delegation", () => {
     expect(host.textContent).toBe("Plugin content");
 
     host.remove();
+    await Promise.resolve();
     expect(signals[2]?.aborted).toBe(true);
     expect(listeners.size).toBe(0);
-    const view = host.querySelector<LitElement & { presented: boolean }>("openclaw-plugin-view")!;
+    const view =
+      host.querySelector<HTMLElementTagNameMap["openclaw-plugin-view"]>("openclaw-plugin-view")!;
     presented = false;
     host.dispatchEvent(new Event(PRESENTATION_CHANGED_EVENT));
     expect(view.presented).toBe(true);
-    view.requestUpdate();
+    view.props = structuredClone(view.props);
     await view.updateComplete;
     expect(roots).toHaveLength(3);
     provider.append(host);

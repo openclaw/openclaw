@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { render } from "lit";
+import { createComponent } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ApplicationContext } from "../../app/context.ts";
 import { setAvatarGatewayOrigin } from "../../lib/identity-avatar-context.ts";
@@ -9,8 +10,9 @@ import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts
 import { createContext, createGateway, createSessions } from "../../test-helpers/app-sidebar.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { loadChatRoute } from "../chat/route-loader.ts";
-import { renderDashboards } from "../dashboards/view.ts";
+import { DashboardsView } from "../dashboards/view.tsx";
 import { props, row } from "./session-activity-view.test-harness.ts";
 import { renderSessionActivityView } from "./session-activity-view.ts";
 
@@ -320,11 +322,13 @@ describe("session activity semantics", () => {
       } as unknown as ApplicationContext;
       const surfaceContainer = document.createElement("div");
       document.body.append(surfaceContainer);
-      render(
-        surface === "activity"
-          ? renderSessionActivityView(input)
-          : renderDashboards(
-              {
+      if (surface === "activity") {
+        render(renderSessionActivityView(input), surfaceContainer);
+      } else {
+        mountSolid(
+          () =>
+            createComponent(DashboardsView, {
+              data: {
                 result: input.result!,
                 error: null,
                 basePath: "",
@@ -332,13 +336,12 @@ describe("session activity semantics", () => {
                 mainKey: "main",
                 globalScope,
               },
-              { query: "", ownerId: "", sort: "updated" },
-              {
-                onFilterChange: vi.fn(),
-              },
-            ),
-        surfaceContainer,
-      );
+              filters: { query: "", ownerId: "", sort: "updated" },
+              handlers: { onFilterChange: vi.fn() },
+            }),
+          { container: surfaceContainer },
+        );
+      }
       const item = surfaceContainer.querySelector<HTMLElement>(
         surface === "activity" ? "[data-activity-session]" : ".dashboard-card__main",
       )!;
