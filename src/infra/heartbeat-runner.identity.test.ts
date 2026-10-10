@@ -113,6 +113,9 @@ describe("runHeartbeatOnce identity", () => {
         AgentId: "historian2",
         SessionKey: "agent:historian2:global:heartbeat",
       });
+      expect(getReplySystemEventContext(replySpy.mock.calls[0]?.[1])).toMatchObject({
+        heartbeatEventQueueSessionKey: "agent:historian2:global",
+      });
       expect(sendSlack).toHaveBeenCalledWith(
         "channel:HISTORIAN",
         "needs attention",
@@ -130,6 +133,39 @@ describe("runHeartbeatOnce identity", () => {
       expect(sendSlack).toHaveBeenCalledOnce();
     });
   });
+
+  it.each([false, true])(
+    "preserves the queue of a session named heartbeat with isolation %s",
+    async (isolatedSession) => {
+      await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+        const cfg: OpenClawConfig = {
+          agents: {
+            defaults: {
+              workspace: tmpDir,
+              heartbeat: { every: "5m", target: "none", session: "heartbeat", isolatedSession },
+            },
+          },
+          session: { store: storePath },
+        };
+        replySpy.mockResolvedValue({ text: "HEARTBEAT_OK" });
+
+        const result = await runHeartbeatOnce({
+          cfg,
+          deps: { getReplyFromConfig: replySpy, getQueueSize: () => 0 },
+        });
+
+        expect(result.status).toBe("ran");
+        expect(replySpy).toHaveBeenCalledOnce();
+        const [context, options] = replySpy.mock.calls[0]!;
+        expect(context.SessionKey).toBe(
+          isolatedSession ? "agent:main:heartbeat:heartbeat" : "agent:main:heartbeat",
+        );
+        expect(getReplySystemEventContext(options)).toMatchObject({
+          heartbeatEventQueueSessionKey: "agent:main:heartbeat",
+        });
+      });
+    },
+  );
 
   it("keeps a global hook event owned by another agent queued for its owner", async () => {
     await withTempHeartbeatSandbox(async ({ tmpDir, replySpy }) => {

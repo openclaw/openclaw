@@ -8,9 +8,9 @@ import {
   getNodeSqliteKysely,
   iterateSqliteQuerySync,
 } from "../infra/kysely-sync.js";
-import { runSqlitePinnedReadSnapshotSync } from "../infra/sqlite-pinned-read-snapshot.js";
 import { parseSqliteTableDefinition } from "../infra/sqlite-schema-contract-assembly.js";
 import { getCanonicalSqliteNamedIndexContracts } from "../infra/sqlite-schema-contract.js";
+import { runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
 import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
 import { LEGACY_CANONICAL_VALIDATION_TRIGGER_NAMES } from "./openclaw-agent-canonical-validation-migration.js";
 import {
@@ -379,7 +379,7 @@ export function captureOpenClawMigrationWitness(
   owner?: OpenClawMigrationWitnessOwner,
   registry?: RegistryMigrationContext,
 ): OpenClawMigrationWitness {
-  return runSqlitePinnedReadSnapshotSync(database, () => {
+  return runSqliteReadSnapshotSync(database, () => {
     const db = getNodeSqliteKysely<WitnessMetadataDatabase>(database);
     const role = owner?.role ?? "sqlite";
     if (

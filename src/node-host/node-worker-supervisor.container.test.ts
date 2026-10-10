@@ -43,7 +43,24 @@ function containerFixture(options: Parameters<typeof createNodeWorkerContainerFi
     options,
   );
   const store = new NodeWorkerLaunchStore(new NodeWorkerJournalWorker({ env: fixture.env }));
-  return { ...fixture, store, [Symbol.asyncDispose]: () => fixture.supervisor.close() };
+  const pending: Promise<unknown>[] = [];
+  return {
+    ...fixture,
+    store,
+    ownOperation<T>(operation: Promise<T>): Promise<T> {
+      // Keep the original result assertable while disposal owns early failures.
+      void operation.catch(() => undefined);
+      pending.push(operation);
+      return operation;
+    },
+    async [Symbol.asyncDispose]() {
+      try {
+        await fixture.supervisor.close();
+      } finally {
+        await Promise.allSettled(pending);
+      }
+    },
+  };
 }
 
 function readWorkerFixture(
@@ -308,18 +325,21 @@ describe("node worker supervisor container isolation", () => {
     const createMarker = path.join(fixture.engineRoot, "hold-create");
     const removalMarker = path.join(fixture.engineRoot, "hold-removal");
     const { store } = fixture;
+    await fixture.supervisor.initialize();
     fs.writeFileSync(createMarker, "hold");
     fs.writeFileSync(removalMarker, "hold");
 
     try {
-      const launch = fixture.supervisor.launch(input, endpoint);
+      const launch = fixture.ownOperation(fixture.supervisor.launch(input, endpoint));
       await vi.waitFor(
         () => expect(fixture.events().some((event) => event.argv[0] === "create")).toBe(true),
         { timeout: 5_000 },
       );
       expect((await store.get(input.launchId))?.state).toBe("pending");
 
-      const cancellation = fixture.supervisor.cancel(testNodeWorkerLaunchIdentity(input));
+      const cancellation = fixture.ownOperation(
+        fixture.supervisor.cancel(testNodeWorkerLaunchIdentity(input)),
+      );
       await vi.waitFor(() => expect(capacitySnapshots.at(-1)).toEqual({ total: 1, available: 0 }));
       expect((await store.get(input.launchId))?.state).toBe("pending");
 
@@ -355,10 +375,13 @@ describe("node worker supervisor container isolation", () => {
     const createMarker = path.join(fixture.engineRoot, "hold-create");
     const { store } = fixture;
     const controller = new AbortController();
+    await fixture.supervisor.initialize();
     fs.writeFileSync(createMarker, "hold");
 
     try {
-      const launch = fixture.supervisor.launch(input, endpoint, controller.signal);
+      const launch = fixture.ownOperation(
+        fixture.supervisor.launch(input, endpoint, controller.signal),
+      );
       await vi.waitFor(
         () => expect(fixture.events().some((event) => event.argv[0] === "create")).toBe(true),
         { timeout: 5_000 },

@@ -9,7 +9,7 @@ import { createDeferred, withinTest } from "./helpers/promise.js";
 import { runQaGatewayFixture } from "./helpers/qa-gateway-cleanup.js";
 
 it(
-  "commits a busy-session answer before ACK and delivers its new turn after an immediate Gateway crash",
+  "preserves a busy-session answer ACK across an immediate Gateway crash without replaying claimed work",
   { timeout: 180_000 },
   async ({ signal }) => {
     let stage = "not started";
@@ -164,7 +164,7 @@ it(
               resolutionId: "durable-proof-answer",
             }),
           ).toEqual({ status: "answered", answers: answer });
-          // The provider is still held: this ACK cannot depend on native execution.
+          // The provider is held, but native admission may already have claimed the continuation.
           expect(fixture.continuationCount).toBe(0);
           const child = fixture.instance.child;
           if (!child) {
@@ -184,22 +184,41 @@ it(
           await fixture.instance.startGateway();
           setStage("post-crash operator connection");
           client = await fixture.connect();
-          setStage("recovered answer continuation provider execution");
-          await withinTest(Promise.race([fixture.continued, fixture.failed]), signal);
-          expect(fixture.continuationCount).toBe(1);
+          // An existing observation can bypass get's recovery wait; list joins the whole pass.
+          await client.request("question.list", { includeContinuation: true });
           setStage("recovered continuation custody read");
           const current = await client.request<QuestionGetResult>("question.get", {
             id: question.id,
             includeContinuation: true,
           });
           expect(current.question.answers).toEqual(answer);
-          const runId = current.continuation?.runId;
-          expect(runId).toEqual(expect.any(String));
-          expect(runId).not.toBe(asking.runId);
-          setStage("recovered continuation native completion");
-          expect(await client.request("agent.wait", { runId, timeoutMs: 30_000 })).toMatchObject({
-            status: "ok",
-          });
+          if (current.continuation?.status === "interrupted") {
+            setStage("pre-crash claim interruption without replay");
+            expect(current.continuation).toMatchObject({
+              questionId: question.id,
+              runId: expect.any(String),
+              reason: expect.any(String),
+              nextAction:
+                "Start a new user turn; this continuation was not automatically repeated.",
+            });
+            expect(fixture.continuationCount).toBe(0);
+          } else {
+            expect(["owed", "claimed", "settled"]).toContain(current.continuation?.status);
+            setStage("recovered answer continuation provider execution");
+            await withinTest(Promise.race([fixture.continued, fixture.failed]), signal);
+            expect(fixture.continuationCount).toBe(1);
+            const admitted = await client.request<QuestionGetResult>("question.get", {
+              id: question.id,
+              includeContinuation: true,
+            });
+            const runId = admitted.continuation?.runId;
+            expect(runId).toEqual(expect.any(String));
+            expect(runId).not.toBe(asking.runId);
+            setStage("recovered continuation native completion");
+            expect(await client.request("agent.wait", { runId, timeoutMs: 30_000 })).toMatchObject({
+              status: "ok",
+            });
+          }
           await expect(
             access(
               path.join(

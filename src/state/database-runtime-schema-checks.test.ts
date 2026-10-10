@@ -87,7 +87,7 @@ beforeAll(async () => {
   expect(trace.execute.mock.calls.some(([, sql]) => /^PRAGMA user_version\b/i.test(sql))).toBe(
     true,
   );
-  expect(trace.execute.mock.calls.some(([, sql]) => trace.isVersionProbe(sql))).toBe(true);
+  expect(trace.execute.mock.calls.some(([, sql]) => trace.isVersionProbe(sql))).toBe(false);
   trace.execute.mockClear();
 
   // No await: all 100 reads of each entry point occur in the same event-loop turn.
@@ -120,19 +120,14 @@ beforeAll(async () => {
   console.info("Admitted database checks for 100 reads per entry point:", counts);
 });
 
-it("keeps admitted reads within the schema-query budget", () => {
-  expect(
-    counts.map(({ owner, userVersion, sqliteMaster }) => ({ owner, userVersion, sqliteMaster })),
-  ).toEqual(
+it("keeps admitted reads free of schema checks and freshness probes", () => {
+  expect(counts).toEqual(
     ["agent", "state", "state-readonly"].map((owner) => ({
       owner,
       userVersion: 0,
       sqliteMaster: 0,
+      dataVersion: 0,
     })),
-  );
-  expect(counts.find(({ owner }) => owner === "state")?.dataVersion).toBeLessThanOrEqual(100);
-  expect(counts.find(({ owner }) => owner === "state-readonly")?.dataVersion).toBeLessThanOrEqual(
-    100,
   );
 });
 

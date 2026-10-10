@@ -8,6 +8,7 @@ import { readSessionActivitySummary } from "./activity-summary.js";
 import { isInternalSessionEffectsKey } from "./internal-session-key.js";
 import { hasPendingSessionTranscriptArchives } from "./session-accessor.sqlite-archive-store-kernel.js";
 import { assertSessionCreationLabelAvailable } from "./session-accessor.sqlite-creation-read.js";
+import { readWrittenSessionEntryPostimage } from "./session-accessor.sqlite-entry-cache.js";
 import {
   sessionSharingEntriesEqual,
   type SessionEntryProjectionFacts,
@@ -54,21 +55,39 @@ export function prepareSessionEntryReplacementPublication(
   const current = new Map<string, SessionEntry>();
   const projection = new Map<string, SessionEntryProjectionFacts>();
   const unavailableParticipantKeys = new Set<string>();
+  const written = new Map(
+    [...result.current].flatMap(([key, entry]) => {
+      const postimage = readWrittenSessionEntryPostimage(database, key, entry);
+      return postimage ? [[key, postimage] as const] : [];
+    }),
+  );
+  const readWritten =
+    written.size === 0
+      ? undefined
+      : prepareExactSessionEntryRowReads(database, [...written.keys()], "list", undefined, {
+          includeBoardPresence: true,
+          includeMembership: true,
+          projectParticipants: false,
+        });
   let readCommitted: ReturnType<typeof prepareExactSessionEntryRowReads> | undefined;
   for (const key of result.current.keys()) {
-    readCommitted ??= prepareExactSessionEntryRowReads(
-      database,
-      [...result.current.keys()],
-      "list",
-      undefined,
-      {
-        includeBoardPresence: true,
-        includeMembership: true,
-        onParticipantProjectionError: (sessionKey) => unavailableParticipantKeys.add(sessionKey),
-      },
-    );
-    // Read the final persisted bytes and side tables after assignment, alias moves and maintenance.
-    const committed = readCommitted(key);
+    const entry = written.get(key);
+    const row = entry ? readWritten?.(key)?.row : undefined;
+    if (!entry) {
+      readCommitted ??= prepareExactSessionEntryRowReads(
+        database,
+        [...result.current.keys()].filter((currentKey) => !written.has(currentKey)),
+        "list",
+        undefined,
+        {
+          includeBoardPresence: true,
+          includeMembership: true,
+          onParticipantProjectionError: (sessionKey) => unavailableParticipantKeys.add(sessionKey),
+        },
+      );
+    }
+    // Later assignment, alias moves and maintenance revoke the writer's exact postimage.
+    const committed = entry ? row && { entry, row } : readCommitted?.(key);
     if (!committed) {
       throw new Error(`Session publication lost its committed metadata: ${key}`);
     }
@@ -83,7 +102,7 @@ export function prepareSessionEntryReplacementPublication(
     if (unavailableParticipantKeys.has(key)) {
       continue;
     }
-    const { entry } = committed;
+    const projectedEntry = committed.entry;
     projection.set(
       key,
       freezeJsonSnapshot({
@@ -91,19 +110,19 @@ export function prepareSessionEntryReplacementPublication(
           key,
           isInternalSessionEffectsKey(key)
             ? null
-            : (normalizeOptionalString(entry.category) ?? null),
+            : (normalizeOptionalString(projectedEntry.category) ?? null),
           memberIds,
           {
-            ...(entry.participants ? { participants: entry.participants } : {}),
-            ...(entry.participantCount === undefined
+            ...(projectedEntry.participants ? { participants: projectedEntry.participants } : {}),
+            ...(projectedEntry.participantCount === undefined
               ? {}
-              : { participantCount: entry.participantCount }),
+              : { participantCount: projectedEntry.participantCount }),
           },
-          entry.sessionId,
+          projectedEntry.sessionId,
         ],
         hasBoard: committed.row.board_present === 1,
-        activitySummaryWatermark: readSessionActivitySummary(entry)
-          ? readSessionTranscriptWatermarkInDatabase(database, entry.sessionId)
+        activitySummaryWatermark: readSessionActivitySummary(projectedEntry)
+          ? readSessionTranscriptWatermarkInDatabase(database, projectedEntry.sessionId)
           : undefined,
       }),
     );

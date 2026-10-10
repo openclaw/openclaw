@@ -690,23 +690,29 @@ suite.define(() => {
       await reasoning.click();
       await expect.poll(() => reasoning.getAttribute("aria-checked")).toBe("false");
 
+      await page.keyboard.press("Escape");
+      await page.keyboard.press("Escape");
       const sidebar = page.locator("openclaw-app-sidebar");
-      await sidebar.getByRole("button", { name: "Edit pinned items", exact: true }).click();
-      await sidebar
-        .locator("wa-dropdown.sidebar-more-menu")
-        .getByRole("menuitem", { name: "Edit pinned items" })
-        .click();
-      const customizeMenu = sidebar.locator(
-        "wa-dropdown.sidebar-customize-menu:not(.sidebar-more-menu):not(.sidebar-agent-menu)",
-      );
+      await sidebar.getByRole("button", { name: "Pages", exact: true }).click();
+      const usage = sidebar.locator(".sidebar-pages__entry").filter({
+        has: page.locator('[data-sidebar-entry="route:usage"]'),
+      });
+      const pinnedUsage = sidebar.locator('.sidebar-rail__pin[data-sidebar-entry="route:usage"]');
+      const pinsBefore = await sidebar
+        .locator(".sidebar-rail__pin")
+        .evaluateAll((pins) => pins.map((pin) => pin.getAttribute("data-sidebar-entry")));
+      expect(await pinnedUsage.count()).toBe(0);
+      await usage.getByRole("button", { name: "Pin", exact: true }).click();
+      await pinnedUsage.getByRole("link", { name: "Usage", exact: true }).waitFor();
+      await usage.getByRole("button", { name: "Unpin", exact: true }).waitFor();
+      // Personal navigation has no global config fallback. With no writable
+      // profile, prove browser-local provenance through storage and both write boundaries.
       await expect
-        .poll(() => customizeMenu.locator(".sidebar-customize-menu__provenance").textContent())
-        .toContain("Stored in this browser only");
-      const usage = customizeMenu.getByRole("menuitemcheckbox", { name: "Usage" });
-      await usage.click();
-      await expect.poll(() => usage.getAttribute("aria-checked")).toBe("true");
-      await page.waitForTimeout(100);
+        .poll(() => readPersistedSettings(page))
+        .toMatchObject({ sidebarEntries: [...pinsBefore, "route:usage"] });
       expect(await gateway.getRequests("config.patch")).toHaveLength(0);
+      expect(await gateway.getRequests("users.prefs.set")).toHaveLength(0);
+      expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
 
       await page.reload();
       await viewMenuTrigger.click();
@@ -722,22 +728,17 @@ suite.define(() => {
         )
         .toBe("false");
 
-      await sidebar.getByRole("button", { name: "Edit pinned items", exact: true }).click();
-      await sidebar
-        .locator("wa-dropdown.sidebar-more-menu")
-        .getByRole("menuitem", { name: "Edit pinned items" })
-        .click();
+      await page.keyboard.press("Escape");
+      await page.keyboard.press("Escape");
+      await pinnedUsage.getByRole("link", { name: "Usage", exact: true }).waitFor();
+      await sidebar.getByRole("button", { name: "Pages", exact: true }).click();
+      await usage.getByRole("button", { name: "Unpin", exact: true }).waitFor();
       await expect
-        .poll(() => customizeMenu.locator(".sidebar-customize-menu__provenance").textContent())
-        .toContain("Stored in this browser only");
-      await expect
-        .poll(() =>
-          customizeMenu
-            .getByRole("menuitemcheckbox", { name: "Usage" })
-            .getAttribute("aria-checked"),
-        )
-        .toBe("true");
+        .poll(() => readPersistedSettings(page))
+        .toMatchObject({ sidebarEntries: [...pinsBefore, "route:usage"] });
       expect(await gateway.getRequests("config.patch")).toHaveLength(0);
+      expect(await gateway.getRequests("users.prefs.set")).toHaveLength(0);
+      expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
     } finally {
       await context.close();
     }

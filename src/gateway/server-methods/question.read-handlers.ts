@@ -23,7 +23,7 @@ import { managerError } from "./question.errors.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
-async function waitForQuestionRecovery(
+export async function waitForQuestionRecovery(
   options: GatewayRequestHandlerOptions,
   waitForRecovery: () => Promise<void>,
 ): Promise<boolean> {

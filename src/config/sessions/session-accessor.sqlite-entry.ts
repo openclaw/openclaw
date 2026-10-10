@@ -1,7 +1,5 @@
-import { randomUUID } from "node:crypto";
 import { normalizeInternalTurnContext } from "../../auto-reply/internal-turn-source.js";
 import { coerceRequiredSqliteNumber as sqliteNumber } from "../../infra/sqlite-number.js";
-import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { OpenClawAgentDatabaseReadOnlyScope } from "../../state/openclaw-agent-db-readonly-scope.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
@@ -45,7 +43,10 @@ import { resolveSessionEntry } from "./session-accessor.sqlite-exact-read.js";
 import { listTranscriptInstancesFromDatabase } from "./session-accessor.sqlite-history.js";
 import { prepareSessionIdentityPublication } from "./session-accessor.sqlite-identity.js";
 import { kickSessionEntryMaintenanceAfterWrite } from "./session-accessor.sqlite-maintenance-kick.js";
-import { createFallbackSessionEntry } from "./session-accessor.sqlite-normalize.js";
+import {
+  createFallbackSessionEntry,
+  createInboundSessionFallback,
+} from "./session-accessor.sqlite-normalize.js";
 import {
   resolveSqliteScope,
   resolveSqliteTranscriptArchiveDirectory,
@@ -92,7 +93,6 @@ import {
 } from "./session-source-authority.js";
 import { resolveSessionStorePathForScope } from "./session-store-path.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
-import { mergeSessionEntry } from "./types.js";
 
 export { loadSessionEntryForAdmission } from "./session-accessor.sqlite-entry-admission.js";
 export { ensureSessionEntrySync } from "./session-accessor.sqlite-initial-entry.js";
@@ -451,7 +451,10 @@ async function patchSqliteSessionEntrySnapshot(
         assertCurrent?.();
         options.workerGuard?.assertCurrent?.();
       },
-      assertCommitAllowed: options.assertCommitAllowed,
+      assertCommitAllowed: () => {
+        options.assertCommitAllowed?.();
+        options.workerGuard?.assertMutationAllowed?.();
+      },
       shouldCommit: options.shouldCommit,
       source: options.workerGuard?.source,
       prepare,
@@ -565,6 +568,7 @@ async function patchSqliteSessionEntrySnapshot(
                   ...options,
                   assertCommitAllowed: () => {
                     options.assertCommitAllowed?.();
+                    options.workerGuard?.assertMutationAllowed?.();
                     options.workerGuard?.source?.();
                   },
                 },
@@ -643,11 +647,6 @@ async function patchSqliteSessionEntrySnapshot(
   return committed;
 }
 
-function createInboundSessionFallback(sessionKey: string): SessionEntry {
-  const patch = isIncognitoSessionKey(sessionKey) ? {} : { lifecycleRevision: randomUUID() };
-  return mergeSessionEntry(undefined, patch);
-}
-
 export async function recordInboundSessionMeta(
   params: RecordInboundSessionMetaParams,
 ): Promise<SessionEntry | null> {
@@ -674,7 +673,7 @@ export async function recordInboundSessionMeta(
       // Inbound metadata must not refresh activity timestamps; idle reset
       // evaluation relies on updatedAt from actual session turns.
       preserveActivity: true,
-      workerGuard: {},
+      workerGuard: { assertMutationAllowed: params.assertCommitAllowed },
       ...(createIfMissing
         ? { fallbackEntry: createInboundSessionFallback(params.sessionKey) }
         : {}),

@@ -42,7 +42,11 @@ import {
   durableQuestionPublication,
 } from "./question.durable-registration.js";
 import { managerError, QuestionRequestValidationError } from "./question.errors.js";
-import { createQuestionReadHandlers, prepareSelectedQuestion } from "./question.read-handlers.js";
+import {
+  createQuestionReadHandlers,
+  prepareSelectedQuestion,
+  waitForQuestionRecovery,
+} from "./question.read-handlers.js";
 import { createTransientQuestionPublication } from "./question.transient-publication.js";
 import type { SecretStoreWriteService } from "./secrets.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
@@ -189,6 +193,14 @@ export function createQuestionHandlers(
         };
       }
       try {
+        // Caller-selected IDs share the recovered namespace across every agent store.
+        if (
+          request.id &&
+          durable?.waitForRecovery &&
+          !(await waitForQuestionRecovery(options, durable.waitForRecovery))
+        ) {
+          return;
+        }
         const questions = await normalizeQuestions(request, authority.assertCurrent);
         if (narrow && operatorAuthority) {
           assertAdmittedRunOperatorAuthority(operatorAuthority);

@@ -42,10 +42,8 @@ import {
   readTranscriptStatsSync,
 } from "./session-accessor.sqlite-read.js";
 import { readTranscriptContextVersionInTransaction } from "./session-accessor.sqlite-transcript-state.js";
-import {
-  appendTranscriptEvent,
-  replaceTranscriptEvents,
-} from "./session-accessor.sqlite-transcript-write.js";
+import { appendTranscriptEvent } from "./session-accessor.sqlite-transcript-write.js";
+import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { resolveSessionColdArchivePath } from "./session-cold-storage-codec.js";
 import { readSessionColdTranscript } from "./session-cold-storage-state.js";
 import { getSessionColdStorageStatus } from "./session-cold-storage-status.js";
@@ -721,6 +719,7 @@ describe("cold transcript storage workers", () => {
         expect(changes).toHaveBeenCalledExactlyOnceWith({
           storePath: fixture.scope.storePath,
           sessionKey: fixture.scope.sessionKey,
+          scope: "transcript",
         });
         expect(changes.mock.results[0]?.value).toBe(false);
       } finally {

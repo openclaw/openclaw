@@ -6,11 +6,14 @@ import {
   getNodeSqliteKysely,
   sqliteStringSet,
 } from "../../infra/kysely-sync.js";
+import { readSqliteDatabaseSiblingWriteRevision } from "../../infra/sqlite-database-admission.js";
 import {
   getAdmittedSqliteSchemaFacts,
-  readSqliteDataVersion,
+  getSqliteReadScopeRevision,
+  type SqliteReadScopeRevision,
   runSqliteReadOperationSync,
 } from "../../infra/sqlite-schema-facts.js";
+import { communicationEntryBinding } from "../../sessions/communication-admission.js";
 import type { SessionRowFacts } from "../../sessions/session-row-changes.js";
 import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
 import { findOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
@@ -35,10 +38,11 @@ import {
   sessionEntryCaches,
   type SqliteSessionEntryCache,
 } from "./session-accessor.sqlite-entry-cache-state.js";
-import type {
-  SessionEntryCacheDatabase,
-  SessionEntryCacheReadOptions,
-  SessionEntryCacheSnapshot,
+import {
+  sessionSharingEntriesEqual,
+  type SessionEntryCacheDatabase,
+  type SessionEntryCacheReadOptions,
+  type SessionEntryCacheSnapshot,
 } from "./session-accessor.sqlite-entry-cache.types.js";
 import {
   prepareExactSessionEntryRowReads,
@@ -256,7 +260,7 @@ export function readSessionEntryCache(
     ) {
       return loadSessionEntrySnapshot(database, projection, prepared, options.deferParticipants);
     }
-    const validityToken = readSessionEntryCacheValidityToken(database.db, "cached");
+    const validityToken = readSessionEntryCacheValidityToken(database.db);
     const cached = sessionEntryCaches.get(database.db);
     if (cached && cacheValidityTokensEqual(cached.validityToken, validityToken)) {
       return cached;
@@ -268,7 +272,11 @@ export function readSessionEntryCache(
       freezeJsonSnapshot(entry);
     }
     const next = { ...loaded, validityToken };
-    sessionEntryCaches.set(database.db, next);
+    if (cacheValidityTokensEqual(validityToken, readSessionEntryCacheValidityToken(database.db))) {
+      sessionEntryCaches.set(database.db, next);
+    } else {
+      sessionEntryCaches.delete(database.db);
+    }
     return next;
   });
 }
@@ -278,7 +286,7 @@ function advanceSessionEntryCacheGeneration(
   writeGeneration: SqliteSessionEntryCacheWriteGeneration,
 ): void {
   // Advance only across the bracketed row write. A raw write before/after this bracket leaves
-  // a generation gap, while the retained data_version still exposes external commits.
+  // a generation gap, while sibling writer receipts invalidate other-connection results.
   if (cached.validityToken.sessionNodesGeneration === writeGeneration.before) {
     cached.validityToken = {
       ...cached.validityToken,
@@ -301,11 +309,13 @@ function publishSqliteSessionEntryCacheUpsert(
   let entry: SessionEntry | undefined;
   try {
     // A tracked entry write leaves participants unchanged. Reuse only facts current
-    // before that write; raw DML and foreign commits still force an authoritative read.
+    // before that write; raw DML and sibling writes still force an authoritative read.
     const retained =
       update.entry &&
       owner.validityToken.sessionNodesGeneration === writeGeneration.before &&
-      owner.validityToken.dataVersion === readSqliteDataVersion(database.db)
+      owner.validityToken.siblingWriteRevision !== undefined &&
+      owner.validityToken.siblingWriteRevision ===
+        readSqliteDatabaseSiblingWriteRevision(database.db)
         ? owner.entries.get(sessionKey)
         : undefined;
     sideMetadata = readSessionEntrySideMetadata(
@@ -489,4 +499,111 @@ export function publishSessionEntryCacheParticipantUpdate(
     }
   }
   publishSessionEntryCacheInvalidation(database, { sessionKey, facts }, writeGeneration);
+}
+
+const writtenEntryPostimages = new WeakMap<
+  SessionEntry,
+  {
+    database: OpenClawAgentDatabase["db"];
+    sessionKey: string;
+    revision: SqliteReadScopeRevision;
+    entry: SessionEntry;
+  }
+>();
+
+/** Only the exact writer result can lend its persisted projection before another mutation. */
+export function readWrittenSessionEntryPostimage(
+  database: OpenClawAgentDatabase,
+  sessionKey: string,
+  written: SessionEntry,
+): SessionEntry | undefined {
+  const postimage = writtenEntryPostimages.get(written);
+  return postimage?.database === database.db &&
+    postimage.sessionKey === sessionKey &&
+    postimage.revision === getSqliteReadScopeRevision(database.db)
+    ? postimage.entry
+    : undefined;
+}
+
+/** Publish committed writer facts before retaining their revision-bound postimage. */
+export function publishWrittenSessionEntry(
+  database: OpenClawAgentDatabase,
+  {
+    sessionKey,
+    entry,
+    previousEntry,
+    entryJson,
+    allowStoredAliases,
+    sideMetadataUnchanged,
+    writeGeneration,
+  }: {
+    sessionKey: string;
+    entry: SessionEntry;
+    previousEntry: SessionEntry | undefined;
+    entryJson: string;
+    allowStoredAliases?: boolean;
+    sideMetadataUnchanged: boolean;
+    writeGeneration: SqliteSessionEntryCacheWriteGeneration | undefined;
+  },
+): void {
+  publishSessionEntryCacheInvalidation(
+    database,
+    {
+      sessionKey,
+      entry,
+      sharingUnchanged:
+        !allowStoredAliases &&
+        sessionSharingEntriesEqual(previousEntry, {
+          ...entry,
+          owner: previousEntry?.owner,
+        }),
+      entryJson,
+      sideMetadata: structuredClone({
+        owner: previousEntry?.owner,
+        participants: previousEntry?.participants,
+        participantCount: previousEntry?.participantCount,
+      }),
+      previousEntry,
+      ...(!allowStoredAliases
+        ? {
+            facts: {
+              kind: "entry" as const,
+              previousSessionId: previousEntry?.sessionId,
+              sessionId: entry.sessionId,
+              category: entry.category?.trim() || null,
+              communicationBinding: communicationEntryBinding(entry),
+              clearMembers:
+                previousEntry !== undefined && previousEntry.sessionId !== entry.sessionId,
+              lifecycleChanged:
+                previousEntry?.sessionId !== entry.sessionId ||
+                previousEntry?.lifecycleRevision !== entry.lifecycleRevision,
+            },
+          }
+        : {}),
+    },
+    writeGeneration,
+  );
+  const revision = getSqliteReadScopeRevision(database.db);
+  if (!allowStoredAliases && sideMetadataUnchanged && revision) {
+    const postimage = projectSessionEntryCacheUpdate(
+      entryJson,
+      structuredClone({
+        owner: previousEntry?.owner,
+        ...(previousEntry?.sessionId === entry.sessionId
+          ? {
+              participants: previousEntry.participants,
+              participantCount: previousEntry.participantCount,
+            }
+          : {}),
+      }),
+    );
+    if (postimage) {
+      writtenEntryPostimages.set(entry, {
+        database: database.db,
+        sessionKey,
+        revision,
+        entry: postimage,
+      });
+    }
+  }
 }

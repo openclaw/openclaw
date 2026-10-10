@@ -68,9 +68,7 @@ const trackedWorkers = resolveGlobalSingleton(Symbol.for("openclaw.workerCpuSour
 
 export function createCpuTrackedWorker(...args: ConstructorParameters<typeof Worker>): Worker {
   const worker = new Worker(...args);
-  trackWorker(worker); // Bun need not emit Node's process-level Worker event.
-  // Node's process event can register the Worker before its constructor returns.
-  trackedWorkers.workers.get(worker)!.script = workerScriptName(args[0], args[1]?.eval);
+  trackNativeWorkerForCpu(worker, args[0], args[1]?.eval);
   return worker;
 }
 
@@ -80,6 +78,7 @@ export function trackNativeWorkerForCpu(
   filename: string | URL,
   evalSource = false,
 ): void {
+  // Register explicitly on Bun; Node may already have reported the Worker during construction.
   trackWorker(worker);
   trackedWorkers.workers.get(worker)!.script = workerScriptName(filename, evalSource);
 }

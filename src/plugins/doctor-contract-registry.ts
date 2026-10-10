@@ -40,6 +40,7 @@ import type { PluginManifestRegistry } from "./manifest-registry.types.js";
 import type { PluginManifestDoctorContract } from "./manifest-types.js";
 import { loadPluginManifestRegistryForPluginRegistry } from "./plugin-registry.js";
 import { getPluginSetupModuleLoader } from "./plugin-setup-module.js";
+import { withPluginSourceCaptureStorage } from "./plugin-source-capture-context.js";
 import { loadBundledPluginPublicArtifactModuleFromCandidatesSync } from "./public-surface-loader.js";
 
 export { collectRelevantDoctorPluginIds } from "./doctor-contract-relevance.js";
@@ -758,9 +759,15 @@ export function applyPluginDoctorCompatibilityMigrations(
 export async function preparePluginDoctorMigrationBackupResources(
   params: PluginDoctorMigrationResourceCollectionParams,
 ) {
-  const entries = loadPluginDoctorStateMigrationEntries(
-    resolvePluginDoctorStateMigrationRecords({ ...params, artifactPreservingReadOnly: true }),
+  return await withPluginSourceCaptureStorage(
+    { stateDir: params.stateDir, placement: "temporary" },
+    async () => {
+      const entries = loadPluginDoctorStateMigrationEntries(
+        resolvePluginDoctorStateMigrationRecords({ ...params, artifactPreservingReadOnly: true }),
+      );
+      const { preparePluginDoctorMigrationResources } =
+        await import("./doctor-migration-resources.js");
+      return await preparePluginDoctorMigrationResources(entries, params);
+    },
   );
-  const { preparePluginDoctorMigrationResources } = await import("./doctor-migration-resources.js");
-  return await preparePluginDoctorMigrationResources(entries, params);
 }
