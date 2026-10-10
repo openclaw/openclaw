@@ -7,11 +7,13 @@ import { registerMatrixFullRuntime } from "../../extensions/matrix/index.js";
 import { registerMemoryCli } from "../../extensions/memory-core/cli.js";
 import type { SessionBackfillExecution } from "../../extensions/memory-core/src/session-backfill-contract.js";
 import { registerSessionBackfillGatewayMethods } from "../../extensions/memory-core/src/session-backfill-gateway.js";
+import { GatewayClientRequestError } from "../../packages/gateway-client/src/request-error.js";
 import { GATEWAY_SERVER_CAPS } from "../../packages/gateway-protocol/src/server-capabilities.js";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resetConfigRuntimeState } from "../config/config.js";
 import type { CallGatewayOptions } from "../gateway/call.js";
+import { memorySearchHandlers } from "../gateway/server-methods/memory-search.js";
 import type {
   GatewayRequestHandler,
   GatewayRequestHandlerOptions,
@@ -22,6 +24,7 @@ import {
   resolveGatewayLockPaths,
   type GatewayLockHandle,
 } from "../infra/gateway-lock.js";
+import type { MemorySearchManager } from "../memory-host-sdk/host/types.js";
 import { createTestPluginApi } from "../plugin-sdk/plugin-test-api.js";
 import type { OpenClawPluginCliRegistrar } from "../plugins/plugin-registration.types.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
@@ -30,6 +33,9 @@ const fixture = vi.hoisted(() => ({
   external: false,
   callGateway: vi.fn<(options: CallGatewayOptions) => Promise<unknown>>(),
   executeBatch: vi.fn<() => Promise<SessionBackfillExecution>>(),
+  memoryManager: vi.fn(),
+  search: vi.fn<MemorySearchManager["search"]>(),
+  searchClose: vi.fn(async () => {}),
   status: vi.fn(),
   bootstrap: vi.fn(),
   recovery: vi.fn(),
@@ -40,6 +46,13 @@ const fixture = vi.hoisted(() => ({
       matrix: { homeserver: "https://matrix.example.org", userId: "@fixture:example.org" },
     },
   })),
+}));
+
+vi.mock("../plugins/memory-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/memory-runtime.js")>()),
+  getActiveMemorySearchManagerCore: fixture.memoryManager,
+  // The injected Memory Core manager uses the legacy manager contract.
+  isActiveMemoryProviderNative: () => false,
 }));
 
 vi.mock("../gateway/call.js", async (importOriginal) => ({
@@ -100,6 +113,7 @@ let ownerId: string | undefined;
 let matrixRegistrar: OpenClawPluginCliRegistrar;
 const methods = new Map<string, GatewayRequestHandler>();
 const gatewayConfig = {
+  plugins: { entries: { "memory-core": { config: { dreaming: { enabled: false } } } } },
   agents: { entries: { main: {} } },
   channels: { matrix: { accounts: { ops: { homeserver: "https://gateway.example.org" } } } },
 };
@@ -125,7 +139,12 @@ async function dispatchToGateway(options: CallGatewayOptions) {
   }
   const response = respond.mock.calls[0];
   if (!response?.[0]) {
-    throw new Error(response?.[2]?.message ?? response?.[1]?.error ?? "Gateway refused request");
+    throw new GatewayClientRequestError(
+      response?.[2] ?? {
+        code: "UNAVAILABLE",
+        message: response?.[1]?.error ?? "Gateway refused request",
+      },
+    );
   }
   return response[1];
 }
@@ -166,6 +185,9 @@ beforeAll(() => {
   });
   registerMatrixFullRuntime(api);
   registerSessionBackfillGatewayMethods(api);
+  for (const [method, handler] of Object.entries(memorySearchHandlers)) {
+    methods.set(method, handler);
+  }
   registerMatrixCliMetadata(
     createTestPluginApi({
       registerCli(registrar) {
@@ -185,6 +207,15 @@ beforeEach(() => {
   fixture.config.mockClear();
   fixture.callGateway.mockReset().mockImplementation(dispatchToGateway);
   fixture.executeBatch.mockReset().mockResolvedValue(backfillExecution());
+  fixture.search.mockReset().mockResolvedValue([]);
+  fixture.searchClose.mockReset().mockResolvedValue(undefined);
+  fixture.memoryManager.mockReset().mockResolvedValue({
+    manager: {
+      search: fixture.search,
+      status: () => ({ backend: "builtin", provider: "none", dirty: false, workspaceDir: root }),
+      close: fixture.searchClose,
+    },
+  });
   fixture.status.mockReset();
   fixture.bootstrap.mockReset();
   fixture.recovery.mockReset();
@@ -234,7 +265,6 @@ describe("plugin commands respect the local state owner", () => {
   it.each([
     ["status"],
     ["index"],
-    ["search", "query"],
     ["forget", "--session", "fixture"],
     ["reset", "--yes"],
     ["promote", "--apply"],
@@ -264,7 +294,7 @@ describe("plugin commands respect the local state owner", () => {
     },
   );
 
-  it.each(["memory", "memory-backfill", "matrix"] as const)(
+  it.each(["memory", "memory-backfill", "memory-search", "matrix"] as const)(
     "retains offline %s ownership until the command settles",
     async (family) => {
       const entered = createDeferred<void>();
@@ -290,7 +320,9 @@ describe("plugin commands respect the local state owner", () => {
       const operation = runCli(
         family === "matrix"
           ? ["matrix", "verify", "list", "--json"]
-          : ["memory", family === "memory-backfill" ? "session-backfill" : "index"],
+          : family === "memory-search"
+            ? ["memory", "search", "query", "--json"]
+            : ["memory", family === "memory-backfill" ? "session-backfill" : "index"],
       );
       try {
         await awaitGateBeforeSettlement(entered.promise, operation, "command did not enter");
@@ -390,7 +422,7 @@ describe("plugin commands respect the local state owner", () => {
     },
   );
 
-  it.each(["memory", "matrix"] as const)(
+  it.each(["memory", "matrix", "search"] as const)(
     "does not replay %s locally when owner method is missing or dispatch is uncertain",
     async (family) => {
       await occupyState();
@@ -408,12 +440,14 @@ describe("plugin commands respect the local state owner", () => {
         const operation = runCli(
           family === "memory"
             ? ["memory", "session-backfill", "--apply", "--json"]
-            : ["matrix", "verify", "bootstrap", "--json"],
+            : family === "search"
+              ? ["memory", "search", "query", "--json"]
+              : ["matrix", "verify", "bootstrap", "--json"],
         );
         const message = dispatched
           ? "No local fallback was attempted"
           : "No local mutation was attempted";
-        if (family === "memory") {
+        if (family !== "matrix") {
           await expect(operation).rejects.toThrow(message);
         } else {
           await operation;
@@ -425,6 +459,7 @@ describe("plugin commands respect the local state owner", () => {
       expect(fixture.bootstrap).not.toHaveBeenCalled();
       expect(fixture.executeBatch).not.toHaveBeenCalled();
       expect(fixture.config).not.toHaveBeenCalled();
+      expect(fixture.memoryManager).not.toHaveBeenCalled();
     },
   );
 
@@ -449,7 +484,7 @@ describe("plugin commands respect the local state owner", () => {
     },
   );
 
-  it.each(["memory", "matrix"] as const)(
+  it.each(["memory", "matrix", "search"] as const)(
     "does not disclose a completed %s result after owner revocation",
     async (family) => {
       await occupyState();
@@ -460,6 +495,11 @@ describe("plugin commands respect the local state owner", () => {
           entered.resolve();
           await finish.promise;
           return backfillExecution();
+        });
+      } else if (family === "search") {
+        fixture.searchClose.mockImplementationOnce(async () => {
+          entered.resolve();
+          await finish.promise;
         });
       } else {
         fixture.status.mockImplementationOnce(async () => {
@@ -472,7 +512,9 @@ describe("plugin commands respect the local state owner", () => {
       const operation = runCli(
         family === "memory"
           ? ["memory", "session-backfill", "--apply", "--json"]
-          : ["matrix", "verify", "status", "--include-recovery-key", "--json"],
+          : family === "search"
+            ? ["memory", "search", "query", "--json"]
+            : ["matrix", "verify", "status", "--include-recovery-key", "--json"],
       );
       const outcome = operation.then(
         () => undefined,
@@ -489,7 +531,7 @@ describe("plugin commands respect the local state owner", () => {
       } finally {
         finish.resolve();
       }
-      if (family === "memory") {
+      if (family !== "matrix") {
         expect(await outcome).toMatchObject({ code: "OUTCOME_UNKNOWN" });
         expect(output).not.toHaveBeenCalled();
       } else {
@@ -520,4 +562,82 @@ describe("plugin commands respect the local state owner", () => {
     expect(fixture.memory).not.toHaveBeenCalled();
     expect(fs.existsSync(resolveGatewayLockPaths(process.env).ownerLockPath)).toBe(false);
   });
+
+  it("routes memory search limits and JSON output through the discovered owner", async () => {
+    await occupyState();
+    const hits = [
+      {
+        path: "memory/fact.md",
+        startLine: 1,
+        endLine: 2,
+        score: 0.8,
+        snippet: "A remembered fact",
+        source: "memory" as const,
+      },
+    ];
+    fixture.search.mockResolvedValueOnce(hits);
+    const output = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    await runCli([
+      "memory",
+      "search",
+      " exact query ",
+      "--agent",
+      "main",
+      "--max-results",
+      "75",
+      "--min-score",
+      "-0.25",
+      "--json",
+    ]);
+    expect(JSON.parse(String(output.mock.calls.at(-1)?.[0]))).toEqual({ results: hits });
+    expect(fixture.callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "memory.search.owner",
+        requiredMethods: ["memory.search.owner"],
+        params: {
+          query: " exact query ",
+          agentId: "main",
+          maxResults: 75,
+          minScore: -0.25,
+          expectedOwnerId: ownerId,
+        },
+      }),
+    );
+    expect(fixture.search).toHaveBeenCalledWith(
+      " exact query ",
+      expect.objectContaining({ maxResults: 75, minScore: -0.25 }),
+    );
+    expect(fixture.searchClose).toHaveBeenCalledTimes(1);
+    expect(fixture.memory).not.toHaveBeenCalled();
+  });
+
+  it.each([undefined, "fixture memory acquisition failed"])(
+    "preserves routed unavailable search output for error=%s",
+    async (error) => {
+      await occupyState();
+      fixture.memoryManager.mockResolvedValueOnce({ manager: null, error });
+      const output = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+      const diagnostics = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+      await runCli(["memory", "search", "query", "--json"]);
+      expect(JSON.parse(String(output.mock.calls.at(-1)?.[0]))).toEqual(
+        error
+          ? {
+              agentId: "main",
+              ok: false,
+              error: {
+                type: "cli_error",
+                message: "memory search failed (main): fixture memory acquisition failed",
+              },
+            }
+          : { agentId: "main", status: "disabled" },
+      );
+      expect(process.exitCode).toBe(error ? 1 : 0);
+      if (error) {
+        expect(diagnostics.mock.calls.flat().join("")).toContain(
+          "memory search failed (main): fixture memory acquisition failed",
+        );
+      }
+      expect(fixture.memory).not.toHaveBeenCalled();
+    },
+  );
 });

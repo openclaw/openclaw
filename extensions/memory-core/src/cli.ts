@@ -195,10 +195,8 @@ export function registerMemoryCli(program: Command, hostOptions?: MemoryCoreRunt
       if (!query) {
         throw new Error("Missing search query. Provide a positional query or use --query <text>.");
       }
-      await runMemoryCliCommand(async () => {
-        const runtime = await import("./cli.runtime.js");
-        await runtime.runMemorySearch(query, opts, hostOptions);
-      });
+      const { runMemorySearchWithOwner } = await import("./cli-search-owner.runtime.js");
+      await runMemorySearchWithOwner(query, opts, hostOptions);
     });
 
   agentCommand("forget", "Delete memories and derived artifacts from selected sessions")

@@ -214,7 +214,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +2: approved async upstream-link writes with released sync compatibility.
       // -8: retired Skill Workshop proposal hook types.
       // +4: CLI state-owner routing, Gateway owner guards, target selection, and timeout parsing.
-      3645,
+      // +1: requester-bound transport effects for owner-routed plugin commands.
+      3646,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -228,7 +229,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: resolve the controller from the current invocation registry.
       // +2: approved async upstream-link writes with released sync compatibility.
       // +4: the same four CLI state-owner and transport functions.
-      2115,
+      // +1: runWithLocalStateMutationOwner shares the existing transport authority scope.
+      2116,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

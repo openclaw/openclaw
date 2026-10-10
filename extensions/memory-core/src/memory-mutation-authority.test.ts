@@ -1,6 +1,7 @@
 import "openclaw/plugin-sdk/compiled-subprocess-testing";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { collectErrorGraphCandidates } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import * as sessionCorpus from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
@@ -116,27 +117,28 @@ describe("memory mutation authority at durable effects", () => {
         await fs.writeFile(file, "accepted\n");
       }
       let current = true;
-      await expect(
-        withMemoryMutationAuthority(
-          () => {
-            if (!current) {
-              throw new Error("fixture owner revoked");
-            }
-          },
-          async () => {
-            const writing =
-              kind === "state"
-                ? writeMemoryCoreWorkspaceEntry({ ...state, value: "revoked" })
-                : kind === "diary"
-                  ? writeDreamsFileAtomic(file, "revoked\n")
-                  : kind === "corpus"
-                    ? appendSessionCorpusText(file, "revoked\n")
-                    : recordMemoryEntryOrigins({ agentId: "main", origins: [origin("revoked")] });
-            current = false;
-            await writing;
-          },
-        ),
-      ).rejects.toThrow("fixture owner revoked");
+      const failure = await withMemoryMutationAuthority(
+        () => {
+          if (!current) {
+            throw new Error("fixture owner revoked");
+          }
+        },
+        async () => {
+          const writing =
+            kind === "state"
+              ? writeMemoryCoreWorkspaceEntry({ ...state, value: "revoked" })
+              : kind === "diary"
+                ? writeDreamsFileAtomic(file, "revoked\n")
+                : kind === "corpus"
+                  ? appendSessionCorpusText(file, "revoked\n")
+                  : recordMemoryEntryOrigins({ agentId: "main", origins: [origin("revoked")] });
+          current = false;
+          await writing;
+        },
+      ).catch((error: unknown) => error);
+      expect(collectErrorGraphCandidates(failure, (record) => [record.cause])).toContainEqual(
+        expect.objectContaining({ message: "fixture owner revoked" }),
+      );
       if (kind === "state") {
         expect(await readMemoryCoreWorkspaceEntries(state)).toEqual([
           { key: kind, value: "accepted" },
