@@ -868,9 +868,7 @@ describe("resolveApiKeyForProviderCore – synthetic local auth for custom provi
             baseUrl: "http://192.168.0.222:11434/v1",
             api: "openai-completions",
             apiKey: "ollama-local",
-            models: Array.from({ length: modelCount }, () =>
-              createModelConfig({ id: "qwen3.5:9b", name: "Qwen 3.5 9B" }),
-            ),
+            models: Array.from({ length: modelCount }, () => createModelConfig()),
           },
         }),
         store: authStore({}),
@@ -896,9 +894,7 @@ describe("resolveApiKeyForProviderCore – synthetic local auth for custom provi
               baseUrl: "https://api.example.com/v1",
               api: "openai-completions",
               apiKey: "ollama-local",
-              models: Array.from({ length: modelCount }, () =>
-                createModelConfig({ id: "qwen3.5:9b", name: "Qwen 3.5 9B" }),
-              ),
+              models: Array.from({ length: modelCount }, () => createModelConfig()),
             },
           }),
           store: authStore({}),
