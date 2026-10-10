@@ -344,6 +344,9 @@ src/agents/worktrees/repository-paths.ts
 src/agents/worktrees/run-end-lifecycle.ts
 src/agents/sandbox/registry-lifecycle.ts
 src/agents/sandbox/registry-publication.ts
+src/config/sessions/session-actor-transaction.ts
+src/infra/sqlite-database-write-receipts.ts
+src/state/openclaw-agent-execution-incognito-session-actors.ts
 src/talk/client-voice-session-lifecycle.ts
 src/talk/client-voice-session-source.ts
 src/agents/worktrees/run-lease-owner.ts
