@@ -4944,7 +4944,6 @@
 ["src/cli/proxy-cli.runtime-cleanup.test.ts","../proxy-capture/coverage.js","34b4399ac2bafac56cccdf15a46624e586f7900aad1a8e2bc6f78b1f048b762e",1]
 ["src/cli/proxy-cli.runtime-cleanup.test.ts","../proxy-capture/env.js","6cc19db402782ac8e2a10bfa14bb78f9ee5d9176d23da627fa0190bceae32279",1]
 ["src/cli/proxy-cli.runtime-cleanup.test.ts","../proxy-capture/proxy-server.js","6dda39e570759a7c4a6895ae1604af64eba9cb69abe1f693203df5967c75a677",1]
-["src/cli/proxy-cli.runtime-cleanup.test.ts","../proxy-capture/runtime.js","481b292e063b84e44cdceed81d8aec96b559c608f821deab115480a500f51e1f",1]
 ["src/cli/proxy-cli.runtime-cleanup.test.ts","../proxy-capture/store.async.js","1bbb65a2e5d679b36c57aeba54f1076931b48fdd7737b26c392e4547bc58896a",1]
 ["src/cli/proxy-cli.runtime-cleanup.test.ts","../state/openclaw-state-worker-context.js","2e78d3212c9f697d53ff378465a75cef560c0c3017820230f7d00d8ba6f1ec8c",1]
 ["src/cli/proxy-cli.runtime.test.ts","../config/config.js","ba59cdee51f2fa757c967d8832989aee0574b0b7c860108dc592f4819a6a73f5",1]
