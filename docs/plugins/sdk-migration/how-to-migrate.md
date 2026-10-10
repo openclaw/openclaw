@@ -179,9 +179,10 @@ starting dependent work, or releasing request resources. Their synchronous
 counterparts shipped through the 2026.9.8 Gateway SDK and remain deprecated
 compatibility methods until the next Plugin SDK major.
 
-Startup also awaits `clearLocalTurnClaimsAfterRestartAsync`. It commits exact
-claim postimages in the placement worker and installs the whole batch before
-revocation notifications or release waiters. Legacy synchronous retirement and
+Startup also awaits `clearLocalTurnClaimsAfterRestartAsync` while holding the
+state-directory lock, before admitting turns. The placement worker clears stale
+local claims and publishes the returned records after success. An uncertain result
+fails startup; the next boot can safely repeat the cleanup. Legacy synchronous retirement and
 restart cleanup warn once per plugin and capability family. Bundled reset and
 deletion paths await retirement; released custom Gateway contexts retain a
 separately selected synchronous adapter through the compatibility window.
