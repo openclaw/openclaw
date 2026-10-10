@@ -59,6 +59,8 @@ it("checks integrity once before index repair and once after rebuilding the inde
         .all()
         .map((row) => row.name),
     ).toEqual(["status"]);
+    repaired.db.exec("CREATE TABLE checkonce_later (value TEXT)");
+    assertExistingOpenClawStateRuntimeSchema(repaired.db, pathname);
     expect(observation.queries.filter((sql) => sql === "PRAGMA integrity_check;")).toHaveLength(2);
     expect(observation.queries.filter((sql) => sql === "PRAGMA foreign_key_check;")).toHaveLength(
       2,
