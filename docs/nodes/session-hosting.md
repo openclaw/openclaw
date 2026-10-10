@@ -59,8 +59,16 @@ Each new dispatch still validates the installed artifact and reuses it when vali
 avoiding another download. Cloud-enrolled nodes keep their own execution-mode-specific
 installation and retention lifecycle.
 
-You can also enroll and enable a service host in one step with
-`openclaw connect --service --session-host`.
+The command printed by `openclaw devices join-code` enrolls and enables a
+service host in one step with `openclaw connect <join-url> --service --session-host`.
+Omit `--session-host` for a command-only node service.
+
+To enable hosting on an already-paired headless node, run on that device:
+
+```bash
+openclaw config set nodeHost.workerRuns.enabled true
+openclaw node install --force
+```
 
 For a process-scoped host, enroll in the foreground with
 `openclaw connect <join-url> --session-host`. The join URL is single-use; after
@@ -238,12 +246,11 @@ exec-server directly, so it does not consume or require a worker slot. Its
 required command must appear in the node's effective `invocableCommands`,
 not merely its declared capabilities. A declared command is usable only when
 the approved pairing and Gateway command allowlist both authorize it.
-Connected non-hosts, ineligible
-or saturated hosts, update-required devices, and unavailable hosts remain
-visible but disabled with an actionable reason. Enable hosting with
-`openclaw connect --service --session-host` or the `nodeHost.workerRuns`
-setting, then restart the node host. Update-required hosts must be upgraded and
-restarted before selection.
+Connected non-hosts, ineligible or saturated hosts, update-required devices,
+and unavailable hosts remain visible but disabled with an actionable reason.
+For an already-paired headless node, enable `nodeHost.workerRuns.enabled` and
+run `openclaw node install --force` as shown above. Update-required hosts must
+be upgraded and restarted before selection.
 
 While node inventory refreshes, or if that refresh fails, the picker keeps known
 devices visible but disables remote selection and Start until fresh inventory
@@ -267,7 +274,7 @@ slots does not cancel it; the node checks physical capacity when the session
 launches a turn.
 Node identity and command authorization remain checked throughout preparation.
 
-If no host is eligible, the error explains whether no session hosts are paired,
+If no host is eligible, the error explains whether no devices have session hosting enabled,
 hosts are disconnected or at capacity, a host needs an update, or the selected
 runtime is unsupported. Current pairing, connection, and command errors take
 precedence over previously advertised worker slots. The dispatch response

@@ -8,6 +8,8 @@ import { createConfigIO } from "../config/io.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
+import { acquireGatewayLock } from "../infra/gateway-lock.js";
+import { captureGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import {
@@ -100,6 +102,20 @@ it.for([false, true])(
     await withEnvAsync(
       { OPENCLAW_STATE_DIR: stateDir, OPENCLAW_CONFIG_PATH: configPath },
       async () => {
+        const owner = await acquireGatewayLock({ allowInTests: true });
+        if (!owner) {
+          throw new Error("Expected Gateway state ownership");
+        }
+        await using gatewayOwnership = {
+          assertCurrent: owner.assertCurrent,
+          async [Symbol.asyncDispose]() {
+            await closeOpenClawStateDatabaseAsync();
+            await owner.release();
+          },
+        };
+        const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
+        const initialOwner = captureGatewayStateOwner(databasePath);
+        expect(initialOwner?.role).toBe("gateway");
         await withPluginRuntimeRegistryScope(registry, async () => {
           await fs.writeFile(configPath, "{}");
           const seed = await readConfigFileSnapshotForWrite();
@@ -219,6 +235,8 @@ it.for([false, true])(
             const write = await commitGatewayConfigWrite({ ...prepared, nextConfig: next });
             write.queueFollowUp();
             await racePromiseWithAbortSignal(application.promise, signal);
+            gatewayOwnership.assertCurrent();
+            expect(captureGatewayStateOwner(databasePath)?.ownerId).toBe(initialOwner?.ownerId);
             expect(restart).not.toHaveBeenCalled();
             expect(hotReload).toHaveBeenCalledTimes(1);
             expect(commit).toHaveBeenCalledTimes(1);

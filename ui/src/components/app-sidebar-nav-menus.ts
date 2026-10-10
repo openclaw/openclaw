@@ -234,17 +234,15 @@ export function renderSidebarCustomizeMenu(params: SidebarCustomizeMenuParams) {
       icon: navigationIconForRoute(routeId),
       label: titleForRoute(routeId),
     })),
-    ...params.pluginNavigation
-      .filter((entry) => entry.value.defaultVisible === false)
-      .map((entry) => ({
-        value: `plugin:${entry.key}`,
-        entry: `plugin:${entry.key}`,
-        icon:
-          entry.value.icon && Object.hasOwn(icons, entry.value.icon)
-            ? (entry.value.icon as IconName) // SAFETY: the own-key check admits only registered icon names.
-            : ("plug" as const),
-        label: entry.value.label,
-      })),
+    ...params.pluginNavigation.map((entry) => ({
+      value: `plugin:${entry.key}`,
+      entry: `plugin:${entry.key}`,
+      icon:
+        entry.value.icon && Object.hasOwn(icons, entry.value.icon)
+          ? (entry.value.icon as IconName) // SAFETY: the own-key check admits only registered icon names.
+          : ("plug" as const),
+      label: entry.value.label,
+    })),
   ];
   return renderSidebarDropdown({
     ...params,

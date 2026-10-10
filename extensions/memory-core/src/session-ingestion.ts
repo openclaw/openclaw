@@ -16,7 +16,11 @@ import {
   formatMemoryDreamingDay,
   resolveMemoryDreamingWorkspaces,
 } from "openclaw/plugin-sdk/memory-core-host-status";
-import { appendRegularFile } from "openclaw/plugin-sdk/security-runtime";
+import {
+  appendRegularFile,
+  assertNoSymlinkParentsSync,
+  root,
+} from "openclaw/plugin-sdk/security-runtime";
 import {
   asNullableRecord,
   normalizeTrimmedStringList,
@@ -27,6 +31,7 @@ import {
   type SessionIngestionFileState,
 } from "./dreaming-ingestion-state.js";
 import { normalizeMemoryCoreWorkspaceKey } from "./dreaming-state.js";
+import { captureMemoryMutationAuthority } from "./memory-mutation-authority.js";
 import { getMemoryWorkspaceMaintenance } from "./memory-workspace-files.js";
 
 export const SESSION_CORPUS_RELATIVE_DIR = path.join("memory", ".dreams", "session-corpus");
@@ -492,8 +497,10 @@ export async function appendSessionCorpusLines(params: {
   );
   const content = `${params.lines.map((entry) => entry.rendered).join("\n")}\n`;
   const files = getMemoryWorkspaceMaintenance(params.workspaceDir);
+  const assertCurrent = captureMemoryMutationAuthority();
+  assertCurrent?.();
   const existingLines = files
-    ? await files.appendCorpus(absolutePath, content)
+    ? await files.appendCorpus(absolutePath, content, assertCurrent)
     : await appendSessionCorpusText(absolutePath, content);
   return params.lines.map((entry, index) => ({
     path: relativePath,
@@ -509,6 +516,8 @@ export async function appendSessionCorpusLines(params: {
 
 /** Native file append; session admission and checkpoints stay with the caller. */
 export async function appendSessionCorpusText(filePath: string, content: string): Promise<number> {
+  const assertCurrent = captureMemoryMutationAuthority();
+  assertCurrent?.();
   await fs.mkdir(path.dirname(filePath), { recursive: true });
   const existing = await fs.readFile(filePath, "utf-8").catch((error: unknown) => {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
@@ -520,10 +529,31 @@ export async function appendSessionCorpusText(filePath: string, content: string)
   const existingLines = normalized
     ? (normalized.endsWith("\n") ? normalized.slice(0, -1) : normalized).split("\n").length
     : 0;
-  await appendRegularFile({
-    filePath,
-    content,
-    rejectSymlinkParents: true,
-  });
+  if (assertCurrent) {
+    const assertAppendCurrent = () => {
+      assertCurrent();
+      assertNoSymlinkParentsSync({
+        rootDir: path.parse(path.resolve(filePath)).root,
+        targetPath: path.dirname(filePath),
+        allowMissing: false,
+        allowRootChildSymlink: true,
+        requireDirectories: true,
+        messagePrefix: "Refusing to append under",
+      });
+    };
+    assertAppendCurrent();
+    const directory = await root(path.dirname(filePath), {
+      hardlinks: "reject",
+      symlinks: "reject",
+      mode: 0o600,
+      assertBeforeMutation: assertAppendCurrent,
+    });
+    await directory.append(path.basename(filePath), content, {
+      assertBeforeMutation: assertAppendCurrent,
+      durable: false,
+    });
+  } else {
+    await appendRegularFile({ filePath, content, rejectSymlinkParents: true });
+  }
   return existingLines;
 }

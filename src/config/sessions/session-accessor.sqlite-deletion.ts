@@ -467,6 +467,16 @@ async function withSqliteSessionMutations<T>(
           ]),
         ),
         async () => {
+          // Native actor/initialization and released sibling contracts are selected
+          // before execution; an attempted worker write never falls back here.
+          if (actor || preparedSessionDeletionRequiresNativeTransaction()) {
+            for (const mutations of prepared.values()) {
+              for (const mutation of mutations) {
+                await getNativeSessionDeletionParticipant(mutation)?.nativeMutation?.prepare();
+              }
+            }
+            assertCurrent();
+          }
           let active = true;
           const assertActive = () => {
             if (!active) {
@@ -592,7 +602,7 @@ export function commitSqliteSessionDeletion(sessionKey: string, entry: SessionEn
   }
   for (const mutation of prepared.mutations) {
     transaction.rollback.push(mutation);
-    mutation.commit();
+    (getNativeSessionDeletionParticipant(mutation)?.nativeMutation ?? mutation).commit();
   }
   if (prepared.target.initialization) {
     transaction.initializations.add(prepared.target.initialization);
@@ -660,7 +670,7 @@ function rollbackSessionDeletionCompanions(
   const failures: unknown[] = [];
   for (const mutation of mutations.toReversed()) {
     try {
-      mutation.rollback();
+      (getNativeSessionDeletionParticipant(mutation)?.nativeMutation ?? mutation).rollback();
     } catch (error) {
       failures.push(error);
     }
