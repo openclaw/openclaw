@@ -154,6 +154,7 @@ export async function handleInlineActions(
     provider: params.provider,
     model: params.model,
     contextTokens: params.contextTokens,
+    contextTokenProjection: params.contextTokenProjection,
     isGroup: params.isGroup,
     typing: params.typing,
   };

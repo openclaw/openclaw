@@ -57,11 +57,15 @@ export function acquireSqliteStagingToken(
   ) {
     throw new Error("SQLite snapshot token ownership is unknown");
   }
-  // Legacy callers may supply a parent without a token. Cooperating owners
-  // create the same inode; SQLite arbitrates admission without recreating parents.
-  const existingIdentity = existing ? readIdentity(location, "file") : undefined;
+  if (mode === "create" && !existing) {
+    // Snapshot, plugin capture, and backup owners create before publishing their private directory.
+    fs.writeFileSync(location, "", { flag: "wx", mode: 0o644 });
+  }
+  const tokenExists = existing !== undefined || mode === "create";
+  // Legacy readers may supply a parent without a token; fresh owners never recreate a removed inode.
+  const existingIdentity = tokenExists ? readIdentity(location, "file") : undefined;
   const db = withSqliteNativeOpen(() =>
-    openNodeSqliteDatabase(existing ? resolveExistingSqliteFileUri(location) : location),
+    openNodeSqliteDatabase(tokenExists ? resolveExistingSqliteFileUri(location) : location),
   );
   let tokenIdentity: fs.BigIntStats;
   const kysely = getNodeSqliteKysely(db);

@@ -4,6 +4,7 @@ import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withTempHome } from "../plugin-sdk/test-env.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
 import { createPluginRecord } from "./loader-records.js";
 import { createRuntimeTestRegistry } from "./registry-runtime.test-helpers.js";
 import { createPluginRuntime } from "./runtime/index.js";
@@ -176,6 +177,7 @@ describe("plugin registry SQLite session ownership", () => {
           }),
         ).rejects.toThrow('owned by plugin "harness-owner"');
         expect(runEmbeddedAgent).toHaveBeenCalledOnce();
+        expect(captureOpenClawAgentDatabaseExecution.listIncognito()).toEqual([]);
       } finally {
         closeOpenClawAgentDatabasesForTest();
       }

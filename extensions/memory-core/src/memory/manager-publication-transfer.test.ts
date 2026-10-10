@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import path from "node:path";
 import { serialize } from "node:v8";
 import {
@@ -468,6 +469,77 @@ describe("bounded memory publication transfer", () => {
         )
         .all(),
     ).toEqual([{ path: input.entry.path }]);
+  });
+
+  it("publishes a session delta that keeps retained rows and reports retained drift", async () => {
+    const owner = createOwner();
+    ensureMemorySessionTombstones(owner.db);
+    const [template] = replacement().chunks;
+    assert.ok(template);
+    const turn = (line: number) => ({
+      ...template,
+      startLine: line,
+      endLine: line,
+      text: `turn ${line} Violetmarker`,
+      hash: `turn-${line}`,
+    });
+    const session = (
+      hash: string,
+      chunks: ReturnType<typeof turn>[],
+      retained: ReturnType<typeof turn>[] = [],
+    ): MemorySourceIndexReplacement => ({
+      ...replacement(),
+      source: "sessions",
+      agentId: "main",
+      sessionId: "delta-session",
+      entry: { path: "sessions/main/delta.jsonl", hash, mtimeMs: 1, size: 1 },
+      embeddings: chunks.map(() => []),
+      chunks,
+      retained,
+    });
+    const rows = () =>
+      owner.db
+        .prepare(
+          "SELECT chunk_rowid, start_line, text FROM memory_index_chunks ORDER BY start_line",
+        )
+        .all();
+
+    await owner.replaceSource(
+      session("v1", [turn(1), turn(2)]),
+      () => undefined,
+      async () => true,
+    );
+    const [first] = rows();
+    const delta = session("v2", [turn(3)], [turn(1)]);
+    expect([...memoryPublicationBatches(delta)].flat().map((fragment) => fragment.row)).toEqual([
+      0, 1,
+    ]);
+    await expect(
+      owner.replaceSource(
+        delta,
+        () => undefined,
+        async () => true,
+      ),
+    ).resolves.toMatchObject({ retainedDrift: false });
+    expect(rows()).toEqual([
+      first,
+      expect.objectContaining({ start_line: 3, text: "turn 3 Violetmarker" }),
+    ]);
+    expect(owner.db.prepare("SELECT COUNT(*) AS count FROM memory_index_chunks_fts").get()).toEqual(
+      { count: 2 },
+    );
+
+    owner.db.prepare("DELETE FROM memory_index_chunks WHERE start_line = 1").run();
+    await expect(
+      owner.replaceSource(
+        session("v3", [turn(4)], [turn(1)]),
+        () => undefined,
+        async () => true,
+      ),
+    ).resolves.toMatchObject({ retainedDrift: true });
+    expect(owner.db.prepare("SELECT hash FROM memory_index_sources").all()).toEqual([
+      { hash: "v2" },
+    ]);
   });
 
   it("roundtrips an over-message cache vector while enforcing revision, tombstone, and capacity fences", async () => {

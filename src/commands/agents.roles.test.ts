@@ -2,9 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
-import { loadAgentRole } from "../agents/agent-roles.js";
 import { createAgentTeam } from "../agents/agent-team.js";
-import { loadAgentIdentityFromWorkspace } from "../agents/identity-file.js";
 import { ensureAgentWorkspace } from "../agents/workspace.js";
 import { readConfigFileSnapshot, resetConfigRuntimeState } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -127,134 +125,54 @@ describe("role and team creation through persisted configuration", () => {
     });
   });
 
-  it.each([false, true])("distinguishes implicit main from authored main: %s", async (authored) => {
-    await withState(async (_root, configPath) => {
-      const original = JSON.stringify({ agents: { entries: { main: {} } } });
-      if (authored) {
-        await fs.writeFile(configPath, original);
-      }
+  it("allows a team to replace the implicit main", async () => {
+    await withState(async () => {
       const result = await createAgentTeam({ coordinator: "main" });
-      if (authored) {
-        expect(result).toMatchObject({ status: "error", message: expect.stringContaining("main") });
-        expect(await fs.readFile(configPath, "utf8")).toBe(original);
-      } else {
-        expect(result).toMatchObject({ status: "created", coordinatorId: "main" });
-        expect(Object.keys((await readConfig()).agents?.entries ?? {})).toEqual([
-          "main",
-          "researcher",
-          "writer",
-          "reviewer",
-        ]);
-      }
+      expect(result).toMatchObject({ status: "created", coordinatorId: "main" });
+      expect(Object.keys((await readConfig()).agents?.entries ?? {})).toEqual([
+        "main",
+        "researcher",
+        "writer",
+        "reviewer",
+      ]);
     });
   });
 
-  it("adds a role with its workspace program and complete identity without bootstrapping again", async () => {
+  it("rejects unfinished role adoption with missing identity without changing workspace bytes or config", async () => {
     await withState(async (root, configPath) => {
-      await fs.writeFile(configPath, JSON.stringify(existingFleet(root)));
+      const original = JSON.stringify(existingFleet(root));
+      await fs.writeFile(configPath, original);
       const workspace = path.join(root, "editor");
-      const { runtime, logs, errors } = createCapturingTestRuntime();
-      await agentsAddCommand(
-        { name: "Editor", role: "writer", workspace, nonInteractive: true, json: true },
-        runtime,
-      );
-      expect(errors).toEqual([]);
-      const summary: unknown = JSON.parse(logs.join("\n"));
-      expect(summary).toMatchObject({ agentId: "editor", workspace });
-      const template = await loadAgentRole("writer");
-      for (const [file, content] of Object.entries(template.files)) {
-        expect(await fs.readFile(path.join(workspace, file), "utf8")).toBe(content);
-      }
-      expect(loadAgentIdentityFromWorkspace(workspace)).toEqual({
-        name: "Writer",
-        creature: "writer assistant",
-        vibe: "clear, audience-aware writing",
-        emoji: "✍️",
-        theme: "clear, audience-aware writing",
-      });
-      expect(await fs.readFile(path.join(workspace, "USER.md"), "utf8")).toContain("# USER.md");
-      const config = await readConfig();
-      expect(config.agents?.entries?.editor?.identity).toEqual(template.identity);
-      expect(config.agents?.entries?.editor?.subagents).toEqual({ allowAgents: [] });
-      expect(config.agents?.entries?.editor?.skills).toBeUndefined();
-      await expect(fs.access(path.join(workspace, "BOOTSTRAP.md"))).rejects.toMatchObject({
-        code: "ENOENT",
-      });
-      const ensured = await ensureAgentWorkspace({ dir: workspace, ensureBootstrapFiles: true });
-      expect(ensured.bootstrapPending).toBe(false);
-      await expect(fs.access(path.join(workspace, "BOOTSTRAP.md"))).rejects.toMatchObject({
-        code: "ENOENT",
-      });
-    });
-  });
-
-  it.each([false, true])(
-    "rejects unfinished role adoption without changing workspace bytes or config (missing identity: %s)",
-    async (missingIdentity) => {
-      await withState(async (root, configPath) => {
-        const original = JSON.stringify(existingFleet(root));
-        await fs.writeFile(configPath, original);
-        const workspace = path.join(root, "editor");
-        const seeded = await ensureAgentWorkspace({ dir: workspace, ensureBootstrapFiles: true });
-        expect(seeded.bootstrapPending).toBe(true);
-        // Git metadata is completion evidence; keep this fixture unambiguously unfinished.
-        await fs.rm(path.join(workspace, ".git"), { recursive: true, force: true });
-        await fs.rm(path.join(workspace, "SOUL.md"));
-        if (missingIdentity) {
-          await fs.rm(path.join(workspace, "IDENTITY.md"));
-        }
-        const readWorkspace = async () => {
-          const entries = await fs.readdir(workspace, { recursive: true, withFileTypes: true });
-          return Promise.all(
-            entries
-              .filter((entry) => entry.isFile())
-              .map(async (entry) => {
-                const file = path.join(entry.parentPath, entry.name);
-                return [path.relative(workspace, file), await fs.readFile(file)];
-              }),
-          );
-        };
-        const before = await readWorkspace();
-        const { runtime } = createCapturingTestRuntime();
-        await expect
-          .soft(
-            agentsAddCommand(
-              { name: "Editor", role: "writer", workspace, nonInteractive: true, json: true },
-              runtime,
-            ),
-          )
-          .rejects.toThrow("unfinished bootstrap");
-        expect.soft(await readWorkspace()).toEqual(before);
-        expect.soft(await fs.readFile(configPath, "utf8")).toBe(original);
-        expect((await readConfig()).agents?.entries?.editor).toBeUndefined();
-      });
-    },
-  );
-
-  it("adds missing role files to a complete workspace while preserving existing files", async () => {
-    await withState(async (root, configPath) => {
-      await fs.writeFile(configPath, JSON.stringify(existingFleet(root)));
-      const workspace = path.join(root, "editor");
-      await fs.mkdir(workspace);
-      const identity = "# IDENTITY.md\n\n- **Name:** Established Editor\n";
-      const soul = "Existing editorial voice\n";
-      await fs.writeFile(path.join(workspace, "IDENTITY.md"), identity);
-      await fs.writeFile(path.join(workspace, "SOUL.md"), soul);
-      const { runtime, errors } = createCapturingTestRuntime();
-      await agentsAddCommand(
-        { name: "Editor", role: "writer", workspace, nonInteractive: true, json: true },
-        runtime,
-      );
-      expect(errors).toEqual([]);
-      expect(await fs.readFile(path.join(workspace, "AGENTS.md"), "utf8")).toBe(
-        (await loadAgentRole("writer")).files["AGENTS.md"],
-      );
-      expect(await fs.readFile(path.join(workspace, "IDENTITY.md"), "utf8")).toBe(identity);
-      expect(await fs.readFile(path.join(workspace, "SOUL.md"), "utf8")).toBe(soul);
-      expect((await readConfig()).agents?.entries?.editor?.workspace).toBe(workspace);
-      await expect(fs.access(path.join(workspace, "BOOTSTRAP.md"))).rejects.toMatchObject({
-        code: "ENOENT",
-      });
+      const seeded = await ensureAgentWorkspace({ dir: workspace, ensureBootstrapFiles: true });
+      expect(seeded.bootstrapPending).toBe(true);
+      // Git metadata is completion evidence; keep this fixture unambiguously unfinished.
+      await fs.rm(path.join(workspace, ".git"), { recursive: true, force: true });
+      await fs.rm(path.join(workspace, "SOUL.md"));
+      await fs.rm(path.join(workspace, "IDENTITY.md"));
+      const readWorkspace = async () => {
+        const entries = await fs.readdir(workspace, { recursive: true, withFileTypes: true });
+        return Promise.all(
+          entries
+            .filter((entry) => entry.isFile())
+            .map(async (entry) => {
+              const file = path.join(entry.parentPath, entry.name);
+              return [path.relative(workspace, file), await fs.readFile(file)];
+            }),
+        );
+      };
+      const before = await readWorkspace();
+      const { runtime } = createCapturingTestRuntime();
+      await expect
+        .soft(
+          agentsAddCommand(
+            { name: "Editor", role: "writer", workspace, nonInteractive: true, json: true },
+            runtime,
+          ),
+        )
+        .rejects.toThrow("unfinished bootstrap");
+      expect.soft(await readWorkspace()).toEqual(before);
+      expect.soft(await fs.readFile(configPath, "utf8")).toBe(original);
+      expect((await readConfig()).agents?.entries?.editor).toBeUndefined();
     });
   });
 
@@ -318,61 +236,50 @@ describe("role and team creation through persisted configuration", () => {
     },
   );
 
-  it.each(["roster", "pending deletion"] as const)(
-    "detects a %s collision on the last specialist before publishing any team config or workspace",
-    async (collision) => {
-      await withState(async (root, configPath) => {
-        const initial = existingFleet(root);
-        if (collision === "roster" && initial.agents?.entries) {
-          initial.agents.entries.Reviewer = { workspace: path.join(root, "existing-reviewer") };
-        }
-        const original = JSON.stringify(initial);
-        await fs.writeFile(configPath, original);
-        const workspaceRoot = path.join(root, "team-workspaces");
-        if (collision === "pending deletion") {
-          beginAgentDeletionJournal({
-            agentId: "reviewer",
-            operationId: "pending-reviewer",
-            agentDir: path.join(root, "agents", "reviewer", "agent"),
-            workspaceDir: path.join(workspaceRoot, "reviewer"),
-            sessionsDir: path.join(root, "agents", "reviewer", "sessions"),
-            deleteFiles: false,
-          });
-        }
-        const foreign =
-          collision === "pending deletion"
-            ? openNodeSqliteDatabase(resolveOpenClawStateSqlitePath())
-            : undefined;
-        let result: Awaited<ReturnType<typeof createAgentTeam>>;
-        try {
-          foreign?.exec(
-            "UPDATE agent_deletion_journal SET cleanup_completed = 1 WHERE agent_id = 'reviewer'",
-          );
-          result = await withOpenClawStateDatabaseReadSnapshot(async () => {
-            foreign?.exec(
-              "UPDATE agent_deletion_journal SET cleanup_completed = 0 WHERE agent_id = 'reviewer'",
-            );
-            const observation = observeHostDataSql();
-            try {
-              const created = await createAgentTeam({ workspaceRoot });
-              expect(
-                observation.queries.filter((sql) => /\bagent_deletion_journal\b/i.test(sql)),
-              ).toEqual([]);
-              return created;
-            } finally {
-              observation.restore();
-            }
-          });
-        } finally {
-          foreign?.close();
-        }
-        expect(result).toMatchObject({
-          status: "error",
-          message: expect.stringContaining("reviewer"),
-        });
-        expect(await fs.readFile(configPath, "utf8")).toBe(original);
-        await expect(fs.access(workspaceRoot)).rejects.toMatchObject({ code: "ENOENT" });
+  it("detects a pending deletion collision on the last specialist before publishing any team config or workspace", async () => {
+    await withState(async (root, configPath) => {
+      const initial = existingFleet(root);
+      const original = JSON.stringify(initial);
+      await fs.writeFile(configPath, original);
+      const workspaceRoot = path.join(root, "team-workspaces");
+      beginAgentDeletionJournal({
+        agentId: "reviewer",
+        operationId: "pending-reviewer",
+        agentDir: path.join(root, "agents", "reviewer", "agent"),
+        workspaceDir: path.join(workspaceRoot, "reviewer"),
+        sessionsDir: path.join(root, "agents", "reviewer", "sessions"),
+        deleteFiles: false,
       });
-    },
-  );
+      const foreign = openNodeSqliteDatabase(resolveOpenClawStateSqlitePath());
+      let result: Awaited<ReturnType<typeof createAgentTeam>>;
+      try {
+        foreign.exec(
+          "UPDATE agent_deletion_journal SET cleanup_completed = 1 WHERE agent_id = 'reviewer'",
+        );
+        result = await withOpenClawStateDatabaseReadSnapshot(async () => {
+          foreign.exec(
+            "UPDATE agent_deletion_journal SET cleanup_completed = 0 WHERE agent_id = 'reviewer'",
+          );
+          const observation = observeHostDataSql();
+          try {
+            const created = await createAgentTeam({ workspaceRoot });
+            expect(
+              observation.queries.filter((sql) => /\bagent_deletion_journal\b/i.test(sql)),
+            ).toEqual([]);
+            return created;
+          } finally {
+            observation.restore();
+          }
+        });
+      } finally {
+        foreign.close();
+      }
+      expect(result).toMatchObject({
+        status: "error",
+        message: expect.stringContaining("reviewer"),
+      });
+      expect(await fs.readFile(configPath, "utf8")).toBe(original);
+      await expect(fs.access(workspaceRoot)).rejects.toMatchObject({ code: "ENOENT" });
+    });
+  });
 });

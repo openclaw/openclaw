@@ -1,4 +1,3 @@
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { openOpenClawAgentDatabaseReadOnly } from "openclaw/plugin-sdk/memory-core-host-engine-knn";
 import {
   readCuratedMemoryTriggerCandidates,
@@ -24,7 +23,11 @@ import {
   type MemoryRecallQuery,
 } from "./manager-retrieval-read.js";
 import { searchChunksByEmbedding } from "./manager-search-vector.js";
-import { searchKeyword, searchPathKeyword } from "./manager-search.js";
+import {
+  searchKeywordWithFallback,
+  type searchKeyword,
+  type searchPathKeyword,
+} from "./manager-search.js";
 import { assertMemoryShadowIdentity, type MemoryShadowConnection } from "./manager-shadow-task.js";
 import { loadMemorySourceFileState } from "./manager-source-state.js";
 import { inspectMemoryIndexPresenceInWorker } from "./manager-status-presence.js";
@@ -179,12 +182,7 @@ serveWorkerTasks(async (input): Promise<MemorySearchWorkerOutput> => {
       return { kind: "vector", rows: await searchChunksByEmbedding({ ...request.query, db }) };
     }
     const indexState = request.includeIndexState ? readMemoryRetrievalIndexState(db) : undefined;
-    const body = await searchKeyword({ ...request.query.body, db })
-      .then((rows) => ({ rows }))
-      .catch((error: unknown) => ({ rows: [], error: formatErrorMessage(error) }));
-    const path = await searchPathKeyword({ ...request.query.path, db })
-      .then((rows) => ({ rows }))
-      .catch((error: unknown) => ({ rows: [], error: formatErrorMessage(error) }));
+    const { body, path } = await searchKeywordWithFallback({ ...request.query, db });
     const recallData = request.query.includeRecallMetadata
       ? readMemoryRecallData(db, {
           candidates: [...body.rows, ...path.rows],

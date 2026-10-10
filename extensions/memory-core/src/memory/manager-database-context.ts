@@ -50,6 +50,7 @@ import type {
 import {
   memoryEmbeddingCacheBatches,
   memoryPublicationBatches,
+  memoryPublicationHeader,
 } from "./manager-publication-transfer.js";
 import {
   assertMemoryShadowIdentity,
@@ -397,7 +398,7 @@ export class MemoryIndexDatabase {
     return undefined;
   }
 
-  read<Key extends "source.hash" | "cache.read" | "session.current">(
+  read<Key extends "source.hash" | "source.chunks" | "cache.read" | "session.current">(
     command: { type: Key; input: MemoryPublicationOperations[Key]["input"] },
     assertCurrent: () => void,
   ): Promise<MemoryPublicationOperations[Key]["output"]> {
@@ -529,10 +530,10 @@ export class MemoryIndexDatabase {
     const run = () =>
       this.runPublication(async (scope) => {
         const operation = randomUUID();
-        const { chunks, embeddings: _embeddings, ...header } = replacement;
+        const { header, rows } = memoryPublicationHeader(replacement);
         await scope.execute({
           type: "stage.start",
-          input: { operation, header, rows: chunks.length },
+          input: { operation, header, rows },
         });
         for (const fragments of memoryPublicationBatches(replacement)) {
           await scope.execute({ type: "stage.append", input: { operation, fragments } });

@@ -257,29 +257,41 @@ function logSlowTransactionHold(params: {
   });
 }
 
-function logSlowTransactionStep(params: {
-  beginAdmission?: SqliteBeginAdmissionDiagnostics;
-  db: DatabaseSync;
-  elapsedMs: number;
-  options?: SqliteTransactionOptions;
-  step: SqliteTransactionStep;
-}): void {
-  if (params.elapsedMs < slowBusyWaitThresholdMs(params.options)) {
+function logTransactionStep(
+  params: {
+    beginAdmission?: SqliteBeginAdmissionDiagnostics;
+    db: DatabaseSync;
+    elapsedMs: number;
+    options?: SqliteTransactionOptions;
+    step: SqliteTransactionStep;
+  },
+  failure?: { error: unknown },
+): void {
+  if (!failure && params.elapsedMs < slowBusyWaitThresholdMs(params.options)) {
     return;
   }
-  (params.options?.logger ?? transactionLog).warn("slow SQLite transaction step", {
-    async: false,
-    ...(params.options?.busyTimeoutMs !== undefined
-      ? { busyTimeoutMs: params.options.busyTimeoutMs }
-      : {}),
-    ...transactionDiagnosticLabels(params.db, params.options),
-    elapsedMs: params.elapsedMs,
-    isMainThread,
-    pid: process.pid,
-    step: params.step,
-    threadId,
-    ...(params.beginAdmission ? { beginAdmission: { ...params.beginAdmission } } : {}),
-  });
+  const sqliteErrcode = failure ? sqliteExtendedResultCode(failure.error) : undefined;
+  const sqlitePrimaryCode = failure ? sqlitePrimaryResultCode(failure.error) : undefined;
+  (params.options?.logger ?? transactionLog).warn(
+    failure ? "SQLite transaction lock wait failed" : "slow SQLite transaction step",
+    {
+      async: false,
+      ...(params.options?.busyTimeoutMs !== undefined
+        ? { busyTimeoutMs: params.options.busyTimeoutMs }
+        : {}),
+      ...transactionDiagnosticLabels(params.db, params.options),
+      ...(failure ? { code: sqliteErrorCode(failure.error) } : {}),
+      elapsedMs: params.elapsedMs,
+      ...(failure ? { failureKind: "lock-contention" } : {}),
+      isMainThread,
+      pid: process.pid,
+      ...(sqliteErrcode !== undefined ? { sqliteErrcode } : {}),
+      ...(sqlitePrimaryCode !== undefined ? { sqlitePrimaryCode } : {}),
+      step: params.step,
+      threadId,
+      ...(params.beginAdmission ? { beginAdmission: { ...params.beginAdmission } } : {}),
+    },
+  );
 }
 
 function execTimedTransactionStep(params: {
@@ -300,7 +312,7 @@ function execTimedTransactionStep(params: {
       params.db.exec(params.sql);
     }
     const elapsedMs = Date.now() - startedAt;
-    logSlowTransactionStep({
+    logTransactionStep({
       beginAdmission,
       db: params.db,
       elapsedMs,
@@ -315,25 +327,10 @@ function execTimedTransactionStep(params: {
       shouldReportSqliteLockFailure(params.db) &&
       !(params.step === "begin" && params.options?.beginLockFailureReporting === "suppress")
     ) {
-      const sqliteErrcode = sqliteExtendedResultCode(error);
-      const sqlitePrimaryCode = sqlitePrimaryResultCode(error);
-      (params.options?.logger ?? transactionLog).warn("SQLite transaction lock wait failed", {
-        async: false,
-        ...(params.options?.busyTimeoutMs !== undefined
-          ? { busyTimeoutMs: params.options.busyTimeoutMs }
-          : {}),
-        ...transactionDiagnosticLabels(params.db, params.options),
-        code: sqliteErrorCode(error),
-        elapsedMs,
-        failureKind: "lock-contention",
-        isMainThread,
-        pid: process.pid,
-        ...(sqliteErrcode !== undefined ? { sqliteErrcode } : {}),
-        ...(sqlitePrimaryCode !== undefined ? { sqlitePrimaryCode } : {}),
-        step: params.step,
-        threadId,
-        ...(beginAdmission ? { beginAdmission: { ...beginAdmission } } : {}),
-      });
+      logTransactionStep(
+        { beginAdmission, db: params.db, elapsedMs, options: params.options, step: params.step },
+        { error },
+      );
     }
     throw error;
   }
@@ -425,6 +422,32 @@ function runSqliteTransactionSync<T>(
     sql: mode === "immediate" ? "BEGIN IMMEDIATE" : "BEGIN",
     step: "begin",
   });
+  return settleSqliteTransactionSync(db, operation, mode, beginMs, prepareMs, options);
+}
+
+/** Settle a reservation acquired by the closed, multi-database worker fence. */
+export function runSqliteReservedTransactionSync<T>(
+  db: DatabaseSync,
+  operation: () => T,
+  options: SqliteTransactionOptions,
+): T {
+  assertTransactionUsable(db);
+  if (isMainThread || !db.isTransaction) {
+    throw new Error("SQLite reserved settlement requires a worker-owned transaction");
+  }
+  return settleSqliteTransactionSync(db, operation, "immediate", 0, undefined, options, true);
+}
+
+function settleSqliteTransactionSync<T>(
+  db: TransactionDatabase,
+  operation: () => T,
+  mode: SqliteTransactionMode,
+  beginMs: number,
+  prepareMs: number | undefined,
+  options: SqliteTransactionOptions | undefined,
+  reservedSourceFence = false,
+): T {
+  const timing = currentSqliteOperationTiming();
   const transactionStartedAt = Date.now();
   const admissionWaitBefore = timing?.hostAdmissionWaitMs ?? 0;
   let commitMs = 0;
@@ -438,8 +461,8 @@ function runSqliteTransactionSync<T>(
   };
   let commitStarted = false;
   try {
-    // Share the admitted schema with kernels inside the transaction's rollback protection.
-    const result = runSqliteReadOperationSync(db, operation);
+    // Share admitted schema inside rollback protection unless the source fence already owns it.
+    const result = reservedSourceFence ? operation() : runSqliteReadOperationSync(db, operation);
     assertSyncTransactionResult(result);
     assertTransactionUsable(db);
     commitStarted = true;

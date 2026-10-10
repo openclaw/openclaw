@@ -22,6 +22,7 @@ export type UsageLike = {
   cacheRead?: number;
   cacheWrite?: number;
   cacheWrite1h?: number;
+  cacheTelemetry?: Usage["cacheTelemetry"];
   contextUsage?: ContextUsage;
   total?: number;
   // Common alternates across providers/SDKs.
@@ -70,6 +71,7 @@ export type NormalizedUsage = {
   cacheRead?: number;
   cacheWrite?: number;
   cacheWrite1h?: number;
+  cacheTelemetry?: Usage["cacheTelemetry"];
   contextUsage?: ContextUsage;
   reasoningTokens?: number;
   total?: number;
@@ -284,6 +286,9 @@ export function normalizeUsage(raw?: UsageLike | null): NormalizedUsage | undefi
     cacheRead,
     cacheWrite,
     ...(cacheWrite1h !== undefined ? { cacheWrite1h } : {}),
+    ...(raw.cacheTelemetry?.state === "available" || raw.cacheTelemetry?.state === "unavailable"
+      ? { cacheTelemetry: { state: raw.cacheTelemetry.state } }
+      : {}),
     ...(cost ? { cost } : {}),
     ...(contextUsage ? { contextUsage } : {}),
     ...(reasoningTokens !== undefined ? { reasoningTokens } : {}),

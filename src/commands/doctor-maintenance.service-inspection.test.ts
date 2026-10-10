@@ -13,6 +13,12 @@ import { defaultRuntime } from "../runtime.js";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import { beginDoctorMaintenance } from "./doctor-maintenance.js";
 
+// This fixture owns a user unit only; the runner's system units are unrelated.
+vi.mock("../daemon/systemd-unit-load-paths.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../daemon/systemd-unit-load-paths.js")>()),
+  DEFAULT_SYSTEMD_SYSTEM_UNIT_DIRS: [],
+}));
+
 // These diagnostics model unavailable transports, not the runner's real user manager.
 vi.mock("../daemon/systemd-peer-native.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../daemon/systemd-peer-native.js")>()),

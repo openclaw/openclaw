@@ -31,7 +31,7 @@ import type { GatewayRequestHandlers } from "./types.js";
 import { preparePersonalModelAccountSelection } from "./users-model-account-access.js";
 import { assertValidParams } from "./validation.js";
 
-// Ordinary reads retain inventory; explicit refresh and lifecycle changes own discovery.
+// Native catalog demand precedes projection; provider inventory keeps its refresh lifecycle.
 export const modelsHandlers: GatewayRequestHandlers = {
   "models.list": createPreparedReadHandler(
     async (options) => {
@@ -109,10 +109,15 @@ export const modelsHandlers: GatewayRequestHandlers = {
         await ensureGatewayPreparedModelRuntimeReady({ agentId: resolved.agentId });
         assertCurrent();
         if (params.refresh !== true) {
-          getPublishedPreparedModelCatalogOwnerSnapshot({
+          const owner = getPublishedPreparedModelCatalogOwnerSnapshot({
             agentId: resolved.agentId,
             config: cfg,
-          })?.recheckNativeLogin?.();
+          });
+          owner?.recheckNativeLogin?.();
+          if (!params.preparedOnly && params.view !== "provider-config") {
+            await owner?.loadNativeModelCatalog?.();
+            assertCurrent();
+          }
         }
         return {
           assertCurrent,

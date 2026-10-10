@@ -73,6 +73,7 @@ final class NativeGatewayWebSocketFixture: @unchecked Sendable {
         let connection: NWConnection
         var buffer = Data()
         var phase = Phase.handshake
+        var isStalled = false
     }
 
     private static let websocketGUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
@@ -200,6 +201,10 @@ final class NativeGatewayWebSocketFixture: @unchecked Sendable {
         self.queue.sync { self.close(index) }
     }
 
+    func stallConnection(at index: Int) {
+        self.queue.sync { self.clients[index]?.isStalled = true }
+    }
+
     func stop() {
         self.queue.sync {
             guard !self.stopped else { return }
@@ -237,12 +242,13 @@ final class NativeGatewayWebSocketFixture: @unchecked Sendable {
     }
 
     private func receive(_ index: Int) {
-        guard let client = self.clients[index] else { return }
+        guard let client = self.clients[index], !client.isStalled else { return }
         client.connection.receive(
             minimumIncompleteLength: 1,
             maximumLength: 65536)
         { [weak self] data, _, complete, error in
-            guard let self, var client = self.clients[index] else { return }
+            // A receive already in flight must not answer pings after the test stalls this socket.
+            guard let self, var client = self.clients[index], !client.isStalled else { return }
             if let data {
                 client.buffer.append(data)
                 self.clients[index] = client
@@ -382,6 +388,7 @@ final class NativeGatewayWebSocketFixture: @unchecked Sendable {
 
     private func processFrames(_ index: Int) {
         while var client = self.clients[index],
+              !client.isStalled,
               let frame = Self.takeFrame(from: &client.buffer)
         {
             self.clients[index] = client

@@ -429,7 +429,6 @@ type QaNativeCoverageEvidenceKind = "script" | "vitest" | "playwright";
 type QaScorecardEvidenceKind = QaNativeCoverageEvidenceKind | "qa-scenario";
 export type QaScorecardEvidenceMode = z.infer<typeof qaScorecardEvidenceModeSchema>;
 export type QaScorecardChannelDriver = z.infer<typeof qaScorecardChannelDriverSchema>;
-type QaMaturityScoreKey = (typeof QA_MATURITY_SCORE_KEYS)[number];
 export type QaMaturityScoreObject = z.infer<typeof qaMaturityScoreObjectSchema>;
 export type QaMaturityDecision = z.infer<
   | typeof qaMaturityScoreDecisionSchema
@@ -724,14 +723,6 @@ export function qaMaturityFamilyOrder(surfaces: readonly QaMaturityTaxonomySurfa
   return [...new Set(surfaces.map((surface) => surface.family))];
 }
 
-function averageSurfaceScore(rows: readonly QaMaturityScoreSurface[], key: QaMaturityScoreKey) {
-  return Math.round(rows.reduce((sum, row) => sum + row.scores[key].score, 0) / rows.length);
-}
-
-function averageCategoryScore(rows: readonly QaMaturityScoreCategory[], key: QaMaturityScoreKey) {
-  return Math.round(rows.reduce((sum, row) => sum + row[key].score, 0) / rows.length);
-}
-
 export function qaMaturityCoverageCategoryKey(surfaceId: string, categoryName: string) {
   return `${surfaceId}\u0000${categoryName}`;
 }
@@ -852,18 +843,16 @@ function validateQaMaturityScoresAgainstTaxonomy(params: {
   }
 
   const rollups = params.scores.rollups;
+  const surfaceScores = scoreSurfaces.map((surface) => surface.scores);
   for (const key of QA_MATURITY_SCORE_KEYS) {
-    const expectedSurfaceAverage = averageSurfaceScore(scoreSurfaces, key);
-    if (rollups.surface_average[key].score !== expectedSurfaceAverage) {
-      throw new Error(
-        `${scoresPath}.rollups.surface_average.${key}.score must be ${expectedSurfaceAverage}`,
-      );
-    }
-    const expectedCategoryAverage = averageCategoryScore(allScoreCategories, key);
-    if (rollups.category_average[key].score !== expectedCategoryAverage) {
-      throw new Error(
-        `${scoresPath}.rollups.category_average.${key}.score must be ${expectedCategoryAverage}`,
-      );
+    for (const [kind, rows] of [
+      ["surface_average", surfaceScores],
+      ["category_average", allScoreCategories],
+    ] as const) {
+      const expected = Math.round(rows.reduce((sum, row) => sum + row[key].score, 0) / rows.length);
+      if (rollups[kind][key].score !== expected) {
+        throw new Error(`${scoresPath}.rollups.${kind}.${key}.score must be ${expected}`);
+      }
     }
   }
   return warnings;
@@ -1070,19 +1059,15 @@ function buildQaScorecardTaxonomyReport(params: {
       };
     }) ?? [];
 
-  const categoryIdsWithInventory = new Set<string>();
-  for (const coverageId of [
-    ...primaryInventoryRefsByCoverageId.keys(),
-    ...secondaryInventoryRefsByCoverageId.keys(),
-  ]) {
-    const categoryId = maturityRefs.coverageIds.get(coverageId);
-    if (categoryId) {
-      categoryIdsWithInventory.add(categoryId);
-    }
-  }
   const relevantCategoryIds = uniqueSorted([
     ...profileCategoryIdsByCategoryId.keys(),
-    ...categoryIdsWithInventory,
+    ...[
+      ...primaryInventoryRefsByCoverageId.keys(),
+      ...secondaryInventoryRefsByCoverageId.keys(),
+    ].flatMap((coverageId) => {
+      const categoryId = maturityRefs.coverageIds.get(coverageId);
+      return categoryId ? [categoryId] : [];
+    }),
   ]);
 
   const requiredCoverageIds = new Set<string>();

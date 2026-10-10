@@ -140,8 +140,8 @@ it("keeps a warmed search reader through discovery and retires it through its ca
         const before = searchSessionTranscriptsReadOnlySync(request, database);
         expect(before.revision).toBeDefined();
         const changed = await reader.owner.searchTranscripts(request, async () => {
-          await broker.runOperation(store!, (scope) =>
-            scope.execute({
+          await broker.runOperation(store!, (operation) =>
+            operation.execute({
               type: "writeRows",
               input: {
                 sql: "UPDATE schema_meta SET updated_at = 2 WHERE meta_key = 'primary'",

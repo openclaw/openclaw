@@ -27,6 +27,7 @@ import {
   adoptOpenClawAgentDatabaseValidation,
   captureOpenClawAgentDatabaseAdmissionPublication,
   captureOpenClawAgentDatabaseAliasPublication,
+  captureOpenClawAgentDatabaseReadValidation,
   captureOpenClawAgentDatabaseValidationTransfer,
   clearOpenClawAgentDatabaseValidationCache,
   getOpenClawAgentDatabaseValidation,
@@ -72,6 +73,29 @@ async function withReceiptFixture(
 }
 
 describe("canonical proof on physical database validation", () => {
+  it("shares restart reader proof with admission through a directory symlink", async () => {
+    await withReceiptFixture(true, (database) => {
+      const aliasDir = path.join(path.dirname(database.path), "reader-alias");
+      fs.symlinkSync(path.dirname(database.path), aliasDir, "junction");
+      const alias = {
+        agentId: database.agentId,
+        path: path.join(aliasDir, path.basename(database.path)),
+      };
+      const reader = captureOpenClawAgentDatabaseReadValidation(alias);
+      expect(reader).toBeDefined();
+      const receipt = getOpenClawAgentDatabaseValidation(database)!;
+      const publish = captureOpenClawAgentDatabaseAdmissionPublication(alias);
+      publish(receipt.identity, structuredClone(receipt));
+      expect(() => reader!.assertCurrent()).not.toThrow();
+      expect(getOpenClawAgentDatabaseValidationForTransfer(alias)).toBe(receipt);
+      expect(alias.path).toContain("reader-alias");
+      invalidateOpenClawAgentDatabaseValidation(database.path);
+      expect(() => reader!.assertCurrent()).toThrow(
+        "Session reader validation is no longer current",
+      );
+    });
+  });
+
   it("shares admitted schema without marker queries while retaining explicit revocation", async () => {
     await withReceiptFixture(false, (database, options) => {
       const observe = (db: DatabaseSync) =>
@@ -176,9 +200,12 @@ describe("canonical proof on physical database validation", () => {
             ),
           ).toBe(true);
 
-          // Connection-local TEMP tables do not revoke physical MAIN admission.
+          // TEMP changes preserve MAIN admission; durable DDL still revokes it.
           reader.database.db.exec("CREATE TEMP TABLE local_fixture(value TEXT)");
           expect(adoptOpenClawAgentDatabaseSchema(database)).toBe(true);
+          database.db.exec("CREATE TABLE main.local_fixture(value TEXT)");
+          expect(adoptOpenClawAgentDatabaseSchema(database)).toBe(false);
+          refreshOpenClawAgentDatabaseSchema(database, () => {});
           expect(hasOpenClawAgentReadOnlySchema(reader.database)).toBe(true);
           expect(adoptOpenClawAgentDatabaseSchema(database, true, true)).toBe(true);
 
@@ -423,7 +450,7 @@ describe("canonical proof on physical database validation", () => {
             if (transition === "schema-revocation" || transition === "optional-schema-revocation") {
               invalidateOpenClawAgentDatabaseSchema(reopened);
             } else if (transition === "local-ddl" || transition === "optional-local-ddl") {
-              reopened.db.exec("CREATE TABLE revoked_promotion(value TEXT)");
+              reopened.db.exec("CREATE TABLE main.revoked_promotion(value TEXT)");
             }
             if (transition === "replacement") {
               expect(promoted.identity).not.toBe(received.identity);

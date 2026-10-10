@@ -115,6 +115,36 @@ describe("new-session model metadata lifecycle", () => {
     control.reset();
   });
 
+  it("keeps a personal account when Default uses the role-permitted provider rather than the agent default", async () => {
+    const { control, neutral, connected, preview, draw, chooseAccount, agent } =
+      retainedAccountDraft();
+    agent.model.primary = "openai/other";
+    const policy = { restricted: true as const, defaultModel: "anthropic/model" };
+    neutral.modelSelectionPolicy = policy;
+    connected.modelSelectionPolicy = policy;
+    const alternate = {
+      id: "alternate",
+      name: "Alternate",
+      provider: "anthropic",
+      available: true,
+    };
+    neutral.models.push(alternate);
+    connected.models.push(alternate);
+    const { completion } = await chooseAccount();
+    preview.resolve(connected);
+    await completion;
+    draw()
+      .querySelector<HTMLButtonElement>('[data-chat-model-option="anthropic/alternate"]')!
+      .click();
+    expect(control.modelForSubmission()).toBe(
+      "anthropic/alternate@personal:person-a:anthropic:one",
+    );
+    draw().querySelector<HTMLButtonElement>('[data-chat-model-default="true"]')!.click();
+    expect(control.modelForSubmission()).toBe("anthropic/model@personal:person-a:anthropic:one");
+    expect(control.accountSelectionReady()).toBe(true);
+    control.reset();
+  });
+
   it("keeps a deliberate provider switch when leaving a personal account for a cached catalog", async () => {
     const {
       context,
