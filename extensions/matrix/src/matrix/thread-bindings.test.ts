@@ -904,8 +904,14 @@ describe("matrix thread bindings", () => {
         trackedManagers.delete(manager);
         expect(reads).toBe(failure === "unknown-write" ? 1 : 2);
         expect(
+          getSessionBindingService().getCapabilities(currentThreadConversation()),
+        ).toMatchObject({
+          adapterAvailable: false,
+        });
+        expect(
           await getSessionBindingService().inspectByConversationAsync(currentThreadConversation()),
-        ).toMatchObject({ status: "unavailable" });
+        ).toMatchObject({ binding: null });
+        expect(manager.listBindings()).toEqual([]);
       } finally {
         release.resolve();
         open.mockRestore();
