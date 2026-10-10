@@ -8,11 +8,13 @@ import {
 } from "../../../../packages/ai/src/provider-types.js";
 import { createSolidPngBuffer } from "../../../../test/helpers/image-fixtures.js";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
+import { buildPersistedMediaImageLayout } from "../../../auto-reply/reply/get-reply-run-helpers.js";
 import { buildForkedChildTranscriptEvents } from "../../../config/sessions/session-accessor.sqlite-parent-fork.js";
 import type { OpenClawConfig } from "../../../config/types.js";
 import * as fsSafe from "../../../infra/fs-safe.js";
 import { prepareFileContextFromMedia } from "../../../media-understanding/file-context.js";
 import { attachRuntimePromptMediaFacts, type MediaFact } from "../../../media/media-facts.js";
+import { readRuntimePromptImageFactIndexes } from "../../../media/runtime-prompt-image-provenance.js";
 import { saveMediaBuffer } from "../../../media/store.js";
 import { buildPersistedUserTurnMessage } from "../../../sessions/user-turn-transcript.js";
 import { captureEnv, setTestEnvValue } from "../../../test-utils/env.js";
@@ -24,11 +26,11 @@ import {
 } from "../../test-helpers/agent-message-fixtures.js";
 import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
 import {
-  installModelPromptTransform,
+  installModelPromptProjection,
   normalizeMessagesForLlmBoundary,
 } from "./attempt-llm-boundary.js";
 import { installHistoryImagePruneContextTransform } from "./history-image-prune.js";
-import { materializeProviderContext } from "./images.js";
+import { detectAndLoadPromptImages, materializeProviderContext } from "./images.js";
 import { wrapStreamFnWithMessageTransform } from "./message-transform-stream-wrapper.js";
 
 const extractPdf = vi.hoisted(() => vi.fn());
@@ -384,14 +386,19 @@ describe("native document replay", () => {
         maxChars: 60000,
         assertCurrent: () => {},
       });
-      const restore = installModelPromptTransform({
+      const restore = installModelPromptProjection({
         session: { agent: f.agent },
         transcriptPrompt: "caption",
         modelPrompt: "caption\n\n" + live.text,
         shouldCapturePrompt: () => true,
       });
       onTestFinished(restore);
-      await f.agent.prompt(user(media, "caption"));
+      const currentUser = user(media, "caption");
+      f.userTranscriptContexts.push({
+        runtimeMessage: currentUser,
+        transcriptMessage: structuredClone(currentUser),
+      });
+      await f.agent.prompt(currentUser);
       expect(JSON.stringify(f.requests[0]).match(/live document body/g)).toHaveLength(1);
       restore();
       const steered = attachRuntimePromptMediaFacts(
@@ -421,6 +428,92 @@ describe("native document replay", () => {
       ];
       expect(JSON.stringify((await f.project(history))[0])).not.toContain("live document body");
       expect(JSON.stringify(history[0])).toContain("brief.txt");
+    },
+  );
+
+  it.each(["text", "pdf", "missing-pdf", "live-pdf", "retry-pdf", "retry-with-photo"] as const)(
+    "replays recorded text without losing document recovery (%s)",
+    async (kind) => {
+      const f = fixture();
+      const pdf = kind !== "text";
+      const withPhoto = kind === "retry-with-photo";
+      const media: MediaFact[] = [
+        {
+          ...(await f.file(
+            pdf ? "frozen.pdf" : "frozen.txt",
+            pdf ? "%PDF-1.7\n" : "changed file text",
+            pdf ? "application/pdf" : "text/plain",
+          )),
+          hydrationSuppressed: pdf,
+        },
+      ];
+      if (withPhoto) {
+        media.push(await f.file("photo.png", Buffer.from(PNG, "base64"), "image/png"));
+      }
+      const pages = [PAGE, SECOND_PAGE];
+      const pageImages = pages.map((data) => ({
+        type: "image" as const,
+        data,
+        mimeType: "image/png",
+      }));
+      extractPdf.mockResolvedValue({ text: "", images: pageImages });
+      if (kind === "missing-pdf") {
+        await fs.unlink(media[0]!.path!);
+      }
+      const suppliedImages =
+        kind === "live-pdf"
+          ? pageImages
+          : withPhoto
+            ? [{ type: "image" as const, data: PNG, mimeType: "image/png" }]
+            : [];
+      const canonical = buildPersistedUserTurnMessage({
+        text: "caption",
+        media,
+        timestamp: 1,
+        mediaImageLayout: buildPersistedMediaImageLayout({
+          ctx: {},
+          media,
+          ctxMediaCount: media.length,
+          imageOrder: suppliedImages.map(() => "inline"),
+          imageSourceIndexes: kind === "live-pdf" ? [0, 0] : withPhoto ? [1] : [],
+        }),
+      });
+      const canonicalBytes = JSON.stringify(canonical);
+      const prepared = await detectAndLoadPromptImages({
+        prompt: "",
+        workspaceDir: f.workspaceDir,
+        workspaceOnly: true,
+        model,
+        userTurnTranscriptRecorder: { resolveMessage: async () => canonical },
+        existingImages: suppliedImages,
+      });
+      const message = castAgentMessage({
+        ...canonical,
+        content: [{ type: "text", text: "caption" }, ...prepared.images],
+        __openclaw: {
+          ...canonical["__openclaw"],
+          mediaImageBlockFactIndexes: readRuntimePromptImageFactIndexes(prepared.images),
+          modelPromptProjection: { version: 1, text: "caption\n\nfrozen document body" },
+        },
+      });
+      if (kind === "live-pdf" || kind.startsWith("retry")) {
+        // Suppression can correlate a rebuilt/canonical row without any PDF page bytes.
+        f.userTranscriptContexts.push({ runtimeMessage: message, transcriptMessage: message });
+      }
+      const content = await f.replay([message, assistant()]);
+      const text = JSON.stringify(content);
+      expect(text.match(/frozen document body/g)).toHaveLength(1);
+      expect(text).not.toContain("changed file text");
+      expect(content.flatMap((part) => (part.type === "image" ? [part.data] : []))).toEqual(
+        pdf && kind !== "missing-pdf" ? [...pages, ...(withPhoto ? [PNG] : [])] : [],
+      );
+      if (kind === "missing-pdf") {
+        expect(text).toContain("could not be read");
+      }
+      expect(extractPdf).toHaveBeenCalledTimes(
+        pdf && kind !== "missing-pdf" && kind !== "live-pdf" ? 1 : 0,
+      );
+      expect(JSON.stringify(canonical)).toBe(canonicalBytes);
     },
   );
 

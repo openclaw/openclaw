@@ -202,24 +202,13 @@ export function listCrossChannelSchemaSupportedMessageActions(
     channel?: string;
   },
 ): ChannelMessageActionName[] {
-  const channelId = resolveMessageActionDiscoveryChannelId(params.channel);
-  if (!channelId) {
-    return [];
-  }
-  const pluginActions = resolveCurrentChannelMessageToolDiscoveryAdapter(
-    channelId,
-    params.preparedMessageToolCatalog,
-  );
-  if (!pluginActions?.actions) {
-    return [];
-  }
-  const resolved = resolveMessageActionDiscoveryForPlugin({
-    pluginId: pluginActions.pluginId,
-    actions: pluginActions.actions,
-    context: createMessageActionDiscoveryContext(params),
+  const resolved = resolveCurrentMessageActionDiscovery(params, {
     includeActions: true,
     includeSchema: true,
   });
+  if (!resolved) {
+    return [];
+  }
   const schemaBlockedActions = new Set<ChannelMessageActionName>();
   for (const contribution of resolved.schemaContributions) {
     // Current-channel-only schema params are not safe for cross-channel tool
@@ -327,24 +316,32 @@ export function resolveChannelMessageToolSchemaProperties(
   return properties;
 }
 
-export function resolveChannelMessageToolMediaSourceParamKeys(
+function resolveCurrentMessageActionDiscovery(
   params: ChannelMessageToolMediaSourceParamKeyInput,
-): string[] {
+  selection: {
+    includeActions?: boolean;
+    includeCapabilities?: boolean;
+    includeSchema?: boolean;
+  } = {},
+): ResolvedChannelMessageActionDiscovery | null {
   const pluginActions = resolveCurrentChannelMessageToolDiscoveryAdapter(
     params.channel,
     params.preparedMessageToolCatalog,
   );
-  if (!pluginActions) {
-    return [];
-  }
-  const described = resolveMessageActionDiscoveryForPlugin({
-    pluginId: pluginActions.pluginId,
-    actions: pluginActions.actions,
-    context: createMessageActionDiscoveryContext(params),
-    action: params.action,
-    includeSchema: false,
-  });
-  return uniqueStrings(described.mediaSourceParams);
+  return pluginActions
+    ? resolveMessageActionDiscoveryForPlugin({
+        ...pluginActions,
+        context: createMessageActionDiscoveryContext(params),
+        action: params.action,
+        ...selection,
+      })
+    : null;
+}
+
+export function resolveChannelMessageToolMediaSourceParamKeys(
+  params: ChannelMessageToolMediaSourceParamKeyInput,
+): string[] {
+  return uniqueStrings(resolveCurrentMessageActionDiscovery(params)?.mediaSourceParams ?? []);
 }
 
 export function channelSupportsMessageCapability(
@@ -370,17 +367,9 @@ export function channelSupportsMessageCapabilityForChannel(
   params: ChannelMessageActionDiscoveryParams,
   capability: ChannelMessageCapability,
 ): boolean {
-  const pluginActions = resolveCurrentChannelMessageToolDiscoveryAdapter(
-    params.channel,
-    params.preparedMessageToolCatalog,
+  return (
+    resolveCurrentMessageActionDiscovery(params, {
+      includeCapabilities: true,
+    })?.capabilities.includes(capability) ?? false
   );
-  if (!pluginActions) {
-    return false;
-  }
-  return resolveMessageActionDiscoveryForPlugin({
-    pluginId: pluginActions.pluginId,
-    actions: pluginActions.actions,
-    context: createMessageActionDiscoveryContext(params),
-    includeCapabilities: true,
-  }).capabilities.includes(capability);
 }

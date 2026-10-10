@@ -88,6 +88,10 @@ custom policy values with an advisory while refreshing recognized old defaults.
 For example, `TimeoutStartSec=45` stays unchanged while the old installer value
 `TimeoutStopSec=30` becomes `330`. Existing identity and command checks still apply.
 Maintenance stops also read the resident Gateway's recorded shutdown budget.
+If rollback finds the service already stopped, the Gateway cannot be reached,
+and its local port is free, it proceeds directly through the guarded native stop
+to restoration instead of waiting for the drain deadline. Running Gateways and
+unverified service or port states keep the normal drain checks.
 Published 2026.9.5 residents keep their startup budget even after `daemon-reload`;
 their first stop therefore uses the short/unknown-budget path. The Gateway's
 lifecycle owner fences admission and reports drain progress until idle or the
@@ -198,6 +202,12 @@ repeatedly hashing both generations. Retirement verifies the live package before
 deleting obsolete backups; rollback still hashes a backup before restoring it
 and verifies the restored bytes. These improvements belong to the installed
 updater and do not change an older updater already running.
+
+Retaining the updater's runtime skips package recovery anchors, control journals,
+and settled evidence beside installed packages. Even hard-linking unchanged
+recovery files would change their metadata and could invalidate an older sealed
+helper's fingerprint. Explicit runtime links into those recovery artifacts are
+rejected; the evidence remains untouched for its recovery owner.
 
 Candidate verification uses the same best-effort contract when its scan reaches
 the resource limits: activation and publication continue with directory identity,

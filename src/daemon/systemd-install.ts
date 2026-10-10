@@ -25,7 +25,6 @@ import {
   hasGatewayServiceLauncherOverride,
   resolveManagedGatewayServiceCommand,
   type GatewayServiceEnv,
-  type GatewayServiceEnvironmentValueSource,
   type GatewayServiceInstallArgs,
   type GatewayServiceManageArgs,
 } from "./service-types.js";
@@ -70,58 +69,6 @@ const SYSTEMD_GATEWAY_CREDENTIAL_KEYS = new Set([
 function restrictSystemdArtifactMode(mode: number | undefined): number {
   const ownerOnly = (mode ?? 0o600) & 0o700;
   return ownerOnly || 0o600;
-}
-
-function collectSystemdInlineManagedKeys(params: {
-  environment?: GatewayServiceEnv;
-  environmentValueSources?: Record<string, GatewayServiceEnvironmentValueSource | undefined>;
-}): Set<string> {
-  const keys = readManagedServiceEnvKeysFromEnvironment(params.environment);
-  for (const key of collectSystemdFileManagedKeys(params.environmentValueSources)) {
-    keys.delete(key);
-  }
-  for (const [rawKey, value] of Object.entries(params.environment ?? {})) {
-    // Clearing NODE_OPTIONS must also remove stale env-file flags that override inline values.
-    if (typeof value !== "string" || (!value.trim() && rawKey !== "NODE_OPTIONS")) {
-      continue;
-    }
-    const key = normalizeServiceEnvKey(rawKey);
-    if (!key) {
-      continue;
-    }
-    const source = readEnvironmentValueSource(params.environmentValueSources, rawKey);
-    if (hasInlineEnvironmentSource(source) && !hasEnvironmentFileSource(source)) {
-      keys.add(key);
-    }
-  }
-  return keys;
-}
-
-function collectSystemdFileManagedKeys(
-  environmentValueSources?: Record<string, GatewayServiceEnvironmentValueSource | undefined>,
-): Set<string> {
-  return normalizeServiceEnvKeys(
-    Object.entries(environmentValueSources ?? {})
-      .filter(([, source]) => isEnvironmentFileOnlySource(source))
-      .map(([key]) => key),
-  );
-}
-
-function collectSystemdFileBackedEnvironment(params: {
-  environment?: GatewayServiceEnv;
-  fileManagedKeys: ReadonlySet<string>;
-}): Record<string, string> {
-  const environment: Record<string, string> = {};
-  for (const [rawKey, rawValue] of Object.entries(params.environment ?? {})) {
-    if (typeof rawValue !== "string" || !rawValue.trim()) {
-      continue;
-    }
-    const key = normalizeServiceEnvKey(rawKey);
-    if (key && params.fileManagedKeys.has(key) && !isUnresolvedShellReference(rawValue)) {
-      environment[rawKey] = rawValue;
-    }
-  }
-  return environment;
 }
 
 function removeSystemdInlineEnvironmentKeys(content: string, keys: ReadonlySet<string>): string {
@@ -302,11 +249,29 @@ async function writeSystemdUnit(
             return typeof inlineValue !== "string" || inlineValue.trim() === value.trim();
           }),
         );
-        const inlineManagedKeys = collectSystemdInlineManagedKeys({
-          environment,
-          environmentValueSources,
-        });
-        const fileManagedKeys = collectSystemdFileManagedKeys(environmentValueSources);
+        const inlineManagedKeys = readManagedServiceEnvKeysFromEnvironment(environment);
+        const fileManagedKeys = normalizeServiceEnvKeys(
+          Object.entries(environmentValueSources ?? {})
+            .filter(([, source]) => isEnvironmentFileOnlySource(source))
+            .map(([key]) => key),
+        );
+        for (const key of fileManagedKeys) {
+          inlineManagedKeys.delete(key);
+        }
+        for (const [rawKey, value] of Object.entries(environment ?? {})) {
+          // Clearing NODE_OPTIONS must also remove stale env-file flags that override inline values.
+          if (typeof value !== "string" || (!value.trim() && rawKey !== "NODE_OPTIONS")) {
+            continue;
+          }
+          const key = normalizeServiceEnvKey(rawKey);
+          if (!key) {
+            continue;
+          }
+          const source = readEnvironmentValueSource(environmentValueSources, rawKey);
+          if (hasInlineEnvironmentSource(source) && !hasEnvironmentFileSource(source)) {
+            inlineManagedKeys.add(key);
+          }
+        }
         const existingEnvironment = await readSystemdGatewayEnvironmentFiles(stateDir, environment);
 
         const backupSource = existingUnit ?? existingBackup;
@@ -321,7 +286,16 @@ async function writeSystemdUnit(
             restrictSystemdArtifactMode(backupSource.mode),
           );
         }
-        const incoming = collectSystemdFileBackedEnvironment({ environment, fileManagedKeys });
+        const incoming: Record<string, string> = {};
+        for (const [rawKey, rawValue] of Object.entries(environment ?? {})) {
+          if (typeof rawValue !== "string" || !rawValue.trim()) {
+            continue;
+          }
+          const key = normalizeServiceEnvKey(rawKey);
+          if (key && fileManagedKeys.has(key) && !isUnresolvedShellReference(rawValue)) {
+            incoming[rawKey] = rawValue;
+          }
+        }
         for (const [key, value] of Object.entries(incoming)) {
           if (/[\r\n]/.test(value)) {
             throw new Error(

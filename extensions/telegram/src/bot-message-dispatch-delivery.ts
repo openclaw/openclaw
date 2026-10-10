@@ -164,6 +164,9 @@ export async function sendPayload(
   payload: ReplyPayload,
   options?: TelegramSendPayloadOptions,
 ): Promise<LivePreviewDeliveryResult> {
+  if (options?.durable) {
+    sourceTurn.finalDeliveryNotDispatched = false;
+  }
   if (sourceTurn.isSuperseded()) {
     await options?.promptContextSequence?.fail();
     return { visibleReplySent: false, suppression: { reason: "channel_transform" } };
@@ -266,6 +269,7 @@ export async function sendPayload(
       }),
     });
     if (durable.status === "failed") {
+      sourceTurn.finalDeliveryNotDispatched = durable.sentBeforeError === false;
       return await failPromptContextSequence(projectionSequence, durable.error);
     }
     if (durable.status === "handled_visible") {
@@ -388,35 +392,6 @@ export function registerTelegramQuestionDeliveryForMessage(
   });
 }
 
-async function materializeAnswerLaneBeforeRotation(turn: Turn): Promise<void> {
-  const block = turn.activeAnswerBlockDelivery;
-  const lane = turn.answerLane;
-  if (
-    !block ||
-    !lane.stream ||
-    !lane.hasStreamedMessage ||
-    lane.finalized ||
-    turn.activeAnswerDraftIsToolProgressOnly
-  ) {
-    return;
-  }
-  const text = lane.lastPartialText || turn.lastAnswerPartialText || block.text;
-  if (!text?.trim()) {
-    return;
-  }
-  const result = await turn.deliverLaneText({
-    laneName: "answer",
-    text,
-    payload: block.payload,
-    infoKind: "block",
-    buttons: block.buttons,
-    finalizePreview: true,
-    durable: false,
-  });
-  turn.activeAnswerBlockDelivery = undefined;
-  await handlePreviewFinalizedResult(turn, result);
-}
-
 function recoverFinalPayload(
   turn: Turn,
   payload: ReplyPayload,
@@ -526,7 +501,6 @@ export async function deliverFinalAnswerText(
       laneName: "answer",
       text: finalText,
       payload: finalPayload,
-      replyTargetBeforeRecovery: answerPayload,
       infoKind: "final",
       buttons,
       allowStream:
@@ -676,8 +650,35 @@ export function createDeliveryState(
     deliverLaneText,
     // Draft's rotate path calls this through the turn record: a direct import
     // from draft.ts would recreate the draft<->delivery runtime import cycle.
-    materializeAnswerLaneBeforeRotation: async () =>
-      await materializeAnswerLaneBeforeRotation(getTurn()),
+    materializeAnswerLaneBeforeRotation: async () => {
+      const turn = getTurn();
+      const block = turn.activeAnswerBlockDelivery;
+      const lane = turn.answerLane;
+      if (
+        !block ||
+        !lane.stream ||
+        !lane.hasStreamedMessage ||
+        lane.finalized ||
+        turn.activeAnswerDraftIsToolProgressOnly
+      ) {
+        return;
+      }
+      const text = lane.lastPartialText || turn.lastAnswerPartialText || block.text;
+      if (!text?.trim()) {
+        return;
+      }
+      const result = await turn.deliverLaneText({
+        laneName: "answer",
+        text,
+        payload: block.payload,
+        infoKind: "block",
+        buttons: block.buttons,
+        finalizePreview: true,
+        durable: false,
+      });
+      turn.activeAnswerBlockDelivery = undefined;
+      await handlePreviewFinalizedResult(turn, result);
+    },
     resolveCurrentTurnTranscriptFinal: context.ctxPayload.GroupThread
       ? async () => undefined
       : createCurrentTurnTranscriptFinalResolver({

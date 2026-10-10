@@ -28,6 +28,7 @@ export default {
     keepEditing: "Keep editing",
     discardDraft: "Discard",
     viewBoard: "Columns",
+    boardColor: "Color",
     clearFilters: "Clear filters",
     activeFilters: "Active filters",
     removeFilter: "Remove filter: {filter}",

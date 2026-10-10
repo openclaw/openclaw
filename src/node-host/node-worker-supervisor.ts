@@ -23,6 +23,7 @@ import type {
 } from "../worker/node-workspace-retain-protocol.js";
 import type { WorkerConnectionEndpoint } from "../worker/worker-connection-endpoint.js";
 import type { NodeWorkerProcessInput } from "../worker/worker-process-observation.js";
+import { throwNodeHostCleanupErrors } from "./cleanup-errors.js";
 import { NodeWorkerCapacity } from "./node-worker-capacity.js";
 import { NodeWorkerChildLifecycle } from "./node-worker-child-lifecycle.js";
 import { NodeWorkerContainerLifecycle } from "./node-worker-container-lifecycle.js";
@@ -560,11 +561,7 @@ class NodeWorkerSupervisor {
           result.status === "rejected" ? [result.reason] : [],
         ),
       );
-      if (errors.length > 0) {
-        throw errors.length === 1
-          ? errors[0]
-          : new AggregateError(errors, "node worker environment cleanup failed");
-      }
+      throwNodeHostCleanupErrors(errors, "node worker environment cleanup failed");
     });
   }
 
@@ -712,11 +709,7 @@ class NodeWorkerSupervisor {
     await this.journal
       .drain({ close: errors.length === 0 })
       .catch((error: unknown) => errors.push(error));
-    if (errors.length > 0) {
-      throw errors.length === 1
-        ? errors[0]
-        : new AggregateError(errors, "node worker terminal reconciliation failed");
-    }
+    throwNodeHostCleanupErrors(errors, "node worker terminal reconciliation failed");
   }
 }
 

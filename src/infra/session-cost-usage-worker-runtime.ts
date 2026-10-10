@@ -385,7 +385,10 @@ async function runPreparedUsageCostWorker(
       // Only the lock owner's admitted writer may create a previously absent cache.
       assertBindingCurrent(cacheBinding, admittedDatabase, execution, opening);
     };
-    const resolveBinding = (target: Pick<SqliteSessionFileMarker, "agentId" | "storePath">) => {
+    const resolveBinding = (
+      target: Pick<SqliteSessionFileMarker, "agentId" | "storePath">,
+      memoryOnly = false,
+    ) => {
       const options = toDatabaseOptions(resolveSqliteReadScope({ ...target, env: location.env }));
       const databasePath = resolveOpenClawAgentSqlitePath(options);
       const binding = bindings.find(
@@ -394,11 +397,7 @@ async function runPreparedUsageCostWorker(
       if (!binding) {
         throw new Error("Usage worker requested an unowned transcript database");
       }
-      return binding;
-    };
-    const memoryBinding = (target: Pick<SqliteSessionFileMarker, "agentId" | "storePath">) => {
-      const binding = resolveBinding(target);
-      if (!binding.memory) {
+      if (memoryOnly && !binding.memory) {
         throw new Error("Usage worker requested an unowned memory database");
       }
       return binding;
@@ -428,6 +427,12 @@ async function runPreparedUsageCostWorker(
           ? incognito?.lock
           : hostLock
         : undefined;
+    const requireLock = (action: string) => {
+      if (!lock) {
+        throw new Error(`Usage report cannot ${action}`);
+      }
+      return lock;
+    };
     if (lock) {
       if (!(await lock.acquire())) {
         return { kind: "busy" };
@@ -486,167 +491,156 @@ async function runPreparedUsageCostWorker(
               }
               // SAFETY: The paired worker constructs this union; host effects still check current authority.
               const request = value as UsageCostWorkerHostRequest;
+              let output: UsageCostWorkerHostEffects[keyof UsageCostWorkerHostEffects]["output"] =
+                undefined;
               if (incognito && request.kind.startsWith("memory-")) {
-                const output = await incognito.read(request);
-                assertRequestCurrent();
-                return {
-                  input: { ok: true, value: output } satisfies UsageCostWorkerHostReply,
-                  transferList,
-                  timeoutMs: USAGE_COST_WORKER_TIMEOUT_MS,
-                };
-              }
-              let output: UsageCostWorkerHostEffects[keyof UsageCostWorkerHostEffects]["output"];
-              switch (request.kind) {
-                case "refresh-session":
-                  if (!lock) {
-                    throw new Error("Usage report cannot refresh sessions");
-                  }
-                  activeSessionFile = request.input.sessionFile;
-                  output = undefined;
-                  break;
-                case "pricing":
-                  output = request.input.map(resolveCost);
-                  break;
-                case "restore": {
-                  if (incognito) {
-                    throw new Error("Incognito transcripts have no cold storage");
-                  }
-                  const binding = resolveBinding(request.input);
-                  await restoreSessionColdTranscript(
-                    { ...request.input, storePath: binding.options.path, env: location.env },
-                    assertRequestCurrent,
-                  );
-                  output = undefined;
-                  break;
-                }
-                case "memory-instances": {
-                  const binding = memoryBinding(request.input);
-                  output = binding.database
-                    ? listSessionTranscriptInstances({
-                        ...request.input,
-                        storePath: binding.options.path,
-                        env: location.env,
-                        projection: "list",
-                      }).map(({ agentId, sessionId, updatedAtMs }) => ({
-                        agentId,
-                        sessionId,
-                        updatedAtMs,
-                      }))
-                    : [];
-                  break;
-                }
-                case "memory-stats":
-                  output = request.input.map((marker) => {
-                    const binding = memoryBinding(marker);
-                    return binding.database
-                      ? readTranscriptStatsBatchFromDatabase(binding.database, [
-                          marker.sessionId,
-                        ])[0]
-                      : undefined;
-                  });
-                  break;
-                case "memory-cache": {
-                  const binding = memoryBinding({
-                    agentId: location.agentId,
-                    storePath: location.databasePath,
-                  });
-                  output = binding.database
-                    ? readSessionCostUsageRollupByteRowsInDatabase(
-                        binding.database.db,
-                        request.input.filePaths,
-                      )
-                    : [];
-                  for (const row of output) {
-                    if (!(row.valueJson.buffer instanceof ArrayBuffer)) {
-                      throw new TypeError("Usage cache row bytes are not transferable");
+                output = await incognito.read(request, context.signal);
+              } else {
+                switch (request.kind) {
+                  case "refresh-session":
+                    requireLock("refresh sessions");
+                    activeSessionFile = request.input.sessionFile;
+                    break;
+                  case "pricing":
+                    output = request.input.map(resolveCost);
+                    break;
+                  case "restore": {
+                    if (incognito) {
+                      throw new Error("Incognito transcripts have no cold storage");
                     }
-                    transferList.push(row.valueJson.buffer);
-                  }
-                  break;
-                }
-                case "memory-transcript": {
-                  await yieldImmediate(undefined, { signal: context.signal });
-                  assertRequestCurrent();
-                  const binding = memoryBinding(request.input.marker);
-                  if (!binding.database) {
-                    throw new Error("Usage memory transcript is no longer available");
-                  }
-                  const key = JSON.stringify(request.input);
-                  let source = sources.get(key);
-                  if (!source) {
-                    source = createMemoryTranscriptProjectionSource(
-                      binding.database,
-                      binding.options,
-                      request.input,
+                    const binding = resolveBinding(request.input);
+                    await restoreSessionColdTranscript(
+                      { ...request.input, storePath: binding.options.path, env: location.env },
+                      assertRequestCurrent,
+                      undefined,
+                      undefined,
+                      context.signal,
                     );
-                    sources.set(key, source);
+                    break;
                   }
-                  const frame = source.read(request.input.marker.sessionId);
-                  output = frame;
-                  if (frame.type === "source-frame") {
-                    transferList.push(frame.bytes.buffer);
+                  case "memory-instances": {
+                    const binding = resolveBinding(request.input, true);
+                    output = binding.database
+                      ? listSessionTranscriptInstances({
+                          ...request.input,
+                          storePath: binding.options.path,
+                          env: location.env,
+                          projection: "list",
+                        }).map(({ agentId, sessionId, updatedAtMs }) => ({
+                          agentId,
+                          sessionId,
+                          updatedAtMs,
+                        }))
+                      : [];
+                    break;
                   }
-                  break;
+                  case "memory-stats":
+                    output = request.input.map((marker) => {
+                      const binding = resolveBinding(marker, true);
+                      return binding.database
+                        ? readTranscriptStatsBatchFromDatabase(binding.database, [
+                            marker.sessionId,
+                          ])[0]
+                        : undefined;
+                    });
+                    break;
+                  case "memory-cache": {
+                    const binding = resolveBinding(
+                      { agentId: location.agentId, storePath: location.databasePath },
+                      true,
+                    );
+                    output = binding.database
+                      ? readSessionCostUsageRollupByteRowsInDatabase(
+                          binding.database.db,
+                          request.input.filePaths,
+                        )
+                      : [];
+                    for (const row of output) {
+                      if (!(row.valueJson.buffer instanceof ArrayBuffer)) {
+                        throw new TypeError("Usage cache row bytes are not transferable");
+                      }
+                      transferList.push(row.valueJson.buffer);
+                    }
+                    break;
+                  }
+                  case "memory-transcript": {
+                    await yieldImmediate(undefined, { signal: context.signal });
+                    assertRequestCurrent();
+                    const binding = resolveBinding(request.input.marker, true);
+                    if (!binding.database) {
+                      throw new Error("Usage memory transcript is no longer available");
+                    }
+                    const key = JSON.stringify(request.input);
+                    let source = sources.get(key);
+                    if (!source) {
+                      source = createMemoryTranscriptProjectionSource(
+                        binding.database,
+                        binding.options,
+                        request.input,
+                      );
+                      sources.set(key, source);
+                    }
+                    const frame = source.read(request.input.marker.sessionId);
+                    output = frame;
+                    if (frame.type === "source-frame") {
+                      transferList.push(frame.bytes.buffer);
+                    }
+                    break;
+                  }
+                  case "memory-cache-body": {
+                    const binding = resolveBinding(
+                      { agentId: location.agentId, storePath: location.databasePath },
+                      true,
+                    );
+                    const row = binding.database
+                      ? readSessionCostUsageRollupBodyInDatabase(binding.database.db, request.input)
+                      : undefined;
+                    // Copy native bytes into a standalone allocation before transferring custody.
+                    const blob = row?.blob ? Uint8Array.from(row.blob) : null;
+                    output = row ? { blob } : undefined;
+                    if (blob) {
+                      transferList.push(blob.buffer);
+                    }
+                    break;
+                  }
+                  case "prune-row":
+                    requireLock("prune cache rows");
+                    pruneRows.push({
+                      key: request.input.key,
+                      valueJson: request.input.value,
+                      updatedAt: request.input.updatedAt,
+                    });
+                    break;
+                  case "prune":
+                    await requireLock("prune cache rows").pruneRows(pruneRows, context.signal);
+                    pruneRows.length = 0;
+                    break;
+                  case "write":
+                    output = await requireLock("write cache rows").writeRollup(
+                      {
+                        rollupId: request.input.key,
+                        previousValueJson: request.input.previousValue,
+                        valueJson: request.input.value,
+                        blob: request.input.blob,
+                        updatedAt: request.input.updatedAt,
+                      },
+                      context.signal,
+                    );
+                    if (output && failedKeys.has(failureKey(request.input.key))) {
+                      await failures
+                        .delete(failureKey(request.input.key), {
+                          assertCurrent: assertRequestCurrent,
+                          signal: context.signal,
+                        })
+                        .catch((error: unknown) => {
+                          logger.warn("Could not clear usage refresh failure fact", { error });
+                        });
+                    }
+                    activeSessionFile = undefined;
+                    break;
+                  default:
+                    throw new Error("Unknown usage worker host request");
                 }
-                case "memory-cache-body": {
-                  const binding = memoryBinding({
-                    agentId: location.agentId,
-                    storePath: location.databasePath,
-                  });
-                  const row = binding.database
-                    ? readSessionCostUsageRollupBodyInDatabase(binding.database.db, request.input)
-                    : undefined;
-                  // Copy native bytes into a standalone allocation before transferring custody.
-                  const blob = row?.blob ? Uint8Array.from(row.blob) : null;
-                  output = row ? { blob } : undefined;
-                  if (blob) {
-                    transferList.push(blob.buffer);
-                  }
-                  break;
-                }
-                case "prune-row":
-                  if (!lock) {
-                    throw new Error("Usage report cannot prune cache rows");
-                  }
-                  pruneRows.push({
-                    key: request.input.key,
-                    valueJson: request.input.value,
-                    updatedAt: request.input.updatedAt,
-                  });
-                  output = undefined;
-                  break;
-                case "prune":
-                  if (!lock) {
-                    throw new Error("Usage report cannot prune cache rows");
-                  }
-                  await lock.pruneRows(pruneRows);
-                  pruneRows.length = 0;
-                  output = undefined;
-                  break;
-                case "write":
-                  if (!lock) {
-                    throw new Error("Usage report cannot write cache rows");
-                  }
-                  output = await lock.writeRollup({
-                    rollupId: request.input.key,
-                    previousValueJson: request.input.previousValue,
-                    valueJson: request.input.value,
-                    blob: request.input.blob,
-                    updatedAt: request.input.updatedAt,
-                  });
-                  if (output && failedKeys.has(failureKey(request.input.key))) {
-                    await failures
-                      .delete(failureKey(request.input.key), {
-                        assertCurrent: assertRequestCurrent,
-                      })
-                      .catch((error: unknown) => {
-                        logger.warn("Could not clear usage refresh failure fact", { error });
-                      });
-                  }
-                  activeSessionFile = undefined;
-                  break;
-                default:
-                  throw new Error("Unknown usage worker host request");
               }
               assertRequestCurrent();
               reply = { ok: true, value: output };

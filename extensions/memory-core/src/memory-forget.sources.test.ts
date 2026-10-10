@@ -46,7 +46,6 @@ describe("memory forget source removal", () => {
 
   function indexSelection() {
     return {
-      agentId: "main",
       changedPaths: new Set<string>(),
       removedPaths: new Set<string>(),
       sessionIds: new Set(["target"]),

@@ -24,7 +24,11 @@ function failOneShotExecution(
   opts: SystemAgentCommandOptions,
   runtime: RuntimeEnv,
   error: unknown,
+  oneShot = true,
 ): void {
+  if (!oneShot) {
+    throw error;
+  }
   const message = formatErrorMessage(error);
   if (opts.json) {
     writeRuntimeJson(runtime, { ok: false, error: message });
@@ -67,22 +71,14 @@ export async function runSystemAgentWithInference(
       verifySetupInference({ runtime, bindSession: true }),
     );
   } catch (error) {
-    if (!oneShot) {
-      throw error;
-    }
-    failOneShotExecution(opts, runtime, error);
-    return;
+    return failOneShotExecution(opts, runtime, error, oneShot);
   }
   if (inference.ok) {
     const { runSystemAgent } = await import("../system-agent/system-agent.js");
     try {
       await runSystemAgent({ ...opts, verifiedInference: inference.binding }, runtime);
     } catch (error) {
-      if (!oneShot) {
-        throw error;
-      }
-      failOneShotExecution(opts, runtime, error);
-      return;
+      return failOneShotExecution(opts, runtime, error, oneShot);
     }
     if (oneShot) {
       requestExitAfterOneShotOutput(runtime);

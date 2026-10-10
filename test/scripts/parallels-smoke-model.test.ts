@@ -63,6 +63,7 @@ import {
   windowsProviderOnlyPluginIsolationScript,
   windowsCodexPlatformPackageRepairFunction,
 } from "../../scripts/e2e/parallels/plugin-isolation.ts";
+import { windowsAgentTurnScript } from "../../scripts/e2e/parallels/powershell.ts";
 import {
   resolveParallelsProviderAuth,
   runParallelsPrerequisiteEval,
@@ -557,6 +558,11 @@ describe("Parallels smoke model selection", () => {
     windows,
     windowsGit,
   } = TS_SOURCE;
+  const windowsAgentTurn = windowsAgentTurnScript({
+    command: "Invoke-OpenClaw @args",
+    sessionId: "parallels-windows-smoke",
+    retryOnCommandFailure: true,
+  });
 
   it("parses macOS dscl user homes with spaces on mounted volumes", () => {
     expect(parseMacosDsclUserHomeLine("clawuser /Volumes/Macintosh HD/Users/clawuser")).toEqual({
@@ -702,10 +708,11 @@ ensure_vm_running`,
 
   it("resets Linux product state before both install lanes", () => {
     for (const lane of ["fresh", "upgrade"]) {
-      const restoreIndex = linux.indexOf(`"${lane}.restore-snapshot"`);
-      const resetIndex = linux.indexOf(`"${lane}.reset-state"`);
+      expect(linux).toContain(`return this.runInstallLane("${lane}")`);
+      const restoreIndex = linux.indexOf("`${lane}.restore-snapshot`");
+      const resetIndex = linux.indexOf("`${lane}.reset-state`");
       const installIndex = linux.indexOf(
-        `"${lane}.${lane === "fresh" ? "install-main" : "install-latest"}"`,
+        lane === "fresh" ? "`${lane}.install-main`" : '"upgrade.install-latest"',
       );
       expect(restoreIndex).toBeGreaterThanOrEqual(0);
       expect(resetIndex).toBeGreaterThan(restoreIndex);
@@ -838,12 +845,12 @@ ensure_vm_running`,
       [windows, "windowsAgentTurnConfigPatchScript(this.auth.modelId)"],
       [windows, "--model"],
       [windows, 'resolveParallelsModelTimeoutSeconds("windows")'],
-      [windows, "finalAssistant(Raw|Visible)Text"],
-      [windows, "parallels-windows-smoke-retry-$attempt"],
-      [windows, "agent turn attempt $attempt failed or finished without OK response"],
+      [windowsAgentTurn, "finalAssistant(Raw|Visible)Text"],
+      [windowsAgentTurn, "parallels-windows-smoke-retry-$attempt"],
+      [windowsAgentTurn, "agent turn attempt $attempt failed or finished without OK response"],
       [windows, "$config.models.providers", false],
       [windows, "timeoutSeconds = 300", false],
-      [windows, '"$sessionId.jsonl"'],
+      [windowsAgentTurn, '"$sessionId.jsonl"'],
     ],
     "waits through transient Windows restoring state before VM operations": [
       [windows, "waitForVmNotRestoring"],
@@ -1766,9 +1773,7 @@ if (commandArgs[0] === "list") {
       expect(script, scriptPath).toContain("--thinking");
       expect(script, scriptPath).toContain("off");
       expect(script, scriptPath).toContain(
-        scriptPath === TS_PATHS.windows
-          ? "finalAssistant(Raw|Visible)Text"
-          : "posixAgentTurnScript({",
+        scriptPath === TS_PATHS.windows ? "windowsAgentTurnScript({" : "posixAgentTurnScript({",
       );
     }
     expect(smokeCommon).toContain("finalAssistant(Raw|Visible)Text");
@@ -1785,7 +1790,13 @@ if (commandArgs[0] === "list") {
     expect(npmUpdateScripts).toContain("windowsAgentWorkspaceScript");
     expect(npmUpdateScripts).toContain("tools.profile");
     expect(npmUpdateScripts).toContain("--thinking off");
-    expect(npmUpdateScripts).toContain("finalAssistant(Raw|Visible)Text");
+    expect(
+      windowsAgentTurnScript({
+        command: "Invoke-OpenClaw @args",
+        sessionId: "parallels-npm-update-windows",
+        retryOnCommandFailure: false,
+      }),
+    ).toContain("finalAssistant(Raw|Visible)Text");
     expect(npmUpdateScripts).toContain("posixAssertAgentOkScript");
     expect(npmUpdateScripts).toContain("posixAgentTurnScript({");
     expect(npmUpdateScripts).toContain("windowsAgentTurnConfigPatchScript");

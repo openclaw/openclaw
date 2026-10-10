@@ -234,12 +234,10 @@ export async function collectStateDatabasePaths(
     queueStateDatabaseSpelling(files, stateRoot, file, owner);
   };
   queue(shared, { role: "global" });
-  let directories: string[] = [];
-  if (options.includeUnconfiguredAgents !== false) {
-    directories = (await listDefaultAgentDatabasePaths(input.stateDir)).map(
-      (entry) => entry.agentId,
-    );
-  }
+  const directories =
+    options.includeUnconfiguredAgents !== false
+      ? (await listDefaultAgentDatabasePaths(input.stateDir)).map((entry) => entry.agentId)
+      : [];
   const configured = Object.entries(input.config.agents?.entries ?? {});
   for (const directory of [input.env?.OPENCLAW_AGENT_DIR, input.env?.PI_CODING_AGENT_DIR]) {
     if (directory?.trim()) {
@@ -738,9 +736,7 @@ export async function snapshotUpdateCandidateState(
   const pluginPaths = await copyUpdateCandidatePlugins(plugins, {
     ...input,
     onProgress: createUpdateStateIoReporter(sourceRoot, "plugin snapshot", input.onProgress),
-    onCodeLink: (fact) => {
-      pluginCodeLinks.push(fact);
-    },
+    onCodeLink: (fact) => pluginCodeLinks.push(fact),
   });
   return {
     versions,

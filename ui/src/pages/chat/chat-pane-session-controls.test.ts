@@ -26,14 +26,14 @@ import {
 } from "../../test-helpers/gateway-client.ts";
 import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
+import { admitQueuedMessageForSession } from "./chat-outbox-admission.test-support.ts";
 import {
   readChatPaneMutationAccess,
   renderChatPaneComposerControls,
 } from "./chat-pane-session-controls.ts";
 import { createInitializationContext, createRenderTestChatPane } from "./chat-pane.test-support.ts";
-import { admitQueuedMessageForSession } from "./chat-queue.ts";
 import { steerQueuedChatMessage } from "./chat-send-actions.ts";
-import { switchChatFastMode, switchChatModel, switchChatThinkingLevel } from "./chat-session.ts";
+import { switchChatModel, switchChatSetting } from "./chat-session.ts";
 import { getPendingChatPickerPatch, patchChatSessionSettings } from "./chat-settings-patches.ts";
 import { handlePageGatewayEvent } from "./chat-state-events.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
@@ -866,8 +866,8 @@ describe("chat pane model-setting permissions", () => {
 
       const results = [
         await switchChatModel(state, "openai/gpt-test-b"),
-        await switchChatThinkingLevel(state, "high"),
-        await switchChatFastMode(state, "on"),
+        await switchChatSetting(state, { kind: "thinkingLevel", value: "high" }),
+        await switchChatSetting(state, { kind: "fastMode", value: "on" }),
       ];
       expect(results).toEqual([allowed, allowed, allowed]);
 
@@ -996,8 +996,8 @@ describe("chat pane model-setting permissions", () => {
         operations.push(
           patchChatSessionSettings(state, state.sessionKey, { thinkingLevel: "low" }),
           switchChatModel(state, "openai/gpt-test-b"),
-          switchChatThinkingLevel(state, "high"),
-          switchChatFastMode(state, "on"),
+          switchChatSetting(state, { kind: "thinkingLevel", value: "high" }),
+          switchChatSetting(state, { kind: "fastMode", value: "on" }),
           Promise.resolve(controls.permissionPicker.onSelect("guarded")),
         );
       }

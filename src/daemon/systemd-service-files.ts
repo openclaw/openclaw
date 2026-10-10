@@ -24,6 +24,7 @@ import type {
   GatewayServiceReadOptions,
   SystemdServiceReadTarget,
 } from "./service-types.js";
+import { systemdUnitCallArgs } from "./systemd-bus-query.js";
 import { createSystemdCommandQuery } from "./systemd-command-query.js";
 import {
   resolveSystemdEnvironmentFiles,
@@ -136,15 +137,7 @@ async function readSystemdManagerCommand(
     const assertAbsentWithoutLoading = async (): Promise<null> => {
       // Missing loaded objects do not prove an authored/native unit definition is absent.
       const fileState = await query(
-        [
-          "call",
-          destination,
-          "/org/freedesktop/systemd1",
-          `${manager}.Manager`,
-          "GetUnitFileState",
-          "s",
-          unitName,
-        ],
+        systemdUnitCallArgs(destination, unitName, "GetUnitFileState"),
         ["s"],
       );
       const value = fileState?.[0];
@@ -162,15 +155,11 @@ async function readSystemdManagerCommand(
       return null;
     };
     const loaded = await query(
-      [
-        "call",
+      systemdUnitCallArgs(
         destination,
-        "/org/freedesktop/systemd1",
-        `${manager}.Manager`,
-        opts?.requireLoaded && !inspection ? "GetUnit" : "LoadUnit",
-        "s",
         unitName,
-      ],
+        opts?.requireLoaded && !inspection ? "GetUnit" : "LoadUnit",
+      ),
       ["o"],
     );
     if (!loaded) {

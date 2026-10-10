@@ -130,6 +130,14 @@ export async function countSessionLogMentions(params: {
 }): Promise<Record<string, number>> {
   const limits = params.limits ?? readSessionLogMentionLimits();
   const counts = Object.fromEntries(Object.keys(params.needles).map((key) => [key, 0]));
+  const countRecord = (text: string) => {
+    const scanText = sessionLogScanText(text);
+    if (scanText !== null) {
+      for (const [key, needle] of Object.entries(params.needles)) {
+        counts[key] = (counts[key] ?? 0) + countOccurrences(scanText, needle);
+      }
+    }
+  };
   let files: string[];
   try {
     files = await fs.readdir(params.sessionsDir);
@@ -166,13 +174,7 @@ export async function countSessionLogMentions(params: {
       limit: limits.fileMaxBytes,
     });
     for (const line of raw.split(/\r?\n/u)) {
-      const scanText = sessionLogScanText(line);
-      if (scanText === null) {
-        continue;
-      }
-      for (const [key, needle] of Object.entries(params.needles)) {
-        counts[key] = (counts[key] ?? 0) + countOccurrences(scanText, needle);
-      }
+      countRecord(line);
     }
   }
   if (path.basename(params.sessionsDir) !== "sessions") {
@@ -210,13 +212,7 @@ export async function countSessionLogMentions(params: {
         label: "total",
         limit: limits.totalMaxBytes,
       });
-      const scanText = sessionLogScanText(eventJson);
-      if (scanText === null) {
-        continue;
-      }
-      for (const [key, needle] of Object.entries(params.needles)) {
-        counts[key] = (counts[key] ?? 0) + countOccurrences(scanText, needle);
-      }
+      countRecord(eventJson);
     }
     return counts;
   } catch (error) {

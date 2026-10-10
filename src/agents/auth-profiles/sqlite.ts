@@ -55,7 +55,7 @@ export function resolveAuthProfileStoreOwner(
   database: AuthProfileDatabase,
   env: NodeJS.ProcessEnv = process.env,
 ): AuthProfileStoreOwner | PreparedAuthProfileStoreOwner {
-  const prepared = authProfileTransactions.get(database)?.owner;
+  const prepared = authProfileTransactions.get(database);
   if (prepared) {
     return prepared;
   }
@@ -84,10 +84,7 @@ type AuthProfileDatabaseTarget =
   | { kind: "agent"; agentId: string; path: string; env: NodeJS.ProcessEnv }
   | { kind: "shared-state"; path: string; env: NodeJS.ProcessEnv };
 
-const authProfileTransactions = new WeakMap<
-  AuthProfileDatabase,
-  { owner: PreparedAuthProfileStoreOwner }
->();
+const authProfileTransactions = new WeakMap<AuthProfileDatabase, PreparedAuthProfileStoreOwner>();
 
 function inferAgentIdFromDir(agentDir: string): string {
   const normalized = path.normalize(agentDir);
@@ -428,22 +425,13 @@ export function runAuthProfileWriteTransaction<T>(
   operation: (database: AuthProfileDatabase, owner: PreparedAuthProfileStoreOwner) => T,
   options: AuthProfileWriteOptions = {},
 ): T {
-  return runPreparedAuthProfileWriteTransaction(
-    prepareAuthProfileWriteTransaction(agentDir, options),
-    operation,
-  );
-}
-
-function runPreparedAuthProfileWriteTransaction<T>(
-  { databaseTarget, sharedOwner }: ReturnType<typeof prepareAuthProfileWriteTransaction>,
-  operation: (database: AuthProfileDatabase, owner: PreparedAuthProfileStoreOwner) => T,
-): T {
+  const { databaseTarget, sharedOwner } = prepareAuthProfileWriteTransaction(agentDir, options);
   const run = (database: AuthProfileDatabase) => {
     const previous = authProfileTransactions.get(database);
-    const context = previous ?? { owner: { ...sharedOwner, databasePath: database.path } };
-    authProfileTransactions.set(database, context);
+    const owner = previous ?? { ...sharedOwner, databasePath: database.path };
+    authProfileTransactions.set(database, owner);
     try {
-      return operation(database, context.owner);
+      return operation(database, owner);
     } finally {
       if (!previous) {
         authProfileTransactions.delete(database);

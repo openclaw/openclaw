@@ -1,5 +1,11 @@
 import type { SessionEntry } from "./types.js";
 
+export type SessionMember = {
+  identityId: string;
+  addedBy: string;
+  addedAt: number;
+};
+
 export type SessionParticipantProjection = Pick<SessionEntry, "participants" | "participantCount">;
 
 /** No row JSON, prompts, or transcript payloads cross the membership publication boundary. */

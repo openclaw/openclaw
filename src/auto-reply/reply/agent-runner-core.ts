@@ -14,6 +14,7 @@ import {
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
+import type { SessionEntryCohortReader } from "../../config/sessions/session-entry-read-runtime.types.js";
 import type { TypingMode } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
 import { isRestartRecoveryClaimChangedError } from "../../infra/agent-lifecycle-error.js";
@@ -295,16 +296,21 @@ export async function refreshSessionEntryFromStore(params: {
   fallbackEntry?: SessionEntry;
   activeSessionStore?: Record<string, SessionEntry>;
   expectedGeneration?: Pick<SessionEntry, "sessionId" | "lifecycleRevision">;
+  reader?: SessionEntryCohortReader;
 }): Promise<SessionEntry | undefined> {
   const { storePath, sessionKey, fallbackEntry, activeSessionStore } = params;
   if (!storePath || !sessionKey) {
     return fallbackEntry;
   }
   try {
-    const latestEntry = await readSessionEntryReadOnlyInWorker({
-      storePath,
-      sessionKey,
-    });
+    const latestEntry = await readSessionEntryReadOnlyInWorker(
+      {
+        storePath,
+        sessionKey,
+      },
+      undefined,
+      params.reader,
+    );
     // Completion may refresh facts, but only admission can adopt a replacement generation.
     if (
       !latestEntry ||
@@ -318,16 +324,12 @@ export async function refreshSessionEntryFromStore(params: {
       activeSessionStore[sessionKey] = latestEntry;
     }
     return latestEntry;
-  } catch {
+  } catch (error) {
+    if (params.reader) {
+      throw error;
+    }
     return fallbackEntry;
   }
-}
-
-export function resolveAdmittedRunSessionFile(params: {
-  sessionFile?: string;
-  sessionKey?: string;
-}): string | undefined {
-  return normalizeOptionalString(params.sessionKey) ?? params.sessionFile;
 }
 
 export async function handleReplyAgentRunError(

@@ -222,6 +222,7 @@ export async function extractFileContext(params: {
   selfServePathsEnabled: boolean;
   /** Retained context shares one text budget across its ordered attachments. */
   totalMaxChars?: number;
+  textAlreadyPrepared?: boolean;
 }) {
   const { attachments, cache, cfg, limits, skipAttachmentIndexes } = params;
   const blocks: AttachmentContextBlock[] = [];
@@ -253,6 +254,11 @@ export async function extractFileContext(params: {
           attachmentIndex: attachment.index,
         })),
       );
+      // Recorded prompt text owns successful extraction; pages still need replay.
+      // Keep current read/policy failures visible even when prior text is retained.
+      if (params.textAlreadyPrepared) {
+        continue;
+      }
     }
     const blockText = renderFileAttachmentOutcome(outcome, {
       selfServeLocalPath: params.selfServePathsEnabled ? undefined : false,
@@ -303,6 +309,9 @@ export async function prepareFileContextFromMedia(params: {
   maxChars: number;
   /** Native replay can share a total budget; plugin-host limits remain per file. */
   totalMaxChars?: number;
+  /** Replay may already own frozen text while document pages still need recovery. */
+  textAlreadyPrepared?: boolean;
+  skipAttachmentIndexes?: Set<number>;
   assertCurrent: () => void;
 }) {
   const context = { Provider: params.channelId, AccountId: params.accountId };
@@ -319,6 +328,8 @@ export async function prepareFileContextFromMedia(params: {
     workspaceDir: params.workspaceDir,
     maxChars: params.maxChars,
     totalMaxChars: params.totalMaxChars,
+    textAlreadyPrepared: params.textAlreadyPrepared,
+    skipAttachmentIndexes: params.skipAttachmentIndexes,
     assertCurrent: params.assertCurrent,
   });
 }
@@ -333,6 +344,8 @@ export async function renderInboundDocumentContext(params: {
   localPathRoots?: readonly string[];
   maxChars?: number;
   totalMaxChars?: number;
+  textAlreadyPrepared?: boolean;
+  skipAttachmentIndexes?: Set<number>;
   assertCurrent?: () => void;
 }): Promise<InboundDocumentContext> {
   params.assertCurrent?.();
@@ -364,6 +377,8 @@ export async function renderInboundDocumentContext(params: {
           : { ...limits, maxChars: Math.min(limits.maxChars, params.maxChars) },
       selfServePathsEnabled: false,
       totalMaxChars: params.totalMaxChars,
+      textAlreadyPrepared: params.textAlreadyPrepared,
+      skipAttachmentIndexes: params.skipAttachmentIndexes,
       assertCurrent: params.assertCurrent,
     });
     params.assertCurrent?.();

@@ -76,13 +76,6 @@ function assertDiscordResponseObject(value: unknown, label: string): Record<stri
   return value as Record<string, unknown>;
 }
 
-function resolveDefaultThreadAutoArchiveDuration(channel?: APIChannel): number | undefined {
-  if (!channel || !("default_auto_archive_duration" in channel)) {
-    return undefined;
-  }
-  return channel.default_auto_archive_duration;
-}
-
 function describeDiscordThreadInitialMessageFailure(
   delivery?: DiscordThreadInitialMessageDelivery,
 ): string {
@@ -216,7 +209,10 @@ export async function createThreadDiscord(
   // Discord clients preselect the parent default, but REST thread creation needs
   // it explicitly. Keep a caller override authoritative when one was supplied.
   const archiveDuration =
-    payload.autoArchiveMinutes ?? resolveDefaultThreadAutoArchiveDuration(channel);
+    payload.autoArchiveMinutes ??
+    (channel && "default_auto_archive_duration" in channel
+      ? channel.default_auto_archive_duration
+      : undefined);
   if (archiveDuration !== undefined) {
     body.auto_archive_duration = archiveDuration;
   }

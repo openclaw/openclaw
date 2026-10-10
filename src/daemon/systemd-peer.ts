@@ -6,7 +6,12 @@ import {
   ServiceOwnershipRefusalError,
 } from "./service-inspection-error.js";
 import type { GatewayServiceEnv, SystemdServiceReadBinding } from "./service-types.js";
-import { readSystemdBusCall, readSystemdUnitObjectPath } from "./systemd-bus-query.js";
+import {
+  isSystemdManagerUid,
+  readSystemdBusCall,
+  readSystemdBusOwner,
+  readSystemdUnitObjectPath,
+} from "./systemd-bus-query.js";
 import { openSystemdBroker, openSystemdPrivatePeer } from "./systemd-peer-native.js";
 import { resolveSystemdServiceName } from "./systemd-service-files.js";
 import { resolveSystemdUserTransport } from "./systemd-user-transport.js";
@@ -69,19 +74,14 @@ export async function admitSystemdServiceReadBinding(
   }
   const unit = selectedUnitName ?? `${resolveSystemdServiceName(env)}.service`;
   let broker: Awaited<ReturnType<typeof openSystemdBroker>> | undefined;
-  const query = async (method: string, name: string, signature: string) => {
+  const brokerQuery = (args: string[], signatures: string[]) => {
     if (!broker) {
       throw unavailable();
     }
-    const connection = broker;
-    return readSystemdBusCall(
-      (args, signatures) => connection.query(args, signatures, deadline),
-      method,
-      ["s", name],
-      signature,
-      unavailable,
-    );
+    return broker.query(args, signatures, deadline);
   };
+  const query = async (method: string, name: string, signature: string) =>
+    readSystemdBusCall(brokerQuery, method, ["s", name], signature, unavailable);
   let peer: Awaited<ReturnType<typeof openSystemdPrivatePeer>> | undefined;
   try {
     const transport = await resolveSystemdUserTransport(route, deadline, undefined, "admission");
@@ -95,17 +95,9 @@ export async function admitSystemdServiceReadBinding(
       return undefined;
     }
     broker = await openSystemdBroker(transport.address, deadline);
-    const destination = await query("GetNameOwner", MANAGER, "s");
-    if (typeof destination !== "string" || !/^:[0-9]+\.[0-9]+$/.test(destination)) {
-      throw unavailable();
-    }
+    const destination = await readSystemdBusOwner(brokerQuery, unavailable);
     const managerUid = await query("GetConnectionUnixUser", destination, "u");
-    if (
-      typeof managerUid !== "number" ||
-      !Number.isInteger(managerUid) ||
-      managerUid < 0 ||
-      managerUid >= 0xffffffff
-    ) {
+    if (!isSystemdManagerUid(managerUid)) {
       throw unavailable();
     }
     if (managerUid !== uid) {
@@ -124,10 +116,7 @@ export async function admitSystemdServiceReadBinding(
     const socket = path.join(transport.runtimeDir, "systemd/private");
     const address = `unix:path=${encodeURIComponent(socket).replaceAll("%2F", "/")}`;
     peer = await openSystemdPrivatePeer(address, { uid, pid, startTime }, deadline);
-    const currentDestination = await query("GetNameOwner", MANAGER, "s");
-    if (typeof currentDestination !== "string" || !/^:[0-9]+\.[0-9]+$/.test(currentDestination)) {
-      throw unavailable();
-    }
+    const currentDestination = await readSystemdBusOwner(brokerQuery, unavailable);
     if (currentDestination !== destination) {
       throw new ServiceOwnershipRefusalError("systemd-manager-changed");
     }

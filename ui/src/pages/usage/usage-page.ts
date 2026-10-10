@@ -22,11 +22,7 @@ import { isUsageCacheIncomplete, resolveUsagePublication } from "./cache-status.
 import type { ProviderUsageSummary } from "./data-types.ts";
 import { UsageDetailsController } from "./detail-controller.ts";
 import { createUsageJsonExportRequest } from "./export.ts";
-import {
-  createDefaultUsageDateRange,
-  selectUsageSessionKeys,
-  toggleUsageRangeSelection,
-} from "./helpers.ts";
+import { createDefaultUsageDateRange, toggleUsageRangeSelection } from "./helpers.ts";
 import { renderUsagePageShell } from "./page-shell.ts";
 import { UsageRefreshPolicy } from "./refresh-policy.ts";
 import { type ProviderUsageSnapshot, requestUsageSnapshot } from "./request-usage-snapshot.ts";
@@ -482,11 +478,12 @@ class UsagePage extends OpenClawLightDomElement {
       ...this.usageRecentSessions.filter((entry) => entry !== key),
     ].slice(0, 8);
 
-    this.usageSelectedSessions = selectUsageSessionKeys(
+    this.usageSelectedSessions = toggleUsageRangeSelection(
       this.usageSelectedSessions,
       key,
       orderedKeys,
       shiftKey,
+      "replace",
     );
 
     if (this.usageSelectedSessions.length === 1) {
@@ -603,7 +600,7 @@ class UsagePage extends OpenClawLightDomElement {
               hour,
               Array.from({ length: 24 }, (_, index) => index),
               shiftKey,
-              true,
+              "append",
             );
           },
           onQueryDraftChange: (query) => {
@@ -629,7 +626,7 @@ class UsagePage extends OpenClawLightDomElement {
               day,
               orderedDays,
               shiftKey,
-              false,
+              "toggle",
             );
           },
           onClearDays: () => (this.usageSelectedDays = []),

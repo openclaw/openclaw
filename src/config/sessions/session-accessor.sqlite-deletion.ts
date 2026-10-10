@@ -233,8 +233,14 @@ export async function withSqliteSessionContextReset<T>(
   scope: Parameters<typeof withSqliteSessionDeletions>[0],
   entry: DeletionEntry,
   run: SessionMutationRun<T>,
+  assertSourceCurrent?: () => void,
+  incognito?: IncognitoDeletionSource,
 ): Promise<T> {
-  return withSqliteSessionMutations(scope, [entry], run, { contextReset: true });
+  return withSqliteSessionMutations(scope, [entry], run, {
+    contextReset: true,
+    assertSourceCurrent,
+    incognito,
+  });
 }
 
 async function withSqliteSessionMutations<T>(
@@ -245,6 +251,7 @@ async function withSqliteSessionMutations<T>(
     additionalIdentities?: readonly string[];
     callerSettlesReceipts?: boolean;
     contextReset?: boolean;
+    assertSourceCurrent?: () => void;
     incognito?: IncognitoDeletionSource;
   },
 ): Promise<T> {
@@ -549,7 +556,10 @@ async function withSqliteSessionMutations<T>(
         ...targets.flatMap((target) => [target.sessionKey, target.sessionId]),
         ...(options.additionalIdentities ?? []),
       ],
-      run: async () => (prepare ? await prepare(targets, invoke) : await invoke(new Map())),
+      run: async () =>
+        prepare
+          ? await prepare(targets, invoke, options.assertSourceCurrent)
+          : await invoke(new Map()),
     });
   } finally {
     await execution?.release();

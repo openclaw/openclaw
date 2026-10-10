@@ -32,6 +32,7 @@ import {
   renderAuthProfileFailoverCopy,
   renderBillingReplyCopy,
   renderCliTimeoutReplyCopy,
+  renderCodexAppServerFailureCopy,
   renderFailoverCodeUserCopy,
   renderHeartbeatRunFailureCopy,
   renderMissingApiKeyReplyCopy,
@@ -39,10 +40,7 @@ import {
   renderRateLimitReplyCopy,
   type ReplyFallbackAttempt,
 } from "../../agents/failover/user-copy.js";
-import {
-  AgentHarnessPreflightError,
-  isAgentHarnessPreflightError,
-} from "../../agents/harness/errors.js";
+import { isAgentHarnessPreflightError } from "../../agents/harness/errors.js";
 import { isProviderAuthError } from "../../agents/model-auth-runtime-shared.js";
 import { buildProviderAuthRecoveryHint } from "../../agents/provider-auth-recovery-hint.js";
 import type { ReplyCompletion, ReplyExpectation } from "../../agents/reply-completion.js";
@@ -153,41 +151,6 @@ export function isNonDirectConversationContext(ctx: ExternalFailureConversationC
 
 export function isVerboseFailureDetailEnabled(level: VerboseLevel | undefined): boolean {
   return level === "on" || level === "full";
-}
-
-const CODEX_APP_SERVER_CLIENT_CLOSED_BEFORE_REPLY_RE =
-  /\bcodex app-server client closed before turn completed\b/iu;
-const CODEX_APP_SERVER_TURN_COMPLETION_IDLE_TIMEOUT_RE =
-  /\bcodex app-server turn idle timed out waiting for turn\/completed\b/iu;
-const CODEX_SESSION_GENERATION_NOT_CURRENT_RE =
-  /\bcodex session generation is no longer current\b/iu;
-const CODEX_EXECUTION_NODE_DISCONNECTED_RE =
-  /^Codex execution node disconnected; start a fresh attempt\. \((?:execution node (?:failed|disconnected)|execution socket (?:closed|failed))(?:: [^\r\n]{1,240})?\)(?:\r?\n|$)/u;
-
-function buildCodexAppServerFailureText(normalizedMessage: string): string | null {
-  if (CODEX_SESSION_GENERATION_NOT_CURRENT_RE.test(normalizedMessage)) {
-    return "⚠️ This Codex session changed before your message could run. Please send it again.";
-  }
-  if (CODEX_EXECUTION_NODE_DISCONNECTED_RE.test(normalizedMessage)) {
-    return "⚠️ Codex execution node disconnected. Start a fresh attempt.";
-  }
-  if (CODEX_APP_SERVER_CLIENT_CLOSED_BEFORE_REPLY_RE.test(normalizedMessage)) {
-    return "⚠️ Lost the connection to Codex before it confirmed the task was finished. It may still be running. Check the conversation in the Control UI before trying again.";
-  }
-  if (CODEX_APP_SERVER_TURN_COMPLETION_IDLE_TIMEOUT_RE.test(normalizedMessage)) {
-    return "⚠️ Codex hasn't confirmed whether the task finished. It may still be running. Check the conversation in the Control UI before trying again.";
-  }
-  return null;
-}
-
-export function createPreflightCompactionError(reason: string, isCodexRuntime: boolean): Error {
-  const message = `${PREFLIGHT_COMPACTION_FAILURE_PREFIX} ${reason}`;
-  return isCodexRuntime
-    ? new AgentHarnessPreflightError(message, {
-        userMessage:
-          "⚠️ Your message was not sent to Codex: the session's saved history exceeds its configured size limit and compaction failed. Use /new, then resend your message, or ask the operator to review the compaction settings.",
-      })
-    : new Error(message);
 }
 
 export function buildPreflightCompactionFailureText(
@@ -408,7 +371,7 @@ export function buildExternalRunFailureReply(
     // Heartbeat-backed event turns remain visible even with generic wording.
     return buildUnclassifiedReply(options.includeDetails === true);
   }
-  const codexAppServerFailure = buildCodexAppServerFailureText(normalizedMessage);
+  const codexAppServerFailure = renderCodexAppServerFailureCopy(normalizedMessage);
   if (codexAppServerFailure) {
     return { text: codexAppServerFailure, isGenericRunnerFailure: false };
   }

@@ -12,6 +12,7 @@ import {
   GatewayDrainingError,
 } from "../../../process/gateway-work-admission.js";
 import { emitSessionLifecycleEvent } from "../../../sessions/session-lifecycle-events.js";
+import { AgentDatabaseAdmissionError } from "../../../state/agent-database-admission.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
 import { resolveSubagentRequesterAgentId } from "../../subagent-requester-owner.js";
@@ -206,7 +207,7 @@ export function createSubagentRegistryRestorer(config: {
         }
       });
     const cfg = getRuntimeConfig();
-    const transferFailures = await settleRestoredRequesterTurns({
+    const activationFailures = await settleRestoredRequesterTurns({
       cfg,
       runs,
       stateContext,
@@ -216,15 +217,26 @@ export function createSubagentRegistryRestorer(config: {
     });
     assertCurrent();
     if (!runsResumed) {
-      await resumeRestoredRuns(cfg, assertCurrent);
-      assertCurrent();
-      // Requester transfer precedes interruption settlement; ordinary wake retries
-      // and cleanup retain their scheduled maintenance pass.
-      await config.recoverInterruptedRuns();
-      assertCurrent();
-      runsResumed = true;
+      try {
+        await resumeRestoredRuns(cfg, assertCurrent);
+        assertCurrent();
+        // Requester transfer precedes interruption settlement; ordinary wake retries
+        // and cleanup retain their scheduled maintenance pass.
+        await config.recoverInterruptedRuns();
+        assertCurrent();
+        runsResumed = true;
+      } catch (error) {
+        if (
+          !(error instanceof AgentDatabaseAdmissionError) ||
+          error.refusal.code !== "agent-database-inspection-pending"
+        ) {
+          throw error;
+        }
+        assertCurrent();
+        activationFailures.push(error);
+      }
     }
-    if (transferFailures.length > 0) {
+    if (activationFailures.length > 0) {
       scheduleRestoreRetry(retryDelayMs, async () => {
         try {
           assertCurrent();
@@ -240,7 +252,15 @@ export function createSubagentRegistryRestorer(config: {
           warn("failed to activate restored requester transfers", { error });
         }
       });
-      throw transferFailures[0];
+      for (const failure of activationFailures) {
+        if (
+          !(failure instanceof AgentDatabaseAdmissionError) ||
+          failure.refusal.code !== "agent-database-inspection-pending"
+        ) {
+          throw failure;
+        }
+      }
+      return;
     }
     activated = true;
   }

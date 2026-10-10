@@ -248,7 +248,10 @@ export function classifyFailoverClassificationFromHttpStatus(
   }
   if (status === 410) {
     // Generic 410/no-body responses behave like transport failures, not session expiry.
-    if (PRESERVED_NOT_FOUND_OR_GONE_REASONS.has(messageReason)) {
+    if (
+      PRESERVED_NOT_FOUND_OR_GONE_REASONS.has(messageReason) ||
+      messageReason === "model_not_found"
+    ) {
       return messageClassification;
     }
     return toReasonClassification("timeout");

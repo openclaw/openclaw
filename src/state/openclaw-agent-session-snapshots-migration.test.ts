@@ -10,13 +10,14 @@ import {
 } from "../config/sessions/session-accessor.sqlite-entry-store.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import { withAgentDatabaseMaintenanceLease } from "./openclaw-agent-db-maintenance-lease.js";
 import { ensureOpenClawAgentDatabaseSchema } from "./openclaw-agent-db-schema.js";
 import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "./openclaw-agent-db.js";
-import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
+import { OPENCLAW_AGENT_SCHEMA_V24_SQL } from "./openclaw-agent-schema-v24.test-support.js";
 import { withoutSessionEntrySnapshotsSchema } from "./openclaw-agent-session-snapshots-schema.js";
 
 function largeEntry(index: number): SessionEntry {
@@ -50,7 +51,7 @@ function largeEntry(index: number): SessionEntry {
 }
 
 function seedV23(database: DatabaseSync, count: number) {
-  database.exec(withoutSessionEntrySnapshotsSchema(OPENCLAW_AGENT_SCHEMA_SQL));
+  database.exec(withoutSessionEntrySnapshotsSchema(OPENCLAW_AGENT_SCHEMA_V24_SQL));
   database.exec(`PRAGMA user_version = 23;
     INSERT INTO schema_meta(meta_key, role, schema_version, agent_id, app_version, created_at, updated_at)
     VALUES ('primary', 'agent', 23, 'main', '2026.9.4', 1, 1)`);
@@ -145,9 +146,11 @@ it("migrates a copied large v23 store without losing snapshots or rewriting tran
           env: state.env,
         });
       });
-      expect(database.prepare("PRAGMA user_version").get()).toEqual({ user_version: 24 });
+      expect(database.prepare("PRAGMA user_version").get()).toEqual({
+        user_version: OPENCLAW_AGENT_SCHEMA_VERSION,
+      });
       expect(database.prepare("SELECT schema_version FROM schema_meta").get()).toEqual({
-        schema_version: 24,
+        schema_version: OPENCLAW_AGENT_SCHEMA_VERSION,
       });
       expect(transcriptRows(database)).toEqual(beforeTranscript);
       const reader = { agentId: "main", db: database };
@@ -250,7 +253,11 @@ it("rolls back extracted snapshots and version markers when schema publication i
       };
       let reachedPublication = false;
       database.setAuthorizer((action, name, value) => {
-        if (action === constants.SQLITE_PRAGMA && name === "user_version" && value === "24") {
+        if (
+          action === constants.SQLITE_PRAGMA &&
+          name === "user_version" &&
+          value === String(OPENCLAW_AGENT_SCHEMA_VERSION)
+        ) {
           reachedPublication = true;
           return constants.SQLITE_DENY;
         }

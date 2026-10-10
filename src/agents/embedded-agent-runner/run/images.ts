@@ -45,6 +45,7 @@ import {
   type MediaImageRef,
 } from "./images.media-refs.js";
 import {
+  collectPreparedDocumentImageFactIndexes,
   type ImageFactIndex,
   type MediaImageLayout,
   readPersistedImageBlockFactIndexes,
@@ -292,12 +293,8 @@ export async function detectAndLoadPromptImages(
           : ("offloaded" as const),
     }));
   })();
-  const slots = mediaImageLayout?.slots.length
-    ? mediaImageLayout.slots.filter(
-        (slot) => slot.factIndex === undefined || !suppressed.has(slot.factIndex),
-      )
-    : inferredSlots;
-  const layoutInlineIndexes = (mediaImageLayout?.slots ?? slots).flatMap((slot) =>
+  const candidateSlots = mediaImageLayout?.slots.length ? mediaImageLayout.slots : inferredSlots;
+  const layoutInlineIndexes = (mediaImageLayout?.slots ?? candidateSlots).flatMap((slot) =>
     slot.kind === "inline" ? [slot.factIndex ?? null] : [],
   );
   const existingIndexes =
@@ -306,6 +303,18 @@ export async function detectAndLoadPromptImages(
     (layoutInlineIndexes.length === (params.existingImages?.length ?? 0)
       ? layoutInlineIndexes
       : params.existingImages?.map(() => null));
+  // Document sources suppress binary hydration, not already-extracted page bytes.
+  // Described photos stay suppressed; a layout without matching bytes proves nothing.
+  for (const index of collectPreparedDocumentImageFactIndexes(
+    media,
+    params.existingImages ?? [],
+    existingIndexes,
+  )) {
+    suppressed.delete(index);
+  }
+  const slots = candidateSlots.filter(
+    (slot) => slot.factIndex === undefined || !suppressed.has(slot.factIndex),
+  );
   const unusedExisting = (params.existingImages ?? [])
     .map((image, index) => ({
       image,

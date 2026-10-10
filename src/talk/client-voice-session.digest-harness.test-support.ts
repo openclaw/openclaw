@@ -10,10 +10,50 @@ import { clientVoiceSessionTesting } from "./client-voice-session.test-support.j
 const { sendDurableMessageBatch } = vi.hoisted(() => ({
   sendDurableMessageBatch: vi.fn(async () => ({ status: "sent" })),
 }));
+const acceptedDigestWork = vi.hoisted(() => new Set<Promise<void>>());
+
+vi.mock("./client-voice-session-lifecycle.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./client-voice-session-lifecycle.js")>();
+  return {
+    ...actual,
+    captureClientVoiceSessionSettlement(
+      ...args: Parameters<typeof actual.captureClientVoiceSessionSettlement>
+    ) {
+      const accepted = actual.captureClientVoiceSessionSettlement(...args);
+      let finish!: () => void;
+      const completed = new Promise<void>((resolve) => {
+        finish = resolve;
+      });
+      acceptedDigestWork.add(completed);
+      return {
+        run<T>(run: () => T): T {
+          return accepted.run(run);
+        },
+        release() {
+          try {
+            accepted.release();
+          } finally {
+            acceptedDigestWork.delete(completed);
+            finish();
+          }
+        },
+      };
+    },
+  };
+});
+
+async function settleDigestAttempts(): Promise<void> {
+  while (acceptedDigestWork.size > 0) {
+    await Promise.all(acceptedDigestWork);
+  }
+}
 
 vi.mock("../channels/message/runtime.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../channels/message/runtime.js")>();
-  return { ...actual, sendDurableMessageBatchCore: sendDurableMessageBatch };
+  return {
+    ...actual,
+    sendDurableMessageBatchCore: sendDurableMessageBatch,
+  };
 });
 
 export function useClientVoiceDigestHarness() {
@@ -21,6 +61,7 @@ export function useClientVoiceDigestHarness() {
   let stateDir: string;
   const tempDirs = useAutoCleanupTempDirTracker((remove) => {
     afterEach(async () => {
+      await settleDigestAttempts();
       clientVoiceSessionTesting.reset();
       resetClientVoiceConfirmationStateForTest();
       try {
@@ -40,6 +81,7 @@ export function useClientVoiceDigestHarness() {
 
   return {
     sendDurableMessageBatch,
+    settleDigestAttempts,
     get stateDir() {
       return stateDir;
     },

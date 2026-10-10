@@ -36,42 +36,39 @@ function inspectEntry(file: string, allowNotDirectory = false) {
 
 export function projectImmutableInstall(record: ImmutableInstallRecord): UpdateImmutableInstall {
   const { descriptor, prepared } = record;
-  return {
+  const result: UpdateImmutableInstall = {
     root: descriptor.root,
     currentSha: descriptor.current.sha,
     currentPath: descriptor.current.path,
     ...(descriptor.activationEnabled ? { activationEnabled: true } : {}),
-    ...(record.activation?.operation
-      ? {
-          activation: {
-            operationId: record.activation.operation.operationId,
-            phase: record.activation.operation.phase,
-            previousSha: record.activation.operation.previous.sha,
-            candidateSha: record.activation.operation.candidate.sha,
-          },
-        }
-      : {}),
-    ...(record.activation?.lastResult
-      ? {
-          lastActivation: {
-            operationId: record.activation.lastResult.operationId,
-            outcome: record.activation.lastResult.outcome,
-            selectedSha: record.activation.lastResult.selectedSha,
-            verifiedAtMs: record.activation.lastResult.verifiedAtMs,
-          },
-        }
-      : {}),
-    ...(prepared
-      ? {
-          prepared: {
-            sha: prepared.sha,
-            path: prepared.path,
-            buildDigest: prepared.buildDigest,
-            preparedAtMs: prepared.preparedAtMs,
-          },
-        }
-      : {}),
   };
+  const operation = record.activation?.operation;
+  if (operation) {
+    result.activation = {
+      operationId: operation.operationId,
+      phase: operation.phase,
+      previousSha: operation.previous.sha,
+      candidateSha: operation.candidate.sha,
+    };
+  }
+  const lastResult = record.activation?.lastResult;
+  if (lastResult) {
+    result.lastActivation = {
+      operationId: lastResult.operationId,
+      outcome: lastResult.outcome,
+      selectedSha: lastResult.selectedSha,
+      verifiedAtMs: lastResult.verifiedAtMs,
+    };
+  }
+  if (prepared) {
+    result.prepared = {
+      sha: prepared.sha,
+      path: prepared.path,
+      buildDigest: prepared.buildDigest,
+      preparedAtMs: prepared.preparedAtMs,
+    };
+  }
+  return result;
 }
 
 async function installationRoot(input: string): Promise<string | null> {
@@ -333,6 +330,10 @@ export async function prepareImmutableUpdate(params: {
     status: ImmutableUpdateResult["status"],
     reason?: string,
   ): ImmutableUpdateResult => ({ status, reason, installation, targetSha, steps, warnings });
+  const preparedResult = (record: ImmutableInstallRecord): ImmutableUpdateResult => ({
+    ...result("prepared", "activation unavailable"),
+    installation: projectImmutableInstall(record),
+  });
   try {
     if (params.sha !== undefined && !SHA.test(params.sha)) {
       throw new Error("--sha requires a full lowercase 40-hex commit SHA.");
@@ -406,13 +407,15 @@ export async function prepareImmutableUpdate(params: {
         assertOwner();
         assertImmutableDescriptorCurrent(descriptor);
       };
+      const verifyService = () =>
+        verifyImmutableService(
+          descriptor.service,
+          descriptor.root,
+          descriptor.current.path,
+          descriptor.runtime.path,
+        );
       assertCurrent();
-      await verifyImmutableService(
-        descriptor.service,
-        descriptor.root,
-        descriptor.current.path,
-        descriptor.runtime.path,
-      );
+      await verifyService();
       const current = await verifyImmutableGeneration(
         descriptor.current.path,
         descriptor.current.sha,
@@ -442,10 +445,7 @@ export async function prepareImmutableUpdate(params: {
           );
         }
         assertCurrent();
-        return {
-          ...result("prepared", "activation unavailable"),
-          installation: projectImmutableInstall(record),
-        };
+        return preparedResult(record);
       }
       assertCurrent();
       const stage = await fs.mkdtemp(path.join(descriptor.root, ".openclaw-immutable-"));
@@ -531,12 +531,7 @@ export async function prepareImmutableUpdate(params: {
             await verifyImmutableGeneration(candidate, selectedSha, runCommand, { sealed: false });
             await sealImmutableGeneration(candidate);
             const verified = await verifyImmutableGeneration(candidate, selectedSha, runCommand);
-            await verifyImmutableService(
-              descriptor.service,
-              descriptor.root,
-              descriptor.current.path,
-              descriptor.runtime.path,
-            );
+            await verifyService();
             assertCurrent();
             // Native publishers hold this lock; preexisting generations are never rebuilt.
             if (fsSync.existsSync(destination)) {
@@ -568,10 +563,7 @@ export async function prepareImmutableUpdate(params: {
         const { recordImmutablePreparedGeneration } =
           await import("./package-update-activation-immutable.js");
         const recorded = recordImmutablePreparedGeneration(record, prepared, assertCurrent);
-        return {
-          ...result("prepared", "activation unavailable"),
-          installation: projectImmutableInstall(recorded),
-        };
+        return preparedResult(recorded);
       } catch (error) {
         cleanupUncertain = hasCommandProcessCleanupError(error);
         throw error;

@@ -80,6 +80,7 @@ export function createProgressState(
     reasoningGate: draftState.streamReasoningInProgressDraft,
     reasoningLinePrefix: "🧠 ",
     commentaryLinePrefix: "💬 ",
+    toolIcons: true,
     commentaryItalics: false,
     updateOnLineChange: true,
     shouldStartNow: (line) => typeof line !== "string" && Boolean(line?.toolName),
@@ -149,7 +150,9 @@ export async function settleFailedFinalDelivery(turn: Turn): Promise<void> {
     return;
   }
   const text =
-    "I couldn't confirm the reply reached Telegram. Check OpenClaw chat history for the answer before retrying the task.";
+    turn.finalDeliveryNotDispatched && !turn.previewLifecycle.finalDelivered
+      ? "I couldn't send the reply to Telegram. Check OpenClaw chat history for the answer and the Gateway logs for the delivery error."
+      : "I couldn't confirm the reply reached Telegram. Check OpenClaw chat history for the answer before retrying the task.";
   const stream = turn.answerLane.stream;
   const messageId = stream?.messageId();
   if (
@@ -221,6 +224,7 @@ export function retainProgressDraft(turn: Turn, stream: TelegramDraftStream) {
     active: true,
     seed: `${turn.context.route.accountId}:${turn.context.chatId}:${turn.context.threadSpec.id ?? ""}`,
     reasoningGate: false,
+    toolIcons: true,
     updateOnLineChange: true,
     initialSnapshot: turn.progressCompositor.getSnapshot(),
     update: (_text, options) => {

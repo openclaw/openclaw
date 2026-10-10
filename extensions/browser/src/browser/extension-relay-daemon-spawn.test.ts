@@ -1,37 +1,54 @@
+import { ChildProcess, spawn } from "node:child_process";
 import net from "node:net";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ensureExtensionRelayDaemonProcess } from "./extension-relay-daemon-spawn.js";
+import { readExtensionRelayToken } from "./extension-relay/relay-auth.js";
+import { getFreePort } from "./test-port.js";
+
+vi.mock("node:child_process", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:child_process")>()),
+  spawn: vi.fn(),
+}));
+vi.mock("./extension-relay/relay-auth.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./extension-relay/relay-auth.js")>()),
+  readExtensionRelayToken: vi.fn(),
+}));
+
+afterEach(() => {
+  vi.resetAllMocks();
+});
 
 const ENTRY = "/opt/openclaw/dist/extensions/browser/relay-daemon-entry.js";
 
 describe("ensureExtensionRelayDaemonProcess", () => {
   it("skips when no relay credential exists", async () => {
-    const spawnProcess = vi.fn();
+    vi.mocked(readExtensionRelayToken).mockReturnValue(null);
     const status = await ensureExtensionRelayDaemonProcess({
       cfg: {},
       port: 18_799,
       entryPath: ENTRY,
-      readToken: () => null,
-      probe: async () => false,
-      spawnProcess,
     });
     expect(status).toBe("skipped");
-    expect(spawnProcess).not.toHaveBeenCalled();
+    expect(spawn).not.toHaveBeenCalled();
   });
 
   it("spawns the daemon entry with the resolved port", async () => {
-    const spawnProcess = vi.fn();
+    const port = await getFreePort();
+    const child = new ChildProcess();
+    const unref = vi.spyOn(child, "unref");
+    vi.mocked(spawn).mockReturnValue(child);
+    vi.mocked(readExtensionRelayToken).mockReturnValue("a".repeat(64));
     const status = await ensureExtensionRelayDaemonProcess({
-      cfg: { browser: { profiles: { work: { driver: "extension", cdpPort: 19123 } } } },
-      port: 19_123,
+      cfg: { browser: { profiles: { work: { driver: "extension", cdpPort: port } } } },
+      port,
       entryPath: ENTRY,
-      execPath: "/usr/bin/node",
-      readToken: () => "a".repeat(64),
-      probe: async () => false,
-      spawnProcess,
     });
     expect(status).toBe("spawned");
-    expect(spawnProcess).toHaveBeenCalledWith("/usr/bin/node", [ENTRY, "--port", "19123"]);
+    expect(spawn).toHaveBeenCalledWith(process.execPath, [ENTRY, "--port", String(port)], {
+      detached: true,
+      stdio: "ignore",
+    });
+    expect(unref).toHaveBeenCalledOnce();
   });
 });
 
@@ -43,23 +60,22 @@ describe("relay port ownership", () => {
     });
     const address = server.address();
     const port = typeof address === "object" && address ? address.port : 0;
-    const spawnProcess = vi.fn();
+    vi.mocked(spawn).mockReturnValue(new ChildProcess());
+    vi.mocked(readExtensionRelayToken).mockReturnValue("a".repeat(64));
     const params = {
       cfg: { browser: { profiles: { work: { driver: "extension" as const, cdpPort: port } } } },
       port,
       entryPath: ENTRY,
-      readToken: () => "a".repeat(64),
-      spawnProcess,
     };
     try {
       expect(await ensureExtensionRelayDaemonProcess(params)).toBe("running");
-      expect(spawnProcess).not.toHaveBeenCalled();
+      expect(spawn).not.toHaveBeenCalled();
     } finally {
       await new Promise<void>((resolve) => {
         server.close(() => resolve());
       });
     }
     expect(await ensureExtensionRelayDaemonProcess(params)).toBe("spawned");
-    expect(spawnProcess).toHaveBeenCalledOnce();
+    expect(spawn).toHaveBeenCalledOnce();
   });
 });

@@ -33,6 +33,7 @@ import {
   getOpenClawAgentDatabaseValidationForTransfer,
   hasOpenClawAgentCanonicalValidation,
   invalidateOpenClawAgentDatabaseSchema,
+  invalidateOpenClawAgentCanonicalValidation,
   invalidateOpenClawAgentDatabaseValidation,
   invalidateOpenClawAgentDatabaseValidationsForAgent,
   markOpenClawAgentCanonicalValidation,
@@ -168,8 +169,10 @@ describe("canonical proof on physical database validation", () => {
           expect(adoptOpenClawAgentDatabaseSchema(database, true, true)).toBe(true);
           expect(Atomics.load(new Int32Array(original.valid), 0)).toBe(0);
 
-          // Local TEMP DDL still revokes even though main's schema markers do not change.
+          // TEMP changes preserve MAIN admission; durable DDL still revokes it.
           reader.database.db.exec("CREATE TEMP TABLE local_fixture(value TEXT)");
+          expect(adoptOpenClawAgentDatabaseSchema(database)).toBe(true);
+          database.db.exec("CREATE TABLE main.local_fixture(value TEXT)");
           expect(adoptOpenClawAgentDatabaseSchema(database)).toBe(false);
           refreshOpenClawAgentDatabaseSchema(database, () => {});
           expect(hasOpenClawAgentReadOnlySchema(reader.database)).toBe(true);
@@ -420,7 +423,7 @@ describe("canonical proof on physical database validation", () => {
             if (transition === "schema-revocation" || transition === "optional-schema-revocation") {
               invalidateOpenClawAgentDatabaseSchema(reopened);
             } else if (transition === "local-ddl" || transition === "optional-local-ddl") {
-              reopened.db.exec("CREATE TEMP TABLE revoked_promotion(value TEXT)");
+              reopened.db.exec("CREATE TABLE main.revoked_promotion(value TEXT)");
             }
             if (transition === "replacement") {
               expect(promoted.identity).not.toBe(received.identity);
@@ -773,6 +776,41 @@ describe("canonical proof on physical database validation", () => {
         } finally {
           raw.close();
         }
+      });
+    },
+  );
+
+  it.each(["commit", "rollback"] as const)(
+    "revokes canonical receipts for offline repair while retaining integrity (%s)",
+    async (outcome) => {
+      await withReceiptFixture(true, (database, options) => {
+        runOpenClawAgentWriteTransaction(recordOpenClawAgentCanonicalValidation, options);
+        expect(markOpenClawAgentCanonicalValidation(database)).toBe(true);
+        const physical = getOpenClawAgentDatabaseValidation(database);
+        const mutate = () =>
+          runOpenClawAgentWriteTransaction((current) => {
+            invalidateOpenClawAgentCanonicalValidation(current);
+            expect(hasOpenClawAgentCanonicalValidation(current)).toBe(false);
+            expect(
+              current.db.prepare("SELECT canonical_ready FROM session_key_contract").get()
+                ?.canonical_ready,
+            ).toBeNull();
+            if (outcome === "rollback") {
+              throw new Error("undo repair");
+            }
+          }, options);
+        if (outcome === "rollback") {
+          expect(mutate).toThrow("undo repair");
+        } else {
+          mutate();
+        }
+        expect(hasOpenClawAgentCanonicalValidation(database)).toBe(false);
+        expect(getOpenClawAgentDatabaseValidation(database)).toBe(physical);
+        expect(Atomics.load(new Int32Array(physical!.valid), 0)).toBe(1);
+        const stored = database.db
+          .prepare("SELECT canonical_ready FROM session_key_contract")
+          .get()?.canonical_ready;
+        expect(stored === null).toBe(outcome === "commit");
       });
     },
   );

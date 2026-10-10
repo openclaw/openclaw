@@ -59,12 +59,9 @@ async function resolveStatusAllLocalDiagnosis(params: {
       ? [undefined, null, null]
       : await Promise.all([
           resolveStatusGatewayHealthSafe({
-            config: overview.cfg,
-            gatewayProbeDeadlineMs: params.gatewayProbeDeadlineMs,
+            ...diagnosticsParams,
             timeoutMs: Math.min(8000, params.timeoutMs ?? 10_000),
-            gatewayReachable,
             gatewayProbeError: gatewayProbe?.error ?? null,
-            ...(gatewayCallOverrides ? { callOverrides: gatewayCallOverrides } : {}),
           }),
           resolveStatusGatewayDiagnosticsSafe(diagnosticsParams),
           resolveStatusGatewayDiagnosticsSafe({

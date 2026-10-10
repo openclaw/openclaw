@@ -100,10 +100,7 @@ export function createTelegramTextSender(config: {
     let acceptedReplyToMessageId: number | undefined;
     const deliveryResults: TelegramSendResult[] = [];
     const buildReceipt = () => {
-      if (deliveryResults.length === 0) {
-        return undefined;
-      }
-      if (deliveryResults.length === 1) {
+      if (deliveryResults.length < 2) {
         return deliveryResults[0]?.receipt;
       }
       const receipt = createMessageReceiptFromOutboundResults({
@@ -148,10 +145,9 @@ export function createTelegramTextSender(config: {
       if (keyboardError !== undefined) {
         // Finalization routes this through sender.fail(), which preserves the
         // accepted message IDs in a partial-delivery error.
-        if (keyboardError instanceof Error) {
-          throw keyboardError;
-        }
-        throw new Error(formatErrorMessage(keyboardError));
+        throw keyboardError instanceof Error
+          ? keyboardError
+          : new Error(formatErrorMessage(keyboardError));
       }
     };
 

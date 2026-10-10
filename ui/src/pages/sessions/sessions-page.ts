@@ -4,6 +4,7 @@ import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { html, nothing, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
+import { createDeferredCore } from "../../../../src/shared/deferred.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
@@ -524,10 +525,8 @@ class SessionsPage extends OpenClawLightDomElement {
     }
     // Claim before refreshList publishes. Only this connection's completion may
     // release the slot; the next query is read from page state, never queued here.
-    let start!: (request: Promise<void>) => void;
-    const pending = new Promise<void>((resolve) => {
-      start = resolve;
-    }).finally(() => {
+    const completion = createDeferredCore();
+    const pending = completion.promise.finally(() => {
       if (this.listRequest !== pending) {
         return;
       }
@@ -537,20 +536,13 @@ class SessionsPage extends OpenClawLightDomElement {
     });
     this.listRequest = pending;
     this.refreshing = true;
-    start(binding.sessions.refreshList({ ...binding.query, ...options }));
+    completion.resolve(binding.sessions.refreshList({ ...binding.query, ...options }));
     return pending;
   }
 
   private clearSearchTimer() {
     clearTimeout(this.searchTimer);
     this.searchTimer = undefined;
-  }
-
-  private adoptCurrentListSnapshot() {
-    const binding = this.listBinding;
-    if (binding) {
-      this.applyListSnapshot(binding, binding.sessions.listSnapshot(binding.query));
-    }
   }
 
   private resetTranscriptSearchState(query: string) {
@@ -868,7 +860,10 @@ class SessionsPage extends OpenClawLightDomElement {
     } finally {
       if (this.isRequestScopeCurrent(scope)) {
         this.sessionMutationPending = false;
-        this.adoptCurrentListSnapshot();
+        const binding = this.listBinding;
+        if (binding) {
+          this.applyListSnapshot(binding, binding.sessions.listSnapshot(binding.query));
+        }
         if (mutationError) {
           this.error = mutationError;
         }
@@ -878,12 +873,6 @@ class SessionsPage extends OpenClawLightDomElement {
 
   private knownCategories(): string[] {
     return sessionCategoryNames(this.result, this.context?.sessions.state.groups ?? []);
-  }
-
-  private setGroupBy(mode: SessionsGroupBy) {
-    this.groupBy = mode;
-    this.page = 0;
-    saveStoredGroupBy(mode);
   }
 
   private async rememberCustomGroup(
@@ -1463,7 +1452,11 @@ class SessionsPage extends OpenClawLightDomElement {
             this.sortDir = direction;
             this.page = 0;
           },
-          onGroupByChange: (mode) => this.setGroupBy(mode),
+          onGroupByChange: (mode) => {
+            this.groupBy = mode;
+            this.page = 0;
+            saveStoredGroupBy(mode);
+          },
           onAssignCategory: (key, category) => this.assignCategory(key, category),
           onRequestNewCategory: (sessionKey) => void this.requestNewCategory(sessionKey),
           onLoadMore: () => {

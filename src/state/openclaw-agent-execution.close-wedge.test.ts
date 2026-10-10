@@ -6,7 +6,7 @@ import * as backoff from "../infra/backoff.js";
 import { formatErrorMessageWithCode } from "../infra/errors.js";
 import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import { closeOpenClawAgentDatabasesAsync } from "./openclaw-agent-db.js";
-import type { AgentDatabaseRequestExecutionSource } from "./openclaw-agent-execution-contract.js";
+import type { AgentDatabaseRequestExecutionSource } from "./openclaw-agent-execution-admission-contract.js";
 import { captureOpenClawAgentDatabaseExecution } from "./openclaw-agent-execution.js";
 import { closeOpenClawStateDatabaseAsync } from "./openclaw-state-db.js";
 
@@ -180,7 +180,7 @@ it("recovers after a failed operation with successful native close", async () =>
   Atomics.store(new Int32Array(fault.enabled), 0, 2);
   const failure: unknown = await first
     .runExisting(source, (scope) =>
-      scope.execute({ type: "session.entry.read", input: { sessionKey: fault.marker } }),
+      scope.execute({ type: "session.entry.read", input: { sessionKeys: [fault.marker] } }),
     )
     .catch((error: unknown) => error);
   Atomics.store(new Int32Array(fault.enabled), 0, 0);
@@ -205,9 +205,9 @@ it("recovers after a failed operation with successful native close", async () =>
     });
   expect(
     await retry.runExisting(source, (scope) =>
-      scope.execute({ type: "session.entry.read", input: { sessionKey: "recovered" } }),
+      scope.execute({ type: "session.entry.read", input: { sessionKeys: ["recovered"] } }),
     ),
-  ).toBeUndefined();
+  ).toMatchObject({ entries: [] });
   await retry.release();
 });
 
@@ -217,9 +217,9 @@ it("reopens a native generation lost between operations before dispatch", async 
   await execution.prepare(source);
   expect(
     await execution.runExisting(source, (scope) =>
-      scope.execute({ type: "session.entry.read", input: { sessionKey: "healthy" } }),
+      scope.execute({ type: "session.entry.read", input: { sessionKeys: ["healthy"] } }),
     ),
-  ).toBeUndefined();
+  ).toMatchObject({ entries: [] });
   const claim = execution.captureGenerationClaim();
   expect(() => claim.assertCurrent()).not.toThrow();
 
@@ -232,9 +232,9 @@ it("reopens a native generation lost between operations before dispatch", async 
   expect(
     await execution.runExisting(source, (scope) => {
       dispatched += 1;
-      return scope.execute({ type: "session.entry.read", input: { sessionKey: "recovered" } });
+      return scope.execute({ type: "session.entry.read", input: { sessionKeys: ["recovered"] } });
     }),
-  ).toBeUndefined();
+  ).toMatchObject({ entries: [] });
   expect(dispatched).toBe(1);
   const replacement = execution.capturePreparedGenerationClaim();
   expect(replacement?.identity).toBe(claim.identity);
@@ -242,9 +242,9 @@ it("reopens a native generation lost between operations before dispatch", async 
   expect(() => claim.assertCurrent()).toThrow("Agent database execution generation was replaced");
   expect(
     await execution.runExisting(source, (scope) =>
-      scope.execute({ type: "session.entry.read", input: { sessionKey: "still-healthy" } }),
+      scope.execute({ type: "session.entry.read", input: { sessionKeys: ["still-healthy"] } }),
     ),
-  ).toBeUndefined();
+  ).toMatchObject({ entries: [] });
   await execution.release();
 });
 
@@ -257,7 +257,7 @@ it("surfaces the native cleanup cause while the close still fails, then recovers
   Atomics.store(new Int32Array(fault.enabled), 0, 1);
   const failure: unknown = await first
     .runExisting(source, (scope) =>
-      scope.execute({ type: "session.entry.read", input: { sessionKey: fault.marker } }),
+      scope.execute({ type: "session.entry.read", input: { sessionKeys: [fault.marker] } }),
     )
     .catch((error: unknown) => error);
   expect(failure).toBeInstanceOf(Error);
@@ -299,9 +299,9 @@ it("surfaces the native cleanup cause while the close still fails, then recovers
   const recovered = captureOpenClawAgentDatabaseExecution({ agentId: "first", env });
   expect(
     await recovered.runExisting(source, (scope) =>
-      scope.execute({ type: "session.entry.read", input: { sessionKey: "recovered" } }),
+      scope.execute({ type: "session.entry.read", input: { sessionKeys: ["recovered"] } }),
     ),
-  ).toBeUndefined();
+  ).toMatchObject({ entries: [] });
   expect(recovered.capturePreparedGenerationClaim()).toBeDefined();
   await recovered.release();
 });

@@ -118,7 +118,7 @@ private final class PingWebSocketTask: WebSocketTasking, @unchecked Sendable {
     }
 }
 
-private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Sendable {
+final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Sendable {
     private typealias ReceiveResult = Result<URLSessionWebSocketTask.Message, Error>
 
     private let lock = NSLock()
@@ -140,6 +140,9 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
     private var receivePhase = 0
     private var pendingReceiveHandler: (@Sendable (ReceiveResult) -> Void)?
     private var pendingInboundFrames: [ReceiveResult] = []
+    private var holdsPongs = false
+    private var pingCount = 0
+    private var pendingPongs: [@Sendable (Error?) -> Void] = []
     private var waiters = StateWaiters()
 
     init(
@@ -272,7 +275,38 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
     }
 
     func sendPing(pongReceiveHandler: @escaping @Sendable (Error?) -> Void) {
-        pongReceiveHandler(nil)
+        let held = self.lock.withLock {
+            self.pingCount += 1
+            if self.holdsPongs { self.pendingPongs.append(pongReceiveHandler) }
+            self.waiters.resumeSatisfied()
+            return self.holdsPongs
+        }
+        if !held { pongReceiveHandler(nil) }
+    }
+
+    func holdPongs() {
+        self.lock.withLock { self.holdsPongs = true }
+    }
+
+    func finishPongs(error: Error? = nil) {
+        let callbacks = self.lock.withLock {
+            defer { self.pendingPongs.removeAll() }
+            return self.pendingPongs
+        }
+        callbacks.forEach { $0(error) }
+    }
+
+    func snapshotPingCount() -> Int {
+        self.lock.withLock { self.pingCount }
+    }
+
+    func waitForPings(count: Int) async {
+        await withCheckedContinuation { continuation in
+            self.lock.withLock {
+                self.waiters.append(continuation) { self.pingCount >= count }
+                self.waiters.resumeSatisfied()
+            }
+        }
     }
 
     func receive() async throws -> URLSessionWebSocketTask.Message {
@@ -509,7 +543,7 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
     }
 }
 
-private final class FakeGatewayWebSocketSession: WebSocketSessioning, GatewayTLSRouteMetadataProviding,
+final class FakeGatewayWebSocketSession: WebSocketSessioning, GatewayTLSRouteMetadataProviding,
     @unchecked Sendable
 {
     private let lock = NSLock()

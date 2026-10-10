@@ -285,7 +285,8 @@ the provider's own awaited work.
     **Session store helpers** are under `api.runtime.agent.session`:
 
     ```typescript
-    const entry = api.runtime.agent.session.getSessionEntry({ agentId, sessionKey });
+    const entry = await api.runtime.agent.session.getSessionEntryAsync({ agentId, sessionKey });
+    const match = await api.runtime.agent.session.getSessionEntryByIdAsync({ agentId, sessionId });
     for (const { sessionKey, entry } of api.runtime.agent.session.listSessionEntries({ agentId })) {
       // Iterate session rows without depending on the legacy sessions.json shape.
     }
@@ -317,7 +318,13 @@ the provider's own awaited work.
     );
     ```
 
-    Prefer `getSessionEntry(...)`, `listSessionEntries(...)`, `patchSessionEntry(...)`, or `upsertSessionEntry(...)` for session workflows. These helpers address sessions by agent/session identity so plugins do not depend on the legacy `sessions.json` storage shape. Use `preserveActivity: true` for metadata-only patches that should not refresh session activity, and `replaceEntry: true` only when the callback returns a complete entry and deleted fields must stay deleted. Doctor and migration paths can combine `fallbackEntry`, `skipMaintenance`, and `requireWriteSuccess` for one atomic canonical-store repair.
+    Prefer `getSessionEntryAsync(...)`, `getSessionEntryByIdAsync(...)`, `patchSessionEntry(...)`, or `upsertSessionEntry(...)` for session workflows. These helpers address sessions by agent/session identity so plugins do not depend on the legacy `sessions.json` storage shape. Use `preserveActivity: true` for metadata-only patches that should not refresh session activity, and `replaceEntry: true` only when the callback returns a complete entry and deleted fields must stay deleted. Doctor and migration paths can combine `fallbackEntry`, `skipMaintenance`, and `requireWriteSuccess` for one atomic canonical-store repair.
+
+    Both async getters are also exported from the existing `openclaw/plugin-sdk/session-store-runtime` subpath. They return the complete public entry projection, excluding host-private fields, or `undefined` for a missing entry. The by-ID result includes `{ sessionKey, entry }` from the same selected owner. An explicit `storePath` selects that physical store; an omitted path inside a host-supplied incognito scope retains that scope. Managed runtime calls reject if their plugin owner retires while the read is pending. Returned metadata does not authorize a later effect; revalidate the caller's current authority at that boundary. The SDK and runtime `getSessionEntry(...)` getters are deprecated in favor of `getSessionEntryAsync(...)` and will be removed at the next Plugin SDK major. Their synchronous behavior remains unchanged during the migration window. The existing `readSessionUpdatedAt(...)` deprecation follows the same removal window; await `readSessionUpdatedAtAsync(...)` instead.
+
+    By default, `getSessionEntryByIdAsync(...)` chooses the first visible exact ID match in session-key order, falling back to trimmed legacy IDs only when there is no exact match. Pass `orderBy: "updatedAt"` to choose the most recently updated match across exact and trimmed IDs, with session-key order breaking ties. Active Memory uses this option to preserve its most-recent-session selection.
+
+    Incognito actor support is inactive preparation: ordinary unbound incognito calls still use the existing host-owned store and allocate no actor. Explicit host bindings exercise the actor arm; fresh selected absence remains distinct from an ended retained actor. `rethrowIncognitoSessionError(error)` preserves those typed refusals in optional-read error handlers. Active Memory awaits entry, eligibility, and status preparation and does not turn actor loss into empty recall. No schema, retention, or update migration is introduced.
 
     When patch authority can change while `update` awaits, pass `assertCommitAllowed: () => void`. The storage owner calls this synchronous guard inside the commit transaction; throw to reject the entire patch. Keep network requests and other asynchronous work in `update`.
 

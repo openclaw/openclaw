@@ -11,6 +11,23 @@ export type MediaImageLayout = {
   suppressedFactIndexes?: number[];
 };
 
+/** Existing image bytes and exact source indexes together prove document-page coverage. */
+export function collectPreparedDocumentImageFactIndexes(
+  media: readonly MediaFact[],
+  images: readonly ImageContent[],
+  imageFactIndexes: readonly ImageFactIndex[] | undefined,
+): Set<number> {
+  if (imageFactIndexes?.length !== images.length) {
+    return new Set();
+  }
+  return new Set(
+    imageFactIndexes.flatMap((index) => {
+      const fact = index === null ? undefined : media[index];
+      return index !== null && fact && !isImageMediaFact(fact) ? [index] : [];
+    }),
+  );
+}
+
 /** Adds extracted pages to a transient projection without letting them claim photo slots. */
 export function appendExtractedPromptImages(
   message: Extract<AgentMessage, { role: "user" }>,

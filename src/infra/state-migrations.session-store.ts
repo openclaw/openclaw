@@ -328,12 +328,6 @@ function sessionStoreMayNeedCanonicalization(params: {
     if (lowerKey === DEFAULT_MAIN_KEY || lowerKey === params.mainKey) {
       return true;
     }
-    if (lowerKey.startsWith("subagent:")) {
-      return true;
-    }
-    if (lowerKey.startsWith("group:") || lowerKey.startsWith("channel:")) {
-      return true;
-    }
     if (!lowerKey.startsWith("agent:")) {
       return true;
     }
@@ -702,32 +696,22 @@ export async function migrateLegacyAcpSessionMetadata(params: {
     if (!migrationFileExists(target.storePath)) {
       continue;
     }
-    const group = storeGroups.find(({ target: existing }) =>
+    let group = storeGroups.find(({ target: existing }) =>
       sessionStorePathsMatch(existing.storePath, target.storePath),
     );
     const matchingDeclaredTargets = declaredTargets.filter((declaredTarget) =>
       sessionStorePathsMatch(target.storePath, declaredTarget.storePath),
     );
-    if (group) {
-      group.agentIds.add(normalizeAgentId(target.agentId));
-      group.aliasCandidates.add(target.storePath);
-      for (const declaredTarget of matchingDeclaredTargets) {
-        group.agentIds.add(declaredTarget.agentId);
-        group.aliasCandidates.add(declaredTarget.storePath);
-      }
-      continue;
+    if (!group) {
+      group = { target, agentIds: new Set(), aliasCandidates: new Set() };
+      storeGroups.push(group);
     }
-    storeGroups.push({
-      target,
-      agentIds: new Set([
-        normalizeAgentId(target.agentId),
-        ...matchingDeclaredTargets.map((declaredTarget) => declaredTarget.agentId),
-      ]),
-      aliasCandidates: new Set([
-        target.storePath,
-        ...matchingDeclaredTargets.map((declaredTarget) => declaredTarget.storePath),
-      ]),
-    });
+    group.agentIds.add(normalizeAgentId(target.agentId));
+    group.aliasCandidates.add(target.storePath);
+    for (const declaredTarget of matchingDeclaredTargets) {
+      group.agentIds.add(declaredTarget.agentId);
+      group.aliasCandidates.add(declaredTarget.storePath);
+    }
   }
 
   for (const { target, agentIds, aliasCandidates } of storeGroups) {
@@ -782,7 +766,6 @@ export async function migrateLegacyAcpSessionMetadata(params: {
     }
 
     const readVerifiedCoreImport = prepareDeferredPluginSessionImportReader({
-      cfg: params.cfg,
       target,
       env,
     });

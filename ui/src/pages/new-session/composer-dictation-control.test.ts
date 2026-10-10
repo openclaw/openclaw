@@ -2,6 +2,7 @@
 
 import { html, render } from "lit";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type * as ComposerDictationModule from "../chat/composer-dictation.ts";
 
 const dictationHarness = vi.hoisted(() => ({
   options: null as null | {
@@ -19,7 +20,8 @@ const dictationHarness = vi.hoisted(() => ({
   }>,
 }));
 
-vi.mock("../chat/composer-dictation.ts", () => ({
+vi.mock("../chat/composer-dictation.ts", async (importOriginal) => ({
+  ...(await importOriginal<typeof ComposerDictationModule>()),
   ComposerDictationController: class {
     active = false;
     connecting = false;
@@ -31,7 +33,11 @@ vi.mock("../chat/composer-dictation.ts", () => ({
       return this.active;
     }
 
-    handleClick = vi.fn();
+    handleClick = vi.fn(() => {
+      if (this.active) {
+        void this.finishActive();
+      }
+    });
     startDirect = vi.fn(() => {
       this.active = true;
       this.options.onStateChange?.();

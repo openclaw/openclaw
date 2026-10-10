@@ -355,6 +355,31 @@ describe("registry race safety", () => {
     }
   });
 
+  it("refuses completion and retirement of a replaced reservation in the worker", async () => {
+    const original = await reserveSandboxRegistryEntry(
+      containerEntry({ backendId: "generation-boundary", workspaceDir: "/original/workspace" }),
+    );
+    await removeRegistryEntry(original.containerName);
+    const replacement = await reserveSandboxRegistryEntry({
+      ...original,
+      createdAtMs: original.createdAtMs + 1,
+      workspaceDir: "/replacement/workspace",
+    });
+    const calls = observeMainThreadSql();
+    calls.calibrate();
+    try {
+      for (const retired of [false, true]) {
+        await expect(completeSandboxRegistryReservation(original, retired)).rejects.toThrow(
+          "Sandbox runtime generation changed",
+        );
+      }
+      await expect(readRegistryEntry(original.containerName)).resolves.toMatchObject(replacement);
+      calls.expectIdle();
+    } finally {
+      calls.restore();
+    }
+  });
+
   it("reads registered runtime IDs for one backend and scope newest first", async () => {
     for (const [containerName, backendId, sessionKey, lastUsedAtMs] of [
       ["openshell-older", "openshell", "agent:main", 10],

@@ -11,7 +11,7 @@ import {
   createSqliteWorkerOperationAdmission,
   type SqliteWorkerAdmissionRequest,
 } from "../../infra/sqlite-worker-operation-admission.js";
-import type { AgentDatabaseRequestExecutionSource } from "../../state/openclaw-agent-execution-contract.js";
+import type { AgentDatabaseRequestExecutionSource } from "../../state/openclaw-agent-execution-admission-contract.js";
 import type { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { executeOpenClawAgentWorkerPublication } from "../../state/openclaw-agent-worker-store.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
@@ -602,6 +602,7 @@ export function createAuthProfileStoreUpdater(
               profiles: buildPersistedAuthProfileSecretsStore(store).profiles,
             };
           const options = params.saveOptions;
+          const copyIds = (ids: Iterable<string> | undefined) => ids && [...ids];
           return {
             save: true,
             store: sanitize(loadedStore)!,
@@ -616,15 +617,9 @@ export function createAuthProfileStoreUpdater(
                 : undefined,
             options: options && {
               ...options,
-              preserveOrderProfileIds: options.preserveOrderProfileIds && [
-                ...options.preserveOrderProfileIds,
-              ],
-              preserveStateProfileIds: options.preserveStateProfileIds && [
-                ...options.preserveStateProfileIds,
-              ],
-              pruneOrderProfileIds: options.pruneOrderProfileIds && [
-                ...options.pruneOrderProfileIds,
-              ],
+              preserveOrderProfileIds: copyIds(options.preserveOrderProfileIds),
+              preserveStateProfileIds: copyIds(options.preserveStateProfileIds),
+              pruneOrderProfileIds: copyIds(options.pruneOrderProfileIds),
             },
           };
         },

@@ -17,7 +17,7 @@ export const APPEARANCE_SETTINGS_TARGET_IDS = {
   connection: "settings-appearance-connection",
 } as const;
 
-const appearanceSettingsRouteTarget = (targetId: string) =>
+export const appearanceSettingsRouteTarget = (targetId: string) =>
   ({ routeId: "appearance", search: "?section=__appearance__", hash: `#${targetId}` }) as const;
 
 export const SETTINGS_ROUTE_TARGETS = {

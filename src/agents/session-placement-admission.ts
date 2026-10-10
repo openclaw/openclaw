@@ -3,7 +3,10 @@ import { registerReplyOperationSuccessorBarrier } from "../auto-reply/reply/repl
 import { getRuntimeConfig } from "../config/config.js";
 import { assertRequiredWorkerLocalExecution } from "../config/required-worker-profile.js";
 import type { SessionTranscriptRuntimeTarget } from "../config/sessions/session-accessor.js";
-import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
+import {
+  composeSessionSourceAssertion,
+  type SessionSourceAssertion,
+} from "../config/sessions/session-source-authority.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createAbortError } from "../infra/abort-signal.js";
 import {
@@ -126,14 +129,18 @@ const requiredPlacementScope = resolveGlobalSingleton(
     new AsyncLocalStorage<{
       identity: Omit<LocalTurnPlacementClaim, "runId">;
       provider: SessionPlacementAdmissionProvider;
-      assertPlacementCurrent: () => void;
+      assertPlacementCurrent: SessionSourceAssertion;
     }>(),
 );
 
 /** Nested entry points consume this run's owner-held admission, never a cached permission. */
 export async function withRequiredSessionPlacement<T>(
   identity: Omit<LocalTurnPlacementClaim, "runId">,
-  options: { config?: OpenClawConfig; assertCurrent?: () => void; signal?: AbortSignal },
+  options: {
+    config?: OpenClawConfig;
+    assertCurrent?: SessionSourceAssertion;
+    signal?: AbortSignal;
+  },
   task: () => Promise<T>,
 ): Promise<T> {
   const inherited = requiredPlacementScope.getStore();
@@ -163,13 +170,13 @@ export async function withRequiredSessionPlacement<T>(
       "Required worker execution needs a real session and an available Gateway placement owner; sessionless model helpers are unsupported.",
     );
   }
-  const assertCurrent = () => {
+  const assertCurrent = composeSessionSourceAssertion([options.assertCurrent], (assertSource) => {
     options.signal?.throwIfAborted();
-    options.assertCurrent?.();
+    assertSource();
     if (state.provider !== provider) {
       throw createAbortError("session placement owner changed during required worker preparation");
     }
-  };
+  });
   assertCurrent();
   return await provider.withRequiredSession(
     identity,
@@ -295,7 +302,7 @@ export async function withSessionPlacementTurnAdmission(
 /** Serializes direct CLI turns with every runtime before acquiring placement ownership. */
 export async function withLocalSessionPlacementTurnSettlement(
   claim: LocalTurnPlacementClaim,
-  task: (assertSettlementCurrent: () => void) => Promise<EmbeddedAgentRunResult>,
+  task: (assertSettlementCurrent: SessionSourceAssertion) => Promise<EmbeddedAgentRunResult>,
   options: Pick<
     RunEmbeddedAgentParams,
     | "abortSignal"
@@ -351,14 +358,17 @@ export async function withLocalSessionPlacementTurnSettlement(
           assertCurrent();
           const assertClaimCurrent = resolveSessionPlacementTurnSettlementAssertion();
           let open = true;
-          const assertSettlementCurrent = () => {
-            // Queue reset closes this task even if its callback has not returned.
-            if (!open || !isCommandLaneTaskMarkerCurrent(taskMarker)) {
-              throw createSessionPlacementSettlementClosedAbortError();
-            }
-            assertOwnerCurrent();
-            assertClaimCurrent?.();
-          };
+          const assertSettlementCurrent = composeSessionSourceAssertion(
+            [assertClaimCurrent],
+            (assertSource) => {
+              // Queue reset closes this task even if its callback has not returned.
+              if (!open || !isCommandLaneTaskMarkerCurrent(taskMarker)) {
+                throw createSessionPlacementSettlementClosedAbortError();
+              }
+              assertOwnerCurrent();
+              assertSource();
+            },
+          );
           try {
             assertSettlementCurrent();
             releaseCapacityWait?.();

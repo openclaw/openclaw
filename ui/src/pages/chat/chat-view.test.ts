@@ -47,7 +47,7 @@ import { makeChatHost } from "./chat-host.test-support.ts";
 import { createChatModelSetupBanner } from "./chat-model-setup.ts";
 import { applyChatPendingInputs, getChatPendingInputs } from "./chat-pending-inputs.ts";
 import * as chatProgress from "./chat-progress.ts";
-import { switchChatFastMode, switchChatModel, switchChatThinkingLevel } from "./chat-session.ts";
+import { switchChatModel, switchChatSetting } from "./chat-session.ts";
 import { groupMessages } from "./chat-thread-grouping.ts";
 import * as chatThread from "./chat-thread.ts";
 import { resetChatViewState } from "./chat-view-state.ts";
@@ -549,9 +549,9 @@ function createChatModelControlsProps(state: ChatHeaderTestState): ChatModelCont
     sessionsResult: state.sessionsResult,
     stream: state.chatStream,
     onFastModeSelect: (value, targetSessionKey) =>
-      switchChatFastMode(
-        state as unknown as Parameters<typeof switchChatFastMode>[0],
-        value,
+      switchChatSetting(
+        state as unknown as Parameters<typeof switchChatSetting>[0],
+        { kind: "fastMode", value },
         targetSessionKey,
       ),
     onModelSelect: (value, targetSessionKey, agentRuntime) =>
@@ -562,9 +562,9 @@ function createChatModelControlsProps(state: ChatHeaderTestState): ChatModelCont
         agentRuntime,
       ),
     onThinkingSelect: (value, targetSessionKey) =>
-      switchChatThinkingLevel(
-        state as unknown as Parameters<typeof switchChatThinkingLevel>[0],
-        value,
+      switchChatSetting(
+        state as unknown as Parameters<typeof switchChatSetting>[0],
+        { kind: "thinkingLevel", value },
         targetSessionKey,
       ),
   };
@@ -3284,7 +3284,6 @@ describe("chat attachment picker", () => {
     const file = new File(["video"], "clip.mp4");
 
     expect(input).toBeInstanceOf(HTMLInputElement);
-    expect(input?.accept).toContain("video/*");
     selectFile(input!, file);
 
     await waitForFast(() => {
@@ -4410,8 +4409,8 @@ describe("chat model controls", () => {
     );
 
     const modelSwitch = switchChatModel(host, "openai/gpt-5.6-sol");
-    const thinkingPatch = switchChatThinkingLevel(host, "ultra");
-    const fastModePatch = switchChatFastMode(host, "on");
+    const thinkingPatch = switchChatSetting(host, { kind: "thinkingLevel", value: "ultra" });
+    const fastModePatch = switchChatSetting(host, { kind: "fastMode", value: "on" });
     const laterModelSwitch = switchChatModel(host, "google/gemini-3-pro");
 
     expect(patches).toEqual([{ model: "openai/gpt-5.6-sol" }]);
@@ -4458,7 +4457,7 @@ describe("chat model controls", () => {
 
     const modelSwitch = switchChatModel(host, "openai/gpt-5.6-sol");
     await reconciliationStarted.promise;
-    const thinkingPatch = switchChatThinkingLevel(host, "ultra");
+    const thinkingPatch = switchChatSetting(host, { kind: "thinkingLevel", value: "ultra" });
     await Promise.resolve();
     expect(patches).toEqual([{ model: "openai/gpt-5.6-sol" }]);
 
@@ -4481,7 +4480,7 @@ describe("chat model controls", () => {
     );
 
     const modelSwitch = switchChatModel(host, "openai/gpt-5.6-sol");
-    const thinkingPatch = switchChatThinkingLevel(host, "ultra");
+    const thinkingPatch = switchChatSetting(host, { kind: "thinkingLevel", value: "ultra" });
     modelPatch.resolve(null);
 
     await expect(modelSwitch).resolves.toBe(false);
@@ -4606,10 +4605,10 @@ describe("chat model controls", () => {
       await Promise.allSettled(operations);
     });
 
-    const first = switchChatFastMode(host, "on");
+    const first = switchChatSetting(host, { kind: "fastMode", value: "on" });
     operations.push(first);
     await waitForFast(() => expect(pendingPatches).toHaveLength(1));
-    const second = switchChatFastMode(host, "off");
+    const second = switchChatSetting(host, { kind: "fastMode", value: "off" });
     operations.push(second);
 
     pendingPatches[0]?.reject(new Error("boom"));

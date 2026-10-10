@@ -16,17 +16,21 @@ import {
  * Prunes already-processed image payloads from replayed prompt history.
  */
 import { buildLateMediaAttachedProjection } from "../../../sessions/user-turn-transcript.js";
+import { readModelPromptProjection } from "../../../sessions/user-turn-transcript.message.js";
 import { collectTextContentBlocks } from "../../content-blocks.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { sanitizeImageBlocks } from "../../tool-images.js";
-import { getTranscriptPromptText } from "../tool-result-context-guard.js";
 import {
   hasNonBlankUserText,
   resolveUserTranscriptMessages,
   type UserTranscriptContext,
 } from "./attempt-history.js";
 import { buildPromptImageFailureNotice, hydratePromptMediaMessages } from "./images.js";
-import { appendExtractedPromptImages } from "./prompt-image-metadata.js";
+import {
+  appendExtractedPromptImages,
+  collectPreparedDocumentImageFactIndexes,
+  readPersistedImageBlockFactIndexes,
+} from "./prompt-image-metadata.js";
 
 /** Replacement text for old image blocks that were already available to the model. */
 const PRUNED_HISTORY_IMAGE_MARKER = "[image data removed - already processed by model]";
@@ -48,41 +52,31 @@ type PrunableContextAgent = {
   ) => AgentMessage[] | Promise<AgentMessage[]>;
 };
 
-/**
- * Number of most-recent completed turns whose preceding user/toolResult image
- * blocks are kept intact. Counts all completed turns, not just image-bearing
- * ones, so text-only turns consume the window.
- */
+// Start cleanup after three completed turns; subsequent cuts retire eight turns at once.
+// Derive the boundary from canonical history so replay after a restart keeps the same bytes.
 const PRESERVE_RECENT_COMPLETED_TURNS = 3;
+const PRUNE_TURN_BATCH = 8;
 function resolvePruneBeforeIndex(messages: AgentMessage[]): number {
-  let turnsToKeep = PRESERVE_RECENT_COMPLETED_TURNS;
-  let pruneBefore = -1;
+  const completedTurns: number[] = [];
+  let turnStart = -1;
   let hasAssistantReply = false;
-  let firstToolResult = -1;
-  // Only a later user message closes a turn; ignore the active tool loop.
-  const lastUser = messages.findLastIndex((message) => message?.role === "user");
-  for (let index = lastUser - 1; index >= 0; index--) {
-    const role = messages[index]?.role;
-    if (role === "assistant") {
-      hasAssistantReply = true;
-    } else if (role === "toolResult" && hasAssistantReply) {
-      firstToolResult = index;
-    } else if (role === "user") {
-      if (hasAssistantReply) {
-        if (turnsToKeep === 0) {
-          return pruneBefore;
-        }
-        turnsToKeep -= 1;
-        if (turnsToKeep === 0) {
-          pruneBefore = index;
-        }
+  for (const [index, message] of messages.entries()) {
+    if (message.role === "user") {
+      // Only a later user closes a turn; an active tool loop never advances the boundary.
+      if (turnStart >= 0 && hasAssistantReply) {
+        completedTurns.push(turnStart);
       }
+      turnStart = index;
       hasAssistantReply = false;
-      firstToolResult = -1;
+    } else if (message.role === "toolResult" && turnStart < 0) {
+      turnStart = index;
+    } else if (message.role === "assistant" && turnStart >= 0) {
+      hasAssistantReply = true;
     }
   }
-  // History can start with an orphan tool-result turn, without an initial user.
-  return turnsToKeep === 0 && firstToolResult >= 0 ? pruneBefore : -1;
+  const eligible = completedTurns.length - PRESERVE_RECENT_COMPLETED_TURNS;
+  const pruneCount = 1 + Math.floor((eligible - 1) / PRUNE_TURN_BATCH) * PRUNE_TURN_BATCH;
+  return eligible > 0 ? completedTurns[pruneCount]! : -1;
 }
 
 function replaceLegacyFactlessMediaText(text: string): string {
@@ -350,23 +344,35 @@ export function installHistoryImagePruneContextTransform(
       const config = mediaOptions.config ?? {};
       const maxChars = resolveFileExtractionLimits(config).maxChars;
       for (const [index, message] of prunedInput.entries()) {
-        const liveTranscript = liveTranscripts?.[index];
-        // Live prompt preparation already owns enrichment. Its structural marker
-        // survives clones; never infer ownership from user-supplied file markup.
-        if (
-          message.role !== "user" ||
-          getTranscriptPromptText(message) !== undefined ||
-          (liveTranscript?.role === "user" &&
-            readReplayText(message.content) !== readReplayText(liveTranscript.content))
-        ) {
+        if (message.role !== "user") {
           continue;
         }
+        const liveTranscript = liveTranscripts?.[index];
+        const textAlreadyPrepared =
+          (readModelPromptProjection(liveTranscript) ?? readModelPromptProjection(message)) !==
+            undefined ||
+          (liveTranscript?.role === "user" &&
+            readReplayText(message.content) !== readReplayText(liveTranscript.content));
         const media =
           readRuntimePromptMediaFacts(message) ?? readPersistedMediaFacts(message) ?? [];
         if (!media.length) {
           continue;
         }
-        const key = JSON.stringify([message.timestamp, media]);
+        // A suppressed retry can be paired with a canonical row without page bytes.
+        // Only actual images with producer-owned source indexes permit skipping reads.
+        const preparedPages = collectPreparedDocumentImageFactIndexes(
+          media,
+          Array.isArray(message.content)
+            ? message.content.filter((block) => block.type === "image")
+            : [],
+          readPersistedImageBlockFactIndexes(message),
+        );
+        const key = JSON.stringify([
+          message.timestamp,
+          media,
+          textAlreadyPrepared,
+          [...preparedPages],
+        ]);
         retainedDocumentKeys.add(key);
         let files = documents.get(key);
         if (!files) {
@@ -378,6 +384,8 @@ export function installHistoryImagePruneContextTransform(
             accountId: mediaOptions.accountId,
             maxChars,
             totalMaxChars: maxChars,
+            textAlreadyPrepared,
+            skipAttachmentIndexes: preparedPages,
             assertCurrent,
           });
           assertCurrent();

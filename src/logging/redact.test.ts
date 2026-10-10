@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withEnv } from "../test-utils/env.js";
 import { replacePatternBounded } from "./redact-bounded.js";
-import { TOOL_PAYLOAD_AMBIGUOUS_ASSIGNMENT_PATTERNS } from "./redact-patterns.js";
+import { createBackendRedactPatterns } from "./redact-patterns.js";
 import * as prefilters from "./redact-prefilter.js";
 import { redactSourceInputTextWithConfig } from "./redact-source.js";
 import {
@@ -270,7 +270,7 @@ describe("model-visible tool payload redaction", () => {
 
   it("keeps explicit custom assignment patterns authoritative over source syntax", () => {
     const source = "const API_TOKEN = computeToken(); return API_TOKEN;";
-    const assignmentPatterns = [...TOOL_PAYLOAD_AMBIGUOUS_ASSIGNMENT_PATTERNS].filter(
+    const assignmentPatterns = [...createBackendRedactPatterns().ambiguousAssignments].filter(
       (pattern) => redactSensitiveText(source, { patterns: [pattern] }) !== source,
     );
     expect(assignmentPatterns.length).toBeGreaterThan(0);
