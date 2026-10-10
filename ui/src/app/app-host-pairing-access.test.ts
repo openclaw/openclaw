@@ -4,6 +4,7 @@ import type { LitElement, TemplateResult } from "lit";
 import { flush } from "solid-js";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { resolveThemeBranding } from "../../../packages/gateway-protocol/src/theme.ts";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { GatewayBrowserClient } from "../api/gateway.ts";
 import { visibleSettingsNavigationGroups } from "../app-navigation.ts";
 import { createApplicationRouter } from "../app-routes.ts";
@@ -24,6 +25,7 @@ import {
 } from "./app-host-solid.test-support.ts";
 import type { OutboxStoreRuntime } from "./app-shell-gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "./context.ts";
+import { LazyRenderer } from "./lazy-renderer.ts";
 import { loadSettings } from "./settings.ts";
 import type { UpdateProgress } from "./update-confirmation.ts";
 
@@ -487,18 +489,15 @@ describe("application shell pairing access", () => {
 
   it.each([false, true])("keeps lazy settings navigation visible (failed: %s)", (failed) => {
     const { shell, container, refresh } = createPairingShell({ auth: { role: "operator" } });
-    const loadRenderer = vi.fn();
+    const loading = createDeferred<NonNullable<typeof shell.settingsSidebar.renderer>>();
+    const importRenderer = vi.fn(() => loading.promise);
+    const settingsSidebar = new LazyRenderer(shell, importRenderer);
+    settingsSidebar.failed = failed;
+    Object.defineProperty(shell, "settingsSidebar", { value: settingsSidebar });
     shell.routeState = {
       routeId: "profile",
       location: { pathname: "/settings/profile", search: "", hash: "" },
     };
-    shell.settingsSidebar.renderer = null;
-    shell.settingsSidebar.failed = failed;
-    if (failed) {
-      shell.settingsSidebar.retry = loadRenderer;
-    } else {
-      shell.settingsSidebar.load = loadRenderer;
-    }
     refresh();
     const sidebar = container.querySelector<HTMLElement>(".settings-sidebar");
     if (failed) {
@@ -527,7 +526,7 @@ describe("application shell pairing access", () => {
         ),
       ).toHaveLength(expectedItems);
     }
-    expect(loadRenderer).toHaveBeenCalledOnce();
+    expect(importRenderer).toHaveBeenCalledOnce();
   });
 
   it("shows a visible accessible error when a mobile setup code cannot be copied", async () => {
