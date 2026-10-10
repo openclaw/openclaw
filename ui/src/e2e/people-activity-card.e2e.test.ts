@@ -3,7 +3,10 @@ import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { beforeEach, expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
-import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import {
+  takeControlUiViewportScreenshot,
+  takeControlUiScreenshotFrame,
+} from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   defaultControlUiFeatureMethods,
   reconnectMockGateway,
@@ -14,6 +17,7 @@ import {
   controlUiSessionUrl,
   createChatFlowE2eSuite,
   installMockGateway,
+  requireRecord,
 } from "./chat-flow.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
@@ -122,6 +126,94 @@ async function capturePeopleCard(page: Page, filename: string) {
 }
 
 suite.define(() => {
+  it("shows the connected owner's name alone and marks it when another person joins", async () => {
+    await suite.withPage(
+      { viewport: { width: 1280, height: 900 }, colorScheme: "light", locale: "en-US" },
+      async ({ page }) => {
+        const now = Date.now();
+        const gateway = await installMockGateway(page, {
+          sessionKey: selected,
+          presenceUsers: [
+            {
+              self: true,
+              id: "gateway-owner",
+              identity: { type: "profile", id: "gateway-owner" },
+              name: "Alex Rivera",
+              lastActivityAt: now,
+            },
+          ],
+          historyMessages: [
+            {
+              role: "assistant",
+              content: [{ type: "text", text: "The weekly planning notes are ready to review." }],
+            },
+          ],
+          methodResponses: {
+            "sessions.list": {
+              ...chatSessionListResponse([
+                { key: selected, kind: "direct", label: "Weekly planning", updatedAt: now },
+              ]),
+              ownerSessionCounts: [{ profileId: "gateway-owner", open: 9, running: 0 }],
+            },
+          },
+        });
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, selected));
+        const connect = await gateway.waitForRequest("connect");
+        const sidebar = page.locator("openclaw-app-sidebar");
+        const owner = sidebar.locator('[data-online-user-id="gateway-owner"]');
+        await owner.locator('[data-session-count="open"]').waitFor();
+        await page
+          .getByText("The weekly planning notes are ready to review.", { exact: true })
+          .waitFor();
+        if (captureUiProofEnabled) {
+          const frame = await takeControlUiScreenshotFrame(
+            page,
+            sidebar.locator(".sidebar-online"),
+            [owner, sidebar.getByText("Weekly planning", { exact: true })],
+            {
+              animations: "disabled",
+              elements: [sidebar.locator(".sidebar-online")],
+            },
+          );
+          await writeFile(path.join(proofDirectory, "online-solo-light.png"), frame.png);
+          await writeFile(
+            path.join(proofDirectory, "online-solo-sidebar.png"),
+            frame.elements[0]!.png,
+          );
+        }
+        const ownerName = owner.locator(".sidebar-online__person-name");
+        expect(await ownerName.textContent()).toBe("Alex Rivera");
+        expect(await owner.getAttribute("aria-label")).toBe("Activity for Alex Rivera");
+        const self = {
+          instanceId: requireRecord(requireRecord(connect.params).client).instanceId,
+          user: {
+            id: "gateway-owner",
+            identity: { type: "profile", id: "gateway-owner" },
+            name: "Alex Rivera",
+          },
+          lastActivityAt: now,
+        };
+        const peer = {
+          instanceId: "morgan-tab",
+          user: { id: "morgan", identity: { type: "profile", id: "morgan" }, name: "Morgan Chen" },
+          lastActivityAt: now,
+        };
+        await gateway.emitGatewayEvent("presence", { presence: [self, peer] });
+        await expect.poll(() => ownerName.textContent()).toBe("Alex Rivera (you)");
+        expect(await owner.getAttribute("aria-label")).toBe("Activity for Alex Rivera (you)");
+        expect(
+          await sidebar
+            .locator('[data-online-user-id="morgan"] .sidebar-online__person-name')
+            .textContent(),
+        ).toBe("Morgan Chen");
+        await gateway.emitGatewayEvent("presence", {
+          presence: [self, { ...peer, reason: "disconnect" }],
+        });
+        await expect.poll(() => ownerName.textContent()).toBe("Alex Rivera");
+        expect(await owner.getAttribute("aria-label")).toBe("Activity for Alex Rivera");
+      },
+    );
+  });
   it("reports native browser interaction but not automatic reconnection", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
       const gateway = await installMockGateway(page, scenario());

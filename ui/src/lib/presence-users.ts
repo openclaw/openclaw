@@ -50,6 +50,22 @@ export function presenceViewerLabel(user: Pick<PresenceViewer, "id" | "name" | "
   return presenceUserLabel(user).name;
 }
 
+export function onlinePresenceViewerLabel(
+  user: Pick<PresenceViewer, "id" | "identity" | "name" | "email">,
+  selfUser: AuthenticatedUser | null,
+  showSelfMarker: boolean,
+): string {
+  if (selfUser && presenceUserKey(user) === presenceUserKey(selfUser)) {
+    // Only the current identity may use its own saved name instead of the shared-owner label.
+    const name =
+      selfUser.name?.trim() ||
+      selfUser.email?.trim() ||
+      presenceUserLabel({ id: selfUser.id }).name;
+    return showSelfMarker ? t("presence.selfName", { name }) : name;
+  }
+  return presenceUserLabel(user).name;
+}
+
 export function presenceViewerLastActivity(user: PresenceViewer): number | undefined {
   const timestamps = (user.entries ?? []).flatMap((entry) =>
     entry.reason !== "disconnect" &&

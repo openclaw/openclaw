@@ -117,7 +117,10 @@ async function mountWorkload(readSummary = async () => summary(), includeRaw = f
 
 function person(sidebar: SidebarLifecycleState, name: string): HTMLElement {
   const row = Array.from(sidebar.querySelectorAll<HTMLElement>(".sidebar-online__person")).find(
-    (entry) => entry.querySelector(".sidebar-online__person-name")?.textContent === name,
+    (entry) =>
+      entry
+        .querySelector(".sidebar-online__person-name")
+        ?.textContent?.replace(/ \(you\)$/u, "") === name,
   );
   if (!row) {
     throw new Error("Missing person: " + name);
@@ -185,7 +188,79 @@ describe("sidebar people workload", () => {
     },
   );
 
-  it("keeps a single deduplicated self visible in the roster and collapsed facepile", async () => {
+  it.each([
+    ["gateway-owner", "Alex Rivera", undefined, "Alex Rivera"],
+    ["gateway-owner", undefined, undefined, "Shared owner"],
+    ["gateway-owner", "   ", undefined, "Shared owner"],
+    ["alex", "Alex Rivera", undefined, "Alex Rivera"],
+    ["alex", undefined, "alex@example.test", "alex@example.test"],
+    ["alex", undefined, undefined, "alex"],
+  ])(
+    "labels the current profile without changing other identities: %s / %s",
+    async (id, name, email, expected) => {
+      const { sidebar, gateway } = await mountWorkload(async () =>
+        summary([{ profileId: id, open: 9, running: 0 }]),
+      );
+      const self = { id, identity: { type: "profile" as const, id }, name, email };
+      gateway.publish({ selfUser: self });
+      const entries = [
+        { instanceId: "self-tab", user: self, lastActivityAt: NOW },
+        { instanceId: "second-tab", user: self, lastActivityAt: NOW },
+        {
+          user: {
+            id: "other",
+            identity: { type: "profile" as const, id: "other" },
+            name: "Alex Rivera",
+          },
+        },
+        { user: { id, name: "Unqualified connection" } },
+      ];
+      gateway.publishEvent("presence", { presence: entries });
+      await settle(sidebar);
+      const own = sidebar.querySelector<HTMLElement>(
+        '[data-person-card-key="profile:' + id + '"]',
+      )!;
+      expect(own.querySelector(".sidebar-online__person-name")?.textContent).toBe(
+        expected + " (you)",
+      );
+      expect(own.getAttribute("aria-label")).toBe("Activity for " + expected + " (you)");
+      expect(own.getAttribute("href")).toBe("/activity/" + id);
+      expect(own.querySelector('[data-session-count="open"]')?.textContent?.trim()).toBe("9");
+      expect(sidebar.querySelectorAll('[data-person-card-key="profile:' + id + '"]')).toHaveLength(
+        1,
+      );
+      expect(
+        sidebar.querySelector('[data-online-user-id="other"] .sidebar-online__person-name')
+          ?.textContent,
+      ).toBe("Alex Rivera");
+      expect(
+        sidebar.querySelector(
+          '[data-person-card-key="raw:' + id + '"] .sidebar-online__person-name',
+        )?.textContent,
+      ).toBe(id === "gateway-owner" ? "Shared owner" : "Unqualified connection");
+
+      gateway.publishEvent("presence", { presence: entries.slice(0, 2) });
+      await settle(sidebar);
+      expect(own.querySelector(".sidebar-online__person-name")?.textContent).toBe(expected);
+      expect(own.getAttribute("aria-label")).toBe("Activity for " + expected);
+
+      gateway.publish({ selfUser: { ...self, name: "Renamed profile" } });
+      await settle(sidebar);
+      expect(own.querySelector(".sidebar-online__person-name")?.textContent).toBe(
+        "Renamed profile",
+      );
+
+      // The same presence payload must not retain a prior viewer's personal label.
+      gateway.publish({ selfUser: null });
+      await settle(sidebar);
+      expect(own.querySelector(".sidebar-online__person-name")?.textContent).not.toContain("(you)");
+      if (id === "gateway-owner") {
+        expect(own.querySelector(".sidebar-online__person-name")?.textContent).toBe("Shared owner");
+      }
+    },
+  );
+
+  it("marks self only when another identity is online, independently of tabs and filters", async () => {
     const { sidebar, gateway } = await mountWorkload();
     const self = presence()[0]!;
     gateway.publishEvent("presence", {
@@ -194,6 +269,27 @@ describe("sidebar people workload", () => {
     await settle(sidebar);
     expect(names(sidebar)).toEqual(["ada"]);
     expect(counts(sidebar, "ada")).toEqual(["1", "7"]);
+    const selfTabs = [self, { ...self, instanceId: "second-self-tab" }];
+    const peer = { instanceId: "raw-peer", user: { id: "ada", name: "Raw Ada" } };
+    gateway.publishEvent("presence", { presence: [...selfTabs, peer] });
+    await settle(sidebar);
+    expect(names(sidebar)).toEqual(["ada (you)", "Raw Ada"]);
+    const view = sidebar.sidebarMenus.host.people;
+    view.setStatusFilter("running");
+    view.setSortMode("name");
+    await settle(sidebar);
+    expect(names(sidebar)).toEqual(["ada (you)"]);
+    view.setSortMode("open");
+    await settle(sidebar);
+    expect(names(sidebar)).toEqual(["ada (you)"]);
+    gateway.publishEvent("presence", {
+      presence: [...selfTabs, { ...peer, reason: "disconnect" }],
+    });
+    await settle(sidebar);
+    expect(names(sidebar)).toEqual(["ada"]);
+    view.resetView();
+    await settle(sidebar);
+    expect(names(sidebar)).toEqual(["ada"]);
     await click(sidebar, ".sidebar-online .sidebar-session-group-toggle");
     const facepile = sidebar.querySelector("openclaw-viewer-facepile");
     expect(facepile?.staticUsers?.map((user) => user.id)).toEqual(["ada"]);
@@ -215,7 +311,7 @@ describe("sidebar people workload", () => {
       if (sidebar.querySelector(toggle)?.getAttribute("aria-expanded") === "false") {
         await click(sidebar, toggle);
       }
-      expect(names(sidebar)).toEqual(["bea", "ada"]);
+      expect(names(sidebar)).toEqual(["bea", "ada (you)"]);
       expect(sidebar.querySelector(".sidebar-online__filter-toggle")).not.toBeNull();
 
       await click(sidebar, toggle);
@@ -223,7 +319,7 @@ describe("sidebar people workload", () => {
       expect(sidebar.querySelector("openclaw-viewer-facepile")?.staticUsers).toHaveLength(3);
 
       await click(sidebar, toggle);
-      expect(names(sidebar)).toEqual(["bea", "ada"]);
+      expect(names(sidebar)).toEqual(["bea", "ada (you)"]);
       expect(sidebar.querySelector(".sidebar-online__filter-toggle")).not.toBeNull();
       await click(sidebar, ".sidebar-online__filter-toggle");
       expect(sidebar.sidebarMenus.peopleFilterMenuPosition).not.toBeNull();
@@ -281,16 +377,16 @@ describe("sidebar people workload", () => {
     const view = sidebar.sidebarMenus.host.people;
     view.setSortMode("running");
     await settle(sidebar);
-    expect(names(sidebar)).toEqual(["bea", "ada", "cy", "Aaron"]);
+    expect(names(sidebar)).toEqual(["bea", "ada (you)", "cy", "Aaron"]);
     view.setSortMode("name");
     await settle(sidebar);
-    expect(names(sidebar)).toEqual(["Aaron", "ada", "bea", "cy"]);
+    expect(names(sidebar)).toEqual(["Aaron", "ada (you)", "bea", "cy"]);
     view.setSortMode("open");
     await settle(sidebar);
-    expect(names(sidebar)).toEqual(["ada", "bea", "cy", "Aaron"]);
+    expect(names(sidebar)).toEqual(["ada (you)", "bea", "cy", "Aaron"]);
     view.setStatusFilter("running");
     await settle(sidebar);
-    expect(names(sidebar)).toEqual(["ada", "bea"]);
+    expect(names(sidebar)).toEqual(["ada (you)", "bea"]);
     expect(counts(sidebar, "ada")).toEqual(["1", "7"]);
     expect(counts(sidebar, "bea")).toEqual(["2", "3"]);
     expect(request).toHaveBeenCalledTimes(reads);
@@ -314,7 +410,7 @@ describe("sidebar people workload", () => {
     expect(sidebar.querySelector(".sidebar-online [aria-haspopup=dialog]")).not.toBeNull();
     sidebar.sidebarMenus.host.people.resetView();
     await settle(sidebar);
-    expect(names(sidebar)).toEqual(["ada", "cy", "bea"]);
+    expect(names(sidebar)).toEqual(["ada (you)", "cy", "bea"]);
   });
 
   it("dismisses compact people menus on selection and only offers reset for changed settings", async () => {
@@ -333,16 +429,16 @@ describe("sidebar people workload", () => {
       'openclaw-select-picker:has(#sidebar-people-status) [data-value="running"]',
     );
     expect(sidebar.querySelector('[role="dialog"]')).toBeNull();
-    expect(names(sidebar)).toEqual(["ada", "bea"]);
+    expect(names(sidebar)).toEqual(["ada (you)", "bea"]);
     await open();
     await click(sidebar, "#sidebar-people-sort");
     await click(sidebar, 'openclaw-select-picker:has(#sidebar-people-sort) [data-value="running"]');
     expect(sidebar.querySelector('[role="dialog"]')).toBeNull();
-    expect(names(sidebar)).toEqual(["bea", "ada"]);
+    expect(names(sidebar)).toEqual(["bea", "ada (you)"]);
     await open();
     await click(sidebar, "#sidebar-people-reset");
     expect(sidebar.querySelector('[role="dialog"]')).toBeNull();
-    expect(names(sidebar)).toEqual(["ada", "cy", "bea"]);
+    expect(names(sidebar)).toEqual(["ada (you)", "cy", "bea"]);
     await open();
     expect(sidebar.querySelector("#sidebar-people-reset")).toBeNull();
   });
@@ -375,7 +471,7 @@ describe("sidebar people workload", () => {
       person(sidebar, "ada").querySelector('[data-session-count="open"]')?.getAttribute("title"),
     ).toBe("7\u00a0open");
     expect(counts(sidebar, "cy")).toEqual([]);
-    expect(names(sidebar)).toEqual(["ada", "cy", "bea", "Raw Ada", "zoe"]);
+    expect(names(sidebar)).toEqual(["ada (you)", "cy", "bea", "Raw Ada", "zoe"]);
     expect(counts(sidebar, "zoe")).toEqual([]);
     expect(person(sidebar, "zoe").getAttribute("aria-description")).toBe(
       "Online · 0 open sessions, 0 running",
@@ -443,7 +539,7 @@ describe("sidebar people workload", () => {
     expect(sidebar.sessionData.ownerCounts.error).toBeNull();
     expect(sidebar.querySelector(".sidebar-online__retry")).toBeNull();
     expect(counts(sidebar, "cy")).toEqual([]);
-    expect(names(sidebar)).toEqual(["ada", "cy", "bea"]);
+    expect(names(sidebar)).toEqual(["ada (you)", "cy", "bea"]);
     expect(person(sidebar, "cy").getAttribute("aria-description")).toContain(
       "0 open sessions, 0 running",
     );

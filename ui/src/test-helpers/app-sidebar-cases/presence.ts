@@ -228,7 +228,7 @@ describe("AppSidebar viewer presence", () => {
       const rows = [...sidebar.querySelectorAll<HTMLElement>(".sidebar-online__person")];
       expect(
         rows.map((row) => row.querySelector(".sidebar-online__person-name")?.textContent?.trim()),
-      ).toEqual(["Self", "Zed", "Alice", "Bob"]);
+      ).toEqual(["Self (you)", "Zed", "Alice", "Bob"]);
       expect(rows.map((row) => row.dataset.presenceActivity)).toEqual([
         "active",
         "active",

@@ -2159,6 +2159,7 @@ export const en: TranslationMap & {
       hint: "Connected with the Gateway token or over a tunnel, not a personal sign-in.",
     },
     rosterTitle: "Online",
+    selfName: "{name} (you)",
     filters: {
       label: "Filter & sort people",
       noMatches: "No people match this filter",
