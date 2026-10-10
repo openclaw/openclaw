@@ -8,6 +8,10 @@ import {
 import { createEmbeddedRunHandle } from "../../agents/embedded-agent-runner/runs.test-support.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import * as sessionInventory from "../../config/sessions/session-entry-read-runtime.js";
+import {
+  beginSessionWorkAdmission,
+  type SessionWorkAdmissionLease,
+} from "../../sessions/session-lifecycle-admission.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
@@ -22,9 +26,13 @@ import { prepareSessionLifecycleDrain } from "./sessions-lifecycle-drain.js";
 
 afterEach(() => vi.restoreAllMocks());
 
-it("preserves another agent's replacement run while deletion inventories sessions", async () => {
-  await withOpenClawTestState({ label: "deletion-run-identity" }, async () => {
-    const cfg = { agents: { entries: { doomed: {}, keeper: {} } } };
+it("preserves another agent's replacement run and admissions in a shared store during inventory", async () => {
+  await withOpenClawTestState({ label: "deletion-run-identity" }, async (state) => {
+    const storePath = state.path("agents/keeper/sessions/sessions.json");
+    const cfg = {
+      agents: { entries: { keeper: {}, doomed: {} } },
+      session: { store: storePath },
+    };
     const sessionId = "reused-session";
     const original = createEmbeddedRunHandle({ runId: "original" });
     const replacementAbort = vi.fn(() => clearActiveEmbeddedRun(sessionId, replacement));
@@ -40,17 +48,44 @@ it("preserves another agent's replacement run while deletion inventories session
     });
     setActiveEmbeddedRun(sessionId, original, "agent:doomed:active", undefined, "doomed");
     const draining = drainAgentDeletionRuns("doomed", cfg, createDirectChatContext(), () => {});
+    let active: SessionWorkAdmissionLease | undefined;
+    let pending: Promise<SessionWorkAdmissionLease> | undefined;
+    const activeInterrupted = vi.fn(() => active?.release());
+    const pendingInterrupted = vi.fn();
     try {
       await awaitGateBeforeSettlement(entered.promise, draining, "drain skipped session inventory");
       clearActiveEmbeddedRun(sessionId, original);
       setActiveEmbeddedRun(sessionId, replacement, "agent:keeper:active", undefined, "keeper");
+      const admission = {
+        agentId: "keeper",
+        scope: storePath,
+        identities: ["agent:keeper:active", sessionId],
+        owner: Symbol("keeper-turn"),
+        serializeOwner: true,
+        assertAllowed: () => {},
+      };
+      active = await beginSessionWorkAdmission({ ...admission, onInterrupt: activeInterrupted });
+      pending = beginSessionWorkAdmission({ ...admission, onInterrupt: pendingInterrupted });
+      void pending.catch(() => {});
       inventory.resolve([]);
       await expect(draining).resolves.toBeUndefined();
       expect(replacementAbort).not.toHaveBeenCalled();
+      expect(activeInterrupted).not.toHaveBeenCalled();
+      expect(pendingInterrupted).not.toHaveBeenCalled();
+      expect(active.isActive()).toBe(true);
+      active.release();
+      const successor = await pending;
+      expect(successor.isActive()).toBe(true);
+      successor.release();
     } finally {
       inventory.resolve([]);
       clearActiveEmbeddedRun(sessionId, original);
       clearActiveEmbeddedRun(sessionId, replacement);
+      active?.release();
+      await pending?.then(
+        (successor) => successor.release(),
+        () => {},
+      );
       await Promise.allSettled([draining]);
     }
   });

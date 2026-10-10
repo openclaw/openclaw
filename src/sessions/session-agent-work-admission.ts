@@ -49,15 +49,15 @@ export function assertAgentSessionWriteAdmission(
     return;
   }
   const agent = agentWorkAdmissionIdentity({ agentId: logicalAgentId, env: options.env });
-  const closed = [...sessionWorkAdmissionClosures].find((owner) =>
-    matchesAgentWorkAdmission(owner.agent, agent),
+  const closed = [...sessionWorkAdmissionClosures].find(
+    (owner) => owner.identities.length === 0 && matchesAgentWorkAdmission(owner.agent, agent),
   );
   if (closed) {
     throw closed.reason;
   }
 }
 
-function matchesAgentWorkAdmission(
+export function matchesAgentWorkAdmission(
   left: AgentWorkAdmissionIdentity | undefined,
   right: AgentWorkAdmissionIdentity | undefined,
 ): boolean {
@@ -110,8 +110,9 @@ export function createAgentWorkAdmissionQueries<T extends AgentSessionWorkAdmiss
   function assertSessionWorkAdmissionOpen(admission: T): void {
     const closed = [...closures].find(
       (owner) =>
-        matchesAgentWorkAdmission(owner.agent, admission.agent) ||
-        owner.identities.some((identity) => admission.identities.has(identity)),
+        (!owner.agent || matchesAgentWorkAdmission(owner.agent, admission.agent)) &&
+        ((owner.agent && owner.identities.length === 0) ||
+          owner.identities.some((identity) => admission.identities.has(identity))),
     );
     if (closed) {
       if (!admission.interrupted) {

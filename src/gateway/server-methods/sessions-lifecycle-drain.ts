@@ -22,6 +22,7 @@ import {
   type ReplyOperation,
 } from "../../auto-reply/reply/reply-run-registry.js";
 import { withTimeout } from "../../infra/fs-safe.js";
+import type { AgentWorkAdmissionIdentity } from "../../sessions/session-agent-work-admission.js";
 import {
   closeSessionWorkAdmissions,
   startSessionWorkAdmissionInterruption,
@@ -73,6 +74,7 @@ type SessionLifecycleParams = {
   sessionKey: string;
   defaultAgentId?: string;
   lifecycleIdentities: string[];
+  admissionAgent?: AgentWorkAdmissionIdentity;
 };
 
 export type SessionLifecycleDrain = {
@@ -96,7 +98,11 @@ function hasAuthoritativeSessionWork(
 ): boolean {
   const sessionId = params.sessionId;
   return (
-    isCompetingSessionWorkAdmissionActive(params.storePath, params.lifecycleIdentities) ||
+    isCompetingSessionWorkAdmissionActive(
+      params.storePath,
+      params.lifecycleIdentities,
+      params.admissionAgent,
+    ) ||
     resolveReplyOperationsForSession(params).length > 0 ||
     embeddedRun?.isActive() === true ||
     hasSessionLifecycleQueueWork(queueTarget) ||
@@ -123,10 +129,7 @@ export async function prepareSessionLifecycleDrain(
     sessionId: params.sessionId,
   };
   const workerService = params.context.workerEnvironmentService;
-  const embeddedRun =
-    params.embeddedRun === undefined && params.sessionId
-      ? captureEmbeddedRunDrainTarget(params.sessionId, params)
-      : (params.embeddedRun ?? undefined);
+  let embeddedRun = params.embeddedRun ?? undefined;
   let workerDrain: AcceptedWorkerInferenceSessionDrain | undefined;
   let workerDrained: Promise<void> | undefined;
   let terminalDrain: AgentTerminalSessionDrain | undefined;
@@ -169,6 +172,7 @@ export async function prepareSessionLifecycleDrain(
         releaseAdmissions = closeSessionWorkAdmissions({
           scope: params.storePath,
           identities: params.lifecycleIdentities,
+          agent: params.admissionAgent,
           reason: createAgentRunDirectAbortError(),
           assertCurrent: params.authorize,
         });
@@ -215,6 +219,9 @@ export async function prepareSessionLifecycleDrain(
           void reclaimed.catch(() => {});
         }
         replyRuns = resolveReplyOperationsForSession(params);
+        if (params.embeddedRun === undefined && params.sessionId) {
+          embeddedRun = captureEmbeddedRunDrainTarget(params.sessionId, params);
+        }
         const cancellation = abortChatRunsForSessionKeyWithPartials({
           context: params.context,
           ops: createChatAbortOps(params.context),
@@ -318,6 +325,7 @@ export async function prepareSessionLifecycleDrain(
     admittedWork = startSessionWorkAdmissionInterruption({
       scope: params.storePath,
       identities: params.lifecycleIdentities,
+      agent: params.admissionAgent,
       assertCurrent: params.authorize,
     }).released;
     void admittedWork.catch(() => {});
@@ -384,21 +392,26 @@ export async function prepareSessionLifecycleDrain(
       },
     };
   } catch (error) {
-    // Authority loss stops further cancellation, but cannot abandon accepted teardown.
+    // Accepted worker writes retain cleanup custody even after a caller timeout.
+    // Only agent deletion additionally joins unbounded local runtime settlement.
     const settled = await Promise.allSettled([
       reclaimed,
       workerDrained,
-      terminalDrain?.drained,
-      admittedWork,
-      embeddedAborted ? embeddedRun?.waitForEnd(null) : undefined,
-      ...replyRuns
-        .filter((operation) => operation.abortSignal.aborted)
-        .map((operation) => waitForReplyOperationOwnerSettlement(operation, null)),
-      waitForChatAbortControllerRemoval({
-        entries: params.context.chatAbortControllers,
-        targets: controllerTargets.filter(({ entry }) => entry.controller.signal.aborted),
-        timeoutMs: null,
-      }),
+      ...(timeoutMs === null
+        ? [
+            terminalDrain?.drained,
+            admittedWork,
+            embeddedAborted ? embeddedRun?.waitForEnd(null) : undefined,
+            ...replyRuns
+              .filter((operation) => operation.abortSignal.aborted)
+              .map((operation) => waitForReplyOperationOwnerSettlement(operation, null)),
+            waitForChatAbortControllerRemoval({
+              entries: params.context.chatAbortControllers,
+              targets: controllerTargets.filter(({ entry }) => entry.controller.signal.aborted),
+              timeoutMs: null,
+            }),
+          ]
+        : []),
     ]);
     const failures = new Set([
       error,

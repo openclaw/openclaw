@@ -1,6 +1,11 @@
+import {
+  matchesAgentWorkAdmission,
+  type AgentWorkAdmissionIdentity,
+} from "./session-agent-work-admission.js";
 import { normalizeSessionIdentities } from "./session-lifecycle-identity.js";
 
 type ReleasableSessionWorkAdmission = {
+  agent?: AgentWorkAdmissionIdentity;
   phase: "pending" | "acquired";
   owner?: symbol;
   released: Promise<void>;
@@ -47,11 +52,15 @@ export function createSessionWorkAdmissionQueries<T extends ReleasableSessionWor
   function isCompetingSessionWorkAdmissionActive(
     scope: string,
     identities: Iterable<string | undefined>,
+    agent?: AgentWorkAdmissionIdentity,
   ): boolean {
     const current = currentAdmissions();
     return normalizeSessionIdentities(scope, identities).some((identity) =>
       [...(admissionsByIdentity.get(identity) ?? [])].some(
-        (admission) => admission.phase === "acquired" && !current?.has(admission),
+        (admission) =>
+          admission.phase === "acquired" &&
+          !current?.has(admission) &&
+          (!agent || matchesAgentWorkAdmission(agent, admission.agent)),
       ),
     );
   }

@@ -12,6 +12,7 @@ import { resolvePersistedSessionStoreOwnerForKey } from "../../config/sessions/s
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getAgentRunContext, listLiveAgentRunIds } from "../../infra/agent-run-registry.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
+import { agentWorkAdmissionIdentity } from "../../sessions/session-agent-work-admission.js";
 import {
   collectActiveAgentSessionWorkAdmissions,
   startAgentWorkAdmissionInterruption,
@@ -35,6 +36,7 @@ export async function drainAgentDeletionRuns(
   const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
   const defaultAgentId = tryResolveAgentOperationAgentId(cfg);
   const admissions = collectActiveAgentSessionWorkAdmissions({ agentId });
+  const admissionAgent = agentWorkAdmissionIdentity({ agentId });
   const embeddedRuns = new Map<string, EmbeddedRunDrainTarget>();
   const unkeyedRuns: EmbeddedRunDrainTarget[] = [];
   const targets = new Map<string, Parameters<typeof prepareSessionLifecycleDrain>[0]>();
@@ -58,6 +60,7 @@ export async function drainAgentDeletionRuns(
       context,
       storePath: selectedScope,
       agentId,
+      admissionAgent,
       defaultAgentId,
       sessionKey: canonicalKey,
       sessionKeys,

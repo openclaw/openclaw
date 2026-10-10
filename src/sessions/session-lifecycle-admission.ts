@@ -22,6 +22,7 @@ import {
   agentWorkAdmissionIdentity,
   createAgentWorkAdmissionQueries,
   interruptSessionWorkAdmissionOwners,
+  matchesAgentWorkAdmission,
   sessionWorkAdmissionClosures as SESSION_WORK_ADMISSION_CLOSURES,
   type AgentWorkAdmissionIdentity,
 } from "./session-agent-work-admission.js";
@@ -684,8 +685,9 @@ function closeNormalizedSessionWorkAdmissions(
   identities: readonly string[],
   reason: Error,
   assertCurrent?: () => void,
+  agent?: AgentWorkAdmissionIdentity,
 ) {
-  const owner = { identities, reason };
+  const owner = { identities, reason, agent };
   SESSION_WORK_ADMISSION_CLOSURES.add(owner);
   // Retire queued ingress immediately; acquired runs keep their canonical cancellation owner.
   try {
@@ -694,6 +696,7 @@ function closeNormalizedSessionWorkAdmissions(
       reason,
       pendingOnly: true,
       assertCurrent,
+      agent,
     });
   } catch (error) {
     SESSION_WORK_ADMISSION_CLOSURES.delete(owner);
@@ -706,6 +709,7 @@ function closeNormalizedSessionWorkAdmissions(
 
 /** Fence ingress while awaiting cleanup that must run outside lifecycle/placement locks. */
 export function closeSessionWorkAdmissions(params: {
+  agent?: AgentWorkAdmissionIdentity;
   scope: string;
   identities: Iterable<string | undefined>;
   reason: Error;
@@ -715,10 +719,12 @@ export function closeSessionWorkAdmissions(params: {
     normalizeSessionIdentities(params.scope, params.identities),
     params.reason,
     params.assertCurrent,
+    params.agent,
   );
 }
 
 function startNormalizedSessionWorkAdmissionInterruption(params: {
+  agent?: AgentWorkAdmissionIdentity;
   reason?: Error;
   identities: readonly string[];
   pendingOnly?: boolean;
@@ -730,18 +736,22 @@ function startNormalizedSessionWorkAdmissionInterruption(params: {
   const admissions = collectSessionWorkAdmissions(
     params.identities,
     (admission) =>
-      (!params.pendingOnly || admission.phase === "pending") && !currentAdmissions?.has(admission),
+      (!params.pendingOnly || admission.phase === "pending") &&
+      !currentAdmissions?.has(admission) &&
+      (!params.agent || matchesAgentWorkAdmission(params.agent, admission.agent)),
   );
   return interruptSessionWorkAdmissionOwners(admissions, params.reason, params.assertCurrent);
 }
 
 export function startSessionWorkAdmissionInterruption(params: {
+  agent?: AgentWorkAdmissionIdentity;
   reason?: Error;
   assertCurrent?: () => void;
   scope: string;
   identities: Iterable<string | undefined>;
 }): { released: Promise<void>; interruptedRunIds: ReadonlySet<string> } {
   return startNormalizedSessionWorkAdmissionInterruption({
+    agent: params.agent,
     identities: normalizeSessionIdentities(params.scope, params.identities),
     reason: params.reason,
     assertCurrent: params.assertCurrent,
