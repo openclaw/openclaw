@@ -333,6 +333,19 @@ function nativeRegistry(readiness: () => { accountType: string; authMode: string
 }
 
 describe("prepared native catalog readiness", () => {
+  it("keeps native readiness unknown before the first discovery", () => {
+    const logical = row("custom", "native-model");
+    const view = prepareModelCatalogView({
+      ...facts({}),
+      snapshot: snapshot([logical]),
+      pluginRegistry: nativeRegistry(() => undefined),
+    });
+    expect(view.evaluateNative(logical, host, "native-test")).toMatchObject({
+      availability: undefined,
+      runtimeAuth: { id: "native-test", source: "native" },
+    });
+  });
+
   it.each([
     {
       name: "another runtime",

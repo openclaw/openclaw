@@ -13,6 +13,15 @@ import type { SessionCapability } from "../../lib/sessions/index.ts";
 import type { UiSessionDefaultsHost } from "../../lib/sessions/session-key.ts";
 import type { ChatRunStartupState } from "./chat-run-startup.ts";
 
+export type ChatReasoning = {
+  runId: string;
+  itemId: string;
+  text: string;
+  startedAt: number;
+  /** Durable IDs survive display reindexing; source ownership can differ from the client run. */
+  receipt?: { runId: string; messageId: string; persisted?: true };
+};
+
 export type AgentEventPayload = AgentEvent & {
   sessionKey?: string;
   agentId?: string;
@@ -87,6 +96,7 @@ export type ToolStreamHost = {
   chatRunUsageById?: Map<string, RunOutputUsage>;
   chatStream: string | null;
   chatStreamStartedAt: number | null;
+  chatReasoning?: ChatReasoning | null;
   chatRunStartup?: ChatRunStartupState | null;
   chatStreamSegments: ChatStreamSegment[];
   toolStreamById: Map<string, ToolStreamEntry>;

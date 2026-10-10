@@ -1930,6 +1930,32 @@ no schema, stored bytes, durability, retention, permissions, or update migration
 it claims no incognito T1 retirement. The production owner selection and native
 selector deletion remain a later atomic cutover.
 
+### Incognito workspace consumers (P08, inactive)
+
+Explicitly bound workspace, files, diff, MCP, placement, and publication consumers
+prepare full session rows through the existing incognito actor. Planning rows
+include project selection and diff baselines; they are not retained as host
+authority. Filesystem, Git, and provider effects consume the actor's acknowledged
+sharing, workspace, and runtime metadata with the existing requester, repository,
+placement, and environment guards. Same-actor destination writes recheck exact
+source predicates inside their transaction. Unrelated title changes do not revoke
+workspace authority.
+
+Title and file-history work distinguish actor incarnations even when the session
+ID and physical root are reused. MCP file handles keep their original source and
+refuse a retired actor. Worker transcript batches compose their existing commit
+kernel in the same actor transaction; receipt recovery does not append the batch
+again. Accepted work retains settlement custody through consumer completion.
+Shared-state publication records, Git effects, and placement policy keep their
+existing owners.
+
+This preparation is inactive: production incognito acquisition and its native
+selectors remain host-owned until P12. An explicit absent actor source remains
+absent and never searches durable stores; a retained ended actor refuses access.
+No feature flag, worker service, schema, retention, permission, content limit,
+freshness probe, or update migration is introduced. No incognito T1 retirement
+is claimed before production activation.
+
 ### Incognito command, CLI, and harness consumers (P03, inactive)
 
 Explicit actor bindings now carry command admission, CLI history and compaction,
