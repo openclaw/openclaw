@@ -61,12 +61,15 @@ const opencodeZenCatalog = createUpstreamProviderCatalog({
     ...projectProviderCatalogSnapshotRows(rows, snapshot),
     ...buildOpenAICompatibleLiveModels(rows, { ...OPENCODE_ZEN_PROVIDER_ROUTE, models: [] })
       .filter((model) => !snapshot.has(model.id.toLowerCase()))
-      .map((model): OpencodeZenModelDefinition => ({
-        ...model,
-        ...OPENCODE_ZEN_PROVIDER_ROUTE,
-        provider: PROVIDER_ID,
-        input: model.input.includes("image") ? ["text", "image"] : ["text"],
-      })),
+      .map((model): OpencodeZenModelDefinition => {
+        const input: OpencodeZenModelDefinition["input"] = model.input.includes("image")
+          ? ["text", "image"]
+          : ["text"];
+        return Object.assign(model, OPENCODE_ZEN_PROVIDER_ROUTE, {
+          provider: PROVIDER_ID,
+          input,
+        });
+      }),
   ],
   metadataEndpoint: OPENCODE_UPSTREAM_CATALOG_ENDPOINT,
   modelsEndpoint: OPENCODE_ZEN_MODELS_ENDPOINT,

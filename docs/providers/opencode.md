@@ -24,9 +24,11 @@ OpenAI Responses transports. This header remains enabled when prompt caching is
 disabled. Low-level SDK stream callers should supply `sessionId` in their stream
 options.
 
-Zen and Go discovery and model requests identify the client as
-`openclaw/<version>` on their native endpoints. Custom proxy URLs do not inherit
-this attribution. OpenClaw does not impersonate the OpenCode client.
+Zen and Go discovery requests and model requests on the OpenAI-compatible and
+Anthropic transports identify the client as `openclaw/<version>` on their native
+endpoints. Custom proxy URLs do not inherit this attribution. The
+`google-generative-ai` SDK path does not yet apply this User-Agent policy.
+OpenClaw does not impersonate the OpenCode client.
 
 Standalone `openclaw infer model run --local` calls and the
 [prepared completion helper](/plugins/sdk-runtime/models#prepared-completion-sdk-compatibility)
