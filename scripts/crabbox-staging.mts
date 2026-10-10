@@ -2168,6 +2168,7 @@ async function recoverStaging(syncRoot: string, id: string, options: RecoveryOpt
       if (options.dryRun) {
         throw new Error("Inspection cannot write recovery metadata.");
       }
+      assertCurrentReceipt();
       upgradeReceiptIdentities(root, next);
       receipt = receiptSchema.parse(next);
       const bytes = JSON.stringify(receipt) + "\n";
