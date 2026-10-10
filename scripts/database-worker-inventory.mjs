@@ -2320,10 +2320,11 @@ function findCalls(source) {
   }
   /** @type {InventoryCall[]} */
   const calls = [];
-  function visit(node, parentOperation, parentBinding, parentGuards = [], owner, parent) {
+  function visit(node, parentOperation, parentBinding, parentGuards, parentOwner, parent) {
     let operation = parentOperation;
     let binding = parentBinding;
-    let guards = parentGuards;
+    let guards = parentGuards ?? [];
+    let owner = parentOwner;
     // Callback SQL needs its own proof; neither an initializer nor a caller's guard covers it.
     if (ts.isFunctionLikeDeclaration(node)) {
       owner = node;
@@ -2491,7 +2492,11 @@ export function inventory(root = defaultRoot, ref = "", staged = false) {
         groups.set(classification.tier, group);
       }
       return [...groups.values()].map((group) => ({
-        ...group,
+        file: group.file,
+        owner: group.owner,
+        tier: group.tier,
+        priority: group.priority,
+        calls: group.calls,
         evidence: [...group.evidence].join("; "),
       }));
     })
