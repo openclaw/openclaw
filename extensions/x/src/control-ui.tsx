@@ -1,3 +1,4 @@
+/** @jsxImportSource @solidjs/web */
 import { render } from "@solidjs/web";
 import { defineControlUiPlugin, type ControlUiView } from "openclaw/plugin-sdk/control-ui";
 import { createStore, For } from "solid-js";

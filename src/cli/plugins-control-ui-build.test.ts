@@ -84,6 +84,22 @@ console.log(JSON.stringify({ mode: (await fs.stat(manifest)).mode & 0o7777, cont
 });
 
 describe("native plugin browser builds", () => {
+  it("preserves esbuild's existing non-Solid JSX compilation", async () => {
+    const project = await fixture();
+    await fs.writeFile(
+      path.join(project.rootDir, "renderer.js"),
+      "export const createElement = (tag, props, ...children) => ({ tag, props, children });",
+    );
+    await fs.writeFile(
+      path.join(project.rootDir, "view.tsx"),
+      'import * as React from "./renderer.js"; export const view = <p>Existing JSX</p>;',
+    );
+    await fs.writeFile(path.join(project.rootDir, project.source), 'export * from "./view.tsx";');
+    const declaration = await buildPluginControlUi(project);
+    const built = await import(pathToFileURL(path.join(project.rootDir, declaration.entry)).href);
+    expect(built.view).toEqual({ tag: "p", props: null, children: ["Existing JSX"] });
+  });
+
   it("bundles a Solid TSX view with reactive updates and owned disposal", async () => {
     const project = await fixture();
     const dependencies = path.join(project.rootDir, "node_modules");
@@ -95,7 +111,8 @@ describe("native plugin browser builds", () => {
     }
     await fs.writeFile(
       path.join(project.rootDir, "view.tsx"),
-      `import { createSignal, flush, onCleanup } from "solid-js";
+      `/** @jsxImportSource @solidjs/web */
+import { createSignal, flush, onCleanup } from "solid-js";
 import { render } from "@solidjs/web";
 export let cleanups = 0;
 function View(props: { label: () => string; click: () => void }) {
@@ -146,10 +163,13 @@ export { flush };
     }
   });
 
-  it("requires the author-installed Solid compiler only when TSX is reached", async () => {
+  it("requires the author-installed Solid compiler only for opted-in TSX", async () => {
     const project = await fixture();
     const first = await buildPluginControlUi(project);
-    await fs.writeFile(path.join(project.rootDir, "view.tsx"), "export const view = <p>Ready</p>;");
+    await fs.writeFile(
+      path.join(project.rootDir, "view.tsx"),
+      "/** @jsxImportSource @solidjs/web */\nexport const view = <p>Ready</p>;",
+    );
     await fs.writeFile(path.join(project.rootDir, project.source), 'export * from "./view.tsx";');
     await expect(buildPluginControlUi(project)).rejects.toThrow(
       "Install @solidjs/compiler in this plugin's devDependencies",

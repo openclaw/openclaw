@@ -320,13 +320,16 @@ source, assets, or generated metadata.
 Solid 2 is supported for native plugin views. Use a `.tsx` browser entry and
 declare `solid-js` and `@solidjs/web` as your plugin's runtime dependencies,
 with matching versions. Add `@solidjs/compiler` and `esbuild` to its development
-dependencies. The builder compiles `.tsx` files with the plugin's own Solid
-compiler and bundles its renderer; the host does not supply a shared runtime.
+dependencies. Put `/** @jsxImportSource @solidjs/web */` before the imports in
+each Solid `.tsx` file. This standard JSX pragma selects the plugin's own Solid
+compiler; other JSX files retain esbuild's existing renderer semantics. The
+builder bundles the renderer, and the host does not supply a shared runtime.
 For typechecking, set `jsx: "preserve"` and `jsxImportSource: "@solidjs/web"`.
 
 The framework-neutral view contract stays the same:
 
 ```tsx
+/** @jsxImportSource @solidjs/web */
 import { createSignal } from "solid-js";
 import { render } from "@solidjs/web";
 import type { ControlUiView } from "openclaw/plugin-sdk/control-ui";

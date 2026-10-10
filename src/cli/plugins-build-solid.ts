@@ -21,6 +21,15 @@ export function createSolidControlUiBuildPlugin(rootDir: string): Plugin {
     name: "control-ui-solid",
     setup(build) {
       build.onLoad({ filter: /\.tsx$/ }, async ({ path: sourcePath }) => {
+        const source = await fs.readFile(sourcePath, "utf8");
+        const comments = source.match(/^(?:\s|\/\*[\s\S]*?\*\/|\/\/[^\r\n]*)*/u)?.[0] ?? "";
+        const importSource =
+          comments.match(/@jsxImportSource\s+([^\s*]+)/u)?.[1] ??
+          build.initialOptions.jsxImportSource;
+        // Other JSX runtimes retain esbuild's existing compiler and semantics.
+        if (importSource !== "@solidjs/web") {
+          return;
+        }
         if (!compiler) {
           try {
             const require = createRequire(path.join(rootDir, "package.json"));
@@ -33,7 +42,6 @@ export function createSolidControlUiBuildPlugin(rootDir: string): Plugin {
             );
           }
         }
-        const source = await fs.readFile(sourcePath, "utf8");
         const result = compiler.transform(source, {
           filename: sourcePath,
           generate: "dom",
