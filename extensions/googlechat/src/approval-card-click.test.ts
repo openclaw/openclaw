@@ -63,20 +63,20 @@ function createApprovalResolveResult(params: {
       };
 }
 
-function createTarget(): WebhookTarget {
+function createTarget(allowFrom: string[] = ["users/123"]): WebhookTarget {
   return {
     account: {
       accountId: "default",
       enabled: true,
       credentialSource: "inline",
       config: {
-        allowFrom: ["users/123"],
+        allowFrom,
       },
     },
     config: {
       channels: {
         googlechat: {
-          allowFrom: ["users/123"],
+          allowFrom,
         },
       },
     },
@@ -152,6 +152,7 @@ describe("maybeHandleGoogleChatApprovalCardClick", () => {
       "token-common",
       "token-in-flight",
       "token-loser",
+      "token-no-approvers",
       "token-retry",
       "token-stale-nested",
       "token-update-retry",
@@ -315,6 +316,33 @@ describe("maybeHandleGoogleChatApprovalCardClick", () => {
         approvalKind: "plugin",
         decision: "deny",
       }),
+    );
+  });
+
+  it("rejects clicks while no explicit approvers are configured", async () => {
+    registerGoogleChatApprovalCardBinding({
+      token: "token-no-approvers",
+      accountId: "default",
+      approvalId: "approval-no-approvers",
+      approvalKind: "exec",
+      decision: "allow-once",
+      allowedDecisions: ["allow-once", "deny"],
+      spaceName: "spaces/AAA",
+      messageName: "spaces/AAA/messages/msg-1",
+      expiresAtMs: Date.now() + 60_000,
+    });
+    const target = createTarget([]);
+
+    await expect(
+      maybeHandleGoogleChatApprovalCardClick({
+        event: createCardClickEvent("token-no-approvers", "users/999"),
+        target,
+      }),
+    ).resolves.toBe(true);
+
+    expect(resolveApprovalOverGateway).not.toHaveBeenCalled();
+    expect(target.runtime.log).toHaveBeenCalledWith(
+      "[default] googlechat approval ignored: card clicks require explicit approvers",
     );
   });
 

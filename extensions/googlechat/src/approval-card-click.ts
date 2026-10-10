@@ -1,3 +1,4 @@
+import { isImplicitSameChatApprovalAuthorization } from "openclaw/plugin-sdk/approval-auth-runtime";
 import { resolveApprovalOverGateway } from "openclaw/plugin-sdk/approval-gateway-runtime";
 import { updateGoogleChatMessage } from "./api.js";
 import { googleChatApprovalAuth } from "./approval-auth.js";
@@ -58,6 +59,12 @@ export async function maybeHandleGoogleChatApprovalCardClick(params: {
   });
   if (!auth?.authorized) {
     logIgnored(params.target, `unauthorized actor ${actor || "unknown"}`);
+    return true;
+  }
+  // Card clicks skip message admission, so the empty-approver fallback meant for
+  // command-authorized `/approve` senders cannot authorize them.
+  if (isImplicitSameChatApprovalAuthorization(auth)) {
+    logIgnored(params.target, "card clicks require explicit approvers");
     return true;
   }
 

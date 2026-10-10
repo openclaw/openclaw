@@ -242,6 +242,24 @@ describe("maybeHandleMSTeamsApprovalCardSubmit", () => {
     expect(msTeamsApprovalControls.get(token)).toBeNull();
   });
 
+  it("rejects submits while no explicit approvers are configured", async () => {
+    const token = "no-approvers";
+    registerBinding({ token });
+    const deps = createMSTeamsMessageHandlerDeps({ cfg: { channels: { msteams: {} } } });
+
+    await expect(
+      maybeHandleMSTeamsApprovalCardSubmit({
+        context: createContext({ token, senderId: UNAUTHORIZED_ID }),
+        deps,
+      }),
+    ).resolves.toBe(true);
+
+    expect(resolveApprovalOverGateway).not.toHaveBeenCalled();
+    expect(deps.log.info).toHaveBeenCalledWith("msteams approval ignored", {
+      reason: "card submits require explicit approvers",
+    });
+  });
+
   it("normalizes Teams conversation message suffixes before matching their card", async () => {
     const token = "normalized-conversation";
     registerBinding({ token });
