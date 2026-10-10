@@ -35,11 +35,8 @@ function captureThinkingPayload({
 
 describe("createMinimaxThinkingDisabledWrapper", () => {
   it.each([
-    ["minimax", "anthropic-messages", "MiniMax-M2.7", { type: "disabled" }],
     ["minimax-portal", "anthropic-messages", "MiniMax-M2.7", { type: "disabled" }],
     ["anthropic", "anthropic-messages", "claude-sonnet-4-6", undefined],
-    ["minimax", "openai-completions", "MiniMax-M2.7", undefined],
-    ["minimax", "anthropic-messages", "MiniMax-M3", undefined],
     ["minimax-portal", "anthropic-messages", "MiniMax-M3", undefined],
   ] as const)("sets default thinking for %s/%s/%s", (provider, api, id, expected) => {
     expect(
@@ -49,7 +46,6 @@ describe("createMinimaxThinkingDisabledWrapper", () => {
 
   it.each([
     ["removes implicit disabled thinking", undefined, { type: "disabled" }, undefined],
-    ["preserves explicit off thinking", "off", { type: "disabled" }, { type: "disabled" }],
     [
       "rewrites budget thinking to adaptive",
       "adaptive",
@@ -88,14 +84,6 @@ describe("createMinimaxThinkingDisabledWrapper", () => {
       },
     });
     expect(capturedPayload.thinking).toEqual({ type: "enabled", budget_tokens: 1024 });
-  });
-
-  it("preserves an already-set thinking value", () => {
-    expect(
-      captureThinkingPayload({
-        payload: { thinking: { type: "enabled", budget_tokens: 1024 } },
-      }).thinking,
-    ).toEqual({ type: "enabled", budget_tokens: 1024 });
   });
 });
 

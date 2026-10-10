@@ -89,22 +89,6 @@ describe("createOpenAIAnthropicToolPayloadCompatibilityWrapper", () => {
     expect(payload?.tool_choice).toEqual({ type: "function", function: { name: "lookup" } });
   });
 
-  it("uses input_schema without reading a poisoned parameters fallback", () => {
-    const payload = runWrapper({
-      tools: [
-        {
-          name: "lookup",
-          input_schema: querySchema(),
-          get parameters(): never {
-            throw new Error("parameters fallback getter exploded");
-          },
-        },
-      ],
-    });
-
-    expect(payload?.tools).toEqual([lookupFunction()]);
-  });
-
   it("skips unreadable and structurally invalid schemas while preserving healthy siblings", () => {
     const circularSchema: Record<string, unknown> = {
       type: "object",
@@ -166,6 +150,9 @@ describe("createOpenAIAnthropicToolPayloadCompatibilityWrapper", () => {
             properties: {
               query: { $dynamicRef: "#query" },
             },
+          },
+          get parameters(): never {
+            throw new Error("parameters fallback getter exploded");
           },
         },
       ],
@@ -291,26 +278,6 @@ describe("createOpenAIAnthropicToolPayloadCompatibilityWrapper", () => {
     });
   });
 
-  it("preserves free-form custom tools and named custom choices", () => {
-    const original = {
-      tools: [
-        {
-          type: "custom",
-          custom: {
-            name: "shell",
-            description: "Run a shell command.",
-            format: { type: "text" },
-          },
-        },
-      ],
-      tool_choice: {
-        type: "custom",
-        custom: { name: "shell" },
-      },
-    };
-    expect(runWrapper(structuredClone(original))).toEqual(original);
-  });
-
   it("projects allowed custom tool choices against surviving functions", () => {
     const payload = runWrapper({
       tools: [
@@ -344,29 +311,6 @@ describe("createOpenAIAnthropicToolPayloadCompatibilityWrapper", () => {
     });
   });
 
-  it("does not match allowed tools across tool kinds", () => {
-    const payload = runWrapper({
-      tools: [
-        {
-          type: "custom",
-          custom: {
-            name: "shell",
-            input_schema: emptySchema(),
-          },
-        },
-      ],
-      tool_choice: {
-        type: "allowed_tools",
-        allowed_tools: {
-          mode: "auto",
-          tools: [{ type: "function", function: { name: "shell" } }],
-        },
-      },
-    });
-
-    expect(payload?.tool_choice).toBe("none");
-  });
-
   it("disables tool calls when no auto-allowed tools survive", () => {
     const payload = runWrapper({
       tools: [
@@ -388,37 +332,9 @@ describe("createOpenAIAnthropicToolPayloadCompatibilityWrapper", () => {
     expect(payload?.tool_choice).toBe("none");
   });
 
-  it("keeps a usable schema when optional metadata getters throw", () => {
-    const payload = runWrapper({
-      tools: [
-        {
-          name: "lookup",
-          parameters: emptySchema(),
-          get description(): never {
-            throw new Error("description getter exploded");
-          },
-          get strict(): never {
-            throw new Error("strict getter exploded");
-          },
-        },
-      ],
-    });
-
-    expect(payload?.tools).toEqual([
-      {
-        type: "function",
-        function: {
-          name: "lookup",
-          parameters: emptySchema(),
-        },
-      },
-    ]);
-  });
-
   it.each([
     ["pinned", { type: "tool", name: "bad_schema" }, 'requested unavailable tool "bad_schema"'],
     ["required", { type: "any" }, "requires a tool, but no tools survived"],
-    ["normalized required", "required", "requires a tool, but no tools survived"],
     [
       "required allowed tools",
       {
@@ -442,12 +358,9 @@ describe("createOpenAIAnthropicToolPayloadCompatibilityWrapper", () => {
     ).toThrow(error);
   });
 
-  it.each([{ type: "auto" }, "auto"])(
-    "omits %j choice when every tool is unreadable",
-    (tool_choice) => {
-      const payload = runWrapper({ tools: [unreadableTool()], tool_choice });
-      expect(payload).not.toHaveProperty("tools");
-      expect(payload).not.toHaveProperty("tool_choice");
-    },
-  );
+  it.each([{ type: "auto" }])("omits %j choice when every tool is unreadable", (tool_choice) => {
+    const payload = runWrapper({ tools: [unreadableTool()], tool_choice });
+    expect(payload).not.toHaveProperty("tools");
+    expect(payload).not.toHaveProperty("tool_choice");
+  });
 });

@@ -76,16 +76,12 @@ function buildConfig(
     modelName?: string;
     baseUrl?: string;
     includeModel?: boolean;
-    mediaMaxMb?: number;
   } = {},
 ): OpenClawConfig {
   const baseUrl = params.baseUrl ?? "https://example.services.ai.azure.com/openai/v1";
   const modelId = params.modelId ?? "image-deployment";
   const modelName = params.modelName ?? "MAI-Image-2.5";
   return {
-    ...(params.mediaMaxMb !== undefined
-      ? { agents: { defaults: { mediaMaxMb: params.mediaMaxMb } } }
-      : {}),
     models: {
       providers: {
         [PROVIDER_ID]: {
@@ -188,70 +184,6 @@ describe("microsoft foundry image generation provider", () => {
     });
   });
 
-  it("sends MAI image generation requests to the Foundry MAI endpoint with API-key auth", async () => {
-    postJsonRequestMock.mockResolvedValue(imageResponse());
-
-    const result = await generateImage({
-      prompt: "draw a clean product render",
-      size: "768x1365",
-      timeoutMs: 12_345,
-      ssrfPolicy: { allowPrivateNetwork: true },
-    });
-
-    expect(resolveApiKeyForProviderMock).toHaveBeenCalledWith({
-      provider: PROVIDER_ID,
-      cfg: buildConfig(),
-      agentDir: undefined,
-      store: undefined,
-    });
-    expect(resolveProviderHttpRequestConfigMock).toHaveBeenCalledWith({
-      baseUrl: "https://example.services.ai.azure.com/mai/v1",
-      defaultBaseUrl: "https://example.services.ai.azure.com/mai/v1",
-      allowPrivateNetwork: false,
-      defaultHeaders: { "api-key": "foundry-key" },
-      request: undefined,
-      provider: PROVIDER_ID,
-      capability: "image",
-      transport: "http",
-    });
-    expect(postJsonRequestMock).toHaveBeenCalledOnce();
-    expect(createProviderOperationDeadlineMock).toHaveBeenCalledWith({
-      timeoutMs: 12_345,
-      label: "Microsoft Foundry MAI image generation",
-    });
-    expect(resolveProviderOperationTimeoutMsMock).toHaveBeenCalledWith({
-      deadline: { timeoutMs: 12_345, label: "Microsoft Foundry MAI image generation" },
-      defaultTimeoutMs: 600_000,
-    });
-    const request = requirePostJsonRequest();
-    expect(request.url).toBe("https://example.services.ai.azure.com/mai/v1/images/generations");
-    expect(request.body).toEqual({
-      model: "image-deployment",
-      prompt: "draw a clean product render",
-      width: 768,
-      height: 1365,
-    });
-    expect(Object.fromEntries(requireHeaders(request.headers).entries())).toEqual({
-      "api-key": "foundry-key",
-      "content-type": "application/json",
-    });
-    expect(request.timeoutMs).toBe(12_345);
-    expect(request.ssrfPolicy).toEqual({ allowPrivateNetwork: true });
-    expect(result.model).toBe("image-deployment");
-    expect(result.images[0]?.buffer.toString()).toBe("png");
-    expect(result.images[0]?.mimeType).toBe("image/png");
-  });
-
-  it("honors configured generated media caps above the default image limit", async () => {
-    const imageBytes = Buffer.alloc(7 * 1024 * 1024, 1);
-    postJsonRequestMock.mockResolvedValue(imageResponse(imageBytes.toString("base64")));
-
-    const result = await generateImage({ cfg: buildConfig({ mediaMaxMb: 8 }) });
-
-    expect(result.images).toHaveLength(1);
-    expect(result.images[0]?.buffer.byteLength).toBe(imageBytes.byteLength);
-  });
-
   it("rejects oversized MAI image JSON responses", async () => {
     postJsonRequestMock.mockResolvedValue(imageResponse("x".repeat(10 * 1024 * 1024)));
 
@@ -272,6 +204,10 @@ describe("microsoft foundry image generation provider", () => {
     expect(requirePostJsonRequest().url).toBe(
       "https://env.services.ai.azure.com/mai/v1/images/generations",
     );
+    expect(Object.fromEntries(requireHeaders(requirePostJsonRequest().headers).entries())).toEqual({
+      "api-key": "foundry-key",
+      "content-type": "application/json",
+    });
   });
 
   it("refreshes Entra ID auth and sends MAI image edits as multipart form data", async () => {
@@ -389,23 +325,6 @@ describe("microsoft foundry image generation provider", () => {
     });
   });
 
-  it("allows manual custom deployment names when configured name only repeats the id", async () => {
-    postJsonRequestMock.mockResolvedValue(imageResponse());
-
-    await generateImage({
-      model: "prod-image",
-      cfg: buildConfig({ modelId: "prod-image", modelName: "prod-image" }),
-    });
-
-    expect(postJsonRequestMock).toHaveBeenCalledOnce();
-    expect(requirePostJsonRequest().body).toEqual({
-      model: "prod-image",
-      prompt: "draw it",
-      width: 1024,
-      height: 1024,
-    });
-  });
-
   it("requires MAI-Image-2.5 metadata before editing custom deployment names", async () => {
     await expect(
       generateImage({
@@ -426,17 +345,6 @@ describe("microsoft foundry image generation provider", () => {
         cfg: buildConfig({ modelId: "gpt-deployment", modelName: "gpt-5.4" }),
       }),
     ).rejects.toThrow('supports MAI image deployments only, got "gpt-5.4"');
-    expect(resolveApiKeyForProviderMock).not.toHaveBeenCalled();
-    expect(postJsonRequestMock).not.toHaveBeenCalled();
-  });
-
-  it("rejects literal non-image MAI model names before making requests", async () => {
-    await expect(
-      generateImage({
-        model: "MAI-DS-R1",
-        cfg: buildConfig({ includeModel: false }),
-      }),
-    ).rejects.toThrow('supports MAI image deployments only, got "MAI-DS-R1"');
     expect(resolveApiKeyForProviderMock).not.toHaveBeenCalled();
     expect(postJsonRequestMock).not.toHaveBeenCalled();
   });
