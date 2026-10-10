@@ -379,6 +379,16 @@ contribution times, plus the slowest contributions. Run history keeps these rows
 older diagnostics are trimmed. The updater that is already installed records these
 steps, so they first appear on the update after the one that installs this version.
 
+The report also preserves `updater-runtime-retention`, which measures retaining
+the running updater's package, built runtime, and dependency tree before mutation.
+This is separate from the private-state snapshot and can run while the previous
+Gateway is still serving. Native service work records `managed-service-executor-check`
+separately from the successful `managed-service-install` or `managed-service-restart`
+child. `update-driver-handoff` measures the interval from the previous driver's last
+completed receipt until the fresh driver resumes finalization. The handoff timer
+can appear on the installing update; retention and service timers require the
+updater executing those operations to include this instrumentation.
+
 Update build and validation processes resolve source-linked plugin SDKs from
 the staged installation root, even when the serving source launcher passed its own checkout
 root. This keeps staged assets and validation independent of the old checkout.

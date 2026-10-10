@@ -265,6 +265,11 @@ then see the exact transcript prefix before the admitted user message. The host
 calls `commitTurn` only for the accepted successful turn; failed or aborted
 turns do not advance context-engine state.
 
+Confirming which running turn consumed a steered message preserves that turn's
+admission. Only its private steering correlation changes: live transcript updates
+publish the correction, but delta cursors do not replay it. Content, provenance,
+branch changes, and transcript replacement still invalidate old admissions.
+
 The logical-turn owner removes unaccepted admissions when the run ends, including
 when it exits before reporting a terminal transcript boundary. Recovery after a
 Gateway interruption also removes admissions without host acceptance and logs

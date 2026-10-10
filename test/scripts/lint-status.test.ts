@@ -11,6 +11,7 @@ import { awaitGateBeforeSettlement, createDeferred, withinTest } from "../helper
 import { runNodeScript } from "../helpers/run-node-script.js";
 import * as nodeScript from "../helpers/run-node-script.js";
 import { formatShimResult } from "./direct-run-entrypoints.test-support.js";
+import { copyOxlintConfigFixture } from "./test-helpers.js";
 
 const fixture = createFixtureLifetime();
 afterEach(() => fixture.cleanup());
@@ -375,7 +376,7 @@ describe.skipIf(process.platform === "win32")("lint failure reporting boundary",
         fs.rmSync(bin, { force: true });
         fs.symlinkSync(path.resolve("node_modules/.bin", name), bin);
       }
-      fs.copyFileSync(".oxlintrc.json", path.join(root, ".oxlintrc.json"));
+      copyOxlintConfigFixture(root);
       fs.mkdirSync(path.join(root, "extensions/sample"), { recursive: true });
       fs.writeFileSync(
         path.join(root, "extensions/tsconfig.json"),
