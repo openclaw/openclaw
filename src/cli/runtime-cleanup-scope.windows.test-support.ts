@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { writeSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { Worker } from "node:worker_threads";
 import {
   retainCliProcessJobUntilExit,
   withCliCommandCleanup,
@@ -23,7 +24,32 @@ if (role === "launcher") {
 } else if (role === "candidate") {
   const { isCurrentProcessInJob } = await import("@openclaw/proc-safe/windows-job");
   const wasInJob = isCurrentProcessInJob();
-  if (ownership === "borrowed") {
+  if (ownership === "legacy") {
+    const { retainWindowsProcessJobUntilExit } =
+      await import("../process/supervisor/service-child-windows-job-native.js");
+    retainWindowsProcessJobUntilExit({});
+    retainWindowsProcessJobUntilExit({});
+    await withCliProcessScope(retainCliProcessJobUntilExit);
+  } else if (ownership === "legacy-worker") {
+    const worker = new Worker(
+      `const { parentPort, workerData } = require("node:worker_threads");
+       import(workerData).then(({ retainWindowsProcessJobUntilExit }) => {
+         retainWindowsProcessJobUntilExit({});
+         parentPort.postMessage("retained");
+       });`,
+      {
+        eval: true,
+        workerData: new URL(
+          "../process/supervisor/service-child-windows-job-native.ts",
+          import.meta.url,
+        ).href,
+      },
+    );
+    const [[message], [code]] = await Promise.all([once(worker, "message"), once(worker, "exit")]);
+    if (message !== "retained" || code !== 0) {
+      throw new Error("Legacy retention worker did not exit cleanly");
+    }
+  } else if (ownership === "borrowed") {
     await retainCliProcessJobUntilExit();
   } else {
     await withCliProcessScope(() =>

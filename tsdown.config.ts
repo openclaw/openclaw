@@ -376,7 +376,7 @@ const rootDependencyOptions = withExternalPackageSubpaths({
     "@larksuiteoapi/node-sdk",
     "@matrix-org/matrix-sdk-crypto-nodejs",
     "@openclaw/ai",
-    // Its native loader resolves optional platform packages from the package scope.
+    // Native loaders resolve optional platform packages from their package scopes.
     "@openclaw/fs-safe",
     "@openclaw/proc-safe",
     "@slack/bolt",
