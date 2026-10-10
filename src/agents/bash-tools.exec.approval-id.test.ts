@@ -98,6 +98,7 @@ vi.mock("../utils/delivery-context.shared.js", () => ({
   },
 }));
 
+// mock-isolation: Approval-id routing uses synthetic clients without consulting live channel approvals.
 vi.mock("../infra/exec-approval-surface.js", () => ({
   describeNativeExecApprovalClientSetup: () => null,
   listNativeExecApprovalClientLabels: () => [],

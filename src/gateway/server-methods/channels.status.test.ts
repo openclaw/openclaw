@@ -73,6 +73,7 @@ vi.mock("../../channels/plugins/index.js", () => ({
   normalizeChannelId: mocks.normalizeChannelId,
 }));
 
+// mock-isolation: Status RPC fixtures supply their channel inventory without persisted account discovery.
 vi.mock("../../channels/plugins/read-only.js", () => ({
   listReadOnlyChannelPluginsForConfigAsync: async (...args: unknown[]) =>
     mocks.listReadOnlyChannelPluginsForConfig(...args),

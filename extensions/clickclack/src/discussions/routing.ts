@@ -85,6 +85,7 @@ export async function resolveClickClackDiscussionRoute(params: {
     current.channelId !== binding.channelId ||
     isClickClackDiscussionChannelRevoked(params) ||
     !bindingMatchesActiveSessionIncarnation(params.runtime, matched.sessionKey, binding) ||
+    // SAFETY: This fresh SDK config is schema-validated; account resolution only reads it.
     resolveDiscussionBindingAccount(params.runtime.config.current() as CoreConfig, binding)
       .state !== "active"
   ) {

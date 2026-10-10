@@ -83,6 +83,7 @@ vi.mock(import("../agent-turn/agent-job.js"), async (importOriginal) => ({
 vi.mock("../../auto-reply/reply/queue/settings-runtime.js", () => ({
   resolveQueueSettings: vi.fn(() => ({})),
 }));
+// mock-isolation: Injection fixtures provide owner authority without command-owner database admission.
 vi.mock("../../auto-reply/command-auth.js", () => ({
   resolveCommandAuthorizationAsync: vi.fn(() => ({ senderIsOwner: true })),
 }));
