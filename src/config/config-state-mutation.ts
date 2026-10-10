@@ -1,10 +1,16 @@
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { runWithLocalStateOwner } from "../cli/local-state-owner.js";
+import { collectNestedErrorCandidates } from "../infra/error-graph-internal.js";
 import { prepareSqliteAuditRecord } from "../infra/sqlite-audit-record.kernel.js";
 import { createSqliteWorkerWriteAdmission } from "../infra/sqlite-worker-store.js";
+import { findStartupMaintenanceRequiredError } from "../infra/startup-maintenance-required.js";
 import { redactSecrets } from "../logging/redact.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import {
+  hydrateOpenClawStateWorkerError,
+  retainOpenClawStateWorkerErrorPayload,
+} from "../state/openclaw-state-worker-error.js";
 import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
 import { CONFIG_SNAPSHOT_SCOPE, CONFIG_SNAPSHOT_KEY } from "./config-journal-snapshot.kernel.js";
 import { CONFIG_AUDIT_SCOPE, CONFIG_AUDIT_MAX_ENTRIES } from "./io.audit-policy.js";
@@ -129,14 +135,32 @@ export async function mutateConfigState(
   env: NodeJS.ProcessEnv,
   assertCurrent?: () => void,
 ): Promise<boolean> {
-  return await runWithLocalStateOwner({
-    env,
-    method: "config.state.mutate",
-    params: { mutation },
-    target: "config ancillary state",
-    recoveryCommand: "openclaw config get",
-    assertTargetCurrent: assertCurrent,
-    runLocal: ({ env: ownerEnv, assertCurrent: assertOwnerCurrent }) =>
-      applyConfigStateMutation(mutation, ownerEnv, assertOwnerCurrent),
-  });
+  try {
+    return await runWithLocalStateOwner({
+      env,
+      method: "config.state.mutate",
+      params: { mutation },
+      target: "config ancillary state",
+      recoveryCommand: "openclaw config get",
+      assertTargetCurrent: assertCurrent,
+      runLocal: ({ env: ownerEnv, assertCurrent: assertOwnerCurrent }) =>
+        applyConfigStateMutation(mutation, ownerEnv, assertOwnerCurrent),
+    });
+  } catch (error) {
+    const { isGatewayClientRequestError } = await import("../gateway/call.js");
+    for (const cause of collectNestedErrorCandidates(error)) {
+      if (
+        isGatewayClientRequestError(cause) &&
+        typeof cause.details === "object" &&
+        cause.details !== null &&
+        "configStateError" in cause.details
+      ) {
+        const failure = new Error(cause.message);
+        retainOpenClawStateWorkerErrorPayload(failure, cause.details.configStateError);
+        // The owner replied; preserve its failure without retrying the accepted mutation.
+        throw hydrateOpenClawStateWorkerError(failure, { includeOrdinary: true });
+      }
+    }
+    throw findStartupMaintenanceRequiredError(error) ?? error;
+  }
 }

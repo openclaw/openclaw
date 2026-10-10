@@ -1,10 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, vi } from "vitest";
+import { acquireGatewayLock, type GatewayLockHandle } from "../infra/gateway-lock.js";
 import { getGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
 import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
+import { gatewayFixtureLifetime } from "./gateway-fixture-lifetime.test-support.js";
 import {
   INSTANCE_BINDING_PROBE_METHOD,
   installInstanceBindingProbeCoordinator,
@@ -15,6 +17,7 @@ import {
   type ChannelBindingProof,
   type InstanceBindingProbeResult,
 } from "./server-plugins.lifecycle.test-fixtures.js";
+import { closeGatewayTestHomeDatabases } from "./test-helpers.server-storage.js";
 import { type connectWebchatClient, rpcReq } from "./test-helpers.server.js";
 
 export async function prepareInstanceBindingFixture(
@@ -123,8 +126,21 @@ export async function patchInstanceBindingTestConfig(
 
 export function installInstanceBindingConfigIo() {
   const configIoRestorers: Array<{ mockRestore: () => void }> = [];
+  let stateOwner: { lock: GatewayLockHandle; home: string } | undefined;
 
   beforeEach(async () => {
+    if (stateOwner) {
+      throw new Error("Previous plugin Gateway state ownership was not released");
+    }
+    const home = process.env.HOME;
+    if (!home) {
+      throw new Error("Gateway test hooks did not install HOME");
+    }
+    const lock = await acquireGatewayLock({ allowInTests: true, timeoutMs: 0 });
+    if (!lock) {
+      throw new Error("Expected plugin Gateway state ownership");
+    }
+    stateOwner = { lock, home };
     const actualIo = await vi.importActual<typeof import("../config/io.js")>("../config/io.js");
     const facades = await Promise.all([import("../config/io.js"), import("../config/config.js")]);
     // Cached mutation importers retain the shared mocks; delegate those same exports to real IO
@@ -147,9 +163,18 @@ export function installInstanceBindingConfigIo() {
     }
   });
 
-  afterEach(() => {
-    for (const restore of configIoRestorers.splice(0)) {
-      restore.mockRestore();
+  afterEach(async () => {
+    try {
+      gatewayFixtureLifetime.assertReleased();
+      if (stateOwner) {
+        await closeGatewayTestHomeDatabases(stateOwner.home);
+        await stateOwner.lock.release();
+        stateOwner = undefined;
+      }
+    } finally {
+      for (const restore of configIoRestorers.splice(0)) {
+        restore.mockRestore();
+      }
     }
   });
 }

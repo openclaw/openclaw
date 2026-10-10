@@ -8,8 +8,10 @@ import * as configFileSource from "../../../src/config/source-file.js";
 import { GatewayClient, GatewayClientRequestError } from "../../../src/gateway/client.js";
 import { invalidateConfigGetResponseCache } from "../../../src/gateway/config-get-response.js";
 import { pruneStaleControlPlaneBuckets } from "../../../src/gateway/control-plane-rate-limit.js";
+import { gatewayFixtureLifetime } from "../../../src/gateway/gateway-fixture-lifetime.test-support.js";
 import { configRawPayload } from "../../../src/gateway/server.config-patch.test-support.js";
 import { startGatewayServer } from "../../../src/gateway/server.js";
+import { acquireGatewayLock, type GatewayLockHandle } from "../../../src/infra/gateway-lock.js";
 import { resetGatewayRestartStateForInProcessRestart } from "../../../src/infra/restart.js";
 import { readConfiguredParsedLogTail } from "../../../src/logging/log-tail.js";
 import { flushLogger, resetLogger, setLoggerOverride } from "../../../src/logging/logger.js";
@@ -25,6 +27,7 @@ const GATEWAY_TOKEN = "config-rpc-synthetic-token";
 
 let state: Awaited<ReturnType<typeof createOpenClawTestState>>;
 let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
+let stateOwner: GatewayLockHandle | undefined;
 let client: GatewayClient | undefined;
 const hotReloadRecovery = vi.fn(() => ({ status: "emitted" as const }));
 
@@ -92,6 +95,10 @@ async function startConfigRpcGateway(
   { configRelativePath, watchConfigFiles = true }: ConfigRpcGatewayOptions = {},
   recordPhase?: (phase: string) => void,
 ) {
+  gatewayFixtureLifetime.assertReleased();
+  if (stateOwner) {
+    throw new Error("Previous config RPC Gateway state ownership was not released");
+  }
   recordPhase?.("state.create");
   state = await createOpenClawTestState({
     label: "config-rpc",
@@ -145,13 +152,22 @@ async function startConfigRpcGateway(
   hotReloadRecovery.mockClear();
   recordPhase?.("port.allocate");
   const port = await getFreePort();
+  stateOwner = (await acquireGatewayLock({ port, allowInTests: true, timeoutMs: 0 })) ?? undefined;
+  if (!stateOwner) {
+    throw new Error("Expected config RPC Gateway state ownership");
+  }
   recordPhase?.("server.start");
-  server = await startGatewayServer(port, {
-    auth: { mode: "token", token: GATEWAY_TOKEN },
-    prepareConfigSnapshot: prepareHostConfigSnapshot,
-    controlUiEnabled: false,
-    hotReloadRecovery,
-  });
+  server = await gatewayFixtureLifetime.ownServer(
+    () =>
+      startGatewayServer(port, {
+        gatewayStateOwner: stateOwner,
+        auth: { mode: "token", token: GATEWAY_TOKEN },
+        prepareConfigSnapshot: prepareHostConfigSnapshot,
+        controlUiEnabled: false,
+        hotReloadRecovery,
+      }),
+    state.root,
+  );
   recordPhase?.("client.create");
   const connected = createDeferredCore();
   client = new GatewayClient({
@@ -206,9 +222,13 @@ async function stopConfigRpcGateway(recordPhase?: (phase: string) => void) {
       recordPhase?.("logger.flush");
       return flushLogger();
     },
-    () => {
+    async () => {
       recordPhase?.("state.cleanup");
-      return state?.cleanup();
+      gatewayFixtureLifetime.assertReleased();
+      await state?.restoreEnv();
+      await stateOwner?.release();
+      stateOwner = undefined;
+      await state?.cleanup();
     },
     () => {
       recordPhase?.("logger.reset");

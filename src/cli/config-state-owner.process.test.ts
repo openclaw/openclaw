@@ -6,7 +6,7 @@ import { WebSocketServer } from "ws";
 import { GATEWAY_SERVER_CAPS } from "../../packages/gateway-protocol/src/server-capabilities.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { readLatestConfigSnapshotAuditRecordAsync } from "../config/config-journal-snapshot.js";
-import { configStateMutationSchema } from "../config/config-state-mutation.js";
+import * as configStateMutations from "../config/config-state-mutation.js";
 import { readRecentConfigAuditRecords } from "../config/io.audit.js";
 import { hashConfigRaw } from "../config/io.read-helpers.js";
 import {
@@ -23,6 +23,7 @@ import {
 } from "../gateway/server-methods/sessions-mutations.owner.test-support.js";
 import { acquireGatewayLock, type GatewayLockHandle } from "../infra/gateway-lock.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { StartupMaintenanceRequiredError } from "../infra/startup-maintenance-required.js";
 import { readConfigMachineState } from "../state/config-machine-state.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -116,7 +117,9 @@ describe("config CLI database effects", () => {
             hasCurrentClientAuthority: () => authenticated,
             respond: (ok, payload, error) => {
               if (ok) {
-                mutations.push(configStateMutationSchema.parse(frame.params?.mutation).kind);
+                mutations.push(
+                  configStateMutations.configStateMutationSchema.parse(frame.params?.mutation).kind,
+                );
               }
               ws.send(JSON.stringify({ type: "res", id: frame.id, ok, payload, error }));
             },
@@ -178,5 +181,59 @@ describe("config CLI database effects", () => {
     });
     expect(result.code, result.stderr).toBe(0);
     await verifyWrites(offline, home);
+  });
+
+  it.each([
+    {
+      name: "propagates maintenance failures instead of treating them as best-effort health writes",
+      failure: new StartupMaintenanceRequiredError(
+        "newer-schema",
+        "The owning Gateway requires a newer OpenClaw build for config health state.",
+      ),
+      initialLevel: "debug",
+      exitCode: 1,
+    },
+    {
+      name: "preserves the owner's ordinary health warning while completing the config write",
+      failure: new Error("The owning Gateway could not write config health state."),
+      initialLevel: "trace",
+      exitCode: 0,
+    },
+  ])("$name", async ({ failure, initialLevel, exitCode }) => {
+    const configPath = env.OPENCLAW_CONFIG_PATH!;
+    const config = JSON.parse(await fs.readFile(configPath, "utf8"));
+    config.logging = { level: initialLevel };
+    const before = JSON.stringify(config);
+    await fs.writeFile(configPath, before);
+    const firstMutation = mutations.length;
+    const apply = configStateMutations.applyConfigStateMutation;
+    const rejection = vi
+      .spyOn(configStateMutations, "applyConfigStateMutation")
+      .mockImplementation(async (mutation, ...args) => {
+        if (mutation.kind === "health") {
+          throw failure;
+        }
+        return await apply(mutation, ...args);
+      });
+    try {
+      const result = await runCliProcessChild({
+        nodeArgs: [...entrypoint, "config", "set", "logging.level", "info"],
+        env,
+      });
+      expect(rejection.mock.calls.some(([mutation]) => mutation.kind === "health")).toBe(true);
+      expect(result.code, result.stderr).toBe(exitCode);
+      expect(result.stderr).toContain(failure.message);
+      expect(result.stderr).not.toContain("Gateway owning");
+      expect(mutations.slice(firstMutation)).not.toContain("health");
+      if (exitCode === 1) {
+        expect(result.stderr).not.toContain("Config health-state write failed:");
+        expect(await fs.readFile(configPath, "utf8")).toBe(before);
+      } else {
+        expect(result.stderr).toContain(`Config health-state write failed: ${failure.message}`);
+        expect(JSON.parse(await fs.readFile(configPath, "utf8")).logging.level).toBe("info");
+      }
+    } finally {
+      rejection.mockRestore();
+    }
   });
 });

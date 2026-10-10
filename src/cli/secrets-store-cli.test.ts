@@ -57,6 +57,8 @@ vi.mock("./local-state-owner.js", () => ({
       config: {},
       signal: new AbortController().signal,
       assertCurrent() {},
+      assertSettlementCurrent() {},
+      runSettlement: async (run) => await run(),
     }),
 }));
 

@@ -1,6 +1,8 @@
 import fs from "node:fs/promises";
 import { expect, it, vi } from "vitest";
+import { captureGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 
 type ConfigState = { hash: string; path: string; config: Record<string, unknown> };
 type RpcResult = { ok: boolean; error?: { message?: string } };
@@ -20,6 +22,9 @@ export function registerAgentConfigMutationTests({
   reloadBarrier: { hold: (() => Promise<void>) | undefined };
 }) {
   it("uses fresh revisions after agent create, update, and delete before reload applies", async () => {
+    const databasePath = resolveOpenClawStateSqlitePath();
+    const stateOwner = captureGatewayStateOwner(databasePath);
+    expect(stateOwner?.role).toBe("gateway");
     const operations = [
       {
         method: "agents.create",
@@ -58,6 +63,8 @@ export function registerAgentConfigMutationTests({
           raw: JSON.stringify({ agents: { entries: { main: { name: operation.method } } } }),
         });
         expect(patched.ok, patched.error?.message).toBe(true);
+        stateOwner?.assertCurrent();
+        expect(captureGatewayStateOwner(databasePath)?.ownerId).toBe(stateOwner?.ownerId);
         expect(current.hash).not.toBe(before);
       } finally {
         gate.resolve();

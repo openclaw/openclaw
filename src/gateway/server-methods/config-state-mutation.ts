@@ -4,6 +4,8 @@ import {
   applyConfigStateMutation,
   configStateMutationSchema,
 } from "../../config/config-state-mutation.js";
+import { encodeOpenClawStateWorkerError } from "../../state/openclaw-state-worker-error.js";
+import { errorShapeFromError } from "../error-shape.js";
 import {
   captureLocalStateMutationGuard,
   localStateOwnerChangedError,
@@ -34,7 +36,24 @@ export const configStateMutationHandler: GatewayRequestHandler = async (options)
     options.respond(false, undefined, localStateOwnerChangedError(error));
     return;
   }
-  const written = await applyConfigStateMutation(parsed.data.mutation, process.env, assertCurrent);
-  assertCurrent();
-  options.respond(true, written, undefined);
+  try {
+    const written = await applyConfigStateMutation(
+      parsed.data.mutation,
+      process.env,
+      assertCurrent,
+    );
+    assertCurrent();
+    options.respond(true, written, undefined);
+  } catch (error) {
+    options.respond(
+      false,
+      undefined,
+      errorShapeFromError(ErrorCodes.UNAVAILABLE, error, {
+        details: {
+          configStateError: encodeOpenClawStateWorkerError(error, { includeOrdinary: true }),
+        },
+        retryable: false,
+      }),
+    );
+  }
 };
