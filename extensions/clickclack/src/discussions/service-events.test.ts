@@ -156,6 +156,11 @@ describe("ClickClack discussion session events", () => {
 
       expect(harness.store.lookup(sessionKey)).toMatchObject({
         sessionId: "session-replacement",
+        label: "Original",
+      });
+      await harness.service.reconcile(sessionKey);
+      expect(harness.store.lookup(sessionKey)).toMatchObject({
+        sessionId: "session-replacement",
         label: "Renamed",
       });
     } finally {

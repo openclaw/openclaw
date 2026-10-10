@@ -547,16 +547,18 @@ export class ClickClackDiscussionService {
       updated = await client.updateChannel(currentBinding.channelId, patch);
       assertChannelPatch(updated, patch);
     }
-    assertCurrentAuthority();
+    // A settled response cannot publish metadata into a replacement attachment.
     const latestBinding = this.#store.get(sessionKey);
     if (
       !latestBinding ||
+      latestBinding.sessionId !== currentBinding.sessionId ||
       latestBinding.serverBaseUrl !== currentBinding.serverBaseUrl ||
       latestBinding.channelId !== currentBinding.channelId ||
       latestBinding.externalRef !== currentBinding.externalRef
     ) {
       return;
     }
+    assertCurrentAuthority();
     const nextBinding: ClickClackDiscussionBinding = {
       ...latestBinding,
       externalUrl,
