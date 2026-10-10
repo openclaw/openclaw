@@ -11,6 +11,7 @@ import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { sleepWithAbort } from "@openclaw/retry";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
+import { captureIncognitoSessionSource } from "../config/sessions/session-incognito-binding.js";
 import { getGatewayRecoveryRuntime } from "../gateway/server-recovery-runtime-context.js";
 import { emitDiagnosticEvent } from "../infra/diagnostic-events.js";
 import {
@@ -136,6 +137,8 @@ function isExecApprovalFollowupDirectDeliveryStale(params: {
   sessionKey: string | undefined;
   expectedSessionId: string | undefined;
   sessionStore: string | undefined;
+  source: ReturnType<typeof captureIncognitoSessionSource>;
+  assertSessionCurrent?: () => void;
 }): boolean {
   const sessionKey = normalizeOptionalString(params.sessionKey);
   const expectedSessionId = normalizeOptionalString(params.expectedSessionId);
@@ -143,6 +146,18 @@ function isExecApprovalFollowupDirectDeliveryStale(params: {
     return false;
   }
   try {
+    if (params.source) {
+      const source = params.source;
+      params.assertSessionCurrent?.();
+      source.admissionSignal?.throwIfAborted();
+      if ("kind" in source) {
+        source.assertCurrent();
+        return true;
+      }
+      source.actor.assertReadable();
+      const entry = source.actor.sessions.readSharing(sessionKey)?.entry;
+      return !entry || entry.sessionId !== expectedSessionId;
+    }
     const storePath = resolveSessionStorePathCore(normalizeOptionalString(params.sessionStore), {
       agentId: params.agentId ?? resolveAgentIdFromSessionKey(sessionKey),
     });
@@ -156,6 +171,10 @@ function isExecApprovalFollowupDirectDeliveryStale(params: {
     );
     return isExecApprovalFollowupSessionRebound({ expectedSessionId, resolvedSessionId });
   } catch (err) {
+    if (params.source) {
+      log.debug(`exec approval followup source retired for ${sessionKey}; suppressing delivery`);
+      return true;
+    }
     // Fail open: if the session store can't be resolved we deliver rather than
     // risk dropping a real followup, but log it so this rare path is observable.
     log.debug(
@@ -412,6 +431,13 @@ export async function sendExecApprovalFollowup(
   params: ExecApprovalFollowupParams,
 ): Promise<boolean> {
   const sessionKey = params.sessionKey?.trim();
+  const source = sessionKey
+    ? captureIncognitoSessionSource({ agentId: params.agentId, sessionKey })
+    : undefined;
+  const assertSessionCurrent =
+    source && !("kind" in source) && sessionKey
+      ? source.actor.sessions.captureCurrent(sessionKey).assertCurrent
+      : undefined;
   // Trimmed text only classifies empty/denied results; the raw text is what reaches the
   // agent so command whitespace survives the follow-up.
   const trimmedResultText = params.resultText.trim();
@@ -514,6 +540,8 @@ export async function sendExecApprovalFollowup(
       sessionKey,
       expectedSessionId: params.expectedSessionId,
       sessionStore: params.sessionStore,
+      source,
+      assertSessionCurrent,
     })
   ) {
     emitDiagnosticEvent({

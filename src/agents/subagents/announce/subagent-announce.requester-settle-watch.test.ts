@@ -24,6 +24,7 @@ import {
   withGatewayToolCallerIdentity,
 } from "../../tools/gateway-caller-context.js";
 import * as announceDelivery from "./subagent-announce-delivery.js";
+import * as deliveryRuntime from "./subagent-announce-delivery.runtime.js";
 import type { sendSubagentAnnounceDirectly } from "./subagent-announce-direct-delivery.js";
 import { setSubagentAnnounceDeliveryDepsForTest } from "./subagent-announce-overrides.test-support.js";
 import {
@@ -59,9 +60,10 @@ describe("requester settle watch admission", () => {
         updatedAt: 100,
       });
       setSubagentAnnounceDeliveryDepsForTest({ getRuntimeConfig: () => cfg });
+      vi.mocked(deliveryRuntime.captureRequesterSessionEntryCurrent).mockRestore();
       const requesterRead = vi
         .spyOn(announceDelivery, "loadRequesterSessionEntry")
-        .mockImplementation(() => ({
+        .mockImplementation(async () => ({
           cfg,
           storePath,
           canonicalKey: REQUESTER_KEY,
