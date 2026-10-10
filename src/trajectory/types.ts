@@ -9,7 +9,6 @@ export type TrajectoryToolDefinition = {
   parameters?: unknown;
 };
 
-// Versioned event envelope for runtime and transcript-derived trajectory rows.
 export type TrajectoryEvent = {
   traceSchema: "openclaw-trajectory";
   schemaVersion: 1;

@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { resolveFetch } from "openclaw/plugin-sdk/fetch-runtime";
+import { captureEffectAuthority, resolveFetch } from "openclaw/plugin-sdk/fetch-runtime";
 import {
   fetchWithRuntimeDispatcher,
   type DispatcherAwareRequestInit,
@@ -42,6 +42,7 @@ export async function withZaloSendContext<T>(
 }
 
 export const fetchWithZaloSendContext: typeof fetch = async (input, init) => {
+  const effect = captureEffectAuthority();
   const fetchImpl = resolveFetch();
   if (!fetchImpl) {
     throw new Error("fetch is not available");
@@ -59,7 +60,12 @@ export const fetchWithZaloSendContext: typeof fetch = async (input, init) => {
       }
     }
   }
-  return fetchImpl(input, init);
+  return effect.initiate(() => {
+    if (context) {
+      assertCurrent(context);
+    }
+    return fetchImpl(input, init);
+  });
 };
 
 export function fetchMediaWithZaloSendContext(

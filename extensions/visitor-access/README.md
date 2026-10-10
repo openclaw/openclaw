@@ -194,7 +194,9 @@ An existing verified identity linked during sign-in keeps its assigned role;
 use `visitor_list` afterward to inspect the resulting access.
 
 When `github` is supplied, the plugin resolves the login to GitHub's immutable
-numeric account ID. Public email is neither required nor used, and a login rename
+numeric account ID. Lookups use the Gateway's configured GitHub API credential
+(`gateway.controlUi.github.token`, or `GH_TOKEN`/`GITHUB_TOKEN`). Rate-limit errors
+report the retry/reset time and suggest configuring the credential when absent. Public email is neither required nor used, and a login rename
 does not change the grant's target. Cloudflare must verify that account's ID under
 the configured provider and claim. A known canonical profile retains its current
 role; an unknown account reports first sign-in as pending. The stored login is a

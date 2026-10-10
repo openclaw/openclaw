@@ -33,6 +33,7 @@ export function renderCreationComposer(
       sessionKey: paneId,
       currentAgentId: composer.agentId,
       connected: false,
+      sessionAdmitted: false,
       canCompose: true,
       canSend: true,
       disabledReason: null,
@@ -72,7 +73,6 @@ export function renderCreationComposer(
       onQueueRemove: (id) => composer.remove(id),
       onOpenImage,
       onRequestUpdate: composer.notify,
-      footerContent: html`<span role="status">${t("newSession.followUpsQueued")}</span>`,
     })}
   </section>`;
 }

@@ -64,13 +64,16 @@ export async function existingSessionSelectionWouldChange(params: {
     return true;
   }
   const catalog = await params.loadGatewayModelCatalogSnapshot();
-  const resolved = resolveSessionPatchModelSelection({
+  const selectionPolicy = {
     cfg: params.cfg,
     agentId: params.agentId,
     catalog: catalog.entries,
-    raw: requestedModel,
     defaultProvider: params.defaultProvider,
     defaultModel: params.defaultModel,
+  };
+  const resolved = resolveSessionPatchModelSelection({
+    ...selectionPolicy,
+    raw: requestedModel,
     subagentModelHint: params.subagentModelHint,
   });
   if (!resolved.ok) {
@@ -84,12 +87,8 @@ export async function existingSessionSelectionWouldChange(params: {
     normalizeOptionalString(params.existingEntry.modelOverride) ?? params.defaultModel;
   if (!normalizeOptionalString(params.existingEntry.modelOverride) && params.subagentModelHint) {
     const resolvedSubagentDefault = resolveSessionPatchModelSelection({
-      cfg: params.cfg,
-      agentId: params.agentId,
-      catalog: catalog.entries,
+      ...selectionPolicy,
       raw: params.subagentModelHint,
-      defaultProvider: params.defaultProvider,
-      defaultModel: params.defaultModel,
     });
     if (!resolvedSubagentDefault.ok) {
       return true;

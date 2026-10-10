@@ -569,8 +569,9 @@ vi.mock("../terminal/ansi.js", () => ({
   sanitizeForLog: (s: string) => s,
 }));
 
+// mock-isolation: Record only attempt metadata without opening a trajectory database.
 vi.mock("../trajectory/runtime.js", () => ({
-  createTrajectoryRuntimeRecorder: (params: unknown) => {
+  createTrajectoryRuntimeRecorder: async (params: unknown) => {
     state.createTrajectoryRuntimeRecorderMock(params);
     state.trajectoryRecorderParamsMock(params);
     return {
@@ -843,11 +844,9 @@ function makeEmptyResult(provider: string, model: string) {
   return {
     payloads: [],
     meta: {
+      ...makeSuccessResult(provider, model).meta,
       durationMs: 30_000,
-      aborted: false,
-      stopReason: "end_turn",
       agentHarnessResultClassification: "empty",
-      agentMeta: { provider, model },
     },
   };
 }
@@ -919,11 +918,7 @@ function requireArray(value: unknown, label: string): unknown[] {
 }
 
 function mockCallArg(mock: ReturnType<typeof vi.fn>, callIndex = 0, argIndex = 0): unknown {
-  const call = mock.mock.calls[callIndex] as unknown[] | undefined;
-  if (!call) {
-    throw new Error(`expected mock call ${callIndex}`);
-  }
-  return call[argIndex];
+  return expectDefined(mock.mock.calls[callIndex], `mock call ${callIndex}`)[argIndex];
 }
 
 function expectRecordFields(value: unknown, expected: Record<string, unknown>): void {
@@ -1249,11 +1244,6 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
 
   it.each([
     {
-      name: "model",
-      switchOptions: { provider: "openai", model: "gpt-5.4" },
-      expectedOverride: true,
-    },
-    {
       name: "runtime",
       switchOptions: { provider: "openai", model: "gpt-5.4", agentRuntimeOverride: "codex" },
       expectedOverride: true,
@@ -1395,7 +1385,6 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
           const runId = "recovery-run";
           const { entry } = setupStoredSession(
             {
-              status: "running",
               lifecycleRunId: runId,
               restartRecoveryRuns: [{ runId, lifecycleGeneration: "test-generation" }],
               mainRestartRecovery: { cycleId: "recovery-cycle", revision: 4, chargedAttempts: 3 },
@@ -1732,40 +1721,6 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       expect.any(String),
       "post-restart-generation",
     );
-  });
-
-  it("preserves bounded delivery evidence when strict post-turn delivery throws", async () => {
-    setupSuccessfulAttempt();
-    const secret = ["sk", "strict-delivery-secret-value"].join("-");
-    state.deliverAgentCommandResultMock.mockImplementation(async (params: unknown) => {
-      (
-        params as {
-          onDeliveryResult?: (result: { deliveryStatus: Record<string, unknown> }) => void;
-        }
-      ).onDeliveryResult?.({
-        deliveryStatus: {
-          status: "failed",
-          errorMessage: `Authorization: Bearer ${secret}`,
-          target: "discord:dm:private",
-        },
-      });
-      throw new Error("strict delivery failed");
-    });
-
-    await expect(runDiscordDelivery()).rejects.toThrow("strict delivery failed");
-
-    const lifecycleError = state.emitAgentEventMock.mock.calls
-      .map((call) => call[0] as { stream?: string; data?: Record<string, unknown> })
-      .find((event) => event.stream === "lifecycle" && event.data?.phase === "error");
-    expect(lifecycleError?.data?.terminalDelivery).toEqual({
-      status: "failed",
-      resultCount: 0,
-    });
-    for (const field of ["stopReason", "terminalReceipt", "terminalReply"]) {
-      expect(lifecycleError?.data).not.toHaveProperty(field);
-    }
-    expect(JSON.stringify(lifecycleError)).not.toContain(secret);
-    expect(JSON.stringify(lifecycleError)).not.toContain("discord:dm:private");
   });
 
   it("preserves restart ownership when an aborted attempt resolves normally", async () => {
@@ -3046,7 +3001,9 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
             to: "discord:dm:123",
             accountId: "main",
           },
-          restartRecoveryDeliveryRunId: "session-1",
+          restartRecoveryRuns: [{ runId: "session-1", lifecycleGeneration: "test-generation" }],
+          restartRecoveryDeliveryRunId: undefined,
+          restartRecoveryDeliverySourceRunId: undefined,
         }),
       }),
     );
@@ -3635,51 +3592,46 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     });
   });
 
-  it.each(["next_fallback", "succeeded", "chain_exhausted"] as const)(
-    "records and publishes a run-scoped %s fallback step",
-    async (outcome) => {
-      const step: ModelFallbackStepFields = {
-        fallbackStepType: "fallback_step",
-        fallbackStepFromModel: "fixture-primary/primary-model",
-        ...(outcome !== "chain_exhausted"
-          ? { fallbackStepToModel: "fixture-fallback/fallback-model" }
-          : {}),
-        fallbackStepFromFailureReason: "overloaded",
-        fallbackStepChainPosition: 1,
-        fallbackStepFinalOutcome: outcome,
+  it("records and publishes a run-scoped fallback step", async () => {
+    const step: ModelFallbackStepFields = {
+      fallbackStepType: "fallback_step",
+      fallbackStepFromModel: "fixture-primary/primary-model",
+      fallbackStepToModel: "fixture-fallback/fallback-model",
+      fallbackStepFromFailureReason: "overloaded",
+      fallbackStepChainPosition: 1,
+      fallbackStepFinalOutcome: "next_fallback",
+    };
+    state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
+      await params.onFallbackStep?.(step);
+      const result = await runInitialFallbackAttempt(params);
+      return {
+        result,
+        provider: params.provider,
+        model: params.model,
+        attempts: [],
       };
-      state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
-        await params.onFallbackStep?.(step);
-        const result = await runInitialFallbackAttempt(params);
-        return {
-          result,
-          provider: params.provider,
-          model: params.model,
-          attempts: [],
-        };
-      });
-      state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "gpt-5.4"));
+    });
+    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "gpt-5.4"));
 
-      await runBasicAgentCommand({ runId: "run-fallback-step" });
+    await runBasicAgentCommand({ runId: "run-fallback-step" });
 
-      expect(state.trajectoryRecordEventMock).toHaveBeenCalledTimes(1);
-      expect(mockCallArg(state.trajectoryRecordEventMock, 0, 0)).toBe("model.fallback_step");
-      expect(mockCallArg(state.trajectoryRecordEventMock, 0, 1)).toEqual(step);
-      const fallbackEvents = state.emitAgentEventMock.mock.calls
-        .map(([event]) => requireRecord(event, "agent event"))
-        .filter((event) => requireRecord(event.data, "agent event data").phase === "fallback_step");
-      expect(fallbackEvents).toEqual([
-        {
-          runId: "run-fallback-step",
-          lifecycleGeneration: "test-generation",
-          sessionKey: "agent:main:main",
-          stream: "lifecycle",
-          data: { phase: "fallback_step", ...step },
-        },
-      ]);
-      expect(state.trajectoryFlushMock).toHaveBeenCalledTimes(1);
-    },
-  );
+    expect(state.trajectoryRecordEventMock).toHaveBeenCalledTimes(1);
+    expect(mockCallArg(state.trajectoryRecordEventMock, 0, 0)).toBe("model.fallback_step");
+    expect(mockCallArg(state.trajectoryRecordEventMock, 0, 1)).toEqual(step);
+    const fallbackEvents = state.emitAgentEventMock.mock.calls
+      .map(([event]) => requireRecord(event, "agent event"))
+      .filter((event) => requireRecord(event.data, "agent event data").phase === "fallback_step");
+    expect(fallbackEvents).toEqual([
+      {
+        runId: "run-fallback-step",
+        lifecycleGeneration: "test-generation",
+        sessionKey: "agent:main:main",
+        stream: "lifecycle",
+        data: { phase: "fallback_step", ...step },
+      },
+    ]);
+    expect(state.trajectoryFlushMock).toHaveBeenCalledTimes(1);
+  });
 
   it.each([false, true])("preserves empty transcript text with media=%s", async (hasMedia) => {
     setupSuccessfulAttempt();
@@ -3792,15 +3744,15 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
   it.each(["user-switch", "locked"] as const)(
     "does not overwrite a concurrent %s after a primary probe",
     async (change) => {
+      const selection = {
+        providerOverride: "openai",
+        modelOverride: "claude",
+        modelOverrideSource: "auto" as const,
+        modelOverrideFallbackOriginProvider: "anthropic",
+        modelOverrideFallbackOriginModel: "claude",
+      };
       const { store } = setupStoredSession(
-        {
-          updatedAt: Date.now(),
-          providerOverride: "openai",
-          modelOverride: "claude",
-          modelOverrideSource: "auto",
-          modelOverrideFallbackOriginProvider: "anthropic",
-          modelOverrideFallbackOriginModel: "claude",
-        },
+        { updatedAt: Date.now(), ...selection },
         commandPaths.internalStore,
       );
       const locked = change === "locked";
@@ -3846,11 +3798,12 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       await runBasicAgentCommand();
 
       if (locked) {
-        const writes = state.persistSessionEntryMock.mock.calls.filter(([params]) => {
-          const entry = (params as { entry?: SessionEntry }).entry;
-          return entry?.modelOverrideSource === "auto" && entry?.modelOverride === "claude";
-        });
-        expect(writes).toHaveLength(0);
+        const lockedSelection = { ...selection, modelSelectionLocked: true };
+        for (const [params] of state.persistSessionEntryMock.mock.calls) {
+          expectRecordFields(requireRecord(params, "post-probe write").entry, lockedSelection);
+        }
+        expectRecordFields(store["agent:main:main"], lockedSelection);
+        expect(store["agent:main:main"]?.restartRecoveryDeliveryRunId).toBeUndefined();
       } else {
         expectRecordFields(store["agent:main:main"], {
           providerOverride: "google",

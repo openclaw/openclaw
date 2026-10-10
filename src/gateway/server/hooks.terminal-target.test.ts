@@ -3,17 +3,46 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resetGatewayWorkAdmission } from "../../process/gateway-work-admission.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 
-const enqueueSystemEventMock = vi.fn();
-const requestHeartbeatMock = vi.fn();
+let terminalObserved = createDeferred();
+let warningObserved = createDeferred();
+const enqueueSystemEventMock = vi.fn((..._args: unknown[]) => {
+  terminalObserved.resolve();
+  return true;
+});
+const captureSessionEventTargetMock = vi.fn(async (agentId: string, sessionKey: string) => ({
+  agentId,
+  sessionKey,
+  sessionId: "captured-session",
+  generation: "captured-generation",
+}));
+const enqueueSessionEventMock = vi.fn((_text: string, _options: Record<string, unknown>) => {
+  terminalObserved.resolve();
+  return {
+    accepted: Promise.resolve({ ok: true }),
+    settled: Promise.resolve({ status: "completed" }),
+  };
+});
 const runCronIsolatedAgentTurnMock = vi.fn();
 const loadConfigMock = vi.fn<() => OpenClawConfig>();
-const logHooksWarnMock = vi.fn();
+const logHooksWarnMock = vi.fn((message: string) => {
+  if (
+    message === "hook terminal event not delivered" ||
+    message === "hook agent terminal event suppressed"
+  ) {
+    warningObserved.resolve();
+  }
+});
 
-vi.mock("../../infra/system-events.js", () => ({
+vi.mock("../../infra/system-events.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/system-events.js")>()),
   enqueueSystemEvent: enqueueSystemEventMock,
+  enqueueSystemEventWithReceipt: (...args: unknown[]) =>
+    enqueueSystemEventMock(...args) ? () => true : null,
 }));
-vi.mock("../../infra/heartbeat-wake.js", () => ({
-  requestHeartbeat: requestHeartbeatMock,
+// mock-isolation: Observe the terminal destination without admitting an ordinary reply turn.
+vi.mock("../../auto-reply/reply/session-event-handoff.js", () => ({
+  captureSessionEventTargetForHost: captureSessionEventTargetMock,
+  enqueueSessionEventForHost: enqueueSessionEventMock,
 }));
 vi.mock("../../cron/isolated-agent.js", () => ({
   runCronIsolatedAgentTurn: runCronIsolatedAgentTurnMock,
@@ -91,8 +120,12 @@ function dispatch(value: HookPayload): Promise<unknown> {
 }
 
 function expectOwnedEvent(text: string, agentId: string): void {
-  const call = enqueueSystemEventMock.mock.calls.find(([actual]) => actual === text);
-  expect(call?.[1]).toEqual({ sessionKey: `agent:${agentId}:global` });
+  const call = enqueueSessionEventMock.mock.calls.find(([actual]) => actual === text);
+  expect(call?.[1]).toMatchObject({
+    agentId,
+    sessionKey: "global",
+    expectedTarget: { agentId, sessionKey: "global", sessionId: "captured-session" },
+  });
 }
 
 async function startGatedRun(
@@ -100,7 +133,9 @@ async function startGatedRun(
   wakeMode: "now" | "next-heartbeat" = "now",
 ) {
   const gate = createDeferred();
+  const started = createDeferred();
   runCronIsolatedAgentTurnMock.mockImplementationOnce(async () => {
+    started.resolve();
     await gate.promise;
     if (result === "failure") {
       throw new Error("agent exploded");
@@ -108,7 +143,7 @@ async function startGatedRun(
     return { status: "ok", summary: "done", delivered: false, deliveryAttempted: false };
   });
   void dispatch(payload({ wakeMode }));
-  await vi.waitFor(() => expect(runCronIsolatedAgentTurnMock).toHaveBeenCalledTimes(1));
+  await started.promise;
   return gate;
 }
 
@@ -116,6 +151,8 @@ describe("global hook terminal target resolution", () => {
   beforeEach(() => {
     resetGatewayWorkAdmission();
     vi.clearAllMocks();
+    terminalObserved = createDeferred();
+    warningObserved = createDeferred();
     loadConfigMock.mockReturnValue(globalConfig("main"));
     capturedDispatchAgentHook = undefined;
     createGatewayHooksRequestHandler({
@@ -139,16 +176,46 @@ describe("global hook terminal target resolution", () => {
     vi.restoreAllMocks();
   });
 
-  it("keeps the accepted agent when hooks are disabled and the system agent changes", async () => {
-    const gate = await startGatedRun("success");
-    loadConfigMock.mockReturnValue({
-      ...globalConfig("work"),
-      hooks: { enabled: false },
-    });
-    gate.resolve();
+  it.each(["now", "next-heartbeat"] as const)(
+    "keeps the accepted %s target when hooks are disabled and the system agent changes",
+    async (wakeMode) => {
+      const gate = await startGatedRun("success", wakeMode);
+      loadConfigMock.mockReturnValue({
+        ...globalConfig("work"),
+        hooks: { enabled: false },
+      });
+      gate.resolve();
 
-    await vi.waitFor(() => expectOwnedEvent("Hook Email: done", "main"));
-    expect(requestHeartbeatMock).toHaveBeenCalledWith(expect.objectContaining({ agentId: "main" }));
+      await terminalObserved.promise;
+      if (wakeMode === "now") {
+        expectOwnedEvent("Hook Email: done", "main");
+        expect(captureSessionEventTargetMock).toHaveBeenCalledExactlyOnceWith("main", "global");
+        expect(enqueueSystemEventMock).not.toHaveBeenCalled();
+      } else {
+        expect(enqueueSystemEventMock).toHaveBeenCalledExactlyOnceWith("Hook Email: done", {
+          sessionKey: "agent:main:global",
+        });
+        expect(captureSessionEventTargetMock).not.toHaveBeenCalled();
+        expect(enqueueSessionEventMock).not.toHaveBeenCalled();
+      }
+    },
+  );
+
+  it("does not recapture a failed immediate terminal target after asynchronous preparation", async () => {
+    captureSessionEventTargetMock.mockRejectedValueOnce(new Error("session target was replaced"));
+
+    await expect(dispatch(payload())).resolves.toMatchObject({ ok: false, statusCode: 502 });
+    await warningObserved.promise;
+    expect(runCronIsolatedAgentTurnMock).not.toHaveBeenCalled();
+    expect(captureSessionEventTargetMock).toHaveBeenCalledExactlyOnceWith("main", "global");
+    expect(enqueueSessionEventMock).not.toHaveBeenCalled();
+    expect(enqueueSystemEventMock).not.toHaveBeenCalled();
+    expect(logHooksWarnMock).toHaveBeenCalledWith(
+      "hook terminal event not delivered",
+      expect.objectContaining({
+        error: "Hook terminal target could not be captured before the run",
+      }),
+    );
   });
 
   it.each([
@@ -166,13 +233,6 @@ describe("global hook terminal target resolution", () => {
       status: "error",
       reason: "accepted-agent-removed",
     },
-    {
-      name: "the accepted agent is removed before next-heartbeat completion",
-      outcome: "success" as const,
-      wakeMode: "next-heartbeat" as const,
-      status: "ok",
-      reason: "accepted-agent-removed",
-    },
   ])("suppresses the terminal event when $name", async (testCase) => {
     const gate = await startGatedRun(testCase.outcome, testCase.wakeMode);
     loadConfigMock.mockReturnValue({
@@ -181,19 +241,18 @@ describe("global hook terminal target resolution", () => {
     });
     gate.resolve();
 
-    await vi.waitFor(() =>
-      expect(logHooksWarnMock).toHaveBeenCalledWith(
-        "hook agent terminal event suppressed",
-        expect.objectContaining({
-          acceptedAgentId: "main",
-          status: testCase.status,
-          reason: testCase.reason,
-          runId: expect.any(String),
-          jobId: expect.any(String),
-        }),
-      ),
+    await warningObserved.promise;
+    expect(logHooksWarnMock).toHaveBeenCalledWith(
+      "hook agent terminal event suppressed",
+      expect.objectContaining({
+        acceptedAgentId: "main",
+        status: testCase.status,
+        reason: testCase.reason,
+        runId: expect.any(String),
+        jobId: expect.any(String),
+      }),
     );
     expect(enqueueSystemEventMock).not.toHaveBeenCalled();
-    expect(requestHeartbeatMock).not.toHaveBeenCalled();
+    expect(enqueueSessionEventMock).not.toHaveBeenCalled();
   });
 });

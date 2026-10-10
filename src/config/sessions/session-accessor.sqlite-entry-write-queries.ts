@@ -1,4 +1,3 @@
-import type { DatabaseSync } from "node:sqlite";
 import { createSqliteQueryCache, prepareSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import type { bindSessionNode, bindSessionRoot } from "./session-accessor.sqlite-session-row.js";
@@ -8,7 +7,8 @@ type SessionWindowWriteRow = Omit<ReturnType<typeof bindSessionRoot>, "primary_c
   transcript_observed_at: number;
 };
 
-function prepareSessionEntryWriteQueries(database: DatabaseSync) {
+// Cache fixed SQL shapes only; every write binds fresh rows through the normal executor.
+export const getSessionEntryWriteQueries = createSqliteQueryCache((database) => {
   const db = getSessionKysely(database);
   const window = (retainOwner: boolean) =>
     prepareSqliteQuerySync<SessionWindowWriteRow>(database, (parameter) =>
@@ -131,20 +131,7 @@ function prepareSessionEntryWriteQueries(database: DatabaseSync) {
           })),
         ),
     ),
-    markValid: prepareSqliteQuerySync<string>(database, (parameter) =>
-      db
-        .updateTable("session_nodes")
-        .set({ entry_valid: 1 })
-        .where(
-          "session_key",
-          "=",
-          parameter((key) => key),
-        ),
-    ),
     claimWindow: window(false),
     retainWindow: window(true),
   };
-}
-
-// Cache fixed SQL shapes only; every write binds fresh rows through the normal executor.
-export const getSessionEntryWriteQueries = createSqliteQueryCache(prepareSessionEntryWriteQueries);
+});

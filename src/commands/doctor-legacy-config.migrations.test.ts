@@ -851,7 +851,7 @@ describe("normalizeCompatibilityConfigValues", () => {
             ],
           },
           codex: {
-            api: "openai-codex-responses",
+            api: "openai-chatgpt-responses",
             baseUrl: "https://chatgpt.com/backend-api",
             models: [{ id: "gpt-5.6-sol" }, { id: "gpt-5.4-mini" }],
           },

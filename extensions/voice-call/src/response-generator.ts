@@ -1,8 +1,3 @@
-/**
- * Voice call response generator - uses the embedded OpenClaw agent for tool support.
- * Routes voice responses through the same agent infrastructure as messaging.
- */
-
 import crypto from "node:crypto";
 import { resolveDefaultModelForAgent } from "openclaw/plugin-sdk/agent-runtime";
 import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
@@ -26,7 +21,6 @@ import { resolveVoiceResponseModel } from "./response-model.js";
 type VoiceResponseParams = {
   voiceConfig: VoiceCallConfig;
   coreConfig: OpenClawConfig;
-  /** Injected host agent runtime */
   agentRuntime: OpenClawPluginApi["runtime"]["agent"];
   /** Call ID for session tracking */
   callId: string;
@@ -74,10 +68,9 @@ const VOICE_OPENING_CONTEXT_HEADER = "[Audible call-opening context]";
 const VOICE_OPENING_CONTEXT_FOOTER = "[End audible call-opening context]";
 const VOICE_OPENING_TRUNCATION_MARKER = " [truncated]";
 
-function buildVoiceTurnPrompt(params: {
-  transcript: Array<{ speaker: "user" | "bot"; text: string }>;
-  userMessage: string;
-}): string {
+function buildVoiceTurnPrompt(
+  params: Pick<VoiceResponseParams, "transcript" | "userMessage">,
+): string {
   const lastEntry = params.transcript.at(-1);
   const history =
     lastEntry?.speaker === "user" && lastEntry.text === params.userMessage
@@ -222,33 +215,13 @@ function extractSpokenTextFromPayloads(payloads: VoiceResponsePayload[]): string
       continue;
     }
 
-    const structured = tryParseSpokenJson(rawText);
-    if (structured !== null) {
-      if (structured.length > 0) {
-        spokenSegments.push(structured);
-      }
-      continue;
-    }
-
-    const plain = sanitizePlainSpokenText(rawText);
-    if (plain) {
-      spokenSegments.push(plain);
+    const spoken = tryParseSpokenJson(rawText) ?? sanitizePlainSpokenText(rawText);
+    if (spoken) {
+      spokenSegments.push(spoken);
     }
   }
 
-  return spokenSegments.length > 0 ? spokenSegments.join(" ").trim() : null;
-}
-
-async function deliverEarlyText(
-  callback: (text: string) => Promise<boolean>,
-  text: string,
-): Promise<boolean> {
-  try {
-    return await callback(text);
-  } catch (error) {
-    console.error("[voice-call] Early TTS delivery failed:", error);
-    return false;
-  }
+  return spokenSegments.join(" ") || null;
 }
 
 function resolveVoiceSandboxSessionKey(agentId: string, sessionKey: string): string {
@@ -259,10 +232,6 @@ function resolveVoiceSandboxSessionKey(agentId: string, sessionKey: string): str
   return `agent:${agentId}:${trimmed}`;
 }
 
-/**
- * Generate a voice response using the embedded OpenClaw agent with full tool support.
- * Uses the same agent infrastructure as messaging for consistent behavior.
- */
 export async function generateVoiceResponse(
   params: VoiceResponseParams,
 ): Promise<VoiceResponseResult> {
@@ -274,12 +243,11 @@ export async function generateVoiceResponse(
     senderIsOwner,
     transcript,
     userMessage,
-    coreConfig,
+    coreConfig: cfg,
     agentRuntime,
     onEarlyText,
   } = params;
 
-  const cfg = coreConfig;
   const agentId = resolveCallAgentId(params);
 
   const resolvedSessionKey = resolveVoiceCallSessionKey({
@@ -287,7 +255,7 @@ export async function generateVoiceResponse(
     callId,
     phone: from,
     explicitSessionKey: sessionKey,
-    coreSession: coreConfig.session,
+    coreSession: cfg.session,
   });
   const toolsAllow = resolveAgentConfig(cfg, agentId)?.tools?.allow;
 
@@ -302,7 +270,7 @@ export async function generateVoiceResponse(
         await agentRuntime.ensureAgentWorkspace({ dir: workspaceDir });
 
         const now = Date.now();
-        const existingSessionEntry = agentRuntime.session.getSessionEntry({
+        let sessionEntry = agentRuntime.session.getSessionEntry({
           storePath,
           sessionKey: resolvedSessionKey,
         });
@@ -310,7 +278,6 @@ export async function generateVoiceResponse(
         const { provider, model } = resolveVoiceResponseModel({ voiceConfig, agentRuntime });
         const configuredModel = resolveDefaultModelForAgent({ cfg, agentId });
 
-        let sessionEntry = existingSessionEntry;
         if (sessionEntry?.modelSelectionLocked === true && voiceConfig.responseModel) {
           throw new ModelSelectionLockedError();
         }
@@ -472,7 +439,12 @@ export async function generateVoiceResponse(
               return;
             }
             lastFlushedText = text;
-            deliveredEarly = await deliverEarlyText(onEarlyText, text);
+            try {
+              deliveredEarly = await onEarlyText(text);
+            } catch (error) {
+              console.error("[voice-call] Early TTS delivery failed:", error);
+              deliveredEarly = false;
+            }
           },
         });
 

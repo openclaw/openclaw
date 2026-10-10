@@ -1460,19 +1460,6 @@ process.exit(1);
 describe("Release Decision artifact polling", () => {
   const parent = { attempt: 1, headSha: "a".repeat(40) };
 
-  it("treats GitHub CLI 2.93 missing named artifacts as unavailable", () => {
-    expect(
-      tryReadReleaseDecisionArtifact(parent, "123", "openclaw/openclaw", () => {
-        throw Object.assign(
-          new Error("no artifact matches any of the names or patterns provided"),
-          {
-            stderr: "no artifact matches any of the names or patterns provided",
-          },
-        );
-      }),
-    ).toBeUndefined();
-  });
-
   it.each(["HTTP 503: Server Error", "HTTP 403: secondary rate limit"])(
     "treats transient download transport failure %s as unavailable this poll",
     (message) => {
@@ -3865,6 +3852,18 @@ describe("release CI summary child correlation", () => {
     expect(validateEvidenceReuseChain(makeCurrent(paths), root, root, compare(paths))).toBe(
       root.targetSha,
     );
+    const betaPaths = [
+      "CHANGELOG.md",
+      `CHANGELOG/${targetVersion}.md`,
+      `CHANGELOG/records/${targetVersion}.md`,
+    ];
+    expect(validateEvidenceReuseChain(makeCurrent(betaPaths), root, root, compare(betaPaths))).toBe(
+      root.targetSha,
+    );
+    const mixedPaths = [...paths, ...betaPaths.slice(1)];
+    expect(() =>
+      validateEvidenceReuseChain(makeCurrent(mixedPaths), root, root, compare(mixedPaths)),
+    ).toThrow("invalid target delta");
     for (const unrelated of [
       "CHANGELOG/2026.8.1.md",
       "CHANGELOG/records/2026.8.1.md",
@@ -3893,16 +3892,7 @@ describe("release CI summary child correlation", () => {
         ).toThrow("failed commit comparison");
       }
     }
-    if (targetVersion.endsWith("-beta.1")) {
-      const betaPaths = [
-        "CHANGELOG.md",
-        `CHANGELOG/${targetVersion}.md`,
-        `CHANGELOG/records/${targetVersion}.md`,
-      ];
-      expect(() =>
-        validateEvidenceReuseChain(makeCurrent(betaPaths), root, root, compare(betaPaths)),
-      ).toThrow("invalid target delta");
-    }
+
     expect(() =>
       validateEvidenceReuseChain(
         makeCurrent(["CHANGELOG.md"]),

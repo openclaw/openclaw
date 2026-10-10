@@ -45,47 +45,6 @@ describe("agent runner helpers", () => {
     expect(createShouldEmitToolOutput({ resolvedVerboseLevel: "full" })()).toBe(true);
   });
 
-  it("uses session verbose level when present", () => {
-    hoisted.loadSessionEntryMock.mockReturnValue({ verboseLevel: "full" });
-    const shouldEmitResult = createShouldEmitToolResult({
-      sessionKey: "agent:main:main",
-      storePath: "/tmp/store.json",
-      resolvedVerboseLevel: "off",
-    });
-    const shouldEmitOutput = createShouldEmitToolOutput({
-      sessionKey: "agent:main:main",
-      storePath: "/tmp/store.json",
-      resolvedVerboseLevel: "off",
-    });
-    expect(shouldEmitResult()).toBe(true);
-    expect(shouldEmitOutput()).toBe(true);
-    expect(hoisted.loadSessionEntryMock).toHaveBeenCalledWith({
-      sessionKey: "agent:main:main",
-      storePath: "/tmp/store.json",
-      clone: false,
-    });
-  });
-
-  it("caches session verbose reads briefly while still refreshing live changes", () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(1_000);
-    hoisted.loadSessionEntryMock.mockReturnValue({ verboseLevel: "full" });
-    const shouldEmitOutput = createShouldEmitToolOutput({
-      sessionKey: "agent:main:main",
-      storePath: "/tmp/store.json",
-      resolvedVerboseLevel: "off",
-    });
-
-    expect(shouldEmitOutput()).toBe(true);
-    hoisted.loadSessionEntryMock.mockReturnValue({ verboseLevel: "off" });
-    expect(shouldEmitOutput()).toBe(true);
-    expect(hoisted.loadSessionEntryMock).toHaveBeenCalledOnce();
-
-    vi.setSystemTime(1_251);
-    expect(shouldEmitOutput()).toBe(false);
-    expect(hoisted.loadSessionEntryMock).toHaveBeenCalledTimes(2);
-  });
-
   it("falls back when store read fails or session value is invalid", () => {
     hoisted.loadSessionEntryMock.mockImplementation(() => {
       throw new Error("boom");

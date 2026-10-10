@@ -157,7 +157,7 @@ function workspaceMigrationError(
           `Legacy workspace setup state requires migration at ${blockedPaths.join(", ")}`,
           "Stop the Gateway, then restore the retained setup file or claim from a verified backup.",
         )
-      : `Legacy workspace setup state requires migration for ${blockedPaths.join(", ")}; run ${formatCliCommand("openclaw doctor --fix", env)}.`,
+      : `Run ${formatCliCommand("openclaw doctor --fix", env)}. Legacy workspace setup state requires migration for ${blockedPaths.join(", ")}.`,
   );
 }
 
@@ -255,7 +255,11 @@ export function prepareLegacyWorkspaceStateReset(
 /** Discard retired workspace files from a pre-removal reset plan. */
 export async function removeLegacyWorkspaceStateForReset(
   plan: LegacyWorkspaceResetPlan,
-  options?: { dryRun?: boolean; assertCurrent?: () => void },
+  options?: {
+    dryRun?: boolean;
+    assertCurrent?: () => void;
+    assertCurrentAsync?: () => Promise<void>;
+  },
 ): Promise<LegacyWorkspaceResetCleanup> {
   const removedPaths: string[] = [];
   const warnings: string[] = [];
@@ -288,8 +292,10 @@ export async function removeLegacyWorkspaceStateForReset(
         }
       }
       if (!options?.dryRun) {
-        options?.assertCurrent?.();
-        await sourceRoot.remove(relativePath);
+        if (options?.assertCurrentAsync) {
+          await options.assertCurrentAsync();
+        }
+        await sourceRoot.remove(relativePath, { assertBeforeMutation: options?.assertCurrent });
       }
       removedPaths.push(sourcePath);
     } catch (error) {

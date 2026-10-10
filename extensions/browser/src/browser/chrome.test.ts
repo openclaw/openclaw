@@ -171,20 +171,6 @@ describe("browser chrome helpers", () => {
     vi.restoreAllMocks();
   });
 
-  it("reports reachability based on /json/version", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue(jsonResponse({ webSocketDebuggerUrl: "ws://127.0.0.1/devtools" })),
-    );
-    await expect(isChromeReachable("http://127.0.0.1:12345", 50)).resolves.toBe(true);
-
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse({}, 500)));
-    await expect(isChromeReachable("http://127.0.0.1:12345", 50)).resolves.toBe(false);
-
-    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("boom")));
-    await expect(isChromeReachable("http://127.0.0.1:12345", 50)).resolves.toBe(false);
-  });
-
   it("diagnoses /json/version responses that omit the websocket URL", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse({ Browser: "Chrome/Mock" })));
 

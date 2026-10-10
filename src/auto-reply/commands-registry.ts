@@ -154,25 +154,24 @@ export function mergeNativeCommandSpecs(params: {
 }): NativeCommandSpec[] {
   const merged: NativeCommandSpec[] = [];
   const names = new Set<string>();
-  const append = (spec: NativeCommandSpec, reportCollision: boolean) => {
-    const normalizedName = normalizeOptionalLowercaseString(spec.name);
-    if (!normalizedName) {
-      return;
-    }
-    if (names.has(normalizedName)) {
-      if (reportCollision) {
-        params.onCollision?.(normalizedName);
+  for (const [specs, reportCollision] of [
+    [params.primary, false],
+    [params.secondary, true],
+  ] as const) {
+    for (const spec of specs) {
+      const normalizedName = normalizeOptionalLowercaseString(spec.name);
+      if (!normalizedName) {
+        continue;
       }
-      return;
+      if (names.has(normalizedName)) {
+        if (reportCollision) {
+          params.onCollision?.(normalizedName);
+        }
+        continue;
+      }
+      names.add(normalizedName);
+      merged.push(spec);
     }
-    names.add(normalizedName);
-    merged.push(spec);
-  };
-  for (const spec of params.primary) {
-    append(spec, false);
-  }
-  for (const spec of params.secondary) {
-    append(spec, true);
   }
   return merged;
 }
@@ -232,13 +231,8 @@ export function isActiveRunSafeCommandTurn(params: {
 
 function parsePositionalArgs(definitions: CommandArgDefinition[], raw: string): CommandArgValues {
   const values: CommandArgValues = {};
-  const trimmed = raw.trim();
-  if (!trimmed) {
-    return values;
-  }
-  const tokens = trimmed.split(/\s+/).filter(Boolean);
-  let index = 0;
-  for (const definition of definitions) {
+  const tokens = raw.split(/\s+/);
+  for (const [index, definition] of definitions.entries()) {
     if (index >= tokens.length) {
       break;
     }
@@ -248,7 +242,6 @@ function parsePositionalArgs(definitions: CommandArgDefinition[], raw: string): 
       break;
     }
     values[definition.name] = expectDefined(tokens[index], "command argument token");
-    index += 1;
   }
   return values;
 }
@@ -441,10 +434,8 @@ export function formatCommandArgMenuTitle(params: {
       .map((choice) => choice.label.trim())
       .filter(Boolean)
       .join(", ");
-    if (options.length > 0 && options.length <= 160) {
-      return `Choose ${menu.arg.name} for /${commandLabel}.\nOptions: ${options}.`;
-    }
-    return `Choose ${menu.arg.name} for /${commandLabel}.`;
+    const suffix = options.length > 0 && options.length <= 160 ? `\nOptions: ${options}.` : "";
+    return `Choose ${menu.arg.name} for /${commandLabel}.${suffix}`;
   }
   return `Choose ${menu.arg.description || menu.arg.name} for /${commandLabel}.`;
 }

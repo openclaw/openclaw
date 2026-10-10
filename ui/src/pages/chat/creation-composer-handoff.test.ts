@@ -92,6 +92,37 @@ describe("created-composer canonical outbox admission", () => {
     expect(input.complete).toHaveBeenCalledOnce();
   });
 
+  it("preserves later delivery state when concurrent panes finish the same transfer", async () => {
+    const { host, owner, scope, resume } = fixture();
+    const input = transfer();
+    const peer = makeChatHost({ sessionKey: host.sessionKey, client: host.client });
+    onTestFinished(owner.subscribe(host));
+    onTestFinished(owner.subscribe(peer));
+    const prepared = createDeferred<Awaited<ReturnType<typeof payloads.prepareOutboxPayload>>>();
+    vi.spyOn(payloads, "prepareOutboxPayload").mockImplementationOnce(() => prepared.promise);
+    const first = admitCreatedComposerQueue(host, input);
+    const delivery = first.then(() =>
+      owner.update(host, [
+        {
+          id: input.inputs[0]!.id,
+          update: (item) => ({ ...item, sendState: "failed", sendError: "Delivery rejected" }),
+        },
+      ]),
+    );
+    const second = admitCreatedComposerQueue(peer, input);
+    prepared.resolve({ status: "ready", update: {} });
+    expect(await first).toBe(true);
+    await delivery;
+    expect(await second).toBe(true);
+
+    await admitCreatedComposerQueue(peer, input);
+    expect(owner.snapshot(host, scope.scope)[0]).toMatchObject({
+      sendState: "failed",
+      sendError: "Delivery rejected",
+    });
+    expect(resume).toHaveBeenCalledOnce();
+  });
+
   it("holds every follower when the accepted session rejected its initial turn", async () => {
     const { host, owner, scope, resume } = fixture();
     await admitCreatedComposerQueue(host, transfer({ initialRejected: true }));
@@ -129,7 +160,6 @@ describe("created-composer canonical outbox admission", () => {
     const send = vi.fn(async () => "sent" as const);
     await scheduleStoredChatOutboxDrain(host, scope.scope, {
       sendQueuedChatMessage: send,
-      sendResetSlashCommand: vi.fn(async () => {}),
     });
     expect(send).not.toHaveBeenCalled();
     prepared.resolve({ status: "ready", update: {} });

@@ -26,6 +26,10 @@ import { normalizeBoardId, normalizeBoardIdRequired } from "./store-normalizers.
 import { freezeCardList, readCards } from "./store-read.js";
 import { WorkboardStoreRuntime } from "./store-runtime.js";
 
+function emptyBoardSummary(id: string): WorkboardBoardSummary {
+  return { id, total: 0, active: 0, archived: 0, byStatus: {} };
+}
+
 export class WorkboardBoardStore extends WorkboardStoreRuntime {
   protected readonly store: WorkboardCardStore;
   protected readonly boardStore: WorkboardKeyedStore<PersistedWorkboardBoard>;
@@ -48,7 +52,7 @@ export class WorkboardBoardStore extends WorkboardStoreRuntime {
   ) {
     super(stores.dataVersion, stores.close, stores.ready, stores.runWithWriteAuthority);
     this.store = this.trackCardStore(store);
-    this.boardStore = this.track(stores.boards);
+    this.boardStore = this.track(stores.boards, { sessions: true });
     this.sessionsBoardStore = stores.sessionsBoard;
     this.subscriptionStore = {
       ...this.track(stores.subscriptions, { notifyChanges: false }),
@@ -136,26 +140,12 @@ export class WorkboardBoardStore extends WorkboardStoreRuntime {
       });
     }
     if (!boards.has("default")) {
-      boards.set("default", {
-        id: "default",
-        total: 0,
-        active: 0,
-        archived: 0,
-        byStatus: {},
-      });
+      boards.set("default", emptyBoardSummary("default"));
     }
     const cardAggregates = await this.store.listBoardAggregates();
     for (const aggregate of cardAggregates) {
       const boardId = aggregate.boardId;
-      const summary =
-        boards.get(boardId) ??
-        ({
-          id: boardId,
-          total: 0,
-          active: 0,
-          archived: 0,
-          byStatus: {},
-        } satisfies WorkboardBoardSummary);
+      const summary = boards.get(boardId) ?? emptyBoardSummary(boardId);
       summary.total += aggregate.total;
       summary.archived += aggregate.archived;
       summary.active += aggregate.total - aggregate.archived;
@@ -195,6 +185,7 @@ export class WorkboardBoardStore extends WorkboardStoreRuntime {
         this.trackMutation(
           () => this.sessionsBoardStore.update(normalizeBoardIdRequired(boardId), patch),
           () => true,
+          true,
         ),
       assertCurrent,
     );
@@ -211,6 +202,7 @@ export class WorkboardBoardStore extends WorkboardStoreRuntime {
       this.trackMutation(
         () => this.sessionsBoardStore.repairPlacements(),
         (result) => result.placements > 0 || result.boards > 0,
+        true,
       ),
     );
   }
@@ -222,12 +214,15 @@ export class WorkboardBoardStore extends WorkboardStoreRuntime {
   ): Promise<boolean> {
     return this.enqueueMutation(
       () =>
-        this.trackMutation(() =>
-          this.sessionsBoardStore.writePlacement(
-            normalizeBoardIdRequired(boardId),
-            placement,
-            options.expectedSpec,
-          ),
+        this.trackMutation(
+          () =>
+            this.sessionsBoardStore.writePlacement(
+              normalizeBoardIdRequired(boardId),
+              placement,
+              options.expectedSpec,
+            ),
+          Boolean,
+          true,
         ),
       options.assertCurrent,
     );

@@ -1,18 +1,22 @@
 /** Process-local registry for SecretRef owners isolated during cold startup. */
+import { formatCliCommand } from "../cli/command-format.js";
 import type { SecretRefSource } from "../config/types.secrets.js";
-import {
-  describeSecretResolutionError,
-  isSecretResolutionError,
-  type SecretResolutionFailureReason,
-} from "./resolve-errors.js";
+import { describeSecretResolutionError, isSecretResolutionError } from "./resolve-errors.js";
 
-export type SecretDegradationReason =
-  | SecretResolutionFailureReason
-  | "secret provider is not configured"
-  | "resolved secret value was invalid"
-  | "secret reference is not allowed for this provider"
-  | "secret reference was not materialized by the active runtime"
-  | "secret resolution failed";
+const SECRET_DEGRADATION_REASONS = [
+  "auth profile migration required",
+  "secret provider failed",
+  "secret provider is not configured",
+  "secret provider policy denied resolution",
+  "secret provider response violated its contract",
+  "secret reference is not allowed for this provider",
+  "secret reference was not found",
+  "secret reference was not materialized by the active runtime",
+  "resolved secret value was invalid",
+  "resolved secret value is a redaction placeholder",
+  "secret resolution failed",
+] as const;
+export type SecretDegradationReason = (typeof SECRET_DEGRADATION_REASONS)[number];
 
 export type SecretOwnerKind =
   | "account"
@@ -59,6 +63,14 @@ type SecretResolutionErrorOwner = DegradedSecretOwner & {
 
 export const SECRET_DEGRADATION_RETRY_HINT = "openclaw secrets reload" as const;
 
+export function formatSecretDegradationRetryHint(reason: string): string {
+  return formatCliCommand(
+    reason === "auth profile migration required"
+      ? "openclaw doctor --fix"
+      : SECRET_DEGRADATION_RETRY_HINT,
+  );
+}
+
 /** Only transient/unavailable resolution failures may enter degraded runtime state. */
 export function isRetryableSecretDegradationReason(reason: string): boolean {
   return reason === "secret provider failed" || reason === "secret reference was not found";
@@ -70,7 +82,7 @@ export type SecretDegradation = {
   id: string;
   reason: string;
   state: "cold" | "stale";
-  retryHint: typeof SECRET_DEGRADATION_RETRY_HINT;
+  retryHint: string;
 };
 
 /** Maps a typed resolution failure to redacted owner warnings when attribution is safe. */
@@ -83,7 +95,7 @@ export function classifySecretResolutionErrorDegradations(error: unknown): Secre
             id: owner.ownerId,
             reason: owner.reason,
             state: owner.degradationState,
-            retryHint: SECRET_DEGRADATION_RETRY_HINT,
+            retryHint: formatSecretDegradationRetryHint(owner.reason),
           },
         ]
       : [],
@@ -99,7 +111,7 @@ export function classifySecretResolutionErrorDegradations(error: unknown): Secre
           id: "unmapped",
           reason,
           state: "cold",
-          retryHint: SECRET_DEGRADATION_RETRY_HINT,
+          retryHint: formatSecretDegradationRetryHint(reason),
         },
       ]
     : [];
@@ -107,21 +119,10 @@ export function classifySecretResolutionErrorDegradations(error: unknown): Secre
 
 /** Preserves known failure classes while dropping any embedded SecretRef identity. */
 export function redactSecretDegradationReason(reason: string): SecretDegradationReason {
-  switch (reason) {
-    case "secret provider failed":
-    case "secret provider is not configured":
-    case "secret provider policy denied resolution":
-    case "secret provider response violated its contract":
-    case "secret reference is not allowed for this provider":
-    case "secret reference was not found":
-    case "secret reference was not materialized by the active runtime":
-    case "resolved secret value was invalid":
-    case "resolved secret value is a redaction placeholder":
-    case "secret resolution failed":
-      return reason;
-    default:
-      return "secret resolution failed";
-  }
+  return (
+    SECRET_DEGRADATION_REASONS.find((candidate) => candidate === reason) ??
+    "secret resolution failed"
+  );
 }
 
 const SECRET_SURFACE_UNAVAILABLE_ERROR_CODE = "SECRET_SURFACE_UNAVAILABLE";
@@ -168,6 +169,9 @@ function cloneOwner<T extends DegradedSecretOwner>(owner: T): T {
     ...owner,
     paths: [...owner.paths],
     refKeys: [...owner.refKeys],
+    ...(owner.providerFailures
+      ? { providerFailures: owner.providerFailures.map((failure) => ({ ...failure })) }
+      : {}),
   };
 }
 

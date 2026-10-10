@@ -123,10 +123,9 @@ export async function readUpdateStateDatabaseSizes(
       options.signal,
     );
   } catch (error) {
-    if (hasCommandProcessCleanupError(error)) {
-      throw inspection.failure(error);
+    if (!hasCommandProcessCleanupError(error)) {
+      options.signal?.throwIfAborted();
     }
-    options.signal?.throwIfAborted();
     throw inspection.failure(error);
   }
   options.signal?.throwIfAborted();

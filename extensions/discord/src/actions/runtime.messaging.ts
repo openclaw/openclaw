@@ -25,12 +25,12 @@ export async function handleDiscordMessagingAction(
     cfg,
     options,
   });
-  return (
+  const result =
     (await handleDiscordReactionMessagingAction(ctx)) ??
     (await handleDiscordMessageSendAction(ctx)) ??
-    (await handleDiscordMessageManagementAction(ctx)) ??
-    (() => {
-      throw new Error(`Unknown action: ${action}`);
-    })()
-  );
+    (await handleDiscordMessageManagementAction(ctx));
+  if (result == null) {
+    throw new Error(`Unknown action: ${action}`);
+  }
+  return result;
 }

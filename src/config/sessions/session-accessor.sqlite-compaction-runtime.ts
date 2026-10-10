@@ -1,5 +1,5 @@
 import type { CommittedCompactionAppend } from "../../agents/sessions/session-compaction-persistence.js";
-import { captureSessionManagerIncognitoActor } from "../../agents/sessions/session-manager-incognito-scope.js";
+import { captureSessionManagerIncognitoBinding } from "../../agents/sessions/session-manager-incognito-scope.js";
 import {
   receiveSessionManagerCommit,
   SessionEntryCommittedError,
@@ -8,8 +8,7 @@ import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { trackAsyncWork } from "../../shared/async-work-scope.js";
 import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
-import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
-import { withOpenClawAgentDatabaseAsync } from "../../state/openclaw-agent-db.js";
+import { withOpenClawAgentDatabaseRuntime } from "../../state/openclaw-agent-db.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import { persistCompactionBoundaryWithSessionEntrySync } from "./session-accessor.sqlite-compaction.js";
 import { publishCommittedSessionIdentity } from "./session-accessor.sqlite-identity.js";
@@ -66,7 +65,7 @@ export async function persistCompactionBoundaryWithSessionEntryAsync(
     initialWriter?.assertActive();
   };
   const options = toDatabaseOptions(resolveSqliteTranscriptScope(captured));
-  const actor = captureSessionManagerIncognitoActor(captured);
+  const actor = captureSessionManagerIncognitoBinding(captured)?.actor;
   const transcriptByteCompactionLatch = { ...params.transcriptByteCompactionLatch };
   return await trackAsyncWork(() =>
     runOpenClawAgentWriteAdmission(
@@ -85,63 +84,69 @@ export async function persistCompactionBoundaryWithSessionEntryAsync(
         );
         assertCurrent();
         const persist = (database: OpenClawAgentDatabase | IncognitoSessionActor) =>
-          withSessionMetadataWorker(options, database, assertCurrent, async (worker) => {
-            const { env: _env, ...target } = captured;
-            const { env: _preparedEnv, ...preparedTarget } = prepared.scope;
-            const acknowledged = await receiveSessionManagerCommit(
-              "session.transcript.compactionBoundary",
-              () =>
-                worker.execute({
-                  type: "session.transcript.compactionBoundary",
-                  input: {
-                    scope: actor ? { ...target, storePath: actor.path } : target,
-                    prepared: {
-                      ...prepared,
-                      scope: actor ? { ...preparedTarget, storePath: actor.path } : preparedTarget,
+          withSessionMetadataWorker(
+            options,
+            database,
+            assertCurrent,
+            async (worker) => {
+              const { env: _env, ...target } = captured;
+              const { env: _preparedEnv, ...preparedTarget } = prepared.scope;
+              const acknowledged = await receiveSessionManagerCommit(
+                "session.transcript.compactionBoundary",
+                () =>
+                  worker.execute({
+                    type: "session.transcript.compactionBoundary",
+                    input: {
+                      scope: actor ? { ...target, storePath: actor.path } : target,
+                      prepared: {
+                        ...prepared,
+                        scope: actor
+                          ? { ...preparedTarget, storePath: actor.path }
+                          : preparedTarget,
+                      },
+                      transcriptByteCompactionLatch,
+                      ...(initialWriter && !initialWriter.committedFence
+                        ? { initialWriterRunId: initialWriter.writerRunId }
+                        : {}),
                     },
-                    transcriptByteCompactionLatch,
-                    ...(initialWriter && !initialWriter.committedFence
-                      ? { initialWriterRunId: initialWriter.writerRunId }
-                      : {}),
-                  },
-                }),
-            );
-            const receipt = acknowledged.value;
-            try {
-              if (receipt.initialEntry?.fence) {
-                initialWriter?.recordCommitted(receipt.initialEntry.fence);
+                  }),
+              );
+              const receipt = acknowledged.value;
+              try {
+                if (receipt.initialEntry?.fence && !("db" in database)) {
+                  initialWriter?.recordCommitted(receipt.initialEntry.fence);
+                }
+              } finally {
+                if (receipt.initialEntry?.identity && !("db" in database)) {
+                  publishCommittedSessionIdentity(
+                    captured.agentId,
+                    database.identity.incarnation,
+                    receipt.initialEntry.identity.previous,
+                    receipt.initialEntry.identity.current,
+                  );
+                }
               }
-            } finally {
-              if (receipt.initialEntry?.identity) {
-                publishCommittedSessionIdentity(
-                  captured.agentId,
-                  "db" in database
-                    ? readOpenClawAgentDatabaseIdentity(database).identity
-                    : database.identity.incarnation,
-                  receipt.initialEntry.identity.previous,
-                  receipt.initialEntry.identity.current,
+              if (acknowledged.failure) {
+                throw new SessionEntryCommittedError(
+                  receipt.committed.result.id,
+                  captured,
+                  receipt.committed.after,
+                  acknowledged.failure,
                 );
               }
-            }
-            if (acknowledged.failure) {
-              throw new SessionEntryCommittedError(
-                receipt.committed.result.id,
-                captured,
-                receipt.committed.after,
-                acknowledged.failure,
-              );
-            }
-            if (receipt.projectionNeedsReconcile) {
-              startSessionTranscriptIndexReconcile({
-                ...options,
-                preferredSessionId: captured.sessionId,
-              });
-            }
-            return receipt.committed;
-          });
+              if (receipt.projectionNeedsReconcile) {
+                startSessionTranscriptIndexReconcile({
+                  ...options,
+                  preferredSessionId: captured.sessionId,
+                });
+              }
+              return receipt.committed;
+            },
+            { initialWriter },
+          );
         return actor
           ? await persist(actor)
-          : await withOpenClawAgentDatabaseAsync(options, persist, assertCurrent);
+          : await withOpenClawAgentDatabaseRuntime(options, persist, assertCurrent);
       },
       true,
     ),

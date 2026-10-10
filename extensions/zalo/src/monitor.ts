@@ -2,7 +2,7 @@ import { logTypingFailure } from "openclaw/plugin-sdk/channel-feedback";
 import {
   createChannelPartialDeliveryError,
   formatInboundMediaUnavailableText,
-  resolveChannelInboundRouteEnvelope,
+  createChannelInboundEnvelopeBuilderAsync,
   type ChannelInboundMediaInput,
 } from "openclaw/plugin-sdk/channel-inbound";
 import type {
@@ -11,13 +11,14 @@ import type {
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { createMessageReceiptFromOutboundResults } from "openclaw/plugin-sdk/channel-outbound";
 import { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
-import type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import {
   deliverTextOrMediaReply,
   resolveSendableOutboundReplyParts,
   type OutboundReplyPayload,
 } from "openclaw/plugin-sdk/reply-payload";
+import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { sleepWithAbort, waitForAbortSignal } from "openclaw/plugin-sdk/runtime-env";
 import {
   resolveDefaultGroupPolicy,
@@ -43,11 +44,7 @@ import {
   type ZaloUpdate,
 } from "./api.js";
 import { normalizeZaloAllowEntry, resolveZaloRuntimeGroupPolicy } from "./group-access.js";
-import {
-  prepareZaloDurableReplyPayload,
-  resolveZaloDurableReplyOptions,
-} from "./monitor-durable.js";
-import type { ZaloRuntimeEnv } from "./monitor.types.js";
+import type { ZaloRuntimeEnv, ZaloStatusSink } from "./monitor.types.js";
 import {
   prepareHostedZaloMediaUrl,
   resolveHostedZaloMediaRoutePrefix,
@@ -81,15 +78,6 @@ const ZALO_TYPING_TIMEOUT_MS = 5_000;
 const UNIX_MILLISECONDS_THRESHOLD = 1_000_000_000_000;
 
 type ZaloCoreRuntime = ReturnType<typeof getZaloRuntime>;
-type ZaloStatusSink = (patch: {
-  connected?: boolean;
-  lifecycle?: "ready" | "recovering";
-  terminalDisconnect?: boolean;
-  lastConnectedAt?: number;
-  lastError?: string | null;
-  lastInboundAt?: number;
-  lastOutboundAt?: number;
-}) => void;
 type ZaloProcessingContext = {
   token: string;
   account: ResolvedZaloAccount;
@@ -472,7 +460,7 @@ async function processMessageWithPipeline(params: ZaloMessagePipelineParams): Pr
   const { isGroup, chatId, senderId, senderName, rawBody } = authorization;
   const agentBody = agentBodyOverride ?? rawBody;
 
-  const { route, buildEnvelope } = resolveChannelInboundRouteEnvelope({
+  const route = resolveAgentRoute({
     cfg: config,
     channel: "zalo",
     accountId: account.accountId,
@@ -506,6 +494,7 @@ async function processMessageWithPipeline(params: ZaloMessagePipelineParams): Pr
 
   const fromLabel = isGroup ? `group:${chatId}` : senderName || `user:${senderId}`;
   const timestamp = resolveZaloTimestampMs(date);
+  const buildEnvelope = await createChannelInboundEnvelopeBuilderAsync({ cfg: config, route });
   const body = buildEnvelope({
     channel: "Zalo",
     from: fromLabel,
@@ -598,35 +587,27 @@ async function processMessageWithPipeline(params: ZaloMessagePipelineParams): Pr
     route: { agentId: route.agentId, dmScope: route.dmScope, sessionKey: route.sessionKey },
     ctxPayload,
     delivery: {
-      preparePayload: (payload) =>
-        prepareZaloDurableReplyPayload({
-          payload,
-          tableMode,
-          convertMarkdownTables: core.channel.text.convertMarkdownTables,
-        }),
-      durable: (payload, info) =>
-        resolveZaloDurableReplyOptions({
-          payload,
-          infoKind: info.kind,
-          chatId,
-        }),
+      preparePayload: (payload) => {
+        if (!payload.text) {
+          return payload;
+        }
+        return {
+          ...payload,
+          text: core.channel.text.convertMarkdownTables(payload.text, tableMode),
+        };
+      },
+      durable: (payload, info) => {
+        if (info.kind !== "final") {
+          return false;
+        }
+        const reply = resolveSendableOutboundReplyParts(payload);
+        if (reply.hasMedia || !reply.hasText) {
+          return false;
+        }
+        return { to: chatId };
+      },
       deliver: async (payload) => {
-        await deliverZaloReply({
-          payload,
-          token,
-          chatId,
-          core,
-          config,
-          webhookUrl: params.webhookUrl,
-          webhookPath: params.webhookPath,
-          proxyUrl: account.config.proxy,
-          mediaMaxBytes: params.mediaMaxMb * 1024 * 1024,
-          canHostMedia: params.canHostMedia,
-          accountId: account.accountId,
-          statusSink,
-          fetcher,
-          tableMode: "off",
-        });
+        await deliverZaloReply(payload, chatId, params);
       },
       onDelivered: (_payload, _info, result) => {
         if (result?.visibleReplySent !== false) {
@@ -649,41 +630,26 @@ async function processMessageWithPipeline(params: ZaloMessagePipelineParams): Pr
   });
 }
 
-async function deliverZaloReply(params: {
-  payload: OutboundReplyPayload;
-  token: string;
-  chatId: string;
-  core: ZaloCoreRuntime;
-  config: OpenClawConfig;
-  webhookUrl?: string;
-  webhookPath?: string;
-  proxyUrl?: string;
-  mediaMaxBytes: number;
-  canHostMedia: boolean;
-  accountId?: string;
-  statusSink?: ZaloStatusSink;
-  fetcher?: ZaloFetch;
-  tableMode?: MarkdownTableMode;
-}): Promise<void> {
+async function deliverZaloReply(
+  payload: OutboundReplyPayload,
+  chatId: string,
+  context: ZaloProcessingContext,
+): Promise<void> {
   const {
-    payload,
     token,
-    chatId,
     core,
     config,
     webhookUrl,
     webhookPath,
-    proxyUrl,
-    mediaMaxBytes,
     canHostMedia,
-    accountId,
+    account,
     statusSink,
     fetcher,
-  } = params;
-  const tableMode = params.tableMode ?? "code";
-  const reply = resolveSendableOutboundReplyParts(payload, {
-    text: core.channel.text.convertMarkdownTables(payload.text ?? "", tableMode),
-  });
+  } = context;
+  const proxyUrl = account.config.proxy;
+  const mediaMaxBytes = context.mediaMaxMb * 1024 * 1024;
+  const accountId = account.accountId;
+  const reply = resolveSendableOutboundReplyParts(payload);
   const chunkMode = core.channel.text.resolveChunkMode(config, "zalo", accountId);
   const acceptedMessageIds: string[] = [];
   let visibleReplySent = false;
@@ -816,6 +782,20 @@ export async function monitorZaloProvider(options: ZaloMonitorOptions): Promise<
     `[${account.accountId}] Zalo provider init mode=${mode} mediaMaxMb=${String(effectiveMediaMaxMb)}`,
   );
 
+  const processingContext: ZaloProcessingContext = {
+    token,
+    account,
+    config,
+    runtime,
+    core,
+    mediaMaxMb: effectiveMediaMaxMb,
+    canHostMedia,
+    webhookUrl: effectiveWebhookUrl,
+    webhookPath: effectiveWebhookPath,
+    statusSink,
+    fetcher,
+  };
+
   try {
     if (hostedMediaRoutePath) {
       const unregisterHostedMediaRoute = registerSharedHostedMediaRoute({
@@ -855,18 +835,8 @@ export async function monitorZaloProvider(options: ZaloMonitorOptions): Promise<
         deliver: async (update, turnAdoptionLifecycle) => {
           statusSink?.({ lastInboundAt: Date.now() });
           await processUpdate({
+            ...processingContext,
             update,
-            token,
-            account,
-            config,
-            runtime,
-            core,
-            mediaMaxMb: effectiveMediaMaxMb,
-            canHostMedia,
-            webhookUrl: effectiveWebhookUrl,
-            webhookPath: path,
-            statusSink,
-            fetcher,
             turnAdoptionLifecycle,
           });
         },
@@ -955,19 +925,9 @@ export async function monitorZaloProvider(options: ZaloMonitorOptions): Promise<
     }
 
     startPollingLoop({
-      token,
-      account,
-      config,
-      runtime,
-      core,
-      canHostMedia,
-      webhookUrl: effectiveWebhookUrl,
-      webhookPath: effectiveWebhookPath,
+      ...processingContext,
       abortSignal,
       isStopped: () => stopped,
-      mediaMaxMb: effectiveMediaMaxMb,
-      statusSink,
-      fetcher,
     });
 
     await waitForAbortSignal(abortSignal);

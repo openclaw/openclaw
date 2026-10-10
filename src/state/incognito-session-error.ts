@@ -14,6 +14,18 @@ export const IncognitoSessionEndedError = resolveGlobalSingleton(
 );
 export type IncognitoSessionEndedError = InstanceType<typeof IncognitoSessionEndedError>;
 
+export const IncognitoSessionMissingError = resolveGlobalSingleton(
+  Symbol.for("openclaw.incognitoSessionMissingError"),
+  () =>
+    class IncognitoMissingError extends Error {
+      readonly code = "INCOGNITO_SESSION_MISSING";
+      constructor() {
+        super("No incognito session owner. Create a new incognito session to continue.");
+        this.name = "IncognitoSessionMissingError";
+      }
+    },
+);
+
 /**
  * Shared by the host and SDK graphs so legacy adapters retain the actionable refusal.
  * @internal Knip production exception; P7d removes this tag when it installs sync refusal preflight.
@@ -38,6 +50,7 @@ export function rethrowIncognitoSessionError(error: unknown): void {
   if (
     collectNestedErrorCandidates(error).some(
       (candidate) =>
+        candidate instanceof IncognitoSessionMissingError ||
         candidate instanceof IncognitoSessionSyncAccessError ||
         candidate instanceof IncognitoSessionEndedError,
     )

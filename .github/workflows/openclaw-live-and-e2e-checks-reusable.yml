@@ -722,6 +722,8 @@ jobs:
           sparse-checkout: |
             package.json
             .github/actions/setup-test-bun
+            scripts/stage-openclaw-bun.sh
+            scripts/lib/openclaw-bun.json
           sparse-checkout-cone-mode: false
           persist-credentials: false
 
@@ -1261,6 +1263,7 @@ jobs:
           LIVE_MODELS_ONLY: ${{ inputs.live_models_only }}
           RELEASE_TEST_PROFILE: ${{ inputs.release_test_profile }}
           PREPARE_ONLY: ${{ inputs.prepare_only }}
+          PUBLISHED_UPGRADE_SURVIVOR_BASELINES: ${{ needs.validate_selected_ref.outputs.upgrade_baselines }}
         run: node scripts/plan-release-workflow-matrix.mjs >> "$GITHUB_OUTPUT"
 
   validate_release_live_cache:
@@ -1742,7 +1745,8 @@ jobs:
       OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_CANDIDATE_VERSION: ${{ needs.prepare_docker_e2e_image.outputs.package_version }}
       OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256: ${{ needs.prepare_docker_e2e_image.outputs.prepublish_plugin_registry_manifest_sha256 }}
       OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: ${{ needs.validate_selected_ref.outputs.upgrade_baseline }}
-      OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS: ${{ needs.validate_selected_ref.outputs.upgrade_baselines }}
+      OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS: ${{ matrix.docker_lanes != '' && matrix.published_upgrade_survivor_baselines || needs.validate_selected_ref.outputs.upgrade_baselines }}
+      OPENCLAW_DOCKER_ALL_LANES: ${{ matrix.docker_lanes }}
       OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS: ${{ inputs.published_upgrade_survivor_scenarios }}
       OPENCLAW_DOCKER_E2E_REQUIRE_LOCAL_IMAGE: ${{ inputs.shared_image_policy == 'no-push-artifact' && '1' || '0' }}
       OPENCLAW_SKIP_DOCKER_BUILD: "1"
@@ -2025,7 +2029,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: docker-e2e-${{ matrix.chunk_id }}
+          name: docker-e2e-${{ matrix.shard_id || matrix.chunk_id }}
           path: .artifacts/docker-tests/
           if-no-files-found: error
 
@@ -4643,7 +4647,9 @@ jobs:
 
       - name: Install Chromium for native live browser tests
         if: steps.selection.outputs.run == 'true' && matrix.suite_id == 'native-live-test'
-        run: pnpm --dir ui exec playwright install --with-deps chromium
+        uses: ./.release-harness/.github/actions/setup-playwright-chromium
+        with:
+          cache-mode: restore
 
       - name: Hydrate live auth/profile inputs
         if: steps.selection.outputs.run == 'true'
@@ -5087,7 +5093,9 @@ jobs:
 
       - name: Install Chromium for A-K live browser tests
         if: contains(matrix.profiles, inputs.release_test_profile) && matrix.suite_id == 'native-live-extensions-a-k' && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id)
-        run: pnpm --dir ui exec playwright install --with-deps chromium
+        uses: ./.release-harness/.github/actions/setup-playwright-chromium
+        with:
+          cache-mode: restore
 
       - name: Hydrate live auth/profile inputs
         if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || (inputs.live_suite_filter == 'native-live-extensions-media-video' && startsWith(matrix.suite_id, 'native-live-extensions-media-video-')))

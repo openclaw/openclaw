@@ -30,6 +30,10 @@ import type {
   SessionHistoryWorkerResult,
 } from "./session-history-types.js";
 import { SessionHistoryDeltaPreparationError } from "./session-history-worker-errors.js";
+import type {
+  SessionColdMetadataWorkerInput,
+  SessionColdMetadataWorkerResult,
+} from "./session-transcript-inventory.types.js";
 import { isSessionTranscriptProjectionUnavailableError } from "./session-transcript-projection-error.js";
 import { resolveSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
 import {
@@ -40,11 +44,7 @@ import {
   withSessionHistoryWorkerDatabase,
   type SessionHistoryWorkerDatabase,
 } from "./session-transcript-worker-runtime.js";
-import type {
-  SessionColdMetadataWorkerInput,
-  SessionColdMetadataWorkerResult,
-  SessionTranscriptHistoryWorkerInput,
-} from "./session-transcript-worker.types.js";
+import type { SessionTranscriptHistoryWorkerInput } from "./session-transcript-worker.types.js";
 import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
 
 type ForegroundHistoryResult = SessionHistoryWorkerResult | SessionColdMetadataWorkerResult;
@@ -269,9 +269,12 @@ function captureHistoryRequest(request: SessionHistoryWorkerRequest): SessionHis
       canonicalKey: params.canonicalKey,
       max: params.max,
       maxHistoryBytes: params.maxHistoryBytes,
+      responseHistoryBytes: params.responseHistoryBytes,
       effectiveMaxChars: params.effectiveMaxChars,
+      toolResultMaxChars: params.toolResultMaxChars,
       offset: params.offset,
       messageId: params.messageId,
+      ...(params.pageCursor ? { pageCursor: { ...params.pageCursor } } : {}),
       ignoreCliSessionImports: params.ignoreCliSessionImports,
       cliHistoryHomeDir: params.cliHistoryHomeDir,
       ...(params.cliHistoryRedaction

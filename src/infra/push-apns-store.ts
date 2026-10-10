@@ -15,13 +15,13 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
-import { ApnsRegistrationPairingChangedError } from "./push-apns-store.errors.js";
-import { apnsRegistrationToRow } from "./push-apns-store.rows.js";
-import type { ApnsEnvironment, ApnsRegistration } from "./push-apns-store.types.js";
 import {
   normalizeApnsRelayBaseUrl,
   normalizePersistedApnsRelayBaseUrl,
-} from "./push-apns.relay.js";
+} from "./push-apns-relay-url.js";
+import { ApnsRegistrationPairingChangedError } from "./push-apns-store.errors.js";
+import { apnsRegistrationToRow } from "./push-apns-store.rows.js";
+import type { ApnsEnvironment, ApnsRegistration } from "./push-apns-store.types.js";
 import { createSqliteWorkerOperationAdmission } from "./sqlite-worker-operation-admission.js";
 
 export { ApnsRegistrationPairingChangedError } from "./push-apns-store.errors.js";
@@ -52,10 +52,7 @@ type RegisterApnsParams = {
     }
 );
 
-type ApnsRegistrationDatabase = Pick<
-  OpenClawStateKyselyDatabase,
-  "apns_registrations" | "apns_registration_tombstones"
->;
+type ApnsRegistrationDatabase = Pick<OpenClawStateKyselyDatabase, "apns_registrations">;
 type ApnsRegistrationRow = Selectable<ApnsRegistrationDatabase["apns_registrations"]>;
 
 const MAX_NODE_ID_LENGTH = 256;
@@ -130,22 +127,13 @@ function normalizeDistribution(value: unknown): "official" | null {
 
 function normalizeRelayOrigin(
   value: unknown,
-  env: NodeJS.ProcessEnv = process.env,
+  normalizeUrl = normalizeApnsRelayBaseUrl,
 ): string | undefined {
   const trimmed = normalizeOptionalString(value);
   if (!trimmed) {
     return undefined;
   }
-  const normalized = normalizeApnsRelayBaseUrl(trimmed, env);
-  return normalized.ok ? normalized.value : undefined;
-}
-
-function normalizePersistedRelayOrigin(value: unknown): string | undefined {
-  const trimmed = normalizeOptionalString(value);
-  if (!trimmed) {
-    return undefined;
-  }
-  const normalized = normalizePersistedApnsRelayBaseUrl(trimmed);
+  const normalized = normalizeUrl(trimmed);
   return normalized.ok ? normalized.value : undefined;
 }
 
@@ -164,6 +152,7 @@ const apnsUpdatedAtSchema = z
   .number()
   .refine(Number.isSafeInteger)
   .refine((value) => value >= 0);
+const trimmedRelayIdentifierSchema = z.string().transform((value) => value.trim());
 const directApnsRegistrationSchema = z.object({
   nodeId: apnsNodeIdSchema,
   transport: z.string().transform(normalizeLowercaseStringOrEmpty).pipe(z.literal("direct")),
@@ -175,18 +164,11 @@ const directApnsRegistrationSchema = z.object({
 const relayApnsRegistrationSchema = z.object({
   nodeId: apnsNodeIdSchema,
   transport: z.string().transform(normalizeLowercaseStringOrEmpty).pipe(z.literal("relay")),
-  relayHandle: z
-    .string()
-    .transform((value) => value.trim())
-    .refine(isValidRelayIdentifier),
-  sendGrant: z
-    .string()
-    .transform((value) => value.trim())
-    .refine((value) => isValidRelayIdentifier(value, MAX_SEND_GRANT_LENGTH)),
-  installationId: z
-    .string()
-    .transform((value) => value.trim())
-    .refine(isValidRelayIdentifier),
+  relayHandle: trimmedRelayIdentifierSchema.refine(isValidRelayIdentifier),
+  sendGrant: trimmedRelayIdentifierSchema.refine((value) =>
+    isValidRelayIdentifier(value, MAX_SEND_GRANT_LENGTH),
+  ),
+  installationId: trimmedRelayIdentifierSchema.refine(isValidRelayIdentifier),
   topic: apnsTopicSchema,
   environment: apnsEnvironmentSchema,
   distribution: z.unknown().transform(normalizeDistribution).pipe(z.literal("official")),
@@ -201,7 +183,7 @@ const canonicalApnsRegistrationSchema = z.union([
 
 function normalizeCanonicalApnsRegistrationWithRelayOrigin(
   record: unknown,
-  normalizeOrigin: (value: unknown) => string | undefined,
+  normalizeOrigin: typeof normalizeApnsRelayBaseUrl,
 ): ApnsRegistration | null {
   const result = canonicalApnsRegistrationSchema.safeParse(record);
   if (!result.success) {
@@ -210,7 +192,7 @@ function normalizeCanonicalApnsRegistrationWithRelayOrigin(
   if (result.data.transport === "direct") {
     return result.data;
   }
-  const relayOrigin = normalizeOrigin(result.data.relayOrigin);
+  const relayOrigin = normalizeRelayOrigin(result.data.relayOrigin, normalizeOrigin);
   const { relayOrigin: _rawRelayOrigin, ...registration } = result.data;
   return {
     ...registration,
@@ -218,13 +200,12 @@ function normalizeCanonicalApnsRegistrationWithRelayOrigin(
   };
 }
 
-/** Normalizes one canonical registration with an explicit transport discriminator. */
 export function normalizeCanonicalApnsRegistration(
   record: unknown,
   env: NodeJS.ProcessEnv = process.env,
 ): ApnsRegistration | null {
-  return normalizeCanonicalApnsRegistrationWithRelayOrigin(record, (value) =>
-    normalizeRelayOrigin(value, env),
+  return normalizeCanonicalApnsRegistrationWithRelayOrigin(record, (origin) =>
+    normalizeApnsRelayBaseUrl(origin, env),
   );
 }
 
@@ -245,7 +226,7 @@ export function apnsRegistrationFromRow(row: ApnsRegistrationRow): ApnsRegistrat
       tokenDebugSuffix: row.token_debug_suffix ?? undefined,
       updatedAtMs: row.updated_at_ms,
     },
-    normalizePersistedRelayOrigin,
+    normalizePersistedApnsRelayBaseUrl,
   );
   if (!normalized) {
     throw new Error("invalid APNs registration row");
@@ -270,7 +251,6 @@ export function apnsRegistrationFromRow(row: ApnsRegistrationRow): ApnsRegistrat
   return normalized;
 }
 
-/** Persists a validated direct or relay APNs registration for one node id. */
 export async function registerApnsRegistration(
   params: RegisterApnsParams,
 ): Promise<ApnsRegistration> {

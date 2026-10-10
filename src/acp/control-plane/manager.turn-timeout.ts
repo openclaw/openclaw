@@ -17,12 +17,8 @@ export function resolveTurnTimeoutMs(params: {
   meta: SessionAcpMeta;
 }): number {
   const runtimeTimeoutSeconds = resolveRuntimeOptionsFromMeta(params.meta).timeoutSeconds;
-  if (
-    typeof runtimeTimeoutSeconds === "number" &&
-    Number.isFinite(runtimeTimeoutSeconds) &&
-    runtimeTimeoutSeconds > 0
-  ) {
-    return clampTimerTimeoutMs(Math.round(runtimeTimeoutSeconds * 1_000), 1_000) ?? 1_000;
+  if (runtimeTimeoutSeconds !== undefined) {
+    return clampTimerTimeoutMs(runtimeTimeoutSeconds * 1_000, 1_000) ?? 1_000;
   }
   return resolveAgentTimeoutMs({
     cfg: params.cfg,

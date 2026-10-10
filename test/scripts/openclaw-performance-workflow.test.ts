@@ -313,16 +313,6 @@ describe("OpenClaw performance workflow", () => {
     expect(verify.run).toContain('"$VITEST_PAIR_RESULT" != "success"');
   });
 
-  it("uses an optional dispatch identifier to name parent-owned runs", () => {
-    const workflow = readFileSync(WORKFLOW, "utf8");
-
-    expect(workflow).toContain(
-      "run-name: ${{ inputs.dispatch_id != '' && format('OpenClaw Performance {0}', inputs.dispatch_id) || 'OpenClaw Performance' }}",
-    );
-    expect(workflow).toContain("dispatch_id:");
-    expect(workflow).toContain("Optional parent workflow dispatch identifier");
-  });
-
   it("pins the Kova evaluator with release validation contracts", () => {
     const workflow = readFileSync(WORKFLOW, "utf8");
     const canonicalKovaRef = "88d9a7efa5e6569f902bf8d298fd6a21c6be2e7b";

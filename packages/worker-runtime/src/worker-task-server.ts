@@ -19,6 +19,8 @@ type WorkerConversation = {
 /** A conversation never outlives the pool task or crosses worker generations. */
 export type WorkerTaskChannel = {
   consumeInput: () => void;
+  /** One-way observations do not acknowledge input or participate in request/reply ownership. */
+  notify: (value: unknown) => void;
   request: (
     value: unknown,
     transferList?: readonly Transferable[],
@@ -26,7 +28,9 @@ export type WorkerTaskChannel = {
 };
 
 export type WorkerTaskServerHost<TaskContext> = {
+  selectStartupPort?: (message: unknown) => MessagePort | undefined;
   initialize: (port: MessagePort) => void;
+  onReady?: () => void;
   onMessage: (sampleMemory: boolean) => void;
   installTaskContext: (context: TaskContext) => void;
   onIdle: () => void;
@@ -46,10 +50,11 @@ export function serveOwnedWorkerTasks<Output, TaskContext>(
   },
   host: WorkerTaskServerHost<TaskContext>,
 ): void {
-  const port = parentPort;
-  if (!port) {
+  if (!parentPort) {
     return;
   }
+  let port = parentPort;
+  let receivedStartup = false;
   host.initialize(port);
   let active: WorkerConversation | undefined;
   let execution = Promise.resolve();
@@ -57,7 +62,7 @@ export function serveOwnedWorkerTasks<Output, TaskContext>(
   let cancelledResponse: { taskId: number; responseId: number } | undefined;
   port.on(
     "message",
-    (message: {
+    function receive(message: {
       input: unknown;
       taskId: number;
       interactive?: boolean;
@@ -68,7 +73,19 @@ export function serveOwnedWorkerTasks<Output, TaskContext>(
       key?: string;
       resourcePort?: MessagePort;
       sampleMemory?: boolean;
-    }) => {
+    }) {
+      if (!receivedStartup) {
+        receivedStartup = true;
+        const taskPort = host.selectStartupPort?.(message);
+        if (taskPort) {
+          port.off("message", receive);
+          port = taskPort;
+          host.initialize(port);
+          port.on("message", receive);
+          host.onReady?.();
+          return;
+        }
+      }
       host.onMessage(message.sampleMemory === true);
       if (message.closeResource && message.resourcePort) {
         const receipt = message.resourcePort;
@@ -167,6 +184,10 @@ export function serveOwnedWorkerTasks<Output, TaskContext>(
         : undefined;
       const channel: WorkerTaskChannel | undefined = message.interactive
         ? {
+            notify: (value) => {
+              control.throwIfCancelled();
+              port.postMessage({ status: "notification", taskId: task.taskId, value });
+            },
             consumeInput: () =>
               port.postMessage({ status: "consumed", taskId: task.taskId, id: 0 }),
             request: (value, transferList) => {
@@ -229,4 +250,5 @@ export function serveOwnedWorkerTasks<Output, TaskContext>(
         .finally(() => host.onIdle());
     },
   );
+  host.onReady?.();
 }

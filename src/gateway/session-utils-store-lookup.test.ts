@@ -513,7 +513,10 @@ describe("global session lookup ownership", () => {
             login: `synthetic-${agentId}`,
           },
         });
-        expect(prepareCurrentGitHubPublicationOptionsIdentity).toHaveBeenLastCalledWith(agentId);
+        expect(prepareCurrentGitHubPublicationOptionsIdentity).toHaveBeenLastCalledWith(
+          agentId,
+          expect.any(Function),
+        );
         expect(latestShared).toHaveBeenLastCalledWith(
           expect.objectContaining({
             agentId,

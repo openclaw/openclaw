@@ -24,6 +24,7 @@ import {
 import { runAgentHarnessAfterToolCallHook } from "../harness/hook-helpers.js";
 import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
 import { resolveCliToolTerminalReason } from "../run-termination.js";
+import { cliAssistantItemId } from "./assistant-identity.js";
 import type { CliToolTracking } from "./execute-tool-tracking.js";
 import { normalizeCliToolName, stripOpenClawMcpToolPrefix } from "./tool-policy.js";
 import type { PreparedCliRunContext } from "./types.js";
@@ -48,8 +49,19 @@ export function createCliEventHandlers(params: {
   let observedCliActivity = false;
   let compactionActive = false;
   const compactionChangeListeners = new Set<() => void>();
-  let signaledToolExecutionStarted = false;
-  let signaledAssistantOutputStarted = false;
+  const signaledPhases = new Set<"tool_execution_started" | "assistant_output_started">();
+  const signalExecutionPhase = (phase: "tool_execution_started" | "assistant_output_started") => {
+    if (signaledPhases.has(phase)) {
+      return;
+    }
+    signaledPhases.add(phase);
+    runParams.onExecutionPhase?.({
+      phase,
+      provider: runParams.provider,
+      model: context.modelId,
+      backend: context.backendResolved.id,
+    });
+  };
   let commentaryCounter = 0;
   const toolSummaryById = new Map<
     string,
@@ -127,15 +139,7 @@ export function createCliEventHandlers(params: {
       startedAt: Date.now(),
     });
     recordToolSummary(event, false);
-    if (!signaledToolExecutionStarted) {
-      signaledToolExecutionStarted = true;
-      runParams.onExecutionPhase?.({
-        phase: "tool_execution_started",
-        provider: runParams.provider,
-        model: context.modelId,
-        backend: context.backendResolved.id,
-      });
-    }
+    signalExecutionPhase("tool_execution_started");
     if (tracked) {
       params.toolTracking.handleCliToolUseStart(event);
     }
@@ -392,17 +396,10 @@ export function createCliEventHandlers(params: {
   const emitCliAssistantDelta = ({ text, delta }: CliStreamingDelta) => {
     if (text || delta) {
       observedCliActivity = true;
-      if (!signaledAssistantOutputStarted) {
-        signaledAssistantOutputStarted = true;
-        runParams.onExecutionPhase?.({
-          phase: "assistant_output_started",
-          provider: runParams.provider,
-          model: context.modelId,
-          backend: context.backendResolved.id,
-        });
-      }
+      signalExecutionPhase("assistant_output_started");
     }
     emitLiveEvent("assistant", () => ({
+      itemId: cliAssistantItemId(runParams.runId),
       text: applyPluginTextReplacements(text, context.backendResolved.textTransforms?.output),
       delta: applyPluginTextReplacements(delta, context.backendResolved.textTransforms?.output),
     }));
@@ -440,8 +437,6 @@ export function createCliEventHandlers(params: {
 
   return {
     emitLiveEvents,
-    emitCliToolUseStart: (event: CliToolUseStartDelta) => emitToolUseStart(event, true),
-    emitCliToolResult: (event: CliToolResultDelta) => emitToolResult(event, true),
     // Display-only native events never enter host-tool correlation or delivery accounting.
     emitCliDisplayToolUseStart: (event: CliToolUseStartDelta) => emitToolUseStart(event, false),
     emitCliDisplayToolResult: (event: CliToolResultDelta) => emitToolResult(event, false),

@@ -85,7 +85,7 @@ describe("subagent registry context cleanup", () => {
       vi.mocked(getRuntimeConfig).mockReturnValue({});
       vi.mocked(loadAgentRuntimePluginRegistryHandle).mockReturnValue(registry);
       vi.mocked(resolveContextEngine).mockImplementation(actualResolveContextEngine);
-      vi.mocked(loadSubagentSessionEntry).mockReturnValue({
+      vi.mocked(loadSubagentSessionEntry).mockResolvedValue({
         sessionId: "swept-session",
         lifecycleRevision: "swept-revision",
         updatedAt: Date.now(),

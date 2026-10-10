@@ -382,7 +382,7 @@ Use the ordinary local config, not the CI-only prebuilt config. The adapter uses
   - Live suites emit progress lines to stderr so long provider calls are visibly active even when Vitest console capture is quiet.
   - `test/vitest/vitest.live.config.ts` disables Vitest console interception so provider/gateway progress lines stream immediately during live runs.
   - Tune direct-model heartbeats with `OPENCLAW_LIVE_HEARTBEAT_MS`.
-  - Tune gateway/probe heartbeats with `OPENCLAW_LIVE_GATEWAY_HEARTBEAT_MS`.
+  - Tune gateway/check heartbeats with `OPENCLAW_LIVE_GATEWAY_HEARTBEAT_MS`.
 
 ### Advisory Bun release checks
 
@@ -407,9 +407,10 @@ gh workflow run openclaw-live-and-e2e-checks-reusable.yml --ref main \
 ```
 
 Bun jobs are labeled advisory and report failures normally in their separate
-run. They do not replace Node release evidence or add PR jobs. The existing
-`setup-test-bun` action owns the fork pin. The existing trusted admission job
-installs it once and shares its executable by artifact ID with the test jobs.
+run. They do not replace Node release evidence or add PR jobs. The trusted
+admission checkout includes `scripts/lib/openclaw-bun.json` and its staging
+helper from the workflow revision. The existing `setup-test-bun` action installs
+that pin once and shares its executable by artifact ID with the test jobs.
 Only test steps select Bun; dependency
 installation, build preparation, packaging, and workflow tooling keep their
 current toolchain.

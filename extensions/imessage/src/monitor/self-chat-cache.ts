@@ -56,10 +56,9 @@ function buildScope(parts: SelfChatCacheKeyParts): string {
 }
 
 class DefaultSelfChatCache implements SelfChatCache {
-  private cache = new Map<string, Map<number, SelfChatCacheEntry>>();
-  private insertionOrder = new Map<number, string>();
+  private cache = new Map<string, Set<SelfChatCacheEntry>>();
+  private insertionOrder = new Map<SelfChatCacheEntry, string>();
   private lastCleanupAt = 0;
-  private nextEntryId = 1;
 
   private buildBucketKey(lookup: SelfChatLookup): string | null {
     const text = normalizeText(lookup.text);
@@ -74,16 +73,15 @@ class DefaultSelfChatCache implements SelfChatCache {
     if (!key || !isUsableTimestamp(lookup.createdAt)) {
       return;
     }
-    const entries = this.cache.get(key) ?? new Map<number, SelfChatCacheEntry>();
+    const entries = this.cache.get(key) ?? new Set<SelfChatCacheEntry>();
     const entry = {
       createdAt: lookup.createdAt,
       createdAtSkewToleranceMs: lookup.allowCreatedAtSkew ? SELF_CHAT_CREATED_AT_TOLERANCE_MS : 0,
       rememberedAt: Date.now(),
     };
-    const id = this.nextEntryId++;
-    entries.set(id, entry);
+    entries.add(entry);
     this.cache.set(key, entries);
-    this.insertionOrder.set(id, key);
+    this.insertionOrder.set(entry, key);
     this.maybeCleanup();
   }
 
@@ -108,37 +106,32 @@ class DefaultSelfChatCache implements SelfChatCache {
     });
   }
 
+  private removeEntry(entry: SelfChatCacheEntry, key: string): void {
+    this.insertionOrder.delete(entry);
+    const entries = this.cache.get(key);
+    entries?.delete(entry);
+    if (entries?.size === 0) {
+      this.cache.delete(key);
+    }
+  }
+
   private maybeCleanup(): void {
     const now = Date.now();
     if (now - this.lastCleanupAt < CLEANUP_MIN_INTERVAL_MS) {
       return;
     }
     this.lastCleanupAt = now;
-    for (const [key, entries] of this.cache.entries()) {
-      for (const [id, entry] of entries.entries()) {
-        if (now - entry.rememberedAt > SELF_CHAT_TTL_MS) {
-          entries.delete(id);
-          this.insertionOrder.delete(id);
-        }
-      }
-      if (entries.size === 0) {
-        this.cache.delete(key);
+    for (const [entry, key] of this.insertionOrder) {
+      if (now - entry.rememberedAt > SELF_CHAT_TTL_MS) {
+        this.removeEntry(entry, key);
       }
     }
     while (this.insertionOrder.size > MAX_SELF_CHAT_CACHE_ENTRIES) {
-      const [id, key] = expectDefined(
+      const [entry, key] = expectDefined(
         this.insertionOrder.entries().next().value,
         "oldest iMessage self-chat cache entry",
       );
-      this.insertionOrder.delete(id);
-      const entries = this.cache.get(key);
-      if (!entries) {
-        continue;
-      }
-      entries.delete(id);
-      if (entries.size === 0) {
-        this.cache.delete(key);
-      }
+      this.removeEntry(entry, key);
     }
   }
 }

@@ -27,23 +27,32 @@ const stagedTransfers = new WeakMap<
   CreationComposerTransfer,
   { owner: ReturnType<typeof chatOutboxOwner>; host: ChatHost }
 >();
-const activeAdmissions = new WeakMap<CreationComposerTransfer, Promise<boolean>>();
+const transferAdmissions = new WeakMap<CreationComposerTransfer, Promise<boolean>>();
 
 export function admitCreatedComposerQueue(
   host: ChatHost,
   transfer: CreationComposerTransfer,
 ): Promise<boolean> {
-  const previous = activeAdmissions.get(transfer);
+  const previous = transferAdmissions.get(transfer);
+  let complete = false;
   const admission = (
     previous
-      ? previous.then(() => performCreatedComposerAdmission(host, transfer))
+      ? previous.then(
+          (settled) => settled || performCreatedComposerAdmission(host, transfer),
+          () => performCreatedComposerAdmission(host, transfer),
+        )
       : performCreatedComposerAdmission(host, transfer)
-  ).finally(() => {
-    if (activeAdmissions.get(transfer) === admission) {
-      activeAdmissions.delete(transfer);
-    }
-  });
-  activeAdmissions.set(transfer, admission);
+  )
+    .then((settled) => {
+      complete = settled;
+      return settled;
+    })
+    .finally(() => {
+      if (!complete && transferAdmissions.get(transfer) === admission) {
+        transferAdmissions.delete(transfer);
+      }
+    });
+  transferAdmissions.set(transfer, admission);
   return admission;
 }
 

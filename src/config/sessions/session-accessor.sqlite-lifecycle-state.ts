@@ -7,7 +7,6 @@ import {
   iterateSqliteQuerySync,
   sqliteStringSet,
 } from "../../infra/kysely-sync.js";
-import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import type {
   OpenClawAgentDatabase,
   OpenClawAgentDatabaseOptions,
@@ -23,6 +22,7 @@ import type {
   SessionLifecycleArchivedTranscript,
 } from "./session-accessor.sqlite-contract.js";
 import {
+  planSessionStateDeleteIfUnreferenced,
   readSessionStateDeleteSnapshot,
   sqliteSessionStateDeleteSnapshotsEqual,
 } from "./session-accessor.sqlite-delete-snapshot.js";
@@ -223,40 +223,11 @@ export function readReferencedSessionIdsAfterTargetMutation(
   return readReferencedSessionIds(database, removedKeys, candidateSessionIds);
 }
 
-export function planSessionStateDeleteIfUnreferenced(params: {
-  archiveTranscript?: boolean;
-  archiveDirectory: string;
-  database: Pick<OpenClawAgentDatabase, "agentId" | "db" | "path">;
-  reason?: "deleted" | "reset";
-  referencedSessionIds: ReadonlySet<string>;
-  sessionId: string;
-}): SessionStateDeletePlan | null {
-  if (
-    params.referencedSessionIds.has(params.sessionId) ||
-    readSessionColdTranscript(params.database.db, params.sessionId)
-  ) {
-    return null;
-  }
-  return {
-    agentId: params.database.agentId,
-    archiveDirectory: params.archiveDirectory,
-    archiveTranscript:
-      params.archiveTranscript !== false &&
-      typeof readOpenClawAgentDatabaseIdentity(params.database).identity === "string",
-    databasePath: params.database.path,
-    reason: params.reason ?? "deleted",
-    sessionId: params.sessionId,
-    snapshot: readSessionStateDeleteSnapshot(params.database.db, params.sessionId),
-  };
-}
-
 export function deleteMaterializedSessionStatePlans(
   database: OpenClawAgentDatabase,
   plans: readonly MaterializedSessionStateDeletePlan[],
   protectedSessionIds?: ReadonlySet<string>,
   excludedSessionKeys?: ReadonlySet<string>,
-  /** Synchronous mutation notification; durable completion still belongs to COMMIT. */
-  onDeleted?: () => void,
   diskBudget?: { preserveRecentMs?: number | null },
 ): SessionLifecycleArchivedTranscript[] {
   if (plans.length === 0) {
@@ -286,9 +257,7 @@ export function deleteMaterializedSessionStatePlans(
     if (plan.archive) {
       persistSessionTranscriptArchive(database, plan);
     }
-    if (deleteSqliteSessionStateRows(database, plan.sessionId)) {
-      onDeleted?.();
-    }
+    deleteSqliteSessionStateRows(database, plan.sessionId);
     if (plan.snapshot.lastSeq !== null && plan.archivedTranscript) {
       archivedTranscripts.push(plan.archivedTranscript);
     }
@@ -619,24 +588,22 @@ export function collectProjectedReferencedSessionIds(params: {
 
 export { collectSessionStateIdsForEntry };
 
-function deleteSqliteSessionStateRows(database: OpenClawAgentDatabase, sessionId: string): boolean {
+function deleteSqliteSessionStateRows(database: OpenClawAgentDatabase, sessionId: string): void {
   assertSessionTranscriptHot(database.db, sessionId);
   const db = getSessionKysely(database.db);
   // The window row cascades canonical transcript tables, but FTS is virtual;
   // clear its projection before dropping the owner row.
   deleteSessionTranscriptIndexInTransaction(database.db, sessionId);
-  const deleted = executeSqliteQuerySync(
+  executeSqliteQuerySync(
     database.db,
     db.deleteFrom("session_windows").where("session_id", "=", sessionId),
   );
-  return Number(deleted.numAffectedRows ?? 0n) > 0;
 }
 
 export function deletePlannedLifecycleArtifactEntries(
   database: OpenClawAgentDatabase,
   entries: readonly SessionEntryRemovalPlan[],
 ): number {
-  assertPlannedLifecycleArtifactEntriesUnchanged(database, entries);
   for (const planned of entries) {
     deleteSessionEntryRows(database, planned.sessionKey);
   }
@@ -653,18 +620,4 @@ export function assertPlannedLifecycleArtifactEntriesUnchanged(
       throw new Error(`SQLite lifecycle cleanup entry changed for ${planned.sessionKey}`);
     }
   }
-}
-
-/** Partition only optimistic entry conflicts; database and parse failures stay fatal. */
-export function partitionUnchangedPlannedLifecycleArtifactEntries(
-  database: OpenClawAgentDatabase,
-  entries: readonly SessionEntryRemovalPlan[],
-): { changed: SessionEntryRemovalPlan[]; unchanged: SessionEntryRemovalPlan[] } {
-  const changed: SessionEntryRemovalPlan[] = [];
-  const unchanged: SessionEntryRemovalPlan[] = [];
-  for (const planned of entries) {
-    const current = readExactSessionEntryRow(database, planned.sessionKey)?.entry;
-    (sqliteSessionEntriesEqual(current, planned.expectedEntry) ? unchanged : changed).push(planned);
-  }
-  return { changed, unchanged };
 }

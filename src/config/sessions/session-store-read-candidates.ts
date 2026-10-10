@@ -1,6 +1,10 @@
+import fs from "node:fs";
 import path from "node:path";
 import { resolveIdentityPathViaExistingAncestorSync } from "../../infra/boundary-path.js";
-import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
+import {
+  inspectDatabasePathIdentitySync,
+  readDatabasePathIdentitySync,
+} from "../../infra/sqlite-worker-identity.js";
 import {
   matchesAgentDatabaseReadCandidatePath,
   type OpenClawAgentDatabaseReadCandidateResource,
@@ -74,6 +78,86 @@ export function captureSessionStoreReadCandidate(
   return { path: capturedPath, physicalPath, ...(scope ? { scope } : {}) };
 }
 
+/** Re-resolve both sides so aliases that converge after file creation remain in custody. */
+export function isSessionStoreReadCandidateCurrent(candidate: SessionStoreReadCandidate): boolean {
+  const currentPhysicalPath = captureSessionStoreReadCandidate(
+    candidate.path,
+    candidate.scope,
+  ).physicalPath;
+  const capturedPhysicalPath = resolveCapturedSessionStoreReadCandidatePhysicalPath(candidate);
+  if (currentPhysicalPath === capturedPhysicalPath) {
+    return true;
+  }
+  if (
+    candidate.scope ||
+    (!isSymlinkFreeWindowsShortPath(candidate.path) &&
+      !isSymlinkFreeWindowsShortPath(candidate.physicalPath))
+  ) {
+    return false;
+  }
+  return matchesWindowsFileAlias(currentPhysicalPath, capturedPhysicalPath);
+}
+
+function resolveCapturedSessionStoreReadCandidatePhysicalPath(
+  candidate: SessionStoreReadCandidate,
+): string {
+  // Family custody is anchored to its captured physical directory. Re-resolving that anchor
+  // would accept a directory that was replaced with a symlink after capture.
+  if (candidate.scope || !isSymlinkFreeWindowsShortPath(candidate.physicalPath)) {
+    return candidate.physicalPath;
+  }
+  return resolveIdentityPathViaExistingAncestorSync(candidate.physicalPath);
+}
+
+function isSymlinkFreeWindowsShortPath(pathname: string): boolean {
+  if (process.platform !== "win32" || !/(?:^|[\\/])[^\\/]*~\d+(?=[\\/]|$)/iu.test(pathname)) {
+    return false;
+  }
+  return isSymlinkFreePath(pathname);
+}
+
+function isSymlinkFreePath(pathname: string): boolean {
+  const resolved = path.resolve(pathname);
+  const parsed = path.parse(resolved);
+  let cursor = parsed.root;
+  for (const segment of resolved.slice(parsed.root.length).split(path.sep)) {
+    cursor = path.join(cursor, segment);
+    const stat = fs.lstatSync(cursor, { throwIfNoEntry: false });
+    if (!stat || stat.isSymbolicLink()) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function matchesWindowsFileAlias(capturedPath: string, selectedPath: string): boolean {
+  const shortPath = isSymlinkFreeWindowsShortPath(capturedPath)
+    ? capturedPath
+    : isSymlinkFreeWindowsShortPath(selectedPath)
+      ? selectedPath
+      : undefined;
+  if (
+    process.platform !== "win32" ||
+    !shortPath ||
+    !isSymlinkFreePath(capturedPath) ||
+    !isSymlinkFreePath(selectedPath)
+  ) {
+    return false;
+  }
+  const capturedParent = fs.statSync(path.dirname(capturedPath), { bigint: true });
+  const selectedParent = fs.statSync(path.dirname(selectedPath), { bigint: true });
+  if (capturedParent.dev !== selectedParent.dev || capturedParent.ino !== selectedParent.ino) {
+    return false;
+  }
+  const capturedIdentity = inspectDatabasePathIdentitySync(capturedPath);
+  const selectedIdentity = inspectDatabasePathIdentitySync(selectedPath);
+  return (
+    capturedIdentity?.key.startsWith("file:") === true &&
+    capturedIdentity.key === selectedIdentity?.key &&
+    capturedIdentity.birthtime === selectedIdentity.birthtime
+  );
+}
+
 /** Native discovery may use only the captured lexical and physical family together. */
 export function assertSessionStoreReadCandidate(
   pathname: string,
@@ -81,14 +165,19 @@ export function assertSessionStoreReadCandidate(
 ): string {
   const physicalPath = resolveIdentityPathViaExistingAncestorSync(pathname);
   for (const candidate of candidates) {
+    const matchesCapturedPhysicalPath =
+      !candidate.scope &&
+      physicalPath === resolveCapturedSessionStoreReadCandidatePhysicalPath(candidate);
     if (
-      matchesAgentDatabaseReadCandidatePath(candidate, pathname) &&
-      matchesAgentDatabaseReadCandidatePath(
-        { ...candidate, path: candidate.physicalPath },
-        physicalPath,
-      ) &&
-      captureSessionStoreReadCandidate(candidate.path, candidate.scope).physicalPath ===
-        candidate.physicalPath
+      (matchesAgentDatabaseReadCandidatePath(candidate, pathname) ||
+        matchesCapturedPhysicalPath ||
+        (!candidate.scope && matchesWindowsFileAlias(candidate.path, pathname))) &&
+      (!candidate.scope ||
+        matchesAgentDatabaseReadCandidatePath(
+          { ...candidate, path: resolveCapturedSessionStoreReadCandidatePhysicalPath(candidate) },
+          physicalPath,
+        )) &&
+      isSessionStoreReadCandidateCurrent(candidate)
     ) {
       return physicalPath;
     }
@@ -96,4 +185,43 @@ export function assertSessionStoreReadCandidate(
   throw new Error(
     `Session database target changed outside captured discovery custody: ${pathname}`,
   );
+}
+
+/** Unlisted siblings inherit absence only from a complete inventory of the original physical family. */
+export function qualifyAbsentSessionStoreReadCandidate(
+  pathname: string,
+  captured: { candidates: readonly SessionStoreReadCandidate[]; familyListingComplete: boolean },
+) {
+  const physicalPath = assertSessionStoreReadCandidate(pathname, captured.candidates);
+  const family = captured.candidates.find(
+    (candidate) =>
+      candidate.scope === "sibling-family" &&
+      matchesAgentDatabaseReadCandidatePath(candidate, pathname) &&
+      matchesAgentDatabaseReadCandidatePath(
+        { ...candidate, path: candidate.physicalPath },
+        physicalPath,
+      ),
+  );
+  const listed = captured.candidates.some(
+    (candidate) =>
+      !candidate.scope &&
+      (matchesAgentDatabaseReadCandidatePath(candidate, pathname) ||
+        matchesAgentDatabaseReadCandidatePath(
+          { ...candidate, path: candidate.physicalPath },
+          physicalPath,
+        )),
+  );
+  if (
+    listed ||
+    !captured.familyListingComplete ||
+    !family ||
+    !isSessionStoreReadCandidateCurrent(family)
+  ) {
+    throw new Error("Session database absence was not captured before discovery");
+  }
+  const identity = readDatabasePathIdentitySync(pathname);
+  if (identity.key.startsWith("file:") || identity.canonicalPath !== physicalPath) {
+    throw new Error("Session database appeared after its initial inventory");
+  }
+  return identity;
 }

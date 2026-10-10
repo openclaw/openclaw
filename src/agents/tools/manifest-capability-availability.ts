@@ -23,24 +23,18 @@ import {
 
 type CapabilityMetadataSnapshot = Pick<PluginMetadataSnapshot, "index" | "plugins">;
 
-const CAPABILITY_METADATA_KEYS = {
-  imageGenerationProviders: "imageGenerationProviderMetadata",
-  videoGenerationProviders: "videoGenerationProviderMetadata",
-  musicGenerationProviders: "musicGenerationProviderMetadata",
-  mediaUnderstandingProviders: undefined,
+const CAPABILITY_METADATA = {
+  imageGenerationProviders: ["imageGenerationProviderMetadata", "image-generation"],
+  videoGenerationProviders: ["videoGenerationProviderMetadata", "video-generation"],
+  musicGenerationProviders: ["musicGenerationProviderMetadata", "music-generation"],
+  // Media understanding has separate image-input and transcription operations.
+  mediaUnderstandingProviders: [undefined, undefined],
 } as const;
 
-type CapabilityContractKey = keyof typeof CAPABILITY_METADATA_KEYS;
-
-const GENERATION_AUTH_CAPABILITIES = {
-  imageGenerationProviders: "image-generation",
-  videoGenerationProviders: "video-generation",
-  musicGenerationProviders: "music-generation",
-} as const;
+type CapabilityContractKey = keyof typeof CAPABILITY_METADATA;
 
 export function capabilityAuthOperation(key: CapabilityContractKey): string | undefined {
-  // Media understanding has separate image-input and transcription operations.
-  return key === "mediaUnderstandingProviders" ? undefined : GENERATION_AUTH_CAPABILITIES[key];
+  return CAPABILITY_METADATA[key][1];
 }
 
 function hasAvailableCapabilityPlugin(
@@ -77,7 +71,7 @@ function hasConfiguredCapabilityProviderSignal(params: {
   config?: OpenClawConfig;
   authStore?: AuthProfileStore;
 }): boolean {
-  const metadataKey = CAPABILITY_METADATA_KEYS[params.key];
+  const [metadataKey] = CAPABILITY_METADATA[params.key];
   const metadata = metadataKey ? params.plugin[metadataKey]?.[params.providerId] : undefined;
   if (
     metadata?.configSignals?.some((signal) =>
@@ -185,7 +179,6 @@ export function loadCapabilityMetadataSnapshot(params: {
   });
 }
 
-/** Checks whether any available plugin has a configured provider for a capability contract. */
 export function hasSnapshotCapabilityAvailability(params: {
   snapshot: CapabilityMetadataSnapshot;
   key: CapabilityContractKey;
@@ -199,7 +192,6 @@ export function hasSnapshotCapabilityAvailability(params: {
   );
 }
 
-/** Checks whether any available plugin exposes env-backed auth for a provider id. */
 export function hasSnapshotProviderEnvAvailability(params: {
   snapshot: CapabilityMetadataSnapshot;
   providerId: string;
@@ -213,7 +205,6 @@ export function hasSnapshotProviderEnvAvailability(params: {
   );
 }
 
-/** Checks whether a specific provider id is available for a capability contract. */
 export function hasSnapshotCapabilityProviderAvailability(params: {
   snapshot: CapabilityMetadataSnapshot;
   key: CapabilityContractKey;
@@ -221,10 +212,10 @@ export function hasSnapshotCapabilityProviderAvailability(params: {
   config?: OpenClawConfig;
   authStore?: AuthProfileStore;
 }): boolean {
-  return hasAvailableCapabilityPlugin(params, (plugin) => {
-    if (!plugin.contracts?.[params.key]?.includes(params.providerId)) {
-      return false;
-    }
-    return hasConfiguredCapabilityProviderSignal({ ...params, plugin });
-  });
+  return hasAvailableCapabilityPlugin(
+    params,
+    (plugin) =>
+      Boolean(plugin.contracts?.[params.key]?.includes(params.providerId)) &&
+      hasConfiguredCapabilityProviderSignal({ ...params, plugin }),
+  );
 }

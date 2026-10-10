@@ -26,7 +26,7 @@ import {
   prepareProjectRegistration,
   registerPreparedProjectRegistry,
 } from "./project-registration.js";
-import { listProjectRegistry, resolveProjectCloneRefreshOwner } from "./project-registry.js";
+import { listProjectRegistry } from "./project-registry.js";
 import type { ProjectRegistryIdentity, ProjectRegistryRecord } from "./project-registry.types.js";
 
 const PROJECT_CLONE_LEASE_MS = 30_000;
@@ -223,7 +223,14 @@ export async function refreshProjectClone(
       };
       // Removal and registration share this lease. Re-read now so a queued stale record cannot
       // authorize network, object-store, or ref effects after checkout ownership changes.
-      const current = await resolveProjectCloneRefreshOwner(selectedProject, lease, context);
+      const { runWithOpenClawStateLeaseWorker } =
+        await import("../state/openclaw-state-lease-worker-operation.js");
+      const current = await runWithOpenClawStateLeaseWorker(lease, context, (scope, identity) =>
+        scope.execute({
+          type: "projects.resolveRefreshOwner",
+          input: { project: selectedProject, lease: identity },
+        }),
+      );
       assertRefreshCurrent();
       if (!current) {
         throw new ProjectCloneError(
@@ -294,7 +301,7 @@ async function resolveClonedProjectCheckout(
 export async function removeClonedProjectCheckout(
   project: ProjectRegistryRecord,
   assertUnreferenced: () => void | Promise<void>,
-  options: Pick<OpenClawStateDatabaseOptions, "path" | "env"> = {},
+  options: Pick<OpenClawStateDatabaseOptions, "path" | "env"> & { assertCurrent?: () => void } = {},
 ): Promise<boolean> {
   const selectedProject = { ...project };
   const env = cloneEnvWithPlatformSemantics(options.env ?? process.env);
@@ -309,11 +316,15 @@ export async function removeClonedProjectCheckout(
       await assertUnreferenced();
       const { runWithOpenClawStateLeaseWorker } =
         await import("../state/openclaw-state-lease-worker-operation.js");
-      const result = await runWithOpenClawStateLeaseWorker(lease, context, (scope, identity) =>
-        scope.execute({
-          type: "projects.removeCheckoutReference",
-          input: { project: selectedProject, lease: identity },
-        }),
+      const result = await runWithOpenClawStateLeaseWorker(
+        lease,
+        context,
+        (scope, identity) =>
+          scope.execute({
+            type: "projects.removeCheckoutReference",
+            input: { project: selectedProject, lease: identity },
+          }),
+        options.assertCurrent ? { assertCurrent: options.assertCurrent } : undefined,
       );
       if (result === "missing") {
         return false;
@@ -327,6 +338,7 @@ export async function removeClonedProjectCheckout(
       await assertUnreferenced();
       context.admission.assertCurrent();
       lease.assertOwned();
+      options.assertCurrent?.();
       await fs.rm(checkout, { recursive: true });
       context.admission.assertCurrent();
       lease.assertOwned();

@@ -17,7 +17,7 @@ import { previewGroundedRemMarkdown } from "./rem-evidence.js";
 import { previewRemHarness } from "./rem-harness.js";
 import { runSessionBackfill, type MemorySessionBackfillOptions } from "./session-backfill.js";
 import {
-  recordGroundedShortTermCandidates,
+  recordShortTermRecalls,
   removeGroundedShortTermCandidates,
 } from "./short-term-promotion.js";
 const { heading, muted, warn } = theme;
@@ -28,9 +28,7 @@ export async function runMemorySessionBackfill(
 ) {
   await withMemoryCommand({
     commandName: "memory session-backfill",
-    agent: opts.agent,
-    diagnosticsToStderr: Boolean(opts.json),
-    onUnavailable: opts.json ? defaultRuntime.writeJson : undefined,
+    options: opts,
     purpose: "status",
     ...hostOptions,
     run: async ({ manager, cfg, agentId }) => {
@@ -114,9 +112,7 @@ export async function runMemoryRemHarness(
 ) {
   await withMemoryCommand({
     commandName: "memory rem-harness",
-    agent: opts.agent,
-    diagnosticsToStderr: Boolean(opts.json),
-    onUnavailable: opts.json ? defaultRuntime.writeJson : undefined,
+    options: opts,
     purpose: "status",
     ...hostOptions,
     run: async ({ manager, cfg, agentId }) => {
@@ -256,9 +252,7 @@ export async function runMemoryRemBackfill(
 ) {
   await withMemoryCommand({
     commandName: "memory rem-backfill",
-    agent: opts.agent,
-    diagnosticsToStderr: Boolean(opts.json),
-    onUnavailable: opts.json ? defaultRuntime.writeJson : undefined,
+    options: opts,
     purpose: "status",
     ...hostOptions,
     run: async ({ manager, cfg, agentId }) => {
@@ -366,10 +360,11 @@ export async function runMemoryRemBackfill(
             replacedShortTermEntries = cleared.removed;
             const shortTermSeedItems = collectGroundedShortTermSeedItems(grounded.files);
             if (shortTermSeedItems.length > 0) {
-              await recordGroundedShortTermCandidates({
+              await recordShortTermRecalls({
                 workspaceDir,
                 query: "__dreaming_grounded_backfill__",
-                items: shortTermSeedItems,
+                signalType: "grounded",
+                results: shortTermSeedItems,
                 dedupeByQueryPerDay: true,
                 nowMs: Date.now(),
                 timezone: remConfig.timezone,
@@ -521,53 +516,46 @@ function parseGroundedRef(
 }
 function collectGroundedShortTermSeedItems(
   previews: Awaited<ReturnType<typeof previewGroundedRemMarkdown>>["files"],
-): Parameters<typeof recordGroundedShortTermCandidates>[0]["items"] {
-  const items: Parameters<typeof recordGroundedShortTermCandidates>[0]["items"] = [];
+): Parameters<typeof recordShortTermRecalls>[0]["results"] {
+  const items: Parameters<typeof recordShortTermRecalls>[0]["results"] = [];
   const seen = new Set<string>();
   for (const file of previews) {
     const dayBucket = extractIsoDayFromPath(file.path) ?? undefined;
-    const signals = [
-      ...file.memoryImplications.map((item) => ({
-        text: item.text,
-        refs: item.refs,
-        score: 0.92,
-        query: "__dreaming_grounded_backfill__:lasting-update",
-        signalCount: 2,
-      })),
-      ...file.candidates
-        .filter((candidate) => candidate.lean === "likely_durable")
-        .map((candidate) => ({
-          text: candidate.text,
-          refs: candidate.refs,
-          score: 0.82,
-          query: "__dreaming_grounded_backfill__:candidate",
-          signalCount: 1,
-        })),
-    ];
-    for (const signal of signals) {
-      if (!signal.text.trim()) {
-        continue;
+    for (const [signals, score, query, signalCount] of [
+      [file.memoryImplications, 0.92, "__dreaming_grounded_backfill__:lasting-update", 2],
+      [
+        file.candidates.filter((candidate) => candidate.lean === "likely_durable"),
+        0.82,
+        "__dreaming_grounded_backfill__:candidate",
+        1,
+      ],
+    ] as const) {
+      for (const signal of signals) {
+        if (!signal.text.trim()) {
+          continue;
+        }
+        const firstRef = signal.refs.find((ref) => ref.trim().length > 0);
+        const parsedRef = firstRef ? parseGroundedRef(file.path, firstRef) : null;
+        if (!parsedRef) {
+          continue;
+        }
+        const key = `${parsedRef.path}:${parsedRef.startLine}:${parsedRef.endLine}:${query}:${signal.text.toLowerCase()}`;
+        if (seen.has(key)) {
+          continue;
+        }
+        seen.add(key);
+        items.push({
+          source: "memory",
+          path: parsedRef.path,
+          startLine: parsedRef.startLine,
+          endLine: parsedRef.endLine,
+          snippet: signal.text,
+          score,
+          query,
+          signalCount,
+          ...(dayBucket ? { dayBucket } : {}),
+        });
       }
-      const firstRef = signal.refs.find((ref) => ref.trim().length > 0);
-      const parsedRef = firstRef ? parseGroundedRef(file.path, firstRef) : null;
-      if (!parsedRef) {
-        continue;
-      }
-      const key = `${parsedRef.path}:${parsedRef.startLine}:${parsedRef.endLine}:${signal.query}:${signal.text.toLowerCase()}`;
-      if (seen.has(key)) {
-        continue;
-      }
-      seen.add(key);
-      items.push({
-        path: parsedRef.path,
-        startLine: parsedRef.startLine,
-        endLine: parsedRef.endLine,
-        snippet: signal.text,
-        score: signal.score,
-        query: signal.query,
-        signalCount: signal.signalCount,
-        ...(dayBucket ? { dayBucket } : {}),
-      });
     }
   }
   return items;

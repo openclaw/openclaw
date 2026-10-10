@@ -195,7 +195,7 @@ it("rejects a Bun-driven split-root update when the recorded service Node cannot
   expect(result).toMatchObject({
     ok: false,
     error: expect.stringContaining(
-      "requires Node >=26.1.0; selected runtime is Node 24.16.0 at /old/node",
+      "Required: openclaw@2027.1.0 Node >=26.1.0; detected: Node 24.16.0 at /old/node",
     ),
     failureFacts: [{ check: "node-runtime", code: "node-runtime-preflight" }],
   });
@@ -251,7 +251,7 @@ it.each([
         : {
             ok: false,
             error: expect.stringContaining(
-              `requires Node >=26.1.0; selected runtime is Node ${node}`,
+              `Required: openclaw@2027.1.0 Node >=26.1.0; detected: Node ${node}`,
             ),
             failureFacts: [{ check: "node-runtime", code: "node-runtime-preflight" }],
           },

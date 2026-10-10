@@ -1,6 +1,7 @@
 import { Buffer } from "node:buffer";
 import { expect, it } from "vitest";
 import type { ApplicationContext } from "../app/context.ts";
+import { waitForControlUiProofSurface } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { selectChatModelOption } from "../test-helpers/select-picker-e2e.ts";
 import {
   ONE_PIXEL_PNG_B64,
@@ -29,110 +30,176 @@ suite.define(() => {
   ])(
     "attaches chat before admission and commits only the confirmed URL (incognito: $incognito, replacement: $canonicalReplacement)",
     async ({ incognito, canonicalReplacement }) => {
-      await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
-        const gateway = await installMockGateway(page);
-        await page.goto(`${suite.server.baseUrl}new?agent=main#draft-return`);
-        if (incognito) {
-          await page.getByRole("switch", { name: "Incognito" }).click();
-        }
-        await page.locator(".new-session-page__message").fill("start the synthetic thread");
-        const originalUrl = page.url();
-        const historyLength = await page.evaluate(() => history.length);
-        await captureUiProof(suite, page, `instant-${incognito}-before.png`);
-        await gateway.deferNext("sessions.create");
-        await page.getByRole("button", { name: "Start session", exact: true }).click();
-        const params = createParams(await gateway.waitForRequest("sessions.create"));
-        await expect
-          .poll(() => page.locator("openclaw-chat-page").count(), { timeout: 5_000 })
-          .toBe(1);
-        await expect
-          .poll(() => page.locator(".chat-thread").textContent())
-          .toContain("start the synthetic thread");
-        expect(await page.locator("openclaw-chat-pane").count()).toBe(0);
-        const followUpComposer = page.locator(
-          ".agent-chat__composer-combobox textarea:not(.new-session-page__message)",
-        );
-        await followUpComposer.waitFor({ state: "visible" });
-        const followers = ["Also check keyboard navigation", "Then verify the mobile layout"];
-        for (const message of followers) {
-          await followUpComposer.fill(message);
-          await followUpComposer.press("Enter");
-          await page.locator(".chat-queue__item", { hasText: message }).waitFor();
-        }
-        await followUpComposer.fill("Still writing my next message");
-        expect(await page.locator(".chat-queue__text").allTextContents()).toEqual(followers);
-        expect(await gateway.getRequests("chat.startup")).toHaveLength(0);
-        expect(await gateway.getRequests("chat.send")).toHaveLength(0);
-        expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
-        expect(page.url()).toBe(originalUrl);
-        expect(await page.evaluate(() => history.length)).toBe(historyLength);
-        expect(params.key).toEqual(
-          expect.stringMatching(
-            incognito ? /^agent:main:dashboard:incognito-/u : /^agent:main:dashboard:/u,
-          ),
-        );
-        expect(params.incognito === true).toBe(incognito);
-        const savedSettings = await page.evaluate(() =>
-          Object.keys(localStorage)
-            .filter((key) => key.startsWith("openclaw.control.settings.v1"))
-            .map((key) => localStorage.getItem(key)),
-        );
-        expect(savedSettings.join("\n")).not.toContain(String(params.key));
+      await suite.withPage(
+        {
+          locale: "en-US",
+          serviceWorkers: "block",
+          viewport: incognito ? { width: 1280, height: 800 } : { width: 390, height: 844 },
+        },
+        async ({ page }) => {
+          const gateway = await installMockGateway(page, {
+            featureMethods: [
+              "chat.metadata",
+              "chat.startup",
+              "sessions.create",
+              "sessions.dispatch",
+              "mcp.app.discover",
+            ],
+            methodResponses: { "mcp.app.discover": { servers: [] } },
+          });
+          await page.goto(`${suite.server.baseUrl}new?agent=main#draft-return`);
+          if (incognito) {
+            await page.getByRole("switch", { name: "Incognito" }).click();
+          }
+          await page.locator(".new-session-page__message").fill("start the synthetic thread");
+          const originalUrl = page.url();
+          const historyLength = await page.evaluate(() => history.length);
+          await captureUiProof(suite, page, `instant-${incognito}-before.png`);
+          await gateway.deferNext("sessions.create");
+          await page.getByRole("button", { name: "Start session", exact: true }).click();
+          const params = createParams(await gateway.waitForRequest("sessions.create"));
+          await expect
+            .poll(() => page.locator("openclaw-chat-page").count(), { timeout: 5_000 })
+            .toBe(1);
+          await expect
+            .poll(() => page.locator(".chat-thread").textContent())
+            .toContain("start the synthetic thread");
+          expect(await page.locator("openclaw-chat-pane").count()).toBe(0);
+          await captureUiProof(suite, page, `instant-${incognito}-pending-chrome.png`);
+          expect(await page.locator(".chat-pane__header").isVisible()).toBe(true);
+          const followUpComposer = page.locator(
+            ".agent-chat__composer-combobox textarea:not(.new-session-page__message)",
+          );
+          await followUpComposer.waitFor({ state: "visible" });
+          expect(await followUpComposer.isEnabled()).toBe(true);
+          const followers = ["Also check keyboard navigation", "Then verify the mobile layout"];
+          for (const message of followers) {
+            await followUpComposer.fill(message);
+            await followUpComposer.press("Enter");
+            await page.locator(".chat-queue__item", { hasText: message }).waitFor();
+          }
+          await followUpComposer.fill("Still writing my next message");
+          expect(await page.locator(".chat-queue__text").allTextContents()).toEqual(followers);
+          expect(await page.locator(".chat-pane__incognito").count()).toBe(incognito ? 1 : 0);
+          if (!incognito) {
+            await page.locator(".chat-pane__nav-toggle").click();
+            // The sliding drawer can hover a tooltip under the stationary pointer.
+            await page.mouse.move(0, 0);
+            await expect
+              .poll(() => page.locator(".chat-pane__nav-toggle").getAttribute("aria-expanded"))
+              .toBe("true");
+            await page.keyboard.press("Escape");
+            await expect
+              .poll(() => page.locator(".chat-pane__nav-toggle").getAttribute("aria-expanded"))
+              .toBe("false");
+          }
+          expect(await gateway.getRequests("chat.startup")).toHaveLength(0);
+          expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+          expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
+          expect(
+            (await gateway.getRequests("mcp.app.discover")).filter(
+              (request) => createParams(request).sessionKey === params.key,
+            ),
+          ).toHaveLength(0);
+          expect(page.url()).toBe(originalUrl);
+          expect(await page.evaluate(() => history.length)).toBe(historyLength);
+          expect(params.key).toEqual(
+            expect.stringMatching(
+              incognito ? /^agent:main:dashboard:incognito-/u : /^agent:main:dashboard:/u,
+            ),
+          );
+          expect(params.incognito === true).toBe(incognito);
+          const savedSettings = await page.evaluate(() =>
+            Object.keys(localStorage)
+              .filter((key) => key.startsWith("openclaw.control.settings.v1"))
+              .map((key) => localStorage.getItem(key)),
+          );
+          expect(savedSettings.join("\n")).not.toContain(String(params.key));
 
-        await captureUiProof(suite, page, `instant-${incognito}-pending.png`);
-        const confirmedKey = canonicalReplacement
-          ? "agent:main:canonical-instant-thread"
-          : String(params.key);
-        await gateway.resolveDeferred("sessions.create", {
-          key: confirmedKey,
-          runStarted: true,
-          runId: "synthetic-initial-run",
-        });
-        await waitForCommittedChatRoute(page);
-        expect(new URL(page.url()).pathname).toBe(controlUiSessionPath(confirmedKey));
-        await gateway.waitForRequest("chat.startup", { match: { sessionKey: confirmedKey } });
-        await expect.poll(() => page.locator("openclaw-chat-pane").count()).toBe(1);
-        expect(await gateway.getRequests("chat.startup")).toEqual(
-          expect.arrayContaining([
-            expect.objectContaining({
-              params: expect.objectContaining({ sessionKey: confirmedKey }),
-            }),
-          ]),
-        );
-        expect(
-          (await gateway.getRequests("chat.startup")).every(
-            (request) => createParams(request).sessionKey === confirmedKey,
-          ),
-        ).toBe(true);
-        expect(await page.evaluate(() => history.length)).toBe(historyLength + 1);
-        await expect
-          .poll(() => page.locator(".chat-thread").textContent())
-          .toContain("start the synthetic thread");
-        expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
-        await expect
-          .poll(() => followUpComposer.inputValue())
-          .toBe("Still writing my next message");
-        await captureUiProof(suite, page, `instant-${incognito}-committed.png`);
-        await gateway.emitChatFinal({
-          sessionKey: confirmedKey,
-          runId: "synthetic-initial-run",
-          text: "Initial task finished.",
-        });
-        for (const [index, message] of followers.entries()) {
-          const request = await gateway.waitForRequest("chat.send", { after: index });
-          const send = createParams(request);
-          expect(send).toMatchObject({ sessionKey: confirmedKey, message });
+          await captureUiProof(suite, page, `instant-${incognito}-pending.png`);
+          await waitForControlUiProofSurface(page.locator(".chat-pane__header"), [
+            followUpComposer,
+            page.locator(".chat-group.user .chat-bubble"),
+          ]);
+          const pendingHeader = await page.locator(".chat-pane__header").boundingBox();
+          const pendingComposer = await page.locator(".agent-chat__composer-shell").boundingBox();
+          const pendingBubble = await page.locator(".chat-group.user .chat-bubble").boundingBox();
+          const confirmedKey = canonicalReplacement
+            ? "agent:main:canonical-instant-thread"
+            : String(params.key);
+          await gateway.resolveDeferred("sessions.create", {
+            key: confirmedKey,
+            runStarted: true,
+            runId: "synthetic-initial-run",
+          });
+          await waitForCommittedChatRoute(page);
+          expect(new URL(page.url()).pathname).toBe(controlUiSessionPath(confirmedKey));
+          await gateway.waitForRequest("chat.startup", { match: { sessionKey: confirmedKey } });
+          await gateway.waitForRequest("mcp.app.discover", { match: { sessionKey: confirmedKey } });
+          await expect.poll(() => page.locator("openclaw-chat-pane").count()).toBe(1);
+          expect(await gateway.getRequests("chat.startup")).toEqual(
+            expect.arrayContaining([
+              expect.objectContaining({
+                params: expect.objectContaining({ sessionKey: confirmedKey }),
+              }),
+            ]),
+          );
+          expect(
+            (await gateway.getRequests("chat.startup")).every(
+              (request) => createParams(request).sessionKey === confirmedKey,
+            ),
+          ).toBe(true);
+          expect(await page.evaluate(() => history.length)).toBe(historyLength + 1);
+          await expect
+            .poll(() => page.locator(".chat-thread").textContent())
+            .toContain("start the synthetic thread");
+          expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
+          await expect
+            .poll(() => followUpComposer.inputValue())
+            .toBe("Still writing my next message");
+          await expect
+            .poll(() => page.locator(".chat-queue__text").allTextContents())
+            .toEqual(followers);
+          expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+          await captureUiProof(suite, page, `instant-${incognito}-committed.png`);
+          await waitForControlUiProofSurface(page.locator(".chat-pane__header"), [
+            followUpComposer,
+            page.locator(".chat-group.user .chat-bubble"),
+          ]);
+          for (const [selector, pending] of [
+            [".chat-pane__header", pendingHeader],
+            [".agent-chat__composer-shell", pendingComposer],
+            [".chat-group.user .chat-bubble", pendingBubble],
+          ] as const) {
+            const committed = await page.locator(selector).boundingBox();
+            expect(pending).not.toBeNull();
+            expect(committed).not.toBeNull();
+            expect(committed!.y).toBeCloseTo(pending!.y, 0);
+            expect(committed!.x).toBeCloseTo(pending!.x, 0);
+          }
           await gateway.emitChatFinal({
             sessionKey: confirmedKey,
-            runId: String(send.idempotencyKey),
-            text: `Follow-up ${index + 1} finished.`,
+            runId: "synthetic-initial-run",
+            text: "Initial task finished.",
           });
-        }
-        expect(
-          (await gateway.getRequests("chat.send")).map((request) => createParams(request).message),
-        ).toEqual(followers);
-        expect(await followUpComposer.inputValue()).toBe("Still writing my next message");
-      });
+          for (const [index, message] of followers.entries()) {
+            const request = await gateway.waitForRequest("chat.send", { after: index });
+            const send = createParams(request);
+            expect(send).toMatchObject({ sessionKey: confirmedKey, message });
+            await gateway.emitChatFinal({
+              sessionKey: confirmedKey,
+              runId: String(send.idempotencyKey),
+              text: `Follow-up ${index + 1} finished.`,
+            });
+          }
+          expect(
+            (await gateway.getRequests("chat.send")).map(
+              (request) => createParams(request).message,
+            ),
+          ).toEqual(followers);
+          expect(await followUpComposer.inputValue()).toBe("Still writing my next message");
+        },
+      );
     },
   );
 

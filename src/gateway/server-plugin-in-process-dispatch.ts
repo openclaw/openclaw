@@ -1,7 +1,21 @@
 import type { AgentWaitParams } from "../../packages/gateway-protocol/src/index.js";
+import { readQuestionDispatchCapability } from "../agents/harness/host-private-capabilities.js";
 import { captureGatewayToolCallerAssertion } from "../agents/tools/gateway-caller-context.js";
+import {
+  captureExternalSessionCommitGuard,
+  composeSessionSourceAssertion,
+} from "../config/sessions/session-source-authority.js";
+import { isGatewayNativeApprovalMethod } from "../infra/approval-gateway-runtime-methods.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import type { PluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.types.js";
+import {
+  hasPreparedGatewayDeviceAuthority,
+  readGatewayDeviceRevocationGuard,
+} from "./device-revocation.js";
+import {
+  isInternalApprovalCommitGuard,
+  retainInternalApprovalCommitGuard,
+} from "./internal-approval-authority.js";
 import { authorizeGatewaySessionCreation } from "./operator-role-policy.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import {
@@ -144,10 +158,8 @@ async function withInProcessGatewayDispatch<T>(
       resolved.client = mergePluginRuntimeClientInternal(resolved.client, {
         operatorRunAuthority: captured.authority,
       });
-      const withCapturedAuthority = (assertCurrent: () => void) => () => {
-        assertCurrent();
-        captured.authority.assertCurrent();
-      };
+      const withCapturedAuthority = (assertCurrent: () => void) =>
+        composeSessionSourceAssertion([assertCurrent, captured.authority.assertCurrent]);
       resolved.assertContextCurrent = withCapturedAuthority(resolved.assertContextCurrent);
       resolved.assertSourceCurrent = withCapturedAuthority(resolved.assertSourceCurrent);
       const assertCreatedInputSourceCurrent = resolved.assertCreatedInputSourceCurrent;
@@ -302,14 +314,42 @@ export async function dispatchGatewayMethodInProcessRaw(
   options?: DispatchGatewayMethodInProcessOptions,
 ): Promise<GatewayMethodDispatchResponse> {
   return await withInProcessGatewayDispatch(method, params, options, async (resolved) => {
-    const assertExplicitRequestCurrent = () => {
-      throwIfGatewayDispatchAborted(method, options?.signal);
-      if (resolved.hasCurrentClientAuthority?.() === false) {
-        throw new Error(`Gateway client authority closed before dispatching ${method}.`);
-      }
-      options?.sessionMutationCommitGuard?.();
-    };
+    const assertExplicitRequestCurrent = composeSessionSourceAssertion(
+      [captureExternalSessionCommitGuard(options?.sessionMutationCommitGuard)],
+      (assertSource) => {
+        throwIfGatewayDispatchAborted(method, options?.signal);
+        if (resolved.hasCurrentClientAuthority?.() === false) {
+          throw new Error(`Gateway client authority closed before dispatching ${method}.`);
+        }
+        assertSource();
+      },
+      {
+        preparedCheck: (assertSource) => {
+          throwIfGatewayDispatchAborted(method, options?.signal);
+          if (
+            !hasPreparedGatewayDeviceAuthority(resolved.client, resolved.hasCurrentClientAuthority)
+          ) {
+            throw new Error(`Gateway client authority closed before dispatching ${method}.`);
+          }
+          assertSource();
+        },
+      },
+    );
     const assertCreatedInputSourceCurrent = resolved.assertCreatedInputSourceCurrent;
+    const sessionMutationCommitGuard = composeSessionSourceAssertion([
+      resolved.assertContextCurrent,
+      resolved.assertInvocationCurrent,
+      assertExplicitRequestCurrent,
+    ]);
+    if (
+      isGatewayNativeApprovalMethod(method) &&
+      (!options?.sessionMutationCommitGuard ||
+        isInternalApprovalCommitGuard(options.sessionMutationCommitGuard)) &&
+      (!resolved.hasCurrentClientAuthority ||
+        readGatewayDeviceRevocationGuard(resolved.hasCurrentClientAuthority))
+    ) {
+      retainInternalApprovalCommitGuard(sessionMutationCommitGuard);
+    }
     return await dispatchGatewayRequestInProcessRaw(method, params, {
       client: resolved.client,
       context: resolved.context,
@@ -322,22 +362,19 @@ export async function dispatchGatewayMethodInProcessRaw(
       onSignalAbort: options?.onSignalAbort,
       requestIdPrefix: "plugin-subagent",
       prepareDispatchCurrent: options?.prepareDispatchCurrent,
-      assertPreparationCurrent: () => {
-        resolved.assertContextCurrent();
-        resolved.assertInvocationCurrent();
-      },
-      sessionMutationCommitGuard: () => {
-        resolved.assertContextCurrent();
-        resolved.assertInvocationCurrent();
-        // Nested RPCs keep the original request owner through preparation and final I/O.
-        assertExplicitRequestCurrent();
-      },
+      assertPreparationCurrent: composeSessionSourceAssertion([
+        resolved.assertContextCurrent,
+        resolved.assertInvocationCurrent,
+      ]),
+      sessionMutationCommitGuard,
+      questionCallerRead: readQuestionDispatchCapability(options?.prepareDispatchCurrent)
+        ?.callerRead,
       ...(assertCreatedInputSourceCurrent
         ? {
-            assertCreatedInputSourceCurrent: () => {
-              assertCreatedInputSourceCurrent();
-              assertExplicitRequestCurrent();
-            },
+            assertCreatedInputSourceCurrent: composeSessionSourceAssertion([
+              assertCreatedInputSourceCurrent,
+              assertExplicitRequestCurrent,
+            ]),
           }
         : {}),
       timeoutMs: options?.timeoutMs,
@@ -370,10 +407,10 @@ export async function dispatchGatewayMethodInProcess<T>(
       return method === "agent"
         ? await facade.dispatch<T>(params as AgentRunRequest, {
             prepareDispatchCurrent: options?.prepareDispatchCurrent,
-            assertAdmissionCurrent: () => {
-              resolved.assertInvocationCurrent();
-              options?.sessionMutationCommitGuard?.();
-            },
+            assertAdmissionCurrent: composeSessionSourceAssertion([
+              resolved.assertInvocationCurrent,
+              captureExternalSessionCommitGuard(options?.sessionMutationCommitGuard),
+            ]),
             privateCompletion: options?.privateCompletion,
             settleWakeReplay: options?.settleWakeReplay,
             cancelOnDeadline: options?.cancelOnDeadline,

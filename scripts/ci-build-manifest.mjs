@@ -11,8 +11,12 @@ import { classifyReleaseTrain, parseReleaseVersion } from "./lib/release-version
 
 // The script belongs to the trusted harness; target modules belong to the cwd.
 const fromTarget = (specifier) => pathToFileURL(path.resolve(process.cwd(), specifier)).href;
+const escapeSummaryHtml = (value) =>
+  value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
 
 const workflowEventName = process.env.OPENCLAW_CI_EVENT_NAME ?? "";
+// Dispatch fallbacks retain their existing scope even when they use PR planning.
+const ordinaryPullRequest = workflowEventName === "pull_request";
 const ciQualification =
   workflowEventName === "workflow_dispatch" &&
   process.env.OPENCLAW_CI_RELEASE_GATE === "true" &&
@@ -350,6 +354,7 @@ const pluginContractShards =
 const channelContractShards =
   !runtimePullRequest && runNodeFull && !releaseFastLane ? createChannelContractTestShards() : [];
 const runMacos =
+  !ordinaryPullRequest &&
   !nativeGeneratedOnly &&
   parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_MACOS) &&
   !docsOnly &&
@@ -358,7 +363,8 @@ const runMacos =
 // Older selected checkouts report only run_macos; retain their native Node coverage.
 const runMacosNode =
   runMacos ||
-  (!nativeGeneratedOnly &&
+  (!ordinaryPullRequest &&
+    !nativeGeneratedOnly &&
     parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_MACOS_NODE) &&
     !docsOnly &&
     isCanonicalRepository &&
@@ -369,7 +375,7 @@ const supportsCurrentMacosSwiftCi =
   existsSync("scripts/format-swift.sh");
 const supportsIosBuild = hasPackageScript("ios:build");
 const supportsCurrentIosCi = supportsIosBuild && supportsCurrentMacosSwiftCi;
-const runIosBuild =
+const iosBuildScope =
   !nativeGeneratedOnly &&
   parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_IOS_BUILD) &&
   !releaseFastLane &&
@@ -377,6 +383,7 @@ const runIosBuild =
   !docsOnly &&
   isCanonicalRepository &&
   (!frozenTarget || supportsCurrentIosCi || (releaseCandidateTarget && supportsIosBuild));
+const runIosBuild = !ordinaryPullRequest && iosBuildScope;
 const runAndroid =
   !nativeGeneratedOnly &&
   parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_ANDROID) &&
@@ -394,6 +401,7 @@ const runAndroidAccessNative =
       "apps/android/app/src/androidTest/java/ai/openclaw/app/gateway/CloudflareAccessNativeTest.kt",
     ));
 let runWindows =
+  !ordinaryPullRequest &&
   parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_WINDOWS) &&
   !releaseFastLane &&
   !docsOnly &&
@@ -423,7 +431,7 @@ const selectUiE2eFamily = (family) =>
     : runUiTests);
 let runControlUiE2e = selectUiE2eFamily("control-ui");
 let runBrowserExtensionE2e = selectUiE2eFamily("browser-extension");
-let runUiRealGateway = selectUiE2eFamily("real-gateway");
+let runUiRealGateway = !ordinaryPullRequest && selectUiE2eFamily("real-gateway");
 let runUiE2e = runControlUiE2e || runBrowserExtensionE2e;
 const nodeRunnerBackend = process.env.OPENCLAW_CI_NODE_RUNNER_BACKEND || runnerProfile;
 const usesHostedRunnerProfile = runnerProfile === "github" || runnerProfile === "hybrid";
@@ -598,11 +606,14 @@ if (selectedTestTargets) {
   if (!uiTestGroups) {
     throw new Error("Current PR CI requires UI target groups");
   }
-  const selected = new Set(selectedTestTargets);
   const { controlUiE2eTestGlobs, isUiTestTarget, uiE2eRealGatewayTestFiles } = await import(
     fromTarget("./test/vitest/vitest.ui-paths.mjs")
   );
   const realGatewayTargets = new Set(uiE2eRealGatewayTestFiles);
+  if (ordinaryPullRequest) {
+    selectedTestTargets = selectedTestTargets.filter((file) => !realGatewayTargets.has(file));
+  }
+  const selected = new Set(selectedTestTargets);
   const selectedControlUiFiles = new Set(uiE2eSelection?.files);
   const narrowGroups = (groups, ownsFile, retainsFile) =>
     groups
@@ -626,7 +637,7 @@ if (selectedTestTargets) {
         controlUiE2eTestGlobs.some((pattern) => matchesGlob(file, pattern)),
       (file) =>
         realGatewayTargets.has(file)
-          ? uiOwnerScope.realGateway || selected.has(file)
+          ? !ordinaryPullRequest && (uiOwnerScope.realGateway || selected.has(file))
           : uiE2eSelection
             ? selectedControlUiFiles.has(file)
             : uiOwnerScope.mocked || selected.has(file),
@@ -727,7 +738,7 @@ const publishedDriverUpdate =
   supportsPublishedDriverUpdate &&
   !docsOnly &&
   (runtimePullRequest
-    ? publishedDriverUpdatePlan.shouldRunPublishedDriverUpdate(changedPaths)
+    ? publishedDriverUpdatePlan.shouldRunPublishedDriverUpdate(changedPaths, workflowEventName)
     : runProofTier && (ownerPathEvent || eventName === "workflow_dispatch" || mainValidation));
 // Canonical pushes also use compact bins: 80+ single-group jobs
 // drain the runner pool for minutes, and per-shard check names on
@@ -1022,14 +1033,16 @@ const plannedUiRealGatewayShards =
     : selectedTestTargets
       ? []
       : [{ shard: 1, shard_count: 1, run_desktop: true, groups: uiTestGroups?.e2e }];
-const uiRealGatewayShards = selectedTestTargets
-  ? plannedUiRealGatewayShards
-      .map((shard) => ({
-        ...shard,
-        groups: shard.groups?.filter((group) => group.includePatterns?.length > 0),
-      }))
-      .filter((shard) => shard.run_desktop || shard.groups?.length > 0)
-  : plannedUiRealGatewayShards;
+const uiRealGatewayShards = ordinaryPullRequest
+  ? []
+  : selectedTestTargets
+    ? plannedUiRealGatewayShards
+        .map((shard) => ({
+          ...shard,
+          groups: shard.groups?.filter((group) => group.includePatterns?.length > 0),
+        }))
+        .filter((shard) => shard.run_desktop || shard.groups?.length > 0)
+    : plannedUiRealGatewayShards;
 const projectNodeTestGroup = ({
   configs,
   env,
@@ -1082,6 +1095,12 @@ const knownToolingConfigs = new Set([
   "test/vitest/vitest.tooling-isolated.config.ts",
   "test/vitest/vitest.tooling-docker.config.ts",
 ]);
+const compactReleaseMatrixRows =
+  eventName === "workflow_dispatch" &&
+  !mainValidation &&
+  !releaseGate &&
+  !ciQualification &&
+  nodeRunnerBackend === "github";
 // The same capped matrix owns compact and plugin work; admit its longest rows first.
 const nodeTestShards = targetNodeTestShards
   .toSorted(
@@ -1105,7 +1124,7 @@ const nodeTestShards = targetNodeTestShards
         : undefined);
     const packedGroups =
       groups?.length && nodeTestGroupsCodec ? encodeNodeTestGroups(groups) : undefined;
-    return {
+    const row = {
       check_name: shard.checkName,
       test_runtime_policy: testRuntimeMode,
       requires_bun:
@@ -1170,6 +1189,28 @@ const nodeTestShards = targetNodeTestShards
         return plan.configs?.includes("test/vitest/vitest.e2e.config.ts") ?? false;
       }),
     };
+    if (compactReleaseMatrixRows) {
+      // The workflow treats absent feature flags as false and history as [].
+      // Encoded groups own their names; the outer name is only a legacy fallback.
+      for (const key of [
+        "requires_bun",
+        "requires_dist",
+        "requires_go",
+        "requires_ripgrep",
+        "requires_sandbox_image",
+      ]) {
+        if (row[key] === false) {
+          delete row[key];
+        }
+      }
+      if (row.git_commits.length === 0) {
+        delete row.git_commits;
+      }
+      if (packedGroups && groups.every((group) => group.shard_name)) {
+        delete row.shard_name;
+      }
+    }
+    return row;
   });
 const nodeTestNonDistShards = nodeTestShards.filter((shard) => !shard.requires_dist);
 // Bound the final matrix: precise plans and appended plugin rows can bypass compact caps.
@@ -1205,7 +1246,7 @@ if (startupCorpusNodeRevision) {
 // an actual dist descriptor transfers that owner to build-artifacts.
 const runNodeCoreDist = nodeTestDistShards.length > 0;
 const runTuiPty = runNodeFull && ((runProofTier && runNodeCoreDist) || selectedTuiPty);
-const protocolCoverageRequested = runNode || runIosBuild || runAndroid;
+const protocolCoverageRequested = runNode || iosBuildScope || runAndroid;
 const runProtocolEventCoverage =
   protocolCoverageRequested &&
   (!frozenTarget || existsSync("scripts/check-protocol-event-coverage.mjs"));
@@ -1255,10 +1296,11 @@ const additionalChecks = [
   },
 ].filter(
   ({ group }) =>
-    !narrowCheckScope ||
-    (group === "prompt-snapshots"
-      ? changedScopeHasPromptSnapshotImpact
-      : narrowCheckScope.additionalGroups.includes(group)),
+    !(ordinaryPullRequest && group === "runtime-topology-architecture") &&
+    (!narrowCheckScope ||
+      (group === "prompt-snapshots"
+        ? changedScopeHasPromptSnapshotImpact
+        : narrowCheckScope.additionalGroups.includes(group))),
 );
 // Move an already-selected boundary row; sharing must never add another CI job.
 const sharedSdkDeclarations =
@@ -1279,6 +1321,10 @@ if (sharedSdkDeclarations) {
     1,
   );
 }
+const runPrMadgeImportCycles =
+  runCheck && ordinaryPullRequest && (proposedCheckScope?.madgeImportCycles ?? true);
+const runPrKyselyGuardrails =
+  runCheck && ordinaryPullRequest && (proposedCheckScope?.kyselyGuardrails ?? true);
 const checkTasks = [
   ...["guards", "npm-lock", "bundled-channel-config-metadata", "prod-types"].map((task) => ({
     check_name: `check-${task}`,
@@ -1291,6 +1337,9 @@ const checkTasks = [
     runner: "blacksmith-16vcpu-ubuntu-2404",
   })),
 ].filter((row) => {
+  if (ordinaryPullRequest && row.task === "dependencies") {
+    return false;
+  }
   if (!narrowCheckScope) {
     return true;
   }
@@ -1301,6 +1350,17 @@ const checkTasks = [
     ? narrowCheckScope.lint
     : narrowCheckScope.checkTasks.includes(row.task);
 });
+
+// Keep the selected source scans independent of the other PR guards.
+const guardRow = checkTasks.find(({ task }) => task === "guards");
+const splitPrGuards = guardRow !== undefined && (runPrMadgeImportCycles || runPrKyselyGuardrails);
+if (splitPrGuards) {
+  checkTasks.push({
+    check_name: "check-guards-architecture",
+    task: "guards-architecture",
+    runner: guardRow.runner,
+  });
+}
 
 // The selected guards row owns the same coercion scan; fast-only plans retain its row.
 if (
@@ -1317,7 +1377,7 @@ if (
 
 // These rows need no compiler plan; retain their existing full-check placement.
 if (runCheckPlan && runNodeFull && !releaseFastLane) {
-  for (const task of ["guards", "dependencies"]) {
+  for (const task of ["guards", "guards-architecture", "dependencies"]) {
     const index = checkTasks.findIndex((row) => row.task === task);
     if (index >= 0) {
       const { task: group, ...row } = checkTasks.splice(index, 1)[0];
@@ -1338,6 +1398,8 @@ const manifest = {
   run_published_driver_update: publishedDriverUpdate,
   run_macos: runMacos,
   run_android: runAndroid,
+  run_android_screenshots:
+    !ordinaryPullRequest && parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_ANDROID_SCREENSHOTS),
   run_skills_python: runSkillsPython,
   run_windows: runWindows,
   run_build_artifacts: runBuildArtifacts,
@@ -1378,6 +1440,10 @@ const manifest = {
   checks_node_core_nondist_matrix: createMatrix(nodeTestNonDistShards),
   run_checks_node_core_dist: runNodeCoreDist,
   run_check: runCheck,
+  // Older scope owners retain these guards rather than silently dropping coverage.
+  run_pr_madge_import_cycles: runPrMadgeImportCycles,
+  run_pr_kysely_guardrails: runPrKyselyGuardrails,
+  split_pr_guards: splitPrGuards,
   narrow_check_paths_json: runCheckPlan ? JSON.stringify(changedPaths) : "",
   run_check_plan: runCheckPlan,
   check_plan_input_json: runCheckPlan
@@ -1618,7 +1684,7 @@ if (hybridHostedEligible) {
     "ios-build": count(manifest.run_ios_build),
     "ios-screenshot-shard": count(parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_IOS_SCREENSHOTS), 2),
     "ios-screenshot-evidence": count(parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_IOS_SCREENSHOTS)),
-    "android-screenshots": count(parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_ANDROID_SCREENSHOTS)),
+    "android-screenshots": count(manifest.run_android_screenshots),
     "android-access-native": count(manifest.run_android_access_native, 2),
     "docker-seed-e2e": count(
       manifest.run_docker_seed_e2e &&
@@ -1778,7 +1844,7 @@ manifest.pr_job_count =
       (manifest.run_ui_real_gateway ? uiRealGatewayShards.length : 0) +
       countPrJobs(manifest.run_android_access_native, 2) +
       countPrJobs(parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_IOS_SCREENSHOTS), 3) +
-      countPrJobs(parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_ANDROID_SCREENSHOTS));
+      countPrJobs(manifest.run_android_screenshots);
 
 for (const [key, value] of Object.entries(manifest)) {
   appendFileSync(
@@ -1862,8 +1928,6 @@ if (process.env.GITHUB_STEP_SUMMARY) {
       }
     }
     // Paths are diff-controlled; render them as escaped HTML text, never Markdown.
-    const escape = (value) =>
-      value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
     appendFileSync(
       process.env.GITHUB_STEP_SUMMARY,
       `### PR Node test selection (${nodeSelectionMode})\n\n` +
@@ -1872,7 +1936,7 @@ if (process.env.GITHUB_STEP_SUMMARY) {
         "<details><summary>Selected files and selection rules</summary>\n<pre>" +
         selectedTestTargets
           .map((file) =>
-            escape(
+            escapeSummaryHtml(
               `${file}\t${[...(reasons.get(file) ?? [])].toSorted((left, right) => left.localeCompare(right)).join(", ")}`,
             ),
           )
@@ -1887,4 +1951,45 @@ if (process.env.GITHUB_STEP_SUMMARY) {
         ? "- Native app qualification: deferred; Linux, macOS, and Windows Node coverage retained.\n"
         : ""),
   );
+}
+
+// Preflight runs once per workflow attempt; shard selection stays silent.
+if (
+  process.env.GITHUB_ACTIONS === "true" &&
+  typeof testRuntimePolicy?.inspectNativeBunQualifications === "function"
+) {
+  try {
+    const { staleEntries, changedInputs } = testRuntimePolicy.inspectNativeBunQualifications(
+      process.cwd(),
+    );
+    if (staleEntries.length > 0) {
+      let detail = "Detailed job summary unavailable.";
+      if (process.env.GITHUB_STEP_SUMMARY) {
+        try {
+          appendFileSync(
+            process.env.GITHUB_STEP_SUMMARY,
+            "### Native Bun qualification staleness\n\n" +
+              `${staleEntries.length} recorded native qualifications are stale. Existing Vitest coverage is retained.\n\n` +
+              "Changed or unreadable inputs:\n\n<pre>" +
+              changedInputs
+                .map(({ file, reason }) => escapeSummaryHtml(`${file}\t${reason}`))
+                .join("\n") +
+              "</pre>\n\n<details><summary>Stale entries</summary>\n<pre>" +
+              staleEntries.map(escapeSummaryHtml).join("\n") +
+              "</pre>\n</details>\n\n",
+          );
+          detail = "See the job summary for stale entries and changed inputs.";
+        } catch {
+          // Reporting is advisory even when the summary cannot be written.
+        }
+      }
+      console.warn(
+        `::notice title=Native Bun qualification staleness::${staleEntries.length} recorded entries have ${changedInputs.length} changed or unreadable inputs; existing Vitest coverage is retained. ${detail}`,
+      );
+    }
+  } catch {
+    console.warn(
+      "::notice title=Native Bun qualification staleness::Could not inspect native qualification fingerprints. Runtime selection is unchanged.",
+    );
+  }
 }

@@ -37,13 +37,16 @@ const time = "2026-08-28T12:00:00.000Z";
 export function candidatePublicationFixture(
   options: {
     candidateSha?: string;
+    transportRef?: string;
     runId?: string;
     purpose?: "publish" | "main-qualification" | "diagnostic";
   } = {},
 ) {
   const fixture = trustedMainNpmFixture();
   const q = options.candidateSha ?? defaultQ;
-  const branch = options.candidateSha ? "release-ci/" + q.slice(0, 12) + "-123" : defaultBranch;
+  const branch =
+    options.transportRef ??
+    (options.candidateSha ? "release-ci/" + q.slice(0, 12) + "-123" : defaultBranch);
   const legacyRunId = fixture.runId;
   const runId = options.runId ?? legacyRunId;
   const workflowSource = readFileSync(".github/workflows/full-release-validation.yml", "utf8");
@@ -81,6 +84,7 @@ export function candidatePublicationFixture(
   const admission = admissionFixture(true, {
     inputs,
     candidateSha: q,
+    transportRef: branch,
     candidateVersion: "2026.8.28-beta.1",
     policy: JSON.parse(readFileSync("scripts/lib/release-qualification-coverage.json", "utf8")),
     workflowSource,
@@ -184,8 +188,10 @@ export function candidatePublicationFixture(
     trustedWorkflow: tooling,
   });
   plan.children = plan.children.filter((child) => child.selected);
+  const qualificationBaselines = JSON.parse(qualificationBaselinesJson);
   Object.assign(expectDefined(plan.candidateRequest, "candidate request"), {
-    upgradeSurvivorBaselines: JSON.parse(qualificationBaselinesJson).upgradeSurvivorBaselines,
+    upgradeBaseline: qualificationBaselines.upgradeBaseline,
+    upgradeSurvivorBaselines: qualificationBaselines.upgradeSurvivorBaselines,
   });
   const jobsFor = (requestedRunId: string) => {
     const child = plan.children.find((entry) => entry.runId === requestedRunId);
@@ -215,7 +221,6 @@ export function candidatePublicationFixture(
     targetSha: q,
     workflowFullRef: tooling.fullRef,
     workflowRef: branch,
-    publicationArtifacts: { npmPreflight: {}, docker: {} },
   });
   delete manifest.candidateBinding;
   delete manifest.evidenceReuse;
@@ -411,7 +416,6 @@ export function candidatePublicationFixture(
       runAttempt: "1",
     },
   };
-  manifest.publicationArtifacts.npmPreflight = npmQualified;
   const npmJob = {
     id: 780,
     run_id: Number(runId),
@@ -474,11 +478,14 @@ export function candidatePublicationFixture(
     })),
   };
   const dockerBytes = JSON.stringify(docker, null, 2) + "\n";
-  manifest.publicationArtifacts.docker = {
-    preparedRunId: runId,
-    preparedRunAttempt: "1",
-    preparedArtifactName: artifactName,
-    preparedManifestSha256: hash(dockerBytes),
+  const publicationArtifacts = {
+    npmPreflight: npmQualified,
+    docker: {
+      preparedRunId: runId,
+      preparedRunAttempt: "1",
+      preparedArtifactName: artifactName,
+      preparedManifestSha256: hash(dockerBytes),
+    },
   };
   const dockerJob = {
     id: 800,
@@ -532,7 +539,7 @@ export function candidatePublicationFixture(
     admission,
     source,
     plan,
-    manifest,
+    manifest: Object.assign(manifest, { publicationArtifacts }),
     parent,
     client,
     fixture,

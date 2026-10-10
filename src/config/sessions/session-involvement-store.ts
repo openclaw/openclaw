@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { emitSessionLifecycleEvent } from "../../sessions/session-lifecycle-events.js";
+import { deferOpenClawAgentPostCommitPublication } from "../../state/openclaw-agent-db.js";
 import {
   prepareUserProfileCatalog,
   readUserProfileAliases,
@@ -7,6 +8,7 @@ import {
 import type { SessionAccessScope } from "./session-accessor.sqlite-contract.js";
 import { publishSessionEntryCacheInvalidation } from "./session-accessor.sqlite-entry-cache.js";
 import { updatePreparedSessionProfileInvolvement } from "./session-accessor.sqlite-involvement.js";
+import type { SessionCollaborationScope } from "./session-collaboration-scope.js";
 import { runSessionCollaborationWrite } from "./session-sharing-store.async.js";
 import type { SessionInvolvementMutation } from "./session-sharing-store.types.js";
 
@@ -25,7 +27,7 @@ export function updateSessionProfileInvolvement(
 }
 
 export async function updateSessionProfileInvolvementAsync(
-  scope: SessionAccessScope,
+  scope: SessionCollaborationScope,
   { assertCurrent, ...params }: InvolvementParams,
 ): Promise<boolean> {
   const captured = structuredClone(params);
@@ -46,17 +48,19 @@ export async function updateSessionProfileInvolvementAsync(
       { type: "involvement", input: { scope, params: captured, profiles: [] } },
       // Personal involvement never writes process-held incognito stores.
       () => false,
-      (result, location, database) => {
-        if (result.changed) {
+      (result, location, database, currentKeys) => {
+        if (result.changed && database && (!currentKeys || currentKeys.has(location.sessionKey))) {
           publishSessionEntryCacheInvalidation(database, {
             sessionKey: location.sessionKey,
             facts: { kind: "unchanged" },
           });
-          emitSessionLifecycleEvent({
-            agentId: location.agentId,
-            sessionKey: location.sessionKey,
-            reason: "involvement",
-          });
+          deferOpenClawAgentPostCommitPublication(database, () =>
+            emitSessionLifecycleEvent({
+              agentId: location.agentId,
+              sessionKey: location.sessionKey,
+              reason: "involvement",
+            }),
+          );
         }
         return result.accepted;
       },

@@ -159,6 +159,7 @@ it.each(["cancelled", "shutdown"] as const)(
     const observed: ReturnType<typeof readContext>[] = [];
     const signals: Array<AbortSignal | undefined> = [];
     const reasons: string[] = [];
+    let started = false;
     const tails: Promise<void>[] = [];
     const tailFailures: unknown[] = [];
     let expected: ReturnType<typeof readContext> | undefined;
@@ -183,7 +184,9 @@ it.each(["cancelled", "shutdown"] as const)(
                   groupId: "removal-context",
                   runId: "queued-removal",
                   lifecycleOwner,
-                  start: async () => {},
+                  start: async () => {
+                    started = true;
+                  },
                   onStartFailure: async () => true,
                   onRemoved: async (actualReason) => {
                     reasons.push(actualReason);
@@ -234,6 +237,9 @@ it.each(["cancelled", "shutdown"] as const)(
       tail.resolve();
       await removal;
       expect(reasons).toEqual([reason]);
+      expect(started).toBe(false);
+      expect(isSwarmRunActive("holder")).toBe(true);
+      expect(releaseSwarmRun("holder")).toBe(true);
       expect(tailFailures).toEqual([]);
       expect(observed).toEqual([expected, expected]);
     } finally {

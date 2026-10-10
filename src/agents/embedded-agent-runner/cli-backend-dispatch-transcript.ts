@@ -92,6 +92,12 @@ export function createCliDispatchTranscriptRecorder(params: {
     });
     return tainted ? ({ ...message, __openclaw: { turnTainted: true } } as AgentMessage) : message;
   };
+  const appendAssistantSnapshot = (text: string, stopReason: "aborted" | "stop") => {
+    if (text && text !== lastWrittenAssistantText) {
+      lastWrittenAssistantText = text;
+      enqueue(() => buildZeroUsageAssistantMessage([{ type: "text", text }], stopReason));
+    }
+  };
 
   enqueue(() => ({
     role: "user",
@@ -152,23 +158,12 @@ export function createCliDispatchTranscriptRecorder(params: {
       if (finalized) {
         return;
       }
-      const text = lastAssistantText.trim();
-      if (!text || text === lastWrittenAssistantText) {
-        return;
-      }
-      lastWrittenAssistantText = text;
-      enqueue(() => buildZeroUsageAssistantMessage([{ type: "text", text }], "aborted"));
+      appendAssistantSnapshot(lastAssistantText.trim(), "aborted");
     },
     finalize: async (finalText?: string) => {
-      if (finalized) {
-        await tail;
-        return;
-      }
-      finalized = true;
-      const text = finalText?.trim() || lastAssistantText.trim();
-      if (text && text !== lastWrittenAssistantText) {
-        lastWrittenAssistantText = text;
-        enqueue(() => buildZeroUsageAssistantMessage([{ type: "text", text }], "stop"));
+      if (!finalized) {
+        finalized = true;
+        appendAssistantSnapshot(finalText?.trim() || lastAssistantText.trim(), "stop");
       }
       await tail;
     },
@@ -185,24 +180,21 @@ function normalizeToolResultContent(result: unknown): ToolResultMessage["content
   if (!Array.isArray(content)) {
     return [];
   }
-  const blocks: ToolResultMessage["content"] = [];
-  for (const block of content) {
+  return content.flatMap<ToolResultMessage["content"][number]>((block) => {
     if (typeof block === "string") {
-      blocks.push({ type: "text", text: block });
-      continue;
+      return [{ type: "text", text: block }];
     }
     const record = asOptionalObjectRecord(block);
     if (!record) {
-      continue;
+      return [];
     }
     const { type, text, data, mimeType } = record;
     if (type === "text" && typeof text === "string") {
-      blocks.push({ type: "text", text });
-      continue;
+      return [{ type: "text", text }];
     }
     if (type === "image" && typeof data === "string" && typeof mimeType === "string") {
-      blocks.push({ type: "image", data, mimeType });
+      return [{ type: "image", data, mimeType }];
     }
-  }
-  return blocks;
+    return [];
+  });
 }

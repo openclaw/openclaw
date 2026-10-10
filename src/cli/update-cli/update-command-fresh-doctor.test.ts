@@ -370,7 +370,7 @@ describe("post-plugin update readiness", () => {
       try {
         const result = await completePostCorePluginUpdate({
           ...updateOptions,
-          freshDoctorRequired: !configured,
+          pluginUpdate: { ...pluginUpdate, changed: !configured },
           timeoutMs: undefined,
         });
         expect(result.pluginUpdate.status).toBe("ok");
@@ -387,7 +387,7 @@ describe("post-plugin update readiness", () => {
     },
   );
 
-  it("runs recorded deferred retirement when the published driver flag is false", async () => {
+  it("runs recorded deferred retirement when plugins are unchanged", async () => {
     await withTempHome(async () => {
       const run = createUpdateRun({ trigger: "cli" });
       vi.stubEnv("OPENCLAW_UPDATE_RUN_ID", run.runId);
@@ -401,7 +401,6 @@ describe("post-plugin update readiness", () => {
       await completePostCorePluginUpdate({
         ...updateOptions,
         pluginUpdate: { ...pluginUpdate, changed: false },
-        freshDoctorRequired: false,
         beforeDoctor,
       });
 
@@ -424,12 +423,12 @@ describe("post-plugin update readiness", () => {
   });
 
   it.each([
-    { freshDoctorRequired: false, created: false },
-    { freshDoctorRequired: true, created: false },
-    { freshDoctorRequired: true, created: true },
+    { changed: false, created: false },
+    { changed: true, created: false },
+    { changed: true, created: true },
   ])(
-    "validates only authored config after Doctor (Doctor=$freshDoctorRequired, created=$created)",
-    async ({ freshDoctorRequired, created }) => {
+    "validates only authored config after Doctor (plugins changed=$changed, created=$created)",
+    async ({ changed, created }) => {
       await withTempHome(async (home) => {
         const configPath = path.join(home, ".openclaw", "openclaw.json");
         const io = createConfigIO({ configPath, observe: false });
@@ -452,7 +451,7 @@ describe("post-plugin update readiness", () => {
         });
         const result = await completePostCorePluginUpdate({
           ...updateOptions,
-          freshDoctorRequired,
+          pluginUpdate: { ...pluginUpdate, changed },
         });
         expect(result.configSnapshot).toMatchObject({ exists: created, valid: !created });
         if (created) {
@@ -507,7 +506,7 @@ describe("post-plugin update readiness", () => {
 
     const { pluginUpdate: result } = await completePostCorePluginUpdate({
       ...updateOptions,
-      freshDoctorRequired: false,
+      pluginUpdate: { ...pluginUpdate, changed: false },
     });
 
     expect(result).toMatchObject({
@@ -668,7 +667,7 @@ describe("post-plugin update readiness", () => {
       try {
         const result = await completePostCorePluginUpdate({
           ...updateOptions,
-          freshDoctorRequired: false,
+          pluginUpdate: { ...pluginUpdate, changed: false },
         });
         expect(result.pluginUpdate.status).toBe("ok");
         expect(warning).not.toHaveBeenCalledWith(
@@ -709,7 +708,6 @@ describe("post-plugin update readiness", () => {
       const result = await completePostCorePluginUpdate({
         ...updateOptions,
         pluginUpdate: { ...pluginUpdate, changed: false },
-        freshDoctorRequired: false,
       });
 
       expect(result.pluginUpdate.status).toBe("ok");
@@ -919,7 +917,6 @@ describe("post-plugin update readiness", () => {
         ...updateOptions,
         runId: run.runId,
         pluginUpdate: { ...pluginUpdate, changed: false },
-        freshDoctorRequired: false,
         beforeDoctor,
       });
 

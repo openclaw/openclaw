@@ -157,9 +157,7 @@ export function projectGatewaySessionRunState(params: {
         : "interrupted";
     fields.status = liveSubagentRunActive
       ? subagentStatus
-      : fields.status === "running"
-        ? undefined
-        : (fields.status ?? (typeof endedAt === "number" ? subagentStatus : undefined));
+      : (fields.status ?? (typeof endedAt === "number" ? subagentStatus : undefined));
     const ownsInterruptedSession =
       entry?.lifecycleRunId === subagentRun.runId ||
       (entry?.lifecycleRunId === undefined && entry?.lastRunId === subagentRun.runId) ||

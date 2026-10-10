@@ -31,6 +31,7 @@ import {
 import { createSessionHistorySubagentProjection } from "./session-history-subagent-projection.js";
 import * as subagentSources from "./session-history-subagent-sources.js";
 import { readChatHistoryMessageId } from "./session-history-tail.js";
+import { collectSessionTranscriptMessages } from "./session-transcript-source-pages.js";
 
 const childKey = "agent:main:dashboard:spawned-worker";
 const peerKey = "agent:main:dashboard:independent-peer";
@@ -236,10 +237,14 @@ describe("subagent coordination history", () => {
         cursor: initial.cursor,
       });
       expect.soft(delta).toMatchObject({ kind: "delta", messages: [] });
-      const raw = await readers.readSessionMessagesAsync(scope, {
-        mode: "full",
-        reason: "raw cross-agent transcript proof",
-      });
+      const raw = await collectSessionTranscriptMessages(
+        readers.readSessionMessagesWithSourceAsync,
+        scope,
+        {
+          mode: "full",
+          reason: "raw cross-agent transcript proof",
+        },
+      );
       expect(raw.map(readChatHistoryMessageId)).toEqual([
         ...messages.map(([id]) => id),
         "cross-late",
@@ -524,10 +529,14 @@ describe("subagent coordination history", () => {
         options,
       );
       expect(page.messages.map(readChatHistoryMessageId)).toEqual(expected);
-      const raw = await readers.readSessionMessagesAsync(scope, {
-        mode: "full",
-        reason: "raw model transcript proof",
-      });
+      const raw = await collectSessionTranscriptMessages(
+        readers.readSessionMessagesWithSourceAsync,
+        scope,
+        {
+          mode: "full",
+          reason: "raw model transcript proof",
+        },
+      );
       expect(raw.map(readChatHistoryMessageId)).toEqual(messages.map(([id]) => id));
     });
   });

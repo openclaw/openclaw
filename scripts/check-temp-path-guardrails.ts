@@ -1,14 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import pMap, { pMapSkip } from "p-map";
+import * as ts from "typescript/unstable/ast";
 import { listRepoFilesSync } from "./check-file-utils.js";
-
-type QuoteChar = "'" | '"' | "`";
-
-type QuoteScanState = {
-  quote: QuoteChar | null;
-  escaped: boolean;
-};
+import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
 
 type RuntimeSourceGuardrailFile = {
   relativePath: string;
@@ -40,94 +35,6 @@ function shouldSkipGuardrailRuntimeSource(relativePath: string): boolean {
   return DEFAULT_GUARDRAIL_SKIP_PATTERNS.some((pattern) => pattern.test(relativePath));
 }
 
-function stripCommentsForScan(input: string): string {
-  return input.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
-}
-
-function consumeQuotedChar(state: QuoteScanState, ch: string): boolean {
-  if (!state.quote) {
-    if (ch === "'" || ch === '"' || ch === "`") {
-      state.quote = ch;
-    }
-    return state.quote !== null;
-  }
-  if (state.escaped) {
-    state.escaped = false;
-    return true;
-  }
-  if (ch === "\\") {
-    state.escaped = true;
-    return true;
-  }
-  if (ch === state.quote) {
-    state.quote = null;
-  }
-  return true;
-}
-
-function findMatchingParen(source: string, openIndex: number): number {
-  let depth = 1;
-  const quoteState: QuoteScanState = { quote: null, escaped: false };
-  for (let i = openIndex + 1; i < source.length; i += 1) {
-    const ch = source.charAt(i);
-    if (consumeQuotedChar(quoteState, ch)) {
-      continue;
-    }
-    if (ch === "(") {
-      depth += 1;
-      continue;
-    }
-    if (ch === ")") {
-      depth -= 1;
-      if (depth === 0) {
-        return i;
-      }
-    }
-  }
-  return -1;
-}
-
-function splitTopLevelArguments(source: string): string[] {
-  const out: string[] = [];
-  let current = "";
-  let parenDepth = 0;
-  let bracketDepth = 0;
-  let braceDepth = 0;
-  const quoteState: QuoteScanState = { quote: null, escaped: false };
-  for (const ch of source) {
-    if (consumeQuotedChar(quoteState, ch)) {
-      current += ch;
-      continue;
-    }
-    if (ch === "(") {
-      parenDepth += 1;
-    } else if (ch === ")") {
-      parenDepth = Math.max(0, parenDepth - 1);
-    } else if (ch === "[") {
-      bracketDepth += 1;
-    } else if (ch === "]") {
-      bracketDepth = Math.max(0, bracketDepth - 1);
-    } else if (ch === "{") {
-      braceDepth += 1;
-    } else if (ch === "}") {
-      braceDepth = Math.max(0, braceDepth - 1);
-    } else if (ch === "," && parenDepth === 0 && bracketDepth === 0 && braceDepth === 0) {
-      out.push(current.trim());
-      current = "";
-      continue;
-    }
-    current += ch;
-  }
-  if (current.trim()) {
-    out.push(current.trim());
-  }
-  return out;
-}
-
-function isOsTmpdirExpression(argument: string): boolean {
-  return /^os\s*\.\s*tmpdir\s*\(\s*\)$/u.test(argument.trim());
-}
-
 function mightContainDynamicTmpdirJoin(source: string): boolean {
   if (!source.includes("path") || !source.includes("join") || !source.includes("tmpdir")) {
     return false;
@@ -140,35 +47,43 @@ function mightContainDynamicTmpdirJoin(source: string): boolean {
   );
 }
 
-function hasDynamicTmpdirJoin(source: string): boolean {
-  if (!mightContainDynamicTmpdirJoin(source)) {
-    return false;
-  }
+function isNamedCall(
+  node: ts.Node | undefined,
+  object: string,
+  method: string,
+): node is ts.CallExpression {
+  return Boolean(
+    node &&
+    ts.isCallExpression(node) &&
+    ts.isPropertyAccessExpression(node.expression) &&
+    ts.isIdentifier(node.expression.expression) &&
+    node.expression.expression.text === object &&
+    node.expression.name.text === method,
+  );
+}
 
-  const scanSource = stripCommentsForScan(source);
-  const joinPattern = /path\s*\.\s*join\s*\(/gu;
-  let match: RegExpExecArray | null = joinPattern.exec(scanSource);
-  while (match) {
-    const openParenIndex = scanSource.indexOf("(", match.index);
-    if (openParenIndex !== -1) {
-      const closeParenIndex = findMatchingParen(scanSource, openParenIndex);
-      if (closeParenIndex !== -1) {
-        const argsSource = scanSource.slice(openParenIndex + 1, closeParenIndex);
-        const args = splitTopLevelArguments(argsSource);
-        const firstArg = args[0];
-        if (firstArg && isOsTmpdirExpression(firstArg)) {
-          for (const arg of args.slice(1)) {
-            const trimmed = arg.trim();
-            if (trimmed.startsWith("`") && trimmed.includes("${")) {
-              return true;
-            }
-          }
-        }
+function hasDynamicTmpdirJoin(sourceFile: ts.SourceFile): boolean {
+  const containsTemplate = (node: ts.Node): true | undefined =>
+    ts.isTemplateExpression(node) ? true : node.forEachChild(containsTemplate);
+  const visit = (node: ts.Node): true | undefined => {
+    if (isNamedCall(node, "path", "join")) {
+      const first = node.arguments[0];
+      if (
+        isNamedCall(first, "os", "tmpdir") &&
+        first.arguments.length === 0 &&
+        node.arguments
+          .slice(1)
+          .some(
+            (argument) =>
+              argument.getText(sourceFile).startsWith("`") && containsTemplate(argument),
+          )
+      ) {
+        return true;
       }
     }
-    match = joinPattern.exec(scanSource);
-  }
-  return false;
+    return node.forEachChild(visit);
+  };
+  return visit(sourceFile) === true;
 }
 
 function listTrackedRuntimeSourceFiles(repoRoot: string): string[] {
@@ -204,13 +119,17 @@ async function readRuntimeSourceFiles(
 async function main() {
   const repoRoot = process.cwd();
   const files = await readRuntimeSourceFiles(repoRoot, listTrackedRuntimeSourceFiles(repoRoot));
+  using parser = createNativeTypeScriptParser({ cwd: repoRoot });
   const offenders: string[] = [];
   const weakRandomMatches: string[] = [];
 
   for (const file of files) {
     const source = file.source;
     const mightContainWeakRandom = source.includes("Date.now") && source.includes("Math.random");
-    if (hasDynamicTmpdirJoin(source)) {
+    if (
+      mightContainDynamicTmpdirJoin(source) &&
+      hasDynamicTmpdirJoin(parser.parseSourceFile(file.relativePath, source))
+    ) {
       offenders.push(file.relativePath);
     }
     if (mightContainWeakRandom && WEAK_RANDOM_SAME_LINE_PATTERN.test(source)) {

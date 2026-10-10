@@ -1,5 +1,4 @@
 import { resolveAmbientOwnerAgentId } from "../agents/agent-scope-config.js";
-// OpenClaw overview gathers config, agent, tool, docs, source, and gateway status.
 import { listAgentEntries } from "../agents/agent-scope.js";
 import {
   OPENCLAW_DOCS_URL,
@@ -15,11 +14,9 @@ import {
   readConfigFileSnapshot,
   resolveConfigPath,
   resolveGatewayPort,
-  type ConfigFileSnapshot,
   type OpenClawConfig,
 } from "../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
-import { isFastTestRuntimeEnv } from "../infra/env.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { createSetupTranslator, type SetupTranslator } from "../wizard/i18n/index.js";
 import { probeGatewayUrl, probeLocalCommand, type LocalCommandProbe } from "./probes.js";
@@ -70,34 +67,6 @@ export type SystemAgentOverview = {
   };
 };
 
-type OpenClawReferencePaths = Awaited<ReturnType<typeof resolveOpenClawReferencePaths>>;
-
-type GatewayConnectionDetails = {
-  url: string;
-  urlSource: string;
-  remoteFallbackNote?: string;
-};
-
-type SystemAgentOverviewDependencies = {
-  readConfigFileSnapshot?: typeof readConfigFileSnapshot;
-  resolveConfigPath?: typeof resolveConfigPath;
-  resolveGatewayPort?: typeof resolveGatewayPort;
-  buildGatewayConnectionDetails?: (input: {
-    config: OpenClawConfig;
-    configPath: string;
-  }) => GatewayConnectionDetails;
-  probeLocalCommand?: typeof probeLocalCommand;
-  probeGatewayUrl?: typeof probeGatewayUrl;
-  resolveOpenClawReferencePaths?: typeof resolveOpenClawReferencePaths;
-};
-
-function issueMessages(snapshot: ConfigFileSnapshot): string[] {
-  return snapshot.issues.map((issue) => {
-    const path = issue.path ? `${issue.path}: ` : "";
-    return `${path}${issue.message}`;
-  });
-}
-
 function buildAgentSummaries(cfg: OpenClawConfig, defaultAgentId: string): SystemAgentSummary[] {
   const entries = listAgentEntries(cfg);
   if (entries.length === 0) {
@@ -143,24 +112,11 @@ function buildAgentSummaries(cfg: OpenClawConfig, defaultAgentId: string): Syste
   return summaries;
 }
 
-function resolveFastTestReferences(env: NodeJS.ProcessEnv): OpenClawReferencePaths | undefined {
-  if (!isFastTestRuntimeEnv(env)) {
-    return undefined;
-  }
-  const sourcePath = process.cwd();
-  return {
-    sourcePath,
-    docsPath: `${sourcePath}/docs`,
-  };
-}
-
 export async function loadSystemAgentOverview(
-  opts: { agentId?: string; env?: NodeJS.ProcessEnv; deps?: SystemAgentOverviewDependencies } = {},
+  opts: { agentId?: string } = {},
 ): Promise<SystemAgentOverview> {
-  const env = opts.env ?? process.env;
-  const deps = opts.deps ?? {};
-  const readSnapshot = deps.readConfigFileSnapshot ?? readConfigFileSnapshot;
-  const snapshot = await readSnapshot();
+  const env = process.env;
+  const snapshot = await readConfigFileSnapshot();
   const cfg = snapshot.runtimeConfig ?? snapshot.sourceConfig ?? {};
   const defaultAgentId = resolveAmbientOwnerAgentId(cfg, opts.agentId);
   const defaultModel =
@@ -168,14 +124,12 @@ export async function loadSystemAgentOverview(
     resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model);
   const setupSelection = resolveConfiguredSetupModelForAgent({ cfg, agentId: defaultAgentId });
   const utility = readUtilityModelSetting(cfg, defaultAgentId);
-  const configPath = snapshot.path || (deps.resolveConfigPath ?? resolveConfigPath)(env);
-  let gatewayUrl = `ws://127.0.0.1:${(deps.resolveGatewayPort ?? resolveGatewayPort)(cfg, env)}`;
+  const configPath = snapshot.path || resolveConfigPath(env);
+  let gatewayUrl = `ws://127.0.0.1:${resolveGatewayPort(cfg, env)}`;
   let gatewaySource = "local loopback";
   let gatewayError: string | undefined;
   try {
-    const buildGatewayConnectionDetails =
-      deps.buildGatewayConnectionDetails ??
-      (await import("../gateway/call.js")).buildGatewayConnectionDetails;
+    const { buildGatewayConnectionDetails } = await import("../gateway/call.js");
     const details = buildGatewayConnectionDetails({ config: cfg, configPath });
     gatewayUrl = details.url;
     gatewaySource = details.urlSource;
@@ -183,27 +137,26 @@ export async function loadSystemAgentOverview(
   } catch (err) {
     gatewayError = err instanceof Error ? err.message : String(err);
   }
-  const resolveReferences = deps.resolveOpenClawReferencePaths ?? resolveOpenClawReferencePaths;
-  const commandProbe = deps.probeLocalCommand ?? probeLocalCommand;
   const [codex, claude, gemini, gateway, references] = await Promise.all([
     // Probes run in parallel; each individual probe is timeout-bounded in probes.ts.
-    commandProbe("codex"),
-    commandProbe("claude"),
-    commandProbe("gemini"),
-    (deps.probeGatewayUrl ?? probeGatewayUrl)(gatewayUrl),
-    resolveFastTestReferences(env) ??
-      resolveReferences({
-        argv1: process.argv[1],
-        cwd: process.cwd(),
-        moduleUrl: import.meta.url,
-      }),
+    probeLocalCommand("codex"),
+    probeLocalCommand("claude"),
+    probeLocalCommand("gemini"),
+    probeGatewayUrl(gatewayUrl),
+    resolveOpenClawReferencePaths({
+      argv1: process.argv[1],
+      cwd: process.cwd(),
+      moduleUrl: import.meta.url,
+    }),
   ]);
   return {
     config: {
       path: configPath,
       exists: snapshot.exists,
       valid: snapshot.valid,
-      issues: issueMessages(snapshot),
+      issues: snapshot.issues.map(
+        (issue) => `${issue.path ? `${issue.path}: ` : ""}${issue.message}`,
+      ),
       hash: snapshot.hash ?? null,
     },
     agents: buildAgentSummaries(cfg, defaultAgentId),
@@ -376,7 +329,7 @@ export function formatSystemAgentStartupMessage(overview: SystemAgentOverview): 
     `Config: ${configStatus}. Default agent: ${agentLabel}.`,
     overview.gateway.reachable
       ? `Gateway: reachable at ${overview.gateway.url}.`
-      : `Gateway: not reachable at ${overview.gateway.url}; I already did the first probe.`,
+      : `Gateway: not reachable at ${overview.gateway.url}; I already did the first check.`,
     formatStartupAction(overview),
   ]
     .filter((line): line is string => line !== undefined)

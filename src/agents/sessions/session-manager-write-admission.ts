@@ -24,29 +24,22 @@ import type { Message } from "../../llm/types.js";
 import { captureLoggingRedactionPatternGuard } from "../../logging/config.js";
 import { getSecretRedactionRegistryRevision } from "../../logging/secret-redaction-registry.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
-import { getAsyncWorkSignal, trackAsyncWork } from "../../shared/async-work-scope.js";
+import { trackAsyncWork } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
-import {
-  isActiveStoreWriter,
-  runQueuedStoreWrite,
-  type StoreWriterQueue,
-} from "../../shared/store-writer-queue.js";
+import { runQueuedStoreWrite, type StoreWriterQueue } from "../../shared/store-writer-queue.js";
 import {
   registerOpenClawAgentDatabaseAsyncResource,
   registerOpenClawAgentDatabaseReadCandidateResource,
 } from "../../state/openclaw-agent-db-resources.js";
 import {
-  withOpenClawAgentDatabaseAsync,
+  withOpenClawAgentDatabaseRuntime,
   type OpenClawAgentDatabase,
   type OpenClawAgentDatabaseOptions,
 } from "../../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
-import {
-  runOpenClawAgentWriteAdmission,
-  SQLITE_SESSION_WRITER_QUEUES,
-} from "../../state/openclaw-agent-write-admission.js";
+import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import {
   captureOpenClawStateDatabaseReadAdmission,
   registerOpenClawStateDatabaseAsyncResource,
@@ -55,8 +48,9 @@ import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.pa
 import type { BashExecutionMessage, CustomMessage } from "./messages.js";
 import type { SessionManagerCore } from "./session-manager-core.js";
 import {
-  captureSessionManagerIncognitoActor,
-  assertSessionManagerIncognitoAdmission,
+  captureSessionManagerIncognitoBinding,
+  captureSessionManagerIncognitoAdmissionAssertion,
+  withRetainedSessionManagerIncognitoActor,
 } from "./session-manager-incognito-scope.js";
 import { SessionTranscriptMessageCommittedError } from "./session-manager-message-error.js";
 import type { SessionTranscriptAppendResult } from "./session-manager-message-runtime.js";
@@ -134,14 +128,16 @@ export async function withSessionManagerWrite<T>(
   const options = toDatabaseOptions(resolveSqliteReadScope(identity));
   options.env = captureSessionTranscriptStorageEnvironment(options.env ?? process.env);
   options.path = resolveOpenClawAgentSqlitePath(options);
-  const actor = captureSessionManagerIncognitoActor(identity);
+  const incognitoBinding = captureSessionManagerIncognitoBinding(identity, manager);
   const assertManager = () => {
     if (!sameSessionTranscriptTargetBinding(identity, manager.getSessionTarget())) {
       throw new Error("Session manager identity changed before transcript write admission");
     }
     assertCurrent();
   };
-  if (actor) {
+  if (incognitoBinding) {
+    captureSessionManagerIncognitoAdmissionAssertion(incognitoBinding)();
+    const actor = incognitoBinding.actor;
     const database: SessionManagerIncognitoDatabase = {
       path: actor.path,
       identity: { incarnation: actor.identity.incarnation },
@@ -158,21 +154,19 @@ export async function withSessionManagerWrite<T>(
         );
       },
     };
-    if (!isActiveStoreWriter(SQLITE_SESSION_WRITER_QUEUES, options.path)) {
-      assertSessionManagerIncognitoAdmission();
-      getAsyncWorkSignal()?.throwIfAborted();
-    }
     // Retain the original incarnation before yielding; no actor lookup or native fallback follows.
     return await trackAsyncWork(() =>
       actor.sessions.withSharedState(() =>
-        runOpenClawAgentWriteAdmission(
-          options,
-          () => {
-            actor.assertCurrent();
-            assertManager();
-            return write({ database, options, assertCurrent });
-          },
-          true,
+        withRetainedSessionManagerIncognitoActor(manager, () =>
+          runOpenClawAgentWriteAdmission(
+            options,
+            () => {
+              actor.assertCurrent();
+              assertManager();
+              return write({ database, options, assertCurrent });
+            },
+            true,
+          ),
         ),
       ),
     );
@@ -183,14 +177,10 @@ export async function withSessionManagerWrite<T>(
     runOpenClawAgentWriteAdmission(
       options,
       () =>
-        withOpenClawAgentDatabaseAsync(
+        withOpenClawAgentDatabaseRuntime(
           options,
           (database) => {
-            const current = manager.getSessionTarget();
-            if (!sameSessionTranscriptTargetBinding(identity, current)) {
-              throw new Error("Session manager identity changed before transcript write admission");
-            }
-            assertCurrent();
+            assertManager();
             // Each native kernel or worker command still validates live authority at commit.
             return write({ database, options, assertCurrent });
           },

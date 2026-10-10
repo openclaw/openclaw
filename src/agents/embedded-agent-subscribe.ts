@@ -18,7 +18,7 @@ import type { EmbeddedRunLivenessState } from "./embedded-agent-runner/types.js"
 import { runBestEffortCallback } from "./embedded-agent-subscribe.callback.js";
 import { createEmbeddedAgentSessionEventHandler } from "./embedded-agent-subscribe.handlers.js";
 import { readPendingToolMediaReply } from "./embedded-agent-subscribe.handlers.messages.replies.js";
-import { cleanupRunToolStartData } from "./embedded-agent-subscribe.handlers.tools.js";
+import { cleanupRunToolStartData } from "./embedded-agent-subscribe.handlers.tools.start.js";
 import type {
   EmbeddedAgentSubscribeContext,
   EmbeddedAgentSubscribeState,
@@ -94,6 +94,12 @@ export function subscribeEmbeddedAgentSession(input: SubscribeEmbeddedAgentSessi
   const messagingToolSentTargets = state.messagingToolSentTargets;
   const messagingToolSentMediaUrls = state.messagingToolSentMediaUrls;
   const messagingToolSourceReplyPayloads = state.messagingToolSourceReplyPayloads;
+  const didSendViaMessagingTool = () =>
+    hasCommittedMessagingToolDeliveryEvidence({
+      messagingToolSentTexts,
+      messagingToolSentMediaUrls,
+      messagingToolSentTargets,
+    });
   const replyDelivery = createReplyDelivery({ params, state, log });
   const {
     clearAssistantStream,
@@ -180,16 +186,6 @@ export function subscribeEmbeddedAgentSession(input: SubscribeEmbeddedAgentSessi
     typeof params.shouldEmitToolOutput === "function"
       ? params.shouldEmitToolOutput()
       : params.verboseLevel === "full";
-  const formatToolOutputBlock = (text: string) => {
-    const trimmed = text.trim();
-    if (!trimmed) {
-      return "(no output)";
-    }
-    if (!useMarkdown) {
-      return trimmed;
-    }
-    return `\`\`\`txt\n${trimmed}\n\`\`\``;
-  };
   const emitToolResultMessage = (
     toolName: string | undefined,
     message: string,
@@ -213,11 +209,7 @@ export function subscribeEmbeddedAgentSession(input: SubscribeEmbeddedAgentSessi
       params.sourceReplyDeliveryMode === "message_tool_only" &&
       parsed.text &&
       filteredMediaUrls.length === 0 &&
-      hasCommittedMessagingToolDeliveryEvidence({
-        messagingToolSentTexts,
-        messagingToolSentMediaUrls,
-        messagingToolSentTargets,
-      })
+      didSendViaMessagingTool()
     ) {
       return;
     }
@@ -253,7 +245,13 @@ export function subscribeEmbeddedAgentSession(input: SubscribeEmbeddedAgentSessi
     const agg = formatToolAggregate(toolName, meta ? [meta] : undefined, {
       markdown: useMarkdown,
     });
-    const message = `${agg}\n${formatToolOutputBlock(output)}`;
+    const trimmed = output.trim();
+    const formattedOutput = trimmed
+      ? useMarkdown
+        ? `\`\`\`txt\n${trimmed}\n\`\`\``
+        : trimmed
+      : "(no output)";
+    const message = `${agg}\n${formattedOutput}`;
     emitToolResultMessage(toolName, message, result);
   };
 
@@ -272,16 +270,14 @@ export function subscribeEmbeddedAgentSession(input: SubscribeEmbeddedAgentSessi
   const resetForCompactionRetry = () => {
     state.hadDeterministicSideEffect =
       state.hadDeterministicSideEffect === true ||
-      hasCommittedMessagingToolDeliveryEvidence({
-        messagingToolSentTexts,
-        messagingToolSentMediaUrls,
-        messagingToolSentTargets,
-      }) ||
+      didSendViaMessagingTool() ||
       state.successfulCronAdds > 0 ||
       state.acceptedSessionSpawns.length > 0 ||
       state.visibleBlockReplyCount > 0;
     assistantTexts.length = 0;
     state.answerSegments.length = 0;
+    state.inputAnswer = undefined;
+    state.keptAnswer = undefined;
     state.lastAssistant = undefined;
     state.lastAssistantTextMessageIndex = -1;
     state.lastAssistantTextContentIndex = undefined;
@@ -320,26 +316,12 @@ export function subscribeEmbeddedAgentSession(input: SubscribeEmbeddedAgentSessi
     state.deterministicApprovalPromptPending = false;
     state.deterministicApprovalPromptSent = false;
     state.lastDeliveredBlockReplyText = undefined;
+    state.lastReasoningSent = undefined;
     state.toolExecutionSinceLastBlockReply = false;
     state.replayState = mergeEmbeddedRunReplayState(state.replayState, params.initialReplayState);
     state.livenessState = "working";
     streamRendering.resetAssistantMessageState(0);
   };
-
-  // Re-filter the full raw buffer. Reusing live scanner state would hide the
-  // visible prefix when timeout interrupts an open <think> or <final> block.
-  const finalizeFlushedAssistantText = (text: string) =>
-    stripDowngradedToolCallText(
-      streamRendering.stripBlockTags(
-        text,
-        {
-          thinking: false,
-          final: false,
-          inlineCode: createInlineCodeState(),
-        },
-        { final: true },
-      ),
-    ).trimEnd();
 
   // Settlement calls this only for the final, failure-free run-budget terminal.
   // Retain and re-filter the full buffer so queued suffixes keep hidden-tag
@@ -353,7 +335,18 @@ export function subscribeEmbeddedAgentSession(input: SubscribeEmbeddedAgentSessi
       state.hasFlushedPartialText = false;
       return;
     }
-    const visibleText = finalizeFlushedAssistantText(text);
+    // Re-filter the full raw buffer; live scanner state may hide an interrupted prefix.
+    const visibleText = stripDowngradedToolCallText(
+      streamRendering.stripBlockTags(
+        text,
+        {
+          thinking: false,
+          final: false,
+          inlineCode: createInlineCodeState(),
+        },
+        { final: true },
+      ),
+    ).trimEnd();
     if (assistantTexts.length > state.assistantTextBaseline || state.hasFlushedPartialText) {
       replyDelivery.replaceCurrentAssistantText(visibleText);
     } else if (visibleText) {
@@ -440,6 +433,7 @@ export function subscribeEmbeddedAgentSession(input: SubscribeEmbeddedAgentSessi
     assistantTexts,
     answerSegments: state.answerSegments,
     getCurrentAttemptAssistant,
+    getKeptAnswer: () => state.keptAnswer,
     hasSuccessfulModelResponse,
     getLastAssistantTextMessageIndex: () =>
       state.lastAssistantTextMessageIndex >= 0 ? state.lastAssistantTextMessageIndex : undefined,
@@ -502,12 +496,7 @@ export function subscribeEmbeddedAgentSession(input: SubscribeEmbeddedAgentSessi
     // Returns true if any messaging tool successfully sent a message.
     // Used to suppress agent's confirmation text (e.g., "Respondi no Telegram!")
     // which is generated AFTER the tool sends the actual answer.
-    didSendViaMessagingTool: () =>
-      hasCommittedMessagingToolDeliveryEvidence({
-        messagingToolSentTexts,
-        messagingToolSentMediaUrls,
-        messagingToolSentTargets,
-      }),
+    didSendViaMessagingTool,
     didSendDeterministicApprovalPrompt: () => state.deterministicApprovalPromptSent,
     getLastToolError: () => (state.lastToolError ? { ...state.lastToolError } : undefined),
     getUsageTotals,

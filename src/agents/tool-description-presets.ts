@@ -21,7 +21,7 @@ export const ASK_USER_TOOL_DISPLAY_SUMMARY = "Ask the user and wait for an answe
 export const SUGGEST_TASK_TOOL_DISPLAY_SUMMARY = "Suggest follow-up work for operator approval.";
 export const DISMISS_TASK_TOOL_DISPLAY_SUMMARY = "Withdraw a pending task suggestion.";
 export const SKILL_WORKSHOP_TOOL_DISPLAY_SUMMARY =
-  "Author reusable skills under the available tool's publication and review policy. Read one complete artifact when it fits the model budget.";
+  "Save, improve, archive, and restore your learned skills.";
 
 export function describeAgentsListTool(sessionsSpawnAvailable: boolean): string {
   return sessionsSpawnAvailable
@@ -103,12 +103,12 @@ export function describeSessionsSearchTool(options?: SessionLinkDescriptionOptio
 /** Describes the sessions_send tool for model-facing instructions. */
 export function describeSessionsSendTool(): string {
   return [
-    "Run a visible session on this Gateway by sessionKey/label, or a configured local agent by agentId; sessionKey wins redundant label.",
+    "Run a permitted session on this Gateway by sessionKey/label, or a configured local agent by agentId; sessionKey wins redundant label. Explicit per-agent send destinations can permit messaging without transcript access.",
     "A session identifies model context, not an external address. A peer reply reaches you once: inline when available, otherwise as a later inter-session input. Continue with another sessions_send; post to channels with message.",
     SESSIONS_SEND_RESULT_GUIDANCE,
     "Omit mode to automatically continue your paused native child task; returns runId/taskRunId with task-owned completion instead of an inline wait or watch. With timeoutSeconds:0, your own running child is steered into its active run (admission only, no separate completion turn; use mode:followup for one); other sessions use ordinary message delivery. mode:notify queues ephemeral context for the next turn without waking or starting work (bounded process memory, not a durable inbox). mode:steer injects guidance into an active supported run and never starts idle work. mode:followup starts a separate turn without steering or resuming a paused task. mode:resume requires a paused native child task and rejects watch:true and positive timeoutSeconds.",
     'Thread chats rejected: target parent channel. Missing configured-agent main created. status "no_reply" is terminal, so do not wait for another reply.',
-    "A timeoutSeconds:0 followup to your existing native child gives this turn a completion to await with sessions_yield, even while queued. watch:true additionally reports later target-session changes; on a steer it can claim the child's existing pending completion.",
+    "A timeoutSeconds:0 followup to your existing native child gives this turn a completion to await with sessions_yield, even while queued. watch:true requires status visibility and additionally reports later target-session changes; on a steer it can claim the child's existing pending completion.",
   ].join(" ");
 }
 
@@ -191,7 +191,8 @@ export function describeSecretsTool(): string {
   return [
     "Protected credentials: `list` metadata first; `request` missing task-needed name + reason via human masked entry; `delete` removes an entry.",
     "Request waits for human; value goes straight to shared store, never model/chat. Use the returned store SecretRef for supported config fields.",
-    "Gateway egress only: enabled proxy + exact allowedHosts required; no hosts blocks egress, not config refs. No plaintext fallback.",
+    "Gateway HTTPS egress only: enabled proxy + exact allowedHosts required; no hosts blocks egress, not config refs. No plaintext fallback.",
+    "Protected entries cannot supply SSH/sudo passwords or subprocess stdin; `${secret:NAME}` is not shell substitution. Check the supported consumer before requesting a credential.",
     SECRET_EGRESS_USAGE_PROMPT,
     "Operator-set env entries are readable and managed separately from this protected store. no_answer means no credential was supplied.",
   ].join(" ");

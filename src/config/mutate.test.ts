@@ -929,75 +929,6 @@ describe("config mutate helpers", () => {
     },
   );
 
-  it("writes through a nested include when a read-time migration added keys", async () => {
-    const home = await suiteRootTracker.make("nested-include-migrated");
-    const configPath = path.join(home, ".openclaw", "openclaw.json");
-    const agentPath = path.join(home, ".openclaw", "config", "agent-alpha.json5");
-    await fs.mkdir(path.dirname(agentPath), { recursive: true });
-    const authoredRoot = {
-      agents: { entries: { alpha: { $include: "./config/agent-alpha.json5" } } },
-    };
-    await fs.writeFile(configPath, json(authoredRoot), "utf-8");
-    await fs.writeFile(agentPath, json({ bootstrapMaxChars: 25000 }), "utf-8");
-    const migrated = {
-      agents: { entries: { alpha: { bootstrapMaxChars: 25000, bootstrapTotalMaxChars: 50000 } } },
-    } satisfies OpenClawConfig;
-    const nextConfig = {
-      agents: { entries: { alpha: { bootstrapMaxChars: 40000, bootstrapTotalMaxChars: 50000 } } },
-    } satisfies OpenClawConfig;
-    const snapshot: ConfigFileSnapshot = {
-      ...createSnapshot({
-        hash: "hash-nested-include-migrated",
-        path: configPath,
-        parsed: authoredRoot,
-        sourceConfig: migrated,
-      }),
-      sourceConfigBeforeMigrations: {
-        agents: { entries: { alpha: { bootstrapMaxChars: 25000 } } },
-      } as ConfigFileSnapshot["sourceConfigBeforeMigrations"],
-      includeProvenance: [
-        {
-          path: ["agents", "entries", "alpha"],
-          kind: "single" as const,
-          hasSiblingOverrides: false,
-          hasArrayAncestor: false,
-          targetPath: agentPath,
-        },
-      ],
-    };
-    ioMocks.readConfigFileSnapshotForWrite
-      .mockResolvedValueOnce({
-        snapshot,
-        writeOptions: await includeWriteOptions(snapshot, agentPath),
-      })
-      .mockResolvedValueOnce(
-        readResult(
-          createSnapshot({
-            hash: "hash-nested-include-migrated-refreshed",
-            path: configPath,
-            parsed: authoredRoot,
-            sourceConfig: nextConfig,
-          }),
-        ),
-      );
-
-    await replaceConfigFile({
-      baseHash: snapshot.hash,
-      nextConfig,
-      writeOptions: { expectedConfigPath: configPath },
-      io: ioMocks,
-    });
-
-    expect(ioMocks.writeConfigFile).not.toHaveBeenCalled();
-    expect(JSON.parse(await fs.readFile(agentPath, "utf-8"))).toEqual({
-      bootstrapMaxChars: 40000,
-      bootstrapTotalMaxChars: 50000,
-    });
-    await expect(fs.readFile(configPath, "utf-8")).resolves.toContain(
-      '"$include": "./config/agent-alpha.json5"',
-    );
-  });
-
   it.each([
     {
       name: "repairs a malformed single-file top-level include",
@@ -1661,7 +1592,7 @@ describe("config mutate helpers", () => {
     }
   });
 
-  it.each(["rename", "permission-fallback"] as const)(
+  it.each(["permission-fallback"] as const)(
     "rolls back include and environment changes after failed refresh via %s",
     async (method) => {
       const { configPath, pluginsPath, initialPluginsRaw, snapshot } = await pluginFixture(

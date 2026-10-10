@@ -37,7 +37,7 @@ For the broader model/provider/runtime split, start with
   `~/.openclaw/agents/<agentId>/copilot`.
 
 `openclaw doctor` runs the plugin's [doctor contract](#doctor) for
-session-state ownership and future config migrations. It does not probe the
+session-state ownership and future config migrations. It does not check the
 Copilot CLI environment.
 
 ## Install

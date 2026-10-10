@@ -12,6 +12,7 @@ import {
   appendTranscriptMessageSnapshotSync,
 } from "../../config/sessions/session-accessor.sqlite-transcript-write.js";
 import type { SessionMetadataWorkerOperations } from "../../config/sessions/session-manager-write-contract.js";
+import { SqliteTranscriptMutationConflictError } from "../../config/sessions/session-mutation-conflict-error.js";
 import { resolveSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
 import { startSessionTranscriptIndexReconcile } from "../../config/sessions/session-transcript-reconcile.js";
 import {
@@ -30,7 +31,6 @@ import {
 import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
-import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { copyCodeModeSourceAppendOptions } from "../transcript-code-mode-source.js";
 import {
@@ -39,6 +39,7 @@ import {
 } from "./session-compaction-persistence.js";
 import { isIndexedSessionEntry, parseOpaqueLeafEntry } from "./session-manager-codec.js";
 import { SessionManagerCore } from "./session-manager-core.js";
+import { prepareSessionManagerSync } from "./session-manager-incognito-scope.js";
 import {
   adoptCommittedMessagePayload,
   canonicalizeSessionEntry,
@@ -50,7 +51,6 @@ import {
 } from "./session-manager-persistence-entry.js";
 import {
   committedTranscriptViewError,
-  isSqliteTranscriptMutationConflict,
   SessionEntryCommittedError,
   receiveSessionManagerCommit,
 } from "./session-manager-persistence-error.js";
@@ -59,7 +59,6 @@ import {
   withSessionManagerWrite,
   type SessionManagerWriteAdmission,
 } from "./session-manager-write-admission.js";
-import { warnSessionPersistenceDeprecation } from "./session-persistence-deprecation.js";
 
 export class SessionManagerPersistence extends SessionManagerCore {
   #initialWriter: InitialSessionTranscriptWriter | undefined;
@@ -67,6 +66,9 @@ export class SessionManagerPersistence extends SessionManagerCore {
 
   protected recordTranscriptNavigationChange(): void {
     this.#navigationEpoch++;
+    this.cacheTtlProjectionPrefixes = this.cacheTtlProjectionPrefixes?.filter(
+      (prefix) => prefix.anchorIds.length > 0,
+    );
   }
 
   /** Local branch selections revoke pending writes; committed view adoption does not. */
@@ -255,17 +257,17 @@ export class SessionManagerPersistence extends SessionManagerCore {
           const committed = initialization.value;
           try {
             if (committed.fence) {
-              initialWriter?.recordCommitted(committed.fence);
+              if (!("db" in database)) {
+                initialWriter?.recordCommitted(committed.fence);
+              }
               Object.assign(target, committed.fence);
               Object.assign(captured, committed.fence);
             }
           } finally {
-            if (committed.identity) {
+            if (committed.identity && !("db" in database)) {
               publishCommittedSessionIdentity(
                 captured.agentId,
-                "db" in database
-                  ? readOpenClawAgentDatabaseIdentity(database).identity
-                  : database.identity.incarnation,
+                database.identity.incarnation,
                 committed.identity.previous,
                 committed.identity.current,
               );
@@ -376,7 +378,7 @@ export class SessionManagerPersistence extends SessionManagerCore {
           if (
             !retryMutationConflicts ||
             expectedMutationAt !== undefined ||
-            !isSqliteTranscriptMutationConflict(error)
+            !(error instanceof SqliteTranscriptMutationConflictError)
           ) {
             throw error;
           }
@@ -422,13 +424,13 @@ export class SessionManagerPersistence extends SessionManagerCore {
             (reload?.ok === false ? committedTranscriptViewError(reload.error) : undefined),
         };
       },
-      { beforeFreshMessageCommit },
+      { beforeFreshMessageCommit, initialWriter },
     );
   }
 
   /** @deprecated Await persistAsync. Removal: next Plugin SDK major. */
   public persist(entry: SessionEntry, options?: PersistRecordOptions): PersistRecordResult {
-    warnSessionPersistenceDeprecation("SessionManager.persist", "persistAsync");
+    prepareSessionManagerSync("persist", this.persistenceTarget, this);
     return this.persistRecord(entry, options);
   }
 

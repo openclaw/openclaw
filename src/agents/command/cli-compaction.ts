@@ -1,5 +1,9 @@
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
+import {
+  composeSessionSourceAssertion,
+  type SessionSourceAssertion,
+} from "../../config/sessions/session-source-authority.js";
 import { resolveFreshSessionTotalTokens, type SessionEntry } from "../../config/sessions/types.js";
 import { buildGenericCliContextEngineHostSupport } from "../../context-engine/host-compat.js";
 import { ensureContextEnginesInitialized } from "../../context-engine/init.js";
@@ -43,6 +47,7 @@ import { acquireAgentRunPreparedModelRuntime } from "../prepared-model-runtime.j
 import type { PreparedModelRuntimePluginGeneration } from "../prepared-model-runtime.types.js";
 import { SessionManager } from "../sessions/session-manager.js";
 import {
+  buildCliCompactionParams,
   buildCliCompactionRuntimeContext,
   type CliCompactionContext,
 } from "./cli-compaction-context.js";
@@ -98,7 +103,7 @@ async function compactCliTranscript(
     authProfileId?: string;
     bestEffortMaintenance?: boolean;
     expectedEntry: Parameters<typeof acceptCompactionSuccessor>[0]["expectedEntry"];
-    assertActive: () => void;
+    assertActive: SessionSourceAssertion;
     abortSignal?: AbortSignal;
     onCommitted?: QueuedCompactionHostOptions["onCommitted"];
   },
@@ -231,10 +236,10 @@ async function compactNativeHarnessCliTranscript(
     sessionEntry: SessionEntry;
     contextTokenBudget: number;
     currentTokenCount: number;
-    contextEngine?: ContextEngine;
+    contextEngine: ContextEngine;
     pluginGeneration?: PreparedModelRuntimePluginGeneration;
     abortSignal?: AbortSignal;
-    assertActive: () => void;
+    assertActive: SessionSourceAssertion;
     sourceAuthority: QueuedCompactionHostOptions["sourceAuthority"];
   },
 ): Promise<NativeHarnessCliCompactionOutcome> {
@@ -276,41 +281,24 @@ async function compactNativeHarnessCliTranscript(
       params.assertActive();
       return await maybeCompactAgentHarnessSession(
         {
-          agentId: params.sessionAgentId,
+          ...buildCliCompactionParams(params),
           sessionId: params.sessionId,
-          sessionKey: params.sessionKey,
           sessionFile: params.sessionFile,
-          workspaceDir: params.workspaceDir,
-          cwd: params.cwd,
-          agentDir: params.agentDir,
-          config: params.cfg,
-          skillsSnapshot: params.skillsSnapshot,
-          provider: params.provider,
-          model: params.model,
           authProfileId,
           contextTokenBudget: params.contextTokenBudget,
           currentTokenCount: params.currentTokenCount,
           trigger: "budget",
           force: true,
-          messageChannel: params.messageChannel,
-          agentAccountId: params.agentAccountId,
-          senderIsOwner: params.senderIsOwner,
-          thinkLevel: params.thinkLevel,
-          extraSystemPrompt: params.extraSystemPrompt,
           modelSelectionLocked,
           allowGatewaySubagentBinding: true,
-          ...(params.contextEngine
-            ? {
-                contextEngine: params.contextEngine,
-                contextEngineRuntimeContext: buildCliCompactionRuntimeContext({
-                  ...params,
-                  authProfileId,
-                  harnessRuntime: nativeHarnessId,
-                  modelSelectionLocked,
-                  trigger: "cli_native_budget",
-                }),
-              }
-            : {}),
+          contextEngine: params.contextEngine,
+          contextEngineRuntimeContext: buildCliCompactionRuntimeContext({
+            ...params,
+            authProfileId,
+            harnessRuntime: nativeHarnessId,
+            modelSelectionLocked,
+            trigger: "cli_native_budget",
+          }),
           ...(nativeHarnessId ? { agentHarnessId: nativeHarnessId } : {}),
           abortSignal: params.abortSignal,
         },
@@ -330,18 +318,13 @@ async function compactNativeHarnessCliTranscript(
 
   if (!result?.ok || !result.compacted) {
     const reason = result?.reason;
-    if (result && isBenignCompactionSkipResult(result)) {
+    // Native automatic compaction must not fall back to a host model request.
+    if (
+      (result && isBenignCompactionSkipResult(result)) ||
+      (result?.ok === true && result.reason === CODEX_APP_SERVER_OWNS_AUTO_COMPACTION_REASON)
+    ) {
       log.info(
         `CLI native harness compaction skipped for ${params.provider}/${params.model}: ${reason}`,
-      );
-      return { compacted: false };
-    }
-    if (result?.ok === true && result.reason === CODEX_APP_SERVER_OWNS_AUTO_COMPACTION_REASON) {
-      // Codex owns automatic thread compaction (codex-rs runs it inline during
-      // turns); falling back to context-engine compaction here fought that
-      // ownership and failed OAuth-only sessions with "No API key found".
-      log.info(
-        `CLI native harness compaction skipped for ${params.provider}/${params.model}: ${CODEX_APP_SERVER_OWNS_AUTO_COMPACTION_REASON}`,
       );
       return { compacted: false };
     }
@@ -408,12 +391,13 @@ export async function runCliTurnCompactionLifecycle(
       lifecycleRevision: capturedEntry?.lifecycleRevision,
       activeWriterRunId: capturedEntry?.activeWriterRunId,
     };
-    const assertActive = () => {
-      params.abortSignal?.throwIfAborted();
-      assertSourceActive();
-      operatorAuthority?.assertCurrent();
-      host.assertActive?.();
-    };
+    const assertActive = composeSessionSourceAssertion(
+      [assertSourceActive, operatorAuthority?.assertCurrent, host.assertActive],
+      (assertSources) => {
+        params.abortSignal?.throwIfAborted();
+        assertSources();
+      },
+    );
     assertActive();
     const onCommitted = (accepted: AcceptedCompactionSuccessor) => {
       if (params.sessionStore) {
@@ -457,22 +441,26 @@ export async function runCliTurnCompactionLifecycle(
       return params.sessionEntry;
     }
 
-    const resolvedBackend = resolveCliBackendConfig(params.provider, params.cfg);
+    const cliBackendId = params.cliBackendId?.trim() || params.provider;
+    const resolvedBackend = resolveCliBackendConfig(cliBackendId, params.cfg);
+    const nativeSessionEntry = isNativeHarnessCompactionSession(
+      params.sessionEntry,
+      params.provider,
+    )
+      ? params.sessionEntry
+      : undefined;
     const lockedHarnessRuntime = normalizeOptionalAgentRuntimeId(
       params.sessionEntry?.agentHarnessId,
     );
     if (
       params.sessionEntry?.modelSelectionLocked === true &&
       lockedHarnessRuntime !== OPENCLAW_AGENT_RUNTIME_ID &&
-      !isNativeHarnessCompactionSession(params.sessionEntry, params.provider)
+      !nativeSessionEntry
     ) {
       throw new Error("CLI compaction cannot replace a model-locked native harness runtime");
     }
-    if (
-      resolvedBackend?.ownsNativeCompaction &&
-      !isNativeHarnessCompactionSession(params.sessionEntry, params.provider)
-    ) {
-      log.info(`CLI backend "${params.provider}" owns native compaction — deferring to backend`);
+    if (resolvedBackend?.ownsNativeCompaction && !nativeSessionEntry) {
+      log.info(`CLI backend "${cliBackendId}" owns native compaction — deferring to backend`);
       return params.sessionEntry;
     }
 
@@ -488,12 +476,6 @@ export async function runCliTurnCompactionLifecycle(
     let failure: { error: unknown } | undefined;
     try {
       result = await work.run(async () => {
-        const nativeSessionEntry = isNativeHarnessCompactionSession(
-          params.sessionEntry,
-          params.provider,
-        )
-          ? params.sessionEntry
-          : undefined;
         if (!nativeSessionEntry) {
           assertActive();
         }

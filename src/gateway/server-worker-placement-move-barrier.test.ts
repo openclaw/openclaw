@@ -185,7 +185,7 @@ describe("worker placement move destination", () => {
             await createGatewayWorkerPlacementMoveBarrier({
               ...options,
               loadSessionRuntime: async () => ({
-                managedWorktrees: { findLiveByOwner: () => undefined },
+                managedWorktrees: { findLiveByOwner: async () => undefined },
                 resolveCanonicalSessionEntryFromStoreKeys,
                 resolveGatewaySessionStoreTargetWithStore,
               }),
@@ -248,7 +248,7 @@ describe("worker placement move destination", () => {
         },
         awaitTurnClaimRelease: async (_sessionId, wait) => await wait(),
         loadSessionRuntime: async () => ({
-          managedWorktrees: { findLiveByOwner: () => undefined },
+          managedWorktrees: { findLiveByOwner: async () => undefined },
           resolveCanonicalSessionEntryFromStoreKeys,
           resolveGatewaySessionStoreTargetWithStore,
         }),
@@ -334,7 +334,7 @@ describe("worker placement move destination", () => {
         placements: { waitForTurnClaimRelease: vi.fn() },
         awaitTurnClaimRelease: (_sessionId, wait) => wait(),
         loadSessionRuntime: async () => ({
-          managedWorktrees: { findLiveByOwner: () => undefined },
+          managedWorktrees: { findLiveByOwner: async () => undefined },
           resolveCanonicalSessionEntryFromStoreKeys,
           resolveGatewaySessionStoreTargetWithStore,
         }),

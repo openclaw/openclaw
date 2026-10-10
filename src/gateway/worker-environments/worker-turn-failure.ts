@@ -67,7 +67,7 @@ export async function failHandedOffTurn(params: {
     if (error instanceof AcceptedWorkspacePublicationIndeterminateError) {
       throw error;
     }
-    const current = params.placements.get(params.placement.sessionId);
+    const current = await params.placements.getAsync(params.placement.sessionId);
     const exactDrainOwner =
       current?.state === "draining" &&
       current.generation === params.placement.generation + 1 &&
@@ -167,30 +167,23 @@ export async function failHandedOffTurn(params: {
   }
   const waitForCleanup = (operation: Promise<unknown>) =>
     terminalRecovery ? Promise.race([operation, terminalRecovery.promise]) : operation;
-  if (!isCurrentDrain()) {
-    await recordingFailure;
-    return;
-  }
-  try {
-    await waitForCleanup(
-      params.environments.stopTunnel(
-        params.placement.environmentId,
-        params.placement.activeOwnerEpoch,
-      ),
-    );
-  } catch (error) {
-    failures.push(`tunnel stop: ${boundedWorkerError(error)}`);
-  }
-  // Recovery may have recorded failure, or a replacement may own the session.
-  // A late cleanup completion must never destroy that newer placement.
-  if (!isCurrentDrain()) {
-    await recordingFailure;
-    return;
-  }
-  try {
-    await waitForCleanup(params.environments.destroy(params.placement.environmentId));
-  } catch (error) {
-    failures.push(`environment destroy: ${boundedWorkerError(error)}`);
+  for (const [label, cleanup] of [
+    [
+      "tunnel stop",
+      () => params.environments.stopTunnel(draining.environmentId, draining.activeOwnerEpoch),
+    ],
+    ["environment destroy", () => params.environments.destroy(draining.environmentId)],
+  ] as const) {
+    // Recovery or replacement may have closed this drain while cleanup awaited.
+    if (!isCurrentDrain()) {
+      await recordingFailure;
+      return;
+    }
+    try {
+      await waitForCleanup(cleanup());
+    } catch (error) {
+      failures.push(`${label}: ${boundedWorkerError(error)}`);
+    }
   }
   await recordFailure();
 }

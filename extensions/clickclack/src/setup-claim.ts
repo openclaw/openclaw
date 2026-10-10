@@ -18,7 +18,6 @@ import {
   isClickClackSetupLoopbackHost,
   requireClickClackSetupApiBaseUrl,
 } from "./setup-contract.js";
-import type { ClickClackSetupCodeClaim } from "./types.js";
 
 const CLICKCLACK_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
 const CLICKCLACK_SETUP_CODE_CLAIM_JSON_LIMIT_BYTES = 64 * 1024;
@@ -48,10 +47,7 @@ function requireString(record: Record<string, unknown>, key: string, label: stri
   return value;
 }
 
-function parseClickClackSetupCodeClaim(
-  value: unknown,
-  expectedClaimUrl?: string,
-): ClickClackSetupCodeClaim {
+function parseClickClackSetupCodeClaim(value: unknown, expectedClaimUrl?: string) {
   const claim = requireRecord(value, "response");
   const bot = requireRecord(claim.bot, "bot");
   const workspace = requireRecord(claim.workspace, "workspace");
@@ -77,7 +73,7 @@ function parseClickClackSetupCodeClaim(
   if (expectedClaimUrl && !hasContractMetadata) {
     throw new Error("ClickClack setup code claim returned a legacy response for an exact endpoint");
   }
-  let contract: Pick<ClickClackSetupCodeClaim, "contract_version" | "api_base_url"> = {};
+  let contract: { contract_version?: 1; api_base_url?: string } = {};
   if (hasContractMetadata) {
     if (contractVersion !== 1 || typeof apiBaseUrlValue !== "string") {
       throw new Error("ClickClack setup code claim returned invalid v1 contract metadata");
@@ -123,7 +119,7 @@ export async function claimClickClackSetupCode(params: {
   code: string;
   fetch?: typeof fetch;
   lookupFn?: LookupFn;
-}): Promise<ClickClackSetupCodeClaim> {
+}) {
   const parsedClaimUrl = URL.parse(params.claimUrl);
   if (
     !parsedClaimUrl ||

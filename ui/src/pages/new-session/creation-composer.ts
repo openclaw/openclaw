@@ -19,7 +19,6 @@ import { NewSessionAttachmentDraft } from "./attachment-draft.ts";
 
 registerNewSessionSetupEnglish();
 
-// The retained input owner needs connection and composer preferences, not app routing.
 type CreationComposerContext = {
   readonly gateway: ApplicationGateway;
   readonly config: ApplicationConfigCapability;
@@ -289,7 +288,7 @@ export class CreationComposer {
     this.flushInput = undefined;
     this.releasePresentation?.();
     this.releasePresentation = undefined;
-    this.attachmentDraft.reset({ release: true });
+    this.attachmentDraft.reset();
     for (const input of this.inputs) {
       releaseChatAttachmentPayloads(input.attachments);
     }

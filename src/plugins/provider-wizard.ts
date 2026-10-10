@@ -1,4 +1,3 @@
-import { expectDefined } from "@openclaw/normalization-core";
 /** Provider setup wizard helpers shared by provider plugins and CLI setup flows. */
 import {
   normalizeOptionalLowercaseString,
@@ -218,7 +217,7 @@ export function resolveProviderPluginChoiceCore(params: {
       const choiceId =
         normalizeOptionalString(wizard.choiceId) ||
         buildProviderPluginMethodChoice(provider.id, method.id);
-      if ((normalizeOptionalString(choiceId) ?? "") === choice) {
+      if (choiceId === choice) {
         return withManifestTarget({ provider, method, wizard });
       }
     }
@@ -234,14 +233,12 @@ export function resolveProviderPluginChoiceCore(params: {
         }
       }
     }
-    if (
-      normalizeProviderId(provider.id) === normalizeProviderId(choice) &&
-      provider.auth.length > 0
-    ) {
+    const method = provider.auth[0];
+    if (method && normalizeProviderId(provider.id) === normalizeProviderId(choice)) {
       return withManifestTarget({
         provider,
-        method: expectDefined(provider.auth[0], "auth entry at 0"),
-        ...(provider.auth[0]?.wizard ? { wizard: provider.auth[0].wizard } : {}),
+        method,
+        ...(method.wizard ? { wizard: method.wizard } : {}),
       });
     }
   }

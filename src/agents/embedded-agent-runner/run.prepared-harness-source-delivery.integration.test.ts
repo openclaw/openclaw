@@ -22,7 +22,7 @@ import {
   setNoAbort,
 } from "../../auto-reply/reply/dispatch-from-config.test-harness.js";
 import type { InternalGetReplyOptions } from "../../auto-reply/reply/get-reply.types.js";
-import { buildDirectChatContext } from "../../auto-reply/reply/groups.js";
+import { buildSourceConversationContext } from "../../auto-reply/reply/groups.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
 import {
   bindSourceReplyDeliveryRuntime,
@@ -399,11 +399,11 @@ describe("prepared harness source delivery", () => {
       followupRun.run.sessionFile = followupRun.run.sessionId;
       followupRun.run.sourceReplyDeliveryMode = runtimeOpts.sourceReplyDeliveryMode;
       const extraSystemPromptBySourceReplyDeliveryMode = {
-        automatic: buildDirectChatContext({
+        automatic: buildSourceConversationContext({
           sessionCtx: { Provider: "discord", ChatType: "direct" },
           sourceReplyDeliveryMode: "automatic",
         }),
-        message_tool_only: buildDirectChatContext({
+        message_tool_only: buildSourceConversationContext({
           sessionCtx: { Provider: "discord", ChatType: "direct" },
           sourceReplyDeliveryMode: "message_tool_only",
         }),

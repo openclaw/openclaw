@@ -22,13 +22,6 @@ export function collectRegisteredToolNames(tools: Array<{ name?: string }>): Set
   return new Set(normalizeTrimmedStringList(tools.map((tool) => tool.name)));
 }
 
-export function collectCoreBuiltinToolNames(
-  tools: Array<{ name?: string }>,
-  options?: { isPluginTool?: (tool: { name?: string }) => boolean },
-): Set<string> {
-  return collectRegisteredToolNames(tools.filter((tool) => !options?.isPluginTool?.(tool)));
-}
-
 export function toSessionToolAllowlist(allowedToolNames: Iterable<string>): string[] {
   return [...new Set(allowedToolNames)].toSorted((a, b) => a.localeCompare(b));
 }

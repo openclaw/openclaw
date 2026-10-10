@@ -158,6 +158,20 @@ export function semanticQualificationInputs(inputs) {
   return canonicalizeJsonValue(wire);
 }
 
+function qualificationInputsMatch(requestInputs, observedInputs) {
+  const observed = semanticQualificationInputs(observedInputs);
+  // GitHub omits optional workflow_dispatch string inputs whose submitted
+  // value is empty from the child run's inputs context. Preserve the complete
+  // admitted request, then restore only those authenticated empty values for
+  // comparison with the effective child-run input shape.
+  for (const [key, value] of Object.entries(requestInputs)) {
+    if (value === "" && !Object.hasOwn(observed, key)) {
+      observed[key] = value;
+    }
+  }
+  return isDeepStrictEqual(requestInputs, observed);
+}
+
 export function buildQualificationAdmissionRequest({
   repository,
   candidateSha,
@@ -690,8 +704,7 @@ export function verifyQualificationAdmission({
       request.candidateSha === candidateSha &&
       request.qualificationSha === qualificationSha &&
       request.transportRef === workflowRef &&
-      (inputs === undefined ||
-        isDeepStrictEqual(request.inputs, semanticQualificationInputs(inputs))),
+      (inputs === undefined || qualificationInputsMatch(request.inputs, inputs)),
     "Qualification evidence differs from the authenticated operator request",
   );
   const finalMetadata = api(repository, "actions/artifacts/" + artifactId, runGh);

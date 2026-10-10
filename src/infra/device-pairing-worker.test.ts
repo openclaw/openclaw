@@ -5,21 +5,32 @@ import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-d
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import * as stateWorker from "../state/openclaw-state-worker-store.js";
 import { approveBootstrapDevicePairing, approveDevicePairing } from "./device-pairing-approval.js";
+import {
+  isPairedDeviceTokenIdentityCurrent,
+  resolvePairedDeviceTokenIdentity,
+} from "./device-pairing-identity.js";
 import { getPublishedPairedDeviceBinding } from "./device-pairing-publication.js";
+import { loadPairedDevicePairingStoreRecordReadOnly } from "./device-pairing-store-readonly.js";
 import {
   persistDevicePairingStoreState,
   readDevicePairingStoreStateFromDatabase,
   type DevicePairingStoreState,
 } from "./device-pairing-store.js";
-import { ensureDeviceToken, verifyDeviceToken } from "./device-pairing-tokens.js";
+import {
+  ensureDeviceToken,
+  rotateDeviceToken,
+  verifyDeviceToken,
+} from "./device-pairing-tokens.js";
 import {
   getPairedDevice,
   getPendingDevicePairing,
   listDevicePairing,
   listDevicePairingReadOnly,
+  requestDevicePairing,
   updatePairedDeviceMetadata,
 } from "./device-pairing.js";
 import * as queries from "./kysely-sync.js";
+import { sqliteWorkerOwnerProbe as probe } from "./sqlite-worker-owner-probe.test-support.js";
 
 let baseDir: string;
 let database: ReturnType<typeof openOpenClawStateDatabase>;
@@ -362,25 +373,13 @@ test.each(["reply lost", "policy revoked", "callback throws"] as const)(
         throw callbackError;
       }
     });
-    const original = stateWorker.runOpenClawStateWorkerOperation;
-    const delivery = vi
-      .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
-      .mockImplementation((context, operation, options) =>
-        original(
-          context,
-          (scope) =>
-            operation({
-              execute: async (command, executeOptions) => {
-                const result = await scope.execute(command, executeOptions);
-                if (command.type === "devicePairing.approveBootstrap" && fault === "reply lost") {
-                  throw deliveryError;
-                }
-                return result;
-              },
-            }),
-          options,
-        ),
-      );
+    const delivery = probe.command(stateWorker, async (command, executeOptions, scope) => {
+      const result = await scope.execute(command, executeOptions);
+      if (command.type === "devicePairing.approveBootstrap" && fault === "reply lost") {
+        throw deliveryError;
+      }
+      return result;
+    });
     let allowed = true;
     try {
       const approval = approveBootstrapDevicePairing(
@@ -428,3 +427,36 @@ test.each(["reply lost", "policy revoked", "callback throws"] as const)(
     }
   },
 );
+
+test("rechecks the original operator generation through reopened read-only pairing storage", async () => {
+  const isolatedDir = tempDirs.make("pairing-operator-generation-");
+  const deviceId = "recovery-device";
+  const scopes = ["operator.read"];
+  const { request } = await requestDevicePairing(
+    { deviceId, publicKey: "synthetic-recovery-public-key", role: "operator", scopes },
+    isolatedDir,
+  );
+  await expect(
+    approveDevicePairing(request.requestId, { callerScopes: scopes }, isolatedDir),
+  ).resolves.toMatchObject({ status: "approved" });
+  const isolatedDatabase = openOpenClawStateDatabase({
+    env: { ...process.env, OPENCLAW_STATE_DIR: isolatedDir },
+  });
+  try {
+    const original = await loadPairedDevicePairingStoreRecordReadOnly(deviceId, isolatedDir);
+    const identity = resolvePairedDeviceTokenIdentity(original, "operator");
+    if (!identity) {
+      throw new Error("Original admitted operator token has no generation");
+    }
+    await closeOpenClawStateDatabaseByPathAsync(isolatedDatabase.path);
+    const reopened = await loadPairedDevicePairingStoreRecordReadOnly(deviceId, isolatedDir);
+    expect(isPairedDeviceTokenIdentityCurrent(reopened, "operator", identity, scopes)).toBe(true);
+    await expect(
+      rotateDeviceToken({ deviceId, role: "operator", baseDir: isolatedDir }),
+    ).resolves.toMatchObject({ ok: true });
+    const rotated = await loadPairedDevicePairingStoreRecordReadOnly(deviceId, isolatedDir);
+    expect(isPairedDeviceTokenIdentityCurrent(rotated, "operator", identity, scopes)).toBe(false);
+  } finally {
+    await closeOpenClawStateDatabaseByPathAsync(isolatedDatabase.path);
+  }
+});

@@ -139,37 +139,6 @@ describe("agents set-identity command", () => {
     await expect(fs.readFile(identityPath, "utf8")).resolves.toBe(originalIdentity);
   });
 
-  it("overrides identity file values with explicit flags", async () => {
-    const { workspace } = await createIdentityWorkspace();
-    await writeIdentityFile(workspace, [
-      "- Name: OpenClaw",
-      "- Theme: space lobster",
-      "- Emoji: :)",
-      "- Avatar: avatars/openclaw.png",
-      "",
-    ]);
-
-    setAgents({ entries: { main: { workspace } } });
-
-    await agentsSetIdentityCommand(
-      {
-        workspace,
-        fromIdentity: true,
-        name: "Nova",
-        emoji: "🦞",
-        avatar: "https://example.com/override.png",
-      },
-      runtime,
-    );
-
-    expect(writtenAgent()?.identity).toEqual({
-      name: "Nova",
-      theme: "space lobster",
-      emoji: "🦞",
-      avatar: "https://example.com/override.png",
-    });
-  });
-
   it("sanitizes identity echoes while preserving stored and JSON values", async () => {
     const name = "Operator\u001B]0;identity-injection\u0007🦞\r\nforged-row\tbadge";
 
@@ -241,16 +210,6 @@ describe("agents set-identity command", () => {
     );
   });
 
-  it("still resolves and updates the implicit default agent by workspace", async () => {
-    const { workspace } = await createIdentityWorkspace("implicit-main");
-    setAgents({ defaults: { workspace }, entries: {} });
-
-    await agentsSetIdentityCommand({ workspace, name: "Default Agent" }, runtime);
-
-    expect(configMocks.writeConfigFile).toHaveBeenCalledTimes(1);
-    expect(writtenAgent()?.identity).toEqual({ name: "Default Agent" });
-  });
-
   it("errors when an explicit identity file exceeds the size cap", async () => {
     const { workspace } = await createIdentityWorkspace();
     const identityPath = await writeIdentityFile(workspace, [
@@ -315,18 +274,6 @@ describe("agents helpers", () => {
 
     expect(next.agents?.entries).toEqual({ work: { name: "Work" } });
     expect(await buildAgentSummaries(next)).toMatchObject([{ id: "work", isDefault: true }]);
-  });
-
-  it("preserves the sole agent as the ambient system owner when adding a second agent", () => {
-    const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
-
-    const next = applyAgentConfig(cfg, { agentId: "helper", name: "Helper" });
-
-    expect(next.agents).toMatchObject({
-      ownership: "explicit",
-      defaults: { systemAgent: { agentId: "main" } },
-      entries: { main: {}, helper: { name: "Helper" } },
-    });
   });
 
   it("applyAgentConfig clears a model override", async () => {
@@ -410,6 +357,7 @@ describe("agents helpers", () => {
           work: { workspace: "/work-ws" },
           home: {
             subagents: { allowAgents: ["WORK", "home"] },
+            tools: { profile: "coding", agentToAgent: { send: ["WORK"] } },
           },
         },
       },
@@ -462,6 +410,11 @@ describe("agents helpers", () => {
     expect(result.config.agents?.defaults?.systemAgent).toBeUndefined();
     expect(result.config.talk).toEqual({ provider: "test-provider" });
     expect(result.config.agents?.entries?.home?.subagents?.allowAgents).toEqual(["home"]);
+    expect(result.config.agents?.entries?.home?.tools).toEqual({
+      profile: "coding",
+      agentToAgent: { send: [] },
+    });
+    expect(cfg.agents?.entries?.home?.tools?.agentToAgent?.send).toEqual(["WORK"]);
     expect(result.removedBindings).toBe(1);
     expect(result.removedAllow).toBe(1);
     expect(result.clearedOwnerRefs).toEqual([

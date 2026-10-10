@@ -142,7 +142,7 @@ describe("getReplyFromConfig configOverride", () => {
   beforeEach(async () => {
     vi.stubEnv("OPENCLAW_ALLOW_SLOW_REPLY_TESTS", "1");
     const sessionDiff = await import("../../sessions/session-diff.js");
-    const commands = await import("./commands.runtime.js");
+    const commands = await import("./commands.js");
     vi.spyOn(sessionDiff, "captureSessionDiffBaseline").mockImplementation(mocks.captureBaseline);
     vi.spyOn(commands, "handleCommands").mockResolvedValue({ shouldContinue: true });
     mocks.handleInlineActions.mockResolvedValue({ kind: "reply", reply: { text: "ok" } });
@@ -350,7 +350,6 @@ describe("getReplyFromConfig auto-fallback primary probes", () => {
   beforeEach(async () => {
     delete process.env.OPENCLAW_TEST_FAST;
     const catalog = await import("../../agents/model-catalog.runtime.js");
-    vi.spyOn(catalog, "loadManifestModelCatalog").mockReturnValue([]);
     vi.spyOn(catalog, "loadProviderScopedThinkingCatalog").mockResolvedValue([]);
     vi.spyOn(catalog, "loadPreparedModelCatalogSnapshot").mockResolvedValue({
       entries: [],

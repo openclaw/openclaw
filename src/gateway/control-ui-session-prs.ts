@@ -38,19 +38,7 @@ export type ControlUiSessionPullRequestsParams = {
   refresh?: boolean;
 };
 
-type PullListItem = {
-  number: number;
-  title: string;
-  url: string;
-  owner: string;
-  repo: string;
-  state: ControlUiSessionPullRequest["state"];
-  author?: ControlUiSessionPullRequest["author"];
-  branch?: string;
-  headSha?: string;
-  baseRef?: string;
-  mergeCommitSha?: string;
-};
+type PullListItem = NonNullable<ReturnType<typeof parsePullListItem>>;
 
 /**
  * Cached GitHub snapshot plus the merged PRs' heads. The heads stay
@@ -144,6 +132,7 @@ async function resolveSessionBranch(
   context: GitCheckoutContext,
   mergedHeads: readonly MergedPullHead[],
   refresh: boolean,
+  refreshIndex: boolean,
 ): Promise<ControlUiSessionBranch | undefined> {
   if (!context.branch || context.branch === context.defaultBranch) {
     return undefined;
@@ -162,7 +151,13 @@ async function resolveSessionBranch(
   const facts = await runGitReadOperation(
     {
       type: "pull-request.branch-facts",
-      input: { root, branch: context.branch, defaultBranch: context.defaultBranch, mergedHeads },
+      input: {
+        root,
+        branch: context.branch,
+        defaultBranch: context.defaultBranch,
+        mergedHeads,
+        refreshIndex,
+      },
     },
     { refresh },
   );
@@ -194,7 +189,7 @@ function derivePullState(value: Record<string, unknown>): ControlUiSessionPullRe
   return value.draft === true ? "draft" : "open";
 }
 
-export function parsePullListItem(value: unknown): PullListItem | null {
+export function parsePullListItem(value: unknown) {
   if (!isRecord(value)) {
     return null;
   }
@@ -512,7 +507,12 @@ export async function loadControlUiSessionPullRequests(
     const branch =
       projection === "publication" || workingBranchHasLivePullRequest
         ? undefined
-        : await resolveSessionBranch(context, mergedHeads, request.refresh === true);
+        : await resolveSessionBranch(
+            context,
+            mergedHeads,
+            request.refresh === true,
+            target.refreshIndex === true,
+          );
     assertCurrent();
     return {
       ...snapshot,

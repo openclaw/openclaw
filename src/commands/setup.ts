@@ -1,9 +1,3 @@
-/**
- * Minimal setup command.
- *
- * Ensures config, default workspace, and session directories exist without
- * running the full onboarding wizard.
- */
 import fs from "node:fs/promises";
 import {
   listAgentEntries,
@@ -24,7 +18,6 @@ import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime, writeRuntimeJson } from "../runtime.js";
 import { isRecord, shortenHomePath } from "../utils.js";
 
-/** Prepares config, workspace, and session directories for a usable installation. */
 export async function setupCommand(
   opts?: { workspace?: string; skipBootstrap?: boolean; json?: boolean },
   runtime: RuntimeEnv = defaultRuntime,
@@ -182,7 +175,6 @@ export async function setupCommand(
     shouldWriteWorkspace ||
     shouldWriteGatewayMode ||
     shouldWriteSkipBootstrap;
-  let configStatus: "created" | "updated" | "unchanged";
   if (configChanged) {
     const explicitSetPaths: string[][] = [];
     if (snapshot.exists && shouldPersistRoster) {
@@ -220,7 +212,6 @@ export async function setupCommand(
           writeInheritedWorkspaceOverride || shouldWriteSkipBootstrap || shouldWriteGatewayMode,
       },
     });
-    configStatus = snapshot.exists ? "updated" : "created";
     if (!opts?.json && !snapshot.exists) {
       runtime.log(
         `Wrote ${(await import("../config/logging.js")).formatConfigFilePath(configPath)}`,
@@ -242,13 +233,10 @@ export async function setupCommand(
         suffix,
       });
     }
-  } else {
-    configStatus = "unchanged";
-    if (!opts?.json) {
-      runtime.log(
-        `Config OK: ${(await import("../config/logging.js")).formatConfigFilePath(configPath)}`,
-      );
-    }
+  } else if (!opts?.json) {
+    runtime.log(
+      `Config OK: ${(await import("../config/logging.js")).formatConfigFilePath(configPath)}`,
+    );
   }
 
   const ws = await (
@@ -269,7 +257,7 @@ export async function setupCommand(
     writeRuntimeJson(runtime, {
       ok: true,
       configPath,
-      configStatus,
+      configStatus: configChanged ? (snapshot.exists ? "updated" : "created") : "unchanged",
       workspaceDir: ws.dir,
       sessionsDir,
     });

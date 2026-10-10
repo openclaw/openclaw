@@ -80,21 +80,22 @@ export async function runCodeModeExec(params: {
 }) {
   removeExpiredRuns();
   const { config } = params;
-  const runtime = new ToolSearchRuntime(params.ctx, toToolSearchConfig(config), {
-    prepareInput: true,
-    validateInput: true,
-  });
-  params.onRuntime?.(runtime);
-  const bridgeDispatch = { started: false };
-  const budget: CodeModeCallBudget = { deadlineMs: performance.now() + config.timeoutMs };
-  const namespaceCatalog = runtime.namespaceEntries();
-  const swarmEnabled = isCodeModeSwarmAvailable(params.ctx, namespaceCatalog);
   const codeModeReplayId = codeModeReplayIdForToolCall(
     params.ctx,
     params.toolCallId,
     params.code,
     params.assistantTurnId,
   );
+  const runtime = new ToolSearchRuntime(params.ctx, toToolSearchConfig(config), {
+    prepareInput: true,
+    validateInput: true,
+    callIdScope: codeModeReplayId.replace(/^cm_replay_/, ""),
+  });
+  params.onRuntime?.(runtime);
+  const bridgeDispatch = { started: false };
+  const budget: CodeModeCallBudget = { deadlineMs: performance.now() + config.timeoutMs };
+  const namespaceCatalog = runtime.namespaceEntries();
+  const swarmEnabled = isCodeModeSwarmAvailable(params.ctx, namespaceCatalog);
   const namespaceRuntime = createCodeModeNamespaceRuntime(namespaceCatalog);
   const catalogProjection = createCodeModeCatalogProjection(runtime.all({ includeMcp: false }), {
     reservedNames: namespaceRuntime.descriptors.map((descriptor) => descriptor.globalName),

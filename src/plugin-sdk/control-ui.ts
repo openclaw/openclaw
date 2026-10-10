@@ -6,7 +6,6 @@ import type {
   SessionsListParams,
 } from "@openclaw/gateway-protocol";
 import type { ControlUiComponents } from "./control-ui-components.js";
-export { createSessionHeaderLink } from "./control-ui-session-link.js";
 export type {
   ControlUiAgentPickerProps,
   ControlUiComponentHandle,
@@ -42,6 +41,7 @@ export type ControlUiSessionListQuery = Readonly<
     | "configuredAgentsOnly"
     | "includeGlobal"
     | "includeUnknown"
+    | "excludeDock"
     | "includeDerivedTitles"
     | "includeLastMessage"
   >
@@ -184,7 +184,7 @@ export type ControlUiAction = {
 export type ControlUiAccessory = {
   id: string;
   placement: "session-header";
-  mount: ControlUiView<BoardGetParams & { session?: ControlUiSession }>;
+  mount: ControlUiView<BoardGetParams>;
 };
 
 export type ControlUiWidget = {
@@ -236,7 +236,14 @@ export type ControlUiHost = {
       listener: (snapshot: ControlUiSessionListSnapshot) => void,
     ) => ControlUiSessionListSubscription;
     open: (session: BoardGetParams) => void;
-    create: (params?: { agentId?: string; label?: string }) => Promise<string | null>;
+    create: (params?: {
+      agentId?: string;
+      label?: string;
+      /** Presentation title without a unique label claim. */
+      displayName?: string;
+      /** Immutable dock surface; preserves the authenticated operator's creator identity. */
+      surface?: "plugin-dock";
+    }) => Promise<string | null>;
     patch: (
       session: BoardGetParams,
       patch: { label?: string; model?: string | null },

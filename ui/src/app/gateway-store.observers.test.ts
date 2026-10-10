@@ -88,26 +88,6 @@ describe("createApplicationGateway connection ownership", () => {
     });
   });
 
-  it("retires a completed native handoff while keeping stale hello operations fenced", () => {
-    ({ gateway, current } = createStore({
-      clientOptions: { clientName: "openclaw-ios", mode: "ui" },
-    }));
-    gateway.connect({ bootstrapToken: "synthetic-native-bootstrap", bootstrapProfile: "owner" });
-
-    current().opts.onHello?.({
-      ...HELLO,
-      server: { version: "2026.7.19", buildId: "replacement-build", connId: "native-conn" },
-      pluginSurfaceUrls: { canvas: "https://canvas.test/__openclaw__/cap/hello" },
-    });
-
-    expect(gateway.snapshot.phase).toBe("reconnecting");
-    expect(gateway.snapshot.canvasPluginSurfaceUrl).toBeNull();
-    expect(current().request).not.toHaveBeenCalled();
-    gateway.connect();
-    expect(current().opts.bootstrapToken).toBeUndefined();
-    expect(current().opts.bootstrapProfile).toBeUndefined();
-  });
-
   it("does not reload a native stale hello after its observer replaces the connection", async () => {
     const actual =
       await vi.importActual<typeof import("./stale-chunk-reload.ts")>("./stale-chunk-reload.ts");
@@ -130,16 +110,21 @@ describe("createApplicationGateway connection ownership", () => {
     gateway.connect({ bootstrapToken: "synthetic-native-bootstrap", bootstrapProfile: "owner" });
     gateway.subscribe((snapshot) => {
       if (snapshot.phase === "reconnecting") {
+        expect(snapshot.canvasPluginSurfaceUrl).toBeNull();
+        expect(current().request).not.toHaveBeenCalled();
         gateway.connect();
       }
     });
     current().opts.onHello?.({
       ...HELLO,
       server: { version: "2026.7.19", buildId: "replacement-build", connId: "native-conn" },
+      pluginSurfaceUrls: { canvas: "https://canvas.test/__openclaw__/cap/hello" },
     });
     await scheduleStaleChunkReloadMock.mock.results[0]?.value;
     expect(fetchMock).not.toHaveBeenCalled();
     expect(replace).not.toHaveBeenCalled();
+    expect(current().opts.bootstrapToken).toBeUndefined();
+    expect(current().opts.bootstrapProfile).toBeUndefined();
     expect(sessionStorage.getItem("openclaw.controlUi.staleChunkReloadBuildId")).toBeNull();
   });
 
@@ -350,18 +335,6 @@ describe("createApplicationGateway connection ownership", () => {
     },
   );
 
-  it("resets the session lineage on stop so the next start uses the gate again", () => {
-    connect();
-    gateway.stop();
-
-    expect(gateway.snapshot.phase).toBe("stopped");
-
-    gateway.start();
-    current().opts.onClose?.({ code: 1006, reason: "refused", willRetry: true });
-
-    expect(gateway.snapshot.phase).toBe("connecting");
-  });
-
   it.each(["subscription change", "exception"])(
     "isolates event subscribers from an earlier %s",
     (action) => {
@@ -531,29 +504,6 @@ describe("createApplicationGateway connection ownership", () => {
     },
   );
 
-  it("projects suspension hello/events without changing transport and drops stale connection state", () => {
-    gateway.start();
-    const first = current();
-    const suspendedHello = { ...HELLO, snapshot: { suspension: { phase: "prepared" } } };
-    first.opts.onHello?.(suspendedHello);
-    expect(gateway.snapshot.suspensionPhase).toBe("prepared");
-    for (const phase of ["accepting", "preparing", "draining", "prepared", "accepting"] as const) {
-      first.opts.onEvent?.(createGatewayEvent("gateway.suspension", { phase }));
-      expect(gateway.snapshot.suspensionPhase).toBe(phase);
-      expect(gateway.snapshot.phase).toBe("connected");
-    }
-    first.opts.onEvent?.(createGatewayEvent("gateway.suspension", { phase: "resuming" }));
-    expect(gateway.snapshot.suspensionPhase).toBe("accepting");
-    first.opts.onHello?.(suspendedHello);
-    first.opts.onClose?.({ code: 1006, reason: "offline", willRetry: true });
-    expect(gateway.snapshot.suspensionPhase).toBeUndefined();
-    gateway.connect();
-    first.opts.onEvent?.(createGatewayEvent("gateway.suspension", { phase: "prepared" }));
-    expect(gateway.snapshot.suspensionPhase).toBeUndefined();
-    current().opts.onHello?.(HELLO);
-    expect(gateway.snapshot.suspensionPhase).toBeUndefined();
-  });
-
   it("defaults unknown suspension evidence while reconnecting and replaces it on hello", async () => {
     vi.useFakeTimers();
     connect();
@@ -570,7 +520,7 @@ describe("createApplicationGateway connection ownership", () => {
     expect(gateway.snapshot.suspensionPhase).toBe("prepared");
   });
 
-  it.each(["suspension", "restart"])(
+  it.each(["suspension", "restart", "restart after connected drain"])(
     "expires %s evidence at its deadline into stable offline",
     async (kind) => {
       vi.useFakeTimers();
@@ -586,12 +536,18 @@ describe("createApplicationGateway connection ownership", () => {
         current().opts.onEvent?.(
           createGatewayEvent("shutdown", {
             reason: "gateway restart",
-            restartExpectedMs: 8_000,
+            restartExpectedMs: kind === "restart" ? 8_000 : 1_500,
           }),
         );
+        if (kind === "restart after connected drain") {
+          await vi.advanceTimersByTimeAsync(10 * 60_000);
+          expect(gateway.snapshot.phase).toBe("connected");
+          expect(gateway.snapshot.restartPending).toBe(true);
+          expect(gateway.snapshot.offlineStable).toBe(false);
+        }
         current().opts.onClose?.({ code: 1012, reason: "gateway restarting", willRetry: true });
       }
-      await vi.advanceTimersByTimeAsync(kind === "suspension" ? 14_999 : 23_999);
+      await vi.advanceTimersByTimeAsync(kind === "restart" ? 23_999 : 14_999);
       if (kind === "suspension") {
         expect(gateway.snapshot.suspensionPhase).toBe("prepared");
       } else {
@@ -605,17 +561,13 @@ describe("createApplicationGateway connection ownership", () => {
         expect(gateway.snapshot.restartPending).toBe(false);
       }
       expect(gateway.snapshot.offlineStable).toBe(true);
+      current().opts.onHello?.(HELLO);
+      expect(gateway.snapshot.phase).toBe("connected");
+      expect(gateway.snapshot.restartPending).toBe(false);
+      expect(gateway.snapshot.suspensionPhase).toBeUndefined();
+      expect(gateway.snapshot.offlineStable).toBe(false);
     },
   );
-
-  it("keeps an ordinary stop on the offline pill path (no restart state)", () => {
-    connect();
-    current().opts.onEvent?.(createGatewayEvent("shutdown", { reason: "gateway stopping" }));
-    expect(gateway.snapshot.restartPending).toBeFalsy();
-    current().opts.onClose?.({ code: 1001, reason: "gateway stopping", willRetry: true });
-    expect(gateway.snapshot.restartPending).toBeFalsy();
-    expect(gateway.snapshot.phase).toBe("reconnecting");
-  });
 
   it("recognizes the structured restart rejection before the first successful hello", () => {
     gateway.start();

@@ -93,7 +93,8 @@ Use **Edit board** to change a board's name, icon, and color. **Reset to default
 clears the icon and color when you save; canceling leaves the saved board unchanged.
 For Sessions boards, the same dialog also edits column labels, colors,
 descriptions, column order, and the fallback column. Ask the Board agent to edit
-column rules.
+column rules. Saving only the name, icon, or color leaves the saved columns unchanged,
+including column edits made by another operator while the dialog was open.
 
 For `workboard.boards.upsert`, omitting `icon` or `color`, passing `null`, or passing
 an empty string preserves the existing value, including for older clients. To clear
@@ -117,14 +118,20 @@ advance the event sequence without invalidating unchanged cards.
 Use a Sessions board to see where your conversations stand without creating
 cards. By default, it includes sessions from all configured agents with activity
 in the last 72 hours and excludes archived sessions, automation (cron) sessions,
-system sessions, and each agent's home session. Subagent sessions remain included.
+system sessions, dock conversations, and each agent's home session. Subagent sessions remain included.
 Set `scope.includeAutomation: true` to include automation and system sessions, or
 `scope.includeHome: true` to include home sessions. The Board agent can set these
 options. Existing boards use the same defaults without a migration. Each session appears in
 exactly one column. Open a tile to continue its conversation; the tile also shows
 its agent, run state, observer headline when available, pull requests, and recent
-activity. The agent filter narrows the displayed sessions without changing the
+activity. Message previews are plain text: Markdown formatting and HTML are removed,
+link labels are retained, and whitespace is collapsed before the 400-character limit.
+Tiles link up to four pull requests, ordered by open, draft, merged,
+then closed state, with a count for any additional pull requests. The agent filter
+narrows the displayed sessions without changing the
 saved board scope.
+
+Dock conversations stay excluded even when automation is included.
 
 **People filter:** Choose **Everyone** (the default), **Involving me**, or a person
 beside the agent filter. Involving me shows sessions you own or previously prompted;
@@ -134,8 +141,9 @@ the Board agent. API clients can pass `view: { involvingMe?: boolean,
 involvingProfileId?: string, includePeople?: boolean }` to
 `workboard.sessionsBoard.read`; `includePeople` returns the people facet for the picker.
 
-Columns are rules over Gateway-owned session status, observer health, and
-pull-request state. Health comes from the Gateway session observer: live digests
+Columns are rules over Gateway-owned run state, observer health, and
+pull-request state. Run state comes from the live run registry and queued inputs;
+a saved `running` status without an active run is idle. Health comes from the Gateway session observer: live digests
 for sessions someone is watching in the Control UI, and a terminal digest when an
 observed run ends. Sessions nobody watches have no health, so they match only run
 and pull-request rules. Reads follow the current caller's session visibility; board specs and
@@ -167,25 +175,54 @@ column is removed, the board applies its rules again. Tile tooltips distinguish
 **by rule** and **pinned**.
 
 Facts update live from session changes, with automatic board rereads at most once
-every five seconds. Later events keep invalidating facts without delaying that
-reread. The board reuses unchanged facts across boards until a session change
-invalidates them, and concurrent reads share one facts refresh per board.
-Session visibility and people filters remain specific to each caller.
-Reads use prepared Gateway facts without waiting for Git or pull-request requests.
-Missing pull-request facts refresh in the background and announce a board change
-when ready. An inline warning names the
-reason when facts or pull-request information are unavailable, including on an
-empty board. A failed facts read keeps the last known facts and placement;
-sessions with no known facts use the fallback column with reason
+every five seconds. Category-only session updates and card-only changes do not
+reload Sessions boards. The Gateway selects the authorized roster once and reuses
+immutable facts for unchanged sessions. The board keeps one frozen snapshot per
+board and people view, replacing only rows whose facts changed. Live run state,
+background previews, and time-dependent subagent state remain current; profile,
+configuration, topology, and access changes refresh authorization. Age-window and
+unavailable-PR retry deadlines still refresh the snapshot. Tool callers obtain
+their own caller-scoped roster; sharing never expands session visibility.
+`workboard.sessionsBoard.read` returns a `revision`; repeat the same query with
+`{ sinceRevision: revision }` for `{ unchanged: true, revision }` when current.
+Reconnects and view changes request a full snapshot. The Workboard change event's
+`sessionsRevision` advances for board edits, operator pins, and session fact
+invalidations independently of `cardsRevision`.
+
+Pull-request facts come from the Gateway's shared PR owner, independently of
+which sessions appear in a Control UI sidebar. Reads use prepared Gateway facts
+without waiting for Git or pull-request requests. Missing snapshots load through
+that owner's bounded background loader and announce a board change when ready.
+If PR facts become unavailable or GitHub rate limits requests, the Gateway's
+selected-facts owner retains the last ready PR list for board cards and column
+rules while updating run state and health. Unavailable PR reads retry per session, starting after one minute
+and doubling to a 15-minute maximum; a successful read resets the delay.
+Redaction changes omit retained PR titles until fresh source text is available,
+without changing known PR states or their retry schedule.
+An inline warning distinguishes stale PR facts from facts not loaded yet and
+identifies GitHub rate limiting. A failed facts read keeps the last known facts
+and placement; sessions with no known facts use the fallback column with reason
 `facts-unavailable`. A session whose available facts match no rule also uses that
 reason while its pull-request facts are unknown. Opening a board starts any needed
-background refresh; unchanged sessions do not refresh merely because time passed.
+background refresh. Shared snapshots reuse prepared facts until a publication,
+redaction change, board age-window expiry, or a pull-request retry becomes due; failure fallback
+retains the last known facts. If redaction rules change during a facts outage,
+the board discards retained text while keeping known run, health, and PR states.
 
 When the Control UI host supports a session dock, **Board agent** opens a
 conversation beside the board. Its first use creates and saves a dedicated
-conversation named **Sessions board · &lt;board name&gt;**. The Board agent is the
-only model used by the board, invoked on demand to change columns, rules, scope,
-or pins using these tools:
+conversation named **Sessions board · &lt;board name&gt;**. This is a dock conversation:
+it stays out of session lists, Involving me views, and people counts. Open it from
+the **Board agent** button. Its human creator, sharing, and sandbox rules are the
+same as an ordinary conversation.
+
+For boards with an older Board agent conversation, the next **Board agent** use
+creates a new dock conversation and saves its reference. The old conversation
+keeps its history and remains an ordinary session that you can archive; its
+creation surface and provenance are not rewritten.
+
+The Board agent is the only model used by the board, invoked on demand to change
+columns, rules, scope, or pins using these tools:
 
 | Tool                              | Arguments and behavior                                                                                                        |
 | --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |

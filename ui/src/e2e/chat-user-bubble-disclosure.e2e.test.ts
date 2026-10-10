@@ -4,6 +4,10 @@ import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { waitForLayoutSettled } from "../pages/chat/chat-layout.browser.test-support.ts";
 import {
+  takeControlUiViewportScreenshot,
+  waitForControlUiProofSurface,
+} from "../test-helpers/control-ui-e2e-screenshot.ts";
+import {
   captureUiProofEnabled,
   createChatFlowE2eSuite,
   installMockGateway,
@@ -31,6 +35,8 @@ async function expectCenteredToggle(bubble: Locator) {
 }
 
 async function expectReadableLastLine(page: Page, content: Locator) {
+  const text = content.locator(".chat-text");
+  await waitForControlUiProofSurface(content, [text]);
   await waitForLayoutSettled(page, ".chat-message-disclosure__content");
   const geometry = await content.evaluate((element) => {
     const paragraph = element.querySelector("p, li")!;
@@ -60,7 +66,22 @@ async function expectReadableLastLine(page: Page, content: Locator) {
     context.font = style.font;
     const metrics = context.measureText("x");
     const baseline = last.top + metrics.fontBoundingBoxAscent;
+    const transcript = element.closest<HTMLElement>(".chat-thread");
+    if (!transcript) {
+      throw new Error("Disclosure content has no transcript");
+    }
+    const transcriptBounds = transcript.getBoundingClientRect();
+    const transcriptLeft = transcriptBounds.left + transcript.clientLeft;
+    const transcriptTop = transcriptBounds.top + transcript.clientTop;
     return {
+      bounds: { left: clip.left, top: clip.top, right: clip.right, bottom: clip.bottom },
+      viewport: { width: innerWidth, height: innerHeight },
+      transcriptClip: {
+        left: transcriptLeft,
+        top: transcriptTop,
+        right: transcriptLeft + transcript.clientWidth,
+        bottom: transcriptTop + transcript.clientHeight,
+      },
       visibleLines: visible.length,
       fraction: (clip.bottom - lineTop) / lineHeight,
       baselineVisible: clip.bottom > baseline,
@@ -73,18 +94,36 @@ async function expectReadableLastLine(page: Page, content: Locator) {
   expect(geometry.fraction).toBeLessThanOrEqual(0.75);
   expect(geometry.baselineVisible, "the x-height fits above the cut").toBe(true);
 
-  const masked = await content.screenshot({ animations: "disabled" });
+  const { bounds, viewport, transcriptClip } = geometry;
+  expect(bounds.right).toBeGreaterThan(bounds.left);
+  expect(bounds.bottom).toBeGreaterThan(bounds.top);
+  expect(bounds.left).toBeGreaterThanOrEqual(Math.max(0, transcriptClip.left));
+  expect(bounds.top).toBeGreaterThanOrEqual(Math.max(0, transcriptClip.top));
+  expect(bounds.right).toBeLessThanOrEqual(Math.min(viewport.width, transcriptClip.right));
+  expect(bounds.bottom).toBeLessThanOrEqual(Math.min(viewport.height, transcriptClip.bottom));
+  const readBounds = () =>
+    content.evaluate((element) => {
+      const { left, top, right, bottom } = element.getBoundingClientRect();
+      return { left, top, right, bottom };
+    });
+  const capture = async () => {
+    expect(await readBounds()).toEqual(bounds);
+    const png = await takeControlUiViewportScreenshot(page, content, [text]);
+    expect(await readBounds()).toEqual(bounds);
+    return png;
+  };
+  const masked = await capture();
   await content.evaluate((element) => ((element as HTMLElement).style.maskImage = "none"));
   let unmasked: Buffer;
   try {
-    unmasked = await content.screenshot({ animations: "disabled" });
+    unmasked = await capture();
   } finally {
     await content.evaluate((element) =>
       (element as HTMLElement).style.removeProperty("mask-image"),
     );
   }
   const rows = await content.evaluate(
-    async (_, { images, sampleRows }) => {
+    async (_, { images, sampleRows, bounds: sampleBounds, viewport: viewportSize }) => {
       const sampleImage = async (source: string) => {
         const image = new Image();
         image.src = source;
@@ -94,15 +133,29 @@ async function expectReadableLastLine(page: Page, content: Locator) {
         canvas.height = image.height;
         const context = canvas.getContext("2d")!;
         context.drawImage(image, 0, 0);
-        const sampleRow = (y: number) => {
-          const { data } = context.getImageData(0, y, image.width, 1);
+        const scaleX = image.width / viewportSize.width;
+        const scaleY = image.height / viewportSize.height;
+        const left = Math.floor(sampleBounds.left * scaleX);
+        const right = Math.ceil(sampleBounds.right * scaleX);
+        const top = Math.floor(sampleBounds.top * scaleY);
+        const sampleRow = (relativeY: number) => {
+          // Match an enclosing element crop while scaling CSS rows to device pixels.
+          const y = top + Math.floor(relativeY * scaleY);
+          if (left < 0 || right > image.width || right <= left || y < 0 || y >= image.height) {
+            throw new Error("Disclosure sample falls outside the captured viewport");
+          }
+          const { data } = context.getImageData(left, y, right - left, 1);
           const values: number[] = [];
-          for (let x = 0; x < image.width; x++) {
+          for (let x = 0; x < right - left; x++) {
             values.push(data.subarray(x * 4, x * 4 + 3).reduce((sum, value) => sum + value, 0));
           }
           return Math.max(...values) - Math.min(...values);
         };
-        return { upper: sampleRow(sampleRows.upper), lower: sampleRow(sampleRows.lower) };
+        return {
+          dimensions: { width: image.width, height: image.height },
+          upper: sampleRow(sampleRows.upper),
+          lower: sampleRow(sampleRows.lower),
+        };
       };
       return Promise.all([sampleImage(images.masked), sampleImage(images.unmasked)]);
     },
@@ -112,8 +165,11 @@ async function expectReadableLastLine(page: Page, content: Locator) {
         unmasked: `data:image/png;base64,${unmasked.toString("base64")}`,
       },
       sampleRows: { upper: geometry.upperRow, lower: geometry.lowerRow },
+      bounds,
+      viewport,
     },
   );
+  expect(rows[0].dimensions).toEqual(rows[1].dimensions);
   const upperAlpha = rows[0].upper / rows[1].upper;
   const lowerAlpha = rows[0].lower / rows[1].lower;
   expect(upperAlpha, "the upper half remains legible").toBeGreaterThan(0.65);

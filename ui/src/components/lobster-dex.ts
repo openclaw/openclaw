@@ -8,6 +8,7 @@ import { getSafeLocalStorage } from "../local-storage.ts";
 
 const LOBSTERDEX_KEY = "openclaw.control.lobsterdex.v1";
 const FAMILIARITY_KEY = "openclaw.control.lobsterpet.familiarity.v1";
+const LOBSTERDEX_CHANGED_EVENT = "openclaw:lobsterdex-changed";
 
 type LobsterdexEntry = {
   firstSeenAt: number | null;
@@ -59,7 +60,11 @@ function writeDex(entries: Map<string, LobsterdexEntry>): void {
       ...(entry.shinySeenAt !== null ? { shinySeenAt: entry.shinySeenAt } : {}),
     };
   }
-  getSafeLocalStorage()?.setItem(LOBSTERDEX_KEY, JSON.stringify(persisted));
+  const storage = getSafeLocalStorage();
+  if (storage) {
+    storage.setItem(LOBSTERDEX_KEY, JSON.stringify(persisted));
+    window.dispatchEvent(new Event(LOBSTERDEX_CHANGED_EVENT));
+  }
 }
 
 export function getLobsterdex(): ReadonlySet<string> {
@@ -68,6 +73,25 @@ export function getLobsterdex(): ReadonlySet<string> {
 
 export function getLobsterdexEntries(): ReadonlyMap<string, LobsterdexEntry> {
   return readDex();
+}
+
+// Invalidation only: callers reread the existing browser-local collection.
+export function subscribeLobsterdex(callback: () => void): () => void {
+  const onChange = () => callback();
+  const onStorage = (event: StorageEvent) => {
+    if (
+      event.storageArea === getSafeLocalStorage() &&
+      (event.key === LOBSTERDEX_KEY || event.key === null)
+    ) {
+      callback();
+    }
+  };
+  window.addEventListener(LOBSTERDEX_CHANGED_EVENT, onChange);
+  window.addEventListener("storage", onStorage);
+  return () => {
+    window.removeEventListener(LOBSTERDEX_CHANGED_EVENT, onChange);
+    window.removeEventListener("storage", onStorage);
+  };
 }
 
 export function recordLobsterVisit(

@@ -1,4 +1,5 @@
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
+import { storedChatOutboxItemNeedsReview } from "../../lib/chat/outbox-owner-registry.ts";
 import type { StoredChatOutbox } from "../../lib/chat/outbox-store-projection.ts";
 import type { StoredChatOutboxScope } from "../../lib/chat/outbox-store-scope.ts";
 
@@ -7,6 +8,22 @@ export type ChatOutboxHostProjection = {
   durableSeen: Set<string>;
   retryable: Set<string>;
 };
+
+export function reconcileChatOutboxProjection(
+  state: ChatOutboxHostProjection,
+  durableIds: ReadonlySet<string>,
+  observeDurable: (id: string) => void,
+): void {
+  durableIds.forEach((id) => {
+    state.durableSeen.add(id);
+    observeDurable(id);
+  });
+  for (const local of state.byScope.values()) {
+    local.queue = local.queue.filter(
+      (item) => durableIds.has(item.id) || isActiveLocal(state, item),
+    );
+  }
+}
 
 /** Merge pane presentation only; the outbox owner retains custody and authority. */
 export function projectChatOutboxItem(item: ChatQueueItem, local: ChatQueueItem): ChatQueueItem {
@@ -32,12 +49,7 @@ export function projectChatOutboxAttention(
   return outboxes.flatMap((outbox) =>
     outbox.queue
       .filter((item) =>
-        owner
-          ? owner.needsReview(outbox, item)
-          : !item.pendingRunId &&
-            (item.sendState === "failed" ||
-              item.sendState === "unconfirmed" ||
-              item.sendState === "held"),
+        owner ? owner.needsReview(outbox, item) : storedChatOutboxItemNeedsReview(item),
       )
       .map((item) => ({
         id: item.id,
@@ -46,26 +58,6 @@ export function projectChatOutboxAttention(
         unconfirmed: item.sendState === "unconfirmed" || item.sendState === "held",
         command: Boolean(item.localCommandName),
       })),
-  );
-}
-
-export function chatOutboxProjectionNeedsReview(
-  states: Iterable<ChatOutboxHostProjection>,
-  key: string,
-  item: ChatQueueItem,
-): boolean {
-  for (const state of states) {
-    if (
-      state.byScope
-        .get(key)
-        ?.queue.some((local) => local.id === item.id && local.sendState === "waiting-model")
-    ) {
-      return false;
-    }
-  }
-  return (
-    !item.pendingRunId &&
-    (item.sendState === "failed" || item.sendState === "unconfirmed" || item.sendState === "held")
   );
 }
 

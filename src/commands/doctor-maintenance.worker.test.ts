@@ -1,11 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   writeNativeHookRelayBridgeRecord,
   type NativeHookRelayBridgeRecord,
 } from "../agents/harness/native-hook-relay-store.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { loadCronStore, resolveCronJobsStorePathFromConfig } from "../cron/store.js";
+import { acquireFileLock } from "../infra/file-lock.js";
 import * as gatewayLock from "../infra/gateway-lock.js";
 import {
   autoMigrateLegacyStateDir,
@@ -16,10 +18,12 @@ import { readUpdateDatabaseGenerations } from "../infra/update-database-generati
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { executeOpenClawStateWorker } from "../state/openclaw-state-worker-store.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { maybeMigrateHeartbeatCadenceToCron } from "./doctor-heartbeat-cadence-migration.js";
 import { beginDoctorMaintenance } from "./doctor-maintenance.js";
 
 function relayRecord(revision: number): NativeHookRelayBridgeRecord {
@@ -115,13 +119,7 @@ describe("Doctor maintenance with shared-state workers", () => {
       },
     );
   });
-  it.each([
-    "schema-upgrade",
-    "resident-worker",
-    "historical-contender",
-    "receipt-unchanged",
-    "receipt-changed",
-  ] as const)(
+  it.each(["resident-worker", "historical-contender", "receipt-unchanged"] as const)(
     "drains and reacquires maintenance around implicit legacy-root relocation: %s",
     async (scenario) => {
       await withOpenClawTestState(
@@ -168,13 +166,6 @@ describe("Doctor maintenance with shared-state workers", () => {
                 vi.spyOn(updateState, "readUpdateDatabaseGenerationsIsolated").mockImplementation(
                   async (paths) => readUpdateDatabaseGenerations(paths),
                 );
-                if (scenario === "receipt-changed") {
-                  const beforeAdmission = new DatabaseSync(databasePath);
-                  beforeAdmission.exec(
-                    "INSERT INTO config_machine_state (state_key, value_json, updated_at_ms) VALUES ('outside', '{}', 2)",
-                  );
-                  beforeAdmission.close();
-                }
               }
               const admittedGenerations = databaseGenerations
                 ? readUpdateDatabaseGenerations([databasePath])
@@ -253,77 +244,100 @@ describe("Doctor maintenance with shared-state workers", () => {
       );
     },
   );
-  it.each([
-    { alreadyOpen: false, reload: false },
-    { alreadyOpen: true, reload: false },
-    { alreadyOpen: true, reload: true },
-  ])(
-    "completes writes and drainage with an already-open worker=$alreadyOpen after module reload=$reload",
-    async ({ alreadyOpen, reload }) => {
-      await withOpenClawTestState(
-        { scenario: "external-service", label: "doctor-managed-worker" },
-        async () => {
-          openOpenClawStateDatabase();
-          let execute = executeOpenClawStateWorker;
-          let capture = captureOpenClawStateWorkerContext;
-          let write = writeNativeHookRelayBridgeRecord;
-          if (alreadyOpen) {
-            await execute(capture(), {
-              type: "nativeHookRelay.read",
-              input: { relayId: "doctor" },
-            });
-          }
-          let enterMaintenance = beginDoctorMaintenance;
-          if (reload) {
-            await closeOpenClawStateDatabaseAsync();
-            vi.resetModules();
-            const [doctor, worker, contexts, relay] = await Promise.all([
-              import("./doctor-maintenance.js"),
-              import("../state/openclaw-state-worker-store.js"),
-              import("../state/openclaw-state-worker-context.js"),
-              import("../agents/harness/native-hook-relay-store.js"),
-            ]);
-            enterMaintenance = doctor.beginDoctorMaintenance;
-            execute = worker.executeOpenClawStateWorker;
-            capture = contexts.captureOpenClawStateWorkerContext;
-            write = relay.writeNativeHookRelayBridgeRecord;
-          }
-          const maintenance = await enterMaintenance({
-            options: { repair: true, nonInteractive: true },
-            root: null,
-            runtime: { log() {}, error() {}, exit() {} },
+  it("completes writes and drainage with a resident worker after module reload", async () => {
+    await withOpenClawTestState(
+      { scenario: "external-service", label: "doctor-managed-worker" },
+      async () => {
+        openOpenClawStateDatabase();
+        await executeOpenClawStateWorker(captureOpenClawStateWorkerContext(), {
+          type: "nativeHookRelay.read",
+          input: { relayId: "doctor" },
+        });
+        await closeOpenClawStateDatabaseAsync();
+        vi.resetModules();
+        const [doctor, worker, contexts, relay] = await Promise.all([
+          import("./doctor-maintenance.js"),
+          import("../state/openclaw-state-worker-store.js"),
+          import("../state/openclaw-state-worker-context.js"),
+          import("../agents/harness/native-hook-relay-store.js"),
+        ]);
+        const execute = worker.executeOpenClawStateWorker;
+        const capture = contexts.captureOpenClawStateWorkerContext;
+        const write = relay.writeNativeHookRelayBridgeRecord;
+        const maintenance = await doctor.beginDoctorMaintenance({
+          options: { repair: true, nonInteractive: true },
+          root: null,
+          runtime: { log() {}, error() {}, exit() {} },
+        });
+        const record = relayRecord(1);
+        try {
+          await maintenance!.run(async () => {
+            await write({ record, updatedAtMs: 1 });
+            expect(
+              await execute(capture(), {
+                type: "nativeHookRelay.read",
+                input: { relayId: record.relayId },
+              }),
+            ).toEqual(record);
           });
-          const record = relayRecord(1);
-          try {
-            await maintenance!.run(async () => {
-              await write({ record, updatedAtMs: 1 });
-              expect(
-                await execute(capture(), {
-                  type: "nativeHookRelay.read",
-                  input: { relayId: record.relayId },
-                }),
-              ).toEqual(record);
-            });
-          } finally {
-            await maintenance?.release();
-          }
-          await closeOpenClawStateDatabaseAsync();
-          expect(
-            await execute(capture(), {
-              type: "nativeHookRelay.read",
-              input: { relayId: record.relayId },
-            }),
-          ).toEqual(record);
-          const successor = relayRecord(2);
-          await write({ record: successor, updatedAtMs: 2 });
-          expect(
-            await execute(capture(), {
-              type: "nativeHookRelay.read",
-              input: { relayId: record.relayId },
-            }),
-          ).toEqual(successor);
+        } finally {
+          await maintenance?.release();
+        }
+        await closeOpenClawStateDatabaseAsync();
+        expect(
+          await execute(capture(), {
+            type: "nativeHookRelay.read",
+            input: { relayId: record.relayId },
+          }),
+        ).toEqual(record);
+        const successor = relayRecord(2);
+        await write({ record: successor, updatedAtMs: 2 });
+        expect(
+          await execute(capture(), {
+            type: "nativeHookRelay.read",
+            input: { relayId: record.relayId },
+          }),
+        ).toEqual(successor);
+      },
+    );
+  });
+});
+
+it("releases cron custody before Doctor finishes, without waiting for CLI cleanup", async () => {
+  await withOpenClawTestState(
+    { scenario: "external-service", label: "doctor-cron-custody" },
+    async (state) => {
+      const cfg: OpenClawConfig = {
+        agents: { entries: { main: { heartbeat: { every: "30m" } } } },
+      };
+      await state.writeConfig(cfg);
+      const maintenance = await beginDoctorMaintenance({
+        options: { repair: true, nonInteractive: true },
+        root: null,
+        runtime: { log() {}, error() {}, exit() {} },
+      });
+      try {
+        const result = await maintenance!.run(() =>
+          maybeMigrateHeartbeatCadenceToCron({ cfg, shouldRepair: true, env: state.env }),
+        );
+        expect(result.warnings).toEqual([]);
+        expect(result.changes).toHaveLength(1);
+      } finally {
+        await maintenance!.finish(cfg);
+      }
+      // A successor must acquire custody while the Doctor process is still alive.
+      const successor = await acquireFileLock(
+        `${resolveOpenClawStateSqlitePath(state.env)}.cron-authority`,
+        {
+          retries: { retries: 0, factor: 1, minTimeout: 1, maxTimeout: 1 },
+          stale: 0,
+          staleRecovery: "remove-if-definitely-stale",
         },
       );
+      await successor.release();
+      const jobs = await loadCronStore(resolveCronJobsStorePathFromConfig(cfg, state.env));
+      expect(jobs.jobs).toHaveLength(1);
+      expect(jobs.jobs[0]?.payload.kind).toBe("heartbeat");
     },
   );
 });

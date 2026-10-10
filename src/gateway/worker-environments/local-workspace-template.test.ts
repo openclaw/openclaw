@@ -2,23 +2,30 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { resolveSandboxConfigForAgent } from "../../agents/sandbox/config.js";
 import type { prepareSandboxDependencyTemplate } from "../../agents/sandbox/dependency-template.js";
+import { withWorktreeAllocationLease } from "../../agents/worktrees/allocation.js";
 import { createCopyWorktreeBackend } from "../../agents/worktrees/filesystem-backend.test-support.js";
 import { requireGit } from "../../agents/worktrees/git.js";
 import { listTemplatesAsync } from "../../agents/worktrees/template-registry-async.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import "../../test-utils/prepare-compiled-subprocesses.js";
+import { prewarmLocalWorkspaceTemplates } from "./local-workspace-prewarm.js";
 import { cloneLocalWorkspaceTemplate } from "./local-workspace-template.js";
 
 const mocks = vi.hoisted(() => ({
   backend: vi.fn(),
   install: vi.fn<typeof prepareSandboxDependencyTemplate>(),
 }));
+// mock-isolation: A portable copy backend exercises template ownership without native mounts.
 vi.mock("../../agents/worktrees/filesystem-backend.js", () => ({
   detectWorktreeFilesystemBackend: mocks.backend,
 }));
+// mock-isolation: The installer writes synthetic dependencies; no real container engine is used.
 vi.mock("../../agents/sandbox/dependency-template.js", () => ({
   resolveSandboxDependencyTemplateIdentity: async () => ({
     key: "pinned-guest-image",
@@ -91,6 +98,9 @@ beforeAll(async () => {
     await git(source, "commit", "--quiet", "-am", "dependency ignore variant");
     ignoreVariants.set(pattern, await git(source, "rev-parse", "HEAD"));
   }
+  const remote = path.join(root, "origin.git");
+  await git(root, "clone", "--quiet", "--bare", source, remote);
+  await git(source, "remote", "add", "origin", remote);
   await write(source, ".env.local", "synthetic host-only credential\n");
   await write(source, ".npmrc", "synthetic host-only registry credential\n");
   await git(source, "config", "credential.helper", "!echo synthetic-host-credential");
@@ -149,8 +159,19 @@ it("shares one installed generation across independent checkouts and replaces it
   const clone = await fixture(signal);
   const first = await clone("first");
   expect(await read(first, "node_modules/dependency/index.js")).toBe(firstLock);
+  const template = (await listTemplatesAsync(env)).find(
+    (record) => record.worktreeRoot === path.join(path.dirname(first), "templates"),
+  );
+  if (!template) {
+    throw new Error("Template was not reserved");
+  }
+  const indexPath = path.join(template.path, ".git", "index");
+  const originalIndex = await fs.readFile(indexPath);
+  // Warm validation must not refresh an index that another reader can be cloning.
+  await fs.utimes(path.join(template.path, "source.ts"), 1, 1);
   await write(first, "node_modules/dependency/index.js", "consumer edit\n");
   const second = await clone("second");
+  expect((await fs.readFile(indexPath)).equals(originalIndex)).toBe(true);
   expect(await read(second, "node_modules/dependency/index.js")).toBe(firstLock);
   expect(await read(first, "node_modules/dependency/index.js")).toBe("consumer edit\n");
   expect(await git(second, "branch", "--show-current")).toBe("openclaw/second");
@@ -282,3 +303,108 @@ for (const failure of ["install failure", "tracked source changed", "frozen lock
     expect(mocks.install).toHaveBeenCalledOnce();
   });
 }
+
+async function prewarmFixture() {
+  const state = directories.make("openclaw-dependency-prewarm-");
+  vi.stubEnv("OPENCLAW_STATE_DIR", state);
+  const config: OpenClawConfig = { agents: { entries: { main: { workspace: source } } } };
+  return { state, config, env: { ...process.env } };
+}
+
+it("lets the first checkout join background preparation through the existing allocation owner", async ({
+  signal,
+}) => {
+  const warmed = await prewarmFixture();
+  const started = createDeferred();
+  const release = createDeferred();
+  const install = mocks.install.getMockImplementation()!;
+  mocks.install.mockImplementationOnce(async (params) => {
+    started.resolve();
+    await release.promise;
+    return await install(params);
+  });
+  const preparation = prewarmLocalWorkspaceTemplates({ getConfig: () => warmed.config, signal });
+  try {
+    await awaitGateBeforeSettlement(
+      started.promise,
+      preparation,
+      "Background install did not start",
+    );
+    const templateRoot = path.join(warmed.state, "worktree-projections");
+    const destination = path.join(templateRoot, "first-session");
+    const selectedCommit = await git(source, "rev-parse", "HEAD");
+    const cloning = withWorktreeAllocationLease({ env: warmed.env, signal }, (guard) =>
+      cloneLocalWorkspaceTemplate({
+        source,
+        repoRoot: source,
+        baseCommit: selectedCommit,
+        branch: "openclaw/first-session",
+        destination,
+        temporaryRoot: templateRoot,
+        templateRoot,
+        env: warmed.env,
+        sandbox,
+        guard: { ...guard, signal: guard.signal ?? signal },
+      }),
+    );
+    release.resolve();
+    await expect(cloning).resolves.toBe(true);
+    await preparation;
+    expect(await read(destination, "node_modules/dependency/index.js")).toBe(secondLock);
+    expect(mocks.install).toHaveBeenCalledOnce();
+    expect(await listTemplatesAsync(warmed.env)).toMatchObject([
+      { status: "ready", sourceCommit: selectedCommit },
+    ]);
+  } finally {
+    release.resolve();
+    await preparation;
+  }
+});
+
+it.each(["shutdown", "config"])(
+  "settles an interrupted background install before releasing allocation (%s)",
+  async (reason) => {
+    const warmed = await prewarmFixture();
+    const controller = new AbortController();
+    const started = createDeferred<AbortSignal>();
+    const cleanup = createDeferred();
+    mocks.install.mockImplementationOnce(async ({ signal }) => {
+      if (!signal) {
+        throw new Error("Background install needs cancellation");
+      }
+      started.resolve(signal);
+      await cleanup.promise;
+      signal.throwIfAborted();
+      return { installed: true };
+    });
+    let settled = false;
+    const preparation = prewarmLocalWorkspaceTemplates({
+      getConfig: () => warmed.config,
+      signal: controller.signal,
+    }).then(() => {
+      settled = true;
+    });
+    try {
+      const signal = await awaitGateBeforeSettlement(
+        started.promise,
+        preparation,
+        "Background install did not start",
+      );
+      if (reason === "shutdown") {
+        controller.abort();
+      } else {
+        sessionChanges.emit({ all: true, scope: "config" });
+      }
+      expect(signal.aborted).toBe(true);
+      await Promise.resolve();
+      expect(settled).toBe(false);
+      cleanup.resolve();
+      await preparation;
+      expect(await listTemplatesAsync(warmed.env)).toMatchObject([{ status: "preparing" }]);
+    } finally {
+      controller.abort();
+      cleanup.resolve();
+      await preparation;
+    }
+  },
+);

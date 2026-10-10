@@ -1,6 +1,8 @@
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { SubsystemLogger } from "../../logging/subsystem.js";
 import type { CapabilityProviderFor } from "../../plugins/capability-provider-runtime.js";
+import type { InputProvenance } from "../../sessions/input-provenance.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import { captureAgentToolSourceExecutionGuard } from "../agent-tool-source-execution-guard.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
@@ -10,6 +12,7 @@ import type { ToolFsPolicy } from "../tool-fs-policy.js";
 import { ToolInputError, readToolStringParam } from "./common.js";
 import {
   captureMediaGenerationAdmission,
+  createDefaultMediaGenerateBackgroundScheduler,
   createMediaGenerationTaskLifecycle,
   scheduleMediaGenerationTaskCompletion,
   type MediaGenerateAsyncStartCallback,
@@ -43,6 +46,7 @@ export type MediaGenerateToolOptions = {
   requesterRunSessionKey?: string;
   requesterAgentId?: string;
   requesterOrigin?: DeliveryContext;
+  inputProvenance?: InputProvenance;
   workspaceDir?: string;
   cwd?: string;
   preparedModelRuntime?: PreparedModelRuntimeSnapshot;
@@ -60,7 +64,8 @@ const GENERATION_LABELS = {
 
 export function resolveMediaGenerateToolContext<K extends keyof typeof GENERATION_LABELS>(
   providerKey: K,
-  options?: MediaGenerateToolOptions,
+  options: MediaGenerateToolOptions | undefined,
+  logger: Pick<SubsystemLogger, "warn" | "error">,
 ) {
   const cfg = options?.config ?? getRuntimeConfig();
   const knownProviders:
@@ -82,9 +87,23 @@ export function resolveMediaGenerateToolContext<K extends keyof typeof GENERATIO
   ) {
     return null;
   }
+  const scheduleBackgroundWork =
+    options?.scheduleBackgroundWork ??
+    createDefaultMediaGenerateBackgroundScheduler({
+      toolName: `${GENERATION_LABELS[providerKey]}_generate`,
+      onCrash: (message, meta) => logger.error(message, meta),
+    });
   return {
     cfg,
     preparedProviders,
+    taskOptions: () => ({
+      sessionKey: options?.agentSessionKey,
+      requesterAgentId: options?.requesterAgentId,
+      requesterOrigin: options?.requesterOrigin,
+      scheduleBackgroundWork,
+      onAsyncTaskStarted: options?.onAsyncTaskStarted,
+      onFailure: (message: string, meta?: Record<string, unknown>) => logger.warn(message, meta),
+    }),
     sandboxConfig: resolveMediaToolSandboxConfig(
       options?.sandbox,
       options?.fsPolicy?.workspaceOnly,
@@ -100,7 +119,6 @@ type MediaGenerationTaskResources = {
 
 /** Preflight retains resources until a duplicate result releases them or task admission takes over. */
 export async function prepareMediaGenerationTask<
-  T extends MediaGenerationExecutionResult,
   Resources extends (MediaGenerationTaskResources & { assertOpen: () => void }) | undefined,
 >(params: {
   generationLabel: "image" | "video" | "music";
@@ -127,10 +145,7 @@ export async function prepareMediaGenerationTask<
     | { kind: "result"; result: MediaGenerateActionResult }
     | {
         kind: "task";
-        params: Omit<
-          Parameters<typeof runMediaGenerationTask<T>>[0],
-          "resources" | "generationLabel"
-        >;
+        params: Omit<Parameters<typeof runMediaGenerationTask>[0], "resources" | "generationLabel">;
       }
   >;
 }) {
@@ -221,6 +236,7 @@ export async function prepareMediaGenerationTask<
   }
   return runMediaGenerationTask({
     ...prepared.params,
+    inputProvenance: options?.inputProvenance,
     requesterRunSessionKey: options?.requesterRunSessionKey,
     generationLabel: params.generationLabel,
     resources,
@@ -231,13 +247,14 @@ export async function prepareMediaGenerationTask<
   });
 }
 
-export async function runMediaGenerationTask<T extends MediaGenerationExecutionResult>(params: {
+export async function runMediaGenerationTask(params: {
   lifecycle: ReturnType<typeof createMediaGenerationTaskLifecycle>;
   generationLabel: "image" | "video" | "music";
   sessionKey?: string;
   requesterRunSessionKey?: string;
   requesterAgentId?: string;
   requesterOrigin?: DeliveryContext;
+  inputProvenance?: InputProvenance;
   prompt: string;
   requestKey: string;
   providerId?: string;
@@ -250,7 +267,9 @@ export async function runMediaGenerationTask<T extends MediaGenerationExecutionR
   assertAdmissionCurrent?: () => void;
   run: (
     handle: MediaGenerationTaskHandle | null,
-  ) => Promise<T & { contentText: string; details: Record<string, unknown> }>;
+  ) => Promise<
+    MediaGenerationExecutionResult & { contentText: string; details: Record<string, unknown> }
+  >;
 }) {
   const resources = params.resources;
   const assertAdmissionCurrent = captureMediaGenerationAdmission(params.assertAdmissionCurrent);
@@ -258,7 +277,7 @@ export async function runMediaGenerationTask<T extends MediaGenerationExecutionR
   const run = resources
     ? async (handle: MediaGenerationTaskHandle | null) => {
         resourcesTransferred = true;
-        let executed: T & { contentText: string; details: Record<string, unknown> };
+        let executed: Awaited<ReturnType<typeof params.run>>;
         try {
           executed = await resources.run(() => params.run(handle));
         } catch (error) {
@@ -282,6 +301,7 @@ export async function runMediaGenerationTask<T extends MediaGenerationExecutionR
       requesterRunSessionKey: params.requesterRunSessionKey,
       requesterAgentId: params.requesterAgentId,
       requesterOrigin: params.requesterOrigin,
+      inputProvenance: params.inputProvenance ?? { kind: "external_user" },
       prompt: params.prompt,
       providerId: params.providerId,
       assertCurrent: assertAdmissionCurrent,

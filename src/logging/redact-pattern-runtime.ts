@@ -289,6 +289,31 @@ type RedactMatcher = {
 export type ResolvedRedactPattern = RegExp | RedactMatcher;
 export type RedactPattern = string | ResolvedRedactPattern;
 
+// The shared compiler exposes mutable regexes; probes remain valid only for their original rule.
+const patternPrefilters = new WeakMap<ResolvedRedactPattern, (text: string) => boolean>();
+
+export function setRedactPatternPrefilter(
+  pattern: ResolvedRedactPattern,
+  probe: (text: string) => boolean,
+): void {
+  if (patternPrefilters.has(pattern)) {
+    return;
+  }
+  const source = pattern.source;
+  const exec = pattern.exec;
+  const flags = pattern instanceof RegExp ? pattern.flags : undefined;
+  const replace = pattern instanceof RegExp ? pattern[Symbol.replace] : undefined;
+  patternPrefilters.set(
+    pattern,
+    (text) =>
+      pattern.source !== source ||
+      pattern.exec !== exec ||
+      (pattern instanceof RegExp &&
+        (pattern.flags !== flags || pattern[Symbol.replace] !== replace)) ||
+      probe(text),
+  );
+}
+
 // Derived matchers live only as long as their owner pattern, never as long as a secret value.
 const indexedPatterns = new WeakMap<RegExp, RegExp>();
 
@@ -354,28 +379,31 @@ export function getSecretCaptureStart(
 
 const globalPatterns = new WeakMap<RegExp, RegExp>();
 
-export function* iterateRedactMatches(
+export function visitRedactMatches(
   text: string,
   pattern: ResolvedRedactPattern,
-): Iterable<RedactMatch> {
-  if (!(pattern instanceof RegExp)) {
-    yield* pattern.exec(text);
+  visit: (match: RedactMatch, pattern: ResolvedRedactPattern) => void,
+): void {
+  if (patternPrefilters.get(pattern)?.(text) === false) {
     return;
   }
-  let regex = pattern;
-  if (!pattern.global) {
-    const cached = globalPatterns.get(pattern);
-    regex = cached ?? new RegExp(pattern.source, `${pattern.flags}g`);
-    if (!cached) {
-      globalPatterns.set(pattern, regex);
+  if (!(pattern instanceof RegExp)) {
+    for (const match of pattern.exec(text)) {
+      visit(match, pattern);
     }
+    return;
+  }
+  let regex = pattern.global ? pattern : globalPatterns.get(pattern);
+  if (!regex) {
+    regex = new RegExp(pattern.source, `${pattern.flags}g`);
+    globalPatterns.set(pattern, regex);
   }
   const unicode = regex.unicode || regex.flags.includes("v");
   let cursor = 0;
   while (cursor <= text.length) {
     const previousIndex = regex.lastIndex;
     let match: RegExpExecArray | null;
-    // A yielded match can re-enter this scanner with the same compiled expression.
+    // A visitor can re-enter this scanner with the same compiled expression.
     try {
       regex.lastIndex = cursor;
       match = regex.exec(text);
@@ -390,12 +418,15 @@ export function* iterateRedactMatches(
       const codePoint = text.codePointAt(cursor);
       cursor += unicode && codePoint !== undefined && codePoint > 0xffff ? 2 : 1;
     }
-    yield {
-      match: match[0],
-      groups: match.slice(1).map((group) => group ?? ""),
-      input: text,
-      offset: match.index,
-    };
+    visit(
+      {
+        match: match[0],
+        groups: match.slice(1).map((group) => group ?? ""),
+        input: text,
+        offset: match.index,
+      },
+      pattern,
+    );
   }
 }
 
@@ -406,6 +437,11 @@ export function replaceRedactPattern(
   replaceRegex?: (...args: unknown[]) => string,
 ): string {
   if (pattern instanceof RegExp) {
+    if (patternPrefilters.get(pattern)?.(text) === false) {
+      // Attached regexes are compiled global; native replacement resets even on a miss.
+      pattern.lastIndex = 0;
+      return text;
+    }
     return text.replace(
       pattern,
       replaceRegex ?? ((...args: unknown[]) => replace(readRedactMatch(args))),
@@ -413,10 +449,10 @@ export function replaceRedactPattern(
   }
   const parts: string[] = [];
   let end = 0;
-  for (const match of iterateRedactMatches(text, pattern)) {
+  visitRedactMatches(text, pattern, (match) => {
     parts.push(text.slice(end, match.offset), replace(match));
     end = match.offset + match.match.length;
-  }
+  });
   return parts.length ? parts.join("") + text.slice(end) : text;
 }
 

@@ -12,6 +12,10 @@ const fingerprint = z.strictObject({
   identity: packageActivationIdentitySchema,
   version: z.string().min(1).max(256),
 });
+const settlementDetail = z
+  .string()
+  .min(1)
+  .max(1024 * 1024);
 export const basename = z
   .string()
   .min(1)
@@ -85,9 +89,20 @@ export type PackageActivationPhase = z.infer<typeof PackageActivationPhaseSchema
 export const intentSchema = z
   .union([
     z.strictObject({
-      kind: z.enum(["superseded-by-manual-install", "recovery-lease-identity-changed"]),
+      kind: z.literal("publication-settled-external-change"),
       replacementIdentity: packageActivationIdentitySchema,
       settled: z.boolean(),
+      detail: settlementDetail,
+    }),
+    z.strictObject({
+      kind: z.enum([
+        "superseded-by-manual-install",
+        "recovery-lease-identity-changed",
+        "recovery-lease-missing",
+      ]),
+      replacementIdentity: packageActivationIdentitySchema,
+      settled: z.boolean(),
+      detail: settlementDetail.optional(),
     }),
     z.strictObject({
       kind: z.literal("prepare"),

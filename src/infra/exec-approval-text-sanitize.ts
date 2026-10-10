@@ -106,25 +106,18 @@ function sanitizeExecApprovalDisplayTextInternal(
   const rawMask = computeSensitiveRedactionBitmap(commandText, redaction);
   const strippedMask = computeSensitiveRedactionBitmap(stripped, redaction);
   let bypassDetected = false;
+  const unionMask = rawMask.slice();
   for (let i = 0; i < strippedMask.length; i++) {
-    if (
-      strippedMask[i] &&
-      !rawMask[expectDefined(strippedToOrig[i], "stripped to orig entry at i")]
-    ) {
-      bypassDetected = true;
-      break;
+    if (strippedMask[i]) {
+      const originalIndex = expectDefined(strippedToOrig[i], "stripped to orig entry at i");
+      bypassDetected ||= !rawMask[originalIndex];
+      unionMask[originalIndex] = true;
     }
   }
   if (!bypassDetected) {
     return truncateForDisplay(escapeInvisibles(rawRedacted, options));
   }
-  // Union both masks, collapse masked runs, and escape unmasked invisibles by code point.
-  const unionMask = rawMask.slice();
-  for (let i = 0; i < strippedMask.length; i++) {
-    if (strippedMask[i]) {
-      unionMask[expectDefined(strippedToOrig[i], "stripped to orig entry at i")] = true;
-    }
-  }
+  // Collapse the combined mask's runs and escape unmasked invisibles by code point.
   let out = "";
   let i = 0;
   while (i < commandText.length) {

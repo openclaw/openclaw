@@ -120,7 +120,7 @@ it.each([
       let replacement: Promise<void> | undefined;
       const writeFailure = new Error("terminal session write failed");
       let persistenceSpy:
-        | MockInstance<typeof lifecycleState.persistGatewaySessionLifecycleEvent>
+        | MockInstance<typeof lifecycleState.prepareGatewaySessionLifecycleEvent>
         | undefined;
       const responseRows: Array<ReturnType<typeof loadSessionEntry>> = [];
       const respond = vi.fn<RespondFn>(() => {
@@ -141,10 +141,10 @@ it.each([
           event: startEvent,
         });
         expect(loadSessionEntry(target)).toMatchObject({
-          status: "running",
           lifecycleRunId: runId,
           abortedLastRun: false,
         });
+        expect(loadSessionEntry(target)?.status).toBeUndefined();
         heldWriter = patchSessionEntryCore(target, async () => {
           writerEntered.resolve();
           await releaseWriter.promise;
@@ -160,8 +160,10 @@ it.each([
         }
         if (outcome === "write-failed") {
           persistenceSpy = vi
-            .spyOn(lifecycleState, "persistGatewaySessionLifecycleEvent")
-            .mockRejectedValueOnce(writeFailure);
+            .spyOn(lifecycleState, "prepareGatewaySessionLifecycleEvent")
+            .mockReturnValueOnce(async () => {
+              throw writeFailure;
+            });
         }
         request = Promise.resolve(
           sessionAbortHandlers["sessions.abort"]!({
@@ -180,7 +182,7 @@ it.each([
         await aborted.promise;
         await setImmediate();
         expect.soft(respond).not.toHaveBeenCalled();
-        expect(loadSessionEntry(target)?.status).toBe("running");
+        expect(loadSessionEntry(target)?.status).toBeUndefined();
         releaseWriter.resolve();
         await heldWriter;
         await replacement;
@@ -188,10 +190,10 @@ it.each([
           await expect(request).rejects.toThrow(writeFailure);
           expect(respond).not.toHaveBeenCalled();
           expect(loadSessionEntry(target)).toMatchObject({
-            status: "running",
             lifecycleRunId: runId,
             abortedLastRun: false,
           });
+          expect(loadSessionEntry(target)?.status).toBeUndefined();
           return;
         }
         await request;
@@ -201,10 +203,10 @@ it.each([
         ]);
         if (outcome === "replacement") {
           expect(loadSessionEntry(target)).toMatchObject({
-            status: "running",
             lifecycleRunId: "replacement-run",
             abortedLastRun: false,
           });
+          expect(loadSessionEntry(target)?.status).toBeUndefined();
           return;
         }
         expect(responseRows[0]).toMatchObject({ status: "killed", abortedLastRun: true });

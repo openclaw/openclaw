@@ -38,7 +38,6 @@ const enNewSessionSetup = {
     gitCheckUnavailable: "Couldn't verify Git for this folder. Choose it again to retry.",
     starting: "Starting…",
     followUps: "Follow-up messages",
-    followUpsQueued: "Messages wait here until the session is ready.",
     followUpCommandsUnavailable: "Commands are available after the session is created.",
     followUpReloadBlocked:
       "Finish starting the session or remove its follow-up messages and draft before reloading.",

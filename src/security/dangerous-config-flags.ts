@@ -10,28 +10,14 @@ import { collectPluginConfigContractMatches } from "../plugins/config-contract-m
 import { resolvePluginConfigContractsById } from "../plugins/config-contracts.js";
 import { isRecord, resolveUserPath } from "../utils.js";
 import { collectEnabledInsecureOrDangerousFlagsFromContracts } from "./dangerous-config-flags-core.js";
-import { collectEnabledInsecureOrDangerousFlagsFromCurrentSnapshot } from "./dangerous-config-flags-current.js";
 
-/**
- * Collect enabled insecure/dangerous config flags for audit and startup warnings.
- * Plugin flags use current metadata when requested, then fall back to resolving manifest contracts.
- */
-export function collectEnabledInsecureOrDangerousFlags(
-  cfg: OpenClawConfig,
-  options: { preferCurrentPluginMetadataSnapshot?: boolean } = {},
-): string[] {
+/** Collect enabled insecure/dangerous config flags from manifest contracts. */
+export function collectEnabledInsecureOrDangerousFlags(cfg: OpenClawConfig): string[] {
   const pluginEntries = cfg.plugins?.entries;
   if (!isRecord(pluginEntries)) {
     return collectEnabledInsecureOrDangerousFlagsFromContracts(cfg);
   }
   const pluginIds = Object.keys(pluginEntries);
-
-  if (options.preferCurrentPluginMetadataSnapshot) {
-    const currentSnapshotFlags = collectEnabledInsecureOrDangerousFlagsFromCurrentSnapshot(cfg);
-    if (currentSnapshotFlags) {
-      return currentSnapshotFlags;
-    }
-  }
 
   const defaultAgentId = tryResolveDefaultAgentId(cfg);
   const workspaceDirs = new Set<string | undefined>();

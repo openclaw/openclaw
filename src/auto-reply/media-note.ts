@@ -42,25 +42,18 @@ function sanitizeInlineMediaNoteValue(value: string | undefined): string {
     .trim();
 }
 
-function formatMediaAttachedLine(params: {
-  fact: MediaFact;
-  index?: number;
-  total?: number;
-}): string {
-  const prefix =
-    typeof params.index === "number" && typeof params.total === "number"
-      ? `[media attached ${params.index}/${params.total}: `
-      : "[media attached: ";
-  const pathValue = sanitizeInlineMediaNoteValue(params.fact.path);
-  const typeRaw = sanitizeInlineMediaNoteValue(params.fact.contentType ?? params.fact.kind);
+function formatMediaAttachedLine(fact: MediaFact, index: number, total: number): string {
+  const prefix = total > 1 ? `[media attached ${index}/${total}: ` : "[media attached: ";
+  const pathValue = sanitizeInlineMediaNoteValue(fact.path);
+  const typeRaw = sanitizeInlineMediaNoteValue(fact.contentType ?? fact.kind);
   const typePart = typeRaw ? ` (${typeRaw})` : "";
-  const urlRaw = sanitizeInlineMediaNoteValue(params.fact.url);
+  const urlRaw = sanitizeInlineMediaNoteValue(fact.url);
   // When the channel mirrors the local path into the fact URL (Telegram album
   // media is the canonical case), rendering ` | ${url}` adds no information
   // and clutters the prompt with `path | path` duplication (issue #47587).
   const urlPart = urlRaw && urlRaw !== pathValue ? ` | ${urlRaw}` : "";
   const fileName = truncateUtf16Safe(
-    sanitizeInlineMediaNoteValue(basenameFromAnyPath(params.fact.fileName ?? "")),
+    sanitizeInlineMediaNoteValue(basenameFromAnyPath(fact.fileName ?? "")),
     256,
   );
   const fileNamePart = fileName ? ` ${JSON.stringify(fileName)}` : "";
@@ -131,18 +124,7 @@ type InboundMediaNoteProjection = {
 /** Formats prompt-visible attachment text and retains facts that still need native hydration. */
 export function buildInboundMediaNoteProjection(ctx: MsgContext): InboundMediaNoteProjection {
   const facts = normalizeMediaFacts(ctx.media);
-  const entries = facts.flatMap((fact, index) => {
-    const mediaPath = fact.path?.trim() ?? "";
-    return mediaPath || fact.url?.trim()
-      ? [
-          {
-            fact,
-            path: mediaPath,
-            index,
-          },
-        ]
-      : [];
-  });
+  const entries = facts.flatMap((fact, index) => (fact.path || fact.url ? [{ fact, index }] : []));
   if (entries.length === 0) {
     return { media: [], mediaIndexes: [] };
   }
@@ -160,7 +142,8 @@ export function buildInboundMediaNoteProjection(ctx: MsgContext): InboundMediaNo
       entry.fact.contentType ?? entry.fact.kind,
     );
     const isAudioByMime = normalizedType === "audio" || normalizedType.startsWith("audio/");
-    const isAudioEntry = entry.fact.kind === "audio" || isAudioPath(entry.path) || isAudioByMime;
+    const isAudioEntry =
+      entry.fact.kind === "audio" || isAudioPath(entry.fact.path) || isAudioByMime;
     return (
       !isAudioEntry ||
       !(
@@ -185,10 +168,7 @@ export function buildInboundMediaNoteProjection(ctx: MsgContext): InboundMediaNo
   const mediaIndexes = visibleEntries.map((entry) => entry.index);
   const count = visibleEntries.length;
   const lines = visibleEntries.map((entry, index) =>
-    formatMediaAttachedLine({
-      fact: entry.fact,
-      ...(count > 1 ? { index: index + 1, total: count } : {}),
-    }),
+    formatMediaAttachedLine(entry.fact, index + 1, count),
   );
   if (count > 1) {
     lines.unshift(`[media attached: ${count} files]`);

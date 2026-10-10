@@ -18,15 +18,14 @@ import {
 const mocks = vi.hoisted(() => ({
   listAgentIds: vi.fn<(_cfg: OpenClawConfig) => string[]>(() => ["default"]),
   resolveAgentWorkspaceDir: vi.fn(),
-  resolveDefaultAgentId: vi.fn(),
   buildPluginRegistrySnapshotReport: vi.fn(),
   buildPluginCompatibilityWarnings: vi.fn(),
 }));
 
-vi.mock("../agents/agent-scope.js", () => ({
+vi.mock("../agents/agent-scope.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/agent-scope.js")>()),
   listAgentIds: (cfg: OpenClawConfig) => mocks.listAgentIds(cfg),
   resolveAgentWorkspaceDir: (...args: unknown[]) => mocks.resolveAgentWorkspaceDir(...args),
-  tryResolveDefaultAgentId: (...args: unknown[]) => mocks.resolveDefaultAgentId(...args),
 }));
 
 vi.mock("../plugins/status.js", () => ({
@@ -45,7 +44,6 @@ async function runNoteWorkspaceStatusForTest(
   },
 ) {
   const cfg: OpenClawConfig = opts?.cfg ?? {};
-  mocks.resolveDefaultAgentId.mockReturnValue("default");
   mocks.listAgentIds.mockReturnValue(["default"]);
   mocks.resolveAgentWorkspaceDir.mockReturnValue("/workspace");
   mocks.buildPluginRegistrySnapshotReport.mockReturnValue({
@@ -71,7 +69,6 @@ describe("noteWorkspaceStatus", () => {
       source: "/plugins/broken-fixture/index.js",
       message: "board widget registration has invalid kind",
     };
-    mocks.resolveDefaultAgentId.mockReturnValue("beta");
     mocks.listAgentIds.mockReturnValue(["alpha", "beta"]);
     mocks.resolveAgentWorkspaceDir.mockImplementation((_cfg, agentId) => `/workspace/${agentId}`);
     let activeWorkspace: string | undefined;
@@ -99,9 +96,7 @@ describe("noteWorkspaceStatus", () => {
       expect(activeWorkspace).toBeDefined();
     });
     try {
-      expect(noteWorkspaceStatus({}, { runWithPluginMetadataSnapshot })).toEqual({
-        workspaceDir: "/workspace/beta",
-      });
+      noteWorkspaceStatus({}, { runWithPluginMetadataSnapshot });
       expect(noteSpy.mock.calls).toEqual([
         ['Agent "alpha":\n- legacy-plugin is hook-only', "Plugin compatibility"],
         [
@@ -192,7 +187,6 @@ describe("noteWorkspaceStatus", () => {
   });
 
   it("collects plugin version drift as structured findings", async () => {
-    mocks.resolveDefaultAgentId.mockReturnValue("default");
     mocks.resolveAgentWorkspaceDir.mockReturnValue("/workspace");
     mocks.buildPluginRegistrySnapshotReport.mockReturnValue({
       workspaceDir: "/workspace",
@@ -236,7 +230,6 @@ describe("noteWorkspaceStatus", () => {
   });
 
   it("reports npm target lookup failure without an uninstallable fix hint", () => {
-    mocks.resolveDefaultAgentId.mockReturnValue("default");
     mocks.resolveAgentWorkspaceDir.mockReturnValue("/workspace");
     mocks.buildPluginRegistrySnapshotReport.mockReturnValue({
       workspaceDir: "/workspace",
@@ -284,7 +277,6 @@ describe("noteWorkspaceStatus", () => {
   });
 
   it("collects compatibility warnings and plugin diagnostics", async () => {
-    mocks.resolveDefaultAgentId.mockReturnValue("default");
     mocks.resolveAgentWorkspaceDir.mockReturnValue("/workspace");
     mocks.buildPluginRegistrySnapshotReport.mockReturnValue({
       workspaceDir: "/workspace",

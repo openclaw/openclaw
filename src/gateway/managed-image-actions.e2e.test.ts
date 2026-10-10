@@ -480,8 +480,7 @@ describe("managed image actions Gateway E2E", () => {
             },
           ]);
           const activeHistory = await readSessionMessagesWithSourceAsync(scope, {
-            mode: "full",
-            reason: "managed image E2E archive precedence",
+            mode: "page",
             allowResetArchiveFallback: true,
           });
           expect(activeHistory.messages).toHaveLength(1);

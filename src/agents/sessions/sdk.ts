@@ -184,32 +184,28 @@ export async function createAgentSession(
       return converted;
     }
     return converted.map((msg) => {
-      if (msg.role === "user" || msg.role === "toolResult") {
-        const content = msg.content;
-        if (Array.isArray(content)) {
-          const hasImages = content.some((c) => c.type === "image");
-          if (hasImages) {
-            const filteredContent = content
-              .map((c) =>
-                c.type === "image"
-                  ? { type: "text" as const, text: "Image reading is disabled." }
-                  : c,
-              )
-              .filter((c, i, arr) => {
-                const previous = arr.at(i - 1);
-                return !(
-                  c.type === "text" &&
-                  c.text === "Image reading is disabled." &&
-                  i > 0 &&
-                  previous?.type === "text" &&
-                  previous.text === "Image reading is disabled."
-                );
-              });
-            return Object.assign({}, msg, { content: filteredContent });
-          }
-        }
+      if (msg.role !== "user" && msg.role !== "toolResult") {
+        return msg;
       }
-      return msg;
+      const content = msg.content;
+      if (!Array.isArray(content) || !content.some((c) => c.type === "image")) {
+        return msg;
+      }
+      const filteredContent = content
+        .map((c) =>
+          c.type === "image" ? { type: "text" as const, text: "Image reading is disabled." } : c,
+        )
+        .filter((c, i, arr) => {
+          const previous = arr.at(i - 1);
+          return !(
+            c.type === "text" &&
+            c.text === "Image reading is disabled." &&
+            i > 0 &&
+            previous?.type === "text" &&
+            previous.text === "Image reading is disabled."
+          );
+        });
+      return Object.assign({}, msg, { content: filteredContent });
     });
   };
 

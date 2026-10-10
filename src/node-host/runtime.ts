@@ -17,6 +17,7 @@ import type { OpenClawPluginNodeHostCommandContext } from "../plugins/types.node
 import { BoundedBuffer } from "../shared/bounded-buffer.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { NODE_DESKTOP_STREAM_COMMAND } from "../shared/node-desktop-stream.js";
+import { throwNodeHostCleanupErrors } from "./cleanup-errors.js";
 import { createNodeInvokeResponder, type NodeHostClient } from "./client.js";
 import { resolveNodeDesktopHostConfig } from "./desktop-stream-command.js";
 import { requestsClaudeNodeSkillRuntime } from "./invoke-agent-cli-claude-params.js";
@@ -32,6 +33,7 @@ import { createNodeInvokeProgressWriter } from "./node-invoke-progress.js";
 import { NodeWorkerBundleInstaller } from "./node-worker-bundle-installer.js";
 import { resolveNodeWorkerContainerEngine } from "./node-worker-container-engine.js";
 import { NodeWorkerContainerContextMismatchError } from "./node-worker-container-lifecycle.js";
+import { snapshotNodeWorkerNativeInference } from "./node-worker-native-inference.js";
 import { createNodeWorkerSupervisor } from "./node-worker-supervisor.js";
 import { NodeWorkerWorkspaceRuntime } from "./node-worker-workspace.js";
 import {
@@ -57,37 +59,6 @@ export type { NodeHostInventory } from "./runtime-manifest.js";
 const DEFAULT_NODE_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 const WORKER_INITIALIZATION_RETRY_MS = 5_000;
 
-type PreparedNodeHostRuntime = {
-  manifest: NodeHostManifest;
-  workerHostingEnabled: boolean;
-  preparedWorkspacesEnabled: boolean;
-  restrictedSurface?: true;
-  workerHostingDisabledReason?: string;
-  initialInventory: NodeHostInventory;
-  start(params: {
-    client: NodeHostClient;
-    onInventoryChanged?: (inventory: NodeHostInventory) => void;
-    onManifestChanged?: (manifest: NodeHostManifest) => void;
-    onRunnerCapacityChanged?: (capacity: NodeWorkerCapacitySnapshot) => void;
-    onWorkerHostingDisabled?: (reason: string) => void;
-  }): ActiveNodeHostRuntime;
-};
-
-type ActiveNodeHostRuntime = {
-  invoke(frame: NodeInvokeRequestPayload): Promise<void>;
-  handleInput(invokeId: string, seq: number, payloadJSON: string): void;
-  cancel(invokeId: string): void;
-  cancelAll(): Promise<void>;
-  tryPauseForUpdate(): Promise<boolean>;
-  resumeAfterUpdate(): void;
-  updateGatewayConnection(connection?: {
-    url: string;
-    tlsFingerprint?: string;
-    cloudflareAccess?: CloudflareAccessCredentials;
-  }): void;
-  close(): Promise<void>;
-};
-
 type ActiveNodeInvoke = {
   controller: AbortController;
   framedFailure?: Error;
@@ -111,12 +82,7 @@ async function settleNodeHostCleanup(owners: Array<Promise<unknown> | undefined>
   const errors = [
     ...new Set(results.flatMap((result) => (result.status === "rejected" ? [result.reason] : []))),
   ];
-  if (errors.length === 1) {
-    throw errors[0];
-  }
-  if (errors.length > 1) {
-    throw new AggregateError(errors, "node-host runtime cleanup failed");
-  }
+  throwNodeHostCleanupErrors(errors, "node-host runtime cleanup failed");
 }
 
 export async function prepareNodeHostRuntime(params?: {
@@ -132,17 +98,17 @@ export async function prepareNodeHostRuntime(params?: {
   desktopSharingEnabled?: boolean;
   commands?: readonly string[];
   platform?: NodeJS.Platform;
-}): Promise<PreparedNodeHostRuntime> {
+}) {
   const commandAllowlist = params?.commands === undefined ? undefined : new Set(params.commands);
   if (!commandAllowlist) {
     void ensureTerminalUploadCleanup();
   }
   const config = params?.config ?? getRuntimeConfig();
   const env = params?.env ?? process.env;
+  const platform = params?.platform ?? process.platform;
   await ensureNodeHostPluginRegistry({ config, env, commandAllowlist });
   const pathEnv = ensureNodePathEnv();
   env.PATH = pathEnv;
-  const platform = params?.platform ?? process.platform;
   const installedAppsSharingEnabled =
     platform === "darwin" && params?.installedAppsSharingEnabled === true;
   const desktopHostConfig = resolveNodeDesktopHostConfig({
@@ -236,6 +202,12 @@ export async function prepareNodeHostRuntime(params?: {
       await disablePreparedWorkerHosting(error);
     }
   }
+  const nativeInferenceSnapshot =
+    workerRunsEnabled &&
+    platform !== "win32" &&
+    config.nodeHost?.workerRuns?.isolation !== "container"
+      ? snapshotNodeWorkerNativeInference(config, env, platform)
+      : undefined;
   const skills =
     commandAllowlist || config.nodeHost?.skills?.enabled === false ? null : scanNodeHostedSkills();
   const buildManifest = (pluginManifest: typeof pluginNodeHost) =>
@@ -261,6 +233,7 @@ export async function prepareNodeHostRuntime(params?: {
     manifest,
     workerHostingEnabled: workerRunsEnabled,
     preparedWorkspacesEnabled: workerRunsEnabled && params?.ephemeral === true,
+    nativeInferenceEnabled: workerRunsEnabled && nativeInferenceSnapshot !== undefined,
     ...(commandAllowlist ? { restrictedSurface: true as const } : {}),
     ...(workerHostingDisabledReason ? { workerHostingDisabledReason } : {}),
     initialInventory,
@@ -270,6 +243,12 @@ export async function prepareNodeHostRuntime(params?: {
       onManifestChanged,
       onRunnerCapacityChanged,
       onWorkerHostingDisabled,
+    }: {
+      client: NodeHostClient;
+      onInventoryChanged?: (inventory: NodeHostInventory) => void;
+      onManifestChanged?: (manifest: NodeHostManifest) => void;
+      onRunnerCapacityChanged?: (capacity: NodeWorkerCapacitySnapshot) => void;
+      onWorkerHostingDisabled?: (reason: string) => void;
     }) {
       const mcpAbort = new AbortController();
       let closing = false;
@@ -289,6 +268,7 @@ export async function prepareNodeHostRuntime(params?: {
           ? createNodeWorkerSupervisor({
               env,
               capacity: config.nodeHost?.workerRuns?.capacity,
+              nativeInferenceSnapshot,
               onCapacityChanged: onRunnerCapacityChanged,
               workspace: workerWorkspace,
             })
@@ -425,7 +405,7 @@ export async function prepareNodeHostRuntime(params?: {
         },
       });
       return {
-        async invoke(frame) {
+        async invoke(frame: NodeInvokeRequestPayload) {
           if (updatePause.isPaused) {
             await createNodeInvokeResponder(client, frame).error(
               "UNAVAILABLE",
@@ -589,13 +569,13 @@ export async function prepareNodeHostRuntime(params?: {
             inFlightInvokes -= 1;
           }
         },
-        handleInput(invokeId, seq, payloadJSON) {
+        handleInput(invokeId: string, seq: number, payloadJSON: string) {
           const input = activeInvokes.get(invokeId)?.input;
           if (!dispatchNodeInvokeInput(input, seq, payloadJSON)) {
             logDebug(`node-host: dropped inactive or duplicate input for invoke ${invokeId}`);
           }
         },
-        cancel(invokeId) {
+        cancel(invokeId: string) {
           activeInvokes.get(invokeId)?.controller.abort();
         },
         cancelAll() {
@@ -634,10 +614,10 @@ export async function prepareNodeHostRuntime(params?: {
         },
         tryPauseForUpdate: updatePause.tryPauseForUpdate,
         resumeAfterUpdate: updatePause.resumeAfterUpdate,
-        updateGatewayConnection(connection) {
+        updateGatewayConnection(connection?: typeof gatewayConnection) {
           gatewayConnection = connection;
         },
-        close() {
+        close(): Promise<void> {
           if (closePromise) {
             return closePromise;
           }

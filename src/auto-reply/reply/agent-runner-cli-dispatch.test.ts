@@ -399,17 +399,31 @@ describe("runCliAgentWithLifecycle", () => {
     });
     const onActivity = vi.fn();
     const onAssistantText = vi.fn<(text: string) => Promise<void>>(async () => undefined);
-
-    await runCliAgentWithLifecycle({
-      runId: "run-activity-assistant",
-      onActivity,
-      onAssistantText,
-      runParams: createRunParams("run-activity-assistant"),
+    const assistantEvents: Record<string, unknown>[] = [];
+    const stop = onAgentEvent((event) => {
+      if (event.runId === "run-activity-assistant" && event.stream === "assistant") {
+        assistantEvents.push(event.data);
+      }
     });
+
+    try {
+      await runCliAgentWithLifecycle({
+        runId: "run-activity-assistant",
+        onActivity,
+        onAssistantText,
+        runParams: createRunParams("run-activity-assistant"),
+      });
+    } finally {
+      stop();
+    }
 
     // Every real event stamps, independent of which callbacks are registered.
     expect(onAssistantText).toHaveBeenCalledTimes(1);
     expect(onActivity).toHaveBeenCalledTimes(2);
+    expect(assistantEvents).toEqual([
+      { text: "Visible answer", delta: "Visible answer" },
+      { itemId: "cli-assistant:run-activity-assistant", text: "Visible answer" },
+    ]);
   });
 
   it("keeps the captured lifecycle generation on the start event", async () => {
@@ -631,7 +645,7 @@ describe("createCliToolSummaryTracker", () => {
     result: { content: [{ type: "text", text: "Wed Jun 10 2026" }] },
   };
 
-  it.each(["exec", "server.exec"])(
+  it.each(["exec", "server.exec", "mcp__openclaw__exec", "mcp_openclaw_exec"])(
     "delivers a safe %s summary using metadata captured at start",
     async (name) => {
       const deliver = vi.fn();
@@ -646,10 +660,30 @@ describe("createCliToolSummaryTracker", () => {
       expect(commandBearing).toBe(true);
       expect(deliver).toHaveBeenCalledTimes(1);
       const payload = deliver.mock.calls[0]?.[0] as { text: string; isError?: boolean };
-      expect(payload.text).toContain(name === "exec" ? "Exec" : "Server.exec");
+      expect(payload.text).toBe(name === "server.exec" ? "Server.exec" : "Exec");
       expect(payload.text).not.toContain("date -u");
       expect(payload.text).not.toContain("Wed Jun 10 2026");
       expect(payload.isError).toBeUndefined();
+    },
+  );
+
+  it.each(["mcp__openclaw__exec", "mcp_openclaw_exec"])(
+    "renders %s with its authored title, including results without a name",
+    async (name) => {
+      const deliver = vi.fn();
+      const tracker = createCliToolSummaryTracker({
+        commandDetailsVisible: true,
+        shouldEmitToolResult: () => true,
+        shouldEmitToolOutput: () => false,
+        deliver,
+      });
+      await tracker.noteToolEvent({
+        ...startEvent,
+        name,
+        args: { command: "date -u", title: "Check build status" },
+      });
+      await tracker.noteToolEvent({ ...resultEvent, name: undefined });
+      expect(deliver).toHaveBeenCalledWith({ text: "`Check build status`" });
     },
   );
 
@@ -759,7 +793,7 @@ describe("createCliToolSummaryTracker", () => {
       });
 
       expect(deliver).toHaveBeenCalledWith({
-        text: fullOutput ? "🗺️ Progress Card\n```txt\nwrite failed\n```" : "🗺️ Progress Card",
+        text: fullOutput ? "Progress Card\n```txt\nwrite failed\n```" : "Progress Card",
         isError: true,
       });
     },
