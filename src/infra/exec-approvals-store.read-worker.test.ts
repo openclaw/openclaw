@@ -298,6 +298,7 @@ it("binds assessment revisions to both policy bytes and their database owner", a
 
 it("reuses prepared policy until a native or worker policy write", async () => {
   const { root, env } = fixture();
+  expect(await loadMcpToolGrants("main", { env })).toEqual([]);
   seed(env);
   vi.stubEnv("OPENCLAW_STATE_DIR", root);
   const read = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");

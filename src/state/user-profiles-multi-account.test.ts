@@ -171,7 +171,7 @@ describe("multi-account people", () => {
 
   it("adds the nullable primary column to existing profiles without advancing the schema", async () => {
     const options = stateOptions();
-    const db = openOpenClawStateDatabase(options).db;
+    let db = openOpenClawStateDatabase(options).db;
     db.exec(
       "CREATE TABLE user_profiles (id TEXT NOT NULL PRIMARY KEY, display_name TEXT, avatar BLOB, avatar_mime TEXT, avatar_sha256 TEXT, merged_into TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL) STRICT",
     );
@@ -188,6 +188,9 @@ describe("multi-account people", () => {
     expect(
       (await resolveUserProfileGitHubAttribution(["legacy-person"], options)).get("legacy-person"),
     ).toBeNull();
+    // Raw migration edits happen after the live owner and its cached facts have closed.
+    await closeOpenClawStateDatabaseAsync();
+    db = openOpenClawStateDatabase(options).db;
     db.exec("ALTER TABLE user_profile_identities ADD COLUMN canonical_login TEXT");
     db.prepare(
       "UPDATE user_profile_identities SET canonical_login = 'legacy' WHERE subject = '70'",
@@ -222,6 +225,8 @@ describe("multi-account people", () => {
       }),
     );
     expect(db.prepare("PRAGMA user_version").get()?.user_version).toBe(version);
+    await closeOpenClawStateDatabaseAsync();
+    db = openOpenClawStateDatabase(options).db;
     db.prepare("UPDATE user_profiles SET primary_github_account_id = 999 WHERE id = ?").run(
       profile.id,
     );

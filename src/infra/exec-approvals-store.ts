@@ -119,6 +119,10 @@ async function readPreparedExecApprovals(
   }
   const key = context.admission.coordinationKey;
   let entry = preparedSnapshots.get(key);
+  if (entry && entry.identity !== context.admission.identity.key) {
+    preparedSnapshots.delete(key);
+    entry = undefined;
+  }
   if (!entry) {
     entry = {
       identity: context.admission.identity.key,

@@ -60,7 +60,12 @@ describe("skill library worker reads and prepared selection authority", () => {
       const count = reads.mock.calls.length;
       first[0]!.name = "caller mutation";
       expect(await seedSkillLibrarySelection(alice, options)).toEqual([
-        expect.objectContaining({ name: "guide" }),
+        {
+          skillId: saved.entry.skillId,
+          revision: saved.entry.revision,
+          name: saved.entry.name,
+          ownerProfileId: saved.entry.ownerProfileId,
+        },
       ]);
       expect(reads.mock.calls).toHaveLength(count);
 

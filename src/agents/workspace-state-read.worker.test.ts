@@ -71,7 +71,9 @@ async function withoutMainThreadSql<T>(read: () => Promise<T>): Promise<T> {
 }
 
 it("reuses unchanged workspace facts and refreshes them after each owning write", async () => {
+  expect((await readWorkspaceStateSnapshot(state.workspaceDir)).setupExists).toBe(false);
   const initial = await seed();
+  expect(initial.setup.bootstrapSeededAt).toBe("2026-07-16T01:00:00.000Z");
   const execute = vi.spyOn(stateWorker, "runOpenClawStateWorkerOperation");
   const unchanged = await withoutMainThreadSql(() =>
     readWorkspaceStateSnapshot(state.workspaceDir),

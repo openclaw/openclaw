@@ -49,6 +49,10 @@ export async function readCachedWorkspaceStateSnapshot(
   context.admission.assertCurrent();
   const key = context.admission.coordinationKey;
   let store = stores.get(key);
+  if (store && store.identity !== context.admission.identity.key) {
+    stores.delete(key);
+    store = undefined;
+  }
   if (!store) {
     store = {
       identity: context.admission.identity.key,
@@ -65,10 +69,16 @@ export async function readCachedWorkspaceStateSnapshot(
   context.admission.assertCurrent();
   // A write that settled during the read owns the next snapshot.
   if (stores.get(key) === store) {
-    if (store.snapshots.size >= 128) {
-      store.snapshots.delete(store.snapshots.keys().next().value!);
+    // First creation promotes the admission from a pathname to a physical file.
+    // Only that physical owner can receive the subsequent write receipts.
+    if (store.identity !== context.admission.identity.key) {
+      stores.delete(key);
+    } else {
+      if (store.snapshots.size >= 128) {
+        store.snapshots.delete(store.snapshots.keys().next().value!);
+      }
+      store.snapshots.set(aliasKey, structuredClone(snapshot));
     }
-    store.snapshots.set(aliasKey, structuredClone(snapshot));
   }
   return snapshot;
 }

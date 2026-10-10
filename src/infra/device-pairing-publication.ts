@@ -7,7 +7,7 @@ import {
   registerOpenClawStateDatabaseLifecycleListener,
 } from "../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import type { PairedDeviceTokenIdentity } from "./device-pairing-identity.js";
+import type { PairedDeviceTokenIdentity } from "./device-pairing-core.types.js";
 import type {
   DevicePairingBinding,
   DevicePairingBindingFact,
