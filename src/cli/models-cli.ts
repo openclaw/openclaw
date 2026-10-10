@@ -1,4 +1,5 @@
 // Commander registration for model catalog, status, auth, alias, and fallback commands.
+import { randomUUID } from "node:crypto";
 import type { Command } from "commander";
 import type { ModelsAuthSetApiKeyResult } from "../../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import { GATEWAY_SERVER_CAPS } from "../../packages/gateway-protocol/src/server-capabilities.js";
@@ -48,6 +49,68 @@ function runAuthModelCommand<T extends object>(
   return withModelsRuntime(async ({ defaultRuntime, resolveModelAgentOption }) => {
     const agent = resolveModelAgentOption(command);
     const opts = options(agent);
+    if (command.name() === "login" || command.name() === "login-github-copilot") {
+      const loginOptions = command.opts<ModelsAuthLoginOptions>();
+      const copilot = command.name() === "login-github-copilot";
+      const sessionId = randomUUID();
+      const unsupported = [
+        loginOptions.profileId?.trim() ? "--profile-id" : undefined,
+        loginOptions.force ? "--force" : undefined,
+        loginOptions.setDefault ? "--set-default" : undefined,
+        loginOptions.yes ? "--yes" : undefined,
+      ].filter(Boolean);
+      let cancellationConfirmed = false;
+      await runWithLocalStateOwner({
+        method: "models.authLogin",
+        params: async (signal) => {
+          // Load the plugin registry only after choosing the Gateway owner, not during CLI help.
+          const { readGatewayLoginParams } =
+            await import("../commands/models/auth-login-gateway.js");
+          return readGatewayLoginParams(
+            {
+              provider: copilot ? "github-copilot" : loginOptions.provider,
+              method: copilot
+                ? "device"
+                : loginOptions.deviceCode
+                  ? "device-code"
+                  : loginOptions.method,
+              agent,
+            },
+            sessionId,
+            signal,
+          );
+        },
+        target: "system/agent provider sign-in",
+        requireLocalBackendSharedAuth: true,
+        requiredCapabilities: [GATEWAY_SERVER_CAPS.MODELS_AUTH_LOGIN_OWNER],
+        timeoutMs: 25 * 60_000,
+        onForeignOwner: unsupported.length
+          ? async () => {
+              throw new Error(
+                `${unsupported.join(", ")} cannot be represented by models.authLogin. Omit these options, or stop the Gateway through its service owner and rerun this command offline. No credential was changed.`,
+              );
+            }
+          : undefined,
+        onGatewayResponse: async (request, signal) => {
+          // Terminal auth runtime belongs to the accepted Gateway wizard, not CLI registration.
+          const { runGatewayLoginWizard } =
+            await import("../commands/models/auth-login-gateway.js");
+          await runGatewayLoginWizard(request, sessionId, signal, defaultRuntime);
+        },
+        onGatewaySignalAbort: async (request) => {
+          await request("wizard.cancel", { sessionId, closeInput: true });
+          cancellationConfirmed = true;
+        },
+        runLocal: async () => {
+          const run = await load();
+          await run(opts, defaultRuntime);
+        },
+      }).catch((error: unknown) => {
+        if (!cancellationConfirmed) throw error;
+        defaultRuntime.log("Login session closed. Credentials already saved were not undone.");
+      });
+      return;
+    }
     const pasteApiKey = command.name() === "paste-api-key";
     const { provider, profileId } = command.opts<{ provider?: string; profileId?: string }>();
     const result = await runWithLocalStateOwner<ModelsAuthSetApiKeyResult | void>({

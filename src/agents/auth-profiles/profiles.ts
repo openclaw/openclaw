@@ -117,11 +117,14 @@ export async function promoteAuthProfileInOrder(params: {
   profileId: string;
   createIfMissing?: boolean;
   createFromOrder?: string[];
+  assertCurrent?: () => void;
 }): Promise<Result<AuthProfileStore, "lock-contention">> {
+  params.assertCurrent?.();
   const providerKey = resolveProviderIdForAuth(params.provider);
   const effectiveStore = ensureAuthProfileStoreForLocalUpdate(params.agentDir);
   const updated = await updateAuthProfileStoreWithLock({
     agentDir: params.agentDir,
+    assertCurrent: params.assertCurrent,
     saveOptions: { preserveOrderProfileIds: [params.profileId, ...(params.createFromOrder ?? [])] },
     updater: (store) => {
       const profile = store.profiles[params.profileId] ?? effectiveStore.profiles[params.profileId];
