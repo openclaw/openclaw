@@ -298,7 +298,7 @@ only when it needs Codex app access. See
 
 Agent-turn jobs default to the creating conversation when the create request carries session context. Callers without a session key, including CLI and API callers that do not supply one, fall back to `isolated`. System events and heartbeats still default to `main`; command and script payloads still default to `isolated`.
 
-An explicitly isolated agent-turn job created from a conversation keeps that conversation's identity for delivery. With default `announce` delivery and no explicit or remembered external route, its final result is committed into the creating conversation, including WebChat/Control UI. The run remains isolated and does not read the conversation's history. See [Automation delivery](/automation/cron-jobs/delivery) for generation checks, duplicate prevention, and external-route behavior.
+Agent, command, and script jobs created from a conversation keep its identity for final results. With `announce`, the result is committed there even when an explicit channel target also receives a notification. An isolated run still does not read that conversation's history. See [Automation delivery](/automation/cron-jobs/delivery) for generation checks, duplicate prevention, and external-notification behavior.
 
 <AccordionGroup>
   <Accordion title="Main session vs current vs isolated vs custom">

@@ -20,15 +20,11 @@ export function observeCronRunRecoveryInDatabase(
           command.proposals.map((proposal) => proposal.jobId),
         ).map((receipt) => [receipt.jobId, receipt]),
       );
-      const runningJobIds = new Set(
-        command.proposals
-          .filter((proposal) => proposal.runningAtMs !== undefined)
-          .map((proposal) => proposal.jobId),
-      );
+      const jobIds = new Set(command.proposals.map((proposal) => proposal.jobId));
       const jobs = new Map(
-        loadedCronStoreFromRows(
-          loadCronRows(database, command.storeKey, runningJobIds),
-        ).store.jobs.map((job) => [job.id, job]),
+        loadedCronStoreFromRows(loadCronRows(database, command.storeKey, jobIds)).store.jobs.map(
+          (job) => [job.id, job],
+        ),
       );
       return {
         kind: "observed",
@@ -36,6 +32,9 @@ export function observeCronRunRecoveryInDatabase(
           const job = jobs.get(proposal.jobId);
           return {
             jobId: proposal.jobId,
+            routing: job
+              ? { id: job.id, delivery: job.delivery, failureAlert: job.failureAlert }
+              : undefined,
             ...(proposal.queuedAtMs === undefined ? {} : { queuedAtMs: proposal.queuedAtMs }),
             ...(proposal.runningAtMs === undefined ? {} : { runningAtMs: proposal.runningAtMs }),
             receipt: receipts.get(proposal.jobId),

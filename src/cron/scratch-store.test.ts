@@ -20,6 +20,7 @@ import {
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { resolveCronJobConfigRevision } from "./config-revision.js";
 import { createCronMutationCompletion } from "./mutation-completion.js";
 import { CRON_JOB_SCRATCH_MAX_BYTES } from "./scratch-contract.js";
 import { readCronScratchSnapshot } from "./scratch-read.js";
@@ -274,6 +275,11 @@ describe("cron scratch worker service", () => {
           ? vi
               .spyOn(runtimeMutation, "runCronRuntimeMutation")
               .mockImplementationOnce(async (params) => {
+                expect(params.type).toBe("cron.writeScratch");
+                expect(params.policy.value).toEqual({
+                  expectedConfigRevision: resolveCronJobConfigRevision(job),
+                });
+                expect(params).not.toHaveProperty("prepare");
                 entered.resolve();
                 await release.promise;
                 return execute(params);
@@ -295,6 +301,7 @@ describe("cron scratch worker service", () => {
                     isRecord(facts) &&
                     typeof facts.nonce === "string"
                   ) {
+                    expect(Object.keys(facts)).toEqual(["nonce"]);
                     nonce = facts.nonce;
                   }
                   if (

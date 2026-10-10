@@ -1,5 +1,6 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions/types.js";
+import * as deliveryQueue from "../infra/delivery-queue-sqlite.js";
 import { setMinimalOutboundSessionPluginRegistryForTests } from "../infra/outbound/outbound-session.test-helpers.js";
 import { makeJob } from "./isolated-agent.test-harness.js";
 
@@ -70,52 +71,34 @@ async function announce(sessionKey?: string) {
 }
 
 describe("command announcement session policy", () => {
+  afterEach(() => vi.restoreAllMocks());
+
   beforeEach(() => {
+    vi.spyOn(deliveryQueue, "inspectDeliveryQueueReceipt").mockResolvedValue({
+      status: undefined,
+      pendingEntry: null,
+    });
     setMinimalOutboundSessionPluginRegistryForTests();
     vi.clearAllMocks();
     mocks.loadSessionEntryReadOnly.mockReset();
     mocks.updateSessionLastRoute.mockResolvedValue({ sessionId: "destination", updatedAt: 1 });
   });
 
-  it("persists the destination route without interpreting a notification identity as a source session", async () => {
-    await announce();
-    expect(mocks.updateSessionLastRoute).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionKey: "agent:main:fallbackchat:direct:recipient",
-        createIfMissing: true,
-        channel: "fallbackchat",
-        to: "user:recipient",
-      }),
-    );
-    expect(mocks.warn).not.toHaveBeenCalled();
-  });
-
-  it("inherits a real source session's required sandbox policy", async () => {
-    mocks.loadSessionEntryReadOnly.mockReturnValue({
-      sessionId: "source",
-      updatedAt: 1,
-      createdVia: "operator",
-      sandbox: "required",
-    });
-    await announce("agent:other:main");
-    expect(mocks.updateSessionLastRoute).toHaveBeenCalledWith(
-      expect.objectContaining({
-        ctx: expect.objectContaining({
-          SessionCreation: expect.objectContaining({ via: "operator", sandbox: "required" }),
-        }),
-      }),
-    );
-  });
-
-  it("still warns when a real source policy cannot be read without blocking delivery", async () => {
-    mocks.loadSessionEntryReadOnly.mockImplementation(() => {
-      throw new Error("source storage unavailable");
-    });
-    expect(await announce("agent:other:main")).toMatchObject({ status: "sent" });
-    expect(mocks.warn).toHaveBeenCalledWith(
-      expect.stringContaining("Failed to preserve outbound session creation policy"),
-    );
-    expect(mocks.warn).toHaveBeenCalledWith(expect.stringContaining("source storage unavailable"));
-    expect(mocks.updateSessionLastRoute).not.toHaveBeenCalled();
-  });
+  it.each(["notification-only", "source", "unreadable-source"] as const)(
+    "does not create or inherit a recipient model session for %s announcements",
+    async (source) => {
+      mocks.loadSessionEntryReadOnly.mockImplementation(() => {
+        if (source === "unreadable-source") {
+          throw new Error("source storage unavailable");
+        }
+        return { sessionId: "source", updatedAt: 1, createdVia: "operator", sandbox: "required" };
+      });
+      expect(
+        await announce(source === "notification-only" ? undefined : "agent:other:main"),
+      ).toEqual({ status: "sent" });
+      expect(mocks.loadSessionEntryReadOnly).not.toHaveBeenCalled();
+      expect(mocks.updateSessionLastRoute).not.toHaveBeenCalled();
+      expect(mocks.warn).not.toHaveBeenCalled();
+    },
+  );
 });

@@ -122,7 +122,7 @@ export async function removeStaleCronJobFamilyRows(
     type: "cron.removeStaleFamily",
     input: { storeKey, family: { ...family } },
     assertCurrent: () => opts?.commitGuard?.(),
-    prepare: () => ({ value: {}, assertCurrent() {} }),
+    policy: { value: {}, assertCurrent() {} },
     publish: (outcome) => {
       removed = outcome.removed;
       if (removed > 0) {

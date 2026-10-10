@@ -156,13 +156,7 @@ export async function writeScratch(
           params.commitGuard?.();
           source.assertCurrent();
         },
-        assertJobCurrent(configRevision) {
-          if (configRevision !== expectedRevision) {
-            // The foreign commit invalidates the resident definition used by the caller guard.
-            noteCronJobsStoreCommit(source.storeKey);
-            throw new CronJobsStoreChangedError(source.storeKey);
-          }
-        },
+        expectedConfigRevision: expectedRevision,
       },
     );
   });

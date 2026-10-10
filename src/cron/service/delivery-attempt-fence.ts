@@ -25,16 +25,13 @@ export function createCronCompletionDeliveryFence(params: {
   const reservation = state.queuedRunReservationsByJobId.get(handle.jobId);
   const defaultAgentId = () => state.deps.resolveDefaultAgentId?.() ?? state.deps.defaultAgentId;
   const admittedDefaultAgentId = defaultAgentId();
-  let preparedAgentFacts: { deletionBlocked: boolean } | undefined;
+  const preparedAgentFacts = { deletionBlocked: false };
   const allowMissingJob = () =>
     activeJobMarker?.jobId === handle.jobId && isCronSelfRemovalCurrent(activeJobMarker);
   const assertCurrent = () => {
     context.admission.assertCurrent();
     signal.throwIfAborted();
-    if (
-      preparedAgentFacts &&
-      state.deps.isAgentAvailable?.(handle.agentId, undefined, preparedAgentFacts) === false
-    ) {
+    if (state.deps.isAgentAvailable?.(handle.agentId, undefined, preparedAgentFacts) === false) {
       throw new CronRunReceiptRevisionError(
         handle.receiptId,
         describeUnavailableCronAgent(handle.agentId),
@@ -58,6 +55,7 @@ export function createCronCompletionDeliveryFence(params: {
     assertCurrent,
     async beforeAttempt() {
       assertCurrent();
+      const missingJobAllowed = allowMissingJob();
       let committed = false;
       try {
         await runCronRuntimeMutation({
@@ -65,30 +63,14 @@ export function createCronCompletionDeliveryFence(params: {
           type: "cron.markDeliveryStarted",
           input: { storeKey: handle.storeKey, handle: { ...handle } },
           assertCurrent,
-          prepare(facts) {
-            preparedAgentFacts = facts;
-            const missingJobAllowed = allowMissingJob();
-            const assertPreparedCurrent = () => {
+          policy: {
+            value: { allowMissingJob: missingJobAllowed, defaultAgentId: admittedDefaultAgentId },
+            assertCurrent() {
               assertCurrent();
-              if (
-                facts.deletionBlocked ||
-                state.deps.isAgentAvailable?.(handle.agentId, undefined, facts) === false
-              ) {
-                throw new CronRunReceiptRevisionError(
-                  handle.receiptId,
-                  describeUnavailableCronAgent(handle.agentId),
-                  "owner-unavailable",
-                );
-              }
               if (allowMissingJob() !== missingJobAllowed) {
                 throw new CronRunReceiptRevisionError(handle.receiptId);
               }
-            };
-            assertPreparedCurrent();
-            return {
-              value: { allowMissingJob: missingJobAllowed, defaultAgentId: admittedDefaultAgentId },
-              assertCurrent: assertPreparedCurrent,
-            };
+            },
           },
           publish() {
             committed = true;

@@ -174,10 +174,10 @@ async function seed(fixture: OpenClawTestState, partition = "first", enabled = t
           ),
         },
         assertCurrent() {},
-        prepare: () => ({
+        policy: {
           value: { nowMs: 2 },
           assertCurrent: options?.beforeCommit ?? (() => {}),
-        }),
+        },
         publish: options?.publish ?? (() => {}),
       });
     },

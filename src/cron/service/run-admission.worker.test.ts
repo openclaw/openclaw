@@ -1,9 +1,10 @@
 import path from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
-import { MessagePort } from "node:worker_threads";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
-import { loseFirstCronMutationReply } from "../../../test/helpers/cron/runtime-mutation.js";
+import {
+  duringCronMutationAdmission,
+  loseFirstCronMutationReply,
+} from "../../../test/helpers/cron/runtime-mutation.js";
 import {
   createCronRegressionState,
   createDueIsolatedJob,
@@ -110,27 +111,6 @@ async function withReservation(
       await state.op;
     }
   });
-}
-
-function duringPreparation(
-  matches: (value: Record<string, unknown>) => boolean,
-  mutate: () => void,
-) {
-  // oxlint-disable-next-line typescript/unbound-method -- Retain the intercepted port as receiver.
-  const original = MessagePort.prototype.postMessage;
-  let observed = false;
-  const spy = vi.spyOn(MessagePort.prototype, "postMessage").mockImplementation(function (
-    this: MessagePort,
-    value,
-    transferList,
-  ) {
-    if (!observed && isRecord(value) && matches(value)) {
-      observed = true;
-      mutate();
-    }
-    return original.call(this, value, transferList);
-  });
-  return { restore: () => spy.mockRestore(), observed: () => observed };
 }
 
 it.each(["activation", "cleanup", "family", "worker control"] as const)(
@@ -325,7 +305,7 @@ it.each(["durable receipt", "local owner"] as const)(
       }
       const interception =
         scope === "local owner"
-          ? duringPreparation(
+          ? duringCronMutationAdmission(
               (value) => "markerAtMs" in value,
               () => {
                 localReplacement = reserveQueuedCronRun(state, job.id, owner.markerAtMs, {
@@ -376,7 +356,7 @@ it("rejects payload execution when its agent becomes unavailable during worker a
     state.deps.isAgentAvailable = () => available;
     const runner = vi.fn(async () => ({ status: "ok" as const }));
     state.deps.runIsolatedAgentJob = runner;
-    const interception = duringPreparation(
+    const interception = duringCronMutationAdmission(
       (value) => "markerAtMs" in value,
       () => {
         available = false;
@@ -429,7 +409,7 @@ it.each([false, true])(
           sessionsDir: path.join(privateRoot, "agents", "main", "sessions"),
         });
       }
-      const interception = duringPreparation(
+      const interception = duringCronMutationAdmission(
         (value) => "markerAtMs" in value,
         () => stop(state),
       );
@@ -480,7 +460,7 @@ it.each(["before commit", "after publication"] as const)(
         settlement: runner.promise,
         onFinishError: (error) => finishErrors.push(error),
       });
-      const interception = duringPreparation(
+      const interception = duringCronMutationAdmission(
         (value) => Array.isArray(value.reservations),
         () => {
           if (timing === "before commit") {

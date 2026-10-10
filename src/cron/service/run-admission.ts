@@ -19,6 +19,7 @@ import {
   releaseReservedCronRuns,
   releaseReservationOwnership,
   reserveCronRuns,
+  retryCronReservationRelease,
   type QueuedCronRunReservation,
 } from "./run-admission-mutation.js";
 import { createCronOwnerExecutionIdentityAdmission, createCronRunHandle } from "./run-history.js";
@@ -27,7 +28,7 @@ import { markServiceCronJobActive } from "./run-receipts.js";
 import { applyCronRuntimeRowsToState } from "./runtime-publication.js";
 import { type CronServiceState, emit } from "./state.js";
 import { captureCronServiceMutationSource, ensureLoaded } from "./store.js";
-import type { TimedCronRunOutcome } from "./timer-execution-timeout.js";
+import type { ExecuteJobCoreOptions, TimedCronRunOutcome } from "./timer-execution-timeout.js";
 import { authorCronRunCompletion, executeJobCoreWithTimeout } from "./timer-job-runner.js";
 import { isRunnableJob } from "./timer-runnable.js";
 
@@ -131,32 +132,16 @@ export async function cleanupQueuedCronRunReservations(params: {
     }
     return;
   }
-  let retrySafe = false;
-  const attempt = () =>
-    locked(state, async () => {
-      retrySafe = false;
-      await releaseReservedCronRuns({
+  await retryCronReservationRelease(state, reservations, (onSettled) =>
+    locked(state, () =>
+      releaseReservedCronRuns({
         ...params,
         context,
         recompute: params.recompute !== undefined,
-        onSettled: (outcome) => {
-          retrySafe = outcome === "not-committed";
-        },
-      });
-    });
-  try {
-    await attempt();
-  } catch (error) {
-    try {
-      if (!retrySafe) {
-        throw error;
-      }
-      await attempt();
-    } catch (failure) {
-      releaseReservationOwnership(state, reservations);
-      throw failure;
-    }
-  }
+        onSettled,
+      }),
+    ),
+  );
 }
 
 /** Supersedes one activated run and releases only its exact durable marker.
@@ -473,6 +458,62 @@ export async function activateQueuedCronRun(params: {
   return { kind: "unavailable", reason: "stopped" };
 }
 
+/** Both admission routes execute with the accepted receipt, never the caller's authority. */
+export async function executeReservedCronRun(
+  state: CronServiceState,
+  execution: Pick<
+    TimedCronRunOutcome,
+    "jobId" | "job" | "taskRunId" | "activeJobMarker" | "reservationIdentity" | "startedAt"
+  > & { runReceipt: CronRunReceiptHandle; runReceiptContext: OpenClawStateWorkerContext },
+  options?: {
+    executionJob?: CronJob;
+    payloadOptions?: Pick<
+      ExecuteJobCoreOptions,
+      "owningCronLaneTaskMarker" | "streamBatch" | "streamScheduleKey" | "streamSourceIdentity"
+    >;
+    setupDiagnostics?: boolean;
+    onSetupError?: (job: CronJob, errorText: string) => void;
+  },
+): Promise<Omit<TimedCronRunOutcome, "endedAt">> {
+  const job = options?.executionJob ?? execution.job;
+  let result: Awaited<ReturnType<typeof executeJobCoreWithTimeout>>;
+  let receiptSettlementDisposition: TimedCronRunOutcome["receiptSettlementDisposition"];
+  try {
+    result = await executeJobCoreWithTimeout(state, job, {
+      ...options?.payloadOptions,
+      runId: execution.taskRunId,
+      activeJobMarker: execution.activeJobMarker,
+      runReceipt: execution.runReceipt,
+      runReceiptContext: execution.runReceiptContext,
+      executionIdentity: createCronOwnerExecutionIdentityAdmission({
+        state,
+        runReceipt: execution.runReceipt,
+      }),
+    });
+  } catch (error) {
+    if (error instanceof CronRunReceiptRevisionError && error.reason === "owner-unavailable") {
+      receiptSettlementDisposition = "owner-unavailable";
+    }
+    const errorText =
+      error instanceof CronRunReceiptRevisionError
+        ? error.message
+        : normalizeCronRunErrorText(error);
+    options?.onSetupError?.(job, errorText);
+    result = authorCronRunCompletion(job, {
+      status: "error",
+      error: errorText,
+      ...(options?.setupDiagnostics
+        ? {
+            diagnostics: createCronRunDiagnosticsFromError("cron-setup", errorText, {
+              nowMs: state.deps.nowMs,
+            }),
+          }
+        : {}),
+    });
+  }
+  return { ...execution, ...result, receiptSettlementDisposition };
+}
+
 export async function executeQueuedCronRun(params: {
   state: CronServiceState;
   jobId: string;
@@ -602,42 +643,13 @@ export async function executeQueuedCronRun(params: {
       runReceipt: started.runReceipt,
       runReceiptContext: started.runReceiptContext,
     };
-    let outcome: TimedCronRunOutcome;
-    try {
-      const result = await executeJobCoreWithTimeout(state, executionJob, {
-        runId: taskRunId,
-        activeJobMarker,
-        runReceipt: started.runReceipt,
-        runReceiptContext: started.runReceiptContext,
-        executionIdentity: createCronOwnerExecutionIdentityAdmission({
-          state,
-          runReceipt: started.runReceipt,
-        }),
-      });
-      outcome = { ...base, ...result, endedAt: state.deps.nowMs() };
-    } catch (error) {
-      const receiptSettlementDisposition =
-        error instanceof CronRunReceiptRevisionError && error.reason === "owner-unavailable"
-          ? "owner-unavailable"
-          : undefined;
-      const errorText =
-        error instanceof CronRunReceiptRevisionError
-          ? error.message
-          : normalizeCronRunErrorText(error);
-      params.onSetupError?.(executionJob, errorText);
-      outcome = {
-        ...base,
-        ...authorCronRunCompletion(executionJob, {
-          status: "error",
-          error: errorText,
-          diagnostics: createCronRunDiagnosticsFromError("cron-setup", errorText, {
-            nowMs: state.deps.nowMs,
-          }),
-        }),
-        ...(receiptSettlementDisposition ? { receiptSettlementDisposition } : {}),
-        endedAt: state.deps.nowMs(),
-      };
-    }
+    const outcome: TimedCronRunOutcome = {
+      ...(await executeReservedCronRun(state, base, {
+        setupDiagnostics: true,
+        onSetupError: params.onSetupError,
+      })),
+      endedAt: state.deps.nowMs(),
+    };
     return { outcome, handled: (await params.onCompleted?.(outcome)) === true };
   };
   const admission = await runWithCronAdmission(

@@ -14,6 +14,7 @@ import type {
   PreparedCronRunReceiptAdjudication,
 } from "./run-receipt.types.js";
 import type { CronRunRecoveryProposal } from "./run-recovery-read.types.js";
+import type { CronRuntimeMutationContracts } from "./runtime-mutation.types.js";
 import type { CronStoreSaveOptions, PreparedCronStoreChanges } from "./save.types.js";
 
 export type CronScheduleMaintenanceOptions = {
@@ -178,6 +179,7 @@ export type CronRuntimeMutationInputs = {
     receipts: Array<{
       terminal: CronReceiptTerminal;
       allowMissingJob: boolean;
+      disposition?: "owner-unavailable";
     }>;
   };
   "cron.removeStaleFamily": {
@@ -206,7 +208,10 @@ export type CronRuntimeMutationInputs = {
 export type CronRuntimeMutationType = keyof CronRuntimeMutationInputs;
 export type CronRuntimeWorkerOperations = {
   [Type in CronRuntimeMutationType]: {
-    input: CronRuntimeMutationInputs[Type] & { nonce: string };
+    input: CronRuntimeMutationInputs[Type] & {
+      nonce: string;
+      prepared: CronRuntimeMutationContracts[Type]["preparation"];
+    };
     output:
       | { nonce: string }
       | (Type extends "cron.reserveRuns" ? { nonce: string; conflict: CronRunReceipt } : never)

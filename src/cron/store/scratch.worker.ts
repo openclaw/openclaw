@@ -7,7 +7,7 @@ import { resolveCronJobConfigRevision } from "../config-revision.js";
 import { writeCronJobScratchInDatabase } from "../scratch-write.kernel.js";
 import { loadedCronStoreFromRows, loadCronRows } from "./row-codec.js";
 import {
-  prepareCronRuntimeMutation,
+  admitCronRuntimeMutation,
   retainCronRuntimeMutationOutcome,
 } from "./runtime-mutation.worker.js";
 import type { CronRuntimeWorkerOperations } from "./runtime-worker.types.js";
@@ -22,9 +22,15 @@ export function writeCronScratchInWorker(
         loadCronRows(db, input.storeKey, new Set([input.jobId])),
         input.createdAtMsFallback,
       ).store.jobs[0];
-      prepareCronRuntimeMutation("cron.writeScratch", input.nonce, {
-        configRevision: job ? resolveCronJobConfigRevision(job) : undefined,
-      });
+      admitCronRuntimeMutation(input.nonce);
+      if (
+        input.prepared.expectedConfigRevision !== undefined &&
+        (!job || resolveCronJobConfigRevision(job) !== input.prepared.expectedConfigRevision)
+      ) {
+        return retainCronRuntimeMutationOutcome("cron.writeScratch", db, input.nonce, {
+          jobChanged: true,
+        });
+      }
       const outcome = writeCronJobScratchInDatabase(db, input);
       return retainCronRuntimeMutationOutcome("cron.writeScratch", db, input.nonce, outcome);
     },

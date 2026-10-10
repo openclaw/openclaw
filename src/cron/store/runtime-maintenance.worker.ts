@@ -10,7 +10,10 @@ import {
   reconcileCronRunHistoryInDatabase,
 } from "./run-history.kernel.js";
 import { readActiveCronRunReceiptsInDatabase } from "./run-receipt-read.js";
-import { listActiveCronRunReceiptJobIdsInDatabase } from "./run-receipt-store.js";
+import {
+  isCronRunReceiptOwnerStale,
+  listActiveCronRunReceiptJobIdsInDatabase,
+} from "./run-receipt-store.js";
 import { prepareCronRunReceiptWriteSchema } from "./run-receipt-write-admission.js";
 import {
   loadCronRuntimeAuthorities,
@@ -19,7 +22,7 @@ import {
 import type { CronRuntimeMutationContracts } from "./runtime-mutation.types.js";
 import {
   createCronMutationLogger,
-  prepareCronRuntimeMutation,
+  admitCronRuntimeMutation,
   retainCronRuntimeMutationOutcome,
 } from "./runtime-mutation.worker.js";
 import type { CronRuntimeWorkerOperations } from "./runtime-worker.types.js";
@@ -48,15 +51,21 @@ export function maintainCronRunHistoryInWorker(
       const receipts = schema.cronRunReceipts
         ? readActiveCronRunReceiptsInDatabase(db, undefined, jobIds)
         : [];
-      const preparation = prepareCronRuntimeMutation("cron.maintainHistory", input.nonce, {
-        jobIds,
-        receipts,
-      });
+      const preparation = input.prepared;
+      admitCronRuntimeMutation(input.nonce);
+      const local = new Set(preparation.localReceiptIds);
+      const liveness = receipts.map((receipt) => ({
+        receipt,
+        stale: isCronRunReceiptOwnerStale(receipt, preparation.nowMs, local),
+      }));
       const reconciled = reconcileCronRunHistoryInDatabase(
         db,
         records,
         preparation.nowMs,
-        new Set(preparation.protectedJobIds),
+        new Set([
+          ...preparation.activeJobIds,
+          ...liveness.filter(({ stale }) => !stale).map(({ receipt }) => receipt.jobId),
+        ]),
       );
       // Newly lost rows retain their first lost observation until the next sweep, as before.
       const pruned = pruneCronRunHistoryInDatabase(
@@ -67,6 +76,7 @@ export function maintainCronRunHistoryInWorker(
       );
       return retainCronRuntimeMutationOutcome("cron.maintainHistory", db, input.nonce, {
         reconciled: reconciled.size,
+        liveness,
         pruned,
       });
     },
@@ -85,9 +95,8 @@ export function scheduleUnownedCronJobsInWorker(
       const decoded = loadedCronStoreFromRows(rows).store.jobs;
       const activeJobIds = listActiveCronRunReceiptJobIdsInDatabase(db, input.storeKey);
       const jobsById = new Map(decoded.map((job) => [job.id, job]));
-      const preparation = prepareCronRuntimeMutation("cron.scheduleUnowned", input.nonce, {
-        jobIds: decoded.map((job) => job.id),
-      });
+      const preparation = input.prepared;
+      admitCronRuntimeMutation(input.nonce);
       const reservations = new Map(
         preparation.ownership.flatMap((owner) =>
           owner.reservation ? [[owner.jobId, owner.reservation] as const] : [],
@@ -162,7 +171,7 @@ export function recordCronFailureAlertOutcomeInWorker(
         job.state.lastFailureAlertAtMs === input.alertAtMs &&
         job.state.lastFailureNotificationId === input.notificationId &&
         job.state.lastFailureNotificationDeliveryStatus === "unknown";
-      prepareCronRuntimeMutation("cron.recordFailureAlertOutcome", input.nonce, { ownsCycle });
+      admitCronRuntimeMutation(input.nonce);
       if (job && row && ownsCycle) {
         job.state.lastFailureNotificationDelivered = input.outcome.delivered;
         job.state.lastFailureNotificationDeliveryStatus = input.outcome.status;

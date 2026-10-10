@@ -1,13 +1,18 @@
 import type { NormalizeReplySkipReason } from "../auto-reply/reply/normalize-reply-skip-reason.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { resolveControlUiAutomationRunUrl } from "../config/control-ui-link-base.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { commitCronConversationResult } from "../cron/conversation-result.js";
 import type { CronCompletionDeliveryFence } from "../cron/delivery-attempt-fence.js";
 import { resolveCronDeliveryPlan, sendCronAnnouncePayloadStrict } from "../cron/delivery.js";
-import { retryTransientDirectCronDelivery } from "../cron/isolated-agent/delivery-dispatch-policy.js";
+import {
+  resolveDeliveryTarget,
+  requiresExternalCronDelivery,
+} from "../cron/isolated-agent/delivery-target.js";
 import { createCronExecutionId } from "../cron/run-id.js";
 import { resolveCronDeliverySessionKey } from "../cron/session-target.js";
-import type { CronDeliveryTrace, CronJob, CronResolvedDeliveryState } from "../cron/types.js";
+import type { CronDeliveryTrace, CronStoredJob, CronResolvedDeliveryState } from "../cron/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { getChildLogger } from "../logging.js";
 
@@ -26,7 +31,7 @@ export function pickDefined<T extends Record<string, unknown>>(
 
 export async function finalizeCronCompletionAnnouncement(params: {
   deliveryAttemptFence: CronCompletionDeliveryFence | null;
-  job: CronJob;
+  job: CronStoredJob;
   text?: string;
   suppressionReason?: NormalizeReplySkipReason;
   runStartedAtMs?: number;
@@ -82,45 +87,72 @@ export async function finalizeCronCompletionAnnouncement(params: {
   // Command summaries are already redacted; adding the link earlier would strip its URL.
   const text = inspectUrl ? `${params.text}\nInspect: ${inspectUrl}` : params.text;
   const abortSignal = params.abortSignal ?? new AbortController().signal;
-  let deliveryMayHaveReachedRecipient = false;
   try {
-    const result = await retryTransientDirectCronDelivery({
+    const conversation = params.job.sourceConversation;
+    if (conversation) {
+      if (params.runStartedAtMs === undefined) {
+        throw new Error("cron result is missing its occurrence start time");
+      }
+      const result = await commitCronConversationResult({
+        config: cfg,
+        agentId,
+        jobId: params.job.id,
+        runStartedAt: params.runStartedAtMs,
+        conversation,
+        payloads: [{ text: params.text }],
+        signal: abortSignal,
+        deliveryAttemptFence: params.deliveryAttemptFence,
+      });
+      if (!result.ok) {
+        deliveryState.error = result.reason;
+        return finish(true);
+      }
+    }
+    const resolved = await resolveDeliveryTarget(cfg, agentId, {
+      ...plan,
+      sessionKey: resolveCronDeliverySessionKey(params.job),
+      sessionTarget: conversation ? params.job.sessionTarget : undefined,
+      sourceConversation: conversation,
+    });
+    if (!resolved.ok && conversation && !requiresExternalCronDelivery(plan, resolved)) {
+      deliveryState.status = "delivered";
+      deliveryState.delivered = true;
+      return finish(true);
+    }
+    if (!resolved.ok) {
+      throw resolved.error;
+    }
+    const result = await sendCronAnnouncePayloadStrict({
+      deps: params.deps,
+      cfg,
+      agentId,
       jobId: params.job.id,
-      label: params.label,
-      signal: abortSignal,
-      shouldRetryError: () => !deliveryMayHaveReachedRecipient,
-      run: () =>
-        sendCronAnnouncePayloadStrict({
-          deps: params.deps,
-          cfg,
-          agentId,
-          jobId: params.job.id,
-          target: {
-            channel: plan.channel,
-            to: plan.to,
-            threadId: plan.threadId,
-            accountId: plan.accountId,
-            sessionKey: resolveCronDeliverySessionKey(params.job),
-          },
-          payload: { text },
-          abortSignal,
-          ...(params.runStartedAtMs === undefined
-            ? {}
-            : {
-                completion: {
-                  job: params.job,
-                  runStartedAt: params.runStartedAtMs,
-                  deliveryAttemptFence: params.deliveryAttemptFence,
-                },
-              }),
-          onDeliveryAttempt: (reachedRecipient) => {
-            deliveryMayHaveReachedRecipient ||= reachedRecipient;
-          },
-        }),
+      target: { ...resolved, sessionKey: resolveCronDeliverySessionKey(params.job) },
+      payload: { text },
+      abortSignal,
+      sessionGeneration: conversation
+        ? {
+            agentId,
+            storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId }),
+            ...conversation,
+            lifecycleRevision: conversation.lifecycleRevision ?? null,
+          }
+        : undefined,
+      ...(params.runStartedAtMs === undefined
+        ? {}
+        : {
+            completion: {
+              job: params.job,
+              runStartedAt: params.runStartedAtMs,
+              deliveryAttemptFence: params.deliveryAttemptFence,
+            },
+          }),
     });
     if (result.status === "sent") {
       deliveryState.status = "delivered";
       deliveryState.delivered = true;
+    } else if (result.skipReason) {
+      deliveryState.deliverySuppressionReason = result.skipReason;
     } else {
       const uncertain = result.reason === "adapter_returned_no_identity";
       deliveryState.status = uncertain ? "unknown" : "not-delivered";

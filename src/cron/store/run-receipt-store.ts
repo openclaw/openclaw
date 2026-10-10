@@ -112,6 +112,22 @@ export const {
   releaseLocalCronRunReceiptOwnership,
 } = settlement;
 
+/** Snapshot local custody; commit checks only receipts actually examined by this operation. */
+export function prepareCronReceiptLiveness() {
+  const receiptIds = settlement.ownedReceiptIds();
+  return {
+    receiptIds,
+    assertCurrent(
+      observations: readonly { receipt: CronRunReceiptHandle; stale: boolean }[] = [],
+      nowMs = Date.now(),
+    ) {
+      if (observations.some(({ receipt, stale }) => ownerStale(receipt, nowMs) !== stale)) {
+        throw new Error("Cron receipt liveness changed before commit");
+      }
+    },
+  };
+}
+
 export function ensureCronRunReceiptSchema(database: DatabaseSync): void {
   // sqlite-allow-raw -- Canonical feature-local additive DDL only.
   database.exec(
@@ -193,9 +209,15 @@ function sameOwner(left: CronRunReceiptRow, right: CronRunReceiptOwnerObservatio
   );
 }
 
-function ownerStale(owner: CronRunReceiptOwnerObservation, nowMs = Date.now()): boolean {
+function ownerStale(
+  owner: CronRunReceiptOwnerObservation,
+  nowMs = Date.now(),
+  localReceiptIds?: ReadonlySet<string>,
+): boolean {
   if (owner.ownerPid === process.pid) {
-    return !settlement.owns(owner.receiptId);
+    return !(localReceiptIds
+      ? localReceiptIds.has(owner.receiptId)
+      : settlement.owns(owner.receiptId));
   }
   if (isPidDefinitelyDead(owner.ownerPid)) {
     return true;
@@ -458,8 +480,9 @@ export function exactCronRunReceiptMatches(
 export function isCronRunReceiptOwnerStale(
   candidate: CronRunReceiptOwnerObservation | CronRunReceiptHandle,
   nowMs = Date.now(),
+  localReceiptIds?: ReadonlySet<string>,
 ): boolean {
-  return ownerStale(candidate, nowMs);
+  return ownerStale(candidate, nowMs, localReceiptIds);
 }
 
 /** Synchronous transaction guard used immediately before a run side effect or state write. */

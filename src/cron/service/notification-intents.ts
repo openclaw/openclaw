@@ -20,14 +20,27 @@ export function captureCronNotificationRouting(
 export function prepareCronNotificationRouting(
   deps: { defaultAgentId?: string; resolveDefaultAgentId?: () => string | undefined },
   needed: boolean,
+  jobs?: readonly CronNotificationJob[],
 ) {
+  const needsDefault =
+    needed &&
+    (!jobs || jobs.some((job) => !resolveCronNotificationQueueOwner(job, "auto-disabled").agentId));
   const capture = () =>
     captureCronNotificationRouting(deps.resolveDefaultAgentId?.(), deps.defaultAgentId);
-  const routing: CronNotificationRouting = needed ? capture() : {};
+  const routing: CronNotificationRouting = needsDefault ? capture() : {};
   return {
     routing,
-    assertCurrent() {
-      if (needed && capture().defaultAgentId !== routing.defaultAgentId) {
+    assertCurrent(notifications: readonly CronNotificationIntent[] = []) {
+      if (
+        needed &&
+        !needsDefault &&
+        notifications.some(
+          (intent) => !resolveCronNotificationQueueOwner(intent.job, intent.kind).agentId,
+        )
+      ) {
+        throw new Error("Cron notification owner changed before commit");
+      }
+      if (needsDefault && capture().defaultAgentId !== routing.defaultAgentId) {
         throw new Error("Cron notification default owner changed before commit");
       }
     },
@@ -78,6 +91,11 @@ type CronFailureAlertRoute = {
   accountId?: string;
   threadId?: string | number;
   alternateRoute: boolean;
+};
+
+export type PreparedCronFailureAlertPolicy = {
+  job: Pick<CronJob, "id" | "delivery" | "failureAlert">;
+  value: ResolvedFailureAlert | null;
 };
 
 export type ResolvedFailureAlert = CronFailureAlertRoute & {

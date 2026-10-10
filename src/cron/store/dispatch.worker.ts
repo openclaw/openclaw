@@ -17,6 +17,9 @@ import { prepareCronRunReceiptWriteSchema } from "./run-receipt-write-admission.
 import { executeCronStoreSaveCommand } from "./save.worker.js";
 import type { CronStateWorkerOperations } from "./worker-contract.js";
 
+const loadFinalization = createLazyRuntimeModule(() => import("./run-finalization.worker.js"));
+let finalization: typeof import("./run-finalization.worker.js") | undefined;
+
 const loadAdmission = createLazyRuntimeModule(() => import("./run-admission.worker.js"));
 let admission: typeof import("./run-admission.worker.js") | undefined;
 
@@ -36,6 +39,11 @@ const loadStartup = createLazyRuntimeModule(() => import("./startup-plan.worker.
 let startup: typeof import("./startup-plan.worker.js") | undefined;
 
 export function prepareCronStateWorkerCommand(type: PropertyKey): Promise<void> | undefined {
+  if (type === "cron.finalizeRuns" && !finalization) {
+    return loadFinalization().then((loaded) => {
+      finalization = loaded;
+    });
+  }
   if (type === "cron.planStartup" && !startup) {
     return loadStartup().then((loaded) => {
       startup = loaded;
@@ -68,7 +76,6 @@ export function prepareCronStateWorkerCommand(type: PropertyKey): Promise<void> 
       "cron.releaseReservations",
       "cron.markDeliveryStarted",
       "cron.finishReceipt",
-      "cron.finalizeRuns",
       "cron.removeStaleFamily",
     ].includes(String(type)) &&
     !admission
@@ -180,12 +187,16 @@ export function executeCronStateCommand(
         { database, path: database.path, env: getSqliteWorkerStateContext().environment },
         { operationLabel: command.type },
       );
+    case "cron.finalizeRuns":
+      if (!finalization) {
+        throw new Error("Cron finalization worker is not prepared");
+      }
+      return finalization.finalizeCronRunsInWorker(database, command.input);
     case "cron.reserveRuns":
     case "cron.activateRun":
     case "cron.releaseReservations":
     case "cron.markDeliveryStarted":
     case "cron.finishReceipt":
-    case "cron.finalizeRuns":
     case "cron.removeStaleFamily":
       if (!admission) {
         throw new Error("Cron admission worker is not prepared");
@@ -201,8 +212,6 @@ export function executeCronStateCommand(
           return admission.markCronDeliveryStartedInWorker(database, command.input);
         case "cron.finishReceipt":
           return admission.finishCronReceiptInWorker(database, command.input);
-        case "cron.finalizeRuns":
-          return admission.finalizeCronRunsInWorker(database, command.input);
         case "cron.removeStaleFamily":
           return admission.removeStaleCronFamilyInWorker(database, command.input);
       }

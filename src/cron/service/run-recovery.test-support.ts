@@ -59,7 +59,8 @@ export async function observeCronRecoveryForTest(
   ) {
     throw new Error("Expected a recovery observation");
   }
-  return result.observation.proposals[0]!;
+  const { routing: _routing, ...proposal } = result.observation.proposals[0]!;
+  return proposal;
 }
 
 export async function recoverCronRunForTest(

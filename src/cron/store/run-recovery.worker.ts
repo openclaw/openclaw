@@ -1,6 +1,7 @@
 import { getSqliteWorkerStateContext } from "../../infra/sqlite-worker-state-context.js";
 import type { OpenClawStateDatabase } from "../../state/openclaw-state-db-contract.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
+import { resolvePreparedCronFailureAlert } from "../service/failure-alerts.js";
 import type { CronJobPolicyContext } from "../service/state.js";
 import { loadedCronStoreFromRows, loadCronRows } from "./row-codec.js";
 import { prepareCronRunReceiptWriteSchema } from "./run-receipt-write-admission.js";
@@ -8,7 +9,7 @@ import { repairCronRunInDatabase } from "./run-recovery.kernel.js";
 import type { CronRunRecoveryOutcome } from "./run-recovery.types.js";
 import {
   createCronMutationLogger,
-  prepareCronRuntimeMutation,
+  admitCronRuntimeMutation,
   retainCronRuntimeMutationOutcome,
 } from "./runtime-mutation.worker.js";
 import type { CronRuntimeWorkerOperations } from "./runtime-worker.types.js";
@@ -22,13 +23,15 @@ export function repairCronRunInWorker(
       const receiptSchema = prepareCronRunReceiptWriteSchema(db);
       const row = loadCronRows(db, input.storeKey, new Set([input.proposal.jobId]))[0];
       const job = row ? loadedCronStoreFromRows([row]).store.jobs[0] : undefined;
-      const preparation = prepareCronRuntimeMutation("cron.repairRun", input.nonce, {
-        id: input.proposal.jobId,
-        delivery: job?.delivery,
-        failureAlert: job?.failureAlert,
-      });
+      const preparation = input.prepared;
+      admitCronRuntimeMutation(input.nonce);
       const logs: CronRunRecoveryOutcome["logs"] = [];
-      const { nowMs, cronConfig, failureAlert } = preparation;
+      const { nowMs, cronConfig } = preparation;
+      const failureAlert = resolvePreparedCronFailureAlert(
+        preparation.failureAlerts,
+        input.proposal.jobId,
+        job,
+      );
       const state: CronJobPolicyContext = {
         deps: {
           nowMs: () => nowMs,

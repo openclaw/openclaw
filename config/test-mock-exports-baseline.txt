@@ -6675,7 +6675,6 @@
 ["src/cron/isolated-agent/delivery-dispatch.double-announce.test.ts","../../agents/agent-bundle-mcp-tools.js","86f7c2f2cb90c3611e934302a75e8fc96fc04e0cb053cb741d627d214a0d4264",1]
 ["src/cron/isolated-agent/delivery-dispatch.double-announce.test.ts","../../agents/subagents/registry/subagent-registry-read.js","d42f393f218a4be4f1e2c1110a257cb1fc4e5469087b0e7ad42a0af98e793204",1]
 ["src/cron/isolated-agent/delivery-dispatch.double-announce.test.ts","../../cli/outbound-send-deps.js","660954193a9b30b0a6b6dffe3567e253561330e66eaf648a42e80a1dd27ab44f",1]
-["src/cron/isolated-agent/delivery-dispatch.double-announce.test.ts","../../config/sessions/main-session.js","a875e8bb3fd7b84defc79db74768b0db36cba354985db6a5845741685db8d3de",1]
 ["src/cron/isolated-agent/delivery-dispatch.double-announce.test.ts","../../config/sessions/transcript.runtime.js","30dfda2a141717e8bc147382fe4f9c0dc0521632b6b7855167609a4681ea7c64",1]
 ["src/cron/isolated-agent/delivery-dispatch.double-announce.test.ts","../../gateway/call.js","615b62847b91b194fe7aa02dfccb5a665f0f42ee6265d3806db43ea89132c9ea",1]
 ["src/cron/isolated-agent/delivery-dispatch.double-announce.test.ts","../../gateway/managed-image-attachments.js","9d02cb8b59bf559fc6d4e74a9ec204e6774ffdb789adaf1c2ed99a0cd2663796",1]

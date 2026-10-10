@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 import type { CronActiveJobMarker } from "../active-jobs.js";
 import { describeUnavailableCronAgent } from "../agent-availability.js";
@@ -8,10 +9,12 @@ import {
   retainCronRunReceiptSettlement,
   type CronRunReceiptSettlementDisposition,
 } from "../store/run-receipt-store.js";
+import type { CronRuntimeMutationContracts } from "../store/runtime-mutation.types.js";
 import type { CronReceiptTerminal } from "../store/runtime-worker.types.js";
-import type { CronJob } from "../types.js";
+import { prepareCronFailureAlertPolicies } from "./failure-alerts.js";
 import { runCronRuntimeMutation } from "./runtime-mutation.js";
 import type { CronServiceState } from "./state.js";
+import type { TimedCronRunOutcome } from "./timer-execution-timeout.js";
 
 export type CronFinalizationReceipt = {
   terminal: CronReceiptTerminal;
@@ -20,22 +23,15 @@ export type CronFinalizationReceipt = {
   disposition?: CronRunReceiptSettlementDisposition;
 };
 
-/** Parent policy consumes transaction-held rows; the worker commits rows and receipts together. */
-export async function finalizeCronRuntimeRows<Value>(params: {
+/** Capture live host custody; the worker computes and commits authoritative rows and receipts. */
+export async function finalizeCronRuntimeRows(params: {
   state: CronServiceState;
   context: OpenClawStateWorkerContext;
   jobIds: string[];
   receipts: CronFinalizationReceipt[];
   markers: Array<CronActiveJobMarker | undefined>;
-  mutate: (facts: {
-    jobs: ReadonlyMap<string, CronJob>;
-    retiredTriggerReceiptIds: ReadonlySet<string>;
-  }) => {
-    jobs: CronJob[];
-    deletedJobIds: string[];
-    value: Value;
-  };
-}): Promise<Value> {
+  outcomes: readonly TimedCronRunOutcome[];
+}): Promise<CronRuntimeMutationContracts["cron.finalizeRuns"]["outcome"]> {
   const storeKey = cronStoreKey(params.state.deps.storePath);
   const retained = params.receipts.map((receipt) => ({
     receipt,
@@ -45,9 +41,9 @@ export async function finalizeCronRuntimeRows<Value>(params: {
     params.state.deps.resolveDefaultAgentId
       ? params.state.deps.resolveDefaultAgentId()
       : params.state.deps.defaultAgentId;
-  let result: { value: Value } | undefined;
+  let result: CronRuntimeMutationContracts["cron.finalizeRuns"]["outcome"] | undefined;
   let committed = false;
-  let settlementOutcome: "committed" | "not-committed" | "unknown" | undefined;
+  let settlementOutcome: "committed" | "not-committed" | "unknown" = "not-committed";
   const assertSourceCurrent = () => {
     params.context.admission.assertCurrent();
     if (cronStoreKey(params.state.deps.storePath) !== storeKey) {
@@ -71,12 +67,14 @@ export async function finalizeCronRuntimeRows<Value>(params: {
         receipts: retained.map(({ receipt }) => ({
           terminal: structuredClone(receipt.terminal),
           allowMissingJob: receipt.allowMissingJob,
+          disposition: receipt.disposition,
         })),
       },
       assertCurrent: assertSourceCurrent,
-      prepare(facts) {
+      policy: (() => {
+        const alerts = prepareCronFailureAlertPolicies(params.state, params.jobIds);
         const defaultAgentId = resolveDefaultAgentId();
-        const receiptFacts = new Map(facts.receipts.map((fact) => [fact.receiptId, fact]));
+        const cronConfig = structuredClone(params.state.deps.cronConfig);
         const markers = params.markers.map((marker) => ({
           marker,
           jobRemoved: marker?.jobRemoved,
@@ -84,6 +82,7 @@ export async function finalizeCronRuntimeRows<Value>(params: {
           triggerMutated: marker?.triggerMutated,
         }));
         const assertCurrent = () => {
+          alerts.assertCurrent();
           assertSourceCurrent();
           if (resolveDefaultAgentId() !== defaultAgentId) {
             throw new Error("Cron finalization default agent changed");
@@ -100,15 +99,12 @@ export async function finalizeCronRuntimeRows<Value>(params: {
           }
           for (const { receipt } of retained) {
             const { handle } = receipt.terminal;
-            const fact = receiptFacts.get(handle.receiptId);
-            if (!fact) {
-              throw new Error("Cron finalization omitted a receipt's authority facts");
-            }
             const recordsUnavailableGuard =
               receipt.terminal.status === "error" && receipt.disposition === "owner-unavailable";
             if (
-              (fact.deletionBlocked ||
-                params.state.deps.isAgentAvailable?.(handle.agentId, undefined, fact) === false) &&
+              params.state.deps.isAgentAvailable?.(handle.agentId, undefined, {
+                deletionBlocked: false,
+              }) === false &&
               !recordsUnavailableGuard
             ) {
               throw new CronRunReceiptRevisionError(
@@ -118,30 +114,52 @@ export async function finalizeCronRuntimeRows<Value>(params: {
               );
             }
           }
+          if (!isDeepStrictEqual(cronConfig, params.state.deps.cronConfig)) {
+            throw new Error("Cron finalization configuration changed");
+          }
           assertSourceCurrent();
         };
         assertCurrent();
-        const mutation = params.mutate({
-          jobs: new Map(facts.jobs.map((job) => [job.id, job])),
-          retiredTriggerReceiptIds: new Set(
-            facts.receipts.filter((fact) => fact.triggerStateRetired).map((fact) => fact.receiptId),
-          ),
-        });
-        assertCurrent();
-        result = { value: mutation.value };
         return {
           value: {
             defaultAgentId,
-            jobs: mutation.jobs,
-            deletedJobIds: mutation.deletedJobIds,
+            failureAlerts: alerts.policies,
+            nowMs: params.state.deps.nowMs(),
+            cronConfig,
+            outcomes: params.outcomes.map((outcome) => {
+              const {
+                activeJobMarker,
+                runReceiptContext: _runReceiptContext,
+                reservationIdentity: _reservationIdentity,
+                request,
+                ...completedResult
+              } = outcome;
+              return structuredClone({
+                ...completedResult,
+                activeJobMarker: activeJobMarker
+                  ? {
+                      jobRemoved: activeJobMarker.jobRemoved,
+                      scheduleMutated: activeJobMarker.scheduleMutated,
+                      triggerMutated: activeJobMarker.triggerMutated,
+                    }
+                  : undefined,
+                request: request
+                  ? {
+                      preserveCadence: request.preserveCadence,
+                      scheduleOwnershipAtMs: request.scheduleOwnershipAtMs,
+                    }
+                  : undefined,
+              });
+            }),
             deferredReceiptIds: retained
               .filter(({ settlement }) => settlement.pending)
               .map(({ receipt }) => receipt.terminal.handle.receiptId),
           },
           assertCurrent,
         };
-      },
+      })(),
       publish(outcome) {
+        result = outcome;
         committed = true;
         if (outcome.changed) {
           noteCronJobsStoreCommit(storeKey);
@@ -167,7 +185,7 @@ export async function finalizeCronRuntimeRows<Value>(params: {
     if (!committed || !result) {
       throw new Error("Cron finalization did not retain its committed policy result");
     }
-    return result.value;
+    return result;
   } catch (error) {
     if (error instanceof CronRunReceiptRevisionError && settlementOutcome !== "not-committed") {
       // Only confirmed rollback permits the caller's stale-receipt compensation.

@@ -24,7 +24,6 @@ import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { shouldAttemptTtsPayload } from "../../tts/tts-config.js";
 import { prepareTtsPreferences } from "../../tts/tts-preferences.js";
-import { hasExplicitCronDeliveryTarget } from "../delivery-target-validation.js";
 import { createCronExecutionId } from "../run-id.js";
 import { hasScheduledNextRunAtMs } from "../service/jobs-scheduling.js";
 import type { CronJob } from "../types.js";
@@ -40,22 +39,14 @@ export const DIRECT_CRON_DELIVERY_COMPLETION_RETENTION = {
   maxEntries: 2_000,
 } as const satisfies DeliveryQueueCompletionRetention;
 
-/** Carry the implicit source's generation through outbound custody and recovery. */
+/** A source-bound notification keeps the result generation through custody and recovery. */
 export function resolveDirectCronDeliveryGeneration(
   params: Pick<
     DispatchCronDeliveryParams,
-    | "job"
-    | "sourceSessionKey"
-    | "sourceSessionGeneration"
-    | "deliveryPlan"
-    | "agentId"
-    | "cfgWithAgentDefaults"
+    "sourceSessionKey" | "sourceSessionGeneration" | "agentId" | "cfgWithAgentDefaults"
   >,
 ) {
-  return params.job.sessionTarget === "isolated" &&
-    params.sourceSessionKey &&
-    params.sourceSessionGeneration &&
-    !hasExplicitCronDeliveryTarget(params.deliveryPlan)
+  return params.sourceSessionKey && params.sourceSessionGeneration
     ? {
         agentId: params.agentId,
         storePath: resolveSessionStorePathCore(params.cfgWithAgentDefaults.session?.store, {
@@ -68,7 +59,7 @@ export function resolveDirectCronDeliveryGeneration(
     : undefined;
 }
 
-export function normalizeDeliveryTarget(channel: string, to: string): string {
+function normalizeDeliveryTarget(channel: string, to: string): string {
   const toTrimmed = to.trim();
   return normalizeTargetForProvider(channel, toTrimmed) ?? toTrimmed;
 }
@@ -204,17 +195,6 @@ export async function resolveDescendantSubagentFollowup(params: {
 export async function logCronDeliveryWarn(message: string): Promise<void> {
   const { logWarn } = await deliveryLoggerRuntimeLoader.load();
   logWarn(message);
-}
-
-export async function logCronDeliveryError(message: string): Promise<void> {
-  const { logError } = await deliveryLoggerRuntimeLoader.load();
-  logError(message);
-}
-
-export function logCronDeliveryErrorDeferred(message: string): void {
-  void deliveryLoggerRuntimeLoader.load().then(({ logError }) => {
-    logError(message);
-  });
 }
 
 export function resolveStaleCronDeliveryError(params: {
