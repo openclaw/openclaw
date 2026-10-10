@@ -10,16 +10,24 @@ import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execut
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { openNodeSqliteDatabase, requireNodeSqlite } from "./node-sqlite.js";
+import {
+  SQLITE_DATABASE_GENERATION_LENGTH,
+  SqliteDatabaseGenerationSlot,
+} from "./sqlite-database-admission-record.js";
 import { runWithSqliteDatabaseAdmissionTurn } from "./sqlite-database-admission-turn.js";
 import {
   hasPendingSqliteDatabaseSchemaMutation,
+  publishSqliteDatabaseAdmission,
   readSqliteDatabaseWriteRevision,
 } from "./sqlite-database-admission.js";
 import type {
   AdmissionTaskInput,
   AdmissionTaskResult,
 } from "./sqlite-database-admission.task.test-support.js";
-import type { AdmissionOperations } from "./sqlite-database-admission.worker.test-support.js";
+import {
+  hostFactKey,
+  type AdmissionOperations,
+} from "./sqlite-database-admission.worker.test-support.js";
 import { admitSqliteSchema, getAdmittedSqliteSchemaFacts } from "./sqlite-schema-facts.js";
 import { SqliteWorkerBroker } from "./sqlite-worker-broker.js";
 import { createSqliteWorkerOperationAdmission } from "./sqlite-worker-operation-admission.js";
@@ -27,6 +35,12 @@ import { createOwnedWorkerTaskPool } from "./worker-task-pool.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const moduleUrl = new URL("./sqlite-database-admission.worker.test-support.ts", import.meta.url);
+
+it("assigns a distinct shared generation slot to every admission witness", () => {
+  const slots = Object.values(SqliteDatabaseGenerationSlot);
+  expect(new Set(slots).size).toBe(slots.length);
+  expect(Math.max(...slots)).toBeLessThan(SQLITE_DATABASE_GENERATION_LENGTH);
+});
 
 it("joins host admission created after a worker's operation context before its first DDL", async () => {
   const root = tempDirs.make("sqlite-late-host-admission-");
@@ -357,6 +371,26 @@ it("shares admission published after dispatch with existing isolates and revalid
       expect(read.values).toEqual([42]);
       expect(read.sql).toEqual([]);
     }
+    expect(
+      await brokers[0]!.runOperation(
+        first!,
+        (scope) => scope.execute({ type: "hostFacts", input: { path: location } }),
+        undefined,
+        undefined,
+        () => ({
+          nativeLocations: [location],
+          admission: createSqliteWorkerOperationAdmission((_request, grant) => {
+            const database = openNodeSqliteDatabase(location);
+            try {
+              publishSqliteDatabaseAdmission(database, hostFactKey, 42);
+            } finally {
+              database.close();
+            }
+            grant();
+          }),
+        }),
+      ),
+    ).toEqual({ value: 42, lookupMessages: 0 });
 
     renameSync(location, path.join(root, "old.sqlite"));
     createDatabase(location, 43);
@@ -480,9 +514,13 @@ it("shares facts with retained task workers across awaited host exchanges", asyn
 
     const nestedLocation = path.join(root, "nested.sqlite");
     createDatabase(nestedLocation, 3);
-    const nested = await pools[0]!.run({ path: nestedLocation, nested: true }, {});
+    const nested = await pools[0]!.run(
+      { path: nestedLocation, nested: true, measureHostAbsence: true },
+      {},
+    );
     expect(nested.threadId).not.toBe(ready[0]!.threadId);
     expect(nested.sql.some((sql) => sql.includes("sqlite_schema"))).toBe(true);
+    expect(nested.hostLookupMessages).toBe(0);
     const afterNested = await pools[1]!.run({ path: nestedLocation }, {});
     expect(afterNested.sql).toEqual([]);
 

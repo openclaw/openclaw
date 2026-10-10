@@ -4,14 +4,13 @@ import { normalizeSchemaSql, quoteSqliteIdentifier } from "./sqlite-schema-sql.j
 
 type SqliteTempGenerationSchema = {
   kind: "generation";
-  table: string;
+  functionName: string;
   triggers: readonly {
     name: string;
     table: string;
     operation: "INSERT" | "UPDATE" | "DELETE";
     enabled: boolean;
   }[];
-  advance: boolean;
 };
 
 type SqliteTempTranscriptIndexSchema = {
@@ -22,7 +21,7 @@ type SqliteTempTranscriptIndexSchema = {
   observedTables: readonly string[];
 };
 
-/** Fixed connection-local counters or transcript queues; trigger bodies cannot be supplied. */
+/** Fixed connection-local mutation callbacks or transcript queues. */
 export type SqliteTempTrackingSchema = SqliteTempGenerationSchema | SqliteTempTranscriptIndexSchema;
 
 type SqliteTempObject = {
@@ -73,17 +72,12 @@ function prepareGenerationSchema(schema: SqliteTempGenerationSchema): {
   sql: string;
   objects: SqliteTempObject[];
 } {
-  const table = quoteSqliteIdentifier(schema.table);
-  const counter = `${table} (id INTEGER NOT NULL PRIMARY KEY CHECK (id = 1), generation INTEGER NOT NULL) STRICT`;
-  const increment = `UPDATE ${table} SET generation = generation + 1 WHERE id = 1;`;
+  const increment = `SELECT ${quoteSqliteIdentifier(schema.functionName)}();`;
   const triggers = schema.triggers.map((trigger) => ({
     ...trigger,
     definition: `TRIGGER ${quoteSqliteIdentifier(trigger.name)} AFTER ${trigger.operation} ON main.${quoteSqliteIdentifier(trigger.table)} BEGIN ${increment} END`,
   }));
   const sql = `
-    CREATE TEMP TABLE IF NOT EXISTS ${counter};
-    INSERT OR IGNORE INTO temp.${table} (id, generation) VALUES (1, 0);
-    ${schema.advance ? `UPDATE temp.${table} SET generation = generation + 1 WHERE id = 1;` : ""}
     ${triggers
       .map(({ name, definition, enabled }) => {
         const trigger = quoteSqliteIdentifier(name);
@@ -93,15 +87,12 @@ function prepareGenerationSchema(schema: SqliteTempGenerationSchema): {
   `;
   return {
     sql,
-    objects: [
-      { name: schema.table, type: "table", table: schema.table, sql: `CREATE TABLE ${counter}` },
-      ...triggers.map((trigger): SqliteTempObject => ({
-        name: trigger.name,
-        type: "trigger",
-        table: trigger.table,
-        sql: `CREATE ${trigger.definition}`,
-      })),
-    ],
+    objects: triggers.map((trigger): SqliteTempObject => ({
+      name: trigger.name,
+      type: "trigger",
+      table: trigger.table,
+      sql: `CREATE ${trigger.definition}`,
+    })),
   };
 }
 

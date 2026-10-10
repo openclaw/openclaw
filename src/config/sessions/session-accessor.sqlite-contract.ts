@@ -57,6 +57,8 @@ export type SessionTranscriptBoundedActiveContext = {
   totalEvents: number;
   transcriptMutationAt: number | null;
   truncated: boolean;
+  /** Every indexed active entry is present, without a read fence or byte/event omission. */
+  completeActivePath?: true;
 };
 
 export type CanonicalSessionValidationResult = {
