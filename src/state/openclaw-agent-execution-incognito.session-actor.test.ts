@@ -129,8 +129,8 @@ it("retains a phase through borrow release without holding the command FIFO acro
   );
   const entered = createDeferredCore();
   const finish = createDeferredCore();
-  const phase = actor.withPhase("retained", authority, async ({ patch }) => {
-    patch([{ kind: "activity", updatedAt: 600 }]);
+  const phase = actor.withPhase("retained", authority, async (held) => {
+    held.patch([{ kind: "activity", updatedAt: 600 }]);
     entered.resolve();
     await finish.promise;
   });

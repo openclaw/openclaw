@@ -220,11 +220,11 @@ export async function captureNativeIncognitoSessionActor(params: {
   };
   const lifetime = {
     assertAdmission: () => params.lifetime.assertAdmission?.(),
-    assertCurrent() {
+    assertCurrent: () => {
       params.lifetime.assertCurrent();
       assertOwner();
     },
-    assertReadable() {
+    assertReadable: () => {
       params.lifetime.assertReadable();
       assertOwner();
     },
@@ -308,7 +308,11 @@ export async function captureNativeIncognitoSessionActor(params: {
                 } catch (error) {
                   settlement = { kind: "unknown", committed: selected.committed };
                   settled.resolve({ kind: "unknown", error });
-                  return Promise.reject(error);
+                  return Promise.reject(
+                    error instanceof Error
+                      ? error
+                      : new Error("Native session actor command failed", { cause: error }),
+                  );
                 }
               },
             });

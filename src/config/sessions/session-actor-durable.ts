@@ -27,11 +27,11 @@ export function captureDurableSessionActor(params: {
   });
   const lifetime = {
     assertAdmission: () => params.lifetime.assertAdmission?.(),
-    assertCurrent() {
+    assertCurrent: () => {
       params.lifetime.assertCurrent();
       execution.assertCurrent();
     },
-    assertReadable() {
+    assertReadable: () => {
       params.lifetime.assertReadable();
       execution.assertCurrent();
     },
