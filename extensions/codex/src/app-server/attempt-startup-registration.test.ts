@@ -23,7 +23,6 @@ vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>()),
 }));
 vi.mock("./desktop-generation.js", () => ({
-  isCodexDesktopGenerationCurrent: () => false,
   waitForCodexDesktopGeneration: async () => undefined,
 }));
 

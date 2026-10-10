@@ -8,7 +8,6 @@ import type { CodexDesktopGeneration } from "./desktop-generation-owner.js";
 export type CodexAppServerAcquireBoundary =
   | "context"
   | "entry-selection"
-  | "prestart-artifact-drain"
   | "transport-registration"
   | "initialize"
   | "catalog-observation"
@@ -170,7 +169,6 @@ export type SharedCodexAppServerClientState = {
   liveClients: Set<CodexAppServerClient>;
   isolatedClients: Set<CodexAppServerClient>;
   entriesByClient: WeakMap<CodexAppServerClient, SharedCodexAppServerClientEntry>;
-  desktopGenerationDrainChecks: Set<() => void>;
   startup: CodexAppServerStartupLifetime;
   startMetadata: WeakMap<CodexAppServerClient, CodexAppServerClientStartMetadata>;
 };
@@ -207,7 +205,6 @@ export const getSharedCodexAppServerClientState = defineCodexBuildState(
     liveClients: new Set(),
     isolatedClients: new Set(),
     entriesByClient: new WeakMap(),
-    desktopGenerationDrainChecks: new Set(),
     startup: createCodexAppServerStartupLifetime(),
     startMetadata: new WeakMap(),
   }),
@@ -407,12 +404,6 @@ export async function retainSharedCodexAppServerClientByInstanceId(
   return undefined;
 }
 
-export function notifyDesktopGenerationDrainChecks(state: SharedCodexAppServerClientState): void {
-  for (const check of state.desktopGenerationDrainChecks) {
-    check();
-  }
-}
-
 // Cold initialization measured 1–5 seconds; keep adjacent discovery/status requests warm.
 const CODEX_APP_SERVER_CLIENT_IDLE_GRACE_MS = 30_000;
 
@@ -471,5 +462,4 @@ export function releaseSharedClientEntry(
   entry[counter] -= 1;
   closeRetiredSharedClientEntryIfIdle(entry);
   scheduleSharedClientIdleRetirement(entry);
-  notifyDesktopGenerationDrainChecks(getSharedCodexAppServerClientState());
 }

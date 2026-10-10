@@ -56,10 +56,9 @@ export class CodexNativeSubagentCompletionDelivery {
     if (!completion || !this.isCurrent(state, childState)) {
       return;
     }
-    if (childState.deliveringCompletion || childState.completionDeliveryTimer) {
+    if (childState.completionDeliveryTimer) {
       return;
     }
-    childState.deliveringCompletion = true;
     let deferredToForeground = false;
     try {
       if (!this.prepareDelivery(state, childState)) {
@@ -140,7 +139,6 @@ export class CodexNativeSubagentCompletionDelivery {
         // pending unregister. Once attempted, sleeping retries retain only delivery authority.
         childState.completionCustody?.settleExecution();
       }
-      childState.deliveringCompletion = false;
     }
   }
 
@@ -187,7 +185,7 @@ export class CodexNativeSubagentCompletionDelivery {
         }
       }
       child.nativeCompletionDelivered = true;
-      if (child.pendingCompletion && !child.deliveringCompletion) {
+      if (child.pendingCompletion && !this.attempts.has(child)) {
         this.finish(deliveryParent, child);
       }
     }

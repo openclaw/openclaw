@@ -68,7 +68,7 @@ import {
   getLeasedSharedCodexAppServerClient,
   retainSharedCodexAppServerClientByInstanceId,
   releaseCodexAppServerClientLease,
-  withLeasedCodexAppServerClientStartSelectionRetry,
+  withCodexAppServerClientRequestScope,
   type CodexAppServerClientLease,
   type CodexAppServerClientOptions,
   type CodexAppServerLeasedRequestOptions,
@@ -429,7 +429,7 @@ async function bindThread(params: CodexThreadBindingParams, threadId?: string) {
     client: await getLeasedSharedCodexAppServerClient(resolved.clientOptions),
   };
   try {
-    await withLeasedCodexAppServerClientStartSelectionRetry({
+    await withCodexAppServerClientRequestScope({
       lease: clientLease,
       options: resolved.clientOptions,
       run: async (client, connectionRequestOptions) => {

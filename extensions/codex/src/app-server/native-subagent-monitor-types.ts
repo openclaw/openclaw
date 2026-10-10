@@ -191,7 +191,6 @@ export type ChildState = NativeSubagentAssignment & {
   nativeCompletionDelivered: boolean;
   completionDeliveryAttempt: number;
   completionDeliveryTimer?: ReturnType<typeof setTimeout>;
-  deliveringCompletion: boolean;
   deliveryOwnerKey?: string;
   settledWithoutCompletion: boolean;
   releaseDirectChild?: () => void;
@@ -233,13 +232,6 @@ export type ThreadRecovery = {
   fallbackCompletion?: RecoveredCompletion;
   resumable: boolean;
   threadState: "unavailable" | "active" | "system_error" | "other";
-};
-
-export type ThreadStatusRevision = {
-  value: number;
-  readers: number;
-  terminal?: true;
-  parentThreadId?: string;
 };
 
 export type MonitorOptions = {

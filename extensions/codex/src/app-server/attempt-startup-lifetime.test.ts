@@ -44,7 +44,6 @@ import {
 import { createInferenceReadyClientHarness } from "./test-support.js";
 
 vi.mock("./desktop-generation.js", () => ({
-  isCodexDesktopGenerationCurrent: () => false,
   waitForCodexDesktopGeneration: async () => undefined,
 }));
 

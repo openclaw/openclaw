@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { setImmediate as nextTurn } from "node:timers/promises";
 import { zstdCompressSync } from "node:zlib";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
@@ -238,84 +237,6 @@ describe("resident Codex catalog recovery", () => {
     expect(await fs.stat(file)).toMatchObject({ mtimeMs: changed.mtimeMs, size: changed.size });
     expect(readNative).toHaveBeenCalledOnce();
   });
-
-  it.each(["update", "remove"])(
-    "keeps a newer file %s when an older native metadata read finishes",
-    async (operation) => {
-      const { home, root, file, original } = await rollout("stale-native-thread", {
-        cwd: "/workspace/original",
-        originator: "codex_cli_rs",
-        recencyAt: 100,
-      });
-      const startOptions = clientOptions(home);
-      const readNative = vi.fn(async () => project([original]));
-      const index = catalog(root, readNative, {
-        homeId: await codexCatalogResidentHomeKey({ startOptions }),
-      });
-      const harness = createClientHarness();
-      const nativeReads = vi.spyOn(harness.client, "request");
-      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
-      try {
-        await index.initialize();
-        // Drain startup currency before arranging the native-read/file-write race.
-        await vi.advanceTimersByTimeAsync(0);
-        await index.reconcile();
-        await observeCodexCatalogClient(harness.client, { startOptions });
-        harness.send({
-          method: "turn/completed",
-          params: { threadId: original.id, turn: {} },
-        });
-        const request = JSON.parse(await harness.waitForWrite(0));
-        expect(request).toMatchObject({
-          method: "thread/read",
-          params: { threadId: original.id, includeTurns: false },
-        });
-        const startedAt = Date.parse("2026-09-17T12:00:00.000Z") / 1_000;
-        if (operation === "update") {
-          await writeCatalogRollout(root, { ...original, cwd: "/workspace/changed" });
-          await fs.appendFile(
-            file,
-            `${JSON.stringify({
-              timestamp: "2026-09-17T12:00:00.000Z",
-              type: "event_msg",
-              payload: { type: "task_started", turn_id: "new-turn", started_at: startedAt },
-            })}\n`,
-          );
-        } else {
-          await fs.unlink(file);
-        }
-        await index.reconcile();
-        const current = await index.list({});
-        expect(current.sessions).toMatchObject(
-          operation === "update"
-            ? [
-                {
-                  threadId: original.id,
-                  cwd: "/workspace/original",
-                  recencyAt: startedAt,
-                },
-              ]
-            : [],
-        );
-        harness.send({ id: request.id, result: { thread: original } });
-        await nativeReads.mock.results[0]!.value;
-        // Explicit originator metadata lets publication finish without filesystem work.
-        await nextTurn();
-        const refreshedStatus = {
-          ...current,
-          sessions: current.sessions.map((session) =>
-            Object.assign({}, session, { status: "idle" }),
-          ),
-        };
-        expect(await index.list({})).toEqual(refreshedStatus);
-        await index.reconcile();
-        expect(await index.list({})).toEqual(refreshedStatus);
-        expect(readNative).toHaveBeenCalledOnce();
-      } finally {
-        await harness.client.closeAndWait();
-      }
-    },
-  );
 
   it.each(["covered", "flat", "outside"])(
     "verifies missing unfingerprinted native rollouts only in %s scan layout",

@@ -8,7 +8,6 @@ const { createIsolatedCodexAppServerClient } = vi.hoisted(() => ({
 vi.mock("./shared-client.js", () => ({
   createIsolatedCodexAppServerClient,
   getLeasedSharedCodexAppServerClient: vi.fn(),
-  isCodexAppServerStartSelectionChangedError: () => false,
   releaseLeasedSharedCodexAppServerClient: vi.fn(),
   retireSharedCodexAppServerClientIfCurrent: vi.fn(),
 }));

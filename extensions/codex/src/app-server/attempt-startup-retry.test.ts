@@ -28,14 +28,13 @@ vi.mock("node:child_process", async (importOriginal) => ({
 }));
 
 vi.mock("./desktop-generation.js", () => ({
-  isCodexDesktopGenerationCurrent: () => false,
   waitForCodexDesktopGeneration: async () => undefined,
 }));
 
 const tempRoots = new Set<string>();
 
 async function createStartupFailureFixture(
-  mode: "transient" | "contention" | "persistent" | "unsupported" | "overload" | "refusal",
+  mode: "transient" | "persistent" | "unsupported" | "overload" | "refusal",
 ) {
   const root = path.join(os.tmpdir(), `openclaw-codex-startup-retry-${randomUUID()}`);
   tempRoots.add(root);
@@ -52,14 +51,11 @@ async function createStartupFailureFixture(
       "const [spawnCountPath, mode, codexHome, requestLogPath] = process.argv.slice(2);",
       'const attempt = Number(fs.existsSync(spawnCountPath) ? fs.readFileSync(spawnCountPath, "utf8") : 0) + 1;',
       'fs.writeFileSync(spawnCountPath, String(attempt), "utf8");',
-      "const startedAtPath = `${spawnCountPath}.started-at`;",
-      'if (attempt === 1) fs.writeFileSync(startedAtPath, String(Date.now()), "utf8");',
-      'const stillContended = mode === "contention" && Date.now() - Number(fs.readFileSync(startedAtPath, "utf8")) < 750;',
       'process.stdout.write(JSON.stringify({ method: "fixture/ready" }) + "\\n");',
-      'if (mode === "persistent" || (mode === "transient" && attempt === 1) || stillContended) {',
+      'if (mode === "persistent" || (mode === "transient" && attempt === 1)) {',
       "  console.error(`Error: failed to initialize sqlite state runtime under ${codexHome}: failed to initialize state runtime at ${codexHome}`);",
       // Keep the persistent fixture alive through process registration so this
-      // case reaches the retry owner; immediate-exit registration has its own case.
+      // case reaches the startup owner; immediate-exit registration has its own case.
       '  if (mode === "persistent") setTimeout(() => { process.exitCode = 1; }, 1_000);',
       "  else process.exitCode = 1;",
       "} else {",
@@ -149,56 +145,6 @@ describe("Codex app-server startup retry", () => {
       await fs.rm(root, { recursive: true, force: true });
     }
     tempRoots.clear();
-  });
-
-  it("retries a real app-server that fails sqlite initialization before registration completes", async (ctx) => {
-    const fixture = await createStartupFailureFixture("transient");
-    let firstChildExit: Promise<unknown> | undefined;
-    let firstChildReady: Promise<void> | undefined;
-    const spawn = childProcess.spawn;
-    const snapshot = processSnapshot.readCodexAppServerProcessSnapshot;
-    const spawnSpy = vi.spyOn(childProcess, "spawn").mockImplementation((...args) => {
-      const child = spawn(...args);
-      if (
-        Array.isArray(args[1]) &&
-        args[1].includes(path.join(fixture.root, "startup-failure.mjs"))
-      ) {
-        if (!firstChildExit) {
-          firstChildReady = waitForFixtureReady(child);
-          firstChildExit = once(child, "exit");
-        }
-      }
-      return child;
-    });
-    const snapshotSpy = vi
-      .spyOn(processSnapshot, "readCodexAppServerProcessSnapshot")
-      .mockImplementation(async (...args) => {
-        // A slow inspector must not replace the child's retryable startup error.
-        await firstChildReady;
-        await firstChildExit;
-        return await snapshot(...args);
-      });
-    ctx.onTestFinished(() => {
-      spawnSpy.mockRestore();
-      snapshotSpy.mockRestore();
-    });
-    const result = await startFixtureAttempt(fixture);
-
-    expect(firstChildExit).toBeDefined();
-    expect(result.thread.threadId).toBe("thread-recovered");
-    expect(await fs.readFile(fixture.spawnCountPath, "utf8")).toBe("2");
-    result.turnRoute.release();
-    result.releaseSharedClientLease();
-  });
-
-  it("waits out transient sqlite contention before retrying app-server startup", async () => {
-    const fixture = await createStartupFailureFixture("contention");
-    const result = await startFixtureAttempt(fixture);
-
-    expect(result.thread.threadId).toBe("thread-recovered");
-    expect(await fs.readFile(fixture.spawnCountPath, "utf8")).toBe("2");
-    result.turnRoute.release();
-    result.releaseSharedClientLease();
   });
 
   it.skipIf(process.platform === "win32")(
@@ -395,13 +341,13 @@ describe("Codex app-server startup retry", () => {
     }
   });
 
-  it("bounds retries when sqlite state initialization keeps failing", async () => {
+  it("returns the initial sqlite startup failure without replaying native startup", async () => {
     const fixture = await createStartupFailureFixture("persistent");
 
     await expect(startFixtureAttempt(fixture)).rejects.toThrow(
       "failed to initialize sqlite state runtime",
     );
-    expect(await fs.readFile(fixture.spawnCountPath, "utf8")).toBe("3");
+    expect(await fs.readFile(fixture.spawnCountPath, "utf8")).toBe("1");
   });
 
   it("rejects an unsupported app-server version without retrying", async () => {

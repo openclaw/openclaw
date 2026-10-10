@@ -9,7 +9,6 @@ import {
   retainCodexAppServerLiveThread,
 } from "./client-runtime.js";
 import {
-  type CodexThreadReadResponse,
   directSpawnItem,
   CodexNativeSubagentMonitor,
   registerCodexNativeSubagentMonitor,
@@ -544,60 +543,6 @@ describe("CodexNativeSubagentMonitor", () => {
         }),
       );
       expect(releaseClient).toHaveBeenCalledTimes(1);
-      client.close();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("does not re-arm a fallback from a stale system-error read", async () => {
-    vi.useFakeTimers();
-    try {
-      const client = createClient();
-      let resolveStaleRead!: (value: CodexThreadReadResponse) => void;
-      const staleRead = new Promise<CodexThreadReadResponse>((resolve) => {
-        resolveStaleRead = resolve;
-      });
-      let readCount = 0;
-      client.setThreadReadFactory("child-thread", async () => {
-        readCount += 1;
-        return readCount === 1
-          ? await staleRead
-          : threadRead({ threadStatus: "active", status: "inProgress" });
-      });
-      const runtime = createRuntime();
-      const releaseClient = vi.fn();
-      const monitor = new CodexNativeSubagentMonitor(client as never, runtime, {
-        recoveryPollDelaysMs: [10],
-        retainClient: () => releaseClient,
-      });
-      await registerDetachedChild(client, monitor);
-
-      await client.notify({
-        method: "thread/status/changed",
-        params: { threadId: "child-thread", status: { type: "systemError" } },
-      });
-      await Promise.resolve();
-      expect(client.request).toHaveBeenCalledWith(
-        "thread/read",
-        expect.objectContaining({ threadId: "child-thread" }),
-        expect.anything(),
-      );
-
-      await client.notify({
-        method: "turn/started",
-        params: {
-          threadId: "child-thread",
-          turn: { id: "resumed-turn", status: "inProgress", items: [], error: null },
-        },
-      });
-      resolveStaleRead(
-        threadRead({ threadStatus: "systemError", status: "failed", error: "stale failure" }),
-      );
-      await vi.advanceTimersByTimeAsync(30);
-
-      expect(runtime.deliverAgentHarnessCompletion).not.toHaveBeenCalled();
-      expect(releaseClient).not.toHaveBeenCalled();
       client.close();
     } finally {
       vi.useRealTimers();
