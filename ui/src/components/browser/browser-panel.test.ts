@@ -10,7 +10,7 @@ import { normalizeBrowserUrlDraft } from "./browser-url.ts";
 
 function attachAnnotationOverlay(panel: {
   browserPanelController: BrowserPanelController;
-  renderRoot: ShadowRoot;
+  renderRoot: HTMLElement;
 }) {
   const stage = document.createElement("div");
   stage.className = "bp-stage";
@@ -120,7 +120,7 @@ describe("normalizeBrowserUrlDraft", () => {
     const panel = document.createElement("openclaw-browser-panel") as unknown as HTMLElement & {
       available: boolean;
       embedded: boolean;
-      renderRoot: ShadowRoot;
+      renderRoot: HTMLElement;
       updateComplete: Promise<unknown>;
     };
     panel.available = true;
@@ -135,7 +135,7 @@ describe("normalizeBrowserUrlDraft", () => {
     const panel = document.createElement("openclaw-browser-panel") as unknown as HTMLElement & {
       available: boolean;
       embedded: boolean;
-      renderRoot: ShadowRoot;
+      renderRoot: HTMLElement;
       updateComplete: Promise<unknown>;
     };
     panel.available = true;
@@ -145,7 +145,7 @@ describe("normalizeBrowserUrlDraft", () => {
 
     const empty = panel.renderRoot.querySelector("openclaw-panel-empty-state");
     await empty?.updateComplete;
-    expect(empty?.shadowRoot?.querySelector(".empty-state__title")?.textContent).toBe("Browser");
+    expect(empty?.querySelector(".empty-state__title")?.textContent).toBe("Browser");
     expect(empty?.querySelector("svg")).not.toBeNull();
   });
 
@@ -160,7 +160,7 @@ describe("normalizeBrowserUrlDraft", () => {
         refreshOnPresentation: boolean;
         client: GatewayBrowserClient;
         browserPanelController: BrowserPanelController;
-        renderRoot: ShadowRoot;
+        renderRoot: HTMLElement;
         requestUpdate: () => void;
         updateComplete: Promise<unknown>;
       };
@@ -192,7 +192,7 @@ describe("normalizeBrowserUrlDraft", () => {
         "true",
       );
       if (retained) {
-        expect(panel.renderRoot.activeElement).toBe(input);
+        expect(document.activeElement).toBe(input);
       }
 
       response.reject(new Error("Refresh connection interrupted"));
@@ -216,7 +216,7 @@ describe("normalizeBrowserUrlDraft", () => {
     const panel = document.createElement("openclaw-browser-panel") as unknown as HTMLElement & {
       available: boolean;
       suppressed: boolean;
-      renderRoot: ShadowRoot;
+      renderRoot: HTMLElement;
       updateComplete: Promise<unknown>;
     };
     panel.available = true;
@@ -358,7 +358,7 @@ describe("normalizeBrowserUrlDraft", () => {
         suppressed: boolean;
         browserPanelController: BrowserPanelController;
         handleToggleRequest: (event: Event) => void;
-        renderRoot: ShadowRoot;
+        renderRoot: HTMLElement;
         updateComplete: Promise<unknown>;
       };
       panel.available = true;
@@ -411,7 +411,7 @@ describe("normalizeBrowserUrlDraft", () => {
       embedded: boolean;
       presented: boolean;
       handleToggleRequest: (event: Event) => void;
-      renderRoot: ShadowRoot;
+      renderRoot: HTMLElement;
       updateComplete: Promise<unknown>;
     };
     panel.available = true;
@@ -426,6 +426,6 @@ describe("normalizeBrowserUrlDraft", () => {
     await panel.updateComplete;
     await Promise.resolve();
 
-    expect(panel.renderRoot.activeElement).toBe(panel.renderRoot.querySelector(".bp-url"));
+    expect(document.activeElement).toBe(panel.renderRoot.querySelector(".bp-url"));
   });
 });

@@ -30,13 +30,13 @@ describe("native Browser panel ownership", () => {
     );
     await flushBrowserResponses();
     await first.updateComplete;
-    expect(first.shadowRoot?.querySelectorAll('[role="tab"]')).toHaveLength(1);
+    expect(first.renderRoot?.querySelectorAll('[role="tab"]')).toHaveLength(1);
     first.presented = false;
     await first.updateComplete;
 
     const second = await mountSessionPanel("agent:main:second");
-    expect(second.shadowRoot?.querySelectorAll('[role="tab"]')).toHaveLength(0);
-    expect(second.shadowRoot?.querySelector<HTMLInputElement>(".bp-url")?.value).toBe("");
+    expect(second.renderRoot?.querySelectorAll('[role="tab"]')).toHaveLength(0);
+    expect(second.renderRoot?.querySelector<HTMLInputElement>(".bp-url")?.value).toBe("");
 
     second.handleToggleRequest(
       new CustomEvent("openclaw:browser-panel-toggle", {
@@ -45,17 +45,17 @@ describe("native Browser panel ownership", () => {
     );
     await flushBrowserResponses();
     await second.updateComplete;
-    expect(second.shadowRoot?.querySelectorAll('[role="tab"]')).toHaveLength(1);
+    expect(second.renderRoot?.querySelectorAll('[role="tab"]')).toHaveLength(1);
     first.presented = true;
     await first.updateComplete;
-    expect(first.shadowRoot?.querySelectorAll('[role="tab"]')).toHaveLength(1);
-    expect(first.shadowRoot?.querySelector<HTMLInputElement>(".bp-url")?.value).toBe(
+    expect(first.renderRoot?.querySelectorAll('[role="tab"]')).toHaveLength(1);
+    expect(first.renderRoot?.querySelector<HTMLInputElement>(".bp-url")?.value).toBe(
       "https://example.test/first",
     );
     first.remove();
     const restored = await mountSessionPanel("agent:main:first");
-    expect(restored.shadowRoot?.querySelectorAll('[role="tab"]')).toHaveLength(1);
-    expect(restored.shadowRoot?.querySelector<HTMLInputElement>(".bp-url")?.value).toBe(
+    expect(restored.renderRoot?.querySelectorAll('[role="tab"]')).toHaveLength(1);
+    expect(restored.renderRoot?.querySelector<HTMLInputElement>(".bp-url")?.value).toBe(
       "https://example.test/first",
     );
   });
@@ -105,13 +105,13 @@ describe("native Browser panel ownership", () => {
     reply.resolve({ ok: true, tabId: opening.tabId });
     await flushBrowserResponses();
     await panel.updateComplete;
-    expect(panel.shadowRoot?.querySelectorAll('[role="tab"]')).toHaveLength(0);
-    expect(panel.shadowRoot?.querySelector<HTMLInputElement>(".bp-url")?.value).toBe("");
+    expect(panel.renderRoot?.querySelectorAll('[role="tab"]')).toHaveLength(0);
+    expect(panel.renderRoot?.querySelector<HTMLInputElement>(".bp-url")?.value).toBe("");
     panel.sessionKey = "agent:main:first";
     await panel.updateComplete;
     await panel.updateComplete;
-    expect(panel.shadowRoot?.querySelectorAll('[role="tab"]')).toHaveLength(1);
-    expect(panel.shadowRoot?.querySelector<HTMLInputElement>(".bp-url")?.value).toBe(opening.url);
+    expect(panel.renderRoot?.querySelectorAll('[role="tab"]')).toHaveLength(1);
+    expect(panel.renderRoot?.querySelector<HTMLInputElement>(".bp-url")?.value).toBe(opening.url);
   });
 
   it("releases pending download feedback when the panel changes sessions", async () => {
@@ -122,26 +122,26 @@ describe("native Browser panel ownership", () => {
     const panel = await mountSessionPanel("agent:main:first");
     const reply = createDeferred<{ ok: true; cancelled: boolean }>();
     native.postMessage.mockImplementationOnce(() => reply.promise);
-    panel.shadowRoot?.querySelector<HTMLButtonElement>('[aria-label="Download file"]')?.click();
+    panel.renderRoot?.querySelector<HTMLButtonElement>('[aria-label="Download file"]')?.click();
     await panel.updateComplete;
     expect(
-      panel.shadowRoot?.querySelector('[aria-label="Downloading…"]')?.getAttribute("aria-busy"),
+      panel.renderRoot?.querySelector('[aria-label="Downloading…"]')?.getAttribute("aria-busy"),
     ).toBe("true");
 
     panel.sessionKey = "agent:main:second";
     await panel.updateComplete;
     await panel.updateComplete;
-    expect(panel.shadowRoot?.querySelector<HTMLInputElement>(".bp-url")?.value).toBe(
+    expect(panel.renderRoot?.querySelector<HTMLInputElement>(".bp-url")?.value).toBe(
       "https://example.test/second",
     );
     expect(
-      panel.shadowRoot?.querySelector('[aria-label="Download file"]')?.getAttribute("aria-busy"),
+      panel.renderRoot?.querySelector('[aria-label="Download file"]')?.getAttribute("aria-busy"),
     ).toBe("false");
     reply.reject(new Error("The old session's save failed"));
     await flushBrowserResponses();
     await panel.updateComplete;
-    expect(panel.shadowRoot?.querySelector(".bp-note--error")).toBeNull();
-    panel.shadowRoot?.querySelector<HTMLButtonElement>('[aria-label="Download file"]')?.click();
+    expect(panel.renderRoot?.querySelector(".bp-note--error")).toBeNull();
+    panel.renderRoot?.querySelector<HTMLButtonElement>('[aria-label="Download file"]')?.click();
     await flushBrowserResponses();
     expect(native.messages().filter((message) => message.type === "download")).toEqual([
       { type: "download", tabId: "mac-first" },
@@ -338,7 +338,7 @@ describe("native Browser panel ownership", () => {
       link.click();
       await flushBrowserResponses();
       await panel.updateComplete;
-      const stage = panel.shadowRoot?.querySelector<HTMLElement>(".bp-stage--native");
+      const stage = panel.renderRoot?.querySelector<HTMLElement>(".bp-stage--native");
       expect(stage).not.toBeNull();
       vi.spyOn(stage!, "getBoundingClientRect").mockReturnValue(new DOMRect(10, 20, 500, 300));
       setHit(panel);
@@ -353,7 +353,7 @@ describe("native Browser panel ownership", () => {
           rect: { x: 10, y: 20, width: 500, height: 300 },
         }),
       );
-      expect(panel.shadowRoot?.querySelector(".bp-shot")).toBeNull();
+      expect(panel.renderRoot?.querySelector(".bp-shot")).toBeNull();
     } finally {
       routing.dispose();
       panel.remove();
@@ -371,7 +371,7 @@ describe("native Browser panel ownership", () => {
       panel.presented = true;
       document.body.append(panel);
       await panel.updateComplete;
-      const stage = panel.shadowRoot?.querySelector<HTMLElement>(".bp-stage--native");
+      const stage = panel.renderRoot?.querySelector<HTMLElement>(".bp-stage--native");
       expect(stage).not.toBeNull();
       vi.spyOn(stage!, "getBoundingClientRect").mockReturnValue(new DOMRect(10, 20, 500, 300));
       setHit(panel);

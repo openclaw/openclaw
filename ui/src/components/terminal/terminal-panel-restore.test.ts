@@ -6,11 +6,11 @@ import { i18n } from "../../i18n/index.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import type { TerminalGatewayClient } from "./terminal-connection.ts";
-import type { TerminalPanelSessionController } from "./terminal-panel-session-controller.ts";
 import {
   createTerminalController,
   defineTestTerminalPanelElement,
   terminalOpenResult,
+  terminalSessionsForTest,
   type CreateGhosttyTerminalMock,
 } from "./terminal-panel.test-support.ts";
 import type { OpenClawTerminalPanel } from "./terminal-panel.ts";
@@ -93,8 +93,7 @@ function mountPanel(
   panel.client = client;
   panel.available = true;
   panel.page = panel.fullscreen = panel.embedded = options.page === true;
-  const sessions = (panel as unknown as { terminalSessions: TerminalPanelSessionController })
-    .terminalSessions;
+  const sessions = terminalSessionsForTest(panel);
   const mountedPanel = { panel, sessions };
   mounted.push(mountedPanel);
   document.body.append(panel);

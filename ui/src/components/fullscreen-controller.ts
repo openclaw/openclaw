@@ -1,17 +1,18 @@
-import { html, type ReactiveController, type TemplateResult } from "lit";
 import { t } from "../i18n/index.ts";
 import { formatUiError } from "../lib/format-error.ts";
-import type { OpenClawLitElement } from "../lit/openclaw-element.ts";
-import { icons } from "./icons.ts";
+import type { PanelLifecycleController, SolidPanelController } from "./solid-panel-controller.ts";
 
-export class DesktopFullscreenController implements ReactiveController {
+export class DesktopFullscreenController implements PanelLifecycleController {
   active = false;
   errorText: string | null = null;
 
   private restoreFocus = false;
 
   constructor(
-    private readonly host: OpenClawLitElement,
+    private readonly host: Pick<
+      SolidPanelController,
+      "renderRoot" | "addController" | "requestUpdate" | "updateComplete"
+    >,
     private readonly onChange: () => void,
   ) {
     host.addController(this);
@@ -29,31 +30,6 @@ export class DesktopFullscreenController implements ReactiveController {
     }
   }
 
-  renderButton(): TemplateResult {
-    const supported = this.supported();
-    const label = t(
-      this.active
-        ? "desktop.exitFullscreen"
-        : supported
-          ? "desktop.enterFullscreen"
-          : "desktop.fullscreenUnavailable",
-    );
-    return html`<openclaw-tooltip .content=${label}>
-      <button
-        class="bp-icon desktop-fullscreen-button"
-        type="button"
-        aria-label=${label}
-        aria-pressed=${this.active ? "true" : "false"}
-        aria-disabled=${supported ? "false" : "true"}
-        @click=${() => void this.toggle()}
-      >
-        <span class="desktop-fullscreen-icon" aria-hidden="true">
-          ${this.active ? icons.minimize : icons.maximize}
-        </span>
-      </button>
-    </openclaw-tooltip>`;
-  }
-
   private async exit(): Promise<void> {
     try {
       await document.exitFullscreen();
@@ -67,12 +43,10 @@ export class DesktopFullscreenController implements ReactiveController {
     if (!section) {
       return false;
     }
-    const shadowFullscreen =
-      this.host.renderRoot instanceof ShadowRoot ? this.host.renderRoot.fullscreenElement : null;
-    return (shadowFullscreen ?? document.fullscreenElement) === section;
+    return document.fullscreenElement === section;
   }
 
-  private supported(): boolean {
+  supported(): boolean {
     return document.fullscreenEnabled && typeof Element.prototype.requestFullscreen === "function";
   }
 
@@ -93,7 +67,7 @@ export class DesktopFullscreenController implements ReactiveController {
     }
   };
 
-  private async toggle(): Promise<void> {
+  async toggle(): Promise<void> {
     this.setError(null);
     if (this.active) {
       await this.exit();

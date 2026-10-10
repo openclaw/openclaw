@@ -67,15 +67,15 @@ describe("Browser panel hosted tabs", () => {
     "renders its own strip=$ownsStrip for embedded=$embedded and tabsInHeader=$tabsInHeader",
     async ({ embedded, tabsInHeader, ownsStrip }) => {
       const { panel } = await mount(embedded, tabsInHeader);
-      expect(Boolean(panel.shadowRoot?.querySelector(".bp-header"))).toBe(ownsStrip);
-      expect(Boolean(panel.shadowRoot?.querySelector("wa-tab-group"))).toBe(ownsStrip);
-      expect(panel.shadowRoot?.querySelector(".bp-toolbar")).not.toBeNull();
-      expect(panel.shadowRoot?.querySelector(".bp-viewport")?.getAttribute("aria-labelledby")).toBe(
+      expect(Boolean(panel.renderRoot?.querySelector(".bp-header"))).toBe(ownsStrip);
+      expect(Boolean(panel.renderRoot?.querySelector("wa-tab-group"))).toBe(ownsStrip);
+      expect(panel.renderRoot?.querySelector(".bp-toolbar")).not.toBeNull();
+      expect(panel.renderRoot?.querySelector(".bp-viewport")?.getAttribute("aria-labelledby")).toBe(
         ownsStrip ? "browser-tab-remote:a" : null,
       );
       if (embedded) {
-        expect(panel.shadowRoot?.querySelector(".bp-header [data-new-tab-action]")).toBeNull();
-        expect(panel.shadowRoot?.querySelector(".bp-toolbar [data-new-tab-action]")).not.toBeNull();
+        expect(panel.renderRoot?.querySelector(".bp-header [data-new-tab-action]")).toBeNull();
+        expect(panel.renderRoot?.querySelector(".bp-toolbar [data-new-tab-action]")).not.toBeNull();
       }
     },
   );
@@ -96,11 +96,11 @@ describe("Browser panel hosted tabs", () => {
     ]);
     expect(panel.activeHostedTabId).toBe("remote:a");
     expect(
-      [...panel.shadowRoot!.querySelectorAll(".tabstrip-tab__label")].map(
+      [...panel.renderRoot!.querySelectorAll(".tabstrip-tab__label")].map(
         (label) => label.textContent,
       ),
     ).toEqual(["Example", "second.test", "New tab"]);
-    const nativeIcon = panel.shadowRoot!.querySelector(
+    const nativeIcon = panel.renderRoot!.querySelector(
       "#browser-tab-native\\:b .tabstrip-tab__icon",
     );
     expect(nativeIcon?.querySelector("img")?.getAttribute("src")).toBe(favicon);
@@ -141,7 +141,7 @@ describe("Browser panel hosted tabs", () => {
     );
     await panel.updateComplete;
     expect(panel.hostedTabs[0]?.favicon).toBe(favicon);
-    expect(panel.shadowRoot?.querySelector("img.tabstrip-tab__favicon")?.getAttribute("src")).toBe(
+    expect(panel.renderRoot?.querySelector("img.tabstrip-tab__favicon")?.getAttribute("src")).toBe(
       favicon,
     );
     expect(changed).toHaveBeenCalledOnce();
@@ -152,7 +152,7 @@ describe("Browser panel hosted tabs", () => {
     );
     await panel.updateComplete;
     expect(panel.hostedTabs[0]?.favicon).toBeUndefined();
-    expect(panel.shadowRoot?.querySelector("img.tabstrip-tab__favicon")).toBeNull();
+    expect(panel.renderRoot?.querySelector("img.tabstrip-tab__favicon")).toBeNull();
     expect(changed).toHaveBeenCalledTimes(2);
   });
 

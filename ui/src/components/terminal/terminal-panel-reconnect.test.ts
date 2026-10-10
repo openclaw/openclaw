@@ -10,9 +10,10 @@ import {
   createTerminalController,
   defineTestTerminalPanelElement,
   terminalOpenResult,
+  terminalSessionsForTest,
   type CreateGhosttyTerminalMock,
 } from "./terminal-panel.test-support.ts";
-import { OpenClawTerminalPanel } from "./terminal-panel.ts";
+import type { OpenClawTerminalPanel } from "./terminal-panel.ts";
 
 vi.mock("../../app/sw-refresh.runtime.ts", () => ({
   refreshControlUiServiceWorker: vi.fn(async () => false),
@@ -374,13 +375,7 @@ describe("OpenClawTerminalPanel reconnect", () => {
     });
     panel.handleToggleRequest(requested);
     panel.handleToggleRequest(requested);
-    const sessions = (
-      panel as unknown as {
-        terminalSessions: {
-          attachSessionById(sessionId: string, agentOwned?: boolean): Promise<void>;
-        };
-      }
-    ).terminalSessions;
+    const sessions = terminalSessionsForTest(panel);
     void sessions.attachSessionById("picked-terminal");
     void sessions.attachSessionById("picked-terminal");
     await panel.updateComplete;

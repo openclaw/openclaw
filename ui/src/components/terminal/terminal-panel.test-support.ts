@@ -1,6 +1,19 @@
 import { vi, type Mock } from "vitest";
 import { terminalFontFamily } from "../../app/terminal-font.ts";
-import { OpenClawTerminalPanel } from "./terminal-panel.ts";
+import { defineTerminalPanelElement } from "./terminal-panel-registration.ts";
+import type { TerminalPanelSessionController } from "./terminal-panel-session-controller.ts";
+import { TerminalPanelController } from "./terminal-panel.ts";
+
+const controllers = new WeakMap<HTMLElement, TerminalPanelController>();
+
+export function terminalSessionsForTest(element: HTMLElement): TerminalPanelSessionController {
+  const controller = controllers.get(element);
+  if (!controller) {
+    throw new Error("Terminal panel fixture is not mounted");
+  }
+  return (controller as unknown as { terminalSessions: TerminalPanelSessionController })
+    .terminalSessions;
+}
 
 export type CreateOptions = {
   parent: HTMLElement;
@@ -65,12 +78,11 @@ export function defineTestTerminalPanelElement(
 ): string {
   type TerminalFactory = typeof import("./terminal-runtime.ts").createIsolatedGhosttyTerminal;
 
-  // The full non-isolated UI suite can import the production panel before this
-  // test. Override its factory instead of relying on a module mock import order.
-  class TestTerminalPanel extends OpenClawTerminalPanel {
-    override createTerminalController = createGhosttyTerminalMock as unknown as TerminalFactory;
-  }
-
-  customElements.define(tagName, TestTerminalPanel);
+  defineTerminalPanelElement(tagName, (element) => {
+    const controller = new TerminalPanelController(element);
+    controller.createTerminalController = createGhosttyTerminalMock as unknown as TerminalFactory;
+    controllers.set(element, controller);
+    return controller;
+  });
   return tagName;
 }

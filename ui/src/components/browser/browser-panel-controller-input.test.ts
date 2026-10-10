@@ -1,5 +1,4 @@
 import { runInNewContext } from "node:vm";
-import { nothing, render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
@@ -18,7 +17,7 @@ import {
   type BrowserRequestEnvelope,
 } from "./browser-panel-controller-test-support.ts";
 import { BrowserPanelController } from "./browser-panel-controller.ts";
-import { renderBrowserPanelChrome } from "./browser-panel-render.ts";
+import { mountBrowserPanelChrome } from "./browser-panel-render-test-support.ts";
 
 setupBrowserPanelTestCleanup();
 
@@ -611,19 +610,7 @@ describe("BrowserPanelController capture and input ownership", () => {
     expect(controller.evaluateUnavailable).toBe(false);
     expect(controller.inspected).toBeNull();
     const renderedPanel = document.createElement("div");
-    const renderPanel = () =>
-      render(
-        renderBrowserPanelChrome(
-          controller,
-          "right",
-          400,
-          400,
-          () => {},
-          () => {},
-          nothing,
-        ),
-        renderedPanel,
-      );
+    const renderPanel = mountBrowserPanelChrome(controller, renderedPanel);
     renderPanel();
     expect(renderedPanel.querySelector('[role="alert"]')?.textContent).toBe(
       "Browser request failed: Browser connection temporarily unavailable",

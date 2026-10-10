@@ -1,14 +1,13 @@
 import type { DesktopObserveResult } from "@openclaw/gateway-protocol";
-import type { ReactiveController, ReactiveControllerHost } from "lit";
 import { resolveGatewayWebSocketUrl } from "../../lib/gateway-websocket-url.ts";
-import {
-  renderDesktopAudioControl,
-  renderDesktopAudioNotice,
-  type DesktopAudioState,
-} from "./desktop-audio-view.ts";
+import type { PanelLifecycleController, SolidPanelController } from "../solid-panel-controller.ts";
+import type { DesktopAudioState } from "./desktop-audio-view.tsx";
 import { DesktopPcmQueue } from "./desktop-pcm-queue.ts";
 
-type DesktopAudioHost = ReactiveControllerHost & {
+type DesktopAudioHost = Pick<
+  SolidPanelController,
+  "addController" | "removeController" | "requestUpdate" | "updateComplete"
+> & {
   ownerDocument: Document;
   embedded: boolean;
   presented: boolean;
@@ -18,7 +17,7 @@ type DesktopAudioHost = ReactiveControllerHost & {
 const SAMPLE_RATE = 48_000;
 
 /** One desktop observation's receive-only audio socket and playback intent. */
-export class DesktopAudio implements ReactiveController {
+export class DesktopAudio implements PanelLifecycleController {
   state: DesktopAudioState = "unavailable";
   private socket: WebSocket | null = null;
   private removeSocketListeners: (() => void) | null = null;
@@ -60,25 +59,14 @@ export class DesktopAudio implements ReactiveController {
     return !this.host.ownerDocument.hidden && (!this.host.embedded || this.host.presented);
   }
 
-  renderButton() {
-    return renderDesktopAudioControl({
-      state: this.state,
-      connected: this.connected(),
-      documentMode: this.host.documentMode,
-      onToggle: () => {
-        if (this.state === "playing" || this.state === "starting") {
-          this.mute();
-        } else if (this.state === "retired") {
-          this.reconnect();
-        } else if (this.connected() && this.visible) {
-          this.unmute();
-        }
-      },
-    });
-  }
-
-  renderNotice() {
-    return renderDesktopAudioNotice(this.state);
+  toggle(): void {
+    if (this.state === "playing" || this.state === "starting") {
+      this.mute();
+    } else if (this.state === "retired") {
+      this.reconnect();
+    } else if (this.connected() && this.visible) {
+      this.unmute();
+    }
   }
 
   connect(

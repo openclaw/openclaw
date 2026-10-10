@@ -15,7 +15,8 @@ import {
   type CreateGhosttyTerminalMock,
   type CreateOptions,
 } from "./terminal-panel.test-support.ts";
-import { OpenClawTerminalPanel } from "./terminal-panel.ts";
+import type { OpenClawTerminalPanel } from "./terminal-panel.ts";
+import tabStripStyles from "../panel-tab-strip-solid.css?inline";
 
 const createGhosttyTerminalMock: CreateGhosttyTerminalMock = vi.fn();
 
@@ -91,7 +92,7 @@ describe("OpenClawTerminalPanel", () => {
 
     const empty = panel.renderRoot.querySelector("openclaw-panel-empty-state");
     await empty?.updateComplete;
-    expect(empty?.shadowRoot?.querySelector(".empty-state__title")?.textContent).toBe("Terminal");
+    expect(empty?.querySelector(".empty-state__title")?.textContent).toBe("Terminal");
     expect(empty?.querySelector("svg")).not.toBeNull();
   });
 
@@ -188,11 +189,7 @@ describe("OpenClawTerminalPanel", () => {
     expect(createOptions?.terminalOptions?.fontSize).toBe(11);
     expect(createOptions?.terminalOptions?.fontFamily).toContain("OpenClaw Nerd Symbols");
     expect(getComputedStyle(createOptions!.parent).caretColor).toBe("rgba(0, 0, 0, 0)");
-    const styleResults = Array.isArray(OpenClawTerminalPanel.styles)
-      ? OpenClawTerminalPanel.styles
-      : [OpenClawTerminalPanel.styles];
-    const styles = styleResults.map((style) => style.cssText).join("\n");
-    expect(styles).toMatch(/\.tabstrip-new\s*\{[^}]*align-self:\s*center/u);
+    expect(tabStripStyles).toMatch(/\.tabstrip-new\s*\{[^}]*align-self:\s*center/u);
     await waitForFast(() => {
       expect(requests).toContainEqual({
         method: "terminal.resize",

@@ -6,7 +6,8 @@ import { i18n } from "../../i18n/index.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import type { TerminalGatewayClient } from "./terminal-connection.ts";
-import { OpenClawTerminalPanel } from "./terminal-panel.ts";
+import { defineTerminalPanelElement } from "./terminal-panel-registration.ts";
+import { TerminalPanelController, type OpenClawTerminalPanel } from "./terminal-panel.ts";
 import type { createIsolatedGhosttyTerminal } from "./terminal-runtime.ts";
 
 function createTerminalController() {
@@ -33,13 +34,13 @@ function createTerminalController() {
 
 const createTerminal = vi.fn(async () => createTerminalController());
 
-class ReadinessTestTerminalPanel extends OpenClawTerminalPanel {
-  override createTerminalController =
-    createTerminal as unknown as typeof createIsolatedGhosttyTerminal;
-}
-
 const TERMINAL_PANEL_ELEMENT_NAME = `test-terminal-panel-readiness-${crypto.randomUUID()}`;
-customElements.define(TERMINAL_PANEL_ELEMENT_NAME, ReadinessTestTerminalPanel);
+defineTerminalPanelElement(TERMINAL_PANEL_ELEMENT_NAME, (element) => {
+  const controller = new TerminalPanelController(element);
+  controller.createTerminalController =
+    createTerminal as unknown as typeof createIsolatedGhosttyTerminal;
+  return controller;
+});
 
 function terminalOpenResult(sessionId: string) {
   return {

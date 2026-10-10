@@ -1,27 +1,19 @@
-import { nothing } from "lit";
-import { property } from "lit/decorators.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { hasNativeBrowserBridge } from "../../app/native-browser-bridge.ts";
-import { t } from "../../i18n/index.ts";
-import { OpenClawLitElement } from "../../lit/openclaw-element.ts";
-import { scrollbarShadowStyles } from "../../lit/scrollbar-styles.ts";
 import { DockLayoutController } from "../dock-layout-controller.ts";
 import { browserPanelLayout } from "../dock-panel-layout.ts";
-import { dockPanelStyles } from "../dock-panel-styles.ts";
-import { notifyPanelHostedTabsChanged, type PanelHostedTabsElement } from "../panel-hosted-tabs.ts";
-import { panelTabStripStyles } from "../panel-tab-strip.ts";
+import { notifyPanelHostedTabsChanged } from "../panel-hosted-tabs.ts";
 import {
   BROWSER_PANEL_TOGGLE_EVENT,
   type BrowserPanelToggleDetail,
 } from "../panel-toggle-contract.ts";
+import { SolidPanelController } from "../solid-panel-controller.ts";
 import { browserRequestReferencedTabs, type BrowserDashboardTarget } from "./browser-client.ts";
 import {
   BrowserPanelController,
   type BrowserPanelControllerHost,
 } from "./browser-panel-controller.ts";
-import { renderBrowserPanelChrome } from "./browser-panel-render.ts";
 import { browserPanelHostedTabs } from "./browser-panel-tabs.ts";
-import { browserPanelStyles } from "./browser-panel.styles.ts";
 import {
   browserTabKey,
   readBrowserTabTarget,
@@ -30,57 +22,50 @@ import {
 } from "./browser-target.ts";
 import { normalizeBrowserUrlDraft } from "./browser-url.ts";
 
-class OpenClawBrowserPanel
-  extends OpenClawLitElement
-  implements BrowserPanelControllerHost, PanelHostedTabsElement
+export class BrowserPanelPresentation
+  extends SolidPanelController
+  implements BrowserPanelControllerHost
 {
   /** Gateway client used for browser.request RPCs; null until connected. */
-  @property({ attribute: false }) client: GatewayBrowserClient | null = null;
+  client: GatewayBrowserClient | null = null;
   /** Whether the connected gateway advertises browser.request to this operator. */
-  @property({ type: Boolean }) available = false;
+  available = false;
   /** Gateway browser features remain separately gated on native hosts. */
-  @property({ type: Boolean }) remoteAvailable = true;
+  remoteAvailable = true;
   /** Full-page route takeovers (settings) own the viewport; the dock hides while one renders. */
-  @property({ type: Boolean }) suppressed = false;
+  suppressed = false;
   /** Gateway HTTP resource mount used for the authenticated media fetch. */
-  @property({ attribute: false }) resourceBasePath = "";
+  resourceBasePath = "";
   /** Bearer credential for the assistant-media screenshot fetch. */
-  @property({ attribute: false }) authToken: string | null = null;
+  authToken: string | null = null;
   /** Hosted by the chat side panel, which owns visibility and geometry. */
-  @property({ type: Boolean }) embedded = false;
+  embedded = false;
   /** The hosting side-panel header presents this panel's tabs. */
-  @property({ type: Boolean }) tabsInHeader = false;
+  tabsInHeader = false;
   /** This embedded instance is the active pane's visible Browser presenter. */
-  @property({ type: Boolean }) presented = false;
+  presented = false;
   /** Whether presentation owns initial work instead of a pending explicit toggle. */
-  @property({ type: Boolean }) refreshOnPresentation = true;
+  refreshOnPresentation = true;
 
-  @property({ attribute: false }) sessionKey = "";
-  @property({ attribute: false }) sessionTabs: BrowserTabTarget[] = [];
-  @property({ attribute: false }) preferredTab?: BrowserTabSelection;
+  sessionKey = "";
+  sessionTabs: BrowserTabTarget[] = [];
+  preferredTab?: BrowserTabSelection;
   /** A dashboard presents only its owned remote tab; its owner controls removal and restart. */
-  @property({ attribute: false }) fixedTab?: BrowserTabTarget;
-  @property({ attribute: false }) dashboardTarget?: BrowserDashboardTarget;
+  fixedTab?: BrowserTabTarget;
+  dashboardTarget?: BrowserDashboardTarget;
 
   private activeSessionKey = "";
   private activeDashboardKey: string | undefined;
   private activeSessionTabsKey: string | undefined;
   private consumedPreferredRevision?: string;
-  private readonly browserPanelController = new BrowserPanelController(this);
-  private readonly dockLayout = new DockLayoutController(this, {
+  readonly browserPanelController = new BrowserPanelController(this);
+  readonly dockLayout = new DockLayoutController(this, {
     layout: browserPanelLayout,
     reservationPrefix: "browser",
     isAvailable: () => this.available,
   });
   private viewportResizeObserver: ResizeObserver | null = null;
   private observedViewportElement: Element | null = null;
-
-  static override styles = [
-    panelTabStripStyles,
-    dockPanelStyles,
-    browserPanelStyles,
-    scrollbarShadowStyles,
-  ];
 
   override connectedCallback(): void {
     super.connectedCallback();
@@ -103,7 +88,7 @@ class OpenClawBrowserPanel
     this.observedViewportElement = null;
   }
 
-  override updated(changed: Map<string, unknown>): void {
+  override updated(changed: Map<PropertyKey, unknown>): void {
     if (changed.has("embedded")) {
       if (this.embedded) {
         window.removeEventListener(BROWSER_PANEL_TOGGLE_EVENT, this.handleToggleRequest);
@@ -182,7 +167,7 @@ class OpenClawBrowserPanel
       }
     }
     const controller = this.browserPanelController;
-    notifyPanelHostedTabsChanged(this, [
+    notifyPanelHostedTabsChanged(this.element, [
       controller.activeTargetId,
       controller.tabs.map((tab) => [tab.id, tab.kind, tab.title, tab.url, tab.favicon]),
     ]);
@@ -326,35 +311,16 @@ class OpenClawBrowserPanel
     }
   };
 
-  private closePanel(): void {
+  closePanel(): void {
     this.browserPanelController.suspendView();
     this.dockLayout.setOpen(false);
   }
-
-  override render() {
-    if (!this.available || (!this.embedded && !this.dockLayout.open)) {
-      return nothing;
-    }
-    return renderBrowserPanelChrome(
-      this.browserPanelController,
-      this.dockLayout.dock,
-      this.dockLayout.height,
-      this.dockLayout.width,
-      (dock) => this.dockLayout.setDock(dock),
-      () => this.closePanel(),
-      this.dockLayout.renderResizer("bp", t("browser.resize")),
-      this.embedded,
-      this.tabsInHeader,
-    );
-  }
 }
 
-if (!customElements.get("openclaw-browser-panel")) {
-  customElements.define("openclaw-browser-panel", OpenClawBrowserPanel);
-}
+export type BrowserPanelElement = HTMLElement & BrowserPanelPresentation;
 
 declare global {
   interface HTMLElementTagNameMap {
-    "openclaw-browser-panel": OpenClawBrowserPanel;
+    "openclaw-browser-panel": BrowserPanelElement;
   }
 }

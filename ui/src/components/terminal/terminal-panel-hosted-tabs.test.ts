@@ -11,12 +11,12 @@ import {
   TERMINAL_PANEL_TOGGLE_EVENT,
 } from "../panel-toggle-contract.ts";
 import type { TerminalGatewayClient } from "./terminal-connection.ts";
-import type { TerminalPanelSessionController } from "./terminal-panel-session-controller.ts";
 import { terminalPanelHostedTabs, type TerminalPanelTab } from "./terminal-panel-tabs.ts";
 import {
   createTerminalController,
   defineTestTerminalPanelElement,
   terminalOpenResult,
+  terminalSessionsForTest,
   type CreateGhosttyTerminalMock,
 } from "./terminal-panel.test-support.ts";
 import type { OpenClawTerminalPanel } from "./terminal-panel.ts";
@@ -46,8 +46,7 @@ async function mount(embedded = true, tabsInHeader = true) {
     panel.toggle();
   }
   await waitForFast(() => expect(panel.hostedTabs[0]?.className).toBe("is-live"));
-  const sessions = (panel as unknown as { terminalSessions: TerminalPanelSessionController })
-    .terminalSessions;
+  const sessions = terminalSessionsForTest(panel);
   await waitForFast(() => expect(sessions.booting).toBe(false));
   await panel.updateComplete;
   return { panel, sessions };
@@ -243,7 +242,7 @@ describe("Terminal panel hosted tabs", () => {
     }
   });
 
-  it("opens its shadow menu from light DOM and restores focus on Escape", async () => {
+  it("opens its panel menu from the hosted header and restores focus on Escape", async () => {
     const { panel } = await mount();
     const actions = mountActions(panel);
     const trigger = button(actions, "Terminal sessions");
@@ -251,9 +250,7 @@ describe("Terminal panel hosted tabs", () => {
     expect(trigger.getAttribute("aria-haspopup")).toBe("dialog");
     trigger.click();
     await waitForFast(() =>
-      expect(panel.shadowRoot?.activeElement).toBe(
-        panel.renderRoot.querySelector(".tp-session-refresh"),
-      ),
+      expect(document.activeElement).toBe(panel.renderRoot.querySelector(".tp-session-refresh")),
     );
     expect(trigger.getAttribute("aria-expanded")).toBe("true");
     const menu = panel.renderRoot.querySelector(".tp-session-menu.tp-session-menu--hosted")!;

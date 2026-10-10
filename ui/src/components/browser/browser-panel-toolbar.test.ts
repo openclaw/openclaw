@@ -27,7 +27,7 @@ describe("Browser toolbar", () => {
       refreshOnPresentation: boolean;
       client: GatewayBrowserClient;
       browserPanelController: BrowserPanelController;
-      renderRoot: ShadowRoot;
+      renderRoot: HTMLElement;
       requestUpdate: () => void;
       updateComplete: Promise<unknown>;
     };
@@ -48,7 +48,7 @@ describe("Browser toolbar", () => {
     return panel;
   }
 
-  it("renders all toolbar glyphs in a shared, stroked SVG coordinate system inside its shadow root", async () => {
+  it("renders all toolbar glyphs in a shared, stroked SVG coordinate system inside its light-DOM host", async () => {
     const panel = await mount();
     const glyphs = panel.renderRoot.querySelectorAll(".bp-toolbar button > svg");
     expect(glyphs).toHaveLength(8);

@@ -1,4 +1,3 @@
-import { nothing, render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import { BROWSER_ANNOTATION_EVENT } from "./browser-annotation.ts";
 import {
@@ -10,7 +9,7 @@ import {
   type BrowserRequestEnvelope,
 } from "./browser-panel-controller-test-support.ts";
 import type { BrowserPanelController } from "./browser-panel-controller.ts";
-import { renderBrowserPanelChrome } from "./browser-panel-render.ts";
+import { mountBrowserPanelChrome } from "./browser-panel-render-test-support.ts";
 
 setupBrowserPanelTestCleanup();
 
@@ -29,18 +28,7 @@ function click(x: number, y: number) {
 
 function renderInput(controller: BrowserPanelController): HTMLTextAreaElement {
   const root = controller.host.renderRoot;
-  render(
-    renderBrowserPanelChrome(
-      controller,
-      "right",
-      400,
-      400,
-      () => {},
-      () => {},
-      nothing,
-    ),
-    root,
-  );
+  mountBrowserPanelChrome(controller, root);
   vi.spyOn(root.querySelector<HTMLElement>(".bp-stage")!, "getBoundingClientRect").mockReturnValue(
     new DOMRect(0, 0, 100, 100),
   );

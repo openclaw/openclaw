@@ -109,7 +109,7 @@ function chooseCard(panel: Panel, browserTab: BrowserTabTarget) {
 }
 
 function pageTitle(panel: Panel) {
-  return panel.shadowRoot?.querySelector<HTMLImageElement>(".bp-shot")?.alt;
+  return panel.renderRoot?.querySelector<HTMLImageElement>(".bp-shot")?.alt;
 }
 
 function controllerFor(panel: Panel): BrowserPanelController {
@@ -154,7 +154,7 @@ describe("browser panel route handoff", () => {
     expect(gateway.request).not.toHaveBeenCalled();
     panel.presented = true;
     await waitForFast(() => expect(pageTitle(panel)).toBe("managed"));
-    expect(panel.shadowRoot?.querySelector(".bp-profile")?.textContent).toBe("managed");
+    expect(panel.renderRoot?.querySelector(".bp-profile")?.textContent).toBe("managed");
     expect(focusCount()).toBe(0);
 
     chooseCard(panel, nodeTab);
@@ -194,7 +194,7 @@ describe("browser panel route handoff", () => {
     panel.sessionKey = "agent:main:second";
     panel.preferredTab = undefined;
     await waitForFast(() => expect(pageTitle(panel)).toBe("default"));
-    expect(panel.shadowRoot?.querySelector(".bp-profile")).toBeNull();
+    expect(panel.renderRoot?.querySelector(".bp-profile")).toBeNull();
     panel.sessionKey = "agent:main:first";
     panel.preferredTab = { tab: hostTab, revision: "second" };
     await waitForFast(() => expect(pageTitle(panel)).toBe("managed"));
@@ -284,9 +284,9 @@ describe("browser panel route handoff", () => {
       gateway.request.mock.calls.map(([, value]) => (value as BrowserRequestEnvelope).path);
     expect(paths()).toEqual(["/tabs"]);
     expect(controllerFor(panel).errorText).toBeNull();
-    const start = panel.shadowRoot?.querySelector<HTMLButtonElement>(".bp-btn");
+    const start = panel.renderRoot?.querySelector<HTMLButtonElement>(".bp-btn");
     expect(start?.textContent?.trim()).toBe("Start browser");
-    const reload = panel.shadowRoot?.querySelector<HTMLButtonElement>(
+    const reload = panel.renderRoot?.querySelector<HTMLButtonElement>(
       'button[aria-label="Reload"]',
     );
     expect(reload?.disabled).toBe(true);
@@ -416,7 +416,7 @@ describe("browser panel route handoff", () => {
       );
       await controller.refreshAll();
       await panel.updateComplete;
-      const stage = panel.shadowRoot!.querySelector<HTMLElement>(".bp-stage")!;
+      const stage = panel.renderRoot!.querySelector<HTMLElement>(".bp-stage")!;
       vi.spyOn(stage, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 100, 100));
       const clickCompleted = createDeferred();
       const respond = gateway.request.getMockImplementation()!;
@@ -584,7 +584,7 @@ describe("browser panel route handoff", () => {
     const beforeBlocked = gateway.request.mock.calls.length;
     await controllerFor(panel).selectTab("t1");
     await panel.updateComplete;
-    expect(panel.shadowRoot?.querySelector(".bp-status")?.textContent).toContain(
+    expect(panel.renderRoot?.querySelector(".bp-status")?.textContent).toContain(
       "Select another tab",
     );
     expect(gateway.request).toHaveBeenCalledTimes(beforeBlocked);
@@ -612,8 +612,8 @@ describe("browser panel route handoff", () => {
       });
       await controllerFor(panel).refreshAll();
       await panel.updateComplete;
-      expect(panel.shadowRoot?.querySelector(".bp-shot")).toBeNull();
-      expect(panel.shadowRoot?.querySelector(".bp-status")?.textContent).toContain(
+      expect(panel.renderRoot?.querySelector(".bp-shot")).toBeNull();
+      expect(panel.renderRoot?.querySelector(".bp-status")?.textContent).toContain(
         "Select another tab",
       );
       expect(controllerFor(panel).urlDraft).toBe("");
@@ -658,24 +658,24 @@ describe("browser panel route handoff", () => {
       });
       const panel = await mountPanel(gateway.client);
       await waitForFast(() =>
-        expect(panel.shadowRoot?.querySelector(".bp-status")?.textContent).toContain(
+        expect(panel.renderRoot?.querySelector(".bp-status")?.textContent).toContain(
           reason === "navigation_blocked"
             ? "Select another tab or enter an allowed address."
             : "Refresh to try again.",
         ),
       );
-      expect(panel.shadowRoot?.textContent).toContain("Kept title");
-      expect(panel.shadowRoot?.querySelector(".bp-shot")).toBeNull();
+      expect(panel.renderRoot?.textContent).toContain("Kept title");
+      expect(panel.renderRoot?.querySelector(".bp-shot")).toBeNull();
       expect(
         gateway.request.mock.calls.some(([, value]) =>
           ["/tabs/focus", "/screenshot", "/act"].includes((value as BrowserRequestEnvelope).path),
         ),
       ).toBe(false);
       blocked = false;
-      panel.shadowRoot?.querySelector<HTMLButtonElement>('button[aria-label="Reload"]')?.click();
+      panel.renderRoot?.querySelector<HTMLButtonElement>('button[aria-label="Reload"]')?.click();
       await waitForFast(() => expect(pageTitle(panel)).toBe("Recovered"));
       expect(controllerFor(panel).tabs[0]?.urlUnavailableReason).toBeUndefined();
-      expect(panel.shadowRoot?.querySelector(".bp-status")).toBeNull();
+      expect(panel.renderRoot?.querySelector(".bp-status")).toBeNull();
     },
   );
 });

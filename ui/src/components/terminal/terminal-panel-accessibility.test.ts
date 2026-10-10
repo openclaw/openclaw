@@ -12,7 +12,7 @@ import {
   terminalOpenResult,
   type CreateGhosttyTerminalMock,
 } from "./terminal-panel.test-support.ts";
-import { OpenClawTerminalPanel } from "./terminal-panel.ts";
+import type { OpenClawTerminalPanel } from "./terminal-panel.ts";
 
 const createGhosttyTerminalMock: CreateGhosttyTerminalMock = vi.fn();
 const TERMINAL_PANEL_ELEMENT_NAME = defineTestTerminalPanelElement(createGhosttyTerminalMock);
@@ -142,9 +142,7 @@ describe("OpenClawTerminalPanel accessibility", () => {
 
     trigger?.click();
     await waitForFast(() =>
-      expect(panel.shadowRoot?.activeElement).toBe(
-        panel.renderRoot.querySelector(".tp-session-refresh"),
-      ),
+      expect(document.activeElement).toBe(panel.renderRoot.querySelector(".tp-session-refresh")),
     );
     expect(panel.renderRoot.querySelector(".tp-session-menu")?.getAttribute("role")).toBe("dialog");
 
@@ -153,7 +151,7 @@ describe("OpenClawTerminalPanel accessibility", () => {
       ?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     await panel.updateComplete;
     expect(panel.renderRoot.querySelector(".tp-session-menu")).toBeNull();
-    expect(panel.shadowRoot?.activeElement).toBe(trigger);
+    expect(document.activeElement).toBe(trigger);
 
     trigger?.click();
     await waitForFast(() =>
@@ -186,9 +184,7 @@ describe("OpenClawTerminalPanel accessibility", () => {
 
     trigger.click();
     await waitForFast(() =>
-      expect(panel.shadowRoot?.activeElement).toBe(
-        panel.renderRoot.querySelector(".tp-session-refresh"),
-      ),
+      expect(document.activeElement).toBe(panel.renderRoot.querySelector(".tp-session-refresh")),
     );
     trigger.focus();
     await Promise.resolve();

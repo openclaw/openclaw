@@ -1,10 +1,7 @@
-import { html, svg, type ReactiveController } from "lit";
 import { t } from "../../i18n/index.ts";
 import { registerDesktopEnglish } from "../../i18n/locales/en-desktop.ts";
-import type { OpenClawLitElement } from "../../lit/openclaw-element.ts";
-import { strokeIcon } from "../icons-tools.ts";
+import type { PanelLifecycleController, SolidPanelController } from "../solid-panel-controller.ts";
 import type { DesktopPanelState } from "./desktop-panel-state.ts";
-import { renderDesktopNotice } from "./desktop-panel-view.ts";
 
 registerDesktopEnglish();
 
@@ -15,21 +12,21 @@ type PictureInPictureWindow = Window & {
   };
 };
 
-type DesktopPictureInPictureHost = OpenClawLitElement & {
+type DesktopPictureInPictureHost = Pick<
+  SolidPanelController,
+  "addController" | "requestUpdate" | "isConnected" | "ownerDocument" | "renderRoot"
+> & {
   available: boolean;
   embedded: boolean;
   presented: boolean;
   documentMode: boolean;
 };
 
-const pipIcon = strokeIcon(svg`<rect x="2" y="3" width="20" height="18" rx="2" />
-  <rect x="12" y="11" width="7" height="7" rx="1" />`);
-
 /** View-only pixels from the existing RFB connection; never owns a socket or input. */
-export class DesktopPictureInPicture implements ReactiveController {
-  private errorText: string | null = null;
+export class DesktopPictureInPicture implements PanelLifecycleController {
+  errorText: string | null = null;
   private popup: Window | null = null;
-  private pending = false;
+  pending = false;
   private generation = 0;
   private stopMirror: (() => void) | null = null;
 
@@ -56,33 +53,15 @@ export class DesktopPictureInPicture implements ReactiveController {
       : null;
   }
 
-  renderNotice(...[errorText, noticeText, availability]: Parameters<typeof renderDesktopNotice>) {
-    return renderDesktopNotice(this.errorText ?? errorText, noticeText, availability);
+  get active(): boolean {
+    return this.popup !== null;
   }
 
-  renderButton() {
-    const connected = this.state() === "connected";
-    const className = this.host.documentMode ? "desktop-touch-action" : "desktop-toolbar-action";
-    const supported =
+  get supported(): boolean {
+    return (
       this.opener?.isSecureContext === true &&
-      typeof this.opener.documentPictureInPicture?.requestWindow === "function";
-    const label = this.popup
-      ? t("desktop.exitPictureInPicture")
-      : supported
-        ? t("desktop.enterPictureInPicture")
-        : t("desktop.pictureInPictureUnavailable");
-    return html`<button
-      class=${className + " desktop-picture-in-picture-button"}
-      type="button"
-      title=${label}
-      aria-label=${label}
-      aria-pressed=${this.popup ? "true" : "false"}
-      aria-busy=${this.pending ? "true" : "false"}
-      ?disabled=${!supported || !connected || this.pending}
-      @click=${() => void this.toggle()}
-    >
-      ${pipIcon}
-    </button>`;
+      typeof this.opener.documentPictureInPicture?.requestWindow === "function"
+    );
   }
 
   close(): void {
@@ -96,7 +75,7 @@ export class DesktopPictureInPicture implements ReactiveController {
     this.host.requestUpdate();
   }
 
-  private async toggle(): Promise<void> {
+  async toggle(): Promise<void> {
     if (this.popup) {
       this.close();
       return;

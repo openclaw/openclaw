@@ -1,7 +1,6 @@
 import { svg } from "lit";
 import { t } from "../../i18n/index.ts";
 import type { PanelHostedTab } from "../panel-hosted-tabs.ts";
-import { renderPanelTabStrip, type PanelTabStripTab } from "../panel-tab-strip.ts";
 
 export type TerminalPanelTab = {
   id: string;
@@ -50,30 +49,4 @@ export function terminalPanelHostedTabs(tabs: TerminalPanelTab[]): PanelHostedTa
     badge: tab.agentOwned ? t("terminal.agentOwnedBadge") : null,
     className: `is-${tab.status}`,
   }));
-}
-
-export function renderTerminalPanelTabs(params: {
-  tabs: TerminalPanelTab[];
-  activeId: string | null;
-  booting: boolean;
-  onSelect: (id: string) => void;
-  onClose: (id: string) => void | Promise<void>;
-  onNew: () => void;
-}) {
-  const tabs: PanelTabStripTab[] = terminalPanelHostedTabs(params.tabs).map((tab) =>
-    Object.assign(tab, {
-      domId: `terminal-tab-${tab.id}`,
-      closeLabel: `${t("terminal.closeSession")}: ${tab.label}`,
-    }),
-  );
-  return renderPanelTabStrip({
-    tabs,
-    activeId: params.activeId,
-    ariaControls: "terminal-tab-panel",
-    onSelect: params.onSelect,
-    onClose: params.onClose,
-    onNew: params.onNew,
-    newLabel: t("terminal.newSession"),
-    newDisabled: params.booting,
-  });
 }
