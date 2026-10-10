@@ -294,9 +294,14 @@ export async function prepareGitHubPublicationRequesterV2(
         policyAuthority = authority;
       },
     );
+    const signal = AbortSignal.any([
+      lifetime.signal,
+      ...(options.signal ? [options.signal] : []),
+      ...(source?.authority.signal ? [source.authority.signal] : []),
+    ]);
     const assertInvocationCurrent = () => {
       try {
-        options.signal?.throwIfAborted();
+        signal.throwIfAborted();
         if (options.hasCurrentClientAuthority?.() === false) {
           throw new GitHubPublicationRequesterUnavailableError();
         }
@@ -306,18 +311,12 @@ export async function prepareGitHubPublicationRequesterV2(
         throw new GitHubPublicationRequesterUnavailableError();
       }
     };
-    const signal = AbortSignal.any([
-      lifetime.signal,
-      ...(options.signal ? [options.signal] : []),
-      ...(source?.authority.signal ? [source.authority.signal] : []),
-    ]);
     const requester: GitHubPublicationRequesterV2 = Object.freeze({
       version: 2 as const,
       signal,
       snapshot,
       assertInvocationCurrent,
       assertCurrent: () => {
-        signal.throwIfAborted();
         assertInvocationCurrent();
         assertPolicy();
         assertInvocationCurrent();
