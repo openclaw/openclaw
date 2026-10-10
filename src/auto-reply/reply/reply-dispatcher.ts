@@ -219,7 +219,10 @@ export type ReplyDispatcherWithTypingOptions = Omit<ReplyDispatcherOptions, "onI
 
 type ReplyDispatcherWithTypingResult = {
   dispatcher: ReturnType<typeof createReplyDispatcher>;
-  replyOptions: Pick<GetReplyOptions, "onReplyStart" | "onTypingController" | "onTypingCleanup">;
+  replyOptions: Pick<
+    GetReplyOptions,
+    "onReplyStart" | "onTypingController" | "onTypingCleanup" | "onTypingRevive"
+  >;
   markDispatchIdle: () => void;
   /** Signal that the model run is complete so the typing controller can stop. */
   markRunComplete: () => void;
@@ -722,6 +725,7 @@ export function createReplyDispatcherWithTyping(
     replyOptions: {
       onReplyStart: resolvedOnReplyStart,
       onTypingCleanup: resolvedOnCleanup,
+      onTypingRevive: typingCallbacks?.beginNextLifecycle,
       onTypingController: (typing) => {
         typingController = typing;
       },

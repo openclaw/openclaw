@@ -120,10 +120,14 @@ async function dispatchSlackMessageWithSetup(
   // A posted draft/progress message counts as visible output even before it is
   // committed as the reply, so the status keepalive stops at the same moment
   // Slack drops the status row.
-  setup.threadStatusGate.hasVisibleOutput = () =>
-    delivery.observedReplyDelivery ||
-    previewLifecycle.previewFinalized ||
-    Boolean(draftStream?.messageId());
+  setup.threadStatusGate.bind(() => {
+    const draftId = draftStream?.messageId();
+    return {
+      delivery: delivery.observedReplyDelivery,
+      preview: previewLifecycle.previewFinalized,
+      ...(draftId ? { draftId } : {}),
+    };
+  });
   const failureNoticeThreadTs = message.thread_ts;
   const failureNoticeTeamId = prepared.eventScope?.teamId;
   let sawTerminalFailurePayload = false;
@@ -494,7 +498,12 @@ async function dispatchSlackMessageWithSetup(
           await progress.onDraftBoundary?.();
           return false;
         },
-        onQueuedFollowupAdmitted: progress.onQueuedFollowupAdmitted,
+        onQueuedFollowupAdmitted: async () => {
+          await progress.onQueuedFollowupAdmitted?.();
+          // The queued turn is a new status generation. Ignore this dispatch's
+          // earlier reply so processing can show before the successor's output.
+          setup.beginFollowupThreadStatus();
+        },
         onQueuedFollowupSettled: progress.onQueuedFollowupSettled,
         onReasoningStream: async (payload) => {
           const visible = await progress.pushReasoningProgress(payload);

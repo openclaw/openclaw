@@ -596,4 +596,46 @@ describe("createTypingCallbacks", () => {
       });
     });
   });
+
+  it("keeps a successor start alive when the sealed lifecycle's stop is still in flight", async () => {
+    let resolveStart: (() => void) | undefined;
+    const start = vi.fn(() => {
+      if (!resolveStart) {
+        return new Promise<void>((resolve) => {
+          resolveStart = resolve;
+        });
+      }
+      return Promise.resolve();
+    });
+    const stop = vi.fn(async () => {});
+    const { callbacks } = createTypingHarness({
+      start,
+      stop,
+      keepaliveIntervalMs: 0,
+      maxDurationMs: 0,
+    });
+
+    const starting = callbacks.onReplyStart();
+    callbacks.onCleanup?.();
+    const stopSuccessor = callbacks.beginNextLifecycle?.();
+    if (!resolveStart || !stopSuccessor) {
+      throw new Error("expected the sealed start and a successor stop");
+    }
+    resolveStart();
+    await starting;
+    await flushMicrotasks();
+    expect(stop).not.toHaveBeenCalled();
+
+    await callbacks.onReplyStart();
+    await flushMicrotasks();
+    expect(start).toHaveBeenCalledTimes(2);
+
+    callbacks.onCleanup?.();
+    await flushMicrotasks();
+    expect(stop).not.toHaveBeenCalled();
+
+    stopSuccessor();
+    await flushMicrotasks();
+    expect(stop).toHaveBeenCalledTimes(1);
+  });
 });

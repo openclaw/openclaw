@@ -118,6 +118,8 @@ export function createFollowupRunner(
     let progressContinuation: ProgressContinuationCapability | undefined;
     const admissionNotices: ReplyPayload[] = [];
     let completion: QueuedFollowupReplyBatch["completion"] = { kind: "completed" };
+    // Admitted turns must not reuse a controller sealed by the predecessor dispatch.
+    let activeTyping = defaults.typing;
     const initiallyAborted = isFollowupRunAborted(queued);
     const endDeliveryCorrelations = initiallyAborted
       ? []
@@ -159,9 +161,11 @@ export function createFollowupRunner(
       const turn: AdmittedFollowupTurn = admission.turn;
       admittedTurn = turn;
       operation = turn.operation;
+      const turnTyping = defaults.typing.createSuccessor?.() ?? defaults.typing;
+      activeTyping = turnTyping;
       const execution = await executeFollowupTurn({
         turn,
-        defaults,
+        defaults: turnTyping === defaults.typing ? defaults : { ...defaults, typing: turnTyping },
         onToolResult: (payload) => deliverProgress(turn, [payload], "tool"),
         onCompactionNoticePayload: (payload) => deliverProgress(turn, [payload], "block"),
       });
@@ -316,8 +320,8 @@ export function createFollowupRunner(
         clearAgentRunContext(admittedTurn.runId);
       }
       operation?.complete();
-      defaults.typing.markRunComplete();
-      defaults.typing.markDispatchIdle();
+      activeTyping.markRunComplete();
+      activeTyping.markDispatchIdle();
     }
     if (disposition.kind === "deferred") {
       throw new FollowupRunDeferredError(
