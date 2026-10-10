@@ -203,7 +203,7 @@ export function renderChatPreferencesSection(props: ConfigProps) {
               aria-label=${t("configView.chatPrefs.messageWidth")}
               type="text"
               spellcheck="false"
-              placeholder="min(1280px, 100%)"
+              placeholder="min(1280px, calc(100% - 136px))"
               .value=${props.chatMessageMaxWidth ?? ""}
               @change=${(event: Event) => {
                 // SAFETY: The listener is bound directly to this input.

@@ -948,7 +948,8 @@ for runtime support and recovery limits.
 ## Chat message width
 
 Normal Chat defaults to a centered transcript and message frame capped at
-`1280px`. Wide-monitor users can override that width under **Settings → Appearance → Chat →
+`1280px`, reserving the transcript navigation rail's required gutter when the
+pane is wide enough to show it. Wide-monitor users can override that width under **Settings → Appearance → Chat →
 Message width**. The preference stays in that browser's local storage. Supported
 forms include plain lengths and percentages such as `960px` or `82%`, plus
 constrained `min(...)`, `max(...)`, `clamp(...)`, `calc(...)`, and

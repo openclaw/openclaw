@@ -29,7 +29,9 @@
 }
 
 .chat {
-  --chat-thread-max-width: min(1280px, 100%);
+  /* Keep the transcript navigation rail's measured 68px gutter while using
+     the wider inherited frame. The centered composer shares this same cap. */
+  --chat-thread-max-width: min(1280px, calc(100% - 136px));
   --chat-message-max-width: 100%;
   /* Keep overlays clear of the edge-hugging scrollbar and add room on wide screens. */
   --chat-thread-gutter: 18px;
@@ -51,6 +53,12 @@
   border: none !important;
   border-radius: var(--radius-lg);
   box-shadow: none !important;
+}
+
+@media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+  .chat {
+    --chat-thread-max-width: min(1280px, 100%);
+  }
 }
 
 @supports (corner-shape: superellipse(1.5)) {

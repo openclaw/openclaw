@@ -84,9 +84,11 @@ suite.define(() => {
       await browserExpect(widthInput).toHaveValue("");
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       await transcript.getByText("A comfortable reading column.").waitFor();
-      expect(await transcript.evaluate((element) => getComputedStyle(element).maxWidth)).toBe(
-        "768px",
+      const restoredFrameWidth = await transcript.evaluate(
+        (element) => element.getBoundingClientRect().width,
       );
+      expect(restoredFrameWidth).toBeGreaterThan(768);
+      expect(restoredFrameWidth).toBeLessThanOrEqual(1280);
     });
   });
 });
