@@ -1018,6 +1018,7 @@ src/infra/sqlite-jsonl-budget.ts
 src/infra/sqlite-live-snapshot.ts
 src/infra/sqlite-lifecycle-errors.ts
 src/infra/sqlite-maintenance-cache.ts
+src/infra/sqlite-native-observer.ts
 src/infra/sqlite-number.ts
 src/infra/sqlite-page-cache-residency.ts
 src/infra/sqlite-page-cache.worker.ts
@@ -1048,6 +1049,7 @@ src/infra/sqlite-schema-ensure.ts
 src/infra/sqlite-schema-facts.ts
 src/infra/sqlite-schema-header.ts
 src/infra/sqlite-schema-issues.ts
+src/infra/sqlite-schema-mutation.ts
 src/infra/sqlite-schema-sql.ts
 src/infra/sqlite-snapshot-file.ts
 src/infra/sqlite-snapshot-policy.ts
