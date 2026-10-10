@@ -21,7 +21,8 @@ vi.mock("openclaw/plugin-sdk/gateway-runtime", async () => {
   };
 });
 
-vi.mock("openclaw/plugin-sdk/cli-state-owner", () => ({
+vi.mock("openclaw/plugin-sdk/cli-state-owner", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/cli-state-owner")>()),
   runWithLocalStateOwner: ({
     runLocal,
   }: {
