@@ -40,6 +40,8 @@ import {
   readCurrentNativePendingAssignments,
   preserveNativePendingAssignments,
   preserveNativeTaskImport,
+  preservedSessionGeneration,
+  storedSessionGeneration,
   bindingStoreKey,
   matchesPendingSupervisionBranch,
   ownsStoredSessionGeneration,
@@ -746,24 +748,4 @@ function isSameSupervisionOwner(
     replacement.threadId === current.threadId &&
     replacement.supervisionSourceThreadId === current.supervisionSourceThreadId
   );
-}
-
-function storedSessionGeneration(
-  identity: CodexAppServerBindingIdentity,
-  current: StoredCodexAppServerBinding | undefined,
-): { sessionId?: string } {
-  if (identity.kind === "session") {
-    return { sessionId: identity.sessionId };
-  }
-  return current?.sessionId ? { sessionId: current.sessionId } : {};
-}
-
-function preservedSessionGeneration(
-  identity: CodexAppServerBindingIdentity,
-  current: StoredCodexAppServerBinding | undefined,
-): { sessionId?: string } {
-  if (current?.sessionId) {
-    return { sessionId: current.sessionId };
-  }
-  return storedSessionGeneration(identity, current);
 }
