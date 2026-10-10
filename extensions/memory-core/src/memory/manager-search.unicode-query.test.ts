@@ -179,7 +179,7 @@ describe("memory keyword query Unicode forms", () => {
   );
 
   it.for(tokenizers)(
-    "keeps AND semantics for mixed-form words with %s",
+    "matches mixed-form words with %s recall semantics",
     async (tokenizer, context) => {
       if (tokenizer === "trigram" && !hasTrigram) {
         context.skip("SQLite does not provide the optional trigram tokenizer");
@@ -193,11 +193,25 @@ describe("memory keyword query Unicode forms", () => {
         ],
         async (search) => {
           for (const form of forms) {
-            expect(
-              (await search("München caféteria".normalize(form))).map((hit) => hit.id),
-            ).toEqual(["both"]);
+            const hits = (await search("München caféteria".normalize(form))).map((hit) => hit.id);
+            if (tokenizer === "trigram") {
+              // Trigram plans keep strict all-term matching.
+              expect(hits).toEqual(["both"]);
+            } else {
+              // unicode61 body recall OR-joins terms (issue #160839): the
+              // mixed-form complete match still ranks first, partial hits follow.
+              expect(hits[0]).toBe("both");
+              expect(hits).toEqual(expect.arrayContaining(["both", "city", "lunch"]));
+            }
           }
-          expect(await search("München unrecordedword")).toEqual([]);
+          const unrecorded = (await search("München unrecordedword")).map((hit) => hit.id);
+          if (tokenizer === "trigram") {
+            expect(unrecorded).toEqual([]);
+          } else {
+            // OR recall: the recorded term alone still recalls its rows.
+            expect(unrecorded).toEqual(expect.arrayContaining(["both", "city"]));
+            expect(unrecorded).not.toContain("lunch");
+          }
         },
       );
     },

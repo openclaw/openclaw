@@ -363,7 +363,10 @@ describe("memory index", () => {
     }
     await manager.sync({ reason: "test" });
 
-    const results = await manager.search("foo.md", { maxResults: 204, minScore: 0 });
+    // Query by bare stem: the shared persistent index also holds MEMORY.md
+    // bodies containing the token "md", and OR-joined keyword recall would
+    // otherwise pull those unrelated chunks into the result window.
+    const results = await manager.search("foo", { maxResults: 204, minScore: 0 });
 
     expect(results).toHaveLength(200);
     expect(new Set(results.map((entry) => entry.path)).size).toBe(200);

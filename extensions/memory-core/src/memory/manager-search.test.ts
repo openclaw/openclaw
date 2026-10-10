@@ -332,6 +332,78 @@ describe("searchKeyword FTS MATCH fallback", () => {
   });
 });
 
+describe("searchKeyword natural-language questions", () => {
+  function createFtsDb() {
+    const { db, schema } = createMemorySearchDb();
+    if (!schema.ftsAvailable) {
+      db.close();
+      throw new Error(`FTS5 unavailable: ${schema.ftsError ?? "unknown error"}`);
+    }
+    return db;
+  }
+
+  it("matches a chunk that holds only some of the question's words (issue #160839)", async () => {
+    const db = createFtsDb();
+    try {
+      insertKeywordFixture(db, {
+        id: "answer",
+        path: "notes/releases.md",
+        text: "Tag v0.78.42.0 is an annotated tag object 0b1698f pointing at the release commit.",
+        endLine: 3,
+      });
+      insertKeywordFixture(db, {
+        id: "unrelated",
+        path: "notes/other.md",
+        text: "What is the deployment process for the gateway service",
+        endLine: 3,
+      });
+
+      const results = await searchKeywordFixture(
+        db,
+        "What is the annotated tag object hash created for v0.78.42.0?",
+      );
+
+      expect(results.map((row) => row.id)).toContain("answer");
+      // BM25 must rank the rare-token answer above the stop-word-only row.
+      expect(results[0]?.id).toBe("answer");
+      expect(results[0]?.textScore).toBeGreaterThan(0);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("keeps a complete match ahead of higher-BM25 partial hits inside the bounded window", async () => {
+    const db = createFtsDb();
+    try {
+      // Common-token eviction fixture: every row shares both query tokens, so
+      // plain OR+BM25 favors the short partial rows over the long complete row
+      // and would evict it from the bounded window without the tier.
+      insertKeywordFixture(db, {
+        id: "complete",
+        path: "notes/complete.md",
+        text: "common keyword " + "padding context around the shared entry ".repeat(40),
+        endLine: 3,
+      });
+      for (let index = 0; index < 30; index += 1) {
+        insertKeywordFixture(db, {
+          id: `partial-${index}`,
+          path: `notes/partial-${index}.md`,
+          text: "common",
+          endLine: 3,
+        });
+      }
+
+      const results = await searchKeywordFixture(db, "common keyword", { limit: 5 });
+
+      expect(results[0]?.id).toBe("complete");
+      expect(results.filter((row) => row.id === "complete")).toHaveLength(1);
+      expect(results).toHaveLength(5);
+    } finally {
+      db.close();
+    }
+  });
+});
+
 describe("searchKeyword boosted relevance", () => {
   it.each(["unicode61", "trigram"] as const)(
     "preserves %s relevance differences before dated-note decay",
@@ -415,6 +487,42 @@ describe("searchKeyword ranked limits", () => {
         });
         expect(results.map((row) => row.id)).toEqual(["chunk-1", "chunk-3", "chunk-5"]);
         expect(examined).toBeLessThanOrEqual(6);
+      } finally {
+        db.close();
+      }
+    },
+  );
+
+  it.each(["unicode61", "trigram"] as const)(
+    "keeps multi-token %s candidate scans bounded with the complete-match tier",
+    async (ftsTokenizer) => {
+      const { db } = createMemorySearchDb({ ftsTokenizer });
+      try {
+        for (let index = 0; index < 64; index++) {
+          insertKeywordFixture(db, {
+            id: `chunk-${index}`,
+            path: `memory/${index}.md`,
+            text: "common keyword",
+            source: index % 2 === 0 ? "memory" : "sessions",
+          });
+        }
+        let examined = 0;
+        db.function("observe_keyword_candidate", () => {
+          examined++;
+          return 1;
+        });
+        const results = await searchKeywordFixture(db, "common keyword", {
+          ftsTokenizer,
+          limit: 3,
+          sourceFilter: {
+            sql: " AND source IN (?) AND observe_keyword_candidate() = 1",
+            params: ["sessions"],
+          },
+        });
+        expect(results).toHaveLength(3);
+        // Tiering must run as bounded rank-ordered scans (and leave trigram
+        // plans untiered), never sort every matching row before LIMIT.
+        expect(examined).toBeLessThanOrEqual(16);
       } finally {
         db.close();
       }

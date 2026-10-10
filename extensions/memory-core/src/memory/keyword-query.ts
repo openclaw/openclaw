@@ -16,6 +16,17 @@ export function buildFtsQuery(
   return buildMatchQueryFromTerms(tokenizeFtsQuery(raw), canonicalTokenizer);
 }
 
+// Loose (OR-joined) body recall: natural-language questions rarely repeat
+// every token in the answer chunk, so OR the terms and let BM25 rank by the
+// rare ones (issue #160839). Canonical alternative groups stay per-term so a
+// document mixing NFC and NFD words still matches.
+export function buildLooseFtsQuery(
+  raw: string,
+  canonicalTokenizer?: FtsCanonicalTokenizer,
+): string | null {
+  return buildLooseMatchQueryFromTerms(tokenizeFtsQuery(raw), canonicalTokenizer);
+}
+
 function simpleCaseFold(character: string): string {
   const upper = character.toUpperCase();
   const folded = Array.from(upper).length === 1 ? upper.toLowerCase() : character.toLowerCase();
@@ -112,20 +123,29 @@ function canonicalTermForms(term: string, tokenizer?: FtsCanonicalTokenizer): st
   });
 }
 
-export function buildMatchQueryFromTerms(
-  terms: string[],
-  canonicalTokenizer?: FtsCanonicalTokenizer,
-): string | null {
-  if (terms.length === 0) {
-    return null;
-  }
-  const quoted = uniqueStrings(terms).map((term) => {
+function quoteTermAlternatives(terms: string[], canonicalTokenizer?: FtsCanonicalTokenizer) {
+  return uniqueStrings(terms).map((term) => {
     const forms = canonicalTermForms(term, canonicalTokenizer);
     const alternatives = forms.map((form) => `"${form.replaceAll('"', "")}"`);
     // Alternatives belong to each word: one document can mix NFC and NFD words.
     return alternatives.length === 1 ? alternatives[0] : `(${alternatives.join(" OR ")})`;
   });
-  return quoted.join(" AND ");
+}
+
+export function buildMatchQueryFromTerms(
+  terms: string[],
+  canonicalTokenizer?: FtsCanonicalTokenizer,
+): string | null {
+  const quoted = quoteTermAlternatives(terms, canonicalTokenizer);
+  return quoted.length === 0 ? null : quoted.join(" AND ");
+}
+
+export function buildLooseMatchQueryFromTerms(
+  terms: string[],
+  canonicalTokenizer?: FtsCanonicalTokenizer,
+): string | null {
+  const quoted = quoteTermAlternatives(terms, canonicalTokenizer);
+  return quoted.length === 0 ? null : quoted.join(" OR ");
 }
 
 export function planKeywordSearch(params: {
@@ -133,12 +153,16 @@ export function planKeywordSearch(params: {
   ftsTokenizer?: "unicode61" | "trigram";
   includeLeadingMarks?: boolean;
   canonicalVariants?: boolean;
+  matchMode?: "all" | "any";
 }): { matchQuery: string | null; substringTerms: string[] } {
   const canonicalTokenizer = params.canonicalVariants
     ? (params.ftsTokenizer ?? "unicode61")
     : undefined;
   if (params.ftsTokenizer !== "trigram") {
-    const matchQuery = buildFtsQuery(params.query, canonicalTokenizer);
+    const matchQuery =
+      params.matchMode === "any"
+        ? buildLooseFtsQuery(params.query, canonicalTokenizer)
+        : buildFtsQuery(params.query, canonicalTokenizer);
     return { matchQuery, substringTerms: [] };
   }
   const tokens = tokenizeFtsQuery(params.query, params.includeLeadingMarks);
