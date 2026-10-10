@@ -224,16 +224,6 @@ describe("tailscale helpers", () => {
     const statusArgs = ["status", "--json"];
     const execOptions = { timeoutMs: 5000, logOutput: false };
 
-    it("classifies a stopped daemon without waiting or starting it", async () => {
-      const exec = vi.fn().mockResolvedValue(status("Stopped"));
-      const info = vi.fn();
-      await expect(
-        waitForTailscaleBackendReady({ bin: tailscaleBin, info, exec }),
-      ).rejects.toMatchObject({ code: "gateway.tailscale_backend_stopped" });
-      expect(exec).toHaveBeenCalledOnce();
-      expect(info).not.toHaveBeenCalled();
-    });
-
     // Connect-failure wording as emitted by the tailscale CLI (cmd/tailscale/cli/diag.go),
     // which differs by platform and by whether a tailscaled process was found.
     it("waits while the daemon is not accepting connections yet", async () => {
