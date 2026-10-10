@@ -209,6 +209,28 @@ export function emitReasoningEnd(ctx: EmbeddedAgentSubscribeContext) {
   });
 }
 
+export function emitPersistentReasoning(ctx: EmbeddedAgentSubscribeContext, text: string) {
+  if (
+    !ctx.state.includeReasoning ||
+    !text ||
+    !ctx.params.onBlockReply ||
+    ctx.params.silentExpected ||
+    shouldSuppressDeterministicApprovalOutput(ctx.state) ||
+    hasMessageToolOnlySourceDelivery(ctx) ||
+    text === ctx.state.lastReasoningSent
+  ) {
+    return;
+  }
+  const previous = ctx.state.lastReasoningSent;
+  const pending =
+    previous && text.startsWith(previous) ? text.slice(previous.length).trimStart() : text;
+  ctx.state.lastReasoningSent = text;
+  // Keep reasoning separate from answer/tool payloads, in provider order.
+  if (pending) {
+    ctx.emitBlockReply({ text: pending, isReasoning: true });
+  }
+}
+
 export function emitAssistantMessageStart(ctx: EmbeddedAgentSubscribeContext) {
   ctx.flushAssistantStream();
   runBestEffortCallback({

@@ -1,6 +1,6 @@
 import { expect, it, vi } from "vitest";
 import {
-  buildDirectChatContext,
+  buildSourceConversationContext,
   buildGroupChatContext,
   buildGroupIntro,
 } from "../../auto-reply/reply/groups.js";
@@ -179,7 +179,7 @@ it.each([
             silentReplyPolicy: "disallow",
             silentToken: "NO_REPLY",
           })
-        : buildDirectChatContext({ sessionCtx: ctx }),
+        : buildSourceConversationContext({ sessionCtx: ctx }),
       shared && buildGroupIntro({ activation: "always", defaultActivation: "mention" }),
     ]
       .filter(Boolean)
@@ -293,9 +293,10 @@ it.each([
     }
     if (testCase.replyAccountId === "rich") {
       expect(prompt).toBe(
-        [buildInboundMetaSystemPrompt(ctx, {}), buildDirectChatContext({ sessionCtx: ctx })].join(
-          "\n\n",
-        ),
+        [
+          buildInboundMetaSystemPrompt(ctx, {}),
+          buildSourceConversationContext({ sessionCtx: ctx }),
+        ].join("\n\n"),
       );
     }
   } finally {

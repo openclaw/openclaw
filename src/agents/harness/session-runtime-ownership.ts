@@ -1,6 +1,7 @@
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
 import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
+import { captureIncognitoSessionSource } from "../../config/sessions/session-incognito-binding.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { warnPluginSdkDeprecation } from "../../plugins/sdk-deprecation.js";
@@ -34,10 +35,23 @@ function captureSessionRuntimeOwnershipRead(params: SessionRuntimeOwnershipReadP
   if (!harness) {
     return undefined;
   }
+  const { agentId, sessionKey, storePath } = params;
+  const privateSource = sessionKey
+    ? captureIncognitoSessionSource({ agentId, sessionKey, storePath })
+    : undefined;
+  const claim =
+    privateSource && !("kind" in privateSource)
+      ? privateSource.actor.sessions.captureCurrent(sessionKey!)
+      : undefined;
   let active = true;
   const assertCurrent = () => {
     if (active) {
       params.assertCurrent?.();
+      privateSource?.admissionSignal?.throwIfAborted();
+      if (privateSource && "kind" in privateSource) {
+        privateSource.assertCurrent();
+      }
+      claim?.assertCurrent();
     }
     if (
       !active ||
@@ -53,6 +67,7 @@ function captureSessionRuntimeOwnershipRead(params: SessionRuntimeOwnershipReadP
   return {
     harness,
     sessionId,
+    privateSource,
     assertCurrent,
     input: {
       config: params.config,
@@ -100,7 +115,7 @@ export function readSessionRuntimeOwnership(
   if (!read) {
     return undefined;
   }
-  const { harness, sessionId, assertCurrent } = read;
+  const { harness, sessionId, privateSource, assertCurrent } = read;
   try {
     assertCurrent();
     if (harness.resolveSessionRuntimeOwnership) {
@@ -123,6 +138,15 @@ export function readSessionRuntimeOwnership(
             assertCurrent();
             return previousSessionId;
           }
+          if (privateSource) {
+            const key = params.sessionKey?.trim();
+            const current =
+              !key || "kind" in privateSource
+                ? undefined
+                : privateSource.actor.sessions.readSharing(key)?.entry;
+            assertCurrent();
+            return current?.sessionId === sessionId ? current.previousSessionId : undefined;
+          }
           const scope = previousSessionReadScope(params);
           const current = scope ? loadSessionEntryReadOnly(scope) : undefined;
           assertCurrent();
@@ -144,7 +168,7 @@ export async function readSessionRuntimeOwnershipAsync(
   if (!read) {
     return undefined;
   }
-  const { harness, sessionId, assertCurrent } = read;
+  const { harness, sessionId, privateSource, assertCurrent } = read;
   const resolveOwnership = harness.resolveSessionRuntimeOwnershipAsync;
   if (!resolveOwnership) {
     read.close();
@@ -161,6 +185,15 @@ export async function readSessionRuntimeOwnershipAsync(
           const previousSessionId = params.readPreparedPreviousSessionId();
           assertCurrent();
           return previousSessionId;
+        }
+        if (privateSource) {
+          const key = params.sessionKey?.trim();
+          const current =
+            !key || "kind" in privateSource
+              ? undefined
+              : privateSource.actor.sessions.readSharing(key)?.entry;
+          assertCurrent();
+          return current?.sessionId === sessionId ? current.previousSessionId : undefined;
         }
         const scope = previousSessionReadScope(params);
         const current = scope
