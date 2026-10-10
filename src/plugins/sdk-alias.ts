@@ -244,18 +244,23 @@ function resolveTrustedOpenClawRootFromArgvHint(params: {
   return hasTrustedOpenClawRootIndicator({ packageRoot, packageJson }) ? packageRoot : null;
 }
 
-function findNearestPluginSdkPackageRoot(startDir: string): string | null {
+function* pluginSdkAncestorDirs(startDir: string): Generator<string> {
   let cursor = path.resolve(startDir);
   for (let i = 0; i < 12; i += 1) {
-    const subpaths = readPluginSdkSubpathsFromPackageRoot(cursor);
-    if (subpaths) {
-      return cursor;
-    }
+    yield cursor;
     const parent = path.dirname(cursor);
     if (parent === cursor) {
       break;
     }
     cursor = parent;
+  }
+}
+
+function findNearestPluginSdkPackageRoot(startDir: string): string | null {
+  for (const dir of pluginSdkAncestorDirs(startDir)) {
+    if (readPluginSdkSubpathsFromPackageRoot(dir)) {
+      return dir;
+    }
   }
   return null;
 }
@@ -299,14 +304,8 @@ function listAncestorPluginRuntimeModuleCandidates(params: {
     if (!start) {
       continue;
     }
-    let cursor = path.resolve(start);
-    for (let i = 0; i < 12; i += 1) {
-      candidates.push(...listPluginRuntimeModuleCandidates(cursor, params.orderedKinds));
-      const parent = path.dirname(cursor);
-      if (parent === cursor) {
-        break;
-      }
-      cursor = parent;
+    for (const dir of pluginSdkAncestorDirs(start)) {
+      candidates.push(...listPluginRuntimeModuleCandidates(dir, params.orderedKinds));
     }
   }
   return dedupeResolvedPaths(candidates);
@@ -794,15 +793,9 @@ function isBundledPluginModulePath(params: {
 }
 
 function isOfficialInstalledPluginModulePath(params: { modulePath: string; packageName: string }) {
-  let cursor = path.dirname(path.resolve(params.modulePath));
-  for (let depth = 0; depth < 12; depth += 1) {
+  for (const cursor of pluginSdkAncestorDirs(path.dirname(path.resolve(params.modulePath)))) {
     const packageJson = readPluginSdkPackageJson(cursor);
     if (!packageJson) {
-      const parent = path.dirname(cursor);
-      if (parent === cursor) {
-        break;
-      }
-      cursor = parent;
       continue;
     }
     if (packageJson.name !== params.packageName) {
