@@ -9,6 +9,7 @@ import {
   listPendingAgentDeletionJournalsInDatabase,
   readAgentDeletionJournalInDatabase,
 } from "./agent-deletion-journal.js";
+import { readRetainedAgentDeletionsFromDatabase } from "./agent-deletion-journal.read.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
@@ -114,6 +115,14 @@ it.each([false, true])(
     const pending = listPendingAgentDeletionJournalsInDatabase(database);
     expect(pending.entries).toHaveLength(gatewayOwned ? 1 : 0);
     expect(pending.manualClawAgentIds).toEqual(gatewayOwned ? [] : [input.agentId]);
+    const facts = readRetainedAgentDeletionsFromDatabase(database.db, database.path);
+    expect(facts).toMatchObject({
+      status: "present",
+      entries: [{ agentId: input.agentId, cleanupCompleted: false }],
+    });
+    expect(facts.status === "present" && facts.entries[0]?.manualClawRemoval).toBe(
+      gatewayOwned ? undefined : true,
+    );
     const recover = (operationId: string) =>
       runOpenClawStateWriteTransaction(
         (current) =>

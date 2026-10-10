@@ -209,6 +209,7 @@ export function assertAgentDeletionPathFence(
         path: snapshot.claimPath,
         statePath: state.path,
       });
+  cleanup?.assertCurrent();
   const cleanupAgentId = cleanup?.assertJournal(
     state.path,
     journalRows.map((row) => ({

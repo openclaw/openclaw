@@ -1,6 +1,12 @@
 import type { OpenClawRegisteredAgentDatabase } from "./openclaw-agent-db-contract.js";
 
-export type RetainedAgentDeletion = { agentId: string; agentDir: string; databasePaths: string[] };
+export type RetainedAgentDeletion = {
+  agentId: string;
+  agentDir: string;
+  databasePaths: string[];
+  cleanupCompleted: boolean;
+  manualClawRemoval?: true;
+};
 export type HeldAgentDatabase = { agentId: string; path: string };
 export type AgentDeletionJournalPurpose = "runtime" | "maintenance";
 export type AgentDeletionJournalPhase = "draining" | "retiring";

@@ -693,6 +693,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/state/dreaming-startup-admission.test.ts",
   "src/state/openclaw-agent-canonical-validation-schema.test.ts",
   "src/state/openclaw-agent-db-maintenance.test.ts",
+  "src/state/openclaw-agent-db-maintenance.deletion.test.ts",
   "src/state/openclaw-agent-db-retired-lease-repair.test.ts",
   "src/state/openclaw-agent-db.storage-migration.test.ts",
   "src/state/openclaw-agent-db.incognito.test.ts",

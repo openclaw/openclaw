@@ -12,6 +12,7 @@ import { isSqliteCorruptionError } from "../infra/sqlite-error-diagnostics.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { isSessionStoreTopologyChange, sessionChanges } from "../sessions/session-row-changes.js";
+import { hasClawDeletionOwnership } from "./agent-deletion-journal-authority.worker.js";
 import { hasPreJournalStateSchema } from "./agent-deletion-journal-history.js";
 import { readAgentDeletionRecoveryHolds } from "./agent-deletion-journal-recovery.kernel.js";
 import type {
@@ -128,9 +129,14 @@ export function readRetainedAgentDeletionsFromDatabase(
         database,
         getNodeSqliteKysely<Pick<DB, "agent_deletion_journal">>(database)
           .selectFrom("agent_deletion_journal")
-          .select(["agent_id", "agent_dir", "database_paths_json"])
-          .where("cleanup_completed", "=", 1)
-          .where("delete_files", "=", 0)
+          .selectAll()
+          .where((eb) => {
+            const retained = eb.and([eb("cleanup_completed", "=", 1), eb("delete_files", "=", 0)]);
+            // Pending stores belong to deletion recovery, not offline migration.
+            return purpose === "maintenance"
+              ? eb.or([retained, eb("cleanup_completed", "=", 0)])
+              : retained;
+          })
           .orderBy("agent_id", "asc"),
       ).rows.map((row) => {
         let databasePaths: string[] = [];
@@ -142,11 +148,20 @@ export function readRetainedAgentDeletionsFromDatabase(
           }
           // Unreadable path details cannot erase this row's known deleted identity.
         }
-        return {
+        const entry: RetainedAgentDeletion = {
           agentId: row.agent_id,
           agentDir: row.agent_dir,
           databasePaths: [path.join(row.agent_dir, "openclaw-agent.sqlite"), ...databasePaths],
+          cleanupCompleted: row.cleanup_completed === 1,
         };
+        if (
+          row.cleanup_completed === 0 &&
+          row.phase == null &&
+          hasClawDeletionOwnership({ db: database }, row.agent_id)
+        ) {
+          entry.manualClawRemoval = true;
+        }
+        return entry;
       });
     }
   } catch (error) {

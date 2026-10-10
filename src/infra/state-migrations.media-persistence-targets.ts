@@ -175,6 +175,7 @@ export function discoverAgentDatabaseMigrationTargets(params: {
   }
   const configuredPathMatcher = createOpenClawAgentDatabasePathMatcher();
   const targets: AgentDatabaseMigrationTarget[] = [];
+  const pendingDeletionTargets: AgentDatabaseMigrationTarget[] = [];
   const retainedTargets: AgentDatabaseMigrationTarget[] = [];
   const unverifiedTargets: AgentDatabaseMigrationTarget[] = [];
   const seenTargets = new Set<string>();
@@ -287,11 +288,22 @@ export function discoverAgentDatabaseMigrationTargets(params: {
         if (typeof deletion === "string") {
           unverifiedTargets.push({ ...candidate, realPath });
         } else {
-          retainedTargets.push({ ...candidate, agentId: deletion.agentId, realPath });
+          const target = { ...candidate, agentId: deletion.agentId, realPath };
+          if (!deletion.cleanupCompleted && !deletion.manualClawRemoval) {
+            pendingDeletionTargets.push(target);
+          } else {
+            retainedTargets.push(target);
+          }
         }
-        warnings.push(
-          `Held agent ${sanitizeForLog(typeof deletion === "string" ? candidate.agentId : deletion.agentId)} database ${sanitizeForLog(pathname)} (${typeof deletion === "string" ? (deletion === "held" ? "deletion journal reconstructed" : "deletion journal unavailable") : "retained-by-deletion"}); run ${formatCliCommand("openclaw doctor --fix", params.env)} to inspect restoration.`,
-        );
+        if (
+          typeof deletion === "string" ||
+          deletion.cleanupCompleted ||
+          deletion.manualClawRemoval
+        ) {
+          warnings.push(
+            `Held agent ${sanitizeForLog(typeof deletion === "string" ? candidate.agentId : deletion.agentId)} database ${sanitizeForLog(pathname)} (${typeof deletion === "string" ? (deletion === "held" ? "deletion journal reconstructed" : "deletion journal unavailable") : "retained-by-deletion"}); run ${formatCliCommand("openclaw doctor --fix", params.env)} to inspect restoration.`,
+          );
+        }
       }
       continue;
     }
@@ -305,6 +317,8 @@ export function discoverAgentDatabaseMigrationTargets(params: {
   }
   return {
     targets,
+    pendingDeletionTargets,
+    schemaTargets: [...targets, ...pendingDeletionTargets],
     retainedTargets,
     unverifiedTargets,
     deletionJournal,
@@ -323,6 +337,7 @@ export function agentDatabaseMigrationAdvisory(
   if (
     discovery.deletionJournal.status !== "unavailable" &&
     (discovery.targets.length > 0 ||
+      discovery.pendingDeletionTargets.length > 0 ||
       discovery.registryRemovals.length > 0 ||
       discovery.failures.length > 0)
   ) {
@@ -342,7 +357,11 @@ export function resolveAgentDatabaseMigrationTargets(params: {
   env: NodeJS.ProcessEnv;
   warnings: string[];
   preparedDiscovery?: PreparedAgentDatabaseMigrationDiscovery;
-}): { targets: AgentDatabaseMigrationTarget[]; recoverableWarningCount: number } {
+}): {
+  targets: AgentDatabaseMigrationTarget[];
+  pendingDeletionTargets: AgentDatabaseMigrationTarget[];
+  recoverableWarningCount: number;
+} {
   const snapshot = readAgentDatabaseDeletionSnapshot(params.env);
   // Rediscover after schema repair and admission; initialization cannot replace unknown history.
   const deletionJournal: AgentDeletionJournalDisposition =
@@ -370,6 +389,7 @@ export function resolveAgentDatabaseMigrationTargets(params: {
   // Failed discovery never grants that disposition, even if it also omitted a foreign entry.
   return {
     targets: discovery.targets,
+    pendingDeletionTargets: discovery.pendingDeletionTargets,
     recoverableWarningCount: discovery.failures.length > 0 ? 0 : discovery.warnings.length,
   };
 }

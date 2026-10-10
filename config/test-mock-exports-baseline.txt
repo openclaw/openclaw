@@ -10010,7 +10010,6 @@
 ["test/e2e/qa-lab/runtime/paired-node-worker-wire-fixture.test.ts","../../../../src/node-host/node-worker-bundle-installer.js","c7baae5dca3ad352f5d3892bd3ed0c647be4ebd3e625fc4ab2a0b58abd09326a",1]
 ["test/e2e/qa-lab/runtime/paired-node-worker-wire-fixture.test.ts","../../../../src/node-host/node-worker-supervisor.js","1cf57a9be26fb1d4d4b42cd19b6ea13761aec986c8712beded1863c99bef4aa7",1]
 ["test/e2e/qa-lab/runtime/paired-node-worker-wire-fixture.test.ts","../../../../src/node-host/node-worker-workspace.js","516a52b10d59aa4cbfe0f5e28baf9b5c5ce6b6522a91ddfa68af293786ea75bd",1]
-["test/helpers/auto-reply/trigger-handling-test-harness.ts","../../../src/agents/embedded-agent-runner/active-run-projections.js","4bb9701d10cbcd4d9ea825b6d8d681054835426350d01448b527a4dcebdd8008",1]
 ["test/helpers/auto-reply/trigger-handling-test-harness.ts","../../../src/agents/embedded-agent-runner/runs.js","688a6aa55c82a0df0c76f8da77b3bbd943f179baeda95bacf747375db696e4f5",1]
 ["test/helpers/auto-reply/trigger-handling-test-harness.ts","../../../src/agents/embedded-agent.js","159d7d8a365440845c6278457c9492f4fbdb857ae317231c494f7561a26085c9",1]
 ["test/helpers/auto-reply/trigger-handling-test-harness.ts","../../../src/agents/model-catalog.js","f083fd4a020731e658a487431e7149dbd2c98c4aa91bbcf4324df910b058a186",1]

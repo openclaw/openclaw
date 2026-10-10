@@ -2,9 +2,10 @@ import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import path from "node:path";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { readWorkspaceStateSnapshot } from "../../agents/workspace-state-store.js";
 import { loadTranscriptEvents } from "../../config/sessions/session-accessor.js";
+import * as sessionEntryReadRuntime from "../../config/sessions/session-entry-read-runtime.js";
 import { createGatewaySession } from "../../gateway/session-create-service.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
@@ -793,6 +794,15 @@ describe("plugin runtime session work admission", () => {
 
   it("rejects a session replaced while work waits for lifecycle admission", async () => {
     const runtime = createRuntimeAgent();
+    const initialRead = createDeferred();
+    const readEntry = sessionEntryReadRuntime.readSessionEntryReadOnlyInWorker;
+    const snapshot = vi
+      .spyOn(sessionEntryReadRuntime, "readSessionEntryReadOnlyInWorker")
+      .mockImplementationOnce(async (...args) => {
+        const entry = await readEntry(...args);
+        initialRead.resolve();
+        return entry;
+      });
     const mutationStarted = createDeferred();
     const releaseMutation = createDeferred();
     const mutation = runExclusiveSessionLifecycleMutation("plugin-create", {
@@ -813,10 +823,20 @@ describe("plugin runtime session work admission", () => {
     await mutationStarted.promise;
 
     const work = runtime.session.runWithWorkAdmission({ storePath, sessionKey }, async () => {});
-    releaseMutation.resolve();
-    await mutation;
-
-    await expect(work).rejects.toMatchObject({ code: "SESSION_WORK_START_CHANGED" });
+    try {
+      await awaitGateBeforeSettlement(
+        initialRead.promise,
+        work,
+        "initial session snapshot was not read",
+      );
+      releaseMutation.resolve();
+      await mutation;
+      await expect(work).rejects.toMatchObject({ code: "SESSION_WORK_START_CHANGED" });
+    } finally {
+      releaseMutation.resolve();
+      await Promise.allSettled([mutation, work]);
+      snapshot.mockRestore();
+    }
   });
 
   it("holds admission through the callback and relays lifecycle interruption", async () => {

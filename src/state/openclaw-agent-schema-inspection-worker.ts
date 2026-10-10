@@ -34,7 +34,13 @@ const stateSchemaRow = z.object({
 });
 const deletionFacts = z.object({
   entries: z.array(
-    z.object({ agentId: z.string(), agentDir: z.string(), databasePaths: z.array(z.string()) }),
+    z.object({
+      agentId: z.string(),
+      agentDir: z.string(),
+      databasePaths: z.array(z.string()),
+      cleanupCompleted: z.boolean(),
+      manualClawRemoval: z.literal(true).optional(),
+    }),
   ),
   held: z.array(z.object({ agentId: z.string(), path: z.string() })),
 });
