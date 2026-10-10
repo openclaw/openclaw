@@ -375,8 +375,6 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
         typeof input.command.profileId === "string" &&
         (input.command.includeProfile === undefined ||
           typeof input.command.includeProfile === "boolean")) ||
-      (input.command.type === "userProfiles.roleAuthority.resolve" &&
-        typeof input.command.profileId === "string") ||
       (input.command.type === "userProfiles.aliases.resolve" &&
         typeof input.command.profileId === "string") ||
       (input.command.type === "userProfiles.githubIdentity.cached" &&
