@@ -867,8 +867,7 @@ export const en = {
       delegatedAuthTitle: "MS Teams delegated auth",
       delegatedOAuthProgress: "MSTeams Delegated OAuth",
       enterAtLeastOneUser: "Enter at least one user.",
-      envPrompt:
-        "MSTEAMS_APP_ID + MSTEAMS_APP_PASSWORD + MSTEAMS_TENANT_ID detected. Use env vars?",
+      envPrompt: "Microsoft Teams environment credentials detected. Use env vars?",
       examples: "Examples:",
       graphLookupUnavailable: "Graph lookup unavailable. Use user IDs only.",
       helpAzureBot: "1) Azure Bot registration -> get App ID + Tenant ID",

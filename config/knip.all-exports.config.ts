@@ -91,6 +91,13 @@ const ROOT_TEST_ENTRY_GLOBS = [
   "test/e2e/qa-lab/runtime/mcp-channels-docker-client.ts!",
   // The Gateway/node MCP parity tests spawn this transport fixture by path.
   "test/e2e/qa-lab/runtime/gateway-node-mcp.fixture.mjs!",
+  // The Codex isolated-completion adapter test spawns this stdio app-server by path.
+  "test/e2e/qa-lab/runtime/codex-isolated-app-server.fixture.mjs!",
+  // The proxy owner test spawns this capture child through resolveRuntimeWorkerUrl.
+  "src/proxy-capture/child-transport.process.test-support.ts!",
+  // `pnpm ui:parity` runs this opt-in Vitest config by path; it includes the capture suite.
+  "scripts/control-ui-parity/vitest.config.ts!",
+  "scripts/control-ui-parity/capture-suite.ts!",
   // The hot-reload scenario passes this isolated upstream preload to the Gateway CLI.
   "test/e2e/qa-lab/runtime/gateway-config-hot-reload-upstream.mjs!",
   // The identity scenario spawns this process-isolated repeated-turn driver by path.

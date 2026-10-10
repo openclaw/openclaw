@@ -53,12 +53,12 @@ export async function resolveRequestedChannel(params: {
   return { cfg, channel };
 }
 
-export function resolveGatewayOutboundTarget(params: {
+export async function resolveGatewayOutboundTarget(params: {
   channel: string;
   to: string;
   cfg: OpenClawConfig;
   accountId?: string;
-}):
+}): Promise<
   | {
       ok: true;
       to: string;
@@ -66,8 +66,9 @@ export function resolveGatewayOutboundTarget(params: {
   | {
       ok: false;
       error: ReturnType<typeof errorShape>;
-    } {
-  const resolved = resolveOutboundTarget({
+    }
+> {
+  const resolved = await resolveOutboundTarget({
     ...params,
     mode: "explicit",
   });

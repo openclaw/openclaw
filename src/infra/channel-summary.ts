@@ -35,10 +35,12 @@ export async function buildChannelSummary(
 
   const plugins =
     options?.plugins ??
-    (await import("../channels/plugins/read-only.js")).listReadOnlyChannelPluginsForConfig(
-      effective,
-      { activationSourceConfig: sourceConfig, includeSetupFallbackPlugins: false },
-    );
+    (await (
+      await import("../channels/plugins/read-only.js")
+    ).listReadOnlyChannelPluginsForConfigAsync(effective, {
+      activationSourceConfig: sourceConfig,
+      includeSetupFallbackPlugins: false,
+    }));
   for (const plugin of plugins) {
     const accountIds = plugin.config.listAccountIds(effective);
     const defaultAccountId =

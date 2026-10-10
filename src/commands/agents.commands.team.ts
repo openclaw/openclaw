@@ -1,6 +1,7 @@
 import { createAgentTeam } from "../agents/agent-team.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { throwExpectedCliError } from "../cli/failure-output.js";
+import { runWithLocalStateOwner } from "../cli/local-state-owner.js";
 import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { shortenHomePath } from "../utils.js";
 
@@ -17,7 +18,13 @@ export async function agentsTeamCreateCommand(
   opts: AgentsTeamCreateOptions,
   runtime: RuntimeEnv = defaultRuntime,
 ): Promise<void> {
-  const result = await createAgentTeam(opts);
+  const result = await runWithLocalStateOwner({
+    method: "agents.team.create",
+    params: {},
+    target: "agent team",
+    onForeignOwner: "refuse",
+    runLocal: () => createAgentTeam(opts),
+  });
   if (result.status === "error") {
     throwExpectedCliError(result.message);
   }
