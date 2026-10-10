@@ -396,6 +396,34 @@ it("adds the fixed smoke once to narrow, hub, and directly edited smoke plans", 
   }
 });
 
+it("keeps a core-impact config change within the complete PR matrix cap", () => {
+  const changedPaths = ["src/config/types.ts"];
+  const shards = expectDefined(
+    createChangedNodeTestShards(changedPaths, {
+      runnerBackend: "github",
+      compactNodeJobCap: 130,
+      includeReleaseOnlyRuntimeTests: false,
+      includePrExemptRuntimeTests: false,
+    }),
+    "core-impact complete owner plan",
+  );
+  expect(shards.filter((shard) => !shard.requiresDist).length).toBeLessThanOrEqual(130);
+  const files = selectedFiles(shards);
+  for (const target of [
+    "test/gateway-rpc-exporters.test.ts",
+    "src/config/io.load-async.test.ts",
+    "src/config/io.compat.test.ts",
+    "src/config/utility-model-separation-migration.io.test.ts",
+    "src/plugins/loader.runtime-registry.test.ts",
+    "test/qa-channel-message-tool-delivery.test.ts",
+  ]) {
+    expect(files).toContain(target);
+  }
+  expect(shards.some((shard) => shard.checkName.startsWith("checks-node-changed-extensions"))).toBe(
+    true,
+  );
+});
+
 it("keeps new-plugin, core, and manifest changes within the complete PR matrix cap", () => {
   // Exact changed set from PR #159879, whose preflight originally emitted 134 rows.
   const changedPaths = [
