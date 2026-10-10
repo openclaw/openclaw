@@ -517,7 +517,6 @@ export function createRepositoryGitHubPublicationCoordinator(params: {
       placements,
       getCommittedRuntimeConfig,
       assertCurrent: params.assertCurrent,
-      signal: params.signal,
       isExecuting: (requestId) => active.has(requestId),
       execute: (row, assertCustody) => execute(row, { assertCustody }),
     }),

@@ -266,6 +266,14 @@ its receipt grants no authority for another GitHub action. FIFO writes and shutd
 still join native settlement. An unknown outcome remains an error for that write,
 but does not disable later operations that reread the current durable state.
 
+Recording unavailable checkpoint preparation and retiring a stale request use
+that same bookkeeping path. Recovery keeps its workspace reservation while it
+checks the current session owner and retires the unchanged request; it preserves
+recorded GitHub effects. Neither operation reserves source databases. If a
+checkpoint becomes available or a session is restored after the check, the user
+may need a new publication request. Snapshot, checkpoint, and publication-target
+binding still retain source authority through their commits.
+
 Personal GitHub OAuth start, device polling, confirmation, expiration, refresh,
 and disconnect use typed connection commands. Each command rereads the current
 generation and operation identity inside its transaction. Profile merge uses the
