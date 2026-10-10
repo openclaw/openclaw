@@ -138,6 +138,18 @@ export type SessionTranscriptMessagePresenceWorkerInput = Omit<
   kind: "transcript-message-presence";
 };
 
+export type SessionTranscriptInactiveIdentityProbe =
+  | { kind: "entry"; entryId: string }
+  | { kind: "transport"; sourceTurnId: string };
+
+export type SessionTranscriptInactiveIdentityWorkerInput = Omit<
+  SessionTranscriptWatermarkWorkerInput,
+  "kind"
+> & {
+  kind: "transcript-inactive-identity";
+  probe: SessionTranscriptInactiveIdentityProbe;
+};
+
 export type SessionTranscriptStatsWorkerInput = Omit<
   SessionTranscriptWatermarkWorkerInput,
   "kind"

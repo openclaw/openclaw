@@ -21,6 +21,7 @@ const historyReadKinds = [
   "transcript-watermark",
   "transcript-stats",
   "transcript-message-presence",
+  "transcript-inactive-identity",
   "transcript-anchors",
   "transcript-raw-delta",
   "transcript-visible-delta",
@@ -456,6 +457,14 @@ async function prepareHistoryRead(
         );
         return { kind: request.kind, present: read.found && read.value };
       };
+    }
+    case "transcript-inactive-identity": {
+      const { readInactiveTranscriptIdentitySync } =
+        await import("./transcript-inactive-identities.worker.js");
+      return () => ({
+        kind: request.kind,
+        inactive: readInactiveTranscriptIdentitySync(request.scope, request.probe),
+      });
     }
     case "session-pending-input-receipts": {
       const { listSessionPendingInputReceipts } =
