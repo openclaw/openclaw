@@ -371,7 +371,9 @@ jobs:
             oidc_token="$(curl --fail --silent --show-error --connect-timeout 5 --max-time 15 \
               --header "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
               --get --data-urlencode "audience=$TARGET_DISPATCH_URL" \
-              "$ACTIONS_ID_TOKEN_REQUEST_URL" | jq -er '.value | strings | select(length > 0)')"; then
+              "$ACTIONS_ID_TOKEN_REQUEST_URL" | jq -er '.value | strings | select(length > 0)')" &&
+            # jq 1.6 exits 0 on empty input, and the step runs without pipefail.
+            [ -n "$oidc_token" ]; then
             echo "::add-mask::$oidc_token"
             direct_body="$RUNNER_TEMP/clawsweeper-direct-intake.json"
             # Only a 2xx answer means the queue took the item; --fail would also
