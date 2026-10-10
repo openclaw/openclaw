@@ -133,7 +133,9 @@ Voice-originated consult runs require a new, exact spoken confirmation before hi
 Gateway shutdown joins accepted voice transcripts, final tool outcomes, and provider-close summaries before releasing persistence resources. Accepted consults keep their persistence ownership until all queued and deferred work finishes, including when diagnostics are disabled. Queued summaries keep their original physical stores while waiting for a delivery slot. Recipient lookup honors `session.store`; voice metadata and delivery markers remain in their separate per-agent store. A missing conversation is reported as a failed digest attempt instead of silently dropping its summary. Provider cleanup failures do not bypass that persistence drain. Stored formats and retry limits are unchanged. Confirmed deliveries retry only their completion marker; partial or uncertain deliveries are not resent. Unresolved outcomes retain a fence for the lifetime of the delivery owner within its existing bounded retry capacity.
 
 After a confirmation prompt, say **yes** to confirm the pending action or **no**
-to cancel it. Each confirmation permits one matching action; another action may
+to cancel it. Short conversational replies such as **Okay, yes** and
+**All right, go ahead, please** also confirm. Reported, conditional, or qualified
+assent does not confirm an action. Each confirmation permits one matching action; another action may
 need another confirmation. Native GPT-Live calls use the finalized user speech
 recorded for that call, so generated delegation text cannot supply confirmation.
 When a native consult is blocked by this gate, Talk returns a specific retry
