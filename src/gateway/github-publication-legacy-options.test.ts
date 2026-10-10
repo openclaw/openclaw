@@ -104,7 +104,7 @@ describe("publication options after a retained-state upgrade", () => {
           },
           action,
         ),
-      ).rejects.toThrow("current");
+      ).rejects.toMatchObject({ name: "AbortError" });
       db.exec("DROP TRIGGER stop_personal_upgrade_admission");
       const recovered = await rpc("sessions.github.options");
       expect(recovered[0], JSON.stringify(recovered[2])).toBe(true);

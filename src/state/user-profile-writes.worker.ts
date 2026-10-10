@@ -200,7 +200,10 @@ export function createUserProfileWriteOperation<Input, Output>(
             }),
             after: ids.map((id) => [id, after.get(id)]),
             emailBindings,
-            githubConnections: current.githubConnections,
+            ...(current.githubConnections.changes.length ||
+            current.githubConnections.retiredProfileIds.length
+              ? { githubConnections: current.githubConnections }
+              : {}),
           };
           requestSqliteWorkerOperationAdmission({ stage: "commit", facts: publication });
           deferSqlitePostCommitPublication(db, () => committed.push(publication));

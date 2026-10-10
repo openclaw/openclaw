@@ -154,7 +154,7 @@ describe("accepted GitHub workflow publication", () => {
         if (original) {
           onTestFinished(original.release);
         }
-        const accepted = vi.spyOn(f.coordinator, "requestForSession");
+        const accepted = vi.spyOn(f.coordinator, "requestForSessionV2");
         const pending = withPluginRuntimeGatewayRequestScope(
           {
             context,
@@ -306,7 +306,7 @@ describe("accepted GitHub workflow publication", () => {
         ...f.guestSource.context,
         githubPublicationService: f.coordinator,
       };
-      const accepted = vi.spyOn(f.coordinator, "requestForSession");
+      const accepted = vi.spyOn(f.coordinator, "requestForSessionV2");
       const result = await withPluginRuntimeGatewayRequestScope(
         { context, client, isWebchatConnect: () => false },
         () =>

@@ -11,7 +11,7 @@ import { captureGitHubPublicationWorkerReceipt } from "./github-publication-rece
 import type { GitHubPublicationSourcePredicate } from "./github-publication-source-contract.js";
 import {
   assertGitHubPublicationWorktreeSource,
-  assertGitHubPublicationConnectionSource,
+  assertGitHubPublicationConnectionAdmissionSource,
 } from "./github-publication-source.kernel.js";
 import type { GitHubPublicationSourceFacts } from "./github-publication-source.types.js";
 import { assertGitHubPublicationWorkerSourceCurrent } from "./github-publication-source.worker.js";
@@ -95,7 +95,8 @@ function assertRequestedSource(
       repoFingerprint: input.row.repository_fingerprint,
       branch: row.branch,
     });
-    assertGitHubPublicationConnectionSource(source, input.row);
+    // Record the verified account before execution rejects a changed login.
+    assertGitHubPublicationConnectionAdmissionSource(source, input.row);
     return;
   }
   const workspace = source.expected.repositoryWorkspace;
@@ -112,7 +113,7 @@ function assertRequestedSource(
     if (input.row.connection_generation === null || input.row.identity_profile_id === null) {
       throw new Error("GitHub publication requested connection is unavailable.");
     }
-    assertGitHubPublicationConnectionSource(source, {
+    assertGitHubPublicationConnectionAdmissionSource(source, {
       ...input.row,
       owner_profile_id: input.row.owner_profile_id,
       connection_generation: input.row.connection_generation,

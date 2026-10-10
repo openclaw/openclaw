@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { insertRegistryWorktree } from "../agents/worktrees/registry.js";
+import { deleteRegistryWorktree, insertRegistryWorktree } from "../agents/worktrees/registry.js";
 import { readGitHubPublicationSessionLifecycle } from "../state/github-publication-session-lifecycles.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
@@ -36,6 +36,18 @@ import { createWorkerSessionPlacementStore } from "./worker-environments/placeme
 import { seedAttachedPlacementEnvironment } from "./worker-environments/placement-test-fixtures.js";
 
 const mocks = githubPublicationTestMocks();
+
+async function persistClaimPublicationWorkspace() {
+  await persistPublicationTestSession(REQUEST.sessionKey);
+  const worktree = mocks.findWorktree("session", REQUEST.sessionKey);
+  await deleteRegistryWorktree(process.env, worktree.id);
+  await insertRegistryWorktree(process.env, {
+    ...worktree,
+    name: "publication",
+    createdAt: Date.now(),
+    lastActiveAt: Date.now(),
+  });
+}
 
 function createLocalCoordinator(
   database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } }),
@@ -799,6 +811,7 @@ describe("Gateway GitHub publication boundaries", () => {
   });
 
   it("publishes deferred session requests alongside an accepted turn claim", async () => {
+    await persistClaimPublicationWorkspace();
     const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
     const placements = createWorkerSessionPlacementStore({ database });
     seedAttachedPlacementEnvironment(database, {
@@ -841,6 +854,7 @@ describe("Gateway GitHub publication boundaries", () => {
   });
 
   it("defers an orphaned turn request and publishes it when the workspace is quiescent", async () => {
+    await persistClaimPublicationWorkspace();
     const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
     const placements = createWorkerSessionPlacementStore({ database });
     seedAttachedPlacementEnvironment(database, {
@@ -889,6 +903,7 @@ describe("Gateway GitHub publication boundaries", () => {
   });
 
   it("defers snapshot preparation failures without blocking workspace acceptance", async () => {
+    await persistClaimPublicationWorkspace();
     const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
     const placements = createWorkerSessionPlacementStore({ database });
     seedAttachedPlacementEnvironment(database, {

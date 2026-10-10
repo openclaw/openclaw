@@ -931,7 +931,7 @@ describe("Gateway GitHub publication", () => {
     expect(warnings).toEqual([expect.stringContaining("GitHub publication deferred")]);
     processClaim.mockRestore();
     warnings.length = 0;
-    vi.spyOn(runtime.coordinator, "markReported").mockImplementationOnce(() => {
+    vi.spyOn(runtime.coordinator, "markReportedAsync").mockImplementationOnce(() => {
       throw new Error("Gateway stopped after transcript append");
     });
 

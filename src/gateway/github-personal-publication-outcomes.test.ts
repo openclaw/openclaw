@@ -340,9 +340,9 @@ describe("personal publication definitive outcomes", () => {
       { client, context },
       controller.signal,
     );
-    await expect(coordinator.requestPersonalForSession(request(), stopped)).rejects.toThrow(
-      "current",
-    );
+    await expect(coordinator.requestPersonalForSession(request(), stopped)).rejects.toMatchObject({
+      name: "AbortError",
+    });
     db.exec("DROP TRIGGER stop_personal_admission");
     const row = openOpenClawStateDatabase()
       .db.prepare(`SELECT request_id, status, execution_id FROM ${table}`)
