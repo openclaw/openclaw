@@ -25,6 +25,7 @@ export const postInstallAdvisory: NonNullable<DoctorHealthFlowContext["postInsta
 
 const mocks = vi.hoisted(() => ({
   outro: vi.fn(),
+  confirm: vi.fn(async () => true),
   config: vi.fn<() => OpenClawConfig>(),
   runContributions: vi.fn<(ctx: DoctorHealthFlowContext) => Promise<void>>(),
   writeUpdatePostInstallDoctorResult: vi.fn(),
@@ -124,6 +125,8 @@ vi.mock("@clack/prompts", () => ({
   intro: vi.fn(),
   note: vi.fn(),
   outro: mocks.outro,
+  confirm: mocks.confirm,
+  select: vi.fn(),
 }));
 
 vi.mock("../infra/openclaw-root.js", async (importOriginal) => ({

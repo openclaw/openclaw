@@ -31,7 +31,7 @@ export type InitSessionStateAttemptContext = {
   isSystemEvent: boolean;
   retargetedSession: boolean;
   sessionKey: string;
-  storeWriterIdentity?: string;
+  inputDeliveryKey?: string;
   sessionCtxForState: FinalizedRuntimeMsgContext;
   storePath: string;
 };
@@ -97,7 +97,7 @@ export async function prepareReplySessionInitialization(
     }
   }
   assertCurrent();
-  return { snapshot, parentSessionKey };
+  return parentSessionKey;
 }
 
 export function resolveReplySessionInitializationOptions(
