@@ -12,6 +12,7 @@ import {
 import { captureSqliteNativeRuntimeAdmission } from "./node-sqlite.js";
 import {
   captureSqliteDatabaseAdmissions,
+  createSqliteDatabaseAdmissionCursor,
   installSqliteDatabaseAdmissions,
   withSqliteDatabaseAdmissionExchange,
 } from "./sqlite-database-admission.js";
@@ -77,7 +78,7 @@ let sourceLoaderRegistered = false;
 let nativeCleanupFailure: OpenClawStateWorkerErrorPayload | undefined;
 let operationAdmission: { actor: number; context: SqliteWorkerOperationContext } | undefined;
 let nativeRuntimeAdmissionSent = false;
-const databaseAdmissionCursor = new Map<string, string>();
+const databaseAdmissionCursor = createSqliteDatabaseAdmissionCursor();
 
 async function loadBackendModule(moduleUrl: string, sourceLoaderUrl?: string): Promise<unknown> {
   if (!sourceLoaderRegistered && sourceLoaderUrl) {

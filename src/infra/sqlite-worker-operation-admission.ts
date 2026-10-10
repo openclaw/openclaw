@@ -12,6 +12,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveIdentityPathViaExistingAncestorSync } from "./boundary-path.js";
 import {
   captureSqliteDatabaseAdmissions,
+  createSqliteDatabaseAdmissionCursor,
   installSqliteDatabaseAdmissions,
   prepareSqliteDatabaseAdmission,
   readSqliteDatabaseAdmissions,
@@ -136,7 +137,7 @@ function createOperationAdmission(
   }
   const inOwnerContext = AsyncLocalStorage.snapshot();
   const decisions = new Set<Int32Array>();
-  const databaseAdmissionCursor = new Map<string, string>();
+  const databaseAdmissionCursor = createSqliteDatabaseAdmissionCursor();
   const cleanupFailures: unknown[] = [];
   let closed = false;
   let started = false;

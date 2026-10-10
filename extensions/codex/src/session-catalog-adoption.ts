@@ -296,7 +296,7 @@ async function ensurePendingAdoptionBinding(params: {
   if (!ownsGeneration) {
     throw new Error(`failed to claim the OpenClaw session generation for ${params.sourceThreadId}`);
   }
-  const existing = params.bindingStore.read(params.identity);
+  const existing = await params.bindingStore.readAsync(params.identity);
   params.initialization.assertCurrent();
   if (existing) {
     if (matchesPendingAdoptionBinding(existing, params)) {

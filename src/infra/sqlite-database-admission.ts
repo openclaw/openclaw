@@ -3,20 +3,20 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
-import { getEnvironmentData, setEnvironmentData, threadId } from "node:worker_threads";
+import { getEnvironmentData, threadId } from "node:worker_threads";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { hasErrnoCode } from "./errno.js";
 import { SQLITE_DATABASE_ADMISSIONS_KEY } from "./sqlite-database-admission-key.js";
 import {
-  captureSqliteDatabaseAdmissionRecords,
   SqliteDatabaseGenerationSlot,
+  SqliteDatabaseAdmissionRegistry,
+  type SqliteDatabaseAdmissionCursor,
   SQLITE_DATABASE_GENERATION_LENGTH,
   readSqliteDatabaseAdmissions,
   readSqliteDatabaseFactRevision,
   activeSqliteDatabaseWriters as activeWriters,
   readSqliteDatabaseRecordWriteRevision as readWriteRevision,
   retireSqliteDatabaseWriter,
-  registerWriterCustody,
   ensureSqliteDatabaseWriter,
   publishSqliteDatabaseFact,
   isSqliteDatabaseAdmissionRetired as isRetired,
@@ -35,7 +35,11 @@ import {
   readDatabaseIdentityBirthtime,
 } from "./sqlite-worker-identity.js";
 
-export { readSqliteDatabaseAdmissions } from "./sqlite-database-admission-record.js";
+export {
+  readSqliteDatabaseAdmissions,
+  createSqliteDatabaseAdmissionCursor,
+  type SqliteDatabaseAdmissionCursor,
+} from "./sqlite-database-admission-record.js";
 export type { SqliteDatabaseAdmissions } from "./sqlite-database-admission-record.js";
 export { beginSqliteDatabaseAdmissionOperation } from "./sqlite-native-admission.js";
 
@@ -46,7 +50,6 @@ export type SqliteDatabaseAdmissionKey<T> = {
   writer?: "host";
 };
 
-export type SqliteDatabaseAdmissionCursor = Map<string, string>;
 type Exchange = (
   admissions: SqliteDatabaseAdmissions,
   location?: string,
@@ -54,7 +57,7 @@ type Exchange = (
 ) => SqliteDatabaseAdmissions;
 
 const state = resolveGlobalSingleton(Symbol.for("openclaw.sqliteDatabaseAdmissions"), () => ({
-  admissions: new Map<string, Admission>(),
+  registry: new SqliteDatabaseAdmissionRegistry(),
   connections: new WeakMap<DatabaseSync, Admission>(),
   openedIdentities: new WeakMap<DatabaseSync, string>(),
   unproven: new WeakSet<DatabaseSync>(),
@@ -74,11 +77,6 @@ const state = resolveGlobalSingleton(Symbol.for("openclaw.sqliteDatabaseAdmissio
 
 function identity(file: fs.BigIntStats): string {
   return `${file.dev}:${file.ino}:${readDatabaseIdentityBirthtime(file)}`;
-}
-
-function rememberEnvironment(): void {
-  // Worker construction clones these records; their Maps retain later facts and custody.
-  setEnvironmentData(SQLITE_DATABASE_ADMISSIONS_KEY, [...state.admissions.values()]);
 }
 
 function exchange(target: string | Admission, create?: boolean): void {
@@ -111,12 +109,11 @@ function retainDescriptor(location: string, descriptor: number, opened: fs.BigIn
     generation: new SharedArrayBuffer(
       Int32Array.BYTES_PER_ELEMENT * SQLITE_DATABASE_GENERATION_LENGTH,
     ),
-    hostRevision: 0,
     writers: new Map(),
     facts: new Map(),
   };
-  state.admissions.set(record.identity, record);
-  rememberEnvironment();
+  state.registry.records.set(record.identity, record);
+  state.registry.publish(record);
   return record;
 }
 
@@ -127,7 +124,7 @@ export function retainSqliteDatabaseAdmissionLocation(location: string): void {
     return;
   }
   const key = identity(observed);
-  const previous = state.admissions.get(key);
+  const previous = state.registry.records.get(key);
   const retainedPrevious = previous && !isRetired(previous) ? previous : undefined;
   if (retainedPrevious) {
     const retained = fs.fstatSync(retainedPrevious.descriptor, { bigint: true });
@@ -154,7 +151,7 @@ function pathAdmission(location: string): Admission | undefined {
   exchange(location);
   try {
     retainSqliteDatabaseAdmissionLocation(location);
-    return state.admissions.get(identity(fs.statSync(location, { bigint: true })));
+    return state.registry.records.get(identity(fs.statSync(location, { bigint: true })));
   } catch (error) {
     if (hasErrnoCode(error, "ENOENT")) {
       return undefined;
@@ -249,7 +246,7 @@ export function bindSqliteDatabaseAdmission(database: DatabaseSync, expected?: s
     return;
   }
   state.openedIdentities.set(database, observed);
-  const record = state.admissions.get(observed);
+  const record = state.registry.records.get(observed);
   if (record && !isRetired(record)) {
     // Existing admission is checked with fstat before the new native connection borrows it.
     retainSqliteDatabaseAdmissionLocation(location);
@@ -271,7 +268,7 @@ function admission(database: DatabaseSync, create = true): Admission | undefined
   if (!location || location === ":memory:") {
     return undefined;
   }
-  const record = create ? pathAdmission(location) : state.admissions.get(expected);
+  const record = create ? pathAdmission(location) : state.registry.records.get(expected);
   if (record && record.identity !== expected) {
     throw new Error("SQLite database changed identity before admission");
   }
@@ -395,6 +392,7 @@ function publishFact<T>(
   ) {
     return;
   }
+  state.registry.publish(record);
   exchange(record);
 }
 
@@ -429,7 +427,10 @@ export function prepareSqliteDatabaseWriter(database: DatabaseSync): Admission |
       state.unproven.add(database);
       return undefined;
     }
-    ensureSqliteDatabaseWriter(record, () => exchange(record));
+    ensureSqliteDatabaseWriter(record, () => {
+      state.registry.publish(record);
+      exchange(record);
+    });
   }
   return record;
 }
@@ -519,7 +520,7 @@ export function trackSqliteDatabaseAdmissionWorker(worker: {
 }): void {
   const id = worker.threadId;
   worker.once("exit", () => {
-    for (const record of state.admissions.values()) {
+    for (const record of state.registry.records.values()) {
       retireSqliteDatabaseWriter(record, id);
     }
   });
@@ -693,7 +694,7 @@ export function retireSqliteDatabaseAdmissionForPath(
   options: { requireSoleDescriptor?: boolean } = {},
 ): void {
   const observed = prepareSqliteDatabaseAdmission(location);
-  const record = observed ? state.admissions.get(observed) : undefined;
+  const record = observed ? state.registry.records.get(observed) : undefined;
   if (!record || isRetired(record)) {
     return;
   }
@@ -710,8 +711,8 @@ export function retireSqliteDatabaseAdmissionForPath(
     Atomics.add(cell, SqliteDatabaseGenerationSlot.factRevision, 1);
     fs.closeSync(record.descriptor);
   }
-  state.admissions.delete(record.identity);
-  rememberEnvironment();
+  state.registry.records.delete(record.identity);
+  state.registry.publish(record);
 }
 
 export function getSqliteDatabaseSchemaRevision(database: DatabaseSync): number | undefined {
@@ -739,73 +740,21 @@ export function captureSqliteDatabaseAdmissions(
   cursor?: SqliteDatabaseAdmissionCursor,
   scope?: { location?: string; admissions?: SqliteDatabaseAdmissions },
 ): SqliteDatabaseAdmissions {
-  let records: Iterable<Admission> = state.admissions.values();
-  if (scope) {
-    const identities = new Set(scope.admissions?.map((record) => record.identity));
-    if (scope.location !== undefined) {
-      const observed = prepareSqliteDatabaseAdmission(scope.location);
-      if (observed) {
-        identities.add(observed);
-      }
+  if (!scope) {
+    return state.registry.capture(cursor);
+  }
+  const identities = new Set(scope.admissions?.map((record) => record.identity));
+  if (scope.location !== undefined) {
+    const observed = prepareSqliteDatabaseAdmission(scope.location);
+    if (observed) {
+      identities.add(observed);
     }
-    records = [...identities].flatMap((key) => state.admissions.get(key) ?? []);
   }
-  const previousSize = state.admissions.size;
-  const result = captureSqliteDatabaseAdmissionRecords(records, cursor, (record) =>
-    state.admissions.delete(record.identity),
-  );
-  if (state.admissions.size !== previousSize) {
-    rememberEnvironment();
-  }
-  return result;
+  return state.registry.capture(cursor, identities);
 }
 
 export function installSqliteDatabaseAdmissions(admissions: SqliteDatabaseAdmissions): void {
-  let topologyChanged = false;
-  for (const incoming of admissions) {
-    if (incoming.descriptorOwner !== 0 || isRetired(incoming)) {
-      continue;
-    }
-    let record = state.admissions.get(incoming.identity);
-    if (record && isRetired(record)) {
-      state.admissions.delete(record.identity);
-      record = undefined;
-    }
-    if (!record) {
-      record = { ...incoming, hostRevision: undefined };
-      state.admissions.set(incoming.identity, record);
-      topologyChanged = true;
-    } else if (record.generationId !== incoming.generationId) {
-      // Only the host creates a generation; unrelated revocation cells cannot certify its facts.
-      continue;
-    }
-    for (const [key, fact] of incoming.facts) {
-      if (valid(incoming, fact)) {
-        record.facts.set(key, fact);
-      }
-    }
-    for (const [writer, cell] of incoming.writers) {
-      if (!record.writers.has(writer)) {
-        record.writers.set(writer, cell);
-      }
-    }
-    if (threadId === 0) {
-      record.hostRevision = Atomics.load(
-        new Int32Array(record.generation),
-        SqliteDatabaseGenerationSlot.hostRevision,
-      );
-    } else if (
-      incoming.hostRevision !== undefined &&
-      incoming.hostRevision ===
-        Atomics.load(new Int32Array(record.generation), SqliteDatabaseGenerationSlot.hostRevision)
-    ) {
-      record.hostRevision = incoming.hostRevision;
-    }
-    registerWriterCustody(record);
-  }
-  if (topologyChanged) {
-    rememberEnvironment();
-  }
+  state.registry.install(admissions);
 }
 
 export function withSqliteDatabaseAdmissionExchange<T>(
