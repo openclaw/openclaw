@@ -1,13 +1,7 @@
 import type { AgentMessage } from "../../packages/agent-core/src/types.js";
 import type { NormalizedUsage } from "../agents/usage.js";
-import type { GetReplyOptions } from "../auto-reply/get-reply-options.types.js";
 import type { ReplyPayload } from "../auto-reply/reply-payload.js";
-import type {
-  ReplyDispatchKind,
-  ReplyDispatcher,
-} from "../auto-reply/reply/reply-dispatcher.types.js";
-import type { PrepareAssistantTranscriptMessage } from "../config/sessions/transcript-assistant-delivery.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { ReplyDispatchKind } from "../auto-reply/reply/reply-dispatcher.types.js";
 import type { DiagnosticTraceContext } from "../infra/diagnostic-trace-context.js";
 import type {
   PluginHookAgentContext,
@@ -38,7 +32,12 @@ import type {
   PluginHookMessageSendingResult,
   PluginHookMessageSentEvent,
 } from "./hook-message.types.js";
-import type { PluginHookReplyDispatchEvent } from "./hook-reply-dispatch-event.types.js";
+import type {
+  PluginHookReplyDispatchContext,
+  PluginHookReplyDispatchEvent,
+  PluginHookReplyDispatchKind,
+  PluginHookReplyDispatchResult,
+} from "./hook-reply-dispatch.types.js";
 import type { PluginHookSkillChangedEvent, PluginHookSkillContext } from "./hook-skill.types.js";
 import type { PluginJsonValue } from "./host-hook-json.js";
 import type {
@@ -50,7 +49,12 @@ import type {
 import type { SkillInstallSpecMetadata } from "./install-security-scan.types.js";
 import type { PluginHookSessionContext } from "./session-end-transcript.js";
 
-export type { PluginHookReplyDispatchEvent } from "./hook-reply-dispatch-event.types.js";
+export type {
+  PluginHookReplyDispatchContext,
+  PluginHookReplyDispatchEvent,
+  PluginHookReplyDispatchKind,
+  PluginHookReplyDispatchResult,
+} from "./hook-reply-dispatch.types.js";
 
 export type {
   PluginHookAgentContext,
@@ -177,8 +181,6 @@ const pluginHookAgentTriggerSet = new Set<PluginHookAgentTrigger>(PLUGIN_HOOK_AG
 
 export const isPluginHookAgentTrigger = (trigger: unknown): trigger is PluginHookAgentTrigger =>
   typeof trigger === "string" && pluginHookAgentTriggerSet.has(trigger as PluginHookAgentTrigger);
-
-export type PluginHookReplyDispatchKind = "agent" | "acp";
 
 export const isPluginHookReplyDispatchKind = (kind: unknown): kind is PluginHookReplyDispatchKind =>
   kind === "agent" || kind === "acp";
@@ -396,33 +398,6 @@ export type PluginHookBeforeDispatchContext = {
 export type PluginHookBeforeDispatchResult = {
   handled: boolean;
   text?: string;
-};
-
-export type PluginHookReplyDispatchContext = {
-  /** Host-resolved dispatch path; omitted when the caller cannot establish it. */
-  dispatchKind?: PluginHookReplyDispatchKind;
-  cfg: OpenClawConfig;
-  dispatcher: ReplyDispatcher;
-  abortSignal?: AbortSignal;
-  onReplyStart?: () => Promise<void> | void;
-  onAgentRunStart?: GetReplyOptions["onAgentRunStart"];
-  userTurnTranscriptRecorder?: GetReplyOptions["userTurnTranscriptRecorder"];
-  /** Host-owned display facts applied before the assistant transcript is published. */
-  prepareAssistantTranscriptMessage?: PrepareAssistantTranscriptMessage;
-  recordProcessed: (
-    outcome: "completed" | "skipped" | "error",
-    opts?: {
-      reason?: string;
-      error?: string;
-    },
-  ) => void;
-  markIdle: (reason: string) => void;
-};
-
-export type PluginHookReplyDispatchResult = {
-  handled: boolean;
-  queuedFinal: boolean;
-  counts: Record<ReplyDispatchKind, number>;
 };
 
 /**

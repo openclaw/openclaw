@@ -25,7 +25,14 @@ synthetic reply, and the sending hooks below to transform outgoing payloads.
 Runtime takeovers should forward `ctx.onAgentRunStart`,
 `ctx.userTurnTranscriptRecorder`, and optional
 `ctx.prepareAssistantTranscriptMessage` to their runtime helper. The ACP dispatch
-helper forwards all three automatically. Share the recorder so the runtime and
+helper forwards all three automatically. Takeovers that submit runtime prompts
+also forward the optional `ctx.onTurnAdopted` callback. Await it after durable
+input and runtime preparation, immediately before submission. A rejected
+acknowledgement must prevent submission. The callback belongs to the active
+hook invocation; retained calls fail after cancellation or completion. Adoption clears the ingress startup
+watchdog and suppresses duplicate delivery; the runtime's execution deadline
+and explicit cancellation continue to apply. Do not infer adoption from
+`onAgentRunStart`, which can precede runtime preparation. Share the recorder so the runtime and
 Gateway do not append the same user turn independently; mark runtime
 persistence only after a successful transcript write.
 

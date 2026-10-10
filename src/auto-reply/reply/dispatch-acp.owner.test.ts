@@ -57,7 +57,7 @@ type AcpOwnerScenario = {
 const free = "agent:free-harness:acp:bound";
 const ordinarySessionKey = "agent:free-harness:ordinary-bound";
 const scenarios: Array<
-  [string, AcpOwnerScenario["question"], AcpOwnerScenario["bindingChange"], string?]
+  [string, AcpOwnerScenario["question"], AcpOwnerScenario["bindingChange"], string?, boolean?]
 > = [
   [free, "none", "direct"],
   ["global", "unconfirmed", "direct"],
@@ -70,11 +70,12 @@ const scenarios: Array<
   ["global", "none", "owner-changed", "main"],
   ["global", "confirmed", "hint-removed", "main"],
   ["global", "none", "hint-removed", "work"],
+  [free, "none", "direct", undefined, true],
 ];
 
 it.each(scenarios)(
-  "preserves ACP target %s and input ownership (question=%s, binding=%s, fallback=%s)",
-  async (sessionKey, question, bindingChange, fallbackAgentId) => {
+  "preserves ACP target %s and input ownership (question=%s, binding=%s, fallback=%s, retired during adoption=%s)",
+  async (sessionKey, question, bindingChange, fallbackAgentId, retireDuringAdoption = false) => {
     await withOpenClawTestState({ label: "acp-dispatch-owner" }, async (state) => {
       const cfg = {
         agents: {
@@ -106,6 +107,13 @@ it.each(scenarios)(
       let sourceCommittedBeforeEffect = false;
       const recordProcessed = vi.fn();
       const markIdle = vi.fn();
+      const onTurnAdopted = vi.fn(async () => {
+        expect(recorder?.hasPersisted()).toBe(true);
+        if (retireDuringAdoption) {
+          recorder?.finishPendingInput?.("interrupted");
+          await recorder?.waitForPendingInputSettlement?.();
+        }
+      });
       const binding: SessionBindingRecord = {
         bindingId: "acp-owner-route",
         targetSessionKey: sessionKey,
@@ -161,6 +169,7 @@ it.each(scenarios)(
             };
           },
           async *runTurn({ handle }) {
+            expect(onTurnAdopted).toHaveBeenCalledOnce();
             sourceCommittedBeforeEffect = recorder?.hasPersisted() === true;
             turns += 1;
             yield { type: "text_delta", text: `${handle.agentId} reply` };
@@ -261,14 +270,16 @@ it.each(scenarios)(
           shouldRouteToOriginating: false,
           bypassForCommand: false,
           userTurnTranscriptRecorder: recorder,
+          onTurnAdopted,
           recordProcessed,
           markIdle,
         });
         dispatcher.markComplete();
         await dispatcher.waitForIdle();
         expect(result).not.toBeNull();
-        expect(turns).toBe(pendingQuestion || bindingRefused ? 0 : 1);
-        expect(sourceCommittedBeforeEffect).toBe(!bindingRefused);
+        expect(turns).toBe(pendingQuestion || bindingRefused || retireDuringAdoption ? 0 : 1);
+        expect(onTurnAdopted).toHaveBeenCalledTimes(pendingQuestion || bindingRefused ? 0 : 1);
+        expect(sourceCommittedBeforeEffect).toBe(!bindingRefused && !retireDuringAdoption);
         expect(persistApproved).toHaveBeenCalledOnce();
         expect(recordProcessed).toHaveBeenCalledOnce();
         expect(markIdle).toHaveBeenCalledOnce();
@@ -300,6 +311,9 @@ it.each(scenarios)(
             }),
           );
           expect(claim?.isResolving() ?? false).toBe(false);
+        } else if (retireDuringAdoption) {
+          expect(delivered.join("")).toContain("Pending input ownership ended");
+          expect(result?.queuedFinal).toBe(true);
         } else if (confirmedQuestion) {
           expect(resolveQuestion).toHaveBeenCalledOnce();
           expect(delivered).toEqual([]);

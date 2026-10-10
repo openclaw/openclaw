@@ -69,10 +69,11 @@ import {
   resolveInlineAgentImageAttachments,
 } from "./agent-turn-attachments.js";
 import { prepareChannelRunAdmission } from "./channel-run-admission.js";
+import { createAcpTurnAdoptionFence } from "./dispatch-acp-adoption.js";
 import { createAcpDispatchDeliveryCoordinator } from "./dispatch-acp-delivery.js";
 import type { AcpDispatchDeliveryParams } from "./dispatch-acp-delivery.types.js";
 import { finalizeAcpTurnOutput } from "./dispatch-acp-finalize.js";
-import { resolveAcpTurnText } from "./dispatch-acp-prompt.js";
+import { resolveAcpRequestId, resolveAcpTurnText } from "./dispatch-acp-prompt.js";
 import type { InboundMessageAuditTerminalRecorder } from "./dispatch-from-config.audit.js";
 import { appendRecentHistoryImageContext } from "./history-media.js";
 import { hasInboundMediaForUnderstanding } from "./inbound-media.js";
@@ -89,14 +90,6 @@ const loadDispatchAcpAuditRuntime = createLazyPromise(
 const loadDispatchAcpTranscriptRuntime = createLazyPromise(
   () => import("./dispatch-acp-transcript.runtime.js"),
 );
-
-function resolveAcpRequestId(ctx: FinalizedRuntimeMsgContext): string {
-  const id = ctx.MessageSidFull ?? ctx.MessageSid ?? ctx.MessageSidFirst ?? ctx.MessageSidLast;
-  return (
-    normalizeOptionalString(id) ??
-    (typeof id === "number" || typeof id === "bigint" ? String(id) : generateSecureUuid())
-  );
-}
 
 export type AcpDispatchAttemptResult = {
   queuedFinal: boolean;
@@ -118,6 +111,7 @@ export async function tryDispatchAcpReplyCore(
     shouldSendFullToolDetails: () => Promise<boolean>;
     bypassForCommand: boolean;
     onAgentRunStart?: GetReplyOptions["onAgentRunStart"];
+    onTurnAdopted?: () => void | Promise<void>;
     userTurnTranscriptRecorder?: GetReplyOptions["userTurnTranscriptRecorder"];
     prepareAssistantTranscriptMessage?: PrepareAssistantTranscriptMessage;
     recordProcessed: InboundMessageAuditTerminalRecorder["note"];
@@ -645,6 +639,11 @@ export async function tryDispatchAcpReplyCore(
       requestId,
       ...(params.abortSignal ? { signal: params.abortSignal } : {}),
       onElicitation,
+      onBeforePrompt: createAcpTurnAdoptionFence({
+        input,
+        admittedRunContext: turnAdmission,
+        onTurnAdopted: params.onTurnAdopted,
+      }),
       onLifecycle: recordUnsupportedNativeActionEvidence,
       onEvent: async (event) => {
         auditRuntime.emitAcpRuntimeEvent({
