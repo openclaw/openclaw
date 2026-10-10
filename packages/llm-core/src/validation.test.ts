@@ -55,27 +55,50 @@ describe("validateToolArguments", () => {
       for (const { branches, value } of cases) {
         for (const alternatives of [branches, branches.toReversed()]) {
           const schema = form === "TypeBox" ? Type.Union(alternatives) : { [form]: alternatives };
-          const tool: Tool = {
-            name: "union-value",
-            description: "Preserve typed values while recovering an integer sibling",
-            parameters: {
-              type: "object",
-              properties: { value: schema, count: { type: "integer" } },
-              required: ["value", "count"],
-            },
-          };
+          const validate = validator("union-value", {
+            type: "object",
+            properties: { value: schema, count: { type: "integer" } },
+            required: ["value", "count"],
+          });
           const input = { value: structuredClone(value), count: "2" };
-          expect(
-            validateToolArguments(tool, {
-              type: "toolCall",
-              id: "union-call",
-              name: tool.name,
-              arguments: input,
-            }),
-          ).toEqual({ value, count: 2 });
+          expect(validate(input)).toEqual({ value, count: 2 });
           expect(input).toEqual({ value, count: "2" });
         }
       }
+    },
+  );
+
+  it.each(["anyOf", "oneOf"])(
+    "recovers unmatched %s branches while preserving accepted nested values",
+    (keyword) => {
+      const validate = validator("nested-union", {
+        type: "object",
+        properties: {
+          value: {
+            [keyword]: [
+              {
+                type: "array",
+                items: {
+                  type: "object",
+                  properties: {
+                    id: { [keyword]: [{ type: "number" }, { type: "string" }] },
+                    count: { type: "integer" },
+                  },
+                  required: ["id", "count"],
+                },
+              },
+              { type: "boolean" },
+            ],
+          },
+        },
+      });
+      expect(validate({ value: [{ id: "00123", count: "2" }] })).toEqual({
+        value: [{ id: "00123", count: 2 }],
+      });
+      expect(validate({ value: "true" })).toEqual({ value: true });
+      expect(() => validate({ value: [{ id: "00123", count: "invalid" }] })).toThrow(
+        /Validation failed/,
+      );
     },
   );
 
