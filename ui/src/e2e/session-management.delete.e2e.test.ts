@@ -133,20 +133,20 @@ suite.define(() => {
 
     try {
       await page.goto(`${suite.server.baseUrl}sessions`);
-      const application = await getControlUiContextHandle(page);
-      await page.waitForFunction((context) => {
-        const client = context.gateway.snapshot.client;
+      const applicationHandle = await getControlUiContextHandle(page);
+      await page.waitForFunction((application) => {
+        const client = application.gateway.snapshot.client;
         return client?.recoveryScopeReady === true && Boolean(client.recoveryScope);
-      }, application);
+      }, applicationHandle);
       const draftStore = await page.evaluateHandle<
         typeof import("../lib/chat/composer-draft-store.runtime.ts")
       >('import("/src/lib/chat/composer-draft-store.runtime.ts")');
       const outboxStore = await page.evaluateHandle<typeof import("../lib/chat/outbox-store.ts")>(
         'import("/src/lib/chat/outbox-store.ts")',
       );
-      const owner = await application.evaluate(
-        async (context, { store, outbox, sessionKeys }) => {
-          const client = context.gateway.snapshot.client;
+      const owner = await applicationHandle.evaluate(
+        async (application, { store, outbox, sessionKeys }) => {
+          const client = application.gateway.snapshot.client;
           if (!client?.recoveryScope) {
             throw new Error("Gateway recovery scope unavailable");
           }
@@ -195,8 +195,8 @@ suite.define(() => {
         { store: draftStore, outbox: outboxStore, sessionKeys: keys },
       );
       const deleteSessions = (sessionKeys: string[]) =>
-        application.evaluate(async (context, targets) => {
-          const sessions = context.sessions;
+        applicationHandle.evaluate(async (application, targets) => {
+          const sessions = application.sessions;
           return targets.length === 1
             ? sessions.delete(targets[0]!, { agentId: "main" })
             : sessions.deleteMany(targets.map((key) => ({ key, agentId: "main" })));
@@ -351,7 +351,7 @@ suite.define(() => {
             durable: "post-confirm durable replacement",
           },
         });
-      await application.dispose();
+      await applicationHandle.dispose();
     } finally {
       await context.close();
     }

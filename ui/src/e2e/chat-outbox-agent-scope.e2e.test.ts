@@ -154,8 +154,8 @@ suite.define(() => {
       timeoutStage = "navigate to main agent";
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       timeoutStage = "select main agent";
-      await evaluateControlUiContext(page, (context) => {
-        context.agentSelection.set("main");
+      await evaluateControlUiContext(page, (application) => {
+        application.agentSelection.set("main");
       });
       // A cold roster must not send the canonical global route back through its alias.
       const mainRoster = { agentId: "main", includeGlobal: true };
@@ -242,9 +242,9 @@ suite.define(() => {
       timeoutStage = "select and navigate work agent";
       await evaluateControlUiContext(
         page,
-        (context, pathname) => {
-          context.agentSelection.set("work");
-          context.navigate("chat", { pathname });
+        (application, pathname) => {
+          application.agentSelection.set("work");
+          application.navigate("chat", { pathname });
         },
         workPath,
       );

@@ -6,7 +6,11 @@ import { resetAppHostTestGlobals } from "./app-host.test-support.ts";
 afterEach(resetAppHostTestGlobals);
 
 describe("navigation drawer focus ownership", () => {
-  it.each([false, true])("restores drawer focus only when it was open (%s)", (open) => {
+  it.each([
+    { open: false, via: "direct" },
+    { open: true, via: "direct" },
+    { open: true, via: "shortcut" },
+  ])("restores drawer focus only when it was open ($open, $via)", ({ open, via }) => {
     const frames: FrameRequestCallback[] = [];
     vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) =>
       frames.push(callback),
@@ -23,7 +27,21 @@ describe("navigation drawer focus ownership", () => {
     shell.navDrawerOpen = open;
     shell.navDrawerTrigger = open ? trigger : null;
     try {
-      shell.closeNavDrawer({ restoreFocus: true });
+      if (via === "shortcut") {
+        vi.stubGlobal("matchMedia", () => ({ matches: true }));
+        const mac = navigator.platform.startsWith("Mac");
+        shell.handleDocumentKeydown(
+          new KeyboardEvent("keydown", {
+            key: "b",
+            code: "KeyB",
+            ctrlKey: !mac,
+            metaKey: mac,
+            cancelable: true,
+          }),
+        );
+      } else {
+        shell.closeNavDrawer({ restoreFocus: true });
+      }
       for (const frame of frames) {
         frame(0);
       }

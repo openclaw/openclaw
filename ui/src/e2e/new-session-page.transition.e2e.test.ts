@@ -430,7 +430,7 @@ suite.define(() => {
       await captureProof(page, "01-chat-route-preparing.png");
       await expectPendingNewSessionPresentation(page);
 
-      await evaluateControlUiContext(page, (context) => {
+      await evaluateControlUiContext(page, (application) => {
         const frames: SessionTransitionFrames = {
           invalid: 0,
           firstInvalid: null,
@@ -453,7 +453,7 @@ suite.define(() => {
             (!newSessionVisible && !chatVisible)
           ) {
             frames.invalid += 1;
-            const route = context.router.getState().matches[0];
+            const route = application.router.getState().matches[0];
             frames.firstInvalid ??= {
               activeViewTransition: Boolean(document.activeViewTransition),
               handoffCover,
@@ -490,14 +490,14 @@ suite.define(() => {
       await gateway.deferNext("chat.startup");
       releaseChatModule();
       await pendingPreviewModule.request;
-      const application = await getControlUiContextHandle(page);
+      const applicationHandle = await getControlUiContextHandle(page);
       try {
-        await page.waitForFunction((context) => {
-          const route = context.router.getState().matches[0];
+        await page.waitForFunction((application) => {
+          const route = application.router.getState().matches[0];
           return route?.routeId === "chat" && route.module && route.isFetching === "loader";
-        }, application);
+        }, applicationHandle);
       } finally {
-        await application.dispose();
+        await applicationHandle.dispose();
       }
       await page.evaluate(
         () =>

@@ -172,8 +172,8 @@ suite.define(() => {
     const operationLabel = currentPage.locator(".chat-work-group .chat-activity-group__label");
     const refreshedSession = await evaluateControlUiContext(
       currentPage,
-      async (context, key) => {
-        const sessions = context.sessions;
+      async (application, key) => {
+        const sessions = application.sessions;
         await sessions.refresh({ agentId: "main", force: true });
         return sessions.state.result?.sessions.find((row) => row.key === key);
       },
@@ -667,8 +667,8 @@ suite.define(() => {
       });
       await gateway.waitForRequest("chat.history", { after: historyCount });
       // A newer sidebar read may publish while Stop's history is still pending.
-      await evaluateControlUiContext(currentPage, async (context) => {
-        await context.sessions.refreshList({ force: true });
+      await evaluateControlUiContext(currentPage, async (application) => {
+        await application.sessions.refreshList({ force: true });
       });
       await gateway.resolveDeferred("chat.history");
       await currentPage

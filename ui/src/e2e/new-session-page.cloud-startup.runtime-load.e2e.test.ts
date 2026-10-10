@@ -105,8 +105,8 @@ suite.define(() => {
         const composer = page.locator(".agent-chat__composer-combobox textarea");
         await expect.poll(() => composer.isDisabled()).toBe(false);
         await waitForGatewayRecoveryScope(page);
-        const owner = await evaluateControlUiContext(page, (context) => {
-          const { gateway: applicationGateway } = context;
+        const owner = await evaluateControlUiContext(page, (application) => {
+          const { gateway: applicationGateway } = application;
           return {
             gatewayUrl: applicationGateway.connection.gatewayUrl,
             recoveryScope: applicationGateway.snapshot.client!.recoveryScope,
@@ -172,7 +172,7 @@ suite.define(() => {
         const readStartup = () =>
           evaluateControlUiContext(
             page,
-            (context, key) => context.placementStartup.get(key),
+            (application, key) => application.placementStartup.get(key),
             sessionKey,
           );
         const failed = await readStartup();
@@ -180,8 +180,8 @@ suite.define(() => {
         for (const selectedKey of ["agent:main:another-task", sessionKey]) {
           await evaluateControlUiContext(
             page,
-            (context, key) => {
-              context.gateway.setSessionKey(key);
+            (application, key) => {
+              application.gateway.setSessionKey(key);
             },
             selectedKey,
           );
@@ -402,7 +402,7 @@ suite.define(() => {
           expect(
             await evaluateControlUiContext(
               page,
-              (context, key) => context.placementStartup.hasPendingTurn(key),
+              (application, key) => application.placementStartup.hasPendingTurn(key),
               privateKey,
             ),
           ).toBe(false);

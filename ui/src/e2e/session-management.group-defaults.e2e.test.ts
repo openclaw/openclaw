@@ -453,7 +453,8 @@ suite.define(() => {
 
       await evaluateControlUiContext(
         page,
-        (context, cwd) => context.sessions.groupsUpdate("Client work", { cwd, worktree: false }),
+        (application, cwd) =>
+          application.sessions.groupsUpdate("Client work", { cwd, worktree: false }),
         refreshedCwd,
       );
 
@@ -465,8 +466,8 @@ suite.define(() => {
         .poll(() => page.locator(".new-session-page__message").inputValue())
         .toBe("keep this draft");
 
-      await evaluateControlUiContext(page, (context) =>
-        context.sessions.groupsRename("Client work", "Customer work"),
+      await evaluateControlUiContext(page, (application) =>
+        application.sessions.groupsRename("Client work", "Customer work"),
       );
 
       const unavailable = page.locator(".new-session-page__catalog-unavailable");

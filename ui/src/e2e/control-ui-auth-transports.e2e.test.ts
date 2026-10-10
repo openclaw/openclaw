@@ -871,8 +871,8 @@ suite.define(() => {
         const seededEvidenceStart = proxy.evidence.length;
         await evaluateControlUiContext(
           connected.page,
-          (context, gatewayUrl) => {
-            context.gateway.connect({
+          (application, gatewayUrl) => {
+            application.gateway.connect({
               gatewayUrl,
               token: "prior-gateway-token",
               password: "prior-gateway-password",
@@ -892,8 +892,8 @@ suite.define(() => {
         const queryEvidenceStart = proxy.evidence.length;
         await evaluateControlUiContext(
           connected.page,
-          (context, gatewayUrl) => {
-            context.gateway.connect({ gatewayUrl });
+          (application, gatewayUrl) => {
+            application.gateway.connect({ gatewayUrl });
           },
           queryScopedUrl,
         );
@@ -909,8 +909,8 @@ suite.define(() => {
         const originEvidenceStart = proxy.evidence.length;
         await evaluateControlUiContext(
           connected.page,
-          (context, gatewayUrl) => {
-            context.gateway.connect({ gatewayUrl });
+          (application, gatewayUrl) => {
+            application.gateway.connect({ gatewayUrl });
           },
           proxy.ipv4TrustedUrl,
         );

@@ -104,7 +104,8 @@ suite.define(() => {
         await expect(
           evaluateControlUiContext(
             peer,
-            (context, sessionKey) => context.sessions.delete(sessionKey, { agentId: "main" }),
+            (application, sessionKey) =>
+              application.sessions.delete(sessionKey, { agentId: "main" }),
             deletedSession,
           ),
         ).resolves.toMatchObject({ deleted: true });

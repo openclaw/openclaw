@@ -47,10 +47,9 @@ export function defineSolidBridge<Props extends object, Methods extends object =
   spec: Spec<Props, Methods>,
 ) {
   const properties = Object.entries<Property<unknown>>(spec.properties);
-  // SAFETY: Each declared key is materialized before it is exposed as a typed host/prop.
   const defaults = Object.fromEntries(
     properties.map(([key, property]) => [key, property.default]),
-  ) as Props;
+  ) as Props; // SAFETY: The property map materializes every declared key.
   const declarations = new Map(properties);
   const attributes = new Map(
     properties.flatMap(([key, property]) =>
@@ -75,7 +74,6 @@ export function defineSolidBridge<Props extends object, Methods extends object =
 
     constructor() {
       super();
-      // SAFETY: Every declared method is installed with its host bound as the first argument.
       const methods = Object.fromEntries(
         Object.entries(spec.methods ?? {}).map(([key, method]) => {
           if (typeof method !== "function") {
@@ -86,7 +84,7 @@ export function defineSolidBridge<Props extends object, Methods extends object =
             (...args: unknown[]) => Reflect.apply(method, undefined, [this.#host, ...args]),
           ];
         }),
-      ) as Methods;
+      ) as Methods; // SAFETY: Each declared method is validated and bound to this host.
       const upgraded = properties.filter(([key]) => Object.hasOwn(this, key));
       for (const [key] of upgraded) {
         this.#upgraded.set(key, Reflect.get(this, key));

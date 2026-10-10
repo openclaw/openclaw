@@ -104,12 +104,12 @@ suite.define(() => {
         updatedAt: 3,
       });
       await gateway.waitForRequest("sessions.list", { after: before, match: rosterMatch });
-      const application = await getControlUiContextHandle(page);
-      const refreshProbe = await application.evaluateHandle((context) => {
+      const applicationHandle = await getControlUiContextHandle(page);
+      const refreshProbe = await applicationHandle.evaluateHandle((application) => {
         const sidebar = document.querySelector<HTMLElement & { updateComplete: Promise<boolean> }>(
           "openclaw-app-sidebar",
         );
-        const sessions = context.sessions;
+        const sessions = application.sessions;
         const row = sidebar?.querySelector('[data-session-key="agent:main:bob"]');
         const scope = sessions?.captureConnectionScope();
         if (!sidebar || !sessions || !row || !scope) {
@@ -203,7 +203,7 @@ suite.define(() => {
       expect(await ada.count()).toBe(1);
       await captureSidebar(page, "warm-after-refresh.png");
       await refreshProbe.dispose();
-      await application.dispose();
+      await applicationHandle.dispose();
     } finally {
       await context.close();
     }

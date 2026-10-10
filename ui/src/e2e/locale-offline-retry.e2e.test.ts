@@ -28,7 +28,7 @@ async function createContext(): Promise<BrowserContext> {
 }
 
 async function gatewayPhase(page: Page): Promise<string | undefined> {
-  return page.evaluate(() => window.openclawControlUi?.snapshot().gatewayPhase);
+  return page.evaluate(() => window.openclawControlUi?.snapshot().gatewayPhase ?? undefined);
 }
 
 async function documentMarker(page: Page): Promise<string | undefined> {

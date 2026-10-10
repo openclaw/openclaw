@@ -246,8 +246,8 @@ describeControlUiE2e("Control UI progressive Model Providers loading", () => {
       await page.goto(`${server.baseUrl}settings/appearance`);
       await waitForControlUiRoute(page, { routeId: "appearance" });
       await gateway.waitForRequest("config.get");
-      await evaluateControlUiContext(page, async (context) => {
-        const route = (context.router as ApplicationRouter).getRoute("model-providers");
+      await evaluateControlUiContext(page, async (application) => {
+        const route = (application.router as ApplicationRouter).getRoute("model-providers");
         if (!route) {
           throw new Error("Models route is unavailable");
         }
@@ -334,8 +334,8 @@ describeControlUiE2e("Control UI progressive Model Providers loading", () => {
       await page.goto(`${server.baseUrl}settings/appearance`);
       await waitForControlUiRoute(page, { routeId: "appearance" });
       await gateway.waitForRequest("config.get");
-      await evaluateControlUiContext(page, async (context) => {
-        const route = (context.router as ApplicationRouter).getRoute("model-providers");
+      await evaluateControlUiContext(page, async (application) => {
+        const route = (application.router as ApplicationRouter).getRoute("model-providers");
         if (!route) {
           throw new Error("Models route is unavailable");
         }
@@ -457,8 +457,8 @@ describeControlUiE2e("Control UI progressive Model Providers loading", () => {
         models: currentModels,
         defaultModels: { automaticUtilityModel: "fixture/current" },
       });
-      await evaluateControlUiContext(page, (context) => {
-        context.gateway.connect();
+      await evaluateControlUiContext(page, (application) => {
+        application.gateway.connect();
       });
       await gateway.waitForRequest("config.get", { after: configReads });
       await gateway.emitGatewayEvent("models.snapshot", {
@@ -472,7 +472,10 @@ describeControlUiE2e("Control UI progressive Model Providers loading", () => {
       await gateway.rejectDeferred("config.get", { message: "Current config is unavailable." });
       await expect
         .poll(() =>
-          evaluateControlUiContext(page, (context) => context.runtimeConfig.state.lastError),
+          evaluateControlUiContext(
+            page,
+            (application) => application.runtimeConfig.state.lastError,
+          ),
         )
         .toContain("Current config is unavailable.");
       if (recordVisuals) {
@@ -742,8 +745,8 @@ describeControlUiE2e("Control UI progressive Model Providers loading", () => {
           if (moduleState === "cached") {
             await gateway.emitGatewayEvent("chat.metadata.changed", {});
           }
-          await evaluateControlUiContext(page, async (context) => {
-            const route = (context.router as ApplicationRouter).getRoute("model-providers");
+          await evaluateControlUiContext(page, async (application) => {
+            const route = (application.router as ApplicationRouter).getRoute("model-providers");
             if (!route) {
               throw new Error("Models route is unavailable");
             }

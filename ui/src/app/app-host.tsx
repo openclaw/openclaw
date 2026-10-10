@@ -30,7 +30,7 @@ import {
 } from "../lib/reactive/application.ts";
 import { projectAgents, projectRuntimeConfig } from "../lib/reactive/domain-capabilities.ts";
 import { projectI18n, t } from "../lib/reactive/i18n.ts";
-import { projectRouter } from "../lib/reactive/router.ts";
+import { projectSource } from "../lib/reactive/projection.ts";
 import { projectTheme } from "../lib/reactive/theme.ts";
 import { resolveSessionDisplayName } from "../lib/session-display.ts";
 import {
@@ -43,7 +43,7 @@ import {
 import { showToast } from "../lib/toast.ts";
 import type { ChatPage } from "../pages/chat/chat-page.ts";
 import { retireSessionPaneHandoffs } from "../pages/chat/chat-pane-handoff-lifecycle.ts";
-import { selectShellRouteState } from "./app-host-route-state.ts";
+import { equalShellRouteState, selectShellRouteState } from "./app-host-route-state.ts";
 import { ShellChromeOwner, type ShellChromeHost } from "./app-shell-chrome.ts";
 import {
   ShellGatewayOwner,
@@ -316,9 +316,12 @@ export class ShellOwner
         this.ensureRuntimeConfig(context.gateway.snapshot, context.runtimeConfig);
         void this.shellGateway.reconcileServerUiPrefs(context.runtimeConfig);
       });
-      watch(projectRouter(runtime.router), () => {
-        this.shellNavigation.updateRouteState(selectShellRouteState(runtime.router.getState()));
+      const shellRoute = projectSource(runtime.router, {
+        read: (router) => selectShellRouteState(router.getState()),
+        subscribe: (router, notify) => router.subscribe(notify),
+        equality: equalShellRouteState,
       });
+      watch(shellRoute, () => this.shellNavigation.updateRouteState(shellRoute.read()));
       for (const source of [context.plugins, context.agentIdentity, context.nativeDeviceSettings]) {
         if (source) {
           this.cleanups.push(source.subscribe(() => this.invalidate()));

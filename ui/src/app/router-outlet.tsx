@@ -418,11 +418,10 @@ export function RouterOutlet(props: RouterOutletProps): SolidJSX.Element {
       aria-disabled={props["aria-disabled"]}
       ref={(element) => {
         host = element;
-        // SAFETY: These descriptors provide both members of the readiness outlet contract.
         const readinessHost = Object.defineProperties(element, {
           presentationSettled: { configurable: true, get: isSettled },
           settlePresentation: { configurable: true, value: settlePresentation },
-        }) as ControlUiReadinessOutlet;
+        }) as ControlUiReadinessOutlet; // SAFETY: These descriptors define the outlet contract.
         untrack(() => props.ref?.(readinessHost));
       }}
     >
