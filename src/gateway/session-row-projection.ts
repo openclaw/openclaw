@@ -4,17 +4,8 @@ import { createSubagentSessionListReadView } from "../agents/subagents/registry/
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import type { readPreparedSessionEntryChange } from "../config/sessions/session-accessor.sqlite-entry-cache-publication.js";
 import { resolveStateDir } from "../config/state-dir.js";
-import {
-  pluginStatePublication,
-  pluginStateReadDependenciesAffected,
-} from "../plugin-state/plugin-state-publication.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
 import {
-  onSessionIdentityMutation,
-  onSessionLifecycleEvent,
-} from "../sessions/session-lifecycle-events.js";
-import {
-  sessionChanges,
   isSessionStoreTopologyChange,
   type SessionRowChange,
 } from "../sessions/session-row-changes.js";
@@ -38,7 +29,10 @@ import { createSessionRowProjectionContext } from "./session-row-projection-cont
 import { createSessionRowGenerationObservations } from "./session-row-projection-generation.js";
 import { createSessionRowCreatorIndex } from "./session-row-projection-identities.js";
 import * as rowReads from "./session-row-projection-materialize.js";
-import { createSessionRowPublication } from "./session-row-projection-publication.js";
+import {
+  createSessionRowPublication,
+  subscribeSessionRowPublications,
+} from "./session-row-projection-publication.js";
 import * as records from "./session-row-projection-record.js";
 import { createSessionRowRefresh } from "./session-row-projection-refresh.js";
 import { createSessionRowProjectionRevisions } from "./session-row-projection-revisions.js";
@@ -516,48 +510,18 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     mark,
     ensureMaterialized,
   });
-  const stop = [
-    pluginStatePublication.subscribeFacts((change) => {
-      const changed: records.Row[] = [];
-      for (const row of rows.values()) {
-        if (
-          !row.runtimeOwnershipDependencies ||
-          !pluginStateReadDependenciesAffected(row.runtimeOwnershipDependencies, change)
-        ) {
-          continue;
-        }
-        row.databaseFactsRevision++;
-        row.pendingDatabaseFacts = undefined;
-        if (row.retainedDatabaseFacts) {
-          row.retainedDatabaseFacts = {
-            ...row.retainedDatabaseFacts,
-            runtimeOwnership: undefined,
-            runtimeOwnershipDependencies: undefined,
-          };
-        }
-        row.preparedRuntimeOwnership = undefined;
-        row.runtimeOwnershipDependencies = undefined;
-        dirty.add(records.identity(row));
-        changed.push(row);
-      }
-      if (changed.length > 0) {
-        epoch++;
-        revisions.invalidate(true);
-        for (const row of changed) {
-          revisions.publishFacts(row);
-        }
-        // Facts install synchronously; preparation starts after the publication frame.
-        queueMicrotask(() => void ensureMaterialized().catch(() => {}));
-      }
-    }),
-    sessionChanges.subscribeFacts(membership.invalidate),
-    sessionChanges.subscribeProjection(mark),
-    // Participant writers publish facts before their display-only lifecycle notice.
-    onSessionLifecycleEvent((change) =>
-      mark(change.reason === "participants" ? { ...change, facts: { kind: "unchanged" } } : change),
-    ),
-    onSessionIdentityMutation(generations.mutate),
-  ];
+  const stop = subscribeSessionRowPublications({
+    rows,
+    dirty,
+    revisions,
+    advanceRevision: () => {
+      epoch++;
+    },
+    ensureMaterialized,
+    invalidateMembership: membership.invalidate,
+    mark,
+    mutateGeneration: generations.mutate,
+  });
   function isCurrent(row: records.Row) {
     return row.privateSource
       ? records.isPrivateSourceCurrent(row.privateSource)

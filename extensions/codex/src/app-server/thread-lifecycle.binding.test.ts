@@ -15,7 +15,10 @@ import {
   retainCodexAppServerLiveThread,
 } from "./client-runtime.js";
 import { CodexAppServerClient, CodexAppServerRpcError } from "./client.js";
-import { createFakeCodexAppServerClient } from "./codex-app-server.test-fixtures.js";
+import {
+  createFakeCodexAppServerClient,
+  disabledMcpServerStatus,
+} from "./codex-app-server.test-fixtures.js";
 import { acquireCodexNativeConfigFence } from "./native-config-fence.js";
 import { resolveCodexNativeSkillIsolation } from "./native-skill-isolation.js";
 import type {
@@ -162,17 +165,6 @@ function retainThread(
     undefined,
     binding.liveThreadConfigFingerprint,
   );
-}
-
-function disabledMcpServerStatus(name: string) {
-  return {
-    name,
-    serverInfo: null,
-    tools: {},
-    resources: [],
-    resourceTemplates: [],
-    authStatus: "unsupported",
-  };
 }
 
 function createThreadLifecycleAppServerOptions(): LifecycleInput["appServer"] {
