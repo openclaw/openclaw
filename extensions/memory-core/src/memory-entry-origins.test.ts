@@ -338,7 +338,7 @@ describe("memory entry origins", () => {
     const reads: Array<{ rows: number; bytes: number }> = [];
     // oxlint-disable-next-line typescript/unbound-method -- Reflect.apply preserves the intercepted statement receiver.
     const all = StatementSync.prototype.all;
-    const observed = vi.spyOn(StatementSync.prototype, "all").mockImplementation(function (
+    const observedAll = vi.spyOn(StatementSync.prototype, "all").mockImplementation(function (
       this: StatementSync,
       ...args
     ) {
@@ -348,6 +348,29 @@ describe("memory entry origins", () => {
       }
       return rows;
     });
+    // oxlint-disable-next-line typescript/unbound-method -- Reflect.apply preserves the intercepted statement receiver.
+    const iterate = StatementSync.prototype.iterate;
+    const observedIterate = vi
+      .spyOn(StatementSync.prototype, "iterate")
+      .mockImplementation(function (this: StatementSync, ...args) {
+        const iterator = Reflect.apply(iterate, this, args);
+        if (this.sourceSQL.includes('"memory_session_tombstones"')) {
+          const read = { rows: 0, bytes: 2 };
+          reads.push(read);
+          // Retain the native iterator and its return() cleanup, including before the first row.
+          const next = iterator.next.bind(iterator);
+          iterator.next = (...parameters) => {
+            const result = next(...parameters);
+            if (!result.done) {
+              read.bytes +=
+                Buffer.byteLength(JSON.stringify(result.value)) + (read.rows > 0 ? 1 : 0);
+              read.rows += 1;
+            }
+            return result;
+          };
+        }
+        return iterator;
+      });
     try {
       readMemoryOriginsInWorker({
         kind: "session-tombstones",
@@ -360,7 +383,8 @@ describe("memory entry origins", () => {
       expect(Math.max(...reads.map((read) => read.rows))).toBeLessThanOrEqual(256);
       expect(Math.max(...reads.map((read) => read.bytes))).toBeLessThanOrEqual(4096);
     } finally {
-      observed.mockRestore();
+      observedIterate.mockRestore();
+      observedAll.mockRestore();
     }
     expect(
       await findForgottenMemorySessionIds({

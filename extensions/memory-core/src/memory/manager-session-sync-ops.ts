@@ -77,22 +77,28 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
       includeContentRevision: false,
       readOnly: this.database.readOnly,
     });
-    if (targets) {
-      const files = new Set([
-        ...(this.normalizeTargetArchiveFiles(targets.archiveFiles, entries) ?? []),
-        ...this.resolveArchiveFilesForSyncTargets(targets.sessions, entries),
-      ]);
-      entries = entries.filter(
-        (entry) =>
-          files.has(entry.sessionFile) ||
-          (entry.transcriptSource !== "sqlite" && files.has(path.resolve(entry.sessionFile))),
-      );
-    }
     entries = entries.filter((entry) => {
       const archivedSessionKey =
         entry.artifactKind === "archive-artifact" ? entry.sessionKey : undefined;
       return isMemorySessionIndexable(entry, archivedSessionKey);
     });
+    if (targets) {
+      const files = new Set([
+        ...(this.normalizeTargetArchiveFiles(targets.archiveFiles, entries) ?? []),
+        ...this.resolveArchiveFilesForSyncTargets(targets.sessions, entries),
+      ]);
+      const sessionIds = new Set(
+        entries
+          .filter(
+            (entry) =>
+              files.has(entry.sessionFile) ||
+              (entry.transcriptSource !== "sqlite" && files.has(path.resolve(entry.sessionFile))),
+          )
+          .map((entry) => entry.sessionId),
+      );
+      // Archive cleanup needs active counterparts from the same discovery snapshot.
+      entries = entries.filter((entry) => sessionIds.has(entry.sessionId));
+    }
     const forgottenSessions = await findForgottenMemorySessionIds({
       agentId: this.agentId,
       sessionIds: entries.map((entry) => entry.sessionId),
