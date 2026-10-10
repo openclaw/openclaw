@@ -26,7 +26,7 @@ export function mountShellView(shell: ShellOwner) {
 }
 
 export function refreshShellView(shell: ShellOwner): void {
-  shell.requestUpdate();
+  shell.invalidate();
   flush();
 }
 

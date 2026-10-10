@@ -3,6 +3,7 @@
 import type { LitElement, TemplateResult } from "lit";
 import { flush } from "solid-js";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { resolveThemeBranding } from "../../../packages/gateway-protocol/src/theme.ts";
 import { GatewayBrowserClient } from "../api/gateway.ts";
 import { visibleSettingsNavigationGroups } from "../app-navigation.ts";
 import { createApplicationRouter } from "../app-routes.ts";
@@ -107,7 +108,7 @@ function createPairingShell(params: {
     agents: { state: { agentsList: null } },
     agentSelection: { state: { selectedId: "main", scopeId: "main" } },
     sessions: { state: { result: null } },
-    theme: { mode: "system", settings: loadSettings() },
+    theme: { mode: "system", settings: loadSettings(), branding: resolveThemeBranding({}) },
   } as unknown as ApplicationContext;
   const shell = createShellOwner();
   const router = createApplicationRouter();
@@ -393,7 +394,7 @@ describe("application shell pairing access", () => {
     shell.connect();
     try {
       await settleLitElements([shell.navigationSidebar as PairingSidebar]);
-      const update = vi.spyOn(shell, "requestUpdate");
+      const update = vi.spyOn(shell, "invalidate");
       expect((shell.navigationSidebar as PairingSidebar).isUpdatePending).toBe(false);
 
       publish?.();

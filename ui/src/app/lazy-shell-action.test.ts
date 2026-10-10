@@ -82,7 +82,6 @@ type PaletteShell = {
     lazyCustomElements: LazyCustomElementRequestController;
     openPalette(): void;
     restorePendingLazyAction(): void;
-    resetForContextEpoch(): void;
     commandPaletteLoading: CommandPaletteLoadingState;
     shellChrome: ShellChromeOwner;
   };
@@ -269,40 +268,40 @@ describe("shell lazy events", () => {
     "does not reload a retired retry after %s while the document probe is pending",
     async (retirement) => {
       vi.stubGlobal("sessionStorage", createStorageMock());
-      let resolveHead = (_response: Response): void => {
-        throw new Error("Document probe not started");
-      };
-      const head = vi.fn(
-        () =>
-          new Promise<Response>((resolve) => {
-            resolveHead = resolve;
-          }),
-      );
+      const probe = createDeferred<Response>();
+      const head = vi.fn(() => probe.promise);
       vi.stubGlobal("fetch", head);
       const open = vi.fn();
       const shell = paletteShell(stalePalette(), open);
 
-      await withConnectedShell(shell, async () => {
-        shell.openPalette();
-        await vi.waitFor(() => expect(shell.lazyCustomElements.visibleState?.status).toBe("error"));
-        shell.lazyCustomElements.retry();
-        await vi.waitFor(() => expect(head).toHaveBeenCalledOnce());
+      try {
+        await withConnectedShell(shell, async () => {
+          shell.openPalette();
+          await vi.waitFor(() =>
+            expect(shell.lazyCustomElements.visibleState?.status).toBe("error"),
+          );
+          shell.lazyCustomElements.retry();
+          await vi.waitFor(() => expect(head).toHaveBeenCalledOnce());
 
-        if (retirement === "close") {
-          shell.lazyCustomElements.close();
-        } else if (retirement === "context-replaced") {
-          shell.resetForContextEpoch();
-        } else if (retirement === "disconnected") {
-          shell.disconnect();
-        } else {
-          shell.lazyCustomElements.request(createLazyElementSpec("new request"));
-        }
-        resolveHead(new Response(null, { status: 200 }));
-        await expect(Promise.all(recovery.pending)).resolves.toEqual([false]);
+          if (retirement === "close") {
+            shell.lazyCustomElements.close();
+          } else if (retirement === "context-replaced") {
+            shell.shellChrome.abandonPendingLazyActionForContext();
+          } else if (retirement === "disconnected") {
+            shell.disconnect();
+          } else {
+            shell.lazyCustomElements.request(createLazyElementSpec("new request"));
+          }
+          probe.resolve(new Response(null, { status: 200 }));
+          await expect(Promise.all(recovery.pending)).resolves.toEqual([false]);
 
-        expect(recovery.reload).not.toHaveBeenCalled();
-        expect(open).not.toHaveBeenCalled();
-      });
+          expect(recovery.reload).not.toHaveBeenCalled();
+          expect(open).not.toHaveBeenCalled();
+        });
+      } finally {
+        probe.resolve(new Response(null, { status: 503 }));
+        await Promise.all(recovery.pending);
+      }
     },
   );
 
@@ -474,7 +473,7 @@ describe("shell lazy events", () => {
           if (outcome === "close") {
             shell.lazyCustomElements.close();
           } else if (outcome === "context") {
-            shell.resetForContextEpoch();
+            shell.shellChrome.abandonPendingLazyActionForContext();
           } else if (outcome === "replacement") {
             shell.commandPaletteElement = createLazyElementSpec("replacement palette");
             shell.openPalette();

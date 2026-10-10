@@ -51,7 +51,9 @@ declare module "@solidjs/web" {
 /** Temporary Lit island for shared icon templates; remove with the icon cutover. */
 function litContent(value: () => unknown): (element: HTMLElement) => void {
   let container: HTMLElement;
-  createEffect(value, (next) => render(next, container));
+  createEffect(value, (next) => {
+    render(next, container);
+  });
   onCleanup(() => render(nothing, container));
   return (element) => {
     container = element;
@@ -122,21 +124,19 @@ export function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Eleme
           props.host.handleThemeChange(event)
         }
       >
-        <a class="shell-skip-link" href="#control-ui-main" prop:inert={view().navDrawerOpen}>
+        <a class="shell-skip-link" href="#control-ui-main" inert={view().navDrawerOpen}>
           {t("common.skipToMainContent")}
         </a>
         <Show when={view().nativeWebChrome && !view().onboarding}>
           <openclaw-macos-titlebar-controls
-            prop:inert={view().navDrawerOpen}
+            inert={view().navDrawerOpen}
             prop:navCollapsed={(props.host.shellRevision(), props.host.nativeNavCollapsed())}
             prop:historyOnly={view().settingsTakeover}
             prop:canGoBack={(props.host.shellRevision(), props.host.nativeHistoryState.canGoBack)}
             prop:canGoForward={
               (props.host.shellRevision(), props.host.nativeHistoryState.canGoForward)
             }
-            prop:newSessionDisabledReason={
-              view().newSessionAccess.allowed ? undefined : view().newSessionAccess.reason
-            }
+            prop:newSessionDisabledReason={view().newSessionDisabledReason}
             prop:onToggleSidebar={props.host.viewCallbacks.toggleSidebar}
             prop:onOpenPalette={props.host.openPalette}
             prop:onOpenNewSession={props.host.handleNativeNewSession}
@@ -144,7 +144,7 @@ export function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Eleme
         </Show>
         <Show when={!view().nativeEmbed}>
           <openclaw-app-topbar
-            prop:inert={view().navDrawerOpen}
+            inert={view().navDrawerOpen}
             prop:resourceBasePath={view().context.resourceBasePath}
             prop:environment={view().config.environment}
             prop:navDrawerOpen={view().navDrawerOpen}
@@ -179,9 +179,7 @@ export function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Eleme
                   className: "shell-chrome-controls__button shell-chrome-controls__new-thread",
                   label: t("chat.runControls.newSession"),
                   showShortcut: true,
-                  disabledReason: view().newSessionAccess.allowed
-                    ? undefined
-                    : view().newSessionAccess.reason,
+                  disabledReason: view().newSessionDisabledReason,
                   onOpen: props.host.viewCallbacks.requestOpenNewSession,
                 })
               }
@@ -211,9 +209,9 @@ export function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Eleme
           <button
             type="button"
             class="shell-nav-backdrop"
-            tabIndex={-1}
+            tabindex={-1}
             aria-hidden="true"
-            prop:inert={!view().navDrawerOpen}
+            inert={!view().navDrawerOpen}
             onClick={() => props.host.closeNavDrawer({ restoreFocus: true })}
           />
           <div
@@ -224,8 +222,8 @@ export function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Eleme
             aria-hidden={
               view().mobileNavLayout && view().navigationSurfaceHidden ? "true" : undefined
             }
-            tabIndex={view().mobileNavLayout ? -1 : undefined}
-            prop:inert={view().navigationSurfaceHidden}
+            tabindex={view().mobileNavLayout ? -1 : undefined}
+            inert={view().navigationSurfaceHidden}
           >
             <LitRouteHost
               renderValue={() =>
@@ -252,11 +250,11 @@ export function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Eleme
             title={t("nav.resize")}
             onResize-start={() => {
               props.host.navResizing = true;
-              props.host.requestUpdate();
+              props.host.invalidate();
             }}
             onResize-end={() => {
               props.host.navResizing = false;
-              props.host.requestUpdate();
+              props.host.invalidate();
             }}
             onResize={(event: CustomEvent<{ splitRatio: number }>) =>
               props.host.resizeNavigation(event.detail.splitRatio)
@@ -277,9 +275,9 @@ export function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Eleme
             },
           ]}
           ref={props.host.shellLayout.contentRef}
-          tabIndex={-1}
+          tabindex={-1}
           onMouseDown={beginNativeWindowDragFromTopInset}
-          prop:inert={
+          inert={
             (!view().nativeEmbed && view().pageActionsBlocked) ||
             (view().mobileNavLayout && view().navDrawerOpen)
           }
@@ -336,7 +334,7 @@ export function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Eleme
           </div>
         </Show>
         <openclaw-terminal-panel
-          prop:inert={view().navDrawerOpen}
+          inert={view().navDrawerOpen}
           prop:client={view().gatewayConnected ? view().gatewaySnapshot.client : null}
           prop:available={view().terminalAvailable}
           prop:agentId={view().selectedAgentId}
@@ -356,7 +354,7 @@ export function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Eleme
           />
         </Show>
         <openclaw-assistant-panel
-          prop:inert={view().navDrawerOpen}
+          inert={view().navDrawerOpen}
           prop:custodianAvailable={view().custodianPanelAvailable && !view().nativeEmbed}
           prop:homeAvailable={view().homePanelAvailable && !view().nativeEmbed}
           prop:custodianSuppressed={view().activeRoute === "custodian"}
@@ -439,14 +437,7 @@ export function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Eleme
         />
       }
     >
-      <Show
-        when={
-          view().activeRoute !== "plugins" &&
-          view().activeRoute !== "plugin-settings" &&
-          view().context.plugins.selectedReplacement("workspace")
-        }
-        fallback={workspace}
-      >
+      <Show when={view().workspaceReplacement} fallback={workspace}>
         <openclaw-plugin-view
           prop:surface="workspace"
           prop:props={{

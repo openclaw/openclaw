@@ -44,8 +44,8 @@ export function DevicePairSetup(props: {
         when={state().renderer}
         fallback={
           <openclaw-modal-dialog
-            label={t("devices.pairing.title")}
-            description={t(state().failed ? "devices.pairing.loadFailed" : "common.loading")}
+            prop:label={t("devices.pairing.title")}
+            prop:description={t(state().failed ? "devices.pairing.loadFailed" : "common.loading")}
             onModal-cancel={() => props.props.onClose()}
           >
             <section class="device-pair-setup" aria-busy={state().failed ? undefined : "true"}>

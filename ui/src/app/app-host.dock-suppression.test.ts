@@ -2,6 +2,7 @@
 
 import type { RouterState } from "@openclaw/uirouter";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { resolveThemeBranding } from "../../../packages/gateway-protocol/src/theme.ts";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { GatewaySessionRow } from "../api/types.ts";
 import { createApplicationRouter, type RouteId } from "../app-routes.ts";
@@ -117,7 +118,7 @@ describe("OpenClaw shell dock suppression", () => {
         },
         runUpdate: vi.fn(),
       },
-      theme: { mode: "dark", settings: loadSettings() },
+      theme: { mode: "dark", settings: loadSettings(), branding: resolveThemeBranding({}) },
       preload: vi.fn(),
     } as unknown as ApplicationContext;
     const shell = createShellOwner();

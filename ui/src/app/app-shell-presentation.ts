@@ -25,7 +25,7 @@ export class ShellPresentation {
       return;
     }
     this.currentNavDrawerOpen = value;
-    this.requestUpdate();
+    this.invalidate();
   }
   private currentNavResizing = false;
   get navResizing(): boolean {
@@ -36,7 +36,7 @@ export class ShellPresentation {
       return;
     }
     this.currentNavResizing = value;
-    this.requestUpdate();
+    this.invalidate();
   }
   private currentDesktopNavigationExpanded = false;
   get desktopNavigationExpanded(): boolean {
@@ -47,7 +47,7 @@ export class ShellPresentation {
       return;
     }
     this.currentDesktopNavigationExpanded = value;
-    this.requestUpdate();
+    this.invalidate();
   }
   private currentActiveSessionKey = "";
   get activeSessionKey(): string {
@@ -58,7 +58,7 @@ export class ShellPresentation {
       return;
     }
     this.currentActiveSessionKey = value;
-    this.requestUpdate();
+    this.invalidate();
   }
   private currentSettingsSearchQuery = "";
   get settingsSearchQuery(): string {
@@ -69,7 +69,7 @@ export class ShellPresentation {
       return;
     }
     this.currentSettingsSearchQuery = value;
-    this.requestUpdate();
+    this.invalidate();
   }
   private currentRouteState: ShellRouteState = {};
   get routeState(): ShellRouteState {
@@ -80,7 +80,7 @@ export class ShellPresentation {
       return;
     }
     this.currentRouteState = value;
-    this.requestUpdate();
+    this.invalidate();
   }
   private currentNativeHistoryState: NativeHistoryState = readNativeHistoryState();
   get nativeHistoryState(): NativeHistoryState {
@@ -91,14 +91,14 @@ export class ShellPresentation {
       return;
     }
     this.currentNativeHistoryState = value;
-    this.requestUpdate();
+    this.invalidate();
   }
 
   get updateComplete(): Promise<boolean> {
     return this.commitPromise;
   }
 
-  requestUpdate(): void {
+  invalidate(): void {
     if (this.disposed) {
       return;
     }

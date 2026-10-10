@@ -1,4 +1,6 @@
 /* @vitest-environment jsdom */
+import { render } from "@solidjs/testing-library";
+import { createComponent, createSignal, flush } from "solid-js";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
@@ -16,6 +18,7 @@ import {
 import { i18n } from "../i18n/index.ts";
 import { SESSION_FACE_PREFERENCE_PARAM } from "../lib/sessions/route-navigation.ts";
 import { createSessionCapabilityHarness } from "../lib/sessions/session-capability.test-support.ts";
+import { setupSidebarTest } from "../test-helpers/app-sidebar-setup.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { selectShellRouteState } from "./app-host-route-state.ts";
 import { createShellOwner } from "./app-host-solid.test-support.ts";
@@ -28,17 +31,22 @@ import {
   type TestOptionalCustomElement,
   stubRenderedWhenDefined,
 } from "./app-host.test-support.ts";
+import { OpenClawShell } from "./app-host.tsx";
 import { ShellGatewayOwner, type ShellGatewayHost } from "./app-shell-gateway.ts";
 import type { ShellNavigationOwner } from "./app-shell-navigation.ts";
 import { createApplicationNavigationPreferences } from "./bootstrap-navigation-preferences.ts";
 import { createApplicationTheme } from "./bootstrap-theme.ts";
+import { bootstrapApplication } from "./bootstrap.ts";
 import { createChatSubmissions } from "./chat-submissions.ts";
 import type {
   ApplicationContext,
   ApplicationGateway,
   ApplicationGatewaySnapshot,
 } from "./context.ts";
-import type { LazyCustomElementRequestController } from "./lazy-custom-element.ts";
+import {
+  COMMAND_PALETTE_ELEMENT,
+  type LazyCustomElementRequestController,
+} from "./lazy-custom-element.ts";
 import {
   persistLazyShellAction,
   readLazyShellAction,
@@ -98,11 +106,6 @@ type ShellLazySurfaceState = ShellKeyboardState &
     openPalette: () => void;
     restorePendingLazyAction: () => void;
   };
-
-type ShellLazyLifecycleState = {
-  resetForContextEpoch: () => void;
-  resetForDocumentDisconnect: () => void;
-};
 
 type ShellUiCommandState = ShellKeyboardState & {
   handleGatewayEvent: (event: { event: string; payload: unknown }) => void;
@@ -207,19 +210,54 @@ type ShellSessionNavigationState = {
   recoverNotFoundRoute: () => boolean;
 };
 
-describe("OpenClaw shell source initialization", () => {
-  it("preserves reload intent on disconnect but clears it on context replacement", () => {
-    vi.stubGlobal("sessionStorage", createStorageMock());
-    persistLazyShellAction({ eventType: COMMAND_PALETTE_OPEN_EVENT });
-    const shell = createShellOwner() as unknown as ShellLazyLifecycleState;
+describe("OpenClaw shell context lifecycle", () => {
+  setupSidebarTest();
 
-    shell.resetForDocumentDisconnect();
+  it("preserves reload intent on disconnect but clears it on context replacement", async () => {
+    vi.stubGlobal("sessionStorage", createStorageMock());
+    vi.stubGlobal("requestIdleCallback", vi.fn());
+    persistLazyShellAction({ eventType: COMMAND_PALETTE_OPEN_EVENT });
+    const disconnected = createShellOwner();
+    disconnected.disconnect();
     expect(readLazyShellAction()).toEqual({ eventType: COMMAND_PALETTE_OPEN_EVENT });
 
-    shell.resetForContextEpoch();
-    expect(readLazyShellAction()).toBeNull();
+    const first = bootstrapApplication();
+    const second = bootstrapApplication();
+    const gate = createDeferred();
+    const originalTag = COMMAND_PALETTE_ELEMENT.tagName;
+    const tagName = createLazyElementSpec("context replacement palette").tagName;
+    COMMAND_PALETTE_ELEMENT.tagName = tagName;
+    vi.spyOn(COMMAND_PALETTE_ELEMENT, "loadModule").mockImplementation(async () => {
+      await gate.promise;
+      customElements.define(tagName, class extends HTMLElement {});
+    });
+    const [runtime, setRuntime] = createSignal(first);
+    let view: ReturnType<typeof render> | undefined;
+    try {
+      view = render(() =>
+        createComponent(OpenClawShell, {
+          get runtime() {
+            return runtime();
+          },
+        }),
+      );
+      flush();
+      expect(readLazyShellAction()).toEqual({ eventType: COMMAND_PALETTE_OPEN_EVENT });
+      setRuntime(second);
+      flush();
+      expect(readLazyShellAction()).toBeNull();
+    } finally {
+      view?.unmount();
+      gate.resolve();
+      await gate.promise;
+      COMMAND_PALETTE_ELEMENT.tagName = originalTag;
+      first.stop();
+      second.stop();
+    }
   });
+});
 
+describe("OpenClaw shell source initialization", () => {
   it("delegates repeated locale import failures to guarded stale-chunk recovery", () => {
     const scheduleReload = vi.mocked(scheduleStaleChunkReload);
     scheduleReload.mockClear();

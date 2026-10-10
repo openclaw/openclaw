@@ -71,7 +71,7 @@ export interface ShellViewHost extends ShellLazyOverlayHost {
   refreshControlUi: () => Promise<boolean>;
   recoverNotFoundRoute: () => boolean;
   prepareView(): void;
-  requestUpdate(): void;
+  invalidate(): void;
   querySelectorAll: ParentNode["querySelectorAll"];
   resizeNavigation(splitRatio: number): void;
   readonly toggleNavigationSurface: (trigger?: HTMLElement) => void;
@@ -204,6 +204,11 @@ export function readShellView(host: ShellViewHost) {
     params: {},
     sessionScope: true,
   });
+  const newSessionDisabledReason = newSessionAccess.allowed ? undefined : newSessionAccess.reason;
+  const workspaceReplacement =
+    activeRoute === "plugins" || activeRoute === "plugin-settings"
+      ? undefined
+      : context.plugins.selectedReplacement("workspace");
   const uiSettings = context.theme.settings;
   // Unknown profile preferences are not absence. Keep the first shell paint
   // image-free so a saved None choice cannot download artwork before hydration.
@@ -372,7 +377,8 @@ export function readShellView(host: ShellViewHost) {
     floatingAttentionVisible,
     shellWidth,
     selectedAgentId,
-    newSessionAccess,
+    newSessionDisabledReason,
+    workspaceReplacement,
     uiSettings,
     backgroundReady,
     chatLikeRoute,

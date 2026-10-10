@@ -265,9 +265,20 @@ export class ShellOwner
   get isConnected() {
     return this.element.isConnected;
   }
-  override requestUpdate(): void {
+  // Temporary callback ABI used by unported lazy-element and layout owners.
+  readonly requestUpdate = () => this.invalidate();
+
+  replaceRuntime(runtime: ApplicationRuntime): void {
+    if (runtime.context !== this.context) {
+      this.shellChrome.abandonPendingLazyActionForContext();
+      this.resetShellState();
+    }
+    this.runtime = runtime;
+  }
+
+  override invalidate(): void {
     this.readiness?.invalidate();
-    super.requestUpdate();
+    super.invalidate();
   }
 
   connect(): void {
@@ -281,7 +292,7 @@ export class ShellOwner
       ) => {
         const publish = () => {
           synchronize?.();
-          this.requestUpdate();
+          this.invalidate();
         };
         const unsubscribe = projection.subscribe(publish);
         this.cleanups.push(() => {
@@ -317,7 +328,7 @@ export class ShellOwner
       });
       for (const source of [context.plugins, context.agentIdentity, context.nativeDeviceSettings]) {
         if (source) {
-          this.cleanups.push(source.subscribe(() => this.requestUpdate()));
+          this.cleanups.push(source.subscribe(() => this.invalidate()));
         }
       }
       this.cleanups.push(
@@ -412,7 +423,7 @@ export class ShellOwner
 
   private readonly refreshStoredOutboxPresentation = () => {
     this.refreshStoredOutboxSummary();
-    this.requestUpdate();
+    this.invalidate();
   };
 
   private resetForDocumentDisconnect() {
@@ -726,7 +737,7 @@ export function OpenClawShell(props: OpenClawShellProps): SolidJSX.Element {
   createEffect(
     () => props.runtime,
     (runtime) => {
-      owner.runtime = runtime;
+      owner.replaceRuntime(runtime);
       owner.connect();
       return () => owner.disconnect();
     },

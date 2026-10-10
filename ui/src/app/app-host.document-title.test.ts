@@ -168,7 +168,7 @@ describe("OpenClaw shell document title", () => {
 
   it("updates the active title without rendering the shell for session publications", async () => {
     const { shell, emitEvent, active, background } = await createConnectedSessionShell();
-    const renderShell = vi.spyOn(shell, "requestUpdate");
+    const renderShell = vi.spyOn(shell, "invalidate");
     for (const session of [
       { ...background, updatedAt: 2, hasActiveRun: true },
       { ...active, updatedAt: 3, derivedTitle: "Revised launch plan" },

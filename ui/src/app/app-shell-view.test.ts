@@ -49,7 +49,7 @@ it("keeps one sidebar and outlet while navigation moves between desktop and draw
 
   mobile = true;
   owner.navDrawerOpen = true;
-  owner.requestUpdate();
+  owner.invalidate();
   flush();
   const drawer = view.container.querySelector(".shell-nav");
   expect(drawer?.getAttribute("role")).toBe("dialog");
@@ -63,7 +63,7 @@ it("keeps one sidebar and outlet while navigation moves between desktop and draw
   expect(view.container.querySelector("openclaw-app-sidebar")).toBe(sidebar);
 
   mobile = false;
-  owner.requestUpdate();
+  owner.invalidate();
   flush();
   expect(drawer?.hasAttribute("role")).toBe(false);
   expect(view.container.querySelectorAll("openclaw-app-sidebar")).toHaveLength(1);
@@ -104,7 +104,7 @@ it("delegates the live shell to a workspace plugin and restores it after deselec
   };
   const selected = vi.spyOn(runtime.context.plugins, "selectedReplacement");
   selected.mockReturnValue(replacement);
-  owner.requestUpdate();
+  owner.invalidate();
   flush();
   const plugin = view.container.querySelector<ReactiveElement>("openclaw-plugin-view");
   expect(plugin).not.toBeNull();
@@ -114,7 +114,7 @@ it("delegates the live shell to a workspace plugin and restores it after deselec
   expect(target?.querySelector("openclaw-app-sidebar")).toBe(sidebar);
 
   selected.mockReturnValue(undefined);
-  owner.requestUpdate();
+  owner.invalidate();
   flush();
   expect(view.container.querySelector("openclaw-plugin-view")).toBeNull();
   expect(view.container.querySelector(".shell")).toBe(shell);

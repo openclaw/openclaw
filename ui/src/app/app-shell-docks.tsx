@@ -40,7 +40,7 @@ export function ShellDocks(props: ShellDocksProps): SolidJSX.Element {
   return (
     <>
       <openclaw-browser-panel
-        prop:inert={props.navDrawerOpen}
+        inert={props.navDrawerOpen}
         data-chat-autotype-exempt=""
         prop:client={client()}
         prop:available={isBrowserPanelSurfaceAvailable(gateway())}
@@ -54,7 +54,7 @@ export function ShellDocks(props: ShellDocksProps): SolidJSX.Element {
         })}
       />
       <openclaw-desktop-panel
-        prop:inert={props.navDrawerOpen}
+        inert={props.navDrawerOpen}
         data-chat-autotype-exempt=""
         prop:client={client()}
         prop:available={isDesktopPanelAvailable(gateway())}
@@ -62,7 +62,7 @@ export function ShellDocks(props: ShellDocksProps): SolidJSX.Element {
         prop:basePath={props.context.basePath}
       />
       <openclaw-link-reader-panel
-        prop:inert={props.navDrawerOpen}
+        inert={props.navDrawerOpen}
         data-chat-autotype-exempt=""
         prop:client={client()}
         prop:available={gateway().phase === "connected"}

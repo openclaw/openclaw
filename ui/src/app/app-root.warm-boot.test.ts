@@ -222,4 +222,26 @@ describe("warm boot app root", () => {
     descendant.dispatchEvent(new ContextEvent(applicationContext, descendant, received, true));
     expect(received).not.toHaveBeenCalled();
   });
+
+  it("releases the keyboard viewport when the mounted application is disposed", () => {
+    vi.stubGlobal(
+      "visualViewport",
+      Object.assign(new EventTarget(), { height: 300, offsetTop: 0, scale: 1 }),
+    );
+    const input = document.createElement("input");
+    document.body.append(input);
+    input.focus();
+    try {
+      createWarmSurface();
+      const style = document.documentElement.style;
+      expect(style.getPropertyValue("--shell-viewport-height")).toBe("300px");
+      expect(style.getPropertyValue("--shell-safe-area-bottom")).toBe("0px");
+      dispose?.();
+      dispose = undefined;
+      expect(style.getPropertyValue("--shell-viewport-height")).toBe("");
+      expect(style.getPropertyValue("--shell-safe-area-bottom")).toBe("");
+    } finally {
+      input.remove();
+    }
+  });
 });

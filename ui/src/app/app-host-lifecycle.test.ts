@@ -16,7 +16,7 @@ describe("OpenClaw shell event lifecycle", () => {
   it("refreshes the existing connection indicator for recovery and removed panes only while mounted", () => {
     const shell = createShellOwner();
     shell.connect();
-    const update = vi.spyOn(shell, "requestUpdate");
+    const update = vi.spyOn(shell, "invalidate");
     try {
       for (const type of [CHAT_HISTORY_RECOVERY_CHANGED_EVENT, CHAT_PANE_LIFECYCLE_CHANGED_EVENT]) {
         update.mockClear();
