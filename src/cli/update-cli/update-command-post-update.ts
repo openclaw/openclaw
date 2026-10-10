@@ -452,13 +452,30 @@ async function finishSettledUpdate(
       }
 
       const postUpdateRoot = params.result.root ?? params.root;
+      // A current core may converge plugins online, parking before fresh Doctor.
+      // A replaced core keeps convergence in its original stopped interval.
+      const deferPluginConvergence =
+        shouldRestart &&
+        params.preManagedServiceStop?.serviceMutationAllowed !== false &&
+        params.coreAlreadyCurrent === true &&
+        params.preManagedServiceStop?.serviceUpdateVerdict?.kind === "owned";
+      const runsPostActivationInspections =
+        params.shouldRestart &&
+        (!params.coreAlreadyCurrent || deferPluginConvergence) &&
+        (!candidateRuntime ||
+          isTruthyEnvValue(process.env[UPDATE_PARENT_RUNS_POST_ACTIVATION_INSPECTIONS_ENV]));
+      let postPluginDoctorRan = false;
       const convergePlugins = async (beforeDoctor?: () => Promise<void>) => {
         const pluginParams = {
           ...params,
-          beforeDoctor: beforeDoctor ?? parkForegroundOrigin,
+          beforeDoctor: async () => {
+            await (beforeDoctor ?? parkForegroundOrigin)();
+            postPluginDoctorRan = true;
+          },
           beforeRuntimePublication: parkForegroundOrigin,
           assertCurrent,
           candidateRuntime,
+          deferPostActivationInspections: runsPostActivationInspections,
         };
         const convergence = await forward(() => convergeUpdatePlugins(pluginParams));
         if (convergence.resultWithPostUpdate.status === "error") {
@@ -468,13 +485,6 @@ async function finishSettledUpdate(
         }
         return convergence;
       };
-      // A current core may converge plugins online, parking before fresh Doctor.
-      // A replaced core keeps convergence in its original stopped interval.
-      const deferPluginConvergence =
-        shouldRestart &&
-        params.preManagedServiceStop?.serviceMutationAllowed !== false &&
-        params.coreAlreadyCurrent === true &&
-        params.preManagedServiceStop?.serviceUpdateVerdict?.kind === "owned";
       let resultWithPostUpdate = params.result;
       let postUpdateConfigSnapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>> | undefined;
       if (!deferPluginConvergence) {
@@ -534,6 +544,7 @@ async function finishSettledUpdate(
         await restoreWindowsAutoStart(resultWithPostUpdate);
       }
       let verificationFailure = "restart-unhealthy";
+      let activationVerified = false;
       const restart = async () => {
         const restarted = await forward(() =>
           maybeRestartService({
@@ -565,6 +576,7 @@ async function finishSettledUpdate(
             onVerified: recordVerifiedDowntime,
           }),
         );
+        activationVerified = restarted === "ok";
         if (restarted !== "failed" && restarted !== "restart-health-failed") {
           return restarted === "ok";
         }
@@ -659,24 +671,29 @@ async function finishSettledUpdate(
             delete resultWithPostUpdate.reason;
           }
         }
-        return resultWithPostUpdate;
       }
       // The activation Doctor deferred optional inspections for this owner: the
       // original updater, or a migrated worker it handed the marker to.
       if (
         resultWithPostUpdate.status === "ok" &&
-        resultWithPostUpdate.steps.some((step) => step.name === `${CLI_NAME} doctor`) &&
-        (!candidateRuntime ||
-          isTruthyEnvValue(process.env[UPDATE_PARENT_RUNS_POST_ACTIVATION_INSPECTIONS_ENV]))
+        runsPostActivationInspections &&
+        (postPluginDoctorRan ||
+          resultWithPostUpdate.steps.some((step) => step.name === `${CLI_NAME} doctor`))
       ) {
         assertCurrent();
-        resultWithPostUpdate = await runPostActivationInspections({
-          root: postUpdateRoot,
-          result: resultWithPostUpdate,
-          timeoutMs: params.updateStepTimeoutMs,
-          nodeRunner: params.packageUpdateNodeRunner,
-          ownedManagedUpdateEnv: params.ownedManagedUpdateEnv,
-        });
+        resultWithPostUpdate = await forward(() =>
+          runPostActivationInspections({
+            root: postUpdateRoot,
+            result: resultWithPostUpdate,
+            gatewayReady: activationVerified,
+            timeoutMs: params.updateStepTimeoutMs,
+            nodeRunner: params.packageUpdateNodeRunner,
+            ownedManagedUpdateEnv: params.ownedManagedUpdateEnv,
+          }),
+        );
+      }
+      if (deferPluginConvergence) {
+        return resultWithPostUpdate;
       }
       const maintenanceFailure = await completePostUpdateMaintenance(
         params,

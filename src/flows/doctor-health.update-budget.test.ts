@@ -7,9 +7,11 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { recordDoctorHealthWarnings } from "./doctor-health-contribution.js";
 import {
   createDoctorHealthFlowContext,
+  createDoctorPrompterFixture,
   resolveDoctorHealthContributions,
   runDoctorHealthContributionList,
 } from "./doctor-health-contributions.test-support.js";
+import * as doctorRepairFlow from "./doctor-repair-flow.js";
 
 const observed = vi.hoisted(() => ({ now: 0, events: [] as string[] }));
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: vi.fn() }));
@@ -108,67 +110,106 @@ it.each(["rehearsal", "partial-markers"])(
   },
 );
 
-it("defers lint-backed advisory inspections from an updater that runs them after restart", async () => {
-  const deferredIds = new Set([
-    "doctor:runtime-tool-schemas",
-    "doctor:provider-catalog-projection",
-    "doctor:workspace-status",
-  ]);
-  const retainedIds = new Set([
-    // Readiness lint gates on its security check; it stays before restart.
-    "doctor:security",
-    // No lint check can reproduce this after restart.
-    "doctor:channel-ingress-dead-letters",
-    "doctor:auth-profiles",
-    "doctor:structured-health-repairs",
-    "doctor:session-transcripts",
-    "doctor:write-config",
-    "doctor:final-config-validation",
-  ]);
-  const contributions = resolveDoctorHealthContributions().filter(
-    (entry) => deferredIds.has(entry.id) || retainedIds.has(entry.id),
-  );
-  expect(contributions).toHaveLength(deferredIds.size + retainedIds.size);
-  const executed: string[] = [];
-  for (const contribution of contributions) {
-    vi.spyOn(contribution, "run").mockImplementation(async () => {
-      executed.push(contribution.id);
+it.each([true, false])(
+  "defers lint-backed advisory inspections from an updater that runs them after restart (budget=%s)",
+  async (hasBudget) => {
+    const deferredIds = new Set([
+      "doctor:runtime-tool-schemas",
+      "doctor:provider-catalog-projection",
+      "doctor:hooks-model",
+    ]);
+    const retainedIds = new Set([
+      "doctor:session-snapshots",
+      "doctor:workspace-status",
+      // Readiness lint gates on its security check; it stays before restart.
+      "doctor:security",
+      // No lint check can reproduce this after restart.
+      "doctor:channel-ingress-dead-letters",
+      "doctor:auth-profiles",
+      "doctor:structured-health-repairs",
+      "doctor:session-transcripts",
+      "doctor:write-config",
+      "doctor:final-config-validation",
+    ]);
+    const contributions = resolveDoctorHealthContributions().filter(
+      (entry) => deferredIds.has(entry.id) || retainedIds.has(entry.id),
+    );
+    expect(contributions).toHaveLength(deferredIds.size + retainedIds.size);
+    const executed: string[] = [];
+    for (const contribution of contributions) {
+      vi.spyOn(contribution, "run").mockImplementation(async () => {
+        executed.push(contribution.id);
+      });
+    }
+    const updateBudget = () => ({
+      agentCount: 1,
+      phase: "activation" as const,
+      inspectionDeadlineMs: Date.now() + 149_000,
+      source: "activation-policy" as const,
+      deferred: new Map(),
     });
-  }
-  const updateBudget = () => ({
-    agentCount: 1,
-    phase: "activation" as const,
-    inspectionDeadlineMs: Date.now() + 149_000,
-    source: "activation-policy" as const,
-    deferred: new Map(),
-  });
-  const updateEnv = {
-    OPENCLAW_UPDATE_IN_PROGRESS: "1",
-    OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR: "0",
-    OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION: "0",
-  };
-  const ctx = createDoctorHealthFlowContext({
-    env: { ...updateEnv, OPENCLAW_UPDATE_PARENT_RUNS_POST_ACTIVATION_INSPECTIONS: "1" },
-    updateBudget: updateBudget(),
-  });
-  await runDoctorHealthContributionList(ctx, contributions);
+    const updateEnv = {
+      OPENCLAW_UPDATE_IN_PROGRESS: "1",
+      OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR: "0",
+      OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION: "0",
+    };
+    const ctx = createDoctorHealthFlowContext({
+      env: { ...updateEnv, OPENCLAW_UPDATE_PARENT_RUNS_POST_ACTIVATION_INSPECTIONS: "1" },
+      updateBudget: hasBudget ? updateBudget() : undefined,
+    });
+    await runDoctorHealthContributionList(ctx, contributions);
 
-  expect(new Set(executed)).toEqual(retainedIds);
-  expect(ctx.updateWarnings ?? []).toEqual([]);
-  expect(ctx.runtime.log).toHaveBeenCalledWith(
-    expect.stringContaining(
-      "Deferred advisory inspections until the restarted Gateway is ready: doctor:provider-catalog-projection, doctor:runtime-tool-schemas, doctor:workspace-status.",
-    ),
-  );
+    expect(new Set(executed)).toEqual(retainedIds);
+    expect(ctx.updateWarnings ?? []).toEqual([]);
+    expect(ctx.runtime.log).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "Deferred advisory inspections until the restarted Gateway is ready: doctor:hooks-model, doctor:provider-catalog-projection, doctor:runtime-tool-schemas.",
+      ),
+    );
 
-  // A shipped updater never runs them after restart, so its Doctor keeps them.
-  executed.length = 0;
-  await runDoctorHealthContributionList(
-    createDoctorHealthFlowContext({ env: updateEnv, updateBudget: updateBudget() }),
-    contributions,
-  );
-  expect(new Set(executed)).toEqual(new Set([...retainedIds, ...deferredIds]));
-});
+    // A shipped updater never runs them after restart, so its Doctor keeps them.
+    executed.length = 0;
+    await runDoctorHealthContributionList(
+      createDoctorHealthFlowContext({
+        env: updateEnv,
+        updateBudget: hasBudget ? updateBudget() : undefined,
+      }),
+      contributions,
+    );
+    expect(new Set(executed)).toEqual(new Set([...retainedIds, ...deferredIds]));
+    if (!hasBudget) {
+      const repair = vi.spyOn(doctorRepairFlow, "runDoctorHealthRepairs").mockResolvedValue({
+        config: {},
+        findings: [],
+        remainingFindings: [],
+        changes: [],
+        warnings: [],
+        diffs: [],
+        effects: [],
+        checksRun: 0,
+        checksRepaired: 0,
+        checksValidated: 0,
+      });
+      const structured = resolveDoctorHealthContributions().find(
+        (contribution) => contribution.id === "doctor:structured-health-repairs",
+      );
+      if (!structured) {
+        throw new Error("Missing structured repair contribution");
+      }
+      await structured.run(
+        createDoctorHealthFlowContext({
+          env: { ...updateEnv, OPENCLAW_UPDATE_PARENT_RUNS_POST_ACTIVATION_INSPECTIONS: "1" },
+          prompter: createDoctorPrompterFixture(true),
+        }),
+      );
+      const checkIds = repair.mock.calls[0]?.[1]?.checks?.map((check) => check.id);
+      expect(checkIds).toContain("core/doctor/security");
+      for (const id of ["runtime-tool-schemas", "provider-catalog-projection", "hooks-model"]) {
+        expect(checkIds).not.toContain(`core/doctor/${id}`);
+      }
+    }
+  },
+);
 
 it.each([
   { agentCount: 480, phase: "validation" },

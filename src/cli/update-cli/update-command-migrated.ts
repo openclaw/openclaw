@@ -168,7 +168,7 @@ export async function continueMigratedUpdateInFreshProcess(
         ),
         OPENCLAW_UPDATE_IN_PROGRESS: "1",
         // This worker finishes the run, including the deferred post-activation inspections.
-        [UPDATE_PARENT_RUNS_POST_ACTIVATION_INSPECTIONS_ENV]: "1",
+        [UPDATE_PARENT_RUNS_POST_ACTIVATION_INSPECTIONS_ENV]: params.shouldRestart ? "1" : "0",
         TMPDIR: scratchDir,
         TMP: scratchDir,
         TEMP: scratchDir,

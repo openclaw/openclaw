@@ -445,11 +445,27 @@ async function runGatewayHealthChecks(ctx: DoctorHealthFlowContext): Promise<voi
     : { checked: false, ready: false, skipped: healthOk };
 }
 
+function shouldDeferPostActivationInspections(env: NodeJS.ProcessEnv): boolean {
+  return (
+    isUpdateDoctorRun(env) &&
+    !resolveUpdateRehearsalRoot(env) &&
+    isTruthyEnvValue(env[UPDATE_PARENT_RUNS_POST_ACTIVATION_INSPECTIONS_ENV])
+  );
+}
+
 function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
   return [
     ...resolveInitialDoctorHealthContributions({
       runStructuredHealthRepairs: (ctx) =>
-        runStructuredHealthRepairs(ctx, resolveDoctorContributionHealthChecks),
+        runStructuredHealthRepairs(ctx, async () => {
+          const checks = await resolveDoctorContributionHealthChecks();
+          if (!shouldDeferPostActivationInspections(ctx.env ?? process.env)) {
+            return checks;
+          }
+          // The repair runner detects even checks without a repair implementation.
+          const deferred = new Set(await resolvePostActivationInspectionCheckIds());
+          return checks.filter((check) => !deferred.has(check.id));
+        }),
       runGatewayConfigHealth,
       runAuthProfileMigration,
       runAuthProfileHealth,
@@ -517,8 +533,17 @@ async function selectPostActivationInspections(
     ) {
       return [];
     }
+    // These runners also report diagnostics their lint checks do not preserve:
+    // snapshot scan errors and the identities of errored workspace plugins.
+    if (
+      contribution.id === "doctor:session-snapshots" ||
+      contribution.id === "doctor:workspace-status"
+    ) {
+      return [];
+    }
     const checks = resolveContributionHealthChecks(contribution, checksById);
-    return checks.length > 0 && checks.every((check) => check.updateReadiness === undefined)
+    return checks.length > 0 &&
+      checks.every((check) => check.updateReadiness === undefined && check.repair === undefined)
       ? [{ contribution, checks }]
       : [];
   });
@@ -544,8 +569,9 @@ async function runDoctorHealthContributionList(
     preparedAgentCount: ctx.preparedAgentCount,
   });
   const updateDoctorRun = isUpdateDoctorRun(env);
+  const rehearsalRoot = resolveUpdateRehearsalRoot(env);
   const rehearsalInspections = new Set(
-    resolveUpdateRehearsalRoot(env)
+    rehearsalRoot
       ? contributions.filter(
           (entry) =>
             !entry.required && entry.updateWork?.kind === "inspection" && !entry.updateWork.repairs,
@@ -555,8 +581,7 @@ async function runDoctorHealthContributionList(
   // Only an updater that runs these with `doctor --lint` after the restarted
   // Gateway is ready sets this marker; shipped updaters keep them in this run.
   const postActivationInspections = new Set(
-    ctx.updateBudget?.phase === "activation" &&
-      isTruthyEnvValue(env[UPDATE_PARENT_RUNS_POST_ACTIVATION_INSPECTIONS_ENV])
+    shouldDeferPostActivationInspections(env)
       ? (await selectPostActivationInspections(contributions)).map(
           ({ contribution }) => contribution,
         )

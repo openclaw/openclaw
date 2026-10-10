@@ -352,7 +352,7 @@ export async function runPackageUpdateDoctor(params: PackageDoctorOptions) {
         }),
         [UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV]: doctorResultPath,
         // finishUpdate runs the deferred inspections once the restarted Gateway is ready.
-        [UPDATE_PARENT_RUNS_POST_ACTIVATION_INSPECTIONS_ENV]: "1",
+        [UPDATE_PARENT_RUNS_POST_ACTIVATION_INSPECTIONS_ENV]: params.restart === false ? "0" : "1",
       },
       timeoutMs: resolveInstallWorkTimeoutMs(params.workTimeoutMs, params.timeoutMs),
       ...(runCommand ? { runCommand } : {}),
