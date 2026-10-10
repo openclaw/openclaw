@@ -29,6 +29,7 @@ const exportVendorAssets = vi.hoisted(() => new Map<string, string>());
 const exportPrompt = vi.hoisted(() =>
   vi.fn(async () => ({ systemPrompt: "synthetic", tools: [] })),
 );
+// mock-isolation: The export uses a synthetic prompt without loading a live agent harness.
 vi.mock("./commands-system-prompt.js", () => ({
   resolveCommandsSystemPromptBundle: exportPrompt,
 }));

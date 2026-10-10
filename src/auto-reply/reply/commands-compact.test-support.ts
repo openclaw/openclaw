@@ -9,6 +9,7 @@ import {
 } from "./commands-agent-scope.test-support.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
+// mock-isolation: Command lifecycle fixtures own embedded-run state and session write outcomes.
 vi.mock("./commands-compact.runtime.js", () => ({
   abortEmbeddedAgentRun: vi.fn(),
   compactEmbeddedAgentSession: vi.fn(),

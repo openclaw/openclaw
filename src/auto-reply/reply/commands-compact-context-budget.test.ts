@@ -8,6 +8,7 @@ import {
 } from "./commands-agent-scope.test-support.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
+// mock-isolation: Keep embedded runs and session writes outside the command-budget fixture.
 vi.mock("./commands-compact.runtime.js", () => ({
   abortEmbeddedAgentRun: vi.fn(),
   compactEmbeddedAgentSession: vi.fn(),

@@ -14,6 +14,7 @@ import { openIncognitoTestActor } from "../../state/openclaw-agent-execution-inc
 import { deliverPendingDeliveryNotice } from "./pending-delivery-notice.js";
 
 const sendRecoveryNotice = vi.hoisted(() => vi.fn());
+// mock-isolation: Notice delivery uses this fixture's sender, never a process-global Gateway.
 vi.mock("../../gateway/server-recovery-runtime-context.js", () => ({
   getGatewayRecoveryRuntime: () => ({ sendRecoveryNotice }),
 }));

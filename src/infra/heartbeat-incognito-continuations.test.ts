@@ -23,7 +23,9 @@ import {
   prepareOutboundSessionBinding,
 } from "./outbound/outbound-session.js";
 
+// mock-isolation: Control the preference wait without reading the operator's TTS preference file.
 vi.mock("../tts/tts-preferences.js", () => ({ prepareTtsPreferences: vi.fn(async () => ({})) }));
+// mock-isolation: Exercise post-preparation authority without contacting a speech provider.
 vi.mock("../tts/tts.runtime.js", () => ({
   maybeApplyTtsToPayload: vi.fn(async ({ payload }: { payload: object }) => ({
     ...payload,
