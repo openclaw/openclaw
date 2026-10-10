@@ -32,6 +32,16 @@ behavior is unchanged, and worker settings alone launch nothing.
 - A sandbox policy permitting the node's outbound Gateway connection, DNS/TLS,
   workspace writes, and a private node-state directory.
 
+Complete package installation during the image build, including OpenClaw lifecycle
+scripts, and check `openclaw --version` as the intended non-root runtime user.
+Do not rely on first-run package repair inside a read-only sandbox.
+
+For a WSS pairing target that pins the Gateway certificate, preserve end-to-end
+Gateway TLS: set `tls: skip` only on the exact Gateway host/port network rule.
+TLS interception changes that certificate and correctly fails its pin check.
+Keep TLS inspection and credential substitution enabled on model-provider
+endpoints; the Gateway exception must not apply to those endpoints.
+
 OpenShell v0.1.3 uses the **real provider endpoint and model**, not the removed
 workspace inference route or `inference.local`. Follow its
 [inference contract](https://github.com/NVIDIA/OpenShell/blob/v0.1.3/docs/how-it-works/inference.mdx)
@@ -125,8 +135,8 @@ In another terminal, derive the exact node identity from the sandbox and preview
 or apply its Gateway profile:
 
 ```bash
-openclaw openshell worker configure native-worker --profile openshell-native --required
-openclaw openshell worker configure native-worker --profile openshell-native --required --apply
+openclaw openshell worker configure native-worker --worker-profile openshell-native --required
+openclaw openshell worker configure native-worker --worker-profile openshell-native --required --apply
 ```
 
 `configure` uses the read-only `openclaw node identity --json` inside the
@@ -134,6 +144,9 @@ configured sandbox state directory. Optional `--device <id>` asserts an expected
 identity and rejects a mismatch. The canonical config writer saves the existing
 `provider: "device"` and `settings.inference: "worker"` profile. No new pairing
 owner or inference transport is introduced; conflicting profiles are not replaced.
+
+`--worker-profile` selects the worker profile. OpenClaw's global `--profile` flag
+selects a configuration profile and is not a worker selector.
 
 **`--required` affects every session on this Gateway:** unavailable workers
 block turns. Omit it for optional administrator-selected dispatch. No config is

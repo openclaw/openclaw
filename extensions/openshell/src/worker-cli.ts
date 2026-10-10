@@ -14,7 +14,7 @@ import { createOpenShellWorkerNodeConfig, OPEN_SHELL_WORKER_BOOTSTRAP } from "./
 
 type WorkerOptions = {
   targetFile?: string;
-  profile?: string;
+  workerProfile?: string;
   device?: string;
   required?: boolean;
   apply?: boolean;
@@ -150,9 +150,9 @@ async function runOpenShellWorker(config: OpenClawConfig, sandbox: string, optio
 
 async function configureWorkerProfile(sandbox: string, options: WorkerOptions) {
   requireName(sandbox);
-  const profile = options.profile?.trim();
+  const profile = options.workerProfile?.trim();
   if (!profile || ["__proto__", "prototype", "constructor"].includes(profile)) {
-    throw new Error("Supply an exact --profile name.");
+    throw new Error("Supply an exact --worker-profile name.");
   }
   const prepared = await readConfigFileSnapshotForWrite();
   if (!prepared.snapshot.valid) {
@@ -309,7 +309,7 @@ export function registerOpenShellWorkerCli(program: Command, config: OpenClawCon
   worker
     .command("configure <sandbox>")
     .description("Preview or apply a paired-device worker-inference profile on this Gateway")
-    .requiredOption("--profile <id>", "New Gateway worker profile name")
+    .requiredOption("--worker-profile <id>", "New Gateway worker profile name")
     .option("--device <id>", "Optional expected paired device ID; rejects a sandbox mismatch")
     .option("--required", "Require this profile for all sessions; unavailable workers block turns")
     .option("--apply", "Persist the displayed profile; otherwise leave configuration unchanged")
