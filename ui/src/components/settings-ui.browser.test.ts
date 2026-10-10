@@ -6,7 +6,7 @@ import "./settings-save-indicator.ts";
 import startupStyles from "../styles.css?inline";
 
 function drawRadioGroups(
-  container: Element,
+  container: HTMLElement,
   { value = "first", busy = false, disabled = false, expanded = false } = {},
   onChange = vi.fn(),
 ) {
