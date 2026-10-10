@@ -26,6 +26,7 @@ import {
   isPackageActivationComplete,
   resolvePackageActivationAnchor,
   packageActivationIdentity,
+  type PackageActivationRecord,
 } from "./package-update-activation-journal.js";
 import {
   preparePackageActivationJournal,
@@ -220,34 +221,35 @@ type PackageActivationSettlement = {
 export async function settlePendingPackageActivation(
   installKey: string,
   onSettled?: (settlement: PackageActivationSettlement) => void,
+  expectedCompleted?: PackageActivationRecord,
 ) {
   const anchor = resolvePackageActivationAnchor(installKey);
-  if (!fs.existsSync(resolvePackageActivationJournalPath(anchor))) {
+  if (!expectedCompleted && !fs.existsSync(resolvePackageActivationJournalPath(anchor))) {
     return undefined;
   }
   const journal = openPackageActivationJournal(anchor);
   const admission = await journal.readForRecovery();
   const initial = admission.record;
   const complete = isPackageActivationComplete(anchor, initial);
+  if (expectedCompleted && (!complete || !isDeepStrictEqual(initial, expectedCompleted))) {
+    throw new Error("Completed package receipt changed; inspect recovery status before retrying.");
+  }
   if (initial.phase === "rollback-in-progress") {
     throw new Error("Package restoration is unfinished; its rollback owner must finish recovery.");
   }
-  const receipt =
+  const priorSettlement =
     initial.phase === "superseded" && initial.intent && "settled" in initial.intent
+      ? initial.intent
+      : undefined;
+  const receipt =
+    priorSettlement || complete
       ? {
           operationId: initial.descriptor.operationId,
-          reason: initial.intent.kind,
+          reason: priorSettlement?.kind ?? "publication-retired",
           retained: `${anchor}.superseded-${initial.descriptor.operationId}`,
-          detail: initial.intent.detail,
+          detail: priorSettlement?.detail,
         }
-      : complete
-        ? {
-            operationId: initial.descriptor.operationId,
-            reason: "publication-retired",
-            retained: `${anchor}.superseded-${initial.descriptor.operationId}`,
-            detail: undefined,
-          }
-        : undefined;
+      : undefined;
   const originalAuthority = initial.descriptor.authority;
   let currentDatabase: ManagedUpdateLeaseDatabaseIdentity;
   // A recreated file can reuse the lost inode. Keep the recorded loss when

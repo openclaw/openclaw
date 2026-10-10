@@ -297,7 +297,10 @@ from the compatible CLI. Archival failure after durable completion is a warning:
 evidence stays preserved and does not prevent repair finalization or a later update. Retained evidence is not deleted or used as
 authority for later updates. Unfinished operations still require a compatible
 recovery owner. This behavior does not deliver a newer repair implementation to
-an already-blocked older CLI; the first-hop installation limitation remains.
+an already-blocked older CLI. For completed `anchor-retired` history, use the
+[independent helper recovery](/install/updating#recover-a-completed-receipt-with-an-older-updater)
+to preserve the receipt and unblock the original updater without replacing its
+installation. Unfinished recovery retains the first-hop installation limitation.
 
 For a package update stranded by an older updater's launcher ownership checks,
 use the manual installation hop, then repair from the new CLI at the same root:
