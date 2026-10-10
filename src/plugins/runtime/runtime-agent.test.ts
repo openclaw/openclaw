@@ -5,7 +5,6 @@ import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { readWorkspaceStateSnapshot } from "../../agents/workspace-state-store.js";
 import { loadTranscriptEvents } from "../../config/sessions/session-accessor.js";
-import * as sessionEntryReads from "../../config/sessions/session-entry-read-runtime.js";
 import { createGatewaySession } from "../../gateway/session-create-service.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
@@ -771,15 +770,6 @@ describe("plugin runtime session work admission", () => {
 
   it("rejects a session replaced while work waits for lifecycle admission", async () => {
     const runtime = createRuntimeAgent();
-    const initialRead = createDeferred();
-    const readEntry = sessionEntryReads.readSessionEntryReadOnlyInWorker;
-    const read = vi
-      .spyOn(sessionEntryReads, "readSessionEntryReadOnlyInWorker")
-      .mockImplementationOnce(async (...args) => {
-        const entry = await readEntry(...args);
-        initialRead.resolve();
-        return entry;
-      });
     const mutationStarted = createDeferred();
     const releaseMutation = createDeferred();
     const mutation = runExclusiveSessionLifecycleMutation("plugin-create", {
@@ -800,15 +790,10 @@ describe("plugin runtime session work admission", () => {
     await mutationStarted.promise;
 
     const work = runtime.session.runWithWorkAdmission({ storePath, sessionKey }, async () => {});
-    try {
-      await initialRead.promise;
-      releaseMutation.resolve();
-      await mutation;
-      await expect(work).rejects.toMatchObject({ code: "SESSION_WORK_START_CHANGED" });
-    } finally {
-      releaseMutation.resolve();
-      read.mockRestore();
-    }
+    releaseMutation.resolve();
+    await mutation;
+
+    await expect(work).rejects.toMatchObject({ code: "SESSION_WORK_START_CHANGED" });
   });
 
   it("holds admission through the callback and relays lifecycle interruption", async () => {
