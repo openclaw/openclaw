@@ -25,7 +25,27 @@ type MatrixIngressPrefixConfig = {
   logVerboseMessage: (message: string) => void;
   directTracker: Pick<ReturnType<typeof createDirectRoomTracker>, "isDirectMessage">;
   claimInboundReplay: (handle: ReplayClaimHandle) => void;
+  /** Events folded into this one (a held attachment); they share its replay claim. */
+  absorbedEventIds?: readonly string[];
 };
+
+function combineReplayClaims(
+  handles: readonly [ReplayClaimHandle, ...ReplayClaimHandle[]],
+): ReplayClaimHandle {
+  if (handles.length === 1) {
+    return handles[0];
+  }
+  return {
+    keys: [handles[0].keys[0], ...handles.flatMap((handle) => handle.keys).slice(1)],
+    commit: async (options) =>
+      (await Promise.all(handles.map((handle) => handle.commit(options)))).every(Boolean),
+    release: (options) => {
+      for (const handle of handles) {
+        handle.release(options);
+      }
+    },
+  };
+}
 
 export async function readMatrixIngressPrefix(config: MatrixIngressPrefixConfig) {
   const {
@@ -43,6 +63,7 @@ export async function readMatrixIngressPrefix(config: MatrixIngressPrefixConfig)
     logVerboseMessage,
     directTracker,
     claimInboundReplay,
+    absorbedEventIds = [],
   } = config;
   const selfUserId = await client.getUserId();
   if (senderId === selfUserId) {
@@ -86,7 +107,16 @@ export async function readMatrixIngressPrefix(config: MatrixIngressPrefixConfig)
     const claim = await inboundDeduper.claim({ roomId, eventId });
     // Missing identifiers fail open; committed and in-flight events do not.
     if (claim.kind === "claimed") {
-      claimInboundReplay(claim.handle);
+      const handles: [ReplayClaimHandle, ...ReplayClaimHandle[]] = [claim.handle];
+      for (const absorbedEventId of absorbedEventIds) {
+        const absorbed = await inboundDeduper.claim({ roomId, eventId: absorbedEventId });
+        if (absorbed.kind === "claimed") {
+          handles.push(absorbed.handle);
+        }
+      }
+      // Committing or releasing the turn settles every event it carries, so a replay
+      // after an unclean stop cannot resurrect the attachment as its own turn.
+      claimInboundReplay(combineReplayClaims(handles));
     } else if (claim.kind !== "invalid") {
       logVerboseMessage(`matrix: skip duplicate inbound event room=${roomId} id=${eventId}`);
       return undefined;
