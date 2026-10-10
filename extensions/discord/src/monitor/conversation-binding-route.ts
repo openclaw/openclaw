@@ -58,9 +58,10 @@ export async function resolveDiscordConversationBindingRouteAsync(
 
 function applyDiscordBindingRoute(
   params: DiscordConversationBindingRouteParams,
-  runtimeRoute: ReturnType<typeof resolveRuntimeConversationBindingRoute>,
+  resolvedRuntimeRoute: ReturnType<typeof resolveRuntimeConversationBindingRoute>,
   baseRoute: ResolvedAgentRoute | undefined,
 ) {
+  let runtimeRoute = resolvedRuntimeRoute;
   const route = baseRoute ?? runtimeRoute.route;
   if (
     shouldIgnoreStaleDiscordRouteBinding({
