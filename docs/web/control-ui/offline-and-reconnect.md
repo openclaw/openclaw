@@ -68,6 +68,11 @@ stored agent lists cannot establish the current role’s discovery permissions. 
 conversation links use cached routing defaults and session rows before agent
 discovery; the Gateway revalidates the established session after connecting.
 
+Exact conversation links also wait for the scoped cached roster before presenting
+their header. Dashboard layouts restore before the pane renders, and embedded
+HTML widgets keep one loading surface while their board metadata and document
+arrive. Widget requests still require the current Gateway connection.
+
 Boot and roster records retain the existing 30-day expiry, and transcripts keep
 their bounded cache limits. Clearing site data removes local recovery data.
 If browser storage is unavailable or no usable record exists, the connection
@@ -103,6 +108,15 @@ cannot hold a UI update indefinitely. The existing warm-reload credential and
 account checks still decide whether cached conversations may appear. No
 Gateway-rendered private HTML, API responses, or authorization tickets are
 added to this shell cache.
+
+Reloads reuse cached build-versioned fonts, themes, and the web manifest without
+contacting the Gateway. The service worker retains the current build and at most
+two previous builds, so open tabs can still load their original assets. Uploaded
+profile avatars use private browser caching only when the URL matches the image's
+content revision; unversioned URLs and external avatar fallbacks still revalidate.
+Content-addressed plugin interface assets stay in the private browser HTTP cache
+across grant renewal; requests reaching the Gateway still require current plugin
+authorization, and plugin data remains subject to per-call RPC authorization.
 
 Online navigations still go directly to the network so reverse-proxy HTTP
 authentication dialogs work normally. If the browser reports itself online
@@ -289,7 +303,7 @@ the **System · restart recovery** notice shows that outcome and asks you to sen
 message to continue. It does not mean the agent resumed. Messages forwarded from
 other sessions keep their own delivery status next to each message.
 
-Once the Gateway confirms that a message is in the transcript, reconnecting retires its temporary browser copy even when the original message is outside the latest history page. Loading older history shows the saved message in its original position without adding a second copy.
+Once the Gateway confirms that a message is in the transcript, reconnecting retires its temporary browser copy even when the original message is outside the latest history page. Delivery checks also clear confirmed later messages when an earlier unconfirmed message still blocks the queue, so those delivered copies no longer raise sidebar or Inbox attention. This does not retry the uncertain message or send later queued messages out of order. Loading older history shows the saved message in its original position without adding a second copy.
 
 Retiring a delivered attachment does not discard the run's completion. If the browser misses
 that completion, a queue recovery read that confirms the same session and run have finished

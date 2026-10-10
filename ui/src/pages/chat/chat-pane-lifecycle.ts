@@ -577,6 +577,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
       this.state.handleChatDraftChange(this.draft, []);
     }
     this.syncSessionReactions();
+    this.syncRetainedBoardSession(this.resolveBoardView());
   }
 
   override updated(changedProperties: Map<PropertyKey, unknown> = new Map()) {
@@ -599,8 +600,6 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
     this.retireArchivedPresentation();
     this.cancelResetConfirmationForSessionChange();
     this.syncHistoryObserver();
-    const board = this.resolveBoardView();
-    this.syncRetainedBoardSession(board);
     this.sessionPanelToggles.flush();
     this.activeSessionResources.syncPane({
       state: () => this.state,
@@ -623,7 +622,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
         this.state &&
         this.isSlotShown(
           resolveSidebarLayoutForBoard({
-            board,
+            board: this.resolveBoardView(),
             layout: this.state.sidebarLayout,
             paneWidth: this.paneWidth,
           }),
