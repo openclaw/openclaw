@@ -1,31 +1,25 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, test, vi } from "vitest";
+import { captureMethodCall } from "../../../test/helpers/capture-method-call.js";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { managedWorktrees } from "../../agents/worktrees/service.js";
+import { managedWorktrees, ManagedWorktreeService } from "../../agents/worktrees/service.js";
 import type { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import type { executeAgentTurn } from "../../auto-reply/reply/agent-runner-execution.js";
-import { runReplyAgent } from "../../auto-reply/reply/agent-runner-run.js";
-import {
-  clearFollowupQueueForTest,
-  createQueueTestRun,
-} from "../../auto-reply/reply/queue.test-helpers.js";
+import { clearFollowupQueueForTest } from "../../auto-reply/reply/queue.test-helpers.js";
 import { getFollowupQueueDepth } from "../../auto-reply/reply/queue/enqueue.js";
-import type { FollowupRun } from "../../auto-reply/reply/queue/types.js";
 import {
-  createReplyOperation,
   replyRunRegistry,
   type ReplyOperation,
 } from "../../auto-reply/reply/reply-run-registry.js";
-import { prepareReplyToolAuthority } from "../../auto-reply/reply/reply-tool-authority.js";
-import { createTypingController } from "../../auto-reply/reply/typing.js";
 import {
   loadSessionEntry,
   loadTranscriptEventsSync,
 } from "../../config/sessions/session-accessor.js";
 import { getSessionWorkAdmissionRelease } from "../../sessions/session-lifecycle-admission.js";
 import { extractTextFromChatContent } from "../../shared/chat-content.js";
+import { waitForChatAbortControllerRemoval } from "../chat-abort-lifecycle-internal.js";
 import type { ChatAbortControllerEntry } from "../chat-abort.js";
 import {
   controlUiClient,
@@ -49,16 +43,27 @@ vi.mock("../../auto-reply/reply/agent-runner-execution.js", async (importOrigina
 test.for(["accepted", "unavailable", "rejected"] as const)(
   "preserves a prestart steer through workspace preparation when late injection is %s",
   async (injection, { signal }) => {
+    const realDispatch = await vi.importActual<typeof import("../../auto-reply/dispatch.js")>(
+      "../../auto-reply/dispatch.js",
+    );
+    const realReply = await vi.importActual<typeof import("../../auto-reply/reply/get-reply.js")>(
+      "../../auto-reply/reply/get-reply.js",
+    );
     const workspace = await initializeRepository(tempDirs.make("openclaw-prestart-steer-"), "repo");
     testState.agentConfig = { workspace };
     const { storePath } = await createSessionStoreDir();
     const preparingWorkspace = createDeferred();
     const releaseWorkspace = createDeferred();
     const releaseInitialRun = createDeferred();
-    const initialRunStarted = createDeferred();
+    const releaseInitialBackend = createDeferred();
+    const initialRuntimeStarted = createDeferred();
+    const inputQueued = createDeferred();
     const steerAccepted = createDeferred();
+    const steerDeclined = createDeferred();
     const releaseSteerCommit = createDeferred();
     const steerTerminal = createDeferred();
+    const followupStarted = createDeferred();
+    const releaseFollowup = createDeferred();
     const queuedSettled = createDeferred();
     const steerRunId = "prestart-steer-input";
     const steerText = "Steer: include the regression proof.";
@@ -77,7 +82,7 @@ test.for(["accepted", "unavailable", "rejected"] as const)(
           "runId" in payload &&
           payload.runId === steerRunId &&
           "state" in payload &&
-          payload.state !== "delta"
+          (payload.state === "final" || payload.state === "error" || payload.state === "aborted")
         ) {
           terminalBeforeConsumption.push(consumed.length === 0);
           steerTerminal.resolve();
@@ -85,18 +90,59 @@ test.for(["accepted", "unavailable", "rejected"] as const)(
       }),
     };
     const requestOptions = { ...controlUiClient, context };
-    const createWorktree = managedWorktrees.createWithOutcome.bind(managedWorktrees);
+    const createWorktree = captureMethodCall("createWithOutcome")(ManagedWorktreeService.prototype);
     const worktreeSpy = vi
-      .spyOn(managedWorktrees, "createWithOutcome")
-      .mockImplementation(async (params) => {
+      .spyOn(ManagedWorktreeService.prototype, "createWithOutcome")
+      .mockImplementation(async function (this: ManagedWorktreeService, params) {
         preparingWorkspace.resolve();
         await releaseWorkspace.promise;
-        return createWorktree(params);
+        return createWorktree(this, params);
       });
-    runtime.execute.mockImplementation(async ({ followupRun, opts }) => {
-      const runId = expectDefined(opts?.runId, "followup run ID");
-      await expectDefined(followupRun.userTurnTranscriptRecorder, "queued input").persistApproved();
-      consumed.push({ runId, text: followupRun.prompt });
+    runtime.execute.mockImplementation(async ({ followupRun, opts, replyOperation }) => {
+      const runId = expectDefined(opts?.runId, "runtime run ID");
+      if (!initialOperation) {
+        initialOperation = expectDefined(replyOperation, "initial reply admission");
+        initialRuntimeStarted.resolve();
+        await releaseInitialBackend.promise;
+        initialOperation.attachBackend({
+          kind: "embedded",
+          runId,
+          toolAuthorityFingerprint: initialOperation.bindToolAuthorityRoute(followupRun.run),
+          cancel: () => {},
+          messageInjectionV2: {
+            version: 2,
+            isAvailable: () => {
+              if (injection === "unavailable") {
+                steerDeclined.resolve();
+              }
+              return injection !== "unavailable";
+            },
+            queueMessage: async (text, options, assertCurrent) => {
+              assertCurrent();
+              if (injection === "rejected") {
+                steerDeclined.resolve();
+                throw new Error("Runtime declined late steering");
+              }
+              options?.onQueueAccepted?.(true);
+              steerAccepted.resolve();
+              await releaseSteerCommit.promise;
+              assertCurrent();
+              await options?.userTurnTranscriptRecorder?.persistApproved();
+              consumed.push({ runId, text });
+            },
+          },
+        });
+        await releaseInitialRun.promise;
+      } else {
+        opts?.onAgentRunStart?.(runId);
+        await expectDefined(
+          followupRun.userTurnTranscriptRecorder,
+          "queued input",
+        ).persistApproved();
+        consumed.push({ runId, text: followupRun.prompt });
+        followupStarted.resolve();
+        await releaseFollowup.promise;
+      }
       return {
         runId,
         outcome: {
@@ -113,115 +159,27 @@ test.for(["accepted", "unavailable", "rejected"] as const)(
         },
       };
     });
-    // Keep handler admission, workspace preparation, steering, queue draining,
-    // and transcript persistence real; supply only prepared model/runtime facts.
+    // Observe custody without replacing dispatch, reply preparation, or queue policy.
     dispatchInboundMessageMock.mockImplementation(async (raw: unknown) => {
-      const { ctx, cfg, replyOptions } = raw as Parameters<typeof dispatchInboundMessage>[0];
-      const opts = expectDefined(replyOptions, "prepared reply options");
-      const key = expectDefined(ctx.SessionKey, "prepared session key");
-      const entry = expectDefined(
-        loadSessionEntry({ agentId: "main", sessionKey: key, storePath }),
-        "created session",
-      );
-      const base = createQueueTestRun({
-        prompt: expectDefined(ctx.BodyForAgent, "prepared prompt"),
-        messageId: ctx.MessageSid,
-        originatingChannel: "webchat",
-      });
-      const followup: FollowupRun = {
-        ...base,
-        operatorAuthority: opts?.operatorAuthority,
-        abortSignal: opts?.abortSignal,
-        turnAdoptionLifecycle: opts?.turnAdoptionLifecycle,
-        userTurnTranscriptRecorder: opts?.userTurnTranscriptRecorder,
-        queuedFollowupReplyDisposition: {
-          kind: "deliver",
-          deliver: expectDefined(opts.onQueuedFollowupReplyBatch, "queued delivery owner"),
-        },
-        run: {
-          ...base.run,
-          config: cfg,
-          agentId: "main",
-          sessionId: entry.sessionId,
-          sessionKey: key,
-          sessionFile: entry.sessionFile ?? `${workspace}/session.jsonl`,
-          workspaceDir: entry.spawnedCwd ?? workspace,
-          cwd: entry.spawnedCwd,
-          messageProvider: "webchat",
-          chatType: "direct",
-          senderIsOwner: true,
-        },
-      };
-      if (opts?.runId !== steerRunId) {
-        const initialRunId = expectDefined(opts.runId, "initial run ID");
-        await opts?.userTurnTranscriptRecorder?.persistApproved();
-        initialOperation = createReplyOperation({
-          agentId: "main",
-          sessionKey: key,
-          sessionId: entry.sessionId,
-          resetTriggered: false,
-        });
-        initialOperation.bindToolAuthoritySnapshot(prepareReplyToolAuthority(followup));
-        const fingerprint = initialOperation.bindToolAuthorityRoute(followup.run);
-        initialOperation.attachBackend({
-          kind: "embedded",
-          runId: initialRunId,
-          toolAuthorityFingerprint: fingerprint,
-          cancel: () => {},
-          messageInjectionV2: {
-            version: 2,
-            isAvailable: () => injection !== "unavailable",
-            queueMessage: async (text, options, assertCurrent) => {
-              assertCurrent();
-              if (injection === "rejected") {
-                throw new Error("Runtime declined late steering");
-              }
-              options?.onQueueAccepted?.(true);
-              steerAccepted.resolve();
-              await releaseSteerCommit.promise;
-              assertCurrent();
-              await options?.userTurnTranscriptRecorder?.persistApproved();
-              consumed.push({ runId: initialRunId, text });
-            },
-          },
-        });
-        initialOperation.setPhase("running");
-        initialRunStarted.resolve();
-        await releaseInitialRun.promise;
-      } else {
-        await initialRunStarted.promise;
-        const lifecycle = expectDefined(opts.turnAdoptionLifecycle, "queued input lifecycle");
+      const params = raw as Parameters<typeof dispatchInboundMessage>[0];
+      if (params.replyOptions?.runId === steerRunId) {
+        const lifecycle = expectDefined(params.replyOptions.turnAdoptionLifecycle, "input custody");
+        const onDeferred = expectDefined(lifecycle.onDeferred, "queued input admission");
+        lifecycle.onDeferred = () => {
+          const admitted = onDeferred();
+          inputQueued.resolve();
+          return admitted;
+        };
         const onSettled = lifecycle.onSettled;
         lifecycle.onSettled = () => {
           onSettled?.();
           queuedSettled.resolve();
         };
-        await runReplyAgent({
-          commandBody: followup.prompt,
-          followupRun: followup,
-          queueKey: key,
-          resolvedQueue: { mode: "steer", debounceMs: 0, cap: 20, dropPolicy: "summarize" },
-          shouldSteer: true,
-          shouldFollowup: true,
-          isActive: true,
-          isRunActive: () => replyRunRegistry.isActive(key),
-          opts,
-          typing: createTypingController({}),
-          sessionEntry: entry,
-          sessionStore: { [key]: entry },
-          sessionKey: key,
-          storePath,
-          defaultModel: "gpt-test",
-          resolvedVerboseLevel: "off",
-          isNewSession: false,
-          blockStreamingEnabled: false,
-          resolvedBlockStreamingBreak: "text_end",
-          sessionCtx: ctx,
-          shouldInjectGroupIntro: false,
-          typingMode: "never",
-        });
       }
-      return { queuedFinal: false, counts: { block: 0, final: 0, tool: 0 } };
+      return realDispatch.dispatchInboundMessage({
+        ...params,
+        replyResolver: realReply.getReplyFromConfig,
+      });
     });
     try {
       const created = await directSessionReq<{ key: string; runId: string }>(
@@ -255,10 +213,21 @@ test.for(["accepted", "unavailable", "rejected"] as const)(
         requestOptions,
       );
       expect(sent).toMatchObject({ ok: true, payload: { runId: steerRunId, status: "started" } });
+      const steerEntry = expectDefined(
+        context.chatAbortControllers.get(steerRunId),
+        "steer source registration",
+      );
       expect(terminalBeforeConsumption).toEqual([]);
       releaseWorkspace.resolve();
-      await withinTest(Promise.race([steerAccepted.promise, steerTerminal.promise]), signal);
+      await withinTest(inputQueued.promise, signal);
+      // Steering can park before reply preparation reaches the runtime.
+      await withinTest(initialRuntimeStarted.promise, signal);
+      expect(context.chatQueuedTurns.has(steerRunId)).toBe(true);
+      expect(initialOperation?.phase).toBe("running");
+      expect(consumed).toEqual([]);
+      releaseInitialBackend.resolve();
       if (injection === "accepted") {
+        await withinTest(steerAccepted.promise, signal);
         expect(terminalBeforeConsumption).toEqual([]);
         expect(consumed).toEqual([]);
         releaseSteerCommit.resolve();
@@ -267,22 +236,38 @@ test.for(["accepted", "unavailable", "rejected"] as const)(
           { runId: createdSession.runId, text: expect.stringContaining(steerText) },
         ]);
         expect(terminalBeforeConsumption).toEqual([false]);
-        expect(runtime.execute).not.toHaveBeenCalled();
+        expect(runtime.execute).toHaveBeenCalledOnce();
       } else {
-        // Rejected steering retains the existing source-completion contract;
-        // queue custody must still deliver the input after the first run ends.
-        expect(terminalBeforeConsumption).toEqual([true]);
+        await withinTest(steerDeclined.promise, signal);
+        expect(
+          await waitForChatAbortControllerRemoval({
+            entries: context.chatAbortControllers,
+            targets: [{ runId: steerRunId, entry: steerEntry }],
+            timeoutMs: null,
+            signal,
+          }),
+        ).toBe(true);
+        expect(terminalBeforeConsumption).toEqual([]);
         expect(consumed).toEqual([]);
         expect(context.chatQueuedTurns.has(steerRunId)).toBe(true);
         expectDefined(initialOperation, "initial run owner").complete();
         releaseInitialRun.resolve();
-        await withinTest(queuedSettled.promise, signal);
-        expect(runtime.execute).toHaveBeenCalledOnce();
+        await withinTest(followupStarted.promise, signal);
+        expect(runtime.execute).toHaveBeenCalledTimes(2);
         expect(consumed).toEqual([
           { runId: expect.any(String), text: expect.stringContaining(steerText) },
         ]);
         expect(consumed[0]?.runId).not.toBe(createdSession.runId);
         expect(consumed[0]?.runId).not.toBe(steerRunId);
+        expect(terminalBeforeConsumption).toEqual([]);
+        releaseFollowup.resolve();
+        await withinTest(queuedSettled.promise, signal);
+        expect(terminalBeforeConsumption).toEqual([false]);
+        expect(context.broadcast).toHaveBeenCalledWith(
+          "chat",
+          expect.objectContaining({ runId: steerRunId, state: "final" }),
+          expect.objectContaining({ sessionKeys: [sessionKey] }),
+        );
       }
       expect(getFollowupQueueDepth(sessionKey)).toBe(0);
       expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(2);
@@ -311,7 +296,9 @@ test.for(["accepted", "unavailable", "rejected"] as const)(
         identities: [sessionKey],
       });
       releaseWorkspace.resolve();
+      releaseInitialBackend.resolve();
       releaseSteerCommit.resolve();
+      releaseFollowup.resolve();
       if (sessionKey) {
         clearFollowupQueueForTest(sessionKey);
       }
@@ -322,7 +309,7 @@ test.for(["accepted", "unavailable", "rejected"] as const)(
       dispatchInboundMessageMock.mockReset();
       runtime.execute.mockReset();
       if (sessionKey) {
-        const owned = managedWorktrees.findLiveByOwner("session", sessionKey);
+        const owned = await managedWorktrees.findLiveByOwner("session", sessionKey);
         if (owned) {
           await managedWorktrees.remove({
             id: owned.id,

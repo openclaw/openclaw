@@ -34,7 +34,7 @@ import { renderLibraryPinRead } from "../skills/library-detail.ts";
 import { refreshCurrentChatSessionList } from "./chat-session.ts";
 import { patchChatSessionSettings } from "./chat-settings-patches.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
-import type { CapabilityMenuProps } from "./components/chat-composer-types.ts";
+import type { ChatComposerCapabilityMenuProps } from "./components/chat-composer-plus-menu.ts";
 import {
   ComposerSkillCatalog,
   composerWebSearchBaseEnabled,
@@ -48,11 +48,10 @@ type ComposerMcpServerScope = "session" | "everywhere";
 function activeConfigFingerprint(snapshot: ConfigSnapshot | null): string {
   const revision =
     snapshot?.appliedConfigHash ?? snapshot?.configRevisionHash ?? snapshot?.hash ?? null;
-  if (revision) {
-    return revision;
-  }
   // Without a revision hash, connector edits still invalidate the effective tools.
-  return JSON.stringify(asRecord(asRecord(snapshot?.runtimeConfig)?.mcp)?.servers ?? null);
+  return (
+    revision || JSON.stringify(asRecord(asRecord(snapshot?.runtimeConfig)?.mcp)?.servers ?? null)
+  );
 }
 
 export class ChatComposerCapabilityHost {
@@ -72,21 +71,6 @@ export class ChatComposerCapabilityHost {
   constructor(private readonly notify: () => void) {
     this.skillCatalog = new ComposerSkillCatalog(notify);
     this.library = new ComposerLibrarySession(notify);
-  }
-
-  private loadSkills(context: ApplicationContext, state: ChatPageHost, agentId: string): void {
-    const config = context.runtimeConfig.state;
-    if (!config.configSnapshot && !config.configLoading) {
-      void context.runtimeConfig.ensureLoaded().catch(() => undefined);
-    }
-    const client = state.client;
-    const connectionEpoch = state.connectionEpoch;
-    this.skillCatalog.load(
-      client,
-      connectionEpoch,
-      agentId,
-      () => state.connected && state.client === client && state.connectionEpoch === connectionEpoch,
-    );
   }
 
   private effectiveToolsKeys(
@@ -465,7 +449,7 @@ export class ChatComposerCapabilityHost {
     agentId: string,
     toolAccessOpen = false,
     skillsOpen = false,
-  ): CapabilityMenuProps {
+  ): ChatComposerCapabilityMenuProps {
     if (this.client !== state.client || this.connectionEpoch !== state.connectionEpoch) {
       this.client = state.client;
       this.connectionEpoch = state.connectionEpoch;
@@ -602,7 +586,19 @@ export class ChatComposerCapabilityHost {
         if (!current()) {
           return;
         }
-        this.loadSkills(context, state, agentId);
+        const config = context.runtimeConfig.state;
+        if (!config.configSnapshot && !config.configLoading) {
+          void context.runtimeConfig.ensureLoaded().catch(() => undefined);
+        }
+        const skillClient = state.client;
+        const skillEpoch = state.connectionEpoch;
+        this.skillCatalog.load(
+          skillClient,
+          skillEpoch,
+          agentId,
+          () =>
+            state.connected && state.client === skillClient && state.connectionEpoch === skillEpoch,
+        );
         void this.library.load(true);
       },
       onPatchToolOverrides: (next) => void this.patch(context, state, next),

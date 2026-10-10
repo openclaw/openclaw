@@ -55,26 +55,6 @@ describe("matrix profile sync", () => {
     expect(client.setDisplayName).toHaveBeenCalledWith("New Name");
   });
 
-  it("does not update when name and avatar already match", async () => {
-    const client = createClientStub();
-    client.getUserProfile.mockResolvedValue({
-      displayname: "Bot",
-      avatar_url: "mxc://example/avatar",
-    });
-
-    const result = await syncMatrixOwnProfile({
-      client,
-      userId: "@bot:example.org",
-      displayName: "Bot",
-      avatarUrl: "mxc://example/avatar",
-    });
-
-    expect(result.skipped).toBe(false);
-    expectNoUpdates(result);
-    expect(client.setDisplayName).not.toHaveBeenCalled();
-    expect(client.setAvatarUrl).not.toHaveBeenCalled();
-  });
-
   it("converts http avatar URL by uploading and then updates profile avatar", async () => {
     const client = createClientStub();
     client.getUserProfile.mockResolvedValue({

@@ -62,7 +62,7 @@ run_log="$(docker_e2e_run_log npm-onboard-channel-agent)"
 OPENCLAW_TEST_STATE_SCRIPT_B64="$(docker_e2e_test_state_shell_b64 npm-onboard-channel-agent empty)"
 
 echo "Running npm tarball onboard/channel/agent Docker E2E ($CHANNEL)..."
-if ! docker_e2e_run_with_harness \
+if docker_e2e_run_with_harness \
   -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
   -e OPENCLAW_NPM_ONBOARD_CHANNEL="$CHANNEL" \
   -e OPENCLAW_NPM_ONBOARD_USE_SOURCE_PLUGIN_PACKAGE="$USE_SOURCE_PLUGIN_PACKAGE" \
@@ -155,7 +155,7 @@ dump_debug_logs() {
     "$OPENCLAW_HOME/.openclaw/openclaw.json" \
     "$OPENCLAW_HOME/.openclaw/agents/main/agent/auth-profiles.json"
 }
-trap 'status=$?; dump_debug_logs "$status"; exit "$status"' ERR
+openclaw_e2e_enable_failure_diagnostics
 
 required_plugins='["@openclaw/codex"]'
 if [ "${OPENCLAW_NPM_ONBOARD_USE_SOURCE_PLUGIN_PACKAGE:-0}" = "1" ] && [ "$CHANNEL" != "telegram" ]; then
@@ -289,8 +289,9 @@ echo "Installed CLI execution identity survived Gateway restart with private fix
 
 echo "npm tarball onboard/channel/agent Docker E2E passed for $CHANNEL"
 EOF
+  echo "npm tarball onboard/channel/agent Docker E2E passed ($CHANNEL)"
+else
+  status=$?
   docker_e2e_print_log "$run_log"
-  exit 1
+  exit "$status"
 fi
-
-echo "npm tarball onboard/channel/agent Docker E2E passed ($CHANNEL)"

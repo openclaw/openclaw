@@ -79,14 +79,50 @@ For multiple bots, put account-specific values under
 `channels.x.accounts.<accountId>`. Root fields are shared defaults; the default
 account ID is `default`.
 
+## Public work sessions
+
+Set `channels.x.accounts.<accountId>.autoPublishWorkSessions: true` (or the
+shared root default `channels.x.autoPublishWorkSessions`) to publish fresh,
+isolated visible work sessions spawned directly by admitted maintainer mentions.
+Guest mentions remain limited to hidden helpers and cannot publish work sessions.
+This is **off by default**. It exposes that child's conversation to anonymous readers
+at the same canonical `/chat` link; it does not change Team collaboration rights.
+Only enable it for an agent whose work is intended to be public.
+
+Publication requires a configured **app-only** `bearerToken`. Before admission,
+the plugin looks up every post included in the supplied thread context using
+application-only authentication and requires explicit `protected: false`
+author metadata. Missing, edited, protected, withheld, or unavailable posts and
+failed lookups deny automatic publication. A permalink or successful
+user-context lookup is not proof of a public audience. Verification reads share
+the account's X API budget; insufficient budget denies publication without
+bypassing the cost limits.
+
+The permission belongs only to that incoming invocation: it is not stored on
+the X conversation, inherited by grandchildren, or accepted in model-authored
+spawn arguments. Forks, private/draft sessions, incognito sessions, and existing
+sessions cannot be automatically published. Changing the account configuration
+or allowlist retires in-flight publication authority. The creation owner commits
+the public grant with the child before its first turn, and the spawn receipt
+reports `publicRead` only for the committed grant. Links without that receipt
+are labeled as requiring sign-in. This lane requires the live in-process Gateway;
+it does not downgrade to a transport that loses the invocation's authority.
+
+Manual publication remains governed by the existing creator/administrator
+sharing controls. No X identity is promoted to a Team profile or administrator.
+
 ## Manage the allowlist
 
 Open **X replies** in the Control UI as an administrator. The page shows the
-effective union of config `allowFrom` entries and users added through the page.
+effective union of config `allowFrom` entries, users added through the page, and
+GitHub-derived users when [GitHub verification](/channels/x#verify-github-collaborators)
+is configured.
 Add a username to resolve it to a stable numeric X user ID. Stored entries retain
 the resolved username, display name, adding operator, and timestamp. Remove a
 stored entry from the page; config entries are read-only and must be removed
-from config.
+from config. The **From GitHub** section is also read-only and shows each X
+handle, its source GitHub login, repository permission, and last sync time.
+Removing a stored entry does not revoke access granted by another source.
 
 The page also shows this account's estimated X API spend for today and the
 current billing cycle against its limits. Select **Refresh** to update the
@@ -107,6 +143,106 @@ in `allowFrom`.
 `groupPolicy: "disabled"` turns off all inbound turns. `dmPolicy` accepts only
 `disabled`.
 
+## Verify GitHub collaborators
+
+Set `verifiedFromGitHub.repo` to grant the verified maintainer tier to people
+with write access to a GitHub repository who declare an X account on their
+GitHub profile. This is **off by default**. Derived numeric X user IDs join
+config `allowFrom` and administrator-managed entries; they receive the same
+maintainer sessions, tools, and reply behavior.
+
+```json5
+{
+  channels: {
+    x: {
+      verifiedFromGitHub: {
+        repo: "openclaw/openclaw",
+        minPermission: "push",
+        refreshMinutes: 60,
+        token: { source: "env", provider: "default", id: "X_GITHUB_TOKEN" },
+      },
+    },
+  },
+}
+```
+
+These settings inherit from `channels.x` into each account, with per-field
+account overrides. `repo` uses `owner/name` format. `minPermission` accepts
+`push` (write, maintain, or admin), `maintain` (maintain or admin), or `admin`.
+The refresh interval defaults to 60 minutes and cannot be shorter than 15.
+
+The X plugin uses its configured GitHub token for read-only REST calls to
+`api.github.com`. The existing GitHub tools identity does not expose a shared
+authenticated REST client, so configuring `tools.github` alone does not provide
+this credential. Set `token` to a [SecretRef](/gateway/secrets) available to the
+Gateway. The credential must be able to list all collaborators on the selected
+repository, including their permissions, and read public user profiles and
+social accounts. For a fine-grained token, grant access to that repository and
+**Metadata: read**; organization policies may also require approval or SSO
+authorization. A credential that cannot list collaborators produces a visible
+sync error instead of silently treating the repository as empty.
+
+A plugin service syncs on startup and at the configured interval. It paginates
+all collaborators, filters by repository permission, and reads each eligible
+GitHub profile's `twitter_username` and Twitter/X social-account links. Multiple
+valid declarations are combined and duplicate handles are removed. Bare handles,
+`@handles`, and X/Twitter profile URLs are accepted. It resolves declared handles
+to numeric X IDs in batches of up to 100
+using the account's existing X API client and budget. Each returned user costs
+**$0.01**. Handle-to-ID caching avoids repeated paid lookups for unchanged
+handles. Unresolvable handles are skipped, cached, and shown in status. To retry
+an unchanged unresolved declaration, remove it for a sync and then add it back,
+or change the declaration. GitHub profile caching uses ETags where available
+and lasts for the running service's lifetime.
+
+Derived entries and the handle-resolution cache live in worker-backed plugin keyed state under
+`x.verified-github`. A successful sync replaces the derived set. Losing the
+required repository permission or removing the declared handle removes that
+entry at the next successful sync. Removals use the existing allowlist
+revocation fence, invalidating in-flight authorization. Other allowlist sources
+still apply. A failed sync keeps the last good set, marks it stale, and logs
+once per failure streak; it does not revoke everyone during a GitHub outage.
+Successful paid lookup batches are cached even if a later batch fails, so the
+next sync can finish without paying again for those users. Unchanged refreshes
+and stale-status updates preserve in-flight authorization.
+
+Channel status includes `verifiedFromGitHub` with `repo`, `entries`,
+`unresolvedHandles`, `lastSyncAt`, and `stale`. The **From GitHub** section on
+**X replies** shows the same source attribution and freshness. Page **Refresh**
+reloads the current snapshot; the plugin service owns synchronization.
+
+### Trust model
+
+The GitHub account owner declares the X handle and already has write access
+to the repository. Mapping that account to the verified tier adds no meaningful
+power within this trust model. The residual risk is a collaborator declaring
+an X handle they do not own. Administrators can inspect the source GitHub login
+for every derived entry on **X replies**. Revoking the collaborator's repository
+access or removing the profile declaration removes the derived entry on the
+next successful sync, subject to the last-good-set behavior during failures.
+
+The host authorizes the resolved numeric X ID, never a handle supplied in a
+post or by the model. The sender line records the source, for example:
+
+```text
+This is from a verified user: @example (Example), X user id 123, GitHub @example-dev with write access to openclaw/openclaw.
+```
+
+### Enable yourself
+
+1. Sign in to the GitHub account that has the required repository permission.
+2. Open **Settings → Public profile**.
+3. Add your X handle to the **Twitter username** field, or add your
+   `https://x.com/your_handle` profile URL under **Social accounts**.
+4. Save your profile and wait for the next sync (60 minutes by default).
+5. Mention the X bot from that X account. An administrator can confirm your
+   mapping in **X replies → From GitHub**.
+
+Without a declared, resolvable X handle, repository access alone cannot map
+you to an X account. You can also ask an administrator to add your X account
+manually. To remove the derived mapping, remove the declaration from your
+GitHub profile or have your repository permission revoked.
+
 ## Guest mode
 
 Guest mode lets people outside the maintainer allowlist ask repository questions.
@@ -124,12 +260,23 @@ For an explicitly configured account, the switch writes that account's override;
 otherwise it writes `channels.x.guests.enabled`. Account overrides inherit the
 other guest settings from the channel root.
 
-Guests receive only the core `read` and `ls` tools, further restricted by the
-agent's normal policy. They cannot edit files, run commands, browse or fetch the
-web, use memory, send messages, inspect other sessions, or create work sessions.
-Subagents, `sessions_spawn`, and `sessions_yield` are currently excluded. The
-optional `guests.tools.allow` can narrow access to `read`, `ls`, or neither;
-`guests.tools.deny` takes precedence. It cannot add stronger tools.
+Guests receive the core `read`, `ls`, `sessions_spawn`, `sessions_yield`, and
+`subagents` tools, further restricted by the agent's normal policy. They can
+start hidden helpers of the same agent. Helpers inherit the guest's restricted
+tools and repository root; they cannot become visible work sessions or target
+another agent. `sessions_yield` waits for helper completion, and `subagents`
+lists, waits for, or cancels helpers.
+
+Guests cannot edit files, run commands, browse or fetch the web, use memory,
+send messages, or inspect unrelated sessions. The optional `guests.tools.allow`
+can narrow the five default tools; an empty array disables all tools.
+`guests.tools.deny` takes precedence. Neither setting can add stronger tools.
+
+Hidden helpers require a host that advertises enforcement of these restrictions.
+Older hosts keep the `read` and `ls` defaults, even when they report the same
+OpenClaw version. The X replies settings page shows upgrade guidance when helper
+support is missing. Explicitly selecting only helper tools on an older host
+disables all guest tools; it does not restore the default read tools.
 
 Each guest mention gets a separate channel session and the quoted X thread
 context. It does not reuse a maintainer's conversation history, permission mode,
@@ -163,6 +310,21 @@ when that setting is absent or false, skills are enabled, or sandbox mode is
 active. Channel status reports the required correction as
 `guestModeBlockedReason`; maintainer mentions continue normally.
 
+Guest mode also requires a queue mode that cannot steer or interrupt an active
+turn. Set the channel override before enabling guests:
+
+```json5
+{
+  messages: { queue: { byChannel: { x: "followup" } } },
+}
+```
+
+`collect` is also supported. Without a channel override, `messages.queue.mode`
+must be `followup` or `collect`; the default `steer` and explicit `interrupt`
+block guest admission before thread expansion. The **X replies** page shows
+the required setting in its existing guest-readiness message. Changing the
+queue mode back to either unsafe value blocks subsequent guest mentions.
+
 Core owns path and symlink containment and rejects reads outside the session
 root with `Path escapes sandbox root`. Keep guest channel sessions in their
 initial permissions: do not grant full permission, widen their session root,
@@ -194,8 +356,8 @@ and each reply post are billed normally; a guest citation URL receives X's
 higher URL-containing reply price. The author quota is not a dollar budget.
 
 **Security:** the host determines the tier only from X's numeric `author_id`
-against the effective union of configured and administrator-managed allowlist
-entries. Handles, display names, post text, and model output never grant
+against the effective union of configured, administrator-managed, and
+GitHub-derived allowlist entries. Handles, display names, post text, and model output never grant
 maintainer access. Every agent-facing turn starts with a host-generated sender
 line; all thread posts below it are quoted data. Removing a maintainer from the
 allowlist makes subsequent mentions guests when guest mode is on.
@@ -277,8 +439,10 @@ per post; each URL counts as 23 characters. The last chunk receives
 empty string to disable the signature.
 
 When a maintainer turn starts a visible work session, its first session URL is appended
-to the reply unless the text already contains that URL. This is a public link
-in a public reply and uses X's URL-containing reply price.
+to the reply unless the text already contains that URL. The canonical link is
+publicly readable only when the creation receipt confirms publication; otherwise
+it is labeled "Work session (sign-in required)." Both use X's URL-containing
+reply price.
 
 For direct replies through the message tool or CLI, target the post ID with an
 `x:` prefix or its full X status URL:
@@ -375,33 +539,38 @@ configured usernames alone cannot authorize a reply.
 
 These fields work at `channels.x` and on individual account entries unless noted.
 
-| Field                               | Default              | Purpose                                                                 |
-| ----------------------------------- | -------------------- | ----------------------------------------------------------------------- |
-| `enabled`                           | `true`               | Enables the channel or account.                                         |
-| `name`                              | Unset                | Optional account display name.                                          |
-| `userId`                            | Required             | Numeric user ID of the bot account.                                     |
-| `username`                          | Required             | Bot username without `@`.                                               |
-| `clientId`                          | Required             | OAuth2 confidential application client ID.                              |
-| `clientSecret`                      | Required             | Application secret; supports SecretRef.                                 |
-| `refreshToken`                      | Required             | Bot's user-context OAuth2 refresh token; supports SecretRef.            |
-| `bearerToken`                       | Unset                | App-only Activity API bearer token; supports SecretRef.                 |
-| `events.mode`                       | `auto`               | `auto`, `stream`, or `poll`.                                            |
-| `events.pollSeconds`                | `60`                 | Mentions polling interval, minimum 15 seconds.                          |
-| `allowFrom`                         | `[]`                 | Numeric author IDs, optionally prefixed with `x:`.                      |
-| `groupPolicy`                       | `allowlist`          | `allowlist`, `open`, or `disabled`.                                     |
-| `dmPolicy`                          | `disabled`           | Only `disabled` is accepted.                                            |
-| `threadContext.maxPosts`            | `50`                 | Maximum posts included in agent thread context, from 2 to 100.          |
-| `guests.enabled`                    | `false`              | Enables repository-only answers for non-allowlisted authors.            |
-| `guests.maxMentionsPerAuthorPerDay` | `5`                  | Per-author, per-account UTC-day limit, from 0 to 1000.                  |
-| `guests.threadContextMaxPosts`      | `10`                 | Guest thread context cap, from 2 to 100 posts.                          |
-| `guests.tools.allow`                | `["read", "ls"]`     | Narrows the read-only guest tools; an empty array disables all tools.   |
-| `guests.tools.deny`                 | `[]`                 | Further denies guest tools; deny wins.                                  |
-| `costLimits.dailyUsd`               | `100`                | Maximum estimated X API spend per UTC day; `0` blocks paid calls.       |
-| `costLimits.monthlyUsd`             | `1000`               | Maximum estimated X API spend per billing cycle; `0` blocks paid calls. |
-| `costLimits.cycleStartDay`          | `1`                  | UTC billing-cycle start day of the month, from 1 to 28.                 |
-| `replySignature`                    | `🤖 automated reply` | Added to the last reply chunk; up to 140 characters, empty disables it. |
-| `accounts`                          | Unset                | Named account overrides; channel root only.                             |
-| `defaultAccount`                    | `default`            | Account selected when none is specified; channel root only.             |
+| Field                               | Default                 | Purpose                                                                           |
+| ----------------------------------- | ----------------------- | --------------------------------------------------------------------------------- |
+| `enabled`                           | `true`                  | Enables the channel or account.                                                   |
+| `name`                              | Unset                   | Optional account display name.                                                    |
+| `userId`                            | Required                | Numeric user ID of the bot account.                                               |
+| `username`                          | Required                | Bot username without `@`.                                                         |
+| `clientId`                          | Required                | OAuth2 confidential application client ID.                                        |
+| `clientSecret`                      | Required                | Application secret; supports SecretRef.                                           |
+| `refreshToken`                      | Required                | Bot's user-context OAuth2 refresh token; supports SecretRef.                      |
+| `bearerToken`                       | Unset                   | App-only bearer for Activity and public-context verification; supports SecretRef. |
+| `autoPublishWorkSessions`           | `false`                 | Publish fresh visible work sessions for verified-public maintainer mentions.      |
+| `events.mode`                       | `auto`                  | `auto`, `stream`, or `poll`.                                                      |
+| `events.pollSeconds`                | `60`                    | Mentions polling interval, minimum 15 seconds.                                    |
+| `allowFrom`                         | `[]`                    | Numeric author IDs, optionally prefixed with `x:`.                                |
+| `verifiedFromGitHub.repo`           | Unset (off)             | Repository whose collaborators can become verified, in `owner/name` form.         |
+| `verifiedFromGitHub.minPermission`  | `push`                  | Minimum repository permission: `push`, `maintain`, or `admin`.                    |
+| `verifiedFromGitHub.refreshMinutes` | `60`                    | Sync interval in minutes, minimum 15.                                             |
+| `verifiedFromGitHub.token`          | Unset                   | GitHub read credential; supports SecretRef.                                       |
+| `groupPolicy`                       | `allowlist`             | `allowlist`, `open`, or `disabled`.                                               |
+| `dmPolicy`                          | `disabled`              | Only `disabled` is accepted.                                                      |
+| `threadContext.maxPosts`            | `50`                    | Maximum posts included in agent thread context, from 2 to 100.                    |
+| `guests.enabled`                    | `false`                 | Enables repository-only answers for non-allowlisted authors.                      |
+| `guests.maxMentionsPerAuthorPerDay` | `5`                     | Per-author, per-account UTC-day limit, from 0 to 1000.                            |
+| `guests.threadContextMaxPosts`      | `10`                    | Guest thread context cap, from 2 to 100 posts.                                    |
+| `guests.tools.allow`                | Host-supported defaults | Narrows the default guest tools; an empty array disables all tools.               |
+| `guests.tools.deny`                 | `[]`                    | Further denies guest tools; deny wins.                                            |
+| `costLimits.dailyUsd`               | `100`                   | Maximum estimated X API spend per UTC day; `0` blocks paid calls.                 |
+| `costLimits.monthlyUsd`             | `1000`                  | Maximum estimated X API spend per billing cycle; `0` blocks paid calls.           |
+| `costLimits.cycleStartDay`          | `1`                     | UTC billing-cycle start day of the month, from 1 to 28.                           |
+| `replySignature`                    | `🤖 automated reply`    | Added to the last reply chunk; up to 140 characters, empty disables it.           |
+| `accounts`                          | Unset                   | Named account overrides; channel root only.                                       |
+| `defaultAccount`                    | `default`               | Account selected when none is specified; channel root only.                       |
 
 ## Troubleshooting
 
@@ -409,6 +578,13 @@ These fields work at `channels.x` and on individual account entries unless noted
 The dropped-mention counter and last dropped author explain intentional silence.
 There is no pairing flow. An empty allowlist blocks all authors under the
 default policy.
+
+**GitHub verification is stale:** inspect `verifiedFromGitHub` in channel status
+and **X replies → From GitHub** for the last successful sync and error. Confirm
+the token can list collaborators, its repository access is approved, and the
+X API budget permits new handle lookups. The last good set remains active until
+a successful sync. For an unresolved handle, check the collaborator's public
+GitHub profile and that the X account exists.
 
 **Streaming falls back:** check the status message for the Activity endpoint,
 HTTP status, and X error detail. Verify the app bearer and the bot's OAuth2

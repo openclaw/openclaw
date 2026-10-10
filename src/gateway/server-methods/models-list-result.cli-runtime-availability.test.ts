@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
+import {
+  createModelCatalogDecisions,
+  prepareModelCatalogDecisions,
+} from "../../agents/model-catalog-decisions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   clearUserProfileAuthLink,
@@ -8,10 +12,7 @@ import {
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { loadDeferredCatalog } from "../server-model-catalog-auth.js";
-import {
-  buildModelsListResult,
-  createGatewayAgentModelCatalogProjector,
-} from "./models-list-result.js";
+import { buildModelsListResult } from "./models-list-result.js";
 import {
   createModelsListTestContext,
   listModels,
@@ -110,6 +111,30 @@ describe("models.list CLI runtime availability", () => {
     },
   );
 
+  it("keeps every Claude CLI model listed as needing login before the full catalog arrives", async () => {
+    const pinned = ["claude-fable-5", "claude-opus-5", "claude-sonnet-5"];
+    const result = await listModels({
+      catalog: [...pinned, "claude-haiku-4-5"].map((id) => providerCatalogEntry("anthropic", id)),
+      cfg: {
+        agents: {
+          defaults: {
+            model: { primary: "anthropic/claude-opus-5" },
+            models: Object.fromEntries(
+              pinned.map((id) => [`anthropic/${id}`, { agentRuntime: { id: "claude-cli" } }]),
+            ),
+          },
+        },
+      },
+      view: "configured",
+      includeDefaultModels: false,
+    });
+    expect(
+      result.models
+        .map(({ id, available, unavailableReason }) => ({ id, available, unavailableReason }))
+        .toSorted((left, right) => left.id.localeCompare(right.id)),
+    ).toEqual(pinned.map((id) => ({ id, available: false, unavailableReason: "missing-auth" })));
+  });
+
   it.each([
     { selection: "default", expired: false, sharedOrder: false },
     { selection: "draft", expired: false, sharedOrder: true },
@@ -176,7 +201,7 @@ describe("models.list CLI runtime availability", () => {
             params: { view: "configured", preparedOnly: true },
             preloadedCatalog: { agentId: "main", config: cfg, snapshot },
             preloadedOnly: true,
-            catalogProjector: createGatewayAgentModelCatalogProjector({
+            catalogProjector: await prepareModelCatalogDecisions({
               cfg,
               agentId: "main",
               agentDir: state.agentDir(),
@@ -284,7 +309,7 @@ describe("models.list CLI runtime availability", () => {
           params: { view: "all", preparedOnly: true },
           preloadedCatalog: { agentId: "main", config: cfg, snapshot },
           preloadedOnly: true,
-          catalogProjector: createGatewayAgentModelCatalogProjector({
+          catalogProjector: createModelCatalogDecisions({
             cfg,
             agentId: "main",
             agentDir: state.agentDir(),

@@ -118,9 +118,9 @@ export function buildFamilyForwardCompatModel(
     id: modelId,
     name: modelId,
     ...patch,
-    cost: patch?.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: patch?.contextWindow ?? DEFAULT_CONTEXT_TOKENS,
-    maxTokens: patch?.maxTokens ?? DEFAULT_CONTEXT_TOKENS,
+    cost: patch.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: patch.contextWindow ?? DEFAULT_CONTEXT_TOKENS,
+    maxTokens: patch.maxTokens ?? DEFAULT_CONTEXT_TOKENS,
     // SAFETY: Synthesis patches supply api/provider/baseUrl/reasoning/input; defaults above are host-owned.
   } as ProviderRuntimeModel);
 }

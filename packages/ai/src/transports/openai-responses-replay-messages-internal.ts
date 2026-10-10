@@ -36,6 +36,7 @@ import {
   type ReplayableResponseOutputMessage,
   type ReplayableResponseReasoningItem,
 } from "./openai-responses-contracts.js";
+import { supportsNativeOpenAIResponsesEndpoint } from "./openai-responses-endpoint.js";
 import { createResponsesInputReplay } from "./openai-responses-input-replay.js";
 import { resolveReplayableResponsesMessageId } from "./openai-responses-replay.js";
 import {
@@ -44,10 +45,7 @@ import {
   providerReplayContextMatches,
   type ProviderReplayContext,
 } from "./provider-replay-context.js";
-import {
-  sanitizeNonEmptyTransportPayloadText,
-  sanitizeTransportPayloadText,
-} from "./transport-stream-shared.js";
+import { sanitizeTransportPayloadText } from "./transport-stream-shared.js";
 
 function resolveResponsesInstructionRole(model: Model): "developer" | "system" {
   const supportsDeveloperRole =
@@ -382,6 +380,7 @@ function convertResponsesMessagesWithStyle(
   }
   let msgIndex = 0;
   const appendAssistant = createResponsesInputReplay(model);
+  const inHistorySystemUpdates = supportsNativeOpenAIResponsesEndpoint(model);
   for (const msg of replayMessages) {
     if (!("role" in msg)) {
       messages.push(msg);
@@ -397,33 +396,33 @@ function convertResponsesMessagesWithStyle(
         ]),
       );
     } else if (msg.role === "user") {
-      if (typeof msg.content === "string") {
-        messages.push(
-          buildResponsesInputMessage(
-            "user",
-            [{ type: "input_text", text: sanitizeTransportPayloadText(msg.content) }],
-            msg,
-          ),
-        );
-      } else {
-        const content = (
-          msg.content.map((item) =>
-            item.type === "text"
-              ? { type: "input_text", text: sanitizeTransportPayloadText(item.text) }
-              : {
-                  type: "input_image",
-                  detail: "auto",
-                  image_url: `data:${item.mimeType};base64,${item.data}`,
-                },
-          ) as ResponseInputMessageContentList
-        ).filter(
-          (item) => providerStyle || model.input.includes("image") || item.type !== "input_image",
-        );
-        if (content.length > 0) {
-          messages.push(buildResponsesInputMessage("user", content, msg));
-        } else if (providerStyle) {
-          continue;
-        }
+      const role =
+        msg.operatorMessage &&
+        inHistorySystemUpdates &&
+        (typeof msg.content === "string" || msg.content.every((block) => block.type === "text"))
+          ? resolveResponsesInstructionRole(model)
+          : "user";
+      const content: ResponseInputMessageContentList =
+        typeof msg.content === "string"
+          ? [{ type: "input_text", text: sanitizeTransportPayloadText(msg.content) }]
+          : (
+              msg.content.map((item) =>
+                item.type === "text"
+                  ? { type: "input_text", text: sanitizeTransportPayloadText(item.text) }
+                  : {
+                      type: "input_image",
+                      detail: "auto",
+                      image_url: `data:${item.mimeType};base64,${item.data}`,
+                    },
+              ) as ResponseInputMessageContentList
+            ).filter(
+              (item) =>
+                providerStyle || model.input.includes("image") || item.type !== "input_image",
+            );
+      if (content.length > 0) {
+        messages.push(buildResponsesInputMessage(role, content, msg));
+      } else if (providerStyle) {
+        continue;
       }
     } else if (msg.role === "assistant") {
       const output: ResponseInput = [];
@@ -540,8 +539,7 @@ function convertResponsesMessagesWithStyle(
       }
     } else if (msg.role === "toolResult") {
       const textResult = extractToolResultText(msg.content);
-      const sanitizedTextResult = sanitizeTransportPayloadText(textResult);
-      const hasText = sanitizedTextResult.trim().length > 0;
+      const hasText = textResult.trim().length > 0;
       const mediaPlaceholder = describeToolResultMediaPlaceholder(msg.content);
       const hasImages = msg.content.some(isImageWithMediaPayload);
       const separatorIndex = msg.toolCallId.indexOf("|");
@@ -554,7 +552,7 @@ function convertResponsesMessagesWithStyle(
           hasImages && model.input.includes("image")
             ? ([
                 ...(hasText
-                  ? [{ type: "input_text", text: sanitizedTextResult }]
+                  ? [{ type: "input_text", text: textResult }]
                   : mediaPlaceholder === "(see attached media)"
                     ? [{ type: "input_text", text: mediaPlaceholder }]
                     : []),
@@ -564,7 +562,9 @@ function convertResponsesMessagesWithStyle(
                   image_url: `data:${item.mimeType};base64,${item.data}`,
                 })),
               ] as ResponseFunctionCallOutputItemList)
-            : sanitizeNonEmptyTransportPayloadText(textResult, mediaPlaceholder ?? "(no output)"),
+            : hasText
+              ? textResult
+              : (mediaPlaceholder ?? "(no output)"),
       });
     }
     msgIndex += 1;

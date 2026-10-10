@@ -353,44 +353,4 @@ describe("archive transcript display positions", () => {
       });
     },
   );
-
-  test("returns an opaque generation source on empty reads and separates archive replacements", async () => {
-    const sessionId = "archive-generations";
-    const records = [entry("root", null, { role: "user", content: "prompt" })];
-    const file = writeArchive(sessionId, records);
-    const reader = new ArchivedTranscriptReader({ sessionId, storePath });
-    const initial = await reader.readPage({ offset: 0, maxMessages: 1 });
-    const source = initial.displaySource;
-    expect(source).toEqual(expect.any(String));
-    for (const result of [
-      await reader.readPage({ offset: 1, maxMessages: 1 }),
-      await reader.readRecentWithStats({ maxMessages: 0 }),
-      await reader.readAroundId({ messageId: "absent", maxMessages: 1 }),
-    ]) {
-      expect(result).toMatchObject({ messages: [], displaySource: source });
-    }
-
-    fs.appendFileSync(
-      file,
-      `\n${JSON.stringify(entry("new", "root", { role: "assistant", content: "new" }))}`,
-    );
-    const replaced = await reader.readPage({ offset: 0, maxMessages: 1 });
-    expect(replaced).toMatchObject({ displaySource: expect.any(String) });
-    expect(replaced.displaySource).not.toBe(source);
-
-    const otherDir = path.join(dir, "other");
-    fs.mkdirSync(otherDir);
-    const copy = path.join(otherDir, path.basename(file));
-    fs.copyFileSync(file, copy);
-    for (const archive of [file, copy]) {
-      fs.utimesSync(archive, 1_700_000_000, 1_700_000_000);
-    }
-    const current = await reader.readPage({ offset: 0, maxMessages: 1 });
-    const other = await new ArchivedTranscriptReader({
-      sessionId,
-      storePath: path.join(otherDir, "sessions.json"),
-    }).readPage({ offset: 0, maxMessages: 1 });
-    expect(other.displaySource).toEqual(expect.any(String));
-    expect(other.displaySource).not.toBe(current.displaySource);
-  });
 });

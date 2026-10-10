@@ -8,6 +8,7 @@ import "../test-utils/prepare-compiled-subprocesses.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import type { RuntimeWorkerGeneration } from "./runtime-worker-generation.js";
+import { SQLITE_DATABASE_ADMISSIONS_KEY } from "./sqlite-database-admission-key.js";
 import type { SqliteWorkerBroker } from "./sqlite-worker-broker.js";
 import type { SqliteWorkerStore } from "./sqlite-worker-contract.js";
 import type { FixtureOperations } from "./sqlite-worker-store.test-support.js";
@@ -274,9 +275,11 @@ describe("Bun SQLite process selection and worker inheritance", () => {
           );
           break;
         }
-        case "branch-summaries":
+        case "branch-summaries": {
+          const { runSessionBranchSummaryWorkerRequest } =
+            await import("../config/sessions/session-transcript-worker-runtime.js");
           expect(
-            await reader.runSessionBranchSummaryWorkerRequest(
+            await runSessionBranchSummaryWorkerRequest(
               {
                 database: { agentId: target.agentId, path: storePath },
                 databaseIdentity: "absent-database",
@@ -287,6 +290,7 @@ describe("Bun SQLite process selection and worker inheritance", () => {
             ),
           ).toEqual({ status: "missing-session" });
           break;
+        }
       }
       expect(runtime.launches).toBeGreaterThan(0);
       expect(runtime.selectedPath).toBe("/fixture/sqlite.dylib");
@@ -421,15 +425,23 @@ describe("Bun SQLite process selection and worker inheritance", () => {
     { bun: false, platform: "darwin" },
     { bun: true, platform: "linux" },
   ])(
-    "leaves worker environment facts and native selection untouched on $platform (Bun: $bun)",
+    "leaves library-selection facts and native selection untouched on $platform (Bun: $bun)",
     async ({ bun, platform }) => {
       setRuntime(bun, platform);
-      runtime.getEnvironmentData.mockImplementation(() => {
+      runtime.getEnvironmentData.mockImplementation((key) => {
+        if (key === SQLITE_DATABASE_ADMISSIONS_KEY) {
+          return undefined;
+        }
         throw new Error("Unrelated worker data must not be read");
       });
       const worker = await enterWorkerHeap();
       expect(worker.ensureSqliteLibrarySelected()).toMatchObject({ source: "runtime" });
-      expect(runtime.getEnvironmentData).not.toHaveBeenCalled();
+      expect(runtime.getEnvironmentData).not.toHaveBeenCalledWith(
+        "openclaw.bunSqliteLibrarySelection",
+      );
+      expect(runtime.getEnvironmentData).not.toHaveBeenCalledWith(
+        "openclaw.sqliteRuntimeCapabilities",
+      );
       expect(runtime.setEnvironmentData).not.toHaveBeenCalled();
       expect(runtime.dlopen).not.toHaveBeenCalled();
       expect(runtime.select).not.toHaveBeenCalled();
@@ -560,7 +572,13 @@ describe("Bun SQLite process selection and worker inheritance", () => {
         await Promise.allSettled([closing, ...(reopening ? [reopening] : [])]);
       }
       expect(runtime.select).toHaveBeenCalledExactlyOnceWith("/fixture/sqlite.dylib");
-      expect(runtime.setEnvironmentData).toHaveBeenCalledTimes(2);
+      expect(
+        runtime.setEnvironmentData.mock.calls.filter(([key]) =>
+          ["openclaw.bunSqliteLibrarySelection", "openclaw.sqliteRuntimeCapabilities"].includes(
+            String(key),
+          ),
+        ),
+      ).toHaveLength(2);
     },
   );
 

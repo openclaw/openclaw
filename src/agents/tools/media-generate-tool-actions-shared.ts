@@ -6,12 +6,56 @@ import {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getProviderEnvVarsCore } from "../../secrets/provider-env-vars.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
-import { isCapabilityProviderConfigured } from "./media-tool-shared.js";
+import type { AnyAgentTool } from "./common.js";
+import { isCapabilityProviderConfigured, resolveGenerateAction } from "./media-tool-shared.js";
+import { prepareToolAuthProfileStoreSource } from "./model-config.helpers.js";
 
 export type MediaGenerateActionResult = {
   content: Array<{ type: "text"; text: string }>;
   details: Record<string, unknown>;
 };
+
+type MediaGenerateProviderAuth = {
+  workspaceDir?: string;
+  agentDir?: string;
+  authStore?: AuthProfileStore;
+  authProfileStoreSource?: boolean;
+};
+
+export function createMediaGenerateExecute(params: {
+  options?: Parameters<typeof prepareToolAuthProfileStoreSource>[0] & {
+    workspaceDir?: string;
+    agentSessionKey?: string;
+    requesterAgentId?: string;
+  };
+  list: (
+    auth: MediaGenerateProviderAuth,
+  ) => MediaGenerateActionResult | Promise<MediaGenerateActionResult>;
+  status: (sessionKey?: string, agentId?: string) => Promise<MediaGenerateActionResult>;
+  generate: (
+    args: Record<string, unknown>,
+    signal?: AbortSignal,
+  ) => Promise<MediaGenerateActionResult>;
+}): AnyAgentTool["execute"] {
+  return async (_toolCallId, rawArgs: Record<string, unknown>, signal) => {
+    const args = rawArgs;
+    const action = resolveGenerateAction(args);
+    const options = params.options;
+    if (action === "list") {
+      const authProfileStoreSource = await prepareToolAuthProfileStoreSource(options);
+      signal?.throwIfAborted();
+      return params.list({
+        workspaceDir: options?.workspaceDir,
+        agentDir: options?.agentDir,
+        authStore: options?.authProfileStore,
+        authProfileStoreSource,
+      });
+    }
+    return action === "status"
+      ? params.status(options?.agentSessionKey, options?.requesterAgentId)
+      : params.generate(args, signal);
+  };
+}
 
 type TaskStatusTextBuilder<Task> = (task: Task, params?: { duplicateGuard?: boolean }) => string;
 type MediaGenerateTaskStatusParams<Task> = {
@@ -35,6 +79,21 @@ type MediaGenerateCapabilitySummaryOptions = {
   modes?: readonly string[];
   includeModes?: boolean;
 };
+
+export function createMediaGenerateProviderListAction<T extends MediaGenerateProvider>(
+  params: Pick<
+    Parameters<typeof createMediaGenerateProviderListActionResult<T>>[0],
+    "kind" | "emptyText" | "listModes" | "summarizeCapabilities"
+  > & { listProviders: (params: { config?: OpenClawConfig }) => T[] },
+) {
+  return (config?: OpenClawConfig, options?: MediaGenerateProviderAuth) =>
+    createMediaGenerateProviderListActionResult({
+      ...params,
+      ...options,
+      cfg: config,
+      providers: params.listProviders({ config }),
+    });
+}
 
 export function createMediaGenerateProviderListActionResult<
   TProvider extends MediaGenerateProvider,
@@ -91,10 +150,7 @@ export function createMediaGenerateProviderListActionResult<
   });
 
   const lines = providerDetails.flatMap((details, index) => {
-    const provider = params.providers.at(index);
-    if (!provider) {
-      return [];
-    }
+    const provider = params.providers[index]!;
     const authHints = details.authEnvVars;
     const capabilities = params.summarizeCapabilities(provider);
     const modelLine = details.models.length > 0 ? details.models.join(", ") : "unknown";

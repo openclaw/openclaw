@@ -4,7 +4,10 @@ import { isDeepStrictEqual } from "node:util";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { asNullableRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
-import type { LegacyConfigUpdatePlan } from "../../commands/doctor/legacy-config-repair.js";
+import type {
+  LegacyConfigUpdatePlan,
+  repairLegacyConfigForUpdateChannel,
+} from "../../commands/doctor/legacy-config-repair.js";
 import {
   createConfigIO,
   mutateConfigFileWithRetry,
@@ -160,23 +163,6 @@ function restoreDroppedPreUpdateChannels(
     changed: true,
     ...(authoredChannels !== undefined ? { authoredChannels } : {}),
   };
-}
-
-function hasRestorablePreUpdateChannels(
-  snapshot: ConfigFileSnapshot,
-  preUpdateConfig: PreUpdateConfigRestoreInput,
-): boolean {
-  if (!snapshot.valid) {
-    return false;
-  }
-  const preUpdateChannels = asNullableRecord(preUpdateConfig.sourceConfig.channels);
-  if (!preUpdateChannels) {
-    return false;
-  }
-  const postUpdateChannels = asNullableRecord(snapshot.sourceConfig.channels) ?? {};
-  return Object.keys(preUpdateChannels).some(
-    (channelId) => postUpdateChannels[channelId] === undefined,
-  );
 }
 
 function resolveRestoredAuthoredChannels(params: {
@@ -443,12 +429,9 @@ async function planUpdateChannelLegacyConfig(snapshot: ConfigFileSnapshot): Prom
   };
 }
 
-export async function maybeRepairLegacyConfigForUpdateChannel(params: {
-  plan?: LegacyConfigUpdatePlan;
-  configSnapshot: ConfigFileSnapshot;
-  configWriteOptions?: ConfigWriteOptions;
-  jsonMode: boolean;
-}): Promise<ConfigFileSnapshot> {
+export async function maybeRepairLegacyConfigForUpdateChannel(
+  params: Parameters<typeof repairLegacyConfigForUpdateChannel>[0],
+): Promise<ConfigFileSnapshot> {
   if (
     !params.plan &&
     (params.configSnapshot.valid || params.configSnapshot.legacyIssues.length === 0)
@@ -456,9 +439,9 @@ export async function maybeRepairLegacyConfigForUpdateChannel(params: {
     return params.configSnapshot;
   }
 
-  const { repairLegacyConfigForUpdateChannel } =
+  const { repairLegacyConfigForUpdateChannel: repairLegacyConfig } =
     await import("../../commands/doctor/legacy-config-repair.js");
-  const { snapshot, repaired, warnings } = await repairLegacyConfigForUpdateChannel(params);
+  const { snapshot, repaired, warnings } = await repairLegacyConfig(params);
   for (const warning of warnings ?? []) {
     defaultRuntime.error(`Warning: ${warning}`);
   }
@@ -490,67 +473,34 @@ async function readPostCoreSourceConfigFile(
     if (!parsed.ok || !isRecord(parsed.parsed)) {
       return undefined;
     }
-    return normalizePreUpdateConfigRestoreInput(parsed.parsed, options);
+    const { sourceConfig, authoredConfig } = parsed.parsed;
+    if (isRecord(sourceConfig) && isRecord(authoredConfig)) {
+      return {
+        sourceConfig: sourceConfig as OpenClawConfig,
+        authoredConfig: authoredConfig as OpenClawConfig,
+      };
+    }
+    const authored = parsed.parsed as OpenClawConfig;
+    let resolvedSourceConfig = authored;
+    if (options?.configPath) {
+      try {
+        const withIncludes = resolveConfigIncludes(authored, options.configPath, undefined, {
+          allowedRoots: resolveIncludeRoots(process.env),
+        });
+        const resolved = resolveConfigEnvVars(withIncludes, process.env, {
+          onMissing: () => undefined,
+        });
+        if (isRecord(resolved)) {
+          resolvedSourceConfig = resolved as OpenClawConfig;
+        }
+      } catch {
+        // A legacy authored handoff still supplies recovery input when includes cannot resolve.
+      }
+    }
+    return { sourceConfig: resolvedSourceConfig, authoredConfig: authored };
   } catch {
     return undefined;
   }
-}
-
-function normalizePreUpdateConfigRestoreInput(
-  parsed: Record<string, unknown>,
-  options?: { configPath?: string },
-): PreUpdateConfigRestoreInput | undefined {
-  const sourceConfig = parsed.sourceConfig;
-  const authoredConfig = parsed.authoredConfig;
-  if (isRecord(sourceConfig) && isRecord(authoredConfig)) {
-    return {
-      sourceConfig: sourceConfig as OpenClawConfig,
-      authoredConfig: authoredConfig as OpenClawConfig,
-    };
-  }
-  const authored = parsed as OpenClawConfig;
-  return {
-    sourceConfig: options?.configPath
-      ? resolvePreUpdateSourceConfigFromAuthored(authored, options.configPath)
-      : authored,
-    authoredConfig: authored,
-  };
-}
-
-function resolvePreUpdateSourceConfigFromAuthored(
-  authoredConfig: OpenClawConfig,
-  configPath: string,
-): OpenClawConfig {
-  try {
-    const withIncludes = resolveConfigIncludes(authoredConfig, configPath, undefined, {
-      allowedRoots: resolveIncludeRoots(process.env),
-    });
-    const resolved = resolveConfigEnvVars(withIncludes, process.env, {
-      onMissing: () => undefined,
-    });
-    return isRecord(resolved) ? (resolved as OpenClawConfig) : authoredConfig;
-  } catch {
-    return authoredConfig;
-  }
-}
-
-async function isFreshPreUpdateConfigSnapshot(params: {
-  currentConfigPath: string;
-  snapshotPath: string;
-  updateStartedAtMs: number;
-}): Promise<boolean> {
-  const snapshotStat = await fs.stat(params.snapshotPath).catch(() => null);
-  if (!snapshotStat) {
-    return false;
-  }
-  if (snapshotStat.mtimeMs + 1000 < params.updateStartedAtMs) {
-    return false;
-  }
-  if (Date.now() - snapshotStat.mtimeMs > PRE_UPDATE_CONFIG_SNAPSHOT_MAX_AGE_MS) {
-    return false;
-  }
-  const currentStat = await fs.stat(params.currentConfigPath).catch(() => null);
-  return !currentStat || snapshotStat.mtimeMs <= currentStat.mtimeMs + 1000;
 }
 
 export async function readPostCorePreUpdateSourceConfig(params: {
@@ -567,21 +517,40 @@ export async function readPostCorePreUpdateSourceConfig(params: {
   }
   for (const suffix of [".pre-update", ".bak"]) {
     const snapshotPath = `${params.currentSnapshot.path}${suffix}`;
+    const currentConfigPath = params.currentSnapshot.path;
+    const updateStartedAtMs = params.updateStartedAtMs;
+    const snapshotStat = await fs.stat(snapshotPath).catch(() => null);
     if (
-      !(await isFreshPreUpdateConfigSnapshot({
-        currentConfigPath: params.currentSnapshot.path,
-        snapshotPath,
-        updateStartedAtMs: params.updateStartedAtMs,
-      }))
+      !snapshotStat ||
+      snapshotStat.mtimeMs + 1000 < updateStartedAtMs ||
+      Date.now() - snapshotStat.mtimeMs > PRE_UPDATE_CONFIG_SNAPSHOT_MAX_AGE_MS
     ) {
+      continue;
+    }
+    const currentStat = await fs.stat(currentConfigPath).catch(() => null);
+    const fresh = !currentStat || snapshotStat.mtimeMs <= currentStat.mtimeMs + 1000;
+    if (!fresh) {
       continue;
     }
     const preUpdateConfig = await readPostCoreSourceConfigFile(snapshotPath, {
       configPath: params.currentSnapshot.path,
     });
     // A fresh explicit snapshot is authoritative, even if it cannot restore channels.
-    return preUpdateConfig &&
-      hasRestorablePreUpdateChannels(params.currentSnapshot, preUpdateConfig)
+    if (!preUpdateConfig) {
+      return undefined;
+    }
+    const snapshot = params.currentSnapshot;
+    if (!snapshot.valid) {
+      return undefined;
+    }
+    const preUpdateChannels = asNullableRecord(preUpdateConfig.sourceConfig.channels);
+    if (!preUpdateChannels) {
+      return undefined;
+    }
+    const postUpdateChannels = asNullableRecord(snapshot.sourceConfig.channels) ?? {};
+    return Object.keys(preUpdateChannels).some(
+      (channelId) => postUpdateChannels[channelId] === undefined,
+    )
       ? preUpdateConfig
       : undefined;
   }

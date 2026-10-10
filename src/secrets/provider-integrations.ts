@@ -27,7 +27,6 @@ export type SecretProviderIntegrationPreset = {
   providerConfig: PluginIntegrationSecretProviderConfig;
 };
 
-/** Result of materializing a plugin integration into a manual exec provider config. */
 type SecretProviderIntegrationResolution =
   | {
       ok: true;
@@ -194,7 +193,6 @@ function isValidPluginIntegrationProviderId(value: string): boolean {
   return value.length > 0 && value.length <= PLUGIN_INTEGRATION_PROVIDER_ID_MAX_LENGTH;
 }
 
-/** Narrows a secret provider config to the plugin-integration exec shape. */
 export function isPluginIntegrationSecretProviderConfig(
   value: unknown,
 ): value is PluginIntegrationSecretProviderConfig {

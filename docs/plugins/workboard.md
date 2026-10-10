@@ -93,7 +93,8 @@ Use **Edit board** to change a board's name, icon, and color. **Reset to default
 clears the icon and color when you save; canceling leaves the saved board unchanged.
 For Sessions boards, the same dialog also edits column labels, colors,
 descriptions, column order, and the fallback column. Ask the Board agent to edit
-column rules.
+column rules. Saving only the name, icon, or color leaves the saved columns unchanged,
+including column edits made by another operator while the dialog was open.
 
 For `workboard.boards.upsert`, omitting `icon` or `color`, passing `null`, or passing
 an empty string preserves the existing value, including for older clients. To clear
@@ -175,9 +176,13 @@ column is removed, the board applies its rules again. Tile tooltips distinguish
 
 Facts update live from session changes, with automatic board rereads at most once
 every five seconds. Category-only session updates and card-only changes do not
-reload Sessions boards. Reads share a prepared placement snapshot when their
-board, authorized roster, people view, and session revision match. Each request
-still obtains its own caller-scoped roster; sharing never expands session visibility.
+reload Sessions boards. The Gateway selects the authorized roster once and reuses
+immutable facts for unchanged sessions. The board keeps one frozen snapshot per
+board and people view, replacing only rows whose facts changed. Live run state,
+background previews, and time-dependent subagent state remain current; profile,
+configuration, topology, and access changes refresh authorization. Age-window and
+unavailable-PR retry deadlines still refresh the snapshot. Tool callers obtain
+their own caller-scoped roster; sharing never expands session visibility.
 `workboard.sessionsBoard.read` returns a `revision`; repeat the same query with
 `{ sinceRevision: revision }` for `{ unchanged: true, revision }` when current.
 Reconnects and view changes request a full snapshot. The Workboard change event's
@@ -188,18 +193,21 @@ Pull-request facts come from the Gateway's shared PR owner, independently of
 which sessions appear in a Control UI sidebar. Reads use prepared Gateway facts
 without waiting for Git or pull-request requests. Missing snapshots load through
 that owner's bounded background loader and announce a board change when ready.
-If PR facts become unavailable or GitHub rate limits requests, the board retains
-the last ready PR list for its cards and column rules while updating run state
-and health. Unavailable PR reads retry per session, starting after one minute
+If PR facts become unavailable or GitHub rate limits requests, the Gateway's
+selected-facts owner retains the last ready PR list for board cards and column
+rules while updating run state and health. Unavailable PR reads retry per session, starting after one minute
 and doubling to a 15-minute maximum; a successful read resets the delay.
+Redaction changes omit retained PR titles until fresh source text is available,
+without changing known PR states or their retry schedule.
 An inline warning distinguishes stale PR facts from facts not loaded yet and
 identifies GitHub rate limiting. A failed facts read keeps the last known facts
 and placement; sessions with no known facts use the fallback column with reason
 `facts-unavailable`. A session whose available facts match no rule also uses that
 reason while its pull-request facts are unknown. Opening a board starts any needed
 background refresh. Shared snapshots reuse prepared facts until a publication,
-board age-window expiry, or a pull-request retry becomes due; failure fallback
-retains the last known facts.
+redaction change, board age-window expiry, or a pull-request retry becomes due; failure fallback
+retains the last known facts. If redaction rules change during a facts outage,
+the board discards retained text while keeping known run, health, and PR states.
 
 When the Control UI host supports a session dock, **Board agent** opens a
 conversation beside the board. Its first use creates and saves a dedicated
@@ -313,8 +321,10 @@ owns its AI-categorization prompt, model, schedule, and run history. The board
 page shows an **Automation** link when that reference is present. Matching
 session events nudge the attached automation through the active Workboard service's
 scheduler authority, including after the worker's tool authority closes, with events
-for the same board coalesced for 60 seconds. The automation's schedule remains
-the backstop. Disabled and auto-disabled automations are never nudged. Deleting
+for the same board coalesced for 60 seconds. If an attempt ends while its run is
+still active, the lifecycle sweep nudges the automation when it records the terminal
+outcome. The automation's schedule remains the backstop. Disabled and auto-disabled
+automations are never nudged. Deleting
 the board does not delete or otherwise mutate the
 operator-owned automation job.
 
@@ -344,6 +354,29 @@ plugin using the linked run and session lifecycle (see
 [Session lifecycle sync](#session-lifecycle-sync)).
 
 ## Agent tools
+
+The card tools below are optional plugin tools. Enabling Workboard exposes only
+the three Sessions board tools to agents; an agent that should create, claim, or
+complete cards needs the card tools allowed for it. Add the plugin id to the
+agent's tool policy to allow every Workboard tool, or list individual tool names
+or a pattern such as `workboard_*`:
+
+```json5
+{
+  agents: {
+    entries: {
+      main: {
+        tools: { alsoAllow: ["workboard"] },
+      },
+    },
+  },
+}
+```
+
+Without that entry the agent sees only `workboard_sessions_board_*` and cannot
+manage cards. Workers that Workboard starts from a card (**Start** or dispatch)
+do not need it: each worker run is granted `workboard_heartbeat`,
+`workboard_complete`, and `workboard_block` for its card.
 
 | Tool                                                                                                                                             | Purpose                                                                                                                                                                                   |
 | ------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -550,11 +583,17 @@ If an active linked session stops reporting recent activity, Workboard marks the
 `stale` and stores that as metadata until the lifecycle clears it.
 
 Lifecycle writes are owned by the Gateway-side Workboard plugin, so they do
-not depend on an open browser tab. Agent and subagent completion hooks persist
-terminal outcomes immediately. A bounded session sweep runs once per minute to
-reconcile active, idle, missing, and stale session state. Each store mutation
-emits the normal `plugin.workboard.changed` invalidation, so an open Workboard tab
-reloads the canonical card instead of writing its own lifecycle projection.
+not depend on an open browser tab. Subagent completion hooks persist terminal
+outcomes immediately. Agent attempt hooks consult the linked session state:
+finishing a model attempt does not move a card into `review` or `blocked` while
+its run is still active. A bounded session sweep runs once per minute to reconcile
+terminal, active, idle, missing, and stale session state. Each store mutation emits
+the normal `plugin.workboard.changed` invalidation, so an open Workboard tab reloads
+the canonical card instead of writing its own lifecycle projection.
+
+Incognito sessions remain absent from session discovery. Explicitly linked
+Incognito cards use authorized exact-session metadata reads, without derived
+titles or message previews, to reconcile their terminal outcomes.
 
 While a card is in an active work state, Workboard follows the linked session:
 

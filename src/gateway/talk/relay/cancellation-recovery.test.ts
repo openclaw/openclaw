@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../../config/types.js";
 import { resetClientVoiceConfirmationStateForTest } from "../../../talk/client-voice-confirmation.test-support.js";
-import { ensureClientVoiceAgentSessionEntry } from "../../../talk/client-voice-session.js";
+import { ensureClientVoiceAgentSessionEntry } from "../../../talk/client-voice-session-write.js";
 import { clientVoiceSessionTesting } from "../../../talk/client-voice-session.test-support.js";
 import { resolveRealtimeVoiceProviderCapabilities } from "../../../talk/provider-resolver.js";
 import type {
@@ -15,16 +15,16 @@ import {
 } from "../../../test-utils/openclaw-test-state.js";
 import { prepareTalkSessionTarget } from "../session-target.js";
 import {
-  cancelTalkRealtimeRelayTurn,
-  createTalkRealtimeRelaySession,
-  sendTalkRealtimeRelayAudio,
-  stopTalkRealtimeRelaySession,
-} from "./index.js";
-import {
   createIdleRelayProvider,
   drainRelayTestSessions,
   makeRelayTransport,
 } from "./index.test-support.js";
+import {
+  cancelTalkRealtimeRelayTurn,
+  sendTalkRealtimeRelayAudio,
+  stopTalkRealtimeRelaySession,
+} from "./operations.js";
+import { createTalkRealtimeRelaySession } from "./session-create.js";
 import { relaySessions } from "./state.js";
 
 const activeRelaySessions = new Map<string, string>();

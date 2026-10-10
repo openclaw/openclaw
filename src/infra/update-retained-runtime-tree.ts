@@ -1,11 +1,10 @@
-import fsSync, { type BigIntStats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { collectPluginSafetyInspectedFiles } from "../plugins/plugin-safety-inspected-files.js";
-import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
-import { createFileCopyWithCloneFallback } from "./fs-safe-file-copy.js";
 import { root as openRoot } from "./fs-safe.js";
 import { hasNodeErrorCode } from "./path-guards.js";
+import { copyUpdateCandidatePluginFileBytes } from "./update-candidate-plugin-file.js";
+import { runUpdateCandidatePluginTasks } from "./update-candidate-plugin-tasks.js";
 import {
   assertUpdateCandidatePluginEntryStat,
   assertUpdateCandidatePluginLinkTarget,
@@ -48,19 +47,9 @@ export async function linkUpdateCandidatePluginTrees(
 ): Promise<{ linked: number; copied: number }> {
   const targets = resolveUpdateCandidatePluginTreeTargets(plan, params);
   const { privateRoot, candidateRoot, hostLinks, relocations, destinationFor } = targets;
-  // Linking bumps the source inode's change time. Later entries that share that
-  // inode (pnpm store hard links) must match the recorded post-link fingerprint.
-  const linkedInodes = new Map<string, string>();
-  const assertEntryStat = (entry: UpdateCandidatePluginEntry, current: BigIntStats) => {
-    const expected =
-      entry.kind === "file" && linkedInodes.has(`${entry.dev}:${entry.ino}`)
-        ? { ...entry, ctimeNs: linkedInodes.get(`${entry.dev}:${entry.ino}`)! }
-        : entry;
-    assertUpdateCandidatePluginEntryStat(expected, current);
-  };
   const assertEntry = async (entry: UpdateCandidatePluginEntry) => {
     await params.onProgress?.();
-    assertEntryStat(entry, await fs.lstat(entry.path, { bigint: true }));
+    assertUpdateCandidatePluginEntryStat(entry, await fs.lstat(entry.path, { bigint: true }));
     if (entry.kind === "symlink" && (await fs.readlink(entry.path)) !== entry.link) {
       throw new Error(`Plugin entry changed after snapshot inventory: ${entry.path}`);
     }
@@ -74,47 +63,28 @@ export async function linkUpdateCandidatePluginTrees(
   await targets.assertBindings();
   params.assertCurrent();
   await fs.mkdir(privateRoot, { recursive: true, mode: 0o700 });
-  const preparedDirectories = new Set([privateRoot]);
-  const preparingDirectories = new Map<string, Promise<void>>();
-  const prepareDirectory = async (directory: string, mode: number) => {
-    if (preparedDirectories.has(directory)) {
-      return;
-    }
-    let preparing = preparingDirectories.get(directory);
+  const preparedDirectories = new Map<string, Promise<string | undefined>>([
+    [privateRoot, Promise.resolve(undefined)],
+  ]);
+  const prepareDirectory = (directory: string, mode: number) => {
+    let preparing = preparedDirectories.get(directory);
     if (!preparing) {
       params.assertCurrent();
-      preparing = fs.mkdir(directory, { recursive: true, mode }).then(() => {
-        preparedDirectories.add(directory);
-        preparingDirectories.delete(directory);
-      });
-      preparingDirectories.set(directory, preparing);
+      preparing = fs.mkdir(directory, { recursive: true, mode });
+      preparedDirectories.set(directory, preparing);
     }
-    await preparing;
+    return preparing;
   };
   let destinationRoot: ReturnType<typeof openRoot> | undefined;
-  const copyFile = createFileCopyWithCloneFallback();
   const copyEntry = async (
     entry: Extract<UpdateCandidatePluginEntry, { kind: "file" }>,
     destination: string,
   ) => {
     const root = await (destinationRoot ??= openRoot(privateRoot));
-    // copyIn owns portable create-only publication; recheck the inventory before
-    // its private stage is published.
-    await copyFile(root, path.relative(privateRoot, destination), entry.path, {
-      overwrite: false,
-      // The entry loop already prepares each destination parent.
-      mkdir: false,
-      // Process-lifetime scratch like the unsynced hard-link path, never a recovery backup.
-      durable: false,
-      maxBytes: entry.size,
-      mode: entry.mode | 0o600,
-      sourceHardlinks: "allow",
-      assertBeforeMutation: () => {
-        params.assertCurrent();
-        assertEntryStat(entry, fsSync.lstatSync(entry.path, { bigint: true }));
-      },
+    await copyUpdateCandidatePluginFileBytes({ entry, privateRoot, destination }, root, {
+      assertBeforeMutation: params.assertCurrent,
+      assertAfterCopy: () => assertEntry(entry),
     });
-    await assertEntry(entry);
     const relocate = resolveRuntimeFileRelocator(destination);
     if (relocate) {
       await relocate(destination, entry.path, destination, relocations, params.assertCurrent);
@@ -148,10 +118,7 @@ export async function linkUpdateCandidatePluginTrees(
     await prepareDirectory(directory, entry.kind === "directory" ? entry.mode | 0o700 : 0o700);
     if (entry.kind === "directory") {
       directories.push(entry);
-      params.onMaterialized?.();
-      return;
-    }
-    if (entry.kind === "symlink") {
+    } else if (entry.kind === "symlink") {
       params.assertCurrent();
       await fs.symlink(entry.link, destination, entry.linkType);
       await relocateRuntimeSymlink(
@@ -166,59 +133,47 @@ export async function linkUpdateCandidatePluginTrees(
         path.resolve(path.dirname(destination), await fs.readlink(destination)),
         { privateRoot, candidateRoot },
       );
-      params.onMaterialized?.();
-      return;
-    }
-    if (
-      pluginFiles.has(entry.path) ||
-      resolveRuntimeFileRelocator(destination) ||
-      (await requiresCopy(entry))
-    ) {
-      await copyEntry(entry, destination);
-      counts.copied += 1;
-      params.onMaterialized?.();
-      return;
-    }
-    params.assertCurrent();
-    try {
-      await fs.link(entry.path, destination);
-    } catch (error) {
-      if (!isLinkUnsupported(error)) {
-        throw error;
+    } else {
+      let copy =
+        pluginFiles.has(entry.path) ||
+        Boolean(resolveRuntimeFileRelocator(destination)) ||
+        (await requiresCopy(entry));
+      if (!copy) {
+        params.assertCurrent();
+        try {
+          await fs.link(entry.path, destination);
+        } catch (error) {
+          if (!isLinkUnsupported(error)) {
+            throw error;
+          }
+          copy = true;
+        }
       }
-      await copyEntry(entry, destination);
-      counts.copied += 1;
-      params.onMaterialized?.();
-      return;
+      if (copy) {
+        await copyEntry(entry, destination);
+        counts.copied += 1;
+      } else {
+        // The private name must reference the inventoried inode, never a newer file.
+        const linked = await fs.lstat(destination, { bigint: true });
+        if (
+          !linked.isFile() ||
+          linked.dev.toString() !== entry.dev ||
+          linked.ino.toString() !== entry.ino
+        ) {
+          throw new Error(
+            `Retained runtime entry does not reference its inventoried file: ${entry.path}`,
+          );
+        }
+        assertUpdateCandidatePluginEntryStat(entry, linked);
+        counts.linked += 1;
+      }
     }
-    // The private name must reference the inventoried inode, never a newer file.
-    const linked = await fs.lstat(destination, { bigint: true });
-    if (
-      !linked.isFile() ||
-      linked.dev.toString() !== entry.dev ||
-      linked.ino.toString() !== entry.ino
-    ) {
-      throw new Error(
-        `Retained runtime entry does not reference its inventoried file: ${entry.path}`,
-      );
-    }
-    assertUpdateCandidatePluginEntryStat({ ...entry, ctimeNs: linked.ctimeNs.toString() }, linked);
-    linkedInodes.set(`${entry.dev}:${entry.ino}`, linked.ctimeNs.toString());
-    counts.linked += 1;
     params.onMaterialized?.();
   };
   const files: Array<Extract<UpdateCandidatePluginEntry, { kind: "file" }>> = [];
   const inodes = new Set<string>();
   const drain = async () => {
-    const result = await runTasksWithConcurrency({
-      tasks: files.map((entry) => () => materialize(entry)),
-      limit: 4,
-      errorMode: "stop",
-    });
-    // Cleanup must never race an admitted filesystem write, including on failure.
-    if (result.hasError) {
-      throw result.firstError;
-    }
+    await runUpdateCandidatePluginTasks(files.map((entry) => () => materialize(entry)));
     files.length = 0;
     inodes.clear();
   };

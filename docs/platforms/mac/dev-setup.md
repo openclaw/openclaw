@@ -17,6 +17,10 @@ the Xcode requirements below.
 - **Xcode 26.4+** (Swift 6.3 toolchain), on the latest macOS available in
   Software Update.
 - **Node.js 24.16+ or 26.1+ & pnpm** for the gateway, CLI, and packaging scripts.
+  SwiftPM and Xcode generate the Gateway protocol models with the first
+  supported Node on `PATH`, then `/opt/homebrew/bin/node` or
+  `/usr/local/bin/node`. Version-manager shims such as mise, asdf, or Volta
+  resolve to the Node binary they launch.
 
 macOS shell tooling uses the system `/bin/bash` (3.2); Homebrew Bash is not
 required. Run scripts directly or with `/bin/bash`. Bash 5.3+ can stall on a
@@ -141,7 +145,7 @@ retains its current runtime until a signed fork Windows build is published;
 unsigned dry-run artifacts are not shippable.
 
 Every repin requires both gates on the same published tag: CI's paired Bun-lane
-replay and Bun-only smoke, plus the macOS runtime probes and two-binary test set.
+replay and Bun-only smoke, plus the macOS runtime checks and two-binary test set.
 Neither app nor CI advances when either gate fails. A Linux-only regression
 also stops the shared repin. Preserve the last tag admitted by both gates while
 investigating; a published prerelease alone is not admission. Record the exact

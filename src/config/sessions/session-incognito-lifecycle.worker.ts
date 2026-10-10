@@ -14,10 +14,12 @@ import type {
   SessionStateDeletePlan,
 } from "./session-accessor.sqlite-archive-types.js";
 import { prepareSessionDeletionInDatabase } from "./session-accessor.sqlite-deletion-plan.js";
+import { withSqliteSessionDeletionWorkerParticipant } from "./session-accessor.sqlite-deletion.js";
 import { sqliteSessionEntriesEqual } from "./session-accessor.sqlite-entry-equality.js";
 import { readExactSessionEntryRow } from "./session-accessor.sqlite-entry-read.js";
 import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import { planSessionLifecycleArtifactCleanup } from "./session-accessor.sqlite-lifecycle-artifacts.js";
+import { mutateSqliteSessionAtMessageInTransaction } from "./session-accessor.sqlite-message-cut.js";
 import {
   buildForkedChildTranscriptEvents,
   resolveParentForkSourceTranscript,
@@ -45,7 +47,11 @@ export function createIncognitoLifecycleWorker(
   database: OpenClawAgentDatabase,
   identity: AgentDatabaseIncognitoIdentity,
   env: SqliteWorkerStateContext["environment"],
-  admit: (stage: "transaction" | "commit", keys: readonly string[]) => void,
+  admit: (
+    stage: "transaction" | "commit",
+    keys: readonly string[],
+    receipt?: { value: unknown },
+  ) => void,
 ) {
   const databaseOptions = { agentId: database.agentId, path: database.path, env };
   const assertEntry = (target: IncognitoLifecycleEntry) => {
@@ -69,7 +75,7 @@ export function createIncognitoLifecycleWorker(
       }
       return { ...plan, reason: reason ?? plan.reason, archive: null, archivedTranscript: null };
     });
-  const write = <T>(keys: readonly string[], operation: () => T): T =>
+  const write = <T>(keys: readonly string[], operation: () => T, receipt = false): T =>
     withSqlitePostCommitPublications(database.db, () =>
       runOpenClawAgentWriteTransaction(
         (current) => {
@@ -78,7 +84,7 @@ export function createIncognitoLifecycleWorker(
           }
           admit("transaction", keys);
           const value = operation();
-          admit("commit", keys);
+          admit("commit", keys, receipt ? { value } : undefined);
           return value;
         },
         databaseOptions,
@@ -90,6 +96,55 @@ export function createIncognitoLifecycleWorker(
     execute(command: Command) {
       const keys = incognitoLifecycleKeys(command, identity);
       switch (command.type) {
+        case "session.lifecycle.maintenance": {
+          const { plan } = command.input;
+          const materializedPlans = materialize(plan.deletePlans);
+          const value = write(
+            keys,
+            () => {
+              const result = reclaimSqliteSessionInTransaction({
+                kind: "maintenance-finalize",
+                agentId: database.agentId,
+                databaseOptions,
+                entries: plan.entries,
+                materializedPlans,
+              });
+              if (result.kind !== "maintenance-finalize") {
+                throw new Error("Incognito maintenance returned another operation");
+              }
+              return result.value;
+            },
+            true,
+          );
+          return { value, keys };
+        }
+        case "session.lifecycle.messageCut": {
+          const value = write(
+            keys,
+            () => {
+              let projectionNeedsReconcile = false;
+              const result = withSqliteSessionDeletionWorkerParticipant(
+                () => {},
+                () =>
+                  mutateSqliteSessionAtMessageInTransaction(
+                    database,
+                    { ...databaseOptions, sessionKey: command.input.intent.sourceKey },
+                    command.input.intent,
+                    {
+                      sourceRepositoryWorkspaceId: command.input.sourceRepositoryWorkspaceId,
+                      scheduleProjectionReconcile: false,
+                      onProjectionReconcileNeeded: () => {
+                        projectionNeedsReconcile = true;
+                      },
+                    },
+                  ),
+              );
+              return { result, projectionNeedsReconcile };
+            },
+            true,
+          );
+          return { value, keys };
+        }
         case "session.lifecycle.parentFork.prepare":
           return { value: prepareParentForkEntry(command.input, { open: () => database }), keys };
         case "session.lifecycle.parentFork.source": {
@@ -114,7 +169,7 @@ export function createIncognitoLifecycleWorker(
             keys,
           };
         case "session.lifecycle.delete": {
-          const { target, reason, admissionIdentities } = command.input;
+          const { target, reason, admissionIdentities, expectedPluginOwnerId } = command.input;
           assertEntry(target);
           const deleteParams = {
             storePath: database.path,
@@ -130,7 +185,8 @@ export function createIncognitoLifecycleWorker(
               deleteParams,
               archiveDirectory: "",
               admissionIdentities,
-              allowLockedEntryRemoval: false,
+              allowLockedEntryRemoval: Boolean(expectedPluginOwnerId),
+              expectedPluginOwnerId,
             },
           });
           if (planned.operation !== "entry" || planned.value.kind !== "ready") {

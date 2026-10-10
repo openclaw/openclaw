@@ -22,10 +22,15 @@ import { hasErrnoCode } from "./errno.js";
 import { sameFileMutationFingerprint } from "./file-descriptor.js";
 import { root as safeRoot } from "./fs-safe.js";
 import { resolveRequiredHomeDir } from "./home-dir.js";
+import { SQLITE_SIDECAR_SUFFIXES } from "./sqlite-files.js";
 import { resolveLegacyStateDirMigrationCandidates } from "./state-migrations.state-dir.js";
 import { resolveUpdateCaptureRoot } from "./update-capture-paths.js";
 import { UPDATE_CAPTURE_PRIVACY_MARKER } from "./update-capture-privacy-marker.js";
-import { updateRecoveryCaptureStateSchema } from "./update-recovery-receipt-schema.js";
+import {
+  assertUpdateRecoverySealComplete,
+  hasPendingUpdateRecoverySeal,
+} from "./update-recovery-capture-seal.js";
+import { canonicalEntryPath } from "./update-recovery-path.js";
 import { recordedUpdateRunDrivers } from "./update-run-activity.js";
 import { inspectUpdateRunDriver, sameUpdateRunDriver } from "./update-run-driver.js";
 import { getUpdateRunAsync } from "./update-run-reader.js";
@@ -39,14 +44,61 @@ const updateRecoveryBackupRefSchema = z.strictObject({
 
 type UpdateRecoveryBackupRef = z.infer<typeof updateRecoveryBackupRefSchema>;
 
+/** Inspection derives evidence from the sealed original, never from today's inventory. */
+export async function withVerifiedUpdateRecoveryBackup<T>(
+  ref: UpdateRecoveryBackupRef,
+  inspect: (manifest: UpdateRecoveryBackupManifest) => Promise<T>,
+): Promise<T> {
+  return withRecoveryMetadata(ref, async ({ manifest, pin }) => {
+    if (manifest.schemaVersion !== 2) {
+      throw new Error("Preservation inspection requires a versioned recovery inventory.");
+    }
+    // Bound the projection, not the amount of retained history streamed by its owners.
+    if (manifest.entries.length > 4096) {
+      throw new Error("Preservation inspection exceeds its 4096-resource bound.");
+    }
+    const verify = async () => {
+      for (const entry of manifest.entries) {
+        if (entry.kind !== "file") {
+          continue;
+        }
+        const pathname = path.join(ref.directory, entry.archivePath);
+        if (entry.sqlite) {
+          for (const suffix of SQLITE_SIDECAR_SUFFIXES) {
+            if (await statOrMissing(`${pathname}${suffix}`)) {
+              throw new Error(
+                `Preservation requires a consolidated SQLite payload: ${entry.sourcePath}`,
+              );
+            }
+          }
+        }
+        const actual = await fileDigest(pathname);
+        if (actual.sha256 !== entry.sha256 || actual.size !== entry.size) {
+          throw new Error(`Preservation payload does not match its manifest: ${entry.sourcePath}`);
+        }
+      }
+      await pin.assertCurrent();
+    };
+    await verify();
+    const result = await inspect(manifest);
+    await verify();
+    const source = await safeRoot(ref.directory, { symlinks: "reject", hardlinks: "reject" });
+    if (
+      sha256Hex(await source.readBytes("manifest.json", { maxBytes: MAX_MANIFEST_BYTES })) !==
+      ref.manifestSha256
+    ) {
+      throw new Error("Preservation manifest changed during inspection.");
+    }
+    return result;
+  });
+}
+
 const recordedOutcomeSchema = z.strictObject({
   status: z.enum(["restored", "committed"]),
   error: z.string().max(4096).optional(),
   manifestSha256: z.string().regex(/^[a-f0-9]{64}$/u),
 });
 
-const updateRecoveryForwardResolutionSchema =
-  updateRecoveryCaptureStateSchema.shape.forwardResolution.unwrap();
 type Outcome = {
   status: "pending" | "restored" | "committed" | "restore-failed";
   error?: string;
@@ -79,17 +131,9 @@ async function fileDigest(pathname: string): Promise<{ size: number; sha256: str
   }
 }
 
-function canonicalEntryPath(pathname: string): string {
-  const absolute = path.resolve(pathname);
-  return path.join(
-    resolvePathViaExistingAncestorSync(path.dirname(absolute)),
-    path.basename(absolute),
-  );
-}
-
 const MAX_MANIFEST_BYTES = 128 * 1024 * 1024;
 
-function captureScopes(env: NodeJS.ProcessEnv): Map<string, Set<string>> {
+export function captureScopes(env: NodeJS.ProcessEnv): Map<string, Set<string>> {
   const selectedStateDir = resolvePathViaExistingAncestorSync(resolveStateDir(env));
   const selectedConfigPath = canonicalEntryPath(resolveConfigPath(env));
   const scopes = new Map([[selectedStateDir, new Set([selectedConfigPath])]]);
@@ -182,6 +226,7 @@ async function withRecoveryMetadata<T>(
     if (pin.receipt.realPath !== location.directory) {
       throw new Error("Update recovery capture changed location.");
     }
+    await assertUpdateRecoverySealComplete(location.directory);
     const source = await safeRoot(location.directory, { symlinks: "reject", hardlinks: "reject" });
     assertOwned?.();
     const bytes = await source.readBytes("manifest.json", {
@@ -209,6 +254,7 @@ async function withRecoveryMetadata<T>(
       }
     }
     await pin.assertCurrent();
+    await assertUpdateRecoverySealComplete(location.directory);
     assertOwned?.();
     return await run({ ref, manifest, outcome, pin });
   } finally {
@@ -298,6 +344,7 @@ async function readBinding(ref: UpdateRecoveryBackupRef) {
       if (!(await statOrMissing(directory))) {
         continue;
       }
+      await assertUpdateRecoverySealComplete(directory);
       if (!(await statOrMissing(path.join(directory, "manifest.json")))) {
         // Preparation can stop before the final seal. Retain and bind all of
         // those bytes, but never label them a verified rollback generation.
@@ -356,11 +403,10 @@ export async function hasUpdateRecoveryForwardResolution(
 ): Promise<boolean> {
   return withRecoveryMetadata(ref, async ({ manifest, outcome }) => {
     const run = await getUpdateRunAsync(manifest.runId);
-    const value = run?.origin.updateRecoveryCapture?.forwardResolution;
-    if (!value) {
+    const receipt = run?.origin.updateRecoveryCapture?.forwardResolution;
+    if (!receipt) {
       return false;
     }
-    const receipt = updateRecoveryForwardResolutionSchema.parse(value);
     if (outcome || !isDeepStrictEqual(receipt.binding, await readBinding(ref))) {
       throw new Error("Forward recovery receipt is stale or contradicts its failed capture.");
     }
@@ -520,7 +566,11 @@ export async function readUpdateRecoveryBackups(): Promise<UpdateRecoveryBackupR
       ) {
         continue;
       }
-      if (entry?.isDirectory() && !manifestEntry && /^[a-zA-Z0-9_-]{1,128}$/u.test(captureId)) {
+      if (
+        entry?.isDirectory() &&
+        /^[a-zA-Z0-9_-]{1,128}$/u.test(captureId) &&
+        (!manifestEntry || (await hasPendingUpdateRecoverySeal(directory)))
+      ) {
         result.push({ kind: "incomplete", directory });
         continue;
       }

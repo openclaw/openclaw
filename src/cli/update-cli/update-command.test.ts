@@ -17,7 +17,6 @@ import * as restartHealth from "../daemon-cli/restart-health.js";
 import * as launchAgentRecovery from "./update-command-launch-agent-recovery.js";
 import type { PostCorePluginUpdateResult } from "./update-command-plugins.js";
 import { testing as updateCommandPluginsTesting } from "./update-command-plugins.test-support.js";
-import { resolvePostCoreUpdateChildStdio } from "./update-command-post-core.js";
 import { applyPostPluginConfigValidation } from "./update-command-post-plugin-validation.js";
 import {
   resolveServiceRefreshEnv,
@@ -29,11 +28,7 @@ import {
   formatPostUpdateGatewayRecoveryInstructions,
   recoverLaunchAgentAndRecheckGatewayHealth,
 } from "./update-command-service-recovery.js";
-import {
-  resolvePostUpdateServiceStateReadEnv,
-  resolveUpdatedGatewayRestartPort,
-  shouldPrepareUpdatedInstallRestart,
-} from "./update-command-service.js";
+import { resolveUpdatedGatewayRestartPort } from "./update-command-service.js";
 import { hasLoadedLaunchdKeepAliveSupervisor } from "./update-command-supervisor.js";
 
 const tempDirs = createTempDirTracker();
@@ -109,65 +104,6 @@ describe("applyPostPluginConfigValidation", () => {
   });
 });
 
-describe("shouldPrepareUpdatedInstallRestart", () => {
-  it("prepares package update restarts when the service is installed but stopped", () => {
-    expect(
-      shouldPrepareUpdatedInstallRestart({
-        updateMode: "npm",
-        serviceInstalled: true,
-        serviceLoaded: false,
-      }),
-    ).toBe(true);
-  });
-
-  it("does not install a new service for package updates when no service exists", () => {
-    expect(
-      shouldPrepareUpdatedInstallRestart({
-        updateMode: "npm",
-        serviceInstalled: false,
-        serviceLoaded: false,
-      }),
-    ).toBe(false);
-  });
-
-  it("keeps non-package updates tied to the matching loaded service state", () => {
-    expect(
-      shouldPrepareUpdatedInstallRestart({
-        updateMode: "git",
-        serviceInstalled: true,
-        serviceLoaded: false,
-      }),
-    ).toBe(false);
-    expect(
-      shouldPrepareUpdatedInstallRestart({
-        updateMode: "git",
-        serviceInstalled: true,
-        serviceLoaded: true,
-        serviceMatchesUpdateRoot: false,
-      }),
-    ).toBe(false);
-    expect(
-      shouldPrepareUpdatedInstallRestart({
-        updateMode: "git",
-        serviceInstalled: true,
-        serviceLoaded: true,
-        serviceMatchesUpdateRoot: true,
-      }),
-    ).toBe(true);
-  });
-
-  it("prepares git restart when this update stopped the managed service", () => {
-    expect(
-      shouldPrepareUpdatedInstallRestart({
-        updateMode: "git",
-        serviceInstalled: true,
-        serviceLoaded: false,
-        serviceStoppedForUpdate: true,
-      }),
-    ).toBe(true);
-  });
-});
-
 describe("resolveUpdatedGatewayRestartPort", () => {
   it("uses the managed service port ahead of the caller environment", async () => {
     expect(
@@ -187,26 +123,6 @@ describe("resolveUpdatedGatewayRestartPort", () => {
         serviceEnv: {},
       }),
     ).toBe(19000);
-  });
-});
-
-describe("resolvePostUpdateServiceStateReadEnv", () => {
-  it.each(["git", "npm"] as const)(
-    "keeps %s restart preparation anchored to the pre-update service env",
-    (updateMode) => {
-      const processEnv = { OPENCLAW_STATE_DIR: "/source/state" };
-      const preManagedServiceEnv = { OPENCLAW_STATE_DIR: "/managed/state" };
-      expect(
-        resolvePostUpdateServiceStateReadEnv({ updateMode, processEnv, preManagedServiceEnv }),
-      ).toEqual(preManagedServiceEnv);
-    },
-  );
-
-  it("uses the caller environment when no managed service context was captured", () => {
-    const processEnv = { OPENCLAW_STATE_DIR: "/source/state" };
-    expect(resolvePostUpdateServiceStateReadEnv({ updateMode: "git", processEnv })).toEqual(
-      processEnv,
-    );
   });
 });
 
@@ -305,25 +221,54 @@ describe("resolveUpdateTargetEnv", () => {
 });
 
 describe("resolveUpdatedInstallCommandEnv", () => {
-  it("keeps runtime SecretRef inputs while applying managed service overrides", () => {
+  it("keeps operator scratch and SecretRef inputs while applying managed service selectors", () => {
     const env = resolveUpdatedInstallCommandEnv({
       invocationCwd: "/srv/openclaw",
       processEnv: {
         OPENCLAW_GATEWAY_AUTH_TOKEN: "runtime-token",
         OPENCLAW_STATE_DIR: "/wrong/state",
+        OPENCLAW_HOME: "/wrong/home",
+        OPENCLAW_PROFILE: "caller",
         PATH: "/caller/bin",
+        TMPDIR: "/caller/cache",
+        TMP: "/caller/tmp",
+        TEMP: "/caller/temp",
       },
       serviceEnv: {
         OPENCLAW_STATE_DIR: "daemon-state",
+        OPENCLAW_HOME: "/daemon/home",
+        OPENCLAW_PROFILE: "work",
         PATH: "/daemon/bin",
+        TMPDIR: "/tmp",
+        TMP: "/service/tmp",
+        TEMP: "/service/temp",
       },
     });
 
     expect(env.OPENCLAW_GATEWAY_AUTH_TOKEN).toBe("runtime-token");
     expect(env.OPENCLAW_STATE_DIR).toBe(path.join("/srv/openclaw", "daemon-state"));
     expect(env.PATH).toBe("/daemon/bin");
+    expect(env.OPENCLAW_HOME).toBe("/daemon/home");
+    expect(env.OPENCLAW_PROFILE).toBe("work");
+    expect(env).toMatchObject({
+      TMPDIR: "/caller/cache",
+      TMP: "/caller/tmp",
+      TEMP: "/caller/temp",
+    });
     expect(env.NODE_DISABLE_COMPILE_CACHE).toBe("1");
     expect(resolveUpdatedInstallCommandEnv({ processEnv: env })).toEqual(env);
+  });
+
+  it.each([undefined, ""])("preserves scratch defaults with an operator value of %j", (value) => {
+    const env = resolveUpdatedInstallCommandEnv({
+      processEnv: { TMPDIR: value, TMP: value, TEMP: value },
+      serviceEnv: { TMPDIR: "/service/tmp", TMP: "/service/tmp", TEMP: "/service/tmp" },
+    });
+    expect(env).toMatchObject({
+      TMPDIR: value ?? "/service/tmp",
+      TMP: value ?? "/service/tmp",
+      TEMP: value ?? "/service/tmp",
+    });
   });
 
   it("preserves effective base-owned selectors while clearing unowned caller selectors", () => {
@@ -945,24 +890,5 @@ describe("hasLoadedLaunchdKeepAliveSupervisor", () => {
     expect(isLoaded).not.toHaveBeenCalled();
 
     platformSpy.mockRestore();
-  });
-});
-
-describe("resolvePostCoreUpdateChildStdio", () => {
-  it('returns "pipe" on Windows so the child never inherits the parent console handles', () => {
-    // On Windows, stdio:"inherit" passes the parent's console HANDLE to the child process.
-    // PowerShell/CMD will not return the prompt until every holder of those handles exits,
-    // causing the terminal to hang after `openclaw update` completes (#78445).
-    expect(resolvePostCoreUpdateChildStdio("win32")).toBe("pipe");
-  });
-
-  it('returns "inherit" on non-Windows platforms', () => {
-    expect(resolvePostCoreUpdateChildStdio("linux")).toBe("inherit");
-    expect(resolvePostCoreUpdateChildStdio("darwin")).toBe("inherit");
-  });
-
-  it('returns "pipe" for JSON output on every platform', () => {
-    expect(resolvePostCoreUpdateChildStdio("linux", true)).toBe("pipe");
-    expect(resolvePostCoreUpdateChildStdio("darwin", true)).toBe("pipe");
   });
 });

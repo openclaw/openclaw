@@ -18,8 +18,8 @@ import {
 import { uiConversationMatches, type UiSessionDefaultsHost } from "../sessions/session-key.ts";
 import {
   chatMetadataCache,
-  isSessionMetadataInvalidation,
   type ChatMetadataEntry,
+  type ChatMetadataInvalidation,
   type ChatMetadataPublication,
   type ChatMetadataRequest,
   type ChatMetadataRefresh,
@@ -40,7 +40,6 @@ function metadataScopeKey({ agentId, sessionKey, authProfileId }: ChatMetadataPa
 }
 
 const MAX_CACHED_CHAT_METADATA = 64;
-const SESSION_METADATA_DEBOUNCE_MS = 2_500;
 
 function metadataEntryFor(
   client: GatewayBrowserClient,
@@ -53,31 +52,17 @@ function metadataEntryFor(
     const invalidate = (
       scope?: ChatMetadataParams,
       sessionDefaults?: UiSessionDefaultsHost,
-      sessionEvent?: Record<string, unknown> | null,
+      {
+        sessionOnly = false,
+        matchesCatalog,
+        commandsChanged = true,
+        delayMs = 0,
+      }: ChatMetadataInvalidation = {},
     ) => {
-      if (
-        sessionEvent !== undefined &&
-        sessionEvent?.catalogChanged !== true &&
-        ((!scope && sessionEvent?.reason !== "delete" && sessionEvent?.reason !== "cleanup") ||
-          (sessionEvent?.phase !== "reset" &&
-            ![
-              "reset",
-              "patch",
-              "command-metadata",
-              "create",
-              "new",
-              "delete",
-              "recovery",
-              "cleanup",
-            ].some((reason) => reason === sessionEvent?.reason)))
-      ) {
-        return;
-      }
       const invalidated = Array.from(entries.values()).filter(
         (entry) =>
-          (sessionEvent === undefined ||
-            scope !== undefined ||
-            entry.scope.sessionKey !== undefined) &&
+          (!matchesCatalog || matchesCatalog(entry.scope)) &&
+          (!sessionOnly || scope !== undefined || entry.scope.sessionKey !== undefined) &&
           (sessionDefaults && scope?.sessionKey
             ? uiConversationMatches(
                 sessionDefaults,
@@ -91,20 +76,20 @@ function metadataEntryFor(
           (!scope?.authProfileId || entry.scope.authProfileId === scope.authProfileId),
       );
       // Retire every affected writer before subscribers can synchronously start replacements.
-      const sessionOnly =
-        scope?.sessionKey !== undefined && isSessionMetadataInvalidation(sessionEvent);
       for (const entry of invalidated) {
         entry.refreshRevision += 1;
-        entry.refreshAfter = sessionOnly ? Date.now() + SESSION_METADATA_DEBOUNCE_MS : undefined;
-        entry.result = undefined;
-        entry.writer = undefined;
-        entry.activeRequest?.controller.abort();
+        entry.refreshAfter = delayMs ? Date.now() + delayMs : undefined;
+        if (!sessionOnly && commandsChanged) {
+          entry.invalidated = true;
+          entry.writer = undefined;
+          entry.activeRequest?.controller.abort();
+        }
       }
       for (const entry of invalidated) {
         notifyChatMetadataListeners(entry, {
           type: "invalidated",
           scope: sessionOnly ? "session" : "full",
-          refreshSessionFacts: sessionOnly || (sessionEvent === undefined && !scope?.sessionKey),
+          refreshSessionFacts: sessionOnly || !scope?.sessionKey,
         });
         entry.release();
       }
@@ -169,9 +154,30 @@ function preparePublication(entry: ChatMetadataEntry): ChatMetadataPublication {
     isCurrent,
     publish: (result) => {
       // Startup responses may include a catalog; models.list owns its UI publication.
-      const metadata = { commands: result.commands };
+      const metadata =
+        "unchanged" in result
+          ? entry.result
+          : result.commands === undefined
+            ? undefined
+            : {
+                commands: result.commands,
+                ...(result.revision ? { revision: result.revision } : {}),
+                ...(result.requiredWorkerInferenceProfileId !== undefined
+                  ? { requiredWorkerInferenceProfileId: result.requiredWorkerInferenceProfileId }
+                  : {}),
+              };
+      if (!metadata) {
+        if (isCurrent()) {
+          entry.invalidated = true;
+        }
+        throw new Error("Chat commands are unavailable. Retry the metadata request.");
+      }
+      if ("unchanged" in result && metadata.revision !== result.revision) {
+        throw new Error("Chat metadata was unchanged without a retained revision.");
+      }
       if (isCurrent()) {
         entry.result = metadata;
+        entry.invalidated = false;
         notifyChatMetadataListeners(entry, {
           type: "result",
           result: metadata,
@@ -194,6 +200,17 @@ function beginChatMetadataRequest(
   entry: ChatMetadataEntry,
   revalidation: boolean,
 ): Promise<ChatMetadataResult> {
+  const current = entry.queuedRequest ?? entry.activeRequest;
+  if (
+    current?.publication.isCurrent() &&
+    !current.controller.signal.aborted &&
+    (!revalidation || current.revalidation || current === entry.queuedRequest)
+  ) {
+    if (revalidation) {
+      current.revalidation = true;
+    }
+    return current.promise;
+  }
   const publication = preparePublication(entry);
   const queued = entry.queuedRequest;
   if (queued) {
@@ -230,8 +247,9 @@ function beginChatMetadataRequest(
               }
               try {
                 result = await client.request<ChatMetadataResponse>("chat.metadata", {
-                  ...entry.scope,
+                  agentId: entry.scope.agentId,
                   includeModels: false,
+                  ...(entry.result?.revision ? { ifRevision: entry.result.revision } : {}),
                 });
                 break;
               } catch (error) {
@@ -281,7 +299,8 @@ export function peekChatMetadata(
   client: GatewayBrowserClient,
   scope: ChatMetadataParams,
 ): ChatMetadataResult | undefined {
-  return chatMetadataCache.get(client)?.entries.get(metadataScopeKey(scope))?.result;
+  const entry = chatMetadataCache.get(client)?.entries.get(metadataScopeKey(scope));
+  return entry?.invalidated ? undefined : entry?.result;
 }
 
 export function subscribeChatMetadata(
@@ -313,12 +332,8 @@ export function loadChatMetadata(
   scope: ChatMetadataParams,
 ): Promise<ChatMetadataResult> {
   const entry = metadataEntryFor(client, scope);
-  if (entry.result) {
+  if (entry.result && !entry.invalidated) {
     return Promise.resolve(entry.result);
-  }
-  const request = entry.queuedRequest ?? entry.activeRequest;
-  if (request?.publication.isCurrent() && !request.controller.signal.aborted) {
-    return request.promise;
   }
   return beginChatMetadataRequest(client, entry, false);
 }
@@ -327,17 +342,7 @@ export function revalidateChatMetadata(
   client: GatewayBrowserClient,
   scope: ChatMetadataParams,
 ): Promise<ChatMetadataResult> {
-  const entry = metadataEntryFor(client, scope);
-  const request = entry.queuedRequest ?? entry.activeRequest;
-  if (
-    request?.publication.isCurrent() &&
-    !request.controller.signal.aborted &&
-    (request.revalidation || request === entry.queuedRequest)
-  ) {
-    request.revalidation = true;
-    return request.promise;
-  }
-  return beginChatMetadataRequest(client, entry, true);
+  return beginChatMetadataRequest(client, metadataEntryFor(client, scope), true);
 }
 
 export function beginChatMetadataPublication(

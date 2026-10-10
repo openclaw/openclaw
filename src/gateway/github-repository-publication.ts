@@ -428,8 +428,9 @@ export function createRepositoryGitHubPublicationCoordinator(params: {
       }
       const loaded = loadGatewaySessionEntryReadOnly(input.sessionKey!, { agentId: input.agentId });
       const placement = loaded.entry?.sessionId
-        ? placements.get(loaded.entry.sessionId)
+        ? await placements.getAsync(loaded.entry.sessionId)
         : undefined;
+      input.requester.assertCurrent();
       const currentClaim = placement ? exactClaimForPlacement(placement) : undefined;
       if (input.expectedRunId !== undefined && input.expectedRunId !== currentClaim?.runId) {
         throw new Error("GitHub publication run identity changed.");
@@ -439,7 +440,7 @@ export function createRepositoryGitHubPublicationCoordinator(params: {
       if (
         terminalRepositoryGitHubPublication(row) ||
         claim ||
-        placements.get(row.session_id)?.turnClaim
+        (await placements.getAsync(row.session_id))?.turnClaim
       ) {
         return projectGitHubPublicationResult(row);
       }

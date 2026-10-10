@@ -141,7 +141,7 @@ describe("test runtime prerequisites", () => {
     ["tui-pty", ["--exclude", "tui/tui-text-wrap-pty.e2e.test.ts"], "runtime"],
     ["gateway-core", ["--exclude", "gateway-*.test.ts"], undefined],
     ["gateway", ["--exclude", "gateway-*.test.ts"], "runtime"],
-    ["tooling", ["--exclude", "**/gateway-codex-delivery-cache.test.ts"], "runtime"],
+    ["infra", ["--exclude", "**/gateway-codex-delivery-cache.test.ts"], "runtime"],
     [
       "agents-core",
       resolveVitestRuntimeConfigScopes("test/vitest/vitest.agents-core.config.ts").flatMap(
@@ -1654,7 +1654,7 @@ describe("scripts/test-projects changed-target routing", () => {
   it.each([
     ["src/agents/**/*.test.ts", "test/plugins"],
     ["src/plugin-sdk/memory-host-events.test.ts", "src/plugin-sdk/provider-auth.test.ts"],
-    ["src/plugin-sdk/outbound-media.bulk.test.ts", "src/plugin-sdk/provider-auth.test.ts"],
+    ["src/agents/provider-transport-fetch.capture.test.ts", "src/plugin-sdk/provider-auth.test.ts"],
   ])("retains the mixed watch rejection for %s and %s", (...targets) => {
     expect(() => buildVitestRunPlans(["--watch", ...targets])).toThrow(
       "watch mode with mixed test suites is not supported",
@@ -1694,7 +1694,7 @@ describe("scripts/test-projects changed-target routing", () => {
         "src/plugin-sdk/memory-host-events.test.ts",
       );
       expect(plan?.databaseWorkerWatchTests).not.toContain(
-        "src/plugin-sdk/outbound-media.bulk.test.ts",
+        "src/plugin-sdk/session-store-runtime.maintenance.test.ts",
       );
     }
     const [spec] = createVitestRunSpecs(["--watch", config, file], { baseEnv: {} });
@@ -1736,7 +1736,6 @@ describe("scripts/test-projects changed-target routing", () => {
       [`${failoverRoot}/failover-classification.corpus.test.ts`, "agents-core-isolated"],
       [`${failoverRoot}/provider-structured-signals.test.ts`, "agents-core-isolated"],
       [`${runtimeRoot}/materialize-model.test.ts`, "agents-support"],
-      [`${embeddedRoot}/run.inherited-auth-owner.test.ts`, "infra"],
       [
         `${embeddedRoot}/run.incomplete-turn.classification.test.ts`,
         "agents-embedded-agent-incomplete-turn",

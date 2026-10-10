@@ -45,7 +45,6 @@ export type ExecApprovalReplyMetadata = {
   sessionKey?: string;
 };
 
-/** Approval descriptor guaranteed to carry a canonical typed approval action. */
 export type TypedApprovalActionDescriptor = ExecApprovalActionDescriptor & {
   action: Extract<MessagePresentationAction, { type: "approval" }>;
 };
@@ -136,7 +135,6 @@ export function buildExecApprovalActionDescriptors(
     : [];
 }
 
-/** Build approval descriptors with explicit owner-aware typed actions. */
 export function buildTypedApprovalActionDescriptors(
   params: BuildExecApprovalActionDescriptorsParams & {
     approvalKind: ChannelApprovalKind;
@@ -159,7 +157,6 @@ export function buildTypedApprovalActionDescriptors(
   );
 }
 
-/** Build portable approval controls from decision descriptors. */
 export function buildApprovalPresentationFromActionDescriptors(
   actions: readonly ExecApprovalActionDescriptor[],
 ): MessagePresentation | undefined {
@@ -196,7 +193,6 @@ export function buildApprovalButtonPresentation(
   );
 }
 
-/** Build portable approval controls with explicit owner-aware typed actions. */
 export function buildTypedApprovalPresentation(
   params: BuildApprovalPresentationParams & { approvalKind: ChannelApprovalKind },
 ): MessagePresentation | undefined {
@@ -368,7 +364,6 @@ export function buildExecApprovalPendingReplyPayload(
   };
 }
 
-/** Build an exec approval prompt with canonical typed decision actions. */
 export function buildTypedExecApprovalPendingReplyPayload(
   params: ExecApprovalPendingReplyParams,
 ): ReplyPayload {
@@ -405,6 +400,13 @@ export function buildExecApprovalUnavailableReplyPayload(
     };
   }
 
+  const fallbackText = (extra?: { excludeChannel: string | undefined }) =>
+    buildGenericNativeExecApprovalFallbackText({
+      ...extra,
+      host: params.host,
+      nodeId: params.nodeId,
+    });
+
   if (params.reason === "initiating-platform-disabled") {
     lines.push(
       `Exec approval is required, but native chat exec approvals are not configured on ${params.channelLabel ?? "this platform"}.`,
@@ -421,33 +423,19 @@ export function buildExecApprovalUnavailableReplyPayload(
     if (setupText) {
       lines.push(setupText);
     } else {
-      lines.push(
-        buildGenericNativeExecApprovalFallbackText({
-          host: params.host,
-          nodeId: params.nodeId,
-        }),
-      );
+      lines.push(fallbackText());
     }
   } else if (params.reason === "initiating-platform-unsupported") {
     lines.push(
       `Exec approval is required, but ${params.channelLabel ?? "this platform"} does not support chat exec approvals.`,
     );
-    lines.push(
-      buildGenericNativeExecApprovalFallbackText({
-        excludeChannel: params.channel,
-        host: params.host,
-        nodeId: params.nodeId,
-      }),
-    );
+    lines.push(fallbackText({ excludeChannel: params.channel }));
   } else {
     lines.push(
       "Exec approval is required, but no interactive approval client is currently available.",
     );
     lines.push(
-      `${buildGenericNativeExecApprovalFallbackText({
-        host: params.host,
-        nodeId: params.nodeId,
-      })} Then retry the command. You can usually leave execApprovals.approvers unset when owner config already identifies the approvers.`,
+      `${fallbackText()} Then retry the command. You can usually leave execApprovals.approvers unset when owner config already identifies the approvers.`,
     );
   }
 

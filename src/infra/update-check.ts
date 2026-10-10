@@ -471,11 +471,32 @@ async function checkGitUpdateStatus(params: {
     upstreamCommit = null;
   }
 
-  const mergeBase = sha && upstreamCommit ? await readGit("merge-base", sha, upstreamCommit) : null;
-  const counts =
-    sha && upstreamCommit && mergeBase
+  const mergeBases =
+    sha && upstreamCommit ? await readGit("merge-base", "--all", sha, upstreamCommit) : null;
+  let counts =
+    sha && upstreamCommit && mergeBases
       ? await readGit("rev-list", "--left-right", "--count", `${sha}...${upstreamCommit}`)
       : null;
+  if (counts && mergeBases && (await readGit("rev-parse", "--is-shallow-repository")) !== "false") {
+    // A shallow common ancestor can hide commits exposed by another merge parent.
+    // Exact counts require every exclusive commit to descend from every visible
+    // merge base. Hidden ancestry is then common and cannot change the difference.
+    for (const mergeBase of mergeBases.split("\n")) {
+      // Use the argument-free form for compatibility with Git before 2.38.
+      const ancestryCounts = await Promise.all(
+        [
+          [sha, upstreamCommit],
+          [upstreamCommit, sha],
+        ].map(([tip, opposite]) =>
+          readGit("rev-list", "--count", "--ancestry-path", `${mergeBase}..${tip}`, `^${opposite}`),
+        ),
+      );
+      if (ancestryCounts.join("\t") !== counts) {
+        counts = null;
+        break;
+      }
+    }
+  }
 
   const parsed = counts?.match(/^(\d+)\s+(\d+)$/u);
 
@@ -527,27 +548,17 @@ async function checkDepsStatus(params: {
     "node_modules",
     ...(manager === "pnpm" ? [".modules.yaml"] : []),
   );
-  const paths = { manager, lockfilePath, markerPath };
   const lockExists = await exists(lockfilePath);
   const markerExists = await exists(markerPath);
-  if (!lockExists) {
-    return {
-      ...paths,
-      status: "unknown",
-      reason: "lockfile missing",
-    };
-  }
-  if (!markerExists) {
-    return {
-      ...paths,
-      status: "missing",
-      reason: "node_modules marker missing",
-    };
-  }
-
   return {
-    ...paths,
-    status: "ok",
+    manager,
+    lockfilePath,
+    markerPath,
+    ...(!lockExists
+      ? { status: "unknown" as const, reason: "lockfile missing" }
+      : !markerExists
+        ? { status: "missing" as const, reason: "node_modules marker missing" }
+        : { status: "ok" as const }),
   };
 }
 

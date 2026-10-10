@@ -340,17 +340,34 @@ it.each(["systemd-user-bus-unavailable", "service-manager-access-denied", undefi
       }
       const detail = reason
         ? formatServiceInspectionReason(reason)
-        : "Gateway service ownership could not be verified because inspection is unavailable.";
+        : "Gateway service inspection is unavailable";
       expect(failure.message).toContain(detail);
       expect(failure.message).not.toContain("identity changed");
       expect(failure.message).not.toContain("private-runtime-detail");
-      expect(failure.failureFacts).toEqual([
-        expect.objectContaining({
-          check: "managed-service",
-          code: reason ?? "service-ownership-unverified",
-          message: expect.stringContaining(detail.slice(0, 80)),
-        }),
-      ]);
+      expect(failure.message).toContain(
+        `Failing check managed-service-runtime (${reason ?? "service-ownership-unverified"})`,
+      );
+      expect(failure.message).toContain(`Update install root: ${process.cwd()}`);
+      expect(failure.message).toContain(`Gateway install root: ${process.cwd()}`);
+      expect(failure.message).toContain(
+        `Update binary: ${path.join(process.cwd(), "openclaw.mjs")}`,
+      );
+      expect(failure.message).toContain(
+        "Required: admitted service ownership owned; manager UID 2001; detected: unavailable; runtime unknown; manager UID unavailable",
+      );
+      expect(failure.message).toContain("openclaw gateway status --deep");
+      expect(failure.failureFacts).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            check: "managed-service-runtime",
+            code: reason ?? "service-ownership-unverified",
+            message:
+              "Required: admitted service ownership owned; manager UID 2001; detected: unavailable; runtime unknown; manager UID unavailable",
+          }),
+        ]),
+      );
+      expect(failure.failureFacts.length).toBeLessThanOrEqual(5);
+      expect(failure.failureFacts.every((fact) => (fact.message?.length ?? 0) <= 200)).toBe(true);
       const result = createUpdateCommandFailureResult({
         mode: "npm",
         durationMs: 0,
@@ -364,7 +381,11 @@ it.each(["systemd-user-bus-unavailable", "service-manager-access-denied", undefi
         root: params.root,
         state: await readGatewayServiceState(service),
       });
-      expect(() => assertGatewayServiceAdmissionUnchanged(before, verdict)).toThrow(detail);
+      expect(() => assertGatewayServiceAdmissionUnchanged(before, verdict)).toThrow(
+        reason
+          ? detail
+          : "Gateway service ownership could not be verified because inspection is unavailable.",
+      );
       if (reason) {
         expect(collectServiceInspectionFailureFacts(verdict)?.[0]).toMatchObject({
           code: reason,
@@ -479,7 +500,7 @@ it.each([
     });
 
     if (scenario.admitted) {
-      await expect(inspection).rejects.toThrow("Scheduled Task probe timed out after 30000 ms");
+      await expect(inspection).rejects.toThrow("Scheduled Task check timed out after 30000 ms");
     } else {
       const inspected = await inspection;
       expect(inspected.blockMessage).toBeUndefined();
@@ -494,7 +515,7 @@ it.each([
         );
         if (scenario.code === "ETIMEDOUT") {
           expect(inspected.serviceMutationSkipMessage).toContain(
-            "Scheduled Task probe timed out after 30000 ms",
+            "Scheduled Task check timed out after 30000 ms",
           );
           expect(inspected.serviceMutationSkipMessage).toContain("ETIMEDOUT");
         }
@@ -543,7 +564,7 @@ it("preserves a silent Scheduled Task probe failure through update and Doctor wa
       serviceMutationAllowed: false,
       serviceUpdateVerdict: { kind: "unavailable" },
     });
-    const detail = "Scheduled Task probe failed (exit 2): no output from PowerShell.";
+    const detail = "Scheduled Task check failed (exit 2): no output from PowerShell.";
     expect(inspection.blockMessage).toBeUndefined();
     expect(inspection.serviceMutationSkipMessage).toContain(detail);
     const maintenance = await beginDoctorMaintenance({

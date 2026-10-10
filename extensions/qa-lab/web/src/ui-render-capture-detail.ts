@@ -56,26 +56,23 @@ export function renderCaptureDetailView(model: CaptureViewModel): string {
               </div>
             </div>
             <div class="capture-nav-row">
-              ${
-                previousFlowEvent
-                  ? `<button class="capture-nav-button" data-capture-event="${esc(captureEventKey(previousFlowEvent))}" type="button">
-                      <span class="capture-nav-label">Previous on flow</span>
-                      <span class="capture-nav-meta">${esc(previousFlowEvent.kind)} · ${esc(new Date(previousFlowEvent.ts).toLocaleTimeString())}${
-                        previousFlowEventVisible ? "" : " · outside current view"
+              ${(
+                [
+                  [previousFlowEvent, previousFlowEventVisible, "Previous", "earlier"],
+                  [nextFlowEvent, nextFlowEventVisible, "Next", "later"],
+                ] as const
+              )
+                .map(([event, visible, label, position]) =>
+                  event
+                    ? `<button class="capture-nav-button" data-capture-event="${esc(captureEventKey(event))}" type="button">
+                      <span class="capture-nav-label">${label} on flow</span>
+                      <span class="capture-nav-meta">${esc(event.kind)} · ${esc(new Date(event.ts).toLocaleTimeString())}${
+                        visible ? "" : " · outside current view"
                       }</span>
                     </button>`
-                  : '<div class="capture-nav-placeholder">No earlier event on this flow.</div>'
-              }
-              ${
-                nextFlowEvent
-                  ? `<button class="capture-nav-button" data-capture-event="${esc(captureEventKey(nextFlowEvent))}" type="button">
-                      <span class="capture-nav-label">Next on flow</span>
-                      <span class="capture-nav-meta">${esc(nextFlowEvent.kind)} · ${esc(new Date(nextFlowEvent.ts).toLocaleTimeString())}${
-                        nextFlowEventVisible ? "" : " · outside current view"
-                      }</span>
-                    </button>`
-                  : '<div class="capture-nav-placeholder">No later event on this flow.</div>'
-              }
+                    : `<div class="capture-nav-placeholder">No ${position} event on this flow.</div>`,
+                )
+                .join("\n              ")}
             </div>
           </section>`
         : '<div class="empty-state">This event does not have a usable flow.</div>',

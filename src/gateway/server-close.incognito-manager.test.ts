@@ -3,12 +3,15 @@ import assert from "node:assert/strict";
 import { expect, it, vi } from "vitest";
 import { withinTest } from "../../test/helpers/promise.js";
 import { makeUserMessage } from "../../test/helpers/user-message.js";
-import { withSessionManagerIncognitoActor } from "../agents/sessions/session-manager-incognito-scope.js";
 import { SessionManager } from "../agents/sessions/session-manager.js";
+import { withIncognitoSessionActor } from "../config/sessions/session-incognito-binding.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { IncognitoSessionEndedError } from "../state/incognito-session-error.js";
+import { useIncognitoActorProbe } from "../state/openclaw-agent-execution-incognito.test-support.js";
 import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
 import { createGatewayMetadataCloseFixture } from "./server-close.metadata.test-support.js";
+
+const probe = useIncognitoActorProbe();
 
 it("settles accepted actor appends across the real close prelude before closing the actor", async ({
   signal,
@@ -47,11 +50,9 @@ it("settles accepted actor appends across the real close prelude before closing 
         updatedAt: Date.now(),
       },
     });
-    const manager = await withSessionManagerIncognitoActor(actor, () =>
-      SessionManager.openAsync(target),
-    );
+    const manager = await withIncognitoSessionActor(actor, () => SessionManager.openAsync(target));
     const actorEntered = createDeferredCore();
-    held = actor.run(authority, async () => {
+    held = probe.read(actor, authority, async () => {
       actorEntered.resolve();
       await release.promise;
     });
@@ -65,7 +66,7 @@ it("settles accepted actor appends across the real close prelude before closing 
       id: "incognito-manager-settlement",
       delayMs: 0,
       run: () =>
-        withSessionManagerIncognitoActor(
+        withIncognitoSessionActor(
           actor,
           async () => {
             const writing = manager.appendMessageAsync(makeUserMessage("accepted before close", 1));

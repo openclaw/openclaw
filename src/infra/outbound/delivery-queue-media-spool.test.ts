@@ -50,9 +50,9 @@ const {
   stageQueuePayloadMedia,
 } = await import("./delivery-queue-media-spool.js");
 const { enqueueDelivery } = await import("./delivery-queue-storage.js");
-const { loadDeliveryQueueEntry, pruneExpiredDeliveryQueueTombstones } =
-  await import("../delivery-queue-sqlite.js");
-const { seedDeliveryQueueEntry } = await import("../delivery-queue-sqlite.test-support.js");
+const { pruneExpiredDeliveryQueueTombstones } = await import("../delivery-queue-sqlite.js");
+const { loadDeliveryQueueEntry, seedDeliveryQueueEntry } =
+  await import("../delivery-queue-sqlite.test-support.js");
 const {
   LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME,
   OUTBOUND_DELIVERY_MIGRATION_QUEUE_NAME,

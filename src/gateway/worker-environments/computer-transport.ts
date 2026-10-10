@@ -246,7 +246,7 @@ export function createEnvironmentComputerTransportOwner(options: WorkerComputerO
         ),
       );
       if (input.operation === "capabilities") {
-        throw new Error("Session computer cannot request another capability probe");
+        throw new Error("Session computer cannot request another capability check");
       }
       return input;
     };
@@ -628,14 +628,14 @@ export function createEnvironmentComputerTransportOwner(options: WorkerComputerO
 /** Placement admission retains its exact turn claim; attachments use the same transport owner. */
 export function createWorkerComputerTransportOwner(
   options: WorkerComputerOwnerOptions & {
-    placements: Pick<WorkerSessionPlacementStore, "get" | "validateTurnClaim">;
+    placements: Pick<WorkerSessionPlacementStore, "get" | "getAsync" | "validateTurnClaim">;
   },
 ) {
   const create = createEnvironmentComputerTransportOwner(options);
-  return (claim: WorkerSessionTurnClaim): Promise<PreparedWorkerComputer | undefined> => {
-    const placement = options.placements.get(claim.sessionId);
+  return async (claim: WorkerSessionTurnClaim): Promise<PreparedWorkerComputer | undefined> => {
+    const placement = await options.placements.getAsync(claim.sessionId);
     if (placement?.state !== "active" || !options.placements.validateTurnClaim(claim)) {
-      return Promise.reject(new Error("Session desktop placement is no longer active"));
+      throw new Error("Session desktop placement is no longer active");
     }
     return create({
       environmentId: placement.environmentId,

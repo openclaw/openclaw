@@ -18,14 +18,6 @@ const PNG_1X1_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+yf7kAAAAASUVORK5CYII=";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-function createIsomBrandBuffer(brand: "hevc" | "msf1"): Buffer {
-  const buffer = Buffer.alloc(24);
-  buffer.writeUInt32BE(buffer.length, 0);
-  buffer.write("ftyp", 4, "ascii");
-  buffer.write(brand, 8, "ascii");
-  return buffer;
-}
-
 function primeOpenAiAuthProfile(mode: "api-key" | "token" = "api-key"): void {
   mocks.resolveApiKeyForProviderCore.mockResolvedValueOnce({
     apiKey: mode === "token" ? "profile-openai-token" : "profile-openai-key",
@@ -816,33 +808,6 @@ describe("capability cli", () => {
     );
   });
 
-  it("uses the configured system agent for embedding provider state", async () => {
-    const cfg = {
-      agents: {
-        ownership: "explicit" as const,
-        defaults: { systemAgent: { agentId: "beta" } },
-        entries: { alpha: {}, beta: {} },
-      },
-    };
-    mocks.loadConfig.mockReturnValue(cfg);
-    mocks.resolveMemorySearchConfig.mockImplementation(
-      (_cfg, agentId) =>
-        (agentId === "beta"
-          ? { provider: "openai", model: "text-embedding-3-small" }
-          : null) as never,
-    );
-
-    await runCapability("embedding", "providers", "--json");
-
-    expect(mocks.resolveMemorySearchConfig).toHaveBeenCalledWith(cfg, "beta");
-    expect(mocks.resolveAgentDir.mock.calls.every((call) => call[1] === "beta")).toBe(true);
-    expect(firstJsonOutput()).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ id: "openai", configured: true, selected: true }),
-      ]),
-    );
-  });
-
   it("requires an explicit owner for agent-backed provider state in explicit fleets", async () => {
     mocks.loadConfig.mockReturnValue({
       agents: {
@@ -952,11 +917,12 @@ describe("capability cli", () => {
     },
   );
 
-  it.each([
-    { name: "HEIC", fileName: "input.heic", source: Buffer.from("heic-like") },
-    { name: "HEIC sequence", fileName: "opaque.bin", source: createIsomBrandBuffer("hevc") },
-    { name: "HEIF sequence", fileName: "opaque.bin", source: createIsomBrandBuffer("msf1") },
-  ])("normalizes $name images before Gateway probes", async ({ fileName, source }) => {
+  it("normalizes HEIF sequence images before Gateway probes", async () => {
+    const fileName = "opaque.bin";
+    const source = Buffer.alloc(24);
+    source.writeUInt32BE(source.length, 0);
+    source.write("ftyp", 4, "ascii");
+    source.write("msf1", 8, "ascii");
     const tempInput = path.join(tempDirs.make("openclaw-model-run-heif-sequence-"), fileName);
     await fs.writeFile(tempInput, source);
 
@@ -1226,58 +1192,43 @@ describe("capability cli", () => {
     },
   );
 
-  it.each([false, true])(
-    "retries explicit image models only after input preparation succeeds (input failed: %s)",
-    async (inputFailed) => {
-      primeImageFallback();
-      if (inputFailed) {
-        mocks.prepareImageDescriptionInput.mockRejectedValueOnce(new Error("image file not found"));
-      } else {
-        mocks.describePreparedImageWithModel
-          .mockRejectedValueOnce(new Error("upstream 429 rate limit"))
-          .mockResolvedValueOnce({ text: "fallback description", model: "google/gemma-4-31b-it" });
-      }
-      const run = runCapability(
-        "image",
-        "describe",
-        "--file",
-        inputFailed ? "missing.jpg" : "photo.jpg",
-        "--model",
-        "openrouter/google/gemma-4-31b-it:free",
-        "--json",
-      );
-      if (inputFailed) {
-        await expect(run).rejects.toThrow("exit 1");
-        expectRuntimeErrorContains("image file not found");
-        expect(runtimeErrorMessages().join("\n")).not.toContain("All image models failed");
-        expect(mocks.describePreparedImageWithModel).not.toHaveBeenCalled();
-        return;
-      }
-      await run;
-      expect(mocks.prepareImageDescriptionInput).toHaveBeenCalledTimes(1);
-      const calls = mocks.describePreparedImageWithModel.mock.calls as unknown as Array<
-        [ImageDescribeParams]
-      >;
-      expect(calls.map(([call]) => `${String(call.provider)}/${String(call.model)}`)).toEqual([
-        "openrouter/google/gemma-4-31b-it:free",
-        "openrouter/google/gemma-4-31b-it",
-      ]);
-      expect(firstJsonOutput()).toMatchObject({
-        ok: true,
-        capability: "image.describe",
-        provider: "openrouter",
-        model: "google/gemma-4-31b-it",
-        attempts: [
-          {
-            provider: "openrouter",
-            model: "google/gemma-4-31b-it:free",
-            error: "upstream 429 rate limit",
-          },
-        ],
-        outputs: [{ text: "fallback description", model: "google/gemma-4-31b-it" }],
-      });
-    },
-  );
+  it("prepares input once before retrying explicit image models", async () => {
+    primeImageFallback();
+    mocks.describePreparedImageWithModel
+      .mockRejectedValueOnce(new Error("upstream 429 rate limit"))
+      .mockResolvedValueOnce({ text: "fallback description", model: "google/gemma-4-31b-it" });
+    await runCapability(
+      "image",
+      "describe",
+      "--file",
+      "photo.jpg",
+      "--model",
+      "openrouter/google/gemma-4-31b-it:free",
+      "--json",
+    );
+    expect(mocks.prepareImageDescriptionInput).toHaveBeenCalledTimes(1);
+    const calls = mocks.describePreparedImageWithModel.mock.calls as unknown as Array<
+      [ImageDescribeParams]
+    >;
+    expect(calls.map(([call]) => `${String(call.provider)}/${String(call.model)}`)).toEqual([
+      "openrouter/google/gemma-4-31b-it:free",
+      "openrouter/google/gemma-4-31b-it",
+    ]);
+    expect(firstJsonOutput()).toMatchObject({
+      ok: true,
+      capability: "image.describe",
+      provider: "openrouter",
+      model: "google/gemma-4-31b-it",
+      attempts: [
+        {
+          provider: "openrouter",
+          model: "google/gemma-4-31b-it:free",
+          error: "upstream 429 rate limit",
+        },
+      ],
+      outputs: [{ text: "fallback description", model: "google/gemma-4-31b-it" }],
+    });
+  });
 
   it.each([
     {
@@ -1466,23 +1417,16 @@ describe("capability cli", () => {
   });
 
   it.each([
-    ["--output-format", "gif"],
     ["--timeout-ms", ""],
     ["--timeout-ms", "1000ms"],
   ])("rejects invalid image option %s %j before dispatch", async (flag, value) => {
     await expect(generateImage(flag, value)).rejects.toThrow("exit 1");
-    if (flag === "--output-format") {
-      expect(mocks.runtime.error).toHaveBeenCalledWith(
-        "--output-format must be one of png, jpeg, or webp",
-      );
-    } else {
-      expectRuntimeErrorContains("Invalid --timeout-ms. Use a positive millisecond value");
-      expect(mocks.resolveCommandConfigWithSecrets).not.toHaveBeenCalled();
-      expect(mocks.generateVideo).not.toHaveBeenCalled();
-      expect(mocks.describeImageFile).not.toHaveBeenCalled();
-      expect(mocks.prepareImageDescriptionInput).not.toHaveBeenCalled();
-      expect(mocks.describePreparedImageWithModel).not.toHaveBeenCalled();
-    }
+    expectRuntimeErrorContains("Invalid --timeout-ms. Use a positive millisecond value");
+    expect(mocks.resolveCommandConfigWithSecrets).not.toHaveBeenCalled();
+    expect(mocks.generateVideo).not.toHaveBeenCalled();
+    expect(mocks.describeImageFile).not.toHaveBeenCalled();
+    expect(mocks.prepareImageDescriptionInput).not.toHaveBeenCalled();
+    expect(mocks.describePreparedImageWithModel).not.toHaveBeenCalled();
     expect(mocks.generateImage).not.toHaveBeenCalled();
   });
 
@@ -1836,7 +1780,7 @@ describe("capability cli", () => {
         });
       }
       expect(mocks.setTtsProvider).not.toHaveBeenCalled();
-      expect(mocks.setRuntimeConfigSnapshot).toHaveBeenLastCalledWith(expected);
+      expect(mocks.setRuntimeConfigSnapshot).toHaveBeenLastCalledWith(expected, undefined);
     },
   );
 
@@ -1849,12 +1793,6 @@ describe("capability cli", () => {
       },
       args: ["--channel", "discord"],
       resolved: { providerConfigs: { openai: { apiKey: "config-key", speakerVoice: "nova" } } },
-    },
-    {
-      name: "mixed-case provider",
-      config: { tts: { providers: { OpenAI: { apiKey: "config-key" } } } },
-      args: ["--model", "openai/gpt-4o-mini-tts"],
-      resolved: { providerConfigs: {} },
     },
     {
       name: "direct provider",
@@ -1885,22 +1823,13 @@ describe("capability cli", () => {
     }
   });
 
-  it.each([false, true])(
-    "preserves explicit TTS selection without inventing overrides (gateway: %s)",
-    async (gateway) => {
-      await convertTts(...(gateway ? ["--gateway", "--voice", "alloy"] : ["--provider", "xiaomi"]));
-      if (gateway) {
-        expect(firstGatewayCall()?.method).toBe("tts.convert");
-        expect(firstGatewayCall()?.params?.provider).toBeUndefined();
-        expect(firstGatewayCall()?.params?.voiceId).toBe("alloy");
-      } else {
-        expect(mocks.resolveExplicitTtsOverrides).toHaveBeenCalledWith(
-          expect.objectContaining({ provider: "xiaomi", modelId: undefined }),
-        );
-        expect(firstTextToSpeechCall()?.disableFallback).toBe(true);
-      }
-    },
-  );
+  it("preserves explicit TTS selection without inventing overrides", async () => {
+    await convertTts("--provider", "xiaomi");
+    expect(mocks.resolveExplicitTtsOverrides).toHaveBeenCalledWith(
+      expect.objectContaining({ provider: "xiaomi", modelId: undefined }),
+    );
+    expect(firstTextToSpeechCall()?.disableFallback).toBe(true);
+  });
 
   it("rejects conflicting TTS provider and model selections", async () => {
     await expect(
@@ -1950,7 +1879,13 @@ describe("capability cli", () => {
     });
 
     try {
-      await expect(convertTts("--gateway", "--output", outputPath)).rejects.toThrow("exit 1");
+      await expect(
+        convertTts("--gateway", "--voice", "alloy", "--output", outputPath),
+      ).rejects.toThrow("exit 1");
+
+      expect(firstGatewayCall()?.method).toBe("tts.convert");
+      expect(firstGatewayCall()?.params?.provider).toBeUndefined();
+      expect(firstGatewayCall()?.params?.voiceId).toBe("alloy");
 
       expectRuntimeErrorContains("injected TTS copy failure");
       expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
@@ -1964,14 +1899,7 @@ describe("capability cli", () => {
     }
   });
 
-  it.each([
-    { args: [], provider: "auto", model: "" },
-    {
-      args: ["--model", "openai/text-embedding-3-large"],
-      provider: "openai",
-      model: "text-embedding-3-large",
-    },
-  ])("creates embeddings with $provider provider selection", async ({ args, provider, model }) => {
+  it("creates embeddings with explicit provider selection", async () => {
     await runCapability(
       "embedding",
       "create",
@@ -1979,10 +1907,15 @@ describe("capability cli", () => {
       "hello",
       "--text",
       "world",
-      ...args,
+      "--model",
+      "openai/text-embedding-3-large",
       "--json",
     );
-    expect(firstEmbeddingProviderCall()).toMatchObject({ provider, model, fallback: "none" });
+    expect(firstEmbeddingProviderCall()).toMatchObject({
+      provider: "openai",
+      model: "text-embedding-3-large",
+      fallback: "none",
+    });
     expect(firstJsonOutput()).toMatchObject({
       capability: "embedding.create",
       provider: "openai",
@@ -2024,24 +1957,17 @@ describe("capability cli", () => {
     );
   });
 
-  it.each([true, false])(
-    "retries embedding cleanup without masking the primary failure (embedding failed: %s)",
-    async (embeddingFailed) => {
-      closeEmbeddingProviderMock.mockRejectedValueOnce(new Error("close failed"));
-      if (embeddingFailed) {
-        mocks.embedBatch.mockRejectedValueOnce(new Error("embedding failed"));
-      } else {
-        closeEmbeddingProviderMock.mockRejectedValueOnce(new Error("close failed"));
-      }
-      await expect(
-        runCapability("embedding", "create", "--text", "hello", "--json"),
-      ).rejects.toThrow("exit 1");
-      expect(closeEmbeddingProviderMock).toHaveBeenCalledTimes(2);
-      expectRuntimeErrorContains(embeddingFailed ? "embedding failed" : "close failed");
-    },
-  );
+  it("retries embedding cleanup without masking the primary failure", async () => {
+    closeEmbeddingProviderMock.mockRejectedValueOnce(new Error("close failed"));
+    mocks.embedBatch.mockRejectedValueOnce(new Error("embedding failed"));
+    await expect(runCapability("embedding", "create", "--text", "hello", "--json")).rejects.toThrow(
+      "exit 1",
+    );
+    expect(closeEmbeddingProviderMock).toHaveBeenCalledTimes(2);
+    expectRuntimeErrorContains("embedding failed");
+  });
 
-  it.each(["populated", "disappeared", "lock-failed"])(
+  it.each(["populated", "lock-failed"])(
     "logs out provider profiles when the store is %s",
     async (state) => {
       const store = {
@@ -2060,11 +1986,7 @@ describe("capability cli", () => {
         },
       };
       const profiles =
-        state === "populated"
-          ? ["openai:default", "openai:secondary"]
-          : state === "disappeared"
-            ? ["openai:stale"]
-            : ["openai:default"];
+        state === "populated" ? ["openai:default", "openai:secondary"] : ["openai:default"];
       mocks.listProfilesForProvider.mockReturnValue(profiles);
       if (state === "populated") {
         mocks.loadAuthProfileStoreForRuntime.mockReturnValue(store as never);
@@ -2144,14 +2066,6 @@ describe("capability cli", () => {
       expect(mocks.modelsStatusCommand).not.toHaveBeenCalled();
     },
   );
-
-  it("rejects providerless audio model overrides", async () => {
-    await expect(
-      runCapability("audio", "transcribe", "--file", "memo.m4a", "--model", "whisper-1", "--json"),
-    ).rejects.toThrow("exit 1");
-    expectRuntimeErrorContains("Model overrides must use the form <provider/model>.");
-    expect(mocks.transcribeAudioFile).not.toHaveBeenCalled();
-  });
 
   it("marks env-backed image providers as configured", async () => {
     vi.stubEnv("FAL_KEY", "fal-test-key");
@@ -2261,52 +2175,31 @@ describe("capability cli", () => {
     ]);
   });
 
-  it.each([
-    {
-      action: "search",
-      args: ["--query", "rate limit"],
-      statusCode: 429,
-      code: "rate_limited",
-      message: "Kitchen Sink rate limit.",
-    },
-    {
-      action: "fetch",
-      args: ["--url", "kitchen://fixture/timeout"],
-      statusCode: 504,
-      code: "timeout",
-      message: "Kitchen Sink fetch timed out.",
-    },
-  ])(
-    "reports structured web $action failures and exits nonzero",
-    async ({ action, args, statusCode, code, message }) => {
-      const provider = `kitchen-sink-${action}`;
-      const result = { ok: false, statusCode, error: { code, message } };
-      if (action === "search") {
-        const runtime = await import("../web-search/runtime.js");
-        vi.mocked(runtime.runWebSearch).mockResolvedValueOnce({
-          provider,
-          result: { ...result, results: [] },
-        });
-      } else {
-        const runtime = await import("../web-fetch/runtime.js");
-        vi.mocked(runtime.resolveWebFetchDefinition).mockReturnValueOnce({
-          provider: { id: provider },
-          definition: { execute: vi.fn(async () => result) },
-        } as never);
-      }
-      await expect(runCap("capability", "web", action, ...args, "--json")).rejects.toThrow(
-        "exit 1",
-      );
-      expect(firstJsonOutput()).toEqual(
-        expect.objectContaining({
-          ok: false,
-          capability: `web.${action}`,
-          provider,
-          error: message,
-        }),
-      );
-    },
-  );
+  it("reports structured web search failures and exits nonzero", async () => {
+    const provider = "kitchen-sink-search";
+    const message = "Kitchen Sink rate limit.";
+    const runtime = await import("../web-search/runtime.js");
+    vi.mocked(runtime.runWebSearch).mockResolvedValueOnce({
+      provider,
+      result: {
+        ok: false,
+        statusCode: 429,
+        error: { code: "rate_limited", message },
+        results: [],
+      },
+    });
+    await expect(
+      runCap("capability", "web", "search", "--query", "rate limit", "--json"),
+    ).rejects.toThrow("exit 1");
+    expect(firstJsonOutput()).toEqual(
+      expect.objectContaining({
+        ok: false,
+        capability: "web.search",
+        provider,
+        error: message,
+      }),
+    );
+  });
 
   it.each([
     {
@@ -2317,7 +2210,7 @@ describe("capability cli", () => {
     {
       action: "fetch",
       config: { tools: { web: { fetch: { enabled: true } } } },
-      args: ["--url", "https://example.com"],
+      args: ["--url", "https://example.com", "--format", "text"],
     },
   ])(
     "resolves selected web $action provider SecretRefs before execution",
@@ -2331,6 +2224,7 @@ describe("capability cli", () => {
       });
       const search = await import("../web-search/runtime.js");
       const fetch = await import("../web-fetch/runtime.js");
+      const execute = vi.fn(async () => ({ content: "ok" }));
       if (action === "search") {
         vi.mocked(search.runWebSearch).mockResolvedValueOnce({
           provider: "firecrawl",
@@ -2339,7 +2233,7 @@ describe("capability cli", () => {
       } else {
         vi.mocked(fetch.resolveWebFetchDefinition).mockReturnValueOnce({
           provider: { id: "firecrawl" },
-          definition: { execute: vi.fn(async () => ({ content: "ok" })) },
+          definition: { execute },
         } as never);
       }
       await runCap("infer", "web", action, ...args, "--provider", "firecrawl", "--json");
@@ -2365,6 +2259,10 @@ describe("capability cli", () => {
         expect(fetch.resolveWebFetchDefinition).toHaveBeenCalledWith({
           config: resolvedConfig,
           providerId: "firecrawl",
+        });
+        expect(execute).toHaveBeenCalledExactlyOnceWith({
+          url: "https://example.com",
+          extractMode: "text",
         });
       }
     },

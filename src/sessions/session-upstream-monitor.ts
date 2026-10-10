@@ -57,24 +57,21 @@ type SessionUpstreamMissingCounter = {
 // can rebase a session onto a new source whose activity ids (e.g. Claude byte
 // offsets) collide with the old source; hashing this into dedupe keys and the CAS
 // keeps those from silently deduping genuine new activity or accepting a stale scan.
-function upstreamSourceKey(probe: {
-  hostId: string;
-  threadId: string;
-  upstreamRef: unknown;
-}): string {
+function upstreamSourceKey(
+  probe: Pick<SessionUpstreamProbe, "hostId" | "threadId" | "upstreamRef">,
+): string {
   return createHash("sha256")
     .update(`${probe.hostId}\u0000${probe.threadId}\u0000${JSON.stringify(probe.upstreamRef)}`)
     .digest("hex")
     .slice(0, 16);
 }
 
-function upstreamMonitorLinkKey(probe: {
-  sessionKey: string;
-  agentId: string;
-  hostId: string;
-  threadId: string;
-  upstreamRef: unknown;
-}): string {
+function upstreamMonitorLinkKey(
+  probe: Pick<
+    SessionUpstreamProbe,
+    "sessionKey" | "agentId" | "hostId" | "threadId" | "upstreamRef"
+  >,
+): string {
   return `${probe.sessionKey}\n${probe.agentId}\n${upstreamSourceKey(probe)}`;
 }
 
@@ -423,7 +420,7 @@ async function runSessionUpstreamMonitorTick(
         }
       }
     } catch (error) {
-      log.warn(`upstream activity probe failed for ${catalogId}: ${String(error)}`);
+      log.warn(`upstream activity check failed for ${catalogId}: ${String(error)}`);
     }
   }
 }

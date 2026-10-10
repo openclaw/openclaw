@@ -10,6 +10,7 @@ import type {
 import { drainWorkerSessionPlacement } from "./placement-drain.js";
 import { readWorkerPlacementMovesReadOnly } from "./placement-move-intent.js";
 import { createPlacementPendingFailureOps } from "./placement-pending-failure.js";
+import { readWorkerSessionPlacementProjectionInDatabase } from "./placement-read-projection.js";
 import {
   advanceCursor,
   normalizeEpoch,
@@ -79,12 +80,7 @@ function operation<
         const source = guardedWorkspaceWrite ? input.sessionEntryCurrentSource : undefined;
         const admit = (stage: "transaction" | "commit", facts: unknown) =>
           requestSessionEntryCurrentAdmission(source, { stage, facts }, { lookup: "logical" });
-        admit(
-          "transaction",
-          guardedWorkspaceWrite
-            ? { placement: find(db, sessionId), placementMove: move() }
-            : undefined,
-        );
+        admit("transaction", { placement: find(db, sessionId), placementMove: move() });
         const receipt = execute(
           {
             path: database.path,
@@ -95,8 +91,24 @@ function operation<
           },
           input,
         );
-        receipt.workspaceResult =
-          listPendingWorkerWorkspaceResultsInDatabase(db, sessionId)[0] ?? null;
+        if (
+          receipt.placement?.state === "local" &&
+          (type === "placementTurns.claim" ||
+            type === "placementTurns.release" ||
+            type === "placementTurns.releaseIfOwned")
+        ) {
+          // Replace the existing result read with complete presentation facts in
+          // this transaction, avoiding another projection request after commit.
+          receipt.projection = readWorkerSessionPlacementProjectionInDatabase(
+            db,
+            [sessionId],
+            [],
+          ).projection;
+          receipt.workspaceResult = receipt.projection.pendingResults.get(sessionId) ?? null;
+        } else {
+          receipt.workspaceResult =
+            listPendingWorkerWorkspaceResultsInDatabase(db, sessionId)[0] ?? null;
+        }
         receipt.placementMove = move();
         admit("commit", receipt);
         deferSqliteWorkerCommitReceipt(db, receipt);

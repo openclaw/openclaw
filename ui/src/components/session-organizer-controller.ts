@@ -39,7 +39,6 @@ import type { SessionOwnerOption } from "./session-owner-chip.ts";
 export type { SessionOrganizerControllerHost } from "./session-organizer-controller-types.ts";
 
 type SessionOrganizerOperations = typeof import("./session-organizer-operations.runtime.ts");
-/** Custom session groups, collapse state, and drag-and-drop assignment. */
 export class SessionOrganizerController {
   collapsedSessionSections = loadStoredCollapsedSessionSections();
   draggingSessionKey: string | null = null;
@@ -97,15 +96,27 @@ export class SessionOrganizerController {
     return operations.patchSession(this.host, session, patch, scope, options);
   };
 
-  async snoozeSessionWithUndo(session: SidebarRecentSession, snoozedUntil: number): Promise<void> {
-    await this.runOperation((operations, scope) =>
+  snoozeSessionWithUndo(session: SidebarRecentSession, snoozedUntil: number): Promise<void> {
+    return this.runOperation((operations, scope) =>
       operations.snoozeSessionWithUndo(this.host, session, snoozedUntil, scope),
     );
   }
 
-  async archiveSessionWithUndo(session: SidebarRecentSession): Promise<void> {
-    await this.runOperation((operations, scope) =>
+  archiveSessionWithUndo(session: SidebarRecentSession): Promise<void> {
+    return this.runOperation((operations, scope) =>
       operations.archiveSessionWithUndo(this.host, session, scope),
+    );
+  }
+
+  archiveSessionTreeWithUndo(session: SidebarRecentSession): Promise<void> {
+    return this.runOperation((operations, scope) =>
+      operations.archiveSessionTreeWithUndo(this.host, session, scope),
+    );
+  }
+
+  promoteSession(session: SidebarRecentSession): Promise<void> {
+    return this.runOperation((operations, scope) =>
+      operations.promoteSession(this.host, session, scope),
     );
   }
 
@@ -123,37 +134,37 @@ export class SessionOrganizerController {
     );
   }
 
-  async forkSession(session: SidebarRecentSession): Promise<void> {
-    await this.runOperation((operations, scope) =>
+  forkSession(session: SidebarRecentSession): Promise<void> {
+    return this.runOperation((operations, scope) =>
       operations.forkSession(this.host, session, scope),
     );
   }
 
-  async stopCloudWorker(session: SidebarRecentSession): Promise<void> {
-    await this.runOperation((operations, scope) =>
+  stopCloudWorker(session: SidebarRecentSession): Promise<void> {
+    return this.runOperation((operations, scope) =>
       operations.stopCloudWorker(this.host, session, scope),
     );
   }
 
-  async setSessionInvolvement(session: SidebarRecentSession, hidden: boolean): Promise<void> {
-    await this.runOperation((operations, scope) =>
+  setSessionInvolvement(session: SidebarRecentSession, hidden: boolean): Promise<void> {
+    return this.runOperation((operations, scope) =>
       operations.setSessionInvolvement(this.host, session, hidden, scope),
     );
   }
 
-  async assignSessionOwner(
+  assignSessionOwner(
     session: SidebarRecentSession,
     owner: Pick<SessionOwnerOption, "type" | "id">,
   ): Promise<void> {
-    await this.runOperation((operations, scope) =>
+    return this.runOperation((operations, scope) =>
       operations.assignSessionOwner(this.host, session, owner, scope),
     );
   }
 
-  async deleteSession(session: SidebarRecentSession): Promise<void> {
+  deleteSession(session: SidebarRecentSession): Promise<void> {
     // Sidebar is the surface the delete-confirm setting names, so it is the one
     // caller allowed to offer the opt-out.
-    await this.runOperation((operations, scope) =>
+    return this.runOperation((operations, scope) =>
       operations.deleteSession(this.host, session, scope, { offerSkip: true }),
     );
   }
@@ -183,6 +194,13 @@ export class SessionOrganizerController {
     this.sidebarZoneDropTarget = null;
     this.sessionListRemovalDrop = false;
     this.host.requestUpdate();
+  }
+
+  get isDraggingChildSession(): boolean {
+    return Boolean(
+      this.draggingSessionKey &&
+      this.host.findSidebarMenuSessionByKey(this.draggingSessionKey)?.isChild,
+    );
   }
 
   startSessionDrag(session: SidebarRecentSession): void {
@@ -288,8 +306,8 @@ export class SessionOrganizerController {
     }
     const position = this.sidebarZoneDropTarget?.position;
     const sessionKey = readSessionDragData(event.dataTransfer);
-    const session = sessionKey ? this.host.findSidebarSessionByKey(sessionKey) : undefined;
-    if (session && !session.pinnable) {
+    const session = sessionKey ? this.host.findSidebarMenuSessionByKey(sessionKey) : undefined;
+    if (session && !session.pinnable && !session.isChild) {
       this.finishSidebarEntryDrag();
       return;
     }
@@ -298,7 +316,11 @@ export class SessionOrganizerController {
       // against the then-current order: a failed patch must not leave an
       // unpinned slot behind, and a stale snapshot must not undo zone edits
       // that raced the request.
-      void this.patchSession(session, { pinned: true }, { sessionScope: true }).then((result) => {
+      void this.patchSession(
+        session,
+        { pinned: true, ...(session.isChild ? { sidebarRoot: true } : {}) },
+        { sessionScope: true },
+      ).then((result) => {
         if (result === "completed") {
           this.writeSidebarEntryAt(entry, targetEntry, position);
         }
@@ -331,9 +353,9 @@ export class SessionOrganizerController {
       return;
     }
     const routeDrag = sidebarRouteDragActive(event.dataTransfer);
-    const sessionKey = readSessionDragData(event.dataTransfer);
-    const session = sessionKey ? this.host.findSidebarSessionByKey(sessionKey) : undefined;
-    if (!routeDrag && !session?.pinned) {
+    const sessionKey = this.draggingSessionKey ?? readSessionDragData(event.dataTransfer);
+    const session = sessionKey ? this.host.findSidebarMenuSessionByKey(sessionKey) : undefined;
+    if (!routeDrag && !session?.pinned && !session?.isChild) {
       return;
     }
     event.preventDefault();
@@ -364,8 +386,12 @@ export class SessionOrganizerController {
       return;
     }
     const sessionKey = readSessionDragData(event.dataTransfer);
-    const session = sessionKey ? this.host.findSidebarSessionByKey(sessionKey) : undefined;
-    if (session?.pinned) {
+    const session = sessionKey ? this.host.findSidebarMenuSessionByKey(sessionKey) : undefined;
+    if (session?.isChild) {
+      event.preventDefault();
+      event.stopPropagation();
+      void this.promoteSession(session);
+    } else if (session?.pinned) {
       event.preventDefault();
       // patchSession prunes the persisted zone entry once the unpin lands.
       void this.patchSession(session, { pinned: false }, { sessionScope: true });
@@ -386,8 +412,8 @@ export class SessionOrganizerController {
     }
   }
 
-  async renameSession(session: SidebarRecentSession): Promise<void> {
-    await this.runOperation((operations, scope) =>
+  renameSession(session: SidebarRecentSession): Promise<void> {
+    return this.runOperation((operations, scope) =>
       operations.renameSession(this.host, session, scope),
     );
   }
@@ -465,8 +491,8 @@ export class SessionOrganizerController {
     });
   }
 
-  async deleteSessionGroupFromMenu(group: string): Promise<void> {
-    await this.runOperation(async (operations, scope) => {
+  deleteSessionGroupFromMenu(group: string): Promise<void> {
+    return this.runOperation(async (operations, scope) => {
       if (!(await operations.deleteSessionGroup(this.host, group, scope))) {
         return;
       }
@@ -528,12 +554,12 @@ export class SessionOrganizerController {
     this.saveCollapsedSessionSections(collapsed);
   }
 
-  async reorderSidebarSection(
+  reorderSidebarSection(
     sourceSectionId: string,
     targetSectionId: string,
     position: "before" | "after",
   ): Promise<void> {
-    await this.runOperation((operations, scope) =>
+    return this.runOperation((operations, scope) =>
       operations.reorderSidebarSection(
         this.host,
         sourceSectionId,
@@ -544,12 +570,12 @@ export class SessionOrganizerController {
     );
   }
 
-  async assignSessionCategory(
+  assignSessionCategory(
     session: SidebarRecentSession,
     category: string | null,
     patch: { pinned?: boolean } = {},
   ): Promise<void> {
-    await this.runOperation((operations, scope) =>
+    return this.runOperation((operations, scope) =>
       operations.assignSessionCategory(this.host, session, category, scope, patch),
     );
   }
@@ -596,7 +622,7 @@ export class SessionOrganizerController {
     // Browsers protect transferred data during dragover. Use the key recorded
     // at dragstart for hover eligibility; sectionDrop reads the payload itself.
     const session = this.draggingSessionKey
-      ? this.host.findSidebarSessionByKey(this.draggingSessionKey)
+      ? this.host.findSidebarMenuSessionByKey(this.draggingSessionKey)
       : undefined;
     if (!this.sectionAcceptsSession(sectionId, category, session)) {
       event.stopPropagation();
@@ -633,7 +659,7 @@ export class SessionOrganizerController {
       return;
     }
     // Rows can be dragged from a browsed agent section, so search all caches.
-    const session = sessionKey ? this.host.findSidebarSessionByKey(sessionKey) : undefined;
+    const session = sessionKey ? this.host.findSidebarMenuSessionByKey(sessionKey) : undefined;
     if (!sourceSectionId && !this.sectionAcceptsSession(sectionId, category, session)) {
       event.stopPropagation();
       return;
@@ -647,12 +673,16 @@ export class SessionOrganizerController {
           : "before";
       void this.reorderSidebarSection(sourceSectionId, sectionId, position);
     } else if (session && sectionId === "pinned") {
-      if (session.pinnable && !session.pinned) {
-        void this.patchSession(session, { pinned: true }, { sessionScope: true });
+      if ((session.pinnable || session.isChild) && !session.pinned) {
+        void this.patchSession(
+          session,
+          { pinned: true, ...(session.isChild ? { sidebarRoot: true } : {}) },
+          { sessionScope: true },
+        );
       }
     } else if (session) {
       const nextCategory = category ?? null;
-      if (session.category !== nextCategory || session.pinned) {
+      if (session.category !== nextCategory || session.pinned || session.isChild) {
         // The pinned:false leg prunes the persisted zone entry via patchSession.
         void this.assignSessionCategory(
           session,

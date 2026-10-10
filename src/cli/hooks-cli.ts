@@ -47,12 +47,9 @@ import type { RunPluginUpdateCommandParams } from "./plugins-update-command.js";
 
 const GATEWAY_HOOKS_STATUS_TIMEOUT_MS = 1_500;
 
-type HooksReportTarget = {
-  agentId: string;
-  workspaceDir: string;
-};
+type HooksReportTarget = ReturnType<typeof resolveHooksReportTarget>;
 
-function resolveHooksReportTarget(config: OpenClawConfig, rawAgentId?: string): HooksReportTarget {
+function resolveHooksReportTarget(config: OpenClawConfig, rawAgentId?: string) {
   const requested = rawAgentId?.trim();
   if (rawAgentId !== undefined && !requested) {
     throw new Error("--agent must not be blank");
@@ -331,6 +328,7 @@ export function registerHooksCli(program: Command): void {
     .requiredOption("--provider <provider>", "Native harness provider")
     .requiredOption("--relay-id <id>", "Native hook relay id")
     .option("--state-db <path>", "Shared state database path")
+    .option("--remote-credential <path>", "Dedicated harness relay credential file")
     .option("--generation <generation>", "Native hook relay registration generation")
     .requiredOption("--event <event>", "Native hook event")
     .option(

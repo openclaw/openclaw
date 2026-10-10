@@ -173,10 +173,7 @@ function resolveModelInput(params: { raw: string; cfg: OpenClawConfig }) {
   });
 }
 
-export function resolveModelTarget(params: { raw: string; cfg: OpenClawConfig }): {
-  provider: string;
-  model: string;
-} {
+export function resolveModelTarget(params: { raw: string; cfg: OpenClawConfig }): ModelRef {
   const resolved = resolveModelInput(params);
   if (!resolved) {
     throw new Error(`Invalid model reference: ${params.raw}`);
@@ -187,7 +184,7 @@ export function resolveModelTarget(params: { raw: string; cfg: OpenClawConfig })
 function resolveAuthoredModelAliasTarget(params: {
   raw: string;
   cfg: OpenClawConfig;
-}): { provider: string; model: string } | undefined {
+}): ModelRef | undefined {
   const resolved = resolveModelInput(params);
   return resolved?.alias ? resolved.ref : undefined;
 }
@@ -212,14 +209,6 @@ export function resolveModelRefsFromEntries(params: {
   });
 }
 
-export function resolveModelKeysFromEntries(
-  params: Parameters<typeof resolveModelRefsFromEntries>[0],
-): Array<string | undefined> {
-  return resolveModelRefsFromEntries(params).map((ref) =>
-    ref ? modelKey(ref.provider, ref.model) : undefined,
-  );
-}
-
 function resolveKnownAgentId(cfg: OpenClawConfig, rawAgentId: string): string {
   const agentId = normalizeAgentId(rawAgentId);
   if (!listAgentIds(cfg).includes(agentId)) {
@@ -237,10 +226,7 @@ export function resolveModelsTargetAgent(
   cfg: OpenClawConfig,
   rawAgentId: string | undefined,
   mode: ModelsTargetMode,
-): {
-  agentId: string;
-  agentDir: string;
-} {
+) {
   const requested = rawAgentId?.trim();
   if (rawAgentId !== undefined && !requested) {
     throw new Error("--agent must not be blank");
@@ -260,12 +246,12 @@ export function resolveModelsTargetAgent(
   return { agentId, agentDir: agentDirOverride ?? agentDir };
 }
 
-type PrimaryFallbackConfig = { primary?: string; fallbacks?: string[] };
+type PrimaryFallbackConfig = NonNullable<ReturnType<typeof toAgentModelListLike>>;
 
 /** Upserts the canonical model entry and folds legacy key metadata into it. */
 export function upsertCanonicalModelConfigEntry(
   models: Record<string, AgentModelEntryConfig>,
-  params: { provider: string; model: string },
+  params: ModelRef,
   options: ModelEntryMergeOptions = {},
 ) {
   const key = modelKey(params.provider, params.model);
@@ -302,7 +288,7 @@ export function upsertCanonicalModelConfigEntry(
 
 export function mergePrimaryFallbackConfig(
   existing: PrimaryFallbackConfig | undefined,
-  patch: { primary?: string; fallbacks?: string[] },
+  patch: PrimaryFallbackConfig,
 ): PrimaryFallbackConfig {
   const next: PrimaryFallbackConfig = { ...existing };
   if (patch.primary !== undefined) {
@@ -320,7 +306,7 @@ export function applyDefaultModelPrimaryUpdate(params: {
   resolveCfg?: OpenClawConfig;
   modelRaw: string;
   field: "model" | "imageModel";
-  resolvedTarget?: { provider: string; model: string };
+  resolvedTarget?: ModelRef;
   modelEntryMerge?: ModelEntryMergeOptions;
 }): OpenClawConfig {
   const resolved = params.resolvedTarget ?? resolveDefaultModelPrimaryTarget(params);
@@ -347,7 +333,7 @@ function resolveDefaultModelPrimaryTarget(params: {
   cfg: OpenClawConfig;
   resolveCfg?: OpenClawConfig;
   modelRaw: string;
-}): { provider: string; model: string } {
+}): ModelRef {
   return params.resolveCfg && params.resolveCfg !== params.cfg
     ? (resolveAuthoredModelAliasTarget({ raw: params.modelRaw, cfg: params.cfg }) ??
         resolveModelTarget({ raw: params.modelRaw, cfg: params.resolveCfg }))

@@ -3,7 +3,7 @@ import type { MessagePort } from "node:worker_threads";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
-  settleFailedSqliteWorkerJobs,
+  failSqliteWorkerSlot,
   settleSqliteWorkerJob,
   withSqliteWorkerCleanupFailure,
 } from "./sqlite-worker-broker-reply.js";
@@ -75,6 +75,7 @@ function jobWithCleanup(admissionFailures: readonly unknown[] = []) {
     },
   };
   const job: Job = {
+    observation: { started() {}, completed() {} },
     request: { type: "execute", id: 1, actor: 1, input: new Uint8Array() },
     bytes: 0,
     nativeDispatched: true,
@@ -145,11 +146,7 @@ describe("SQLite worker settlement cleanup lineage", { concurrent: false }, () =
       const current = jobWithCleanup();
       const error = new Error("Worker result was lost");
       const retirement = createDeferredCore();
-      settleFailedSqliteWorkerJobs({
-        current: current.job,
-        queued: [],
-        queuedError: error,
-        error,
+      failSqliteWorkerSlot({ current: current.job, queue: [], actors: new Set() }, error, {
         retire: () => retirement.promise,
         finish: settleSqliteWorkerJob,
       });
@@ -184,17 +181,19 @@ describe("SQLite worker settlement cleanup lineage", { concurrent: false }, () =
       const original = new Error("Original operation refused");
       const cleanup = new Error("Native operation cleanup failed");
       const retirementFailure = new Error("Worker retirement could not be confirmed");
-      const queuedError = new SqliteWorkerError("Worker retired before queued work", "unavailable");
       const retirement = createDeferredCore();
-      settleFailedSqliteWorkerJobs({
+      const slot: Parameters<typeof failSqliteWorkerSlot>[0] = {
         current: current.job,
-        queued: [queued.job],
-        error: cleanup,
-        queuedError,
+        queue: [queued.job],
+        actors: new Set(),
+      };
+      failSqliteWorkerSlot(slot, cleanup, {
         completed: outcome === "value" ? { value } : { error: original },
         retire: () => retirement.promise,
         finish: settleSqliteWorkerJob,
       });
+      const queuedError = slot.failed;
+      expect(queuedError).toMatchObject({ code: "unavailable", message: cleanup.message });
       expect(current.resolve).not.toHaveBeenCalled();
       expect(current.reject).not.toHaveBeenCalled();
       expect(current.settleNative).not.toHaveBeenCalled();

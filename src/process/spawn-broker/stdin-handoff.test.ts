@@ -1,8 +1,9 @@
 import { once } from "node:events";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createSpawnBrokerHost, type SpawnBrokerHost } from "./host.js";
+import { supportsSpawnBrokerCommandTransport } from "./pipe.js";
 
-const skipBrokerTests = process.platform === "win32" || Boolean(process.versions.bun);
+const skipBrokerTests = !supportsSpawnBrokerCommandTransport();
 
 describe.skipIf(skipBrokerTests)("spawn broker stdin handoff", () => {
   let host: SpawnBrokerHost;

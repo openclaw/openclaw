@@ -160,6 +160,7 @@ import {
   registerActiveManagedProxyUrl,
   stopActiveManagedProxyRegistration,
 } from "./proxy/active-proxy-state.js";
+import { globalUndiciStreamTimeoutMs } from "./undici-dispatcher-options.js";
 let DEFAULT_UNDICI_STREAM_TIMEOUT_MS: typeof import("./undici-global-dispatcher.js").DEFAULT_UNDICI_STREAM_TIMEOUT_MS;
 let ensureGlobalUndiciDispatcherStreamTimeouts: typeof import("./undici-global-dispatcher.js").ensureGlobalUndiciDispatcherStreamTimeouts;
 let ensureGlobalUndiciEnvProxyDispatcher: typeof import("./undici-global-dispatcher.js").ensureGlobalUndiciEnvProxyDispatcher;
@@ -211,7 +212,7 @@ describe("ensureGlobalUndiciDispatcherStreamTimeouts", () => {
         autoSelectFamilyAttemptTimeout: 300,
       },
     });
-    expect(undiciGlobalDispatcherModule.globalUndiciStreamTimeoutMs).toBe(1_900_000);
+    expect(globalUndiciStreamTimeoutMs).toBe(1_900_000);
   });
 
   it("replaces EnvHttpProxyAgent dispatcher while preserving env-proxy mode", () => {
@@ -286,7 +287,7 @@ describe("ensureGlobalUndiciDispatcherStreamTimeouts", () => {
     ensureGlobalUndiciDispatcherStreamTimeouts({ timeoutMs: 1_900_000 });
 
     expect(setGlobalDispatcher).not.toHaveBeenCalled();
-    expect(undiciGlobalDispatcherModule.globalUndiciStreamTimeoutMs).toBe(1_900_000);
+    expect(globalUndiciStreamTimeoutMs).toBe(1_900_000);
   });
 
   it("wraps Proxyline managed dispatcher with timed dispatch options", () => {
@@ -344,7 +345,7 @@ describe("ensureGlobalUndiciDispatcherStreamTimeouts", () => {
         allowH2: false,
       },
     ]);
-    expect(undiciGlobalDispatcherModule.globalUndiciStreamTimeoutMs).toBe(1_900_000);
+    expect(globalUndiciStreamTimeoutMs).toBe(1_900_000);
   });
 
   it("replaces a fresh Proxyline managed dispatcher after env proxy timeouts were applied", () => {
@@ -540,9 +541,7 @@ describe("ensureGlobalUndiciDispatcherStreamTimeouts", () => {
 
     expect(loadUndiciGlobalDispatcherDeps).toHaveBeenCalledOnce();
     expect(setGlobalDispatcher).toHaveBeenCalledOnce();
-    expect(undiciGlobalDispatcherModule.globalUndiciStreamTimeoutMs).toBe(
-      DEFAULT_UNDICI_STREAM_TIMEOUT_MS,
-    );
+    expect(globalUndiciStreamTimeoutMs).toBe(DEFAULT_UNDICI_STREAM_TIMEOUT_MS);
   });
 
   it("honors explicit global stream timeouts above the default floor", () => {
@@ -552,7 +551,7 @@ describe("ensureGlobalUndiciDispatcherStreamTimeouts", () => {
 
     expect(loadUndiciGlobalDispatcherDeps).toHaveBeenCalledOnce();
     expect(setGlobalDispatcher).toHaveBeenCalledOnce();
-    expect(undiciGlobalDispatcherModule.globalUndiciStreamTimeoutMs).toBe(timeoutMs);
+    expect(globalUndiciStreamTimeoutMs).toBe(timeoutMs);
   });
 
   it("re-applies when autoSelectFamily decision changes", () => {

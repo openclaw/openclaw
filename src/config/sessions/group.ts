@@ -55,14 +55,6 @@ function resolveOriginatingGroupTargetId(params: {
   return null;
 }
 
-function shortenGroupId(value?: string) {
-  const trimmed = normalizeOptionalString(value) ?? "";
-  if (trimmed.length <= 14) {
-    return trimmed;
-  }
-  return `${trimmed.slice(0, 6)}...${trimmed.slice(-4)}`;
-}
-
 /**
  * Builds a human-readable group/channel title from stored chat metadata.
  * Prefers the native channel name (#general) or the chat subject verbatim;
@@ -109,10 +101,6 @@ export function buildGroupDisplayName(params: {
   const fallbackId = normalizeOptionalString(params.id) ?? params.key;
   const rawLabel = detail || fallbackId;
   let token = normalizeHyphenSlug(rawLabel);
-  // Very long opaque ids become a readable stable token instead of leaking full route ids into UI.
-  if (!token) {
-    token = normalizeHyphenSlug(shortenGroupId(rawLabel));
-  }
   if (!params.groupChannel && token.startsWith("#")) {
     token = token.replace(/^#+/, "");
   }

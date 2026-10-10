@@ -18,6 +18,7 @@ import {
 } from "../../packages/gateway-protocol/src/index.js";
 import type {
   ExecApprovalGrantsListResult,
+  ExecApprovalGrantsRevokeResult,
   ExecApprovalStandingGrant,
   ExecApprovalsNodeSetParams,
 } from "../../packages/gateway-protocol/src/schema/exec-approvals.js";
@@ -35,7 +36,6 @@ import { formatErrorMessage } from "../infra/errors.js";
 import {
   collectExecPolicyScopeSnapshots,
   SESSION_EXEC_OVERRIDES_NOTE,
-  type ExecPolicyScopeSnapshot,
 } from "../infra/exec-approvals-effective.js";
 import {
   redactExecApprovals,
@@ -54,11 +54,7 @@ import { nodesCallOpts, resolveCliNodeId } from "./nodes-cli/rpc.js";
 import type { NodesRpcOpts } from "./nodes-cli/types.js";
 import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
 
-type FileExecApprovalsSnapshot = {
-  path: string;
-  exists: boolean;
-  hash: string;
-  file: ExecApprovalsFile;
+type FileExecApprovalsSnapshot = Awaited<ReturnType<typeof loadSnapshotLocal>> & {
   resolvedDefaults?: Required<ExecApprovalsDefaults>;
 };
 
@@ -80,15 +76,9 @@ type ExecApprovalsSnapshot = FileExecApprovalsSnapshot | NativeExecApprovalsSnap
 type ConfigSnapshotLike = {
   config?: OpenClawConfig;
 };
-type ConfigLoadResult = {
-  config: OpenClawConfig | null;
-  timedOut: boolean;
-};
+type ConfigLoadResult = Awaited<ReturnType<typeof loadConfigForApprovalsTarget>>;
 type ApprovalsTargetSource = "gateway" | "node" | "local";
-type EffectivePolicyReport = {
-  scopes: ExecPolicyScopeSnapshot[];
-  note?: string;
-};
+type EffectivePolicyReport = ReturnType<typeof buildEffectivePolicyReport>;
 const APPROVALS_GET_DEFAULT_TIMEOUT_MS = 60_000;
 const EXEC_APPROVALS_STDIN_MAX_BYTES = 1024 * 1024;
 
@@ -102,15 +92,7 @@ type ExecApprovalsCliOpts = NodesRpcOpts & {
   expiresInDays?: string;
 };
 
-type PendingApprovalCliEntry = {
-  id: string;
-  kind: ApprovalKind;
-  agentId: string | null;
-  sessionKey: string | null;
-  createdAtMs: number;
-  expiresAtMs: number;
-  summary: string;
-};
+type PendingApprovalCliEntry = NonNullable<ReturnType<typeof readPendingApprovalEntry>>;
 
 const APPROVAL_DECISIONS = ["allow-once", "allow-always", "deny"] as const;
 const PENDING_APPROVAL_SUMMARY_MAX_LENGTH = 96;
@@ -279,13 +261,7 @@ function requireTrimmedNonEmpty(value: string, message: string): string {
   return trimmed;
 }
 
-async function loadWritableSnapshotTarget(opts: ExecApprovalsCliOpts): Promise<{
-  snapshot: FileExecApprovalsSnapshot | NativeExecApprovalsSnapshot;
-  nodeId: string | null;
-  source: ApprovalsTargetSource;
-  targetLabel: string;
-  baseHash: string;
-}> {
+async function loadWritableSnapshotTarget(opts: ExecApprovalsCliOpts) {
   // Writes carry the base hash so gateway/node updates can reject stale snapshots.
   const { snapshot, nodeId, source } = await loadSnapshotTarget(opts);
   const targetLabel = source === "local" ? "local" : nodeId ? `node:${nodeId}` : "gateway";
@@ -430,10 +406,7 @@ function decodeDisplayedApprovalId(value: string): string | null {
   return Buffer.from(decoded, "utf16le").toString("base64url") === encoded ? decoded : null;
 }
 
-function readPendingApprovalEntry(
-  value: unknown,
-  kind: ApprovalKind,
-): PendingApprovalCliEntry | null {
+function readPendingApprovalEntry(value: unknown, kind: ApprovalKind) {
   if (!isRecord(value) || !isRecord(value.request)) {
     return null;
   }
@@ -765,7 +738,7 @@ async function resolvePendingApproval(
 async function loadConfigForApprovalsTarget(params: {
   opts: ExecApprovalsCliOpts;
   source: ApprovalsTargetSource;
-}): Promise<ConfigLoadResult> {
+}) {
   try {
     if (params.source === "local") {
       return { config: await readBestEffortConfig(), timedOut: false };
@@ -794,7 +767,7 @@ function buildEffectivePolicyReport(params: {
   resolvedDefaults?: Required<ExecApprovalsDefaults>;
   hostPath: string;
   nativePolicy: boolean;
-}): EffectivePolicyReport {
+}) {
   const cfg = params.configLoad.config;
   const timeoutNote = params.configLoad.timedOut
     ? "Config fetch timed out. Re-run with a higher --timeout to inspect Effective Policy."
@@ -807,38 +780,20 @@ function buildEffectivePolicyReport(params: {
         : "Host approvals policy unavailable.",
     };
   }
-  if (params.source === "node") {
-    if (!cfg) {
-      return {
-        scopes: [],
-        note:
-          timeoutNote ??
-          "Gateway config unavailable. Node output above shows host approvals state only, and final runtime policy still intersects with gateway tools.exec.",
-      };
-    }
-    if (!params.resolvedDefaults) {
-      return {
-        scopes: [],
-        note: "This node does not expose a complete resolved host policy, so Effective Policy is unavailable.",
-      };
-    }
-    return {
-      scopes: collectExecPolicyScopeSnapshots({
-        cfg,
-        approvals: params.approvals,
-        hostPath: params.hostPath,
-        hostDefaults: params.resolvedDefaults,
-        hostDefaultSource: "node-reported resolved defaults",
-      }),
-      note:
-        "Effective exec policy is the node host approvals policy intersected with gateway tools.exec policy. " +
-        SESSION_EXEC_OVERRIDES_NOTE,
-    };
-  }
   if (!cfg) {
     return {
       scopes: [],
-      note: timeoutNote ?? "Config unavailable.",
+      note:
+        timeoutNote ??
+        (params.source === "node"
+          ? "Gateway config unavailable. Node output above shows host approvals state only, and final runtime policy still intersects with gateway tools.exec."
+          : "Config unavailable."),
+    };
+  }
+  if (params.source === "node" && !params.resolvedDefaults) {
+    return {
+      scopes: [],
+      note: "This node does not expose a complete resolved host policy, so Effective Policy is unavailable.",
     };
   }
   return {
@@ -846,9 +801,17 @@ function buildEffectivePolicyReport(params: {
       cfg,
       approvals: params.approvals,
       hostPath: params.hostPath,
+      ...(params.source === "node"
+        ? {
+            hostDefaults: params.resolvedDefaults,
+            hostDefaultSource: "node-reported resolved defaults",
+          }
+        : {}),
     }),
     note:
-      "Effective exec policy is the host approvals policy intersected with requested tools.exec policy. " +
+      (params.source === "node"
+        ? "Effective exec policy is the node host approvals policy intersected with gateway tools.exec policy. "
+        : "Effective exec policy is the host approvals policy intersected with requested tools.exec policy. ") +
       SESSION_EXEC_OVERRIDES_NOTE,
   };
 }
@@ -857,13 +820,10 @@ function renderEffectivePolicy(params: { report: EffectivePolicyReport }) {
   const rich = isRich();
   const heading = (text: string) => (rich ? theme.heading(text) : text);
   const muted = (text: string) => (rich ? theme.muted(text) : text);
-  if (params.report.scopes.length === 0 && !params.report.note) {
-    return;
-  }
   defaultRuntime.log("");
   defaultRuntime.log(heading("Effective Policy"));
   if (params.report.scopes.length === 0) {
-    defaultRuntime.log(muted(params.report.note ?? "No effective policy details available."));
+    defaultRuntime.log(muted(params.report.note));
     return;
   }
   const rows = params.report.scopes.map((summary) => ({
@@ -1192,7 +1152,7 @@ export function registerExecApprovalsCli(program: Command) {
       await runApprovalsAction(opts, async () => {
         const result = (await callGatewayFromCli("exec.approval.grants.revoke", opts, {
           grantId,
-        })) as { outcome: "revoked" | "already-revoked" | "not-found" }; // SAFETY: closed enum from the revoke result schema.
+        })) as ExecApprovalGrantsRevokeResult; // SAFETY: closed enum from the revoke result schema.
         if (opts.json) {
           defaultRuntime.writeJson(result, 0);
           return;

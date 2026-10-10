@@ -18,6 +18,7 @@ type RecoveryKind = "overflow" | "timeout";
 type AuthorityLoss = "closed" | "replaced" | "writer-replaced";
 type FixtureOptions = {
   oversized?: boolean;
+  replyAdmission?: boolean;
   inMemory?: boolean;
   detached?: boolean;
   historicalTurns?: number;
@@ -59,6 +60,11 @@ async function createRecoveryFixture(state: OpenClawTestState, options: FixtureO
     await import("../../context-engine/runtime-settings.js");
   const { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } =
     await import("../../context-engine/host-compat.js");
+
+  const { admitReplyTurn } = await import("../../auto-reply/reply/reply-turn-admission.js");
+  const { waitForReplyRunSuccessorAdmission } =
+    await import("../../auto-reply/reply/reply-run-registry.js");
+  let replyOperation: PreparedEmbeddedRunInput["runParams"]["replyOperation"];
 
   const memoryManager = options.inMemory ? SessionManager.inMemory(state.workspaceDir) : undefined;
   const sessionId = memoryManager?.getSessionId() ?? randomUUID();
@@ -165,6 +171,10 @@ async function createRecoveryFixture(state: OpenClawTestState, options: FixtureO
     }
     controller.abort(callerError);
     await Promise.allSettled(work);
+    if (replyOperation) {
+      replyOperation.complete();
+      await waitForReplyRunSuccessorAdmission(target.sessionKey, null);
+    }
     try {
       await drain();
     } finally {
@@ -205,6 +215,19 @@ async function createRecoveryFixture(state: OpenClawTestState, options: FixtureO
     } else {
       expect(writerFence?.expectedWriterRunId).toBe(runId);
       runParams.sessionTarget = { ...target, ...writerFence };
+    }
+    if (options.replyAdmission) {
+      const reply = await admitReplyTurn({
+        ...target,
+        kind: "visible",
+        resetTriggered: false,
+        upstreamAbortSignal: controller.signal,
+      });
+      if (reply.status !== "owned") {
+        throw new Error("Fixture requires retained reply admission");
+      }
+      replyOperation = reply.operation;
+      runParams.replyOperation = replyOperation;
     }
     const sessionPromptState = await createEmbeddedRunSessionPromptState({
       runParams,
@@ -432,6 +455,8 @@ async function createRecoveryFixture(state: OpenClawTestState, options: FixtureO
     return {
       compact,
       maintain,
+      target,
+      replyOperation,
       beforeHook,
       afterHook,
       updates,

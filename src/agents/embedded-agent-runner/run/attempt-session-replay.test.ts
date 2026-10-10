@@ -1,9 +1,6 @@
 import fs from "node:fs";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { WorkerTaskPoolCore } from "@openclaw/worker-runtime";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createFailureMessage } from "../../../../packages/agent-core/src/turn-interruption.js";
-import { awaitGateBeforeSettlement } from "../../../../test/helpers/promise.js";
 import {
   loadTranscriptEventsSync,
   upsertSessionEntryCore,
@@ -100,74 +97,62 @@ describe("context engine bootstrap", () => {
 });
 
 describe("interrupted canonical user replay", () => {
-  it("rejects a byte-identical replacement source between replay preparations", async () => {
-    await withInterruptedTurn(false, async (fixture) => {
-      const prepared = await fixture.prepare();
-      const pathname = fixture.target.storePath!;
-      await closeOpenClawAgentDatabaseByPathAsync(pathname);
-      fs.renameSync(pathname, `${pathname}.retired`);
-      fs.copyFileSync(`${pathname}.retired`, pathname);
-      await expect(prepared.prepareInitialUserTurnReplay!()).rejects.toThrow(/database owner/);
-    });
+  it("discards unpersisted assistant mutations before deciding replay", async () => {
+    await withInterruptedTurn(
+      false,
+      async (fixture) => {
+        const original = guardSessionManager(SessionManager.open(fixture.target), {
+          runId: fixture.attempt.runId,
+        });
+        await original.appendMessageAsync(
+          createAssistant(testModel, [{ type: "text", text: "Already completed" }]),
+        );
+        const before = loadTranscriptEventsSync(fixture.target);
+        const manager = await SessionManager.openBoundedAsync(fixture.target, {
+          maxBytes: 8192,
+          maxEvents: 20,
+        });
+        fixture.attempt.sessionManager = manager;
+        const leaf = manager.getLeafEntry();
+        if (leaf?.type !== "message" || leaf.message.role !== "assistant") {
+          throw new Error("Expected the stored final assistant");
+        }
+        const interrupted = createFailureMessage(
+          testModel,
+          createAgentRunRestartAbortError(),
+          true,
+        );
+        Object.assign(interrupted, { __openclaw: { runId: fixture.attempt.runId } });
+        leaf.message = interrupted;
+        const prepared = await fixture.prepare();
+        expect(prepared.prepareInitialUserTurnReplay).toBeUndefined();
+        expect(fixture.attempt.userTurnTranscriptRecorder?.hasPersisted()).toBe(false);
+        expect(manager.getLeafEntry()).toMatchObject({
+          message: { content: [{ type: "text", text: "Already completed" }] },
+        });
+        expect(loadTranscriptEventsSync(fixture.target)).toEqual(before);
+      },
+      { selectedOwner: true, interruptedTurn: false },
+    );
   });
 
-  it.each(["rewrite", "close", "revoke"] as const)(
-    "refuses replay after %s between worker validation and consumption",
-    async (change) => {
-      await withInterruptedTurn(false, async (fixture) => {
-        const prepared = await fixture.prepare();
-        const admit = await prepared.prepareInitialUserTurnReplay?.();
-        expect(admit).toBeTypeOf("function");
-        const original = SessionManager.open(fixture.target);
-        const validated = createDeferredCore();
-        const release = createDeferredCore();
-        // oxlint-disable-next-line typescript/unbound-method -- Preserve the original pool receiver.
-        const run = WorkerTaskPoolCore.prototype.run;
-        const spy = vi
-          .spyOn(WorkerTaskPoolCore.prototype, "run")
-          .mockImplementation(async function (
-            this: WorkerTaskPoolCore<unknown, unknown>,
-            input,
-            options,
-          ) {
-            const reply = await run.call(this, input, options);
-            if (
-              isRecord(reply) &&
-              reply.ok === true &&
-              isRecord(reply.value) &&
-              isRecord(reply.value.facts) &&
-              reply.value.facts.replayValidated === "current"
-            ) {
-              validated.resolve();
-              await release.promise;
-            }
-            return reply;
-          });
-        const consume = vi.fn();
-        const pending = admit!(consume);
-        let closing: ReturnType<typeof closeOpenClawAgentDatabaseByPathAsync> | undefined;
-        try {
-          await awaitGateBeforeSettlement(
-            validated.promise,
-            pending,
-            "Replay validation was not reached",
+  it.each([false, true])(
+    "rejects a byte-identical replacement source between replay preparations (selected=%s)",
+    async (selectedOwner) => {
+      await withInterruptedTurn(
+        false,
+        async (fixture) => {
+          const prepared = await fixture.prepare();
+          const pathname = fixture.target.storePath!;
+          await closeOpenClawAgentDatabaseByPathAsync(pathname);
+          fs.renameSync(pathname, `${pathname}.retired`);
+          fs.copyFileSync(`${pathname}.retired`, pathname);
+          await expect(prepared.prepareInitialUserTurnReplay!()).rejects.toThrow(
+            selectedOwner ? "Agent database execution admission is closed" : /database owner/,
           );
-          if (change === "rewrite") {
-            expect(original.removeTrailingEntries(() => true)).toBeGreaterThan(0);
-          } else if (change === "close") {
-            closing = closeOpenClawAgentDatabaseByPathAsync(fixture.target.storePath!);
-          } else {
-            fixture.revoke();
-          }
-          release.resolve();
-          await expect(pending).rejects.toThrow(/replay|revoked|closed|current|admission/i);
-          expect(consume).not.toHaveBeenCalled();
-        } finally {
-          release.resolve();
-          await Promise.allSettled([pending, closing]);
-          spy.mockRestore();
-        }
-      });
+        },
+        { selectedOwner },
+      );
     },
   );
 
@@ -469,7 +454,7 @@ describe("interrupted canonical user replay", () => {
                   JSON.stringify(message.content).includes(fixture.attempt.prompt),
               );
               expect(users).toHaveLength(1);
-              expect(users[0].content).toContainEqual(image);
+              expect(users[0]?.content).toContainEqual(image);
               expect(loadTranscriptEventsSync(fixture.target).slice(0, before.length)).toEqual(
                 before,
               );
@@ -542,11 +527,11 @@ describe("interrupted canonical user replay", () => {
     await withInterruptedTurn(false, async (fixture) => {
       let owner: SessionManager | undefined;
       let cleanupOwner: unknown;
-      fixture.revoke();
       try {
         await expect(
           fixture.prepare((manager) => {
             owner = manager;
+            fixture.revoke();
           }),
         ).rejects.toThrow("original writer closed");
       } finally {

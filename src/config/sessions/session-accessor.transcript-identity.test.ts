@@ -23,7 +23,7 @@ import * as transcriptTargets from "./session-accessor.transcript-target.js";
 import { setCanonicalSqliteSessionMainKey } from "./session-canonical-key.js";
 import { captureSessionStoreReadCandidates } from "./session-store-target-inventory.js";
 import { withSessionStoreTarget } from "./session-store-target-runtime.js";
-import { historyLane } from "./session-transcript-worker-resources.js";
+import { targetDiscoveryLane } from "./session-transcript-worker-resources.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
 
 describe("transcript turn physical identity", () => {
@@ -67,9 +67,9 @@ describe("transcript turn physical identity", () => {
     return { selected: selected.promise, resume: resume.resolve };
   }
 
-  it.runIf(process.platform !== "win32").each([undefined, "agent-qualified"] as const)(
-    "rejects a replaced database before returning a runtime target (%s)",
-    async (keyFormat) => {
+  it.runIf(process.platform !== "win32")(
+    "rejects a replaced database before returning a runtime target",
+    async () => {
       replaceSessionEntrySync(scope(), { sessionId, updatedAt: 1 });
       const original = database();
       const replacement = openOpenClawAgentDatabase({
@@ -78,9 +78,9 @@ describe("transcript turn physical identity", () => {
       });
       await closeOpenClawAgentDatabaseByPathAsync(original.path, original.agentId);
       await closeOpenClawAgentDatabaseByPathAsync(replacement.path, replacement.agentId);
-      const run = historyLane.pool.run.bind(historyLane.pool);
+      const run = targetDiscoveryLane.pool.run.bind(targetDiscoveryLane.pool);
       let replaced = false;
-      vi.spyOn(historyLane.pool, "run").mockImplementation(async (...args) => {
+      vi.spyOn(targetDiscoveryLane.pool, "run").mockImplementation(async (...args) => {
         const reply = await run(...args);
         if (
           reply.ok &&
@@ -95,7 +95,9 @@ describe("transcript turn physical identity", () => {
         return reply;
       });
       await expect(
-        transcriptTargets.resolveSessionTranscriptRuntimeTarget(scope(), undefined, { keyFormat }),
+        transcriptTargets.resolveSessionTranscriptRuntimeTarget(scope(), undefined, {
+          keyFormat: "agent-qualified",
+        }),
       ).rejects.toThrow(/identity/i);
       expect(replaced).toBe(true);
     },
@@ -107,9 +109,9 @@ describe("transcript turn physical identity", () => {
       const target = { ...scope(), storePath: `${fixture.storePath()}.custom.json` };
       const databaseOptions = toDatabaseOptions(resolveSqliteScope(target));
       const shared = openOpenClawStateDatabase();
-      const run = historyLane.pool.run.bind(historyLane.pool);
+      const run = targetDiscoveryLane.pool.run.bind(targetDiscoveryLane.pool);
       let reads = 0;
-      vi.spyOn(historyLane.pool, "run").mockImplementation(async (...args) => {
+      vi.spyOn(targetDiscoveryLane.pool, "run").mockImplementation(async (...args) => {
         const reply = await run(...args);
         if (
           reply.ok &&

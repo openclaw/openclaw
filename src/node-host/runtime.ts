@@ -17,6 +17,7 @@ import type { OpenClawPluginNodeHostCommandContext } from "../plugins/types.node
 import { BoundedBuffer } from "../shared/bounded-buffer.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { NODE_DESKTOP_STREAM_COMMAND } from "../shared/node-desktop-stream.js";
+import { throwNodeHostCleanupErrors } from "./cleanup-errors.js";
 import { createNodeInvokeResponder, type NodeHostClient } from "./client.js";
 import { resolveNodeDesktopHostConfig } from "./desktop-stream-command.js";
 import { requestsClaudeNodeSkillRuntime } from "./invoke-agent-cli-claude-params.js";
@@ -32,6 +33,7 @@ import { createNodeInvokeProgressWriter } from "./node-invoke-progress.js";
 import { NodeWorkerBundleInstaller } from "./node-worker-bundle-installer.js";
 import { resolveNodeWorkerContainerEngine } from "./node-worker-container-engine.js";
 import { NodeWorkerContainerContextMismatchError } from "./node-worker-container-lifecycle.js";
+import { snapshotNodeWorkerNativeInference } from "./node-worker-native-inference.js";
 import { createNodeWorkerSupervisor } from "./node-worker-supervisor.js";
 import { NodeWorkerWorkspaceRuntime } from "./node-worker-workspace.js";
 import {
@@ -80,12 +82,7 @@ async function settleNodeHostCleanup(owners: Array<Promise<unknown> | undefined>
   const errors = [
     ...new Set(results.flatMap((result) => (result.status === "rejected" ? [result.reason] : []))),
   ];
-  if (errors.length === 1) {
-    throw errors[0];
-  }
-  if (errors.length > 1) {
-    throw new AggregateError(errors, "node-host runtime cleanup failed");
-  }
+  throwNodeHostCleanupErrors(errors, "node-host runtime cleanup failed");
 }
 
 export async function prepareNodeHostRuntime(params?: {
@@ -108,10 +105,10 @@ export async function prepareNodeHostRuntime(params?: {
   }
   const config = params?.config ?? getRuntimeConfig();
   const env = params?.env ?? process.env;
+  const platform = params?.platform ?? process.platform;
   await ensureNodeHostPluginRegistry({ config, env, commandAllowlist });
   const pathEnv = ensureNodePathEnv();
   env.PATH = pathEnv;
-  const platform = params?.platform ?? process.platform;
   const installedAppsSharingEnabled =
     platform === "darwin" && params?.installedAppsSharingEnabled === true;
   const desktopHostConfig = resolveNodeDesktopHostConfig({
@@ -205,6 +202,12 @@ export async function prepareNodeHostRuntime(params?: {
       await disablePreparedWorkerHosting(error);
     }
   }
+  const nativeInferenceSnapshot =
+    workerRunsEnabled &&
+    platform !== "win32" &&
+    config.nodeHost?.workerRuns?.isolation !== "container"
+      ? snapshotNodeWorkerNativeInference(config, env, platform)
+      : undefined;
   const skills =
     commandAllowlist || config.nodeHost?.skills?.enabled === false ? null : scanNodeHostedSkills();
   const buildManifest = (pluginManifest: typeof pluginNodeHost) =>
@@ -230,6 +233,7 @@ export async function prepareNodeHostRuntime(params?: {
     manifest,
     workerHostingEnabled: workerRunsEnabled,
     preparedWorkspacesEnabled: workerRunsEnabled && params?.ephemeral === true,
+    nativeInferenceEnabled: workerRunsEnabled && nativeInferenceSnapshot !== undefined,
     ...(commandAllowlist ? { restrictedSurface: true as const } : {}),
     ...(workerHostingDisabledReason ? { workerHostingDisabledReason } : {}),
     initialInventory,
@@ -264,6 +268,7 @@ export async function prepareNodeHostRuntime(params?: {
           ? createNodeWorkerSupervisor({
               env,
               capacity: config.nodeHost?.workerRuns?.capacity,
+              nativeInferenceSnapshot,
               onCapacityChanged: onRunnerCapacityChanged,
               workspace: workerWorkspace,
             })

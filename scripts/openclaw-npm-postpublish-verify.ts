@@ -59,10 +59,10 @@ type InstalledPackageJson = {
   optionalDependencies?: Record<string, string>;
 };
 
-type InstalledBundledExtensionPackageJson = {
-  dependencies?: Record<string, string>;
-  optionalDependencies?: Record<string, string>;
-};
+type InstalledBundledExtensionPackageJson = Pick<
+  InstalledPackageJson,
+  "dependencies" | "optionalDependencies"
+>;
 
 type InstalledBundledExtensionManifestRecord = {
   id: string;
@@ -131,11 +131,7 @@ type InstalledRootDistJavaScriptReadResult =
   | { error: string; ok: false }
   | { ok: true; relativePath: string; source: string | null };
 
-type PublishedInstallScenario = {
-  name: string;
-  installSpecs: string[];
-  expectedVersion: string;
-};
+type PublishedInstallScenario = ReturnType<typeof buildPublishedInstallScenarios>[number];
 
 type OpenClawNpmPostpublishVerifyArgs =
   | {
@@ -172,14 +168,14 @@ export function parseOpenClawNpmPostpublishVerifyArgs(
   return { help: false, version };
 }
 
-export function buildPublishedInstallScenarios(version: string): PublishedInstallScenario[] {
+export function buildPublishedInstallScenarios(version: string) {
   const parsed = parseReleaseVersion(version);
   if (parsed === null) {
     throw new Error(`Unsupported release version "${version}".`);
   }
 
   const exactSpec = `openclaw@${version}`;
-  const scenarios: PublishedInstallScenario[] = [
+  const scenarios = [
     {
       name: "fresh-exact",
       installSpecs: [exactSpec],
@@ -220,16 +216,6 @@ export function resolvePublishedInstallSourceVerification(
   };
 }
 
-type NpmRegistryKey = {
-  key: string;
-  keyid: string;
-};
-
-type NpmRegistrySignature = {
-  keyid: string;
-  sig: string;
-};
-
 type NpmRegistryAttestation = {
   bundle?: {
     dsseEnvelope?: {
@@ -239,10 +225,7 @@ type NpmRegistryAttestation = {
   predicateType?: string;
 };
 
-type NpmProvenanceVerificationPolicy = {
-  certificateIdentityURI: string;
-  certificateIssuer: string;
-};
+type NpmProvenanceVerificationPolicy = ReturnType<typeof resolveNpmProvenanceVerificationPolicy>;
 
 type VerifyNpmProvenanceBundle = (
   bundle: unknown,
@@ -301,7 +284,7 @@ function resolveNpmProvenanceVerificationPolicy(
     ref?: string;
     sha?: string;
   },
-): NpmProvenanceVerificationPolicy {
+) {
   const parsedVersion = parseReleaseVersion(version);
   if (parsedVersion === null) {
     throw new Error(`Unsupported release version "${version}".`);
@@ -1003,11 +986,7 @@ export function resolveInstalledBinaryCommandInvocation(
   prefixDir: string,
   args: string[],
   params: { comSpec?: string; platform?: NodeJS.Platform } = {},
-): {
-  args: string[];
-  command: string;
-  windowsVerbatimArguments?: boolean;
-} {
+) {
   const platform = params.platform ?? process.platform;
   const binaryPath = resolveInstalledBinaryPath(prefixDir, platform);
   if (platform === "win32") {
@@ -1024,10 +1003,7 @@ export function resolveInstalledBinaryCommandInvocation(
   };
 }
 
-function readBundledExtensionPackageJsons(packageRoot: string): {
-  manifests: InstalledBundledExtensionManifestRecord[];
-  errors: string[];
-} {
+function readBundledExtensionPackageJsons(packageRoot: string) {
   const extensionsDir = join(packageRoot, "dist", "extensions");
   const manifests: InstalledBundledExtensionManifestRecord[] = [];
   const errors: string[] = [];
@@ -1244,11 +1220,11 @@ async function verifyPublishedRegistryProvenanceOnce(version: string): Promise<v
         url?: string;
       };
       integrity?: string;
-      signatures?: NpmRegistrySignature[];
+      signatures?: Parameters<typeof verifyNpmRegistrySignatures>[0]["signatures"];
     };
   };
   const keysDocument = (await fetchRegistryJson(new URL("-/npm/v1/keys", registry).toString())) as {
-    keys?: NpmRegistryKey[];
+    keys?: Parameters<typeof verifyNpmRegistrySignatures>[0]["keys"];
   };
   const integrity = packageDocument.dist?.integrity;
   const signatures = packageDocument.dist?.signatures;

@@ -1593,9 +1593,7 @@ extension OpenClawChatViewModel {
             sessionKey: modelStateKey,
             agentID: capturedAgentID,
             syncSelection: syncSelection)
-        if let thinkingLevels = patchResult?.thinkingLevels {
-            updateCurrentSessionThinkingLevels(thinkingLevels, sessionKey: modelStateKey)
-        }
+        updateCurrentSessionThinkingLevels(patchResult?.thinkingLevels, sessionKey: modelStateKey)
         if syncSelection,
            !self.prefersExplicitThinkingLevel,
            Self.normalizedThinkingLevel(self.preferredThinkingLevel) != "ultra",
@@ -1622,7 +1620,7 @@ extension OpenClawChatViewModel {
             self.acceptedThinkingLevelsByTarget[target] = thinkingLevel
             if self.acceptedExplicitThinkingPreferencesByTarget[target] == false {
                 self.acceptedPreferredThinkingLevelsByTarget[target] = thinkingLevel
-                self.recordAuthoritativeInheritedThinkingPreference(thinkingLevel)
+                self.confirmedThinkingPreference = PreferenceState(level: thinkingLevel, isExplicit: false)
             }
         }
         if let patchResult {

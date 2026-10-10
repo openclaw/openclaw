@@ -36,6 +36,7 @@ import type {
   PluginRuntime,
   RuntimeGatewayRequestOptions,
 } from "../plugins/runtime/types.js";
+import { bindInProcessSessionDeliveryGeneration } from "./in-process-session-delivery.js";
 import { authorizeOperatorScopesForRequiredScope } from "./method-scopes.js";
 import { normalizeOperatorScopeList } from "./operator-scopes.js";
 import type { GatewayNodeInvokeStream } from "./server-methods/shared-types.js";
@@ -46,7 +47,10 @@ import {
   dispatchGatewayMethodInProcessRaw,
   getInProcessGatewayRequestContext,
 } from "./server-plugin-in-process-dispatch.js";
-import { readTrustedPluginSessionFacts } from "./server-plugin-session-facts.js";
+import {
+  readTrustedPluginSessionFacts,
+  withTrustedPluginSessionFacts,
+} from "./server-plugin-session-facts.js";
 import {
   canTrustedOfficialPluginRequestScopes,
   createGatewaySubagentRuntime,
@@ -59,6 +63,9 @@ import {
   openGatewayNodeDuplex,
   projectGatewayRuntimeNodes,
 } from "./server-plugins-node-runtime.js";
+import { resolveRequestedSessionAgentId } from "./session-request-agent.js";
+import { withReadySessionRows } from "./session-row-prepared-read.js";
+import { requireSessionRowProjection } from "./session-row-projection-access.js";
 
 export {
   dispatchGatewayMethodInProcess,
@@ -70,6 +77,7 @@ export { runWithOperatorToolGatewayCleanupContext } from "./server-plugin-in-pro
 export { hasInProcessGatewayContext } from "./server-plugins-node-runtime.js";
 export {
   readTrustedPluginSessionFacts,
+  withTrustedPluginSessionFacts,
   withTrustedPluginUserProfileIdentity,
   resolveTrustedPluginGitHubAccount,
 };
@@ -91,7 +99,52 @@ export async function dispatchTrustedPluginGatewayMethod<T>(
     );
   }
   const syntheticScopes = normalizeOperatorScopeList(options?.scopes);
-  return await dispatchGatewayMethodInProcess<T>(method, params, {
+  let requestParams = params;
+  const expectedSession = options?.sessionDeliveryGeneration;
+  if (expectedSession) {
+    if (method !== "send") {
+      throw new Error("Session delivery generation is only valid for Gateway send requests");
+    }
+    const context = getInProcessGatewayRequestContext(resolveGatewayContext);
+    if (!context) {
+      throw new Error("Session delivery generation requires an active Gateway");
+    }
+    const projection = requireSessionRowProjection(context);
+    const generation = await withReadySessionRows(
+      projection,
+      (cfg) => {
+        const requested = resolveRequestedSessionAgentId(cfg, expectedSession.sessionKey);
+        return requested.ok
+          ? [{ key: expectedSession.sessionKey, agentId: requested.agentId }]
+          : [];
+      },
+      (read) => {
+        const requested = resolveRequestedSessionAgentId(
+          read.state.cfg,
+          expectedSession.sessionKey,
+        );
+        const record = requested.ok
+          ? read.describe({ key: expectedSession.sessionKey, agentId: requested.agentId })
+          : undefined;
+        if (
+          !record?.entry.sessionId ||
+          record.entry.sessionId !== expectedSession.sessionId ||
+          (record.entry.lifecycleRevision ?? undefined) !== expectedSession.lifecycleRevision
+        ) {
+          throw new Error("Requester session changed during delivery");
+        }
+        return {
+          agentId: record.agentId,
+          storePath: record.storeTarget.storePath,
+          sessionKey: record.key,
+          sessionId: record.entry.sessionId,
+          lifecycleRevision: record.entry.lifecycleRevision ?? null,
+        };
+      },
+    );
+    requestParams = bindInProcessSessionDeliveryGeneration(params, generation);
+  }
+  return await dispatchGatewayMethodInProcess<T>(method, requestParams, {
     forceSyntheticClient: true,
     pluginRuntimeOwnerId: pluginId,
     resolveGatewayContext,
@@ -270,6 +323,8 @@ function createGatewayPluginRuntimeBindings(
           openPluginPanelForRequester(params, resolveBoundGatewayContext),
         readSessionFacts: (params) =>
           readTrustedPluginSessionFacts(params, resolveBoundGatewayContext),
+        withSessionFacts: (select, run) =>
+          withTrustedPluginSessionFacts(select, run, resolveBoundGatewayContext),
         subscribeSessionChanges: subscribeRuntimeSessionChanges,
         withUserProfileIdentity: (params, run) =>
           withTrustedPluginUserProfileIdentity(params, run, resolveBoundGatewayContext),

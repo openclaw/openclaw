@@ -25,11 +25,13 @@ import type { BashExecutionMessage, CustomMessage } from "./messages.js";
 import { getSessionCompactionPersistenceAsync } from "./session-compaction-persistence.js";
 import { isTalkRealtimeVoiceEntry } from "./session-manager-codec.js";
 import {
-  prepareCurrentTurnReplayWitness,
+  prepareCurrentTurnReplaySelection,
   resolveCurrentTurnEntryId,
   sessionManagerPrepareCurrentTurnReplay,
 } from "./session-manager-current-turn.js";
 import { generateSessionEntryId } from "./session-manager-id.js";
+import { prepareSessionManagerSync } from "./session-manager-incognito-scope.js";
+import { sessionManagerReadMessageAnchor } from "./session-manager-message-anchor.js";
 import {
   canonicalizeSessionEntry,
   type PersistRecordResult,
@@ -44,9 +46,27 @@ import type {
 } from "./session-manager-types.js";
 import type { PreparedSessionTranscriptReload } from "./session-manager-view-types.js";
 import { withSessionManagerWrite } from "./session-manager-write-admission.js";
-import { warnSessionPersistenceDeprecation } from "./session-persistence-deprecation.js";
 
 export class SessionManagerAppend extends SessionManagerSuffixPersistence {
+  #lastMessageAppend:
+    | {
+        anchor: TranscriptEntryAnchor;
+        target: ReturnType<SessionManagerAppend["getSessionTarget"]>;
+      }
+    | undefined;
+
+  [sessionManagerReadMessageAnchor](entryId: string | null | undefined) {
+    this.assertTranscriptViewAvailable();
+    const receipt = this.#lastMessageAppend;
+    return receipt &&
+      receipt.anchor.entryId === entryId &&
+      receipt.anchor.generation === this.transcriptVersion?.generation &&
+      this.byId.has(receipt.anchor.entryId) &&
+      sameSessionTranscriptTargetBinding(receipt.target, this.persistenceTarget)
+      ? receipt.anchor
+      : undefined;
+  }
+
   protected appendEntryAsync<T extends SessionEntry>(
     entry: T,
     options?: AppendPersistenceOptions,
@@ -230,10 +250,10 @@ export class SessionManagerAppend extends SessionManagerSuffixPersistence {
     try {
       persistenceResult = this.persistRecord(canonicalEntry, attemptOptions, preparedMessage);
     } catch (error) {
-      const deliberateBranchAppend = this.pendingDeliberateAppend;
-      const sideBranchAppend =
-        this.appendMode === "side" || isSessionTranscriptSideAppendEntry(canonicalEntry);
-      const retryableExplicitParentAppend = deliberateBranchAppend || sideBranchAppend;
+      const retryableExplicitParentAppend =
+        this.pendingDeliberateAppend ||
+        this.appendMode === "side" ||
+        isSessionTranscriptSideAppendEntry(canonicalEntry);
       if (
         (!activeBranchAppend && !retryableExplicitParentAppend) ||
         !(error instanceof SqliteTranscriptMutationConflictError)
@@ -251,30 +271,27 @@ export class SessionManagerAppend extends SessionManagerSuffixPersistence {
       // Preserve the prepared parent so storage can distinguish a descendant tail from an
       // unrelated branch. Turn-bound assistant and tool-result messages may follow only a
       // descendant tail with no newer user turn; compatible reset and reentrant writes remain.
-      const retryOptions: AppendPersistenceOptions & { expectedMutationAt?: number | null } =
-        preparedTurnAppend
-          ? (() => {
-              const validatedMutationAt = this.persistenceTarget
-                ? validatePreparedAssistantAppendSync(
-                    this.persistenceTarget,
-                    canonicalEntry.parentId,
-                    admittedUserId,
-                  )
-                : undefined;
-              if (validatedMutationAt === undefined) {
-                throw error;
-              }
-              return copyCodeModeSourceAppendOptions(persistenceOptions, {
-                ...persistenceOptions,
-                expectedMutationAt: validatedMutationAt,
-              });
-            })()
-          : copyCodeModeSourceAppendOptions(persistenceOptions, {
-              ...persistenceOptions,
-              expectedMutationAt: this.persistenceTarget
-                ? readTranscriptMutationAtSync(this.persistenceTarget)
-                : null,
-            });
+      let expectedMutationAt: number | null | undefined;
+      if (preparedTurnAppend) {
+        expectedMutationAt = this.persistenceTarget
+          ? validatePreparedAssistantAppendSync(
+              this.persistenceTarget,
+              canonicalEntry.parentId,
+              admittedUserId,
+            )
+          : undefined;
+        if (expectedMutationAt === undefined) {
+          throw error;
+        }
+      } else {
+        expectedMutationAt = this.persistenceTarget
+          ? readTranscriptMutationAtSync(this.persistenceTarget)
+          : null;
+      }
+      const retryOptions = copyCodeModeSourceAppendOptions(persistenceOptions, {
+        ...persistenceOptions,
+        expectedMutationAt,
+      });
       persistenceResult = this.persistRecord(canonicalEntry, retryOptions, preparedMessage);
     }
     return this.adoptPersistedEntry(canonicalEntry, persistenceResult, admittedUserId);
@@ -425,6 +442,15 @@ export class SessionManagerAppend extends SessionManagerSuffixPersistence {
       } else {
         this.leafId = canonicalEntry.id;
         this.appendMode = undefined;
+        // Bind opaque-only inherited state only after the visible append succeeds.
+        this.cacheTtlProjectionPrefixes = this.cacheTtlProjectionPrefixes?.flatMap((prefix) => {
+          if (prefix.anchorIds.length) {
+            return [prefix];
+          }
+          return canonicalEntry.type === "reset" || canonicalEntry.type === "branch_summary"
+            ? []
+            : [{ ...prefix, anchorIds: [canonicalEntry.id] }];
+        });
       }
       if (canonicalEntry.type === "label") {
         if (canonicalEntry.label) {
@@ -438,6 +464,15 @@ export class SessionManagerAppend extends SessionManagerSuffixPersistence {
     }
     this.pendingDeliberateAppend = false;
     freezeJsonSnapshot(canonicalEntry);
+    if (canonicalEntry.type === "message") {
+      // Publish with the adopted view, before later native writes or worker replies can run.
+      this.#lastMessageAppend = persistenceResult?.anchor
+        ? {
+            anchor: Object.freeze({ ...persistenceResult.anchor }),
+            target: this.getSessionTarget(),
+          }
+        : undefined;
+    }
     return {
       entry: canonicalEntry,
       anchor: persistenceResult?.anchor,
@@ -454,6 +489,14 @@ export class SessionManagerAppend extends SessionManagerSuffixPersistence {
   ): string | null {
     this.assertTranscriptViewAvailable();
     const includeOmitted = options?.includeOmittedCustomMessages === true;
+    if (includeOmitted) {
+      prepareSessionManagerSync(
+        "resolveCurrentTurnEntryId",
+        this.persistenceTarget,
+        this,
+        "openAsync, then resolveCurrentTurnEntryId without includeOmittedCustomMessages",
+      );
+    }
     return resolveCurrentTurnEntryId(
       {
         target: this.persistenceTarget,
@@ -473,7 +516,7 @@ export class SessionManagerAppend extends SessionManagerSuffixPersistence {
     matchesUser: (entry: SessionEntry | undefined) => boolean,
     signal?: AbortSignal,
   ) {
-    return prepareCurrentTurnReplayWitness(
+    return prepareCurrentTurnReplaySelection(
       () => {
         this.assertTranscriptViewAvailable();
         return {
@@ -484,6 +527,7 @@ export class SessionManagerAppend extends SessionManagerSuffixPersistence {
           remainingAncestors:
             this.boundedContextLimits?.maxEvents ?? this.byId.size + this.opaqueParentsById.size,
           isInterruptedTail,
+          pendingDeliberateAppend: this.pendingDeliberateAppend,
         };
       },
       matchesUser,
@@ -497,7 +541,7 @@ export class SessionManagerAppend extends SessionManagerSuffixPersistence {
     message: Message | CustomMessage | BashExecutionMessage,
     options?: AppendPersistenceOptions,
   ): string {
-    warnSessionPersistenceDeprecation("SessionManager.appendMessage", "appendMessageAsync");
+    prepareSessionManagerSync("appendMessage", this.persistenceTarget, this);
     return this.appendMessageWithTranscriptAnchorSync(message, options).entryId;
   }
 
@@ -544,10 +588,7 @@ export class SessionManagerAppend extends SessionManagerSuffixPersistence {
     message: Message | CustomMessage | BashExecutionMessage,
     options?: AppendPersistenceOptions,
   ) {
-    warnSessionPersistenceDeprecation(
-      "SessionManager.appendMessageWithTranscriptAnchor",
-      "appendMessageWithTranscriptAnchorAsync",
-    );
+    prepareSessionManagerSync("appendMessageWithTranscriptAnchor", this.persistenceTarget, this);
     return this.appendMessageWithTranscriptAnchorSync(message, options);
   }
 

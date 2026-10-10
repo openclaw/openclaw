@@ -14,14 +14,14 @@ type WorkerInferenceFrameContext = {
   seq: number;
 };
 
-const TERMINAL_ERROR_MESSAGES = new Map<WorkerInferenceErrorReason, string>([
-  ["model-not-approved", "Model is not approved"],
-  ["invalid-context", "Inference context is invalid"],
-  ["epoch-mismatch", "Inference ownership changed"],
-  ["session-not-attached", "Session is not attached"],
-  ["provider-error", "Provider request failed"],
-  ["cancelled", "Inference cancelled"],
-]);
+const TERMINAL_ERROR_MESSAGES: Record<WorkerInferenceErrorReason, string> = {
+  "model-not-approved": "Model is not approved",
+  "invalid-context": "Inference context is invalid",
+  "epoch-mismatch": "Inference ownership changed",
+  "session-not-attached": "Session is not attached",
+  "provider-error": "Provider request failed",
+  cancelled: "Inference cancelled",
+};
 
 export function terminalError(
   reason: WorkerInferenceErrorReason,
@@ -37,7 +37,7 @@ export function terminalError(
   return {
     type: "error",
     reason,
-    message: errorMessage ?? TERMINAL_ERROR_MESSAGES.get(reason) ?? "Provider request failed",
+    message: errorMessage ?? TERMINAL_ERROR_MESSAGES[reason],
     ...(usage ? { usage } : {}),
   };
 }

@@ -201,9 +201,7 @@ function isRootMemoryPath(filePath: string, workspaceDir: string): boolean {
   if (!normalized) {
     return false;
   }
-  const absolutePath = path.isAbsolute(normalized)
-    ? path.resolve(normalized)
-    : path.resolve(workspaceDir, normalized);
+  const absolutePath = path.resolve(workspaceDir, normalized);
   return absolutePath === path.join(path.resolve(workspaceDir), "MEMORY.md");
 }
 

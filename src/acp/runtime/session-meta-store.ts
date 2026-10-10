@@ -98,23 +98,17 @@ export function readSessionEntryFromStore(params: {
   clone?: boolean;
 }): {
   cfg: OpenClawConfig;
-  agentId?: string;
-  storePath?: string;
+  agentId: string;
+  storePath: string;
   storeSessionKey: string;
   entry?: SessionEntry;
   storeReadFailed?: boolean;
 } {
-  const {
-    cfg,
-    agentId,
-    storePath,
-    storeSessionKey: canonicalKey,
-  } = resolveSessionStorePathForAcp(params);
+  const { cfg, agentId, storePath, storeSessionKey } = resolveSessionStorePathForAcp(params);
   try {
-    const storeSessionKey = normalizeStoreSessionKey(canonicalKey);
     const entry = storeSessionKey
       ? loadSessionEntryReadOnly({
-          ...(agentId ? { agentId } : {}),
+          agentId,
           storePath,
           sessionKey: storeSessionKey,
           ...(params.clone === false ? { clone: false } : {}),
@@ -127,7 +121,7 @@ export function readSessionEntryFromStore(params: {
       cfg,
       agentId,
       storePath,
-      storeSessionKey: canonicalKey,
+      storeSessionKey,
       storeReadFailed: true,
     };
   }

@@ -44,17 +44,6 @@ type TerminalUploadBatch = {
   abortController: AbortController;
 };
 
-type TerminalUploadProgress = {
-  completed: number;
-  canInsert: boolean;
-  current: number;
-  error: string | null;
-  fileName: string;
-  retryable: boolean;
-  state: TerminalUploadBatch["state"];
-  total: number;
-};
-
 function isRetryableUploadError(error: unknown): boolean {
   if (typeof error === "object" && error !== null && "retryable" in error) {
     const gatewayError = error as { gatewayCode?: unknown; code?: unknown; retryable?: unknown };
@@ -102,7 +91,7 @@ export class TerminalPanelUploadController {
     return this.batch !== null;
   }
 
-  get progress(): TerminalUploadProgress | null {
+  get progress() {
     const batch = this.batch;
     if (!batch) {
       return null;
@@ -388,10 +377,7 @@ export class TerminalPanelUploadController {
     if (this.batch !== batch) {
       return;
     }
-    batch.abortController.abort();
-    this.batch = null;
-    this.dragActive = false;
-    this.dragDepth = 0;
+    this.dispose();
     this.host.requestUpdate();
   }
 
@@ -407,6 +393,7 @@ export function renderTerminalPanelActions(params: {
   fullscreen: boolean;
   embedded?: boolean;
   dock: "bottom" | "right" | "main";
+  dockDisabled?: boolean;
   upload: TerminalPanelUploadController;
   sessionPicker: unknown;
   onDock: (dock: "bottom" | "right" | "main") => void;
@@ -434,10 +421,12 @@ export function renderTerminalPanelActions(params: {
                   className: "rail-header__action tp-icon",
                   label: t("terminal.dockBottom"),
                   icon: icons.panelBottomOpen,
+                  disabled: params.dockDisabled,
                   onClick: () => params.onDock("bottom"),
                 })
               : html`${renderDockDestinations({
                   current: params.dock,
+                  disabled: params.dockDisabled,
                   groupClass: "tp-dock-modes",
                   groupLabel: t("terminal.dockMode"),
                   destinations: [

@@ -1,4 +1,8 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import {
+  REPEATED_TOOL_ERROR_CODE,
+  REPEATED_TOOL_ERROR_MESSAGE,
+} from "../../../packages/agent-core/src/errors.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { classifyGatewayStorageFailure } from "../../infra/sqlite-error-diagnostics.js";
 import type { AssistantMessage } from "../../llm/types.js";
@@ -18,6 +22,7 @@ import {
   renderAssistantFormatFailureCopy,
   renderAssistantRequestFailureCopy,
   renderFormatErrorCopy,
+  renderModelLoadFailureCopy,
 } from "../failover/assistant-request-failure-copy.js";
 import { failoverReasonFromClassification } from "../failover/classification-rules.js";
 import {
@@ -104,11 +109,6 @@ function classifyAssistantErrorFacts(msg: AssistantMessage, opts?: AssistantErro
     storageFailure: classifyGatewayStorageFailure(msg),
     code: signal.code,
   };
-}
-function isMissingToolCallInputError(raw: string): boolean {
-  return (
-    Boolean(raw) && (TOOL_CALL_INPUT_MISSING_RE.test(raw) || TOOL_CALL_INPUT_PATH_RE.test(raw))
-  );
 }
 export function formatAssistantErrorText(
   msg: AssistantMessage,
@@ -208,7 +208,7 @@ export function formatAssistantErrorText(
     );
   }
 
-  if (isMissingToolCallInputError(raw)) {
+  if (raw && (TOOL_CALL_INPUT_MISSING_RE.test(raw) || TOOL_CALL_INPUT_PATH_RE.test(raw))) {
     return (
       "Session history looks corrupted (tool call input missing). " +
       "Use /new to start a fresh session. " +
@@ -306,6 +306,13 @@ export function formatUserFacingAssistantErrorText(
   msg: AssistantMessage,
   opts?: AssistantErrorTextOptions,
 ): string {
+  if (msg.errorCode === REPEATED_TOOL_ERROR_CODE) {
+    return REPEATED_TOOL_ERROR_MESSAGE;
+  }
+  const modelLoadCopy = renderModelLoadFailureCopy(msg);
+  if (modelLoadCopy) {
+    return modelLoadCopy;
+  }
   const rawError = msg.errorMessage?.trim();
   const approvalMessage = resolveExecutionApprovalFailureMessage(rawError);
   if (approvalMessage) {

@@ -1,27 +1,34 @@
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { isPathInside } from "openclaw/plugin-sdk/file-access-runtime";
 import {
   replaceManagedMarkdownBlock,
   withTrailingNewline,
 } from "openclaw/plugin-sdk/memory-host-markdown";
 import { timestampMsToIsoString } from "openclaw/plugin-sdk/number-runtime";
-import { FsSafeError, root as fsRoot } from "openclaw/plugin-sdk/security-runtime";
+import { root as fsRoot } from "openclaw/plugin-sdk/security-runtime";
 import {
   asNullableRecord,
   isRecord,
   uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  isFsSafeErrorCode,
+  moveTargetToRecovery,
+  recoverySlotPrefix,
+  removeEmptyRecoverySlot,
+  resolveContainedImportPath,
+  type ChatGptRecoverySlot,
+  type ChatGptRollbackEntryRef,
+  type ChatGptRollbackRoot,
+} from "./chatgpt-import-recovery.js";
 import { compileMemoryWikiVault } from "./compile.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
 import {
-  countMemoryWikiImportRunStateRows,
+  getMemoryWikiImportRunStateStore,
   MEMORY_WIKI_IMPORT_RUN_STATE_MAX_ENTRIES,
-  readMemoryWikiImportRunRecord,
   resolveMemoryWikiImportRunsDir,
   type ChatGptImportRunRecord,
-  writeMemoryWikiImportRunRecord,
 } from "./import-runs-state.js";
 import { appendMemoryWikiLog } from "./log.js";
 import {
@@ -605,7 +612,7 @@ export async function importChatGptConversations(params: {
 
     if (!params.dryRun && changedCount > 0) {
       const requiredStateRows = 1 + changedCount;
-      const existingStateRows = await countMemoryWikiImportRunStateRows();
+      const existingStateRows = await getMemoryWikiImportRunStateStore().rowCount();
       const projectedStateRows = existingStateRows + requiredStateRows;
       if (projectedStateRows > MEMORY_WIKI_IMPORT_RUN_STATE_MAX_ENTRIES) {
         throw new Error(
@@ -646,7 +653,7 @@ export async function importChatGptConversations(params: {
           record: importRunRecord,
         });
       }
-      await writeMemoryWikiImportRunRecord(params.config.vault.path, importRunRecord);
+      await getMemoryWikiImportRunStateStore().write(params.config.vault.path, importRunRecord);
       const compile = await compileMemoryWikiVault(params.config).catch((error: unknown) => {
         const message = error instanceof Error ? error.message : String(error);
         throw new Error(
@@ -687,37 +694,8 @@ export async function importChatGptConversations(params: {
   });
 }
 
-type ChatGptImportRunEntry = ChatGptImportRunRecord["createdPaths"][number];
-type ChatGptRollbackEntryRef = {
-  entry: ChatGptImportRunEntry;
-  kind: "created" | "updated";
-  index: number;
-};
-type ChatGptRecoverySlot = {
-  ref: ChatGptRollbackEntryRef;
-  slotRelativePath: string;
-  contentRelativePath: string;
-};
-type ChatGptRollbackRoot = Awaited<ReturnType<typeof fsRoot>>;
-
 function toVaultRelativePath(vaultRoot: string, absolutePath: string): string {
   return path.relative(vaultRoot, absolutePath).replace(/\\/g, "/");
-}
-
-function recoverySlotPrefix(ref: ChatGptRollbackEntryRef): string {
-  return `${ref.kind}-${ref.index}-${createHash("sha256").update(ref.entry.path).digest("hex")}-`;
-}
-
-function resolveContainedImportPath(root: string, relativePath: string, label: string): string {
-  if (!relativePath || path.isAbsolute(relativePath) || path.win32.isAbsolute(relativePath)) {
-    throw new Error(`${label} must be a relative path: ${relativePath}`);
-  }
-  const resolvedRoot = path.resolve(root);
-  const resolvedPath = path.resolve(resolvedRoot, relativePath);
-  if (!isPathInside(resolvedRoot, resolvedPath)) {
-    throw new Error(`${label} must stay inside ${resolvedRoot}: ${relativePath}`);
-  }
-  return resolvedPath;
 }
 
 function buildRollbackEntryRefs(record: ChatGptImportRunRecord): ChatGptRollbackEntryRef[] {
@@ -734,76 +712,6 @@ function listPreservedPaths(record: ChatGptImportRunRecord): ChatGptRollbackPres
       recoveryPath,
     })),
   );
-}
-
-function isFsSafeErrorCode(error: unknown, code: FsSafeError["code"]): boolean {
-  return error instanceof FsSafeError && error.code === code;
-}
-
-async function reserveRecoverySlot(
-  runRoot: ChatGptRollbackRoot,
-  ref: ChatGptRollbackEntryRef,
-): Promise<{ slotRelativePath: string; contentRelativePath: string }> {
-  await runRoot.mkdir("recovered");
-  const slotRelativePath = path.posix.join(
-    "recovered",
-    `${recoverySlotPrefix(ref)}${randomUUID()}`,
-  );
-  await runRoot.mkdir(slotRelativePath);
-  return {
-    slotRelativePath,
-    contentRelativePath: path.posix.join(slotRelativePath, "content"),
-  };
-}
-
-async function removeEmptyRecoverySlot(
-  runRoot: ChatGptRollbackRoot,
-  slotRelativePath: string,
-): Promise<void> {
-  try {
-    if ((await runRoot.list(slotRelativePath)).length > 0) {
-      return;
-    }
-    await runRoot.remove(slotRelativePath);
-  } catch (error) {
-    if (isFsSafeErrorCode(error, "not-found")) {
-      return;
-    }
-    throw error;
-  }
-}
-
-async function moveTargetToRecovery(params: {
-  vaultRoot: ChatGptRollbackRoot;
-  runRoot: ChatGptRollbackRoot;
-  runRelativePath: string;
-  ref: ChatGptRollbackEntryRef;
-}): Promise<ChatGptRecoverySlot | null> {
-  resolveContainedImportPath(
-    params.vaultRoot.rootDir,
-    params.ref.entry.path,
-    "Memory Wiki import page path",
-  );
-  for (;;) {
-    const slot = await reserveRecoverySlot(params.runRoot, params.ref);
-    const recoveryVaultRelativePath = path.posix.join(
-      params.runRelativePath,
-      slot.contentRelativePath,
-    );
-    try {
-      await params.vaultRoot.move(params.ref.entry.path, recoveryVaultRelativePath);
-      return { ref: params.ref, ...slot };
-    } catch (error) {
-      await removeEmptyRecoverySlot(params.runRoot, slot.slotRelativePath);
-      if (isFsSafeErrorCode(error, "not-found")) {
-        return null;
-      }
-      if (isFsSafeErrorCode(error, "already-exists")) {
-        continue;
-      }
-      throw error;
-    }
-  }
 }
 
 async function scanRecoverySlots(params: {
@@ -906,7 +814,7 @@ export async function rollbackChatGptImportRun(params: {
 }) {
   return await withMemoryWikiVaultMutation(params.config.vault.path, async () => {
     const vaultRoot = params.config.vault.path;
-    const record = await readMemoryWikiImportRunRecord(vaultRoot, params.runId);
+    const record = await getMemoryWikiImportRunStateStore().read(vaultRoot, params.runId);
     if (!record) {
       throw new Error(`Memory Wiki import run not found: ${params.runId}`);
     }
@@ -941,7 +849,7 @@ export async function rollbackChatGptImportRun(params: {
     }
     if (!record.rollbackStartedAt) {
       record.rollbackStartedAt = new Date().toISOString();
-      await writeMemoryWikiImportRunRecord(vaultRoot, record);
+      await getMemoryWikiImportRunStateStore().write(vaultRoot, record);
     }
     if (!record.rollbackTargetsFinalizedAt) {
       await initializeMemoryWikiVault(params.config);
@@ -951,7 +859,7 @@ export async function rollbackChatGptImportRun(params: {
       const runFs = await fsRoot(runDir);
       const recoverySlots = await scanRecoverySlots({ runRoot: runFs, record });
       if (await classifyRecoverySlots({ vaultRoot, runRoot: runFs, slots: recoverySlots })) {
-        await writeMemoryWikiImportRunRecord(vaultRoot, record);
+        await getMemoryWikiImportRunStateStore().write(vaultRoot, record);
       }
       for (const ref of refs) {
         const { entry } = ref;
@@ -978,7 +886,7 @@ export async function rollbackChatGptImportRun(params: {
             ref,
           });
           if (slot && (await classifyRecoverySlots({ vaultRoot, runRoot: runFs, slots: [slot] }))) {
-            await writeMemoryWikiImportRunRecord(vaultRoot, record);
+            await getMemoryWikiImportRunStateStore().write(vaultRoot, record);
           }
           if (snapshot === undefined) {
             if (slot) {
@@ -1006,7 +914,7 @@ export async function rollbackChatGptImportRun(params: {
       // The store commits path rows before this meta fence. It does not claim
       // host power-loss ordering beyond process-restart recovery.
       record.rollbackTargetsFinalizedAt = new Date().toISOString();
-      await writeMemoryWikiImportRunRecord(vaultRoot, record);
+      await getMemoryWikiImportRunStateStore().write(vaultRoot, record);
     }
     // Finalization rebuilds derived artifacts without rewriting source pages.
     // A normal later compile may refresh machine-managed Related blocks.
@@ -1014,7 +922,7 @@ export async function rollbackChatGptImportRun(params: {
       sourcePageWrites: "preserve",
     });
     record.rolledBackAt = new Date().toISOString();
-    await writeMemoryWikiImportRunRecord(vaultRoot, record);
+    await getMemoryWikiImportRunStateStore().write(vaultRoot, record);
     const preservedPaths = listPreservedPaths(record);
     const removedCount = record.createdPaths.length;
     const restoredCount = record.updatedPaths.filter((entry) => entry.snapshotPath).length;

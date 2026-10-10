@@ -1,7 +1,6 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import {
-  captureSkillLibrarySelection,
+  captureSkillLibraryPreparation,
   prepareSkillLibrarySelection,
 } from "../library/selection.js";
 import { resolveSkillRuntimeConfig } from "../loading/runtime-config.js";
@@ -16,7 +15,6 @@ import {
 import { getSkillsSourceVersion } from "./refresh-state.js";
 import { resolveSkillSnapshotExecutionFileHost } from "./skill-snapshot-provenance.js";
 
-/** Resolves skill entries embedded into a run payload into runtime-visible entries. */
 export async function resolveEmbeddedRunSkillEntries(params: {
   workspaceDir: string;
   executionWorkspaceDir?: string;
@@ -61,17 +59,10 @@ export async function resolveEmbeddedRunSkillEntries(params: {
       return cachedSkillEntries;
     }
     params.assertCurrent?.();
-    const librarySelections = captureSkillLibrarySelection(
+    const preparation = captureSkillLibraryPreparation(
       params.workspaceOnly === true ? [] : (params.skillsSnapshot?.librarySelections ?? []),
+      () => params.assertCurrent?.(),
     );
-    const libraryContext = librarySelections.length
-      ? captureOpenClawStateWorkerContext()
-      : undefined;
-    const assertPreparedEntriesCurrent = () => {
-      params.assertCurrent?.();
-      libraryContext?.maintenanceScope?.assertAdmission();
-      libraryContext?.admission.assertCurrent();
-    };
     const options = {
       config,
       agentId: params.agentId,
@@ -87,22 +78,22 @@ export async function resolveEmbeddedRunSkillEntries(params: {
       ...(params.workspaceOnly === true ? { workspaceOnly: true } : {}),
     };
     for (;;) {
-      assertPreparedEntriesCurrent();
+      preparation.assertCurrent();
       const sourceVersion = getSkillsSourceVersion(skillRoots.agentWorkspaceDir, options);
       const workspaceEntries = await prepareWorkspaceSkills(
         skillRoots.agentWorkspaceDir,
         options,
         params.assertCurrent,
       );
-      assertPreparedEntriesCurrent();
-      const libraryEntries = libraryContext
+      preparation.assertCurrent();
+      const libraryEntries = preparation.libraryContext
         ? await prepareSkillLibrarySelection(
-            librarySelections,
-            { env: libraryContext.environment },
-            assertPreparedEntriesCurrent,
+            preparation.librarySelections,
+            { env: preparation.libraryContext.environment },
+            preparation.assertCurrent,
           )
         : undefined;
-      assertPreparedEntriesCurrent();
+      preparation.assertCurrent();
       if (cachedSkillEntries) {
         return cachedSkillEntries;
       }

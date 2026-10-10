@@ -22,11 +22,20 @@ accepted source revision and whether it came from a Gateway write or a file edit
 Later hot-reloadable writes do not erase a committed restart requirement while
 its application is pending.
 
+The `agents.create`, `agents.update`, and `agents.delete` Gateway methods wait
+for runtime application before reporting success. A successful response lets
+clients immediately create sessions or read the updated agent roster. If the
+config was saved but could not be applied, including when reload is `off`, the
+method returns `UNAVAILABLE` with recovery guidance instead of reporting the
+agent change as ready. Inspect `config.get` before retrying a saved mutation.
+
 If a busy state store temporarily refuses the reload's lifecycle lease, the
-Gateway keeps the change pending and retries automatically with a capped backoff.
-No additional config edit is needed. The previous runtime stays active until the
-change applies, and shutdown cancels pending retries. Other reload failures remain
-visible in the Gateway log.
+Gateway keeps the change pending and retries automatically with increasing backoff,
+up to one final attempt after the five-second backoff. The previous runtime stays
+active until the change applies. Exhausted retries or a non-retryable admission
+failure return `UNAVAILABLE` to waiting config mutations; a later config observation
+can retry the saved change. Shutdown cancels retries and settles waiting mutations.
+Reload failures remain visible in the Gateway log.
 
 If an automatic plugin reload cannot drain active work, the Gateway records the
 failure and keeps the last-good runtime. When the drain timed out on that
@@ -204,6 +213,11 @@ applies to subsequent events and admissions. Disabling collection drains already
 accepted writes; enabling it does not reconstruct earlier events or add identity
 to runs already admitted without one. Existing retention policy is unchanged.
 
+When Memory Core is selected, changes to `models.providers` reload its index
+service. Cached memory managers close before replacements use the new provider
+configuration, so correcting an embedding endpoint or credential does not require
+a Gateway restart. Existing indexes remain on disk.
+
 Operation settings apply at their next use; they do not restart in-flight runs
 or recreate provisioned workers. Approval expiry changes affect newly issued
 grants. Attachment retention changes apply on the next cleanup sweep, including
@@ -285,7 +299,7 @@ Revoking a command cancels its active invocations and rejects later input and
 results. Revoking desktop streaming also closes its observer transports. Browser
 node routing applies to subsequent operations. Node pairing policy
 (`gateway.nodes.pairing`) also hot-applies: pending automatic approvals recheck
-the current policy before granting access, including after SSH probes. Existing
+the current policy before granting access, including after SSH checks. Existing
 paired devices remain paired. Terminal shell changes apply to newly opened
 terminals; active terminals keep their original shell. Detached-session timeout
 changes recalculate deadlines from each terminal's original disconnect time.

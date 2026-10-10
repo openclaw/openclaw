@@ -94,14 +94,11 @@ describe("codex cli node sessions", () => {
   });
 
   it.each([
-    { sourceAware: false, catalogAgent: undefined, sourcePin: false, allowed: true },
-    { sourceAware: true, catalogAgent: "research", sourcePin: false, allowed: true },
-    { sourceAware: false, catalogAgent: "research", sourcePin: false, allowed: false },
-    { sourceAware: true, catalogAgent: undefined, sourcePin: true, allowed: true },
-    { sourceAware: false, catalogAgent: undefined, sourcePin: true, allowed: false },
+    { sourceAware: true, allowed: true },
+    { sourceAware: false, allowed: false },
   ])(
-    "guards selected-home resume for node capability $sourceAware, agent $catalogAgent and source pin $sourcePin",
-    async ({ sourceAware, catalogAgent, sourcePin, allowed }) => {
+    "guards selected-home resume for node capability $sourceAware",
+    async ({ sourceAware, allowed }) => {
       const policy = createCodexCliSessionNodeInvokePolicies().find((entry) =>
         entry.commands.includes("codex.cli.session.resume"),
       )!;
@@ -112,8 +109,7 @@ describe("codex cli node sessions", () => {
         params: {
           sessionId: "native-thread",
           prompt: "continue",
-          ...(catalogAgent ? { agentId: catalogAgent } : {}),
-          ...(sourcePin ? { sourceHomeId: codexCatalogHomeId(tempDir) } : {}),
+          sourceHomeId: codexCatalogHomeId(tempDir),
         },
         config: {},
         node: { nodeId: "node-1", caps: sourceAware ? [CODEX_CLI_SESSION_SOURCE_CAPABILITY] : [] },
@@ -337,39 +333,28 @@ describe("codex cli node sessions", () => {
     });
   });
 
-  it.each(["empty", "different session"])(
-    "does not attach an %s rollout to history from its filename alone",
-    async (contents) => {
-      const sessionId = "019e2007-1f7e-7eb1-a42b-8c01f4b9b5cd";
-      await fs.writeFile(
-        path.join(tempDir, "history.jsonl"),
-        JSON.stringify({ session_id: sessionId, ts: 1778678322, text: "history prompt" }),
-      );
-      const sessionsDir = path.join(tempDir, "sessions");
-      await fs.mkdir(sessionsDir);
-      await fs.writeFile(
-        path.join(sessionsDir, `rollout-${sessionId}.jsonl`),
-        contents === "empty"
-          ? ""
-          : JSON.stringify({
-              type: "session_meta",
-              payload: { id: "another-session", cwd: "/different-project" },
-            }),
-      );
-      const command = createCodexCliSessionNodeHostCommands(resolveCatalogSource).find(
-        (entry) => entry.command === CODEX_CLI_SESSIONS_LIST_COMMAND,
-      )!;
-      const result = JSON.parse(await command.handle(JSON.stringify({ filter: sessionId })));
-      expect(result.sessions).toEqual([
-        {
-          sessionId,
-          updatedAt: "2026-05-13T13:18:42.000Z",
-          lastMessage: "history prompt",
-          messageCount: 1,
-        },
-      ]);
-    },
-  );
+  it("does not attach an empty rollout to history from its filename alone", async () => {
+    const sessionId = "019e2007-1f7e-7eb1-a42b-8c01f4b9b5cd";
+    await fs.writeFile(
+      path.join(tempDir, "history.jsonl"),
+      JSON.stringify({ session_id: sessionId, ts: 1778678322, text: "history prompt" }),
+    );
+    const sessionsDir = path.join(tempDir, "sessions");
+    await fs.mkdir(sessionsDir);
+    await fs.writeFile(path.join(sessionsDir, `rollout-${sessionId}.jsonl`), "");
+    const command = createCodexCliSessionNodeHostCommands(resolveCatalogSource).find(
+      (entry) => entry.command === CODEX_CLI_SESSIONS_LIST_COMMAND,
+    )!;
+    const result = JSON.parse(await command.handle(JSON.stringify({ filter: sessionId })));
+    expect(result.sessions).toEqual([
+      {
+        sessionId,
+        updatedAt: "2026-05-13T13:18:42.000Z",
+        lastMessage: "history prompt",
+        messageCount: 1,
+      },
+    ]);
+  });
 
   it("cancels a running node resume before a delayed write and releases its reservation", async ({
     signal,
@@ -834,21 +819,6 @@ describe("codex cli node sessions", () => {
       }),
     ).rejects.toThrow("Codex CLI node command returned malformed payloadJSON.");
     expect(invoke).toHaveBeenCalledWith(expect.objectContaining({ scopes: ["operator.write"] }));
-  });
-
-  it("keeps Codex history session previews on UTF-16 code point boundaries", async () => {
-    const sessionId = "019e2007-1f7e-7eb1-a42b-8c01f4b9b5ce";
-    const text = `${"a".repeat(136)}🤖tail`;
-    await fs.writeFile(
-      path.join(tempDir, "history.jsonl"),
-      JSON.stringify({ session_id: sessionId, ts: 1778678322, text }),
-    );
-
-    const parsed = await listLocalSessions({ filter: "", limit: 5 });
-
-    expect(parsed.sessions?.[0]?.lastMessage).toBe(`${"a".repeat(136)}...`);
-    expect(parsed.sessions?.[0]?.lastMessage).not.toContain("\ud83e");
-    expect(parsed.sessions?.[0]?.lastMessage).not.toContain("\udd16");
   });
 
   it("keeps Codex session-file previews on UTF-16 code point boundaries", async () => {

@@ -188,8 +188,10 @@ export function canApplySessionListSnapshot(
       existing.spawnedBy !== next.spawnedBy ||
       existing.controlOwnerSessionKey !== next.controlOwnerSessionKey ||
       existing.parentSessionKey !== next.parentSessionKey ||
+      existing.sidebarRoot !== next.sidebarRoot ||
       (countsOnly &&
         (existing.hasActiveRun !== next.hasActiveRun ||
+          existing.hasActiveSubagentRun !== next.hasActiveSubagentRun ||
           existing.status !== next.status ||
           existing.visibility !== next.visibility ||
           existing.sharingRole !== next.sharingRole ||
@@ -254,15 +256,13 @@ export function sessionListAgentMatcher(agentId?: string | null) {
 }
 
 /** Capture membership before event reconciliation can remove or move a known child. */
-export function sessionListEventMatcher(payload: unknown, fallbackAgentId?: string | null) {
-  const matches = sessionChangedSnapshots(payload).map((snapshot) =>
-    sessionListSnapshotMatcher(snapshot, fallbackAgentId),
-  );
+export function sessionListEventMatcher(payload: unknown) {
+  const matches = sessionChangedSnapshots(payload).map(sessionListSnapshotMatcher);
   return (scope: SessionListScope, result?: SessionsListResult | null): boolean =>
     matches.some((match) => match(scope, result));
 }
 
-function sessionListSnapshotMatcher(payload: unknown, fallbackAgentId?: string | null) {
+function sessionListSnapshotMatcher(payload: unknown) {
   const parsed = parseSessionChangedEvent(payload);
   const info = parsed?.[0];
   const event = parsed?.[1] ?? asOptionalRecord(payload);
@@ -270,7 +270,7 @@ function sessionListSnapshotMatcher(payload: unknown, fallbackAgentId?: string |
   const matchesAgent = sessionListAgentMatcher(
     info?.agentId ??
       parseAgentSessionKey(info?.key)?.agentId ??
-      (typeof event?.agentId === "string" ? event.agentId : fallbackAgentId),
+      (typeof event?.agentId === "string" ? event.agentId : undefined),
   );
   const owners = [
     source?.controlOwnerSessionKey,
@@ -404,6 +404,8 @@ export type ManagedSessionList = ObservedSessionList & {
   key: string;
   query: ReturnType<typeof normalizeManagedSessionListQuery>;
   retainedLimit: number;
+  /** Raw page identities, scoped to this window, for completeness despite hidden rows. */
+  receivedKeys: Set<string>;
   startupRetryAttempt: number;
   /** Invalidation retires remaining pages without cancelling the correlated RPC. */
   readGeneration: number;

@@ -22,6 +22,8 @@ const DEFAULT_DRIVE_PROPERTIES = {
 };
 const tokenProvider = { getAccessToken: vi.fn(async () => "graph-token") };
 
+afterEach(() => vi.unstubAllGlobals());
+
 type FetchCall = [string, { method?: string; headers?: Record<string, string> } | undefined];
 
 function requireFetchCall(fetchFn: ReturnType<typeof vi.fn>, index = 0): FetchCall {
@@ -126,12 +128,12 @@ function runGraphUpload(
   fetchFn: ReturnType<typeof vi.fn>,
   overrides: Partial<Parameters<typeof uploadAndShareSharePoint>[0]> = {},
 ): ReturnType<typeof uploadAndShareSharePoint> {
+  vi.stubGlobal("fetch", withFetchPreconnect(fetchFn));
   return uploadAndShareSharePoint({
     buffer: DEFAULT_BUFFER,
     filename: DEFAULT_UPLOAD_RESULT.name,
     siteId: "site-123",
     tokenProvider,
-    fetchFn: fetchFn as unknown as typeof fetch,
     ...overrides,
   });
 }
@@ -211,7 +213,7 @@ function expectMSTeamsTimeout(promise: Promise<unknown>, label: string, timeoutM
 
 type UploadToSharePointParams = Partial<
   Omit<Parameters<typeof uploadAndShareSharePoint>[0], "chatId" | "usePerUserSharing">
->;
+> & { fetchFn?: typeof fetch };
 
 async function uploadToSharePoint(params: UploadToSharePointParams = {}) {
   const uploadFetch = params.fetchFn ?? fetch;
@@ -224,13 +226,13 @@ async function uploadToSharePoint(params: UploadToSharePointParams = {}) {
       return await uploadFetch(input, init);
     }),
   );
+  vi.stubGlobal("fetch", fetchFn);
   const result = await uploadAndShareSharePoint({
     buffer: params.buffer ?? DEFAULT_BUFFER,
     filename: params.filename ?? DEFAULT_UPLOAD_RESULT.name,
     siteId: params.siteId ?? "site-123",
     tokenProvider: params.tokenProvider ?? tokenProvider,
     contentType: params.contentType,
-    fetchFn,
     assertDirectAdapterHandoff: params.assertDirectAdapterHandoff,
     onPlatformSendDispatch: params.onPlatformSendDispatch,
   });
@@ -598,12 +600,12 @@ describe("graph upload send authority", () => {
     fetchFn: ReturnType<typeof vi.fn>,
     overrides: Partial<Parameters<typeof uploadAndShareSharePoint>[0]>,
   ) {
+    vi.stubGlobal("fetch", withFetchPreconnect(fetchFn));
     return step === "properties"
       ? getDriveItemProperties({
           siteId: "site-123",
           itemId: "item-1",
           tokenProvider,
-          fetchFn: withFetchPreconnect(fetchFn),
           ...overrides,
         })
       : runGraphUpload(fetchFn, {

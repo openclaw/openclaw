@@ -93,7 +93,6 @@ export class MultiSelect extends OpenClawLightDomElement {
     return this.options.find((option) => this.getValueKey(option.value) === key);
   }
 
-  /** Dropdown rows: unchosen options matching the query, then the custom entry. */
   private rows(): MultiSelectRow[] {
     const taken = new Set(this.value.map((entry) => this.getValueKey(entry)));
     const custom = this.query.trim();

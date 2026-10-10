@@ -1,7 +1,7 @@
 /** Worker entrypoint for transcript parsing and active-branch resolution only. */
 import { MessagePort } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { readSqliteSchemaCookie } from "../../infra/sqlite-schema-contract.js";
+import { getAdmittedSqliteSchemaFacts } from "../../infra/sqlite-schema-facts.js";
 import { assertExistingDatabaseIdentity } from "../../infra/sqlite-worker-identity.js";
 import { serveWorkerTasks } from "../../infra/worker-task-server.js";
 import {
@@ -20,7 +20,6 @@ import {
   runSqliteReconciliationLifecyclePhase,
   type SqliteMutationWorkerCoordination,
 } from "./session-accessor.sqlite-worker-coordination.js";
-import { listSessionsNeedingTranscriptIndexReconcile } from "./session-transcript-index.js";
 import type { TranscriptIndexEntry } from "./session-transcript-projection-append.js";
 import {
   prepareSessionTranscriptProjection,
@@ -43,7 +42,7 @@ type ReconcileWorkerOwner = {
 type ReconcileWorkerPlanInput = ReconcileWorkerOwner & {
   agentId: string;
   path: string;
-  preferredSessionId?: string;
+  sessionIds: string[];
 };
 
 export type SessionTranscriptReconcileWorkerInput =
@@ -90,11 +89,10 @@ type SessionTranscriptReconcileWorkerCommand = {
   yield?: true;
 };
 
-function parseWorkerInput(value: unknown): SessionTranscriptReconcileWorkerInput | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+function parseWorkerInput(input: unknown): SessionTranscriptReconcileWorkerInput | undefined {
+  if (!isRecord(input)) {
     return undefined;
   }
-  const input = value as Record<string, unknown>;
   if (
     input.mode === "memory" &&
     Array.isArray(input.sessionIds) &&
@@ -113,34 +111,24 @@ function parseWorkerInput(value: unknown): SessionTranscriptReconcileWorkerInput
   ) {
     return { ...owner, mode: "release", leaseId: input.leaseId, path: input.path };
   }
-  if (typeof input.agentId !== "string" || typeof input.path !== "string") {
-    return undefined;
-  }
-  if (input.preferredSessionId !== undefined && typeof input.preferredSessionId !== "string") {
+  if (
+    typeof input.agentId !== "string" ||
+    typeof input.path !== "string" ||
+    !Array.isArray(input.sessionIds) ||
+    !input.sessionIds.every((sessionId) => typeof sessionId === "string")
+  ) {
     return undefined;
   }
   const plan = {
     ...owner,
     agentId: input.agentId,
     path: input.path,
-    ...(typeof input.preferredSessionId === "string"
-      ? { preferredSessionId: input.preferredSessionId }
-      : {}),
+    sessionIds: input.sessionIds,
   };
   if (input.mode === "disk" && typeof input.leaseId === "string") {
     return { ...plan, mode: "disk", leaseId: input.leaseId };
   }
   return undefined;
-}
-
-function orderSessionIds(sessionIds: string[], preferredSessionId: string | undefined): string[] {
-  if (!preferredSessionId || !sessionIds.includes(preferredSessionId)) {
-    return sessionIds;
-  }
-  return [
-    preferredSessionId,
-    ...sessionIds.filter((sessionId) => sessionId !== preferredSessionId),
-  ];
 }
 
 function resolveLeaseEnvironment(owner: ReconcileWorkerOwner) {
@@ -377,9 +365,9 @@ async function run(
           throw new Error("Transcript worker lost its admitted shared-state handle");
         }
         const shared = sharedBorrow.database;
-        const sharedSchema = readSqliteSchemaCookie(shared.db);
-        const agentSchema = readSqliteSchemaCookie(opened.database.db);
-        if (typeof sharedSchema !== "number" || typeof agentSchema !== "number") {
+        const sharedSchema = getAdmittedSqliteSchemaFacts(shared.db)?.admissionId;
+        const agentSchema = getAdmittedSqliteSchemaFacts(opened.database.db)?.admissionId;
+        if (!sharedSchema || !agentSchema) {
           throw new Error("Transcript worker cannot retain its admitted schema identities");
         }
         // Reentry is a new native phase, never adoption of a schema changed while yielding.
@@ -387,8 +375,8 @@ async function run(
           sharedBorrow?.assertCurrent();
           if (
             !shared.db.isOpen ||
-            readSqliteSchemaCookie(shared.db) !== sharedSchema ||
-            readSqliteSchemaCookie(opened.database.db) !== agentSchema
+            getAdmittedSqliteSchemaFacts(shared.db)?.admissionId !== sharedSchema ||
+            getAdmittedSqliteSchemaFacts(opened.database.db)?.admissionId !== agentSchema
           ) {
             throw new Error("Transcript worker schema changed between lifecycle phases");
           }
@@ -401,13 +389,7 @@ async function run(
       }
       return opened.database;
     });
-    const sessionIds =
-      reconcileInput.mode === "memory"
-        ? reconcileInput.sessionIds
-        : orderSessionIds(
-            listSessionsNeedingTranscriptIndexReconcile(database!.db),
-            reconcileInput.preferredSessionId,
-          );
+    const sessionIds = reconcileInput.sessionIds;
     let yielded = false;
     for (const [index, sessionId] of sessionIds.entries()) {
       assertSource();

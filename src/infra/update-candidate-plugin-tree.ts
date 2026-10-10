@@ -1,18 +1,24 @@
-import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { assertDirectoryIdentitySync, readDirectoryIdentity } from "@openclaw/fs-safe/advanced";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
-import { createFileCopyWithCloneFallback } from "./fs-safe-file-copy.js";
 import { root as openRoot } from "./fs-safe.js";
 import { tryReadJson } from "./json-files.js";
 import { parseRegistryNpmSpec } from "./npm-registry-spec.js";
 import { isPackageUpdateRecoveryArtifactName } from "./package-update-backup-paths.js";
 import { hasNodeErrorCode, isPathInside } from "./path-guards.js";
+import { ignoreMissingUpdateCandidateFile } from "./update-candidate-files.js";
 import type { UpdateCandidatePluginCodeLink } from "./update-candidate-plugin-code-links.js";
+import { copyUpdateCandidatePluginFiles } from "./update-candidate-plugin-file.js";
+import {
+  withUpdateCandidatePluginFileHashing,
+  type UpdateCandidatePluginFileHasher,
+} from "./update-candidate-plugin-hash.js";
+import { runUpdateCandidatePluginTasks } from "./update-candidate-plugin-tasks.js";
 import {
   assertUpdateCandidatePluginEntryStat,
+  ignoreUnresolvedPluginLink,
   isUpdateCandidateHostLauncher,
   publishUpdateCandidatePluginTreeLinks,
   resolveUpdateCandidatePluginTreeTargets,
@@ -68,12 +74,7 @@ async function dependencyOwner(
     if (
       await fs.stat(path.join(directory, "package.json")).then(
         () => true,
-        (error: unknown) => {
-          if (hasNodeErrorCode(error, "ENOENT")) {
-            return false;
-          }
-          throw error;
-        },
+        (error: unknown) => ignoreMissingUpdateCandidateFile(error) ?? false,
       )
     ) {
       return directory;
@@ -102,6 +103,15 @@ export async function prepareUpdateCandidatePluginTrees(params: {
   retainedHostRoot?: string;
   onProgress?: () => void | Promise<void>;
 }): Promise<UpdateCandidatePluginTreePlan> {
+  return await withUpdateCandidatePluginFileHashing((hashFile) =>
+    prepareUpdateCandidatePluginTreesWithHashing(params, hashFile),
+  );
+}
+
+async function prepareUpdateCandidatePluginTreesWithHashing(
+  params: Parameters<typeof prepareUpdateCandidatePluginTrees>[0],
+  hashFile: UpdateCandidatePluginFileHasher,
+): Promise<UpdateCandidatePluginTreePlan> {
   const roots = new Map(params.roots);
   const privateRoot = resolvePathViaExistingAncestorSync(path.resolve(params.targetStateDir));
   const candidateRoot = resolvePathViaExistingAncestorSync(path.resolve(params.candidateRoot));
@@ -183,16 +193,14 @@ export async function prepareUpdateCandidatePluginTrees(params: {
         birthtimeNs: stat.birthtimeNs.toString(),
         mtimeNs: stat.mtimeNs.toString(),
         ctimeNs: stat.ctimeNs.toString(),
+        uid: stat.uid.toString(),
+        gid: stat.gid.toString(),
+        sha256: await hashFile(file, stat),
       };
     } else if (stat.isSymbolicLink()) {
       const target =
         process.platform === "win32"
-          ? await fs.stat(file).catch((error: unknown) => {
-              if (hasNodeErrorCode(error, "ENOENT") || hasNodeErrorCode(error, "ELOOP")) {
-                return undefined;
-              }
-              throw error;
-            })
+          ? await fs.stat(file).catch(ignoreUnresolvedPluginLink)
           : undefined;
       entry = {
         ...common,
@@ -315,12 +323,7 @@ export async function prepareUpdateCandidatePluginTrees(params: {
       if (entry.name === "node_modules" && (entry.isDirectory() || entry.isSymbolicLink())) {
         const owner = await fs
           .realpath(path.join(directory, entry.name))
-          .catch((error: unknown) => {
-            if (hasNodeErrorCode(error, "ENOENT") || hasNodeErrorCode(error, "ELOOP")) {
-              return undefined;
-            }
-            throw error;
-          });
+          .catch(ignoreUnresolvedPluginLink);
         if (owner) {
           const source = path.join(directory, entry.name);
           assertUpdateCandidatePluginCopySource(owner, privateRoot);
@@ -332,10 +335,8 @@ export async function prepareUpdateCandidatePluginTrees(params: {
         }
       }
     }
-    const leaves = await runTasksWithConcurrency({
-      limit: 4,
-      errorMode: "stop",
-      tasks: entries
+    const leaves = await runUpdateCandidatePluginTasks(
+      entries
         .filter((entry) => {
           const file = path.join(directory, entry.name);
           return !entry.isDirectory() && !isRecoveryArtifact(file) && !isOwnedHostEdge(file);
@@ -347,19 +348,13 @@ export async function prepareUpdateCandidatePluginTrees(params: {
             return { measured };
           }
           const target = path.resolve(directory, measured.link);
-          const real = await fs.realpath(file).catch((error: unknown) => {
-            if (hasNodeErrorCode(error, "ENOENT") || hasNodeErrorCode(error, "ELOOP")) {
-              return target;
-            }
-            throw error;
-          });
+          const real = await fs
+            .realpath(file)
+            .catch((error: unknown) => ignoreUnresolvedPluginLink(error) ?? target);
           return { measured, edge: { target, real } };
         }),
-    });
-    if (leaves.hasError) {
-      throw leaves.firstError;
-    }
-    const observations = new Map(leaves.results.map((leaf) => [leaf.measured.path, leaf]));
+    );
+    const observations = new Map(leaves.map((leaf) => [leaf.measured.path, leaf]));
     // Reads can overlap; graph discovery and progress callbacks retain listing order.
     for (const entry of entries) {
       const file = path.join(directory, entry.name);
@@ -402,12 +397,7 @@ export async function prepareUpdateCandidatePluginTrees(params: {
       if (!exists) {
         continue;
       }
-      const real = await fs.realpath(source).catch((error: unknown) => {
-        if (hasNodeErrorCode(error, "ENOENT")) {
-          return undefined;
-        }
-        throw error;
-      });
+      const real = await fs.realpath(source).catch(ignoreMissingUpdateCandidateFile);
       discovered.push({ source, real });
     }
     hosts.clear();
@@ -533,11 +523,8 @@ export async function prepareUpdateCandidatePluginTrees(params: {
   for (const [sourceRoot, real] of moduleAliases) {
     relocations.push({ sourceRoot, destinationRoot: projected(real) });
   }
-  for (const root of hostRoots) {
+  for (const root of [...hostRoots, ...hosts]) {
     relocations.push({ sourceRoot: root, destinationRoot: candidateRoot });
-  }
-  for (const host of hosts) {
-    relocations.push({ sourceRoot: host, destinationRoot: candidateRoot });
   }
   for (const [file, { target, real }] of edges) {
     const host = isUpdateCandidateHostLauncher(file)
@@ -608,36 +595,33 @@ export async function copyUpdateCandidatePluginTrees(
     targetStateDir: string;
     candidateRoot: string;
     onCodeLink?: (fact: UpdateCandidatePluginCodeLink) => void;
+    onProgress?: () => void;
   },
 ): Promise<void> {
-  const targets = resolveUpdateCandidatePluginTreeTargets(plan, params);
+  const targets = resolveUpdateCandidatePluginTreeTargets(plan, params, params.onProgress);
   const { privateRoot, candidateRoot, copies, hostLinks, relocations, destinationFor } = targets;
   const assertEntry = async (entry: UpdateCandidatePluginEntry) => {
     assertUpdateCandidatePluginEntryStat(entry, await fs.lstat(entry.path, { bigint: true }));
     if (entry.kind === "symlink" && (await fs.readlink(entry.path)) !== entry.link) {
       throw new Error(`Plugin entry changed after snapshot inventory: ${entry.path}`);
     }
+    params.onProgress?.();
   };
   const assertEntries = async () => {
-    const checked = await runTasksWithConcurrency({
-      limit: 4,
-      errorMode: "stop",
-      tasks: plan.entries.map((entry) => () => assertEntry(entry)),
-    });
-    if (checked.hasError) {
-      throw checked.firstError;
-    }
+    await runUpdateCandidatePluginTasks(plan.entries.map((entry) => () => assertEntry(entry)));
   };
   await targets.assertBindings();
   await assertEntries();
   await fs.mkdir(privateRoot, { recursive: true, mode: 0o700 });
+  const rootIdentity = await readDirectoryIdentity(privateRoot);
   const destinationRoot = await openRoot(privateRoot);
-  const copyFile = createFileCopyWithCloneFallback();
+  assertDirectoryIdentitySync(privateRoot, rootIdentity);
   const preparedDirectories = new Set([privateRoot]);
   for (const entry of plan.entries) {
     if (entry.kind === "directory") {
       const destination = destinationFor(entry.path);
       await fs.mkdir(destination, { recursive: true, mode: entry.mode | 0o700 });
+      params.onProgress?.();
       preparedDirectories.add(destination);
     }
   }
@@ -648,48 +632,25 @@ export async function copyUpdateCandidatePluginTrees(
       const parent = path.dirname(destinationFor(entry.path));
       if (!preparedDirectories.has(parent)) {
         await fs.mkdir(parent, { recursive: true, mode: 0o700 });
+        params.onProgress?.();
         preparedDirectories.add(parent);
       }
     }
   }
-  const copied = await runTasksWithConcurrency({
-    limit: 4,
-    errorMode: "stop",
-    tasks: plan.entries
-      .filter((entry) => entry.kind === "file")
-      .map((entry) => async () => {
-        await assertEntry(entry);
-        const destination = destinationFor(entry.path);
-        // copyIn owns portable create-only publication; no-replace move needs a
-        // native binding. Recheck the inventory before its private stage is published.
-        await copyFile(destinationRoot, path.relative(privateRoot, destination), entry.path, {
-          overwrite: false,
-          // Every destination parent is prepared before copies are admitted.
-          mkdir: false,
-          // Rehearsal payloads are disposable and never serve as recovery backups.
-          durable: false,
-          maxBytes: entry.size,
-          mode: entry.mode | 0o600,
-          sourceHardlinks: "allow",
-          assertBeforeMutation: () =>
-            assertUpdateCandidatePluginEntryStat(
-              entry,
-              fsSync.lstatSync(entry.path, { bigint: true }),
-            ),
-        });
-        await assertEntry(entry);
-      }),
+  const files = plan.entries.filter((entry) => entry.kind === "file");
+  await copyUpdateCandidatePluginFiles(files, {
+    privateRoot,
+    rootIdentity,
+    destinationRoot,
+    destinationFor,
+    onProgress: params.onProgress,
   });
-  // A failed copy can already have published bytes. Drain every admitted copy
-  // before the caller can clean up, or before any link publication begins.
-  if (copied.hasError) {
-    throw copied.firstError;
-  }
   for (const entry of plan.entries) {
     if (entry.kind === "symlink") {
       await assertEntry(entry);
       const destination = destinationFor(entry.path);
       await fs.symlink(entry.link, destination, entry.linkType);
+      params.onProgress?.();
     }
   }
   await targets.assertBindings();
@@ -701,6 +662,7 @@ export async function copyUpdateCandidatePluginTrees(
         entry.kind === "symlink" ? relocateRuntimeSymlink : resolveRuntimeFileRelocator(target);
       if (relocate) {
         await relocate(target, entry.path, target, relocations);
+        params.onProgress?.();
       }
     }
   }
@@ -710,21 +672,26 @@ export async function copyUpdateCandidatePluginTrees(
     hostLinks,
     aliases: targets.aliases,
   });
-  const verification = { privateRoot, candidateRoot, hostLinks, onCodeLink: params.onCodeLink };
-  for (const alias of privateAliases) {
-    await verifyUpdateCandidatePluginTree(alias, verification);
-  }
-  for (const [, target] of copies) {
-    await verifyUpdateCandidatePluginTree(target, verification);
+  const verification = {
+    privateRoot,
+    candidateRoot,
+    hostLinks,
+    onCodeLink: params.onCodeLink,
+    onProgress: params.onProgress,
+  };
+  for (const treeRoot of [...privateAliases, ...copies.map(([, target]) => target)]) {
+    await verifyUpdateCandidatePluginTree(treeRoot, verification);
   }
   for (const entry of plan.entries) {
     if (entry.kind === "file" && (entry.mode & 0o600) !== 0o600) {
       await fs.chmod(destinationFor(entry.path), entry.mode);
+      params.onProgress?.();
     }
   }
   for (const entry of plan.entries
     .filter((candidate) => candidate.kind === "directory")
     .toSorted((left, right) => right.path.length - left.path.length)) {
     await fs.chmod(destinationFor(entry.path), entry.mode);
+    params.onProgress?.();
   }
 }

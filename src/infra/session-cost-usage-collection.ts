@@ -21,7 +21,6 @@ import {
 } from "../config/sessions/paths.js";
 import type { SessionTranscriptStats } from "../config/sessions/session-accessor.sqlite-contract.js";
 import { listSessionTranscriptArchivesReadOnly } from "../config/sessions/session-accessor.sqlite-history.js";
-import { loadTranscriptEventsSync } from "../config/sessions/session-accessor.sqlite-read.js";
 import { withSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import {
   listDurableSqliteTargetPathsForSessionStorePath,
@@ -29,6 +28,7 @@ import {
   resolveSqliteTargetFromSessionStorePath,
 } from "../config/sessions/session-sqlite-target.js";
 import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
+import { loadTranscriptEvents } from "../config/sessions/session-transcript-events.js";
 import { streamSessionTranscriptLines } from "../config/sessions/transcript-stream.js";
 import { selectVisibleTranscriptEvents } from "../config/sessions/transcript-visible-events.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -39,6 +39,7 @@ import { resolveRealpathOrAbsolute } from "./boundary-path.js";
 import { hasErrnoCode } from "./errno.js";
 import {
   readIncognitoUsageTranscript,
+  captureUsageCostIncognitoBinding,
   type UsageCostIncognitoBinding,
 } from "./session-cost-usage-incognito.js";
 import type { UsageCostTranscriptFile } from "./session-cost-usage.types.js";
@@ -369,10 +370,7 @@ export async function* readTranscriptRecords(
     if (incognito) {
       events = await readIncognitoUsageTranscript(incognito, marker);
     } else {
-      const { restoreSessionColdTranscript } =
-        await import("../config/sessions/session-cold-storage.js");
-      await restoreSessionColdTranscript(marker);
-      events = loadTranscriptEventsSync(marker);
+      events = await loadTranscriptEvents(marker);
     }
     for (const event of selectVisibleTranscriptEvents(events)) {
       incognito?.actor.assertCurrent();
@@ -415,7 +413,7 @@ export async function* readTranscriptRecordsBestEffort(
   }
 }
 
-export async function resolveUsageSessionSource(params: {
+export async function resolveUsageSessionSource(input: {
   sessionId?: string;
   sessionFile?: string;
   agentId: string;
@@ -427,6 +425,7 @@ export async function resolveUsageSessionSource(params: {
     storePath: string;
   };
 }): Promise<{ sessionFile: string; entry?: SessionEntry } | undefined> {
+  const params = { ...input, incognito: captureUsageCostIncognitoBinding(input) };
   const signal = getAsyncWorkSignal();
   const assertCurrent = () => signal?.throwIfAborted();
   assertCurrent();
@@ -544,20 +543,14 @@ export async function resolveUsageSessionSource(params: {
       return { sessionFile: path.join(sessionsDir, primary.name) };
     }
 
+    const archiveTimestamp = (name: string) =>
+      parseSessionArchiveTimestamp(name, "deleted") ??
+      parseSessionArchiveTimestamp(name, "reset") ??
+      0;
     const latestArchive = entries
       .filter((entry) => isSessionArchiveArtifactName(entry.name))
       .map((entry) => entry.name)
-      .toSorted((a, b) => {
-        const tsA =
-          parseSessionArchiveTimestamp(a, "deleted") ??
-          parseSessionArchiveTimestamp(a, "reset") ??
-          0;
-        const tsB =
-          parseSessionArchiveTimestamp(b, "deleted") ??
-          parseSessionArchiveTimestamp(b, "reset") ??
-          0;
-        return tsB - tsA || b.localeCompare(a);
-      })[0];
+      .toSorted((a, b) => archiveTimestamp(b) - archiveTimestamp(a) || b.localeCompare(a))[0];
 
     const sessionFile = latestArchive ? path.join(sessionsDir, latestArchive) : candidate;
     return sessionFile ? { sessionFile } : undefined;

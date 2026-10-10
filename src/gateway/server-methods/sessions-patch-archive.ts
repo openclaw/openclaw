@@ -3,7 +3,6 @@ import {
   ErrorCodes,
   errorShape,
   type ErrorShape,
-  type SessionCreatedActor,
   type SessionsPatchParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { ModelCatalogSnapshot } from "../../agents/model-catalog.js";
@@ -26,31 +25,30 @@ import {
 import { projectSessionsPatchEntry } from "../sessions-patch.js";
 import { WorkerInferenceSessionDrainBusyError } from "../worker-environments/inference-control-internal.js";
 import {
-  prepareSessionWorkerPlacementArchiveCheck,
+  prepareSessionWorkerPlacementArchiveCheckAsync,
   prepareSessionWorkerPlacementMutationCheck,
   SessionWorkerPlacementStopError,
 } from "../worker-environments/session-placement-lifecycle.js";
 import {
   prepareSessionLifecycleDrain,
   SessionLifecycleWorkspaceRecoveryError,
-  type SessionLifecycleDrain,
 } from "./sessions-lifecycle-drain.js";
+import type {
+  SessionPatchArchivePreparation,
+  SessionPatchArchiveTarget,
+} from "./sessions-patch-archive.types.js";
 import {
   sessionChangedError as archiveChangedError,
   unexpectedPatchError,
 } from "./sessions-patch-errors.js";
+import { resolveSessionPatchTargetError } from "./sessions-patch-expectations.js";
 import {
   resolveProtectedSessionVisibilityError,
   resolveSessionWorkerPlacementPatchError,
+  prepareSessionWorkerPlacementPatchError,
   sessionLog,
 } from "./sessions-shared.js";
 import type { GatewayRequestContext } from "./types.js";
-
-export type SessionPatchArchivePreparation = {
-  canonicalKey: string;
-  drain: SessionLifecycleDrain;
-  entry?: SessionEntry;
-};
 
 export function releaseSessionPatchArchive(preparation?: SessionPatchArchivePreparation): void {
   try {
@@ -61,18 +59,6 @@ export function releaseSessionPatchArchive(preparation?: SessionPatchArchivePrep
     );
   }
 }
-
-export type SessionPatchArchiveTarget = {
-  archiveActor: SessionCreatedActor | undefined;
-  canonicalKey: string;
-  fullPatch: SessionsPatchParams;
-  initialEntry?: SessionEntry;
-  initialStoreKeys: string[];
-  key: string;
-  lifecycleIdentities: Array<string | undefined>;
-  requestedAgentId?: string;
-  storePath: string;
-};
 
 function archiveUnavailableError(key: string, message: "active" | "stopping"): ErrorShape {
   return errorShape(
@@ -154,6 +140,10 @@ export async function prepareSessionPatchArchive(params: {
     ) {
       return err(archiveChangedError(target.key));
     }
+    const expectationError = resolveSessionPatchTargetError(fresh.entry, target);
+    if (expectationError) {
+      return err(expectationError);
+    }
     const missingHarnessSessionError = resolveMissingAgentHarnessSessionError(
       freshCanonicalKey,
       fresh.entry,
@@ -218,7 +208,7 @@ export async function prepareSessionPatchArchive(params: {
   if (!preview.ok) {
     return err(preview.error);
   }
-  const previewPlacementError = resolveSessionWorkerPlacementPatchError({
+  const previewPlacementError = await prepareSessionWorkerPlacementPatchError({
     agentId: freshResolved.agentId,
     cfg,
     context: params.context,
@@ -336,7 +326,7 @@ export async function prepareSessionPatchArchiveTransition(params: {
     context: params.context,
     sessionId: params.entry.sessionId,
   };
-  const placement = prepareSessionWorkerPlacementArchiveCheck(placementTarget);
+  const placement = await prepareSessionWorkerPlacementArchiveCheckAsync(placementTarget);
   let assertWorktreeMutationAllowed: (() => void) | undefined;
   const commitGuard = () => {
     const authorizationError = params.authorize();

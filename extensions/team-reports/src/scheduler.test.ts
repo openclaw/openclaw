@@ -137,26 +137,24 @@ async function setup(
       }),
   };
   const discord = {
-    collect: vi
-      .fn<DiscordSource["collect"]>()
-      .mockImplementation(async (_config, window, _roster, emit) => {
-        const atMs = window.sinceMs + 1;
-        await emit([
-          {
-            key: ((BigInt(atMs) - 1420070400000n) << 22n).toString(),
-            value: {
-              channelId: "200",
-              parentChannelId: "200",
-              channelName: "engineering",
-              authorId: "300",
-              authorIsBot: false,
-              atMs,
-              content: "Widget resizing is ready for review.",
-            },
+    collect: vi.fn<DiscordSource["collect"]>().mockImplementation(async (_config, window, emit) => {
+      const atMs = window.sinceMs + 1;
+      await emit([
+        {
+          key: ((BigInt(atMs) - 1420070400000n) << 22n).toString(),
+          value: {
+            channelId: "200",
+            parentChannelId: "200",
+            channelName: "engineering",
+            authorId: "300",
+            authorIsBot: false,
+            atMs,
+            content: "Widget resizing is ready for review.",
           },
-        ]);
-        return healthy;
-      }),
+        },
+      ]);
+      return healthy;
+    }),
   };
   const runtimes: SourceRuntime[] = [];
   const sources: ReportSourceFactory = (runtime) => {
@@ -473,13 +471,19 @@ describe("Team Reports scheduler lifecycle", () => {
   });
 
   it.each([
-    ["2026-08-20T12:00:00Z", "2026-08-20T16:00:00Z", "00:05", "2026-08-21T00:05:00Z"],
-    ["2026-08-20T03:59:00Z", "2026-08-20T08:00:00Z", "00:05", "2026-08-21T00:05:00Z"],
-    ["2026-08-20T00:04:00Z", "2026-08-20T00:09:00Z", "00:05", "2026-08-21T00:05:00Z"],
-    ["2026-08-19T23:58:00Z", "2026-08-20T00:03:00Z", "23:59", "2026-08-20T23:59:00Z"],
+    ["2026-08-20T12:00:00Z", "2026-08-20T16:00:00Z", "00:05", "2026-08-21T00:05:00Z", []],
+    ["2026-08-20T03:59:00Z", "2026-08-20T08:00:00Z", "00:05", "2026-08-21T00:05:00Z", []],
+    ["2026-08-20T00:04:00Z", "2026-08-20T00:09:00Z", "00:05", "2026-08-21T00:05:00Z", []],
+    [
+      "2026-08-19T23:58:00Z",
+      "2026-08-20T00:03:00Z",
+      "23:59",
+      "2026-08-20T23:59:00Z",
+      ["2026-08-18"],
+    ],
   ])(
     "keeps startup quiet and catches up at the first scheduled run (%s)",
-    async (now, due, closedDayUtc, nextClosedDay) => {
+    async (now, due, closedDayUtc, nextClosedDay, missedDays) => {
       vi.setSystemTime(new Date(now));
       const { scheduler, store, github, nextRun } = await setup({
         caughtUp: false,
@@ -496,17 +500,37 @@ describe("Team Reports scheduler lifecycle", () => {
       expect(await store.listPeriods()).toMatchObject([
         { period: "day", key: "2026-08-20", status: "partial" },
         { period: "day", key: "2026-08-19", status: "closed" },
+        ...missedDays.map((key) => ({ period: "day", key, status: "closed" })),
       ]);
-      expect(github.collect).toHaveBeenCalledTimes(2);
+      expect(github.collect).toHaveBeenCalledTimes(2 + missedDays.length);
       await vi.advanceTimersByTimeAsync(60_000);
-      expect(github.collect).toHaveBeenCalledTimes(2);
+      expect(github.collect).toHaveBeenCalledTimes(2 + missedDays.length);
       const nextDue = (await scheduler.status()).nextDue;
       expect(nextDue.closedDay).toBe(Date.parse(nextClosedDay));
       const nextIntraday = nextDue.intraday!;
       await vi.advanceTimersByTimeAsync(nextIntraday - Date.now());
       await nextRun();
       expect((await store.listRuns())[0]?.kind).toBe("intraday");
-      expect(github.collect).toHaveBeenCalledTimes(3);
+      expect(github.collect).toHaveBeenCalledTimes(3 + missedDays.length);
+    },
+  );
+
+  it.each([0, 24])(
+    "closes the day before startup when the first scheduled run falls after midnight (intraday every %s hours)",
+    async (intradayEveryHours) => {
+      const { scheduler, store, nextRun } = await setup({
+        caughtUp: false,
+        schedule: { closedDayUtc: "00:05", intradayEveryHours },
+      });
+      await scheduler.start();
+      const due = (await scheduler.health()).nextDueMs!;
+      expect(due).toBeGreaterThanOrEqual(Date.parse("2026-08-21T00:00:00Z"));
+      await vi.advanceTimersByTimeAsync(due - Date.now());
+      await nextRun();
+      expect((await store.listRuns())[0]?.periods).toEqual(
+        expect.arrayContaining([{ period: "day", key: "2026-08-19" }]),
+      );
+      expect((await store.getPeriod("day", "2026-08-19"))?.report.status).toBe("closed");
     },
   );
 

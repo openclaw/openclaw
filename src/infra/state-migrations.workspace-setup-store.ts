@@ -37,10 +37,7 @@ const MIGRATION_KIND = WORKSPACE_LEGACY_STATE_MIGRATION_KIND;
 
 type WorkspaceMigrationDatabase = Pick<
   OpenClawStateKyselyDatabase,
-  | "workspace_setup_state"
-  | "workspace_path_aliases"
-  | "workspace_generated_bootstrap_hashes"
-  | "migration_sources"
+  "workspace_setup_state" | "workspace_generated_bootstrap_hashes" | "migration_sources"
 >;
 
 type ParsedSetup = {
@@ -305,6 +302,14 @@ export function importAndRecordReceipt(params: {
     (database) => {
       const { db } = database;
       const kysely = getNodeSqliteKysely<WorkspaceMigrationDatabase>(db);
+      const readWorkspace = () =>
+        executeSqliteQueryTakeFirstSync(
+          db,
+          kysely
+            .selectFrom("workspace_setup_state")
+            .selectAll()
+            .where("workspace_key", "=", params.source.workspaceKey),
+        );
       const existingReceipt = readLegacyMigrationReceiptFromDatabase(db, key);
       // Revalidate the observed receipt before publishing a new backup or generation.
       if (
@@ -323,13 +328,7 @@ export function importAndRecordReceipt(params: {
         if (!params.source.workspaceDir) {
           throw new Error("legacy workspace setup has no workspace path");
         }
-        const existing = executeSqliteQueryTakeFirstSync(
-          db,
-          kysely
-            .selectFrom("workspace_setup_state")
-            .selectAll()
-            .where("workspace_key", "=", params.source.workspaceKey),
-        );
+        const existing = readWorkspace();
         if (existing && existing.version != null) {
           if (
             existing.workspace_path !== params.source.workspaceDir ||
@@ -380,20 +379,14 @@ export function importAndRecordReceipt(params: {
           resolution = existing ? "merged" : "inserted";
           verifiedFingerprint = createWorkspaceSetupFingerprint(setupColumns);
         }
-        const verified = executeSqliteQueryTakeFirstSync(
-          db,
-          kysely
-            .selectFrom("workspace_setup_state")
-            .selectAll()
-            .where("workspace_key", "=", params.source.workspaceKey),
-        );
+        const verified = readWorkspace();
         // Every setup import branch writes the source path, so a NULL path
         // here is a verification failure, not an attestation-only row.
         const actualFingerprint =
           verified && verified.workspace_path != null
             ? createWorkspaceSetupFingerprint(verified)
             : null;
-        if (!verified || actualFingerprint !== verifiedFingerprint) {
+        if (actualFingerprint !== verifiedFingerprint) {
           throw new Error("SQLite verification failed for workspace setup state");
         }
       } else {
@@ -419,13 +412,11 @@ export function importAndRecordReceipt(params: {
           attestedAtMs: parsedAttestation.attestedAtMs,
           generatedHashes: parsedAttestation.generatedHashes,
         });
-        const existingRow = executeSqliteQueryTakeFirstSync(
-          db,
-          kysely
-            .selectFrom("workspace_setup_state")
-            .selectAll()
-            .where("workspace_key", "=", params.source.workspaceKey),
-        );
+        const attestationColumns = {
+          attested_at_ms: parsedAttestation.attestedAtMs,
+          attestation_updated_at_ms: now,
+        };
+        const existingRow = readWorkspace();
         if (existingRow?.attested_at_ms != null) {
           const existingHashes = readGeneratedHashes(db, params.source.workspaceKey);
           const existingFingerprint = attestationFingerprint({
@@ -458,10 +449,7 @@ export function importAndRecordReceipt(params: {
               db,
               kysely
                 .updateTable("workspace_setup_state")
-                .set({
-                  attested_at_ms: parsedAttestation.attestedAtMs,
-                  attestation_updated_at_ms: now,
-                })
+                .set(attestationColumns)
                 .where("workspace_key", "=", params.source.workspaceKey),
             );
             executeSqliteQuerySync(
@@ -485,14 +473,10 @@ export function importAndRecordReceipt(params: {
                 // Orphan hashed-key attestation files carry no path; the row
                 // heals its NULL path when the workspace next appears live.
                 workspace_path: params.source.workspaceDir ?? null,
-                attested_at_ms: parsedAttestation.attestedAtMs,
-                attestation_updated_at_ms: now,
+                ...attestationColumns,
               })
               .onConflict((conflict) =>
-                conflict.column("workspace_key").doUpdateSet({
-                  attested_at_ms: parsedAttestation.attestedAtMs,
-                  attestation_updated_at_ms: now,
-                }),
+                conflict.column("workspace_key").doUpdateSet(attestationColumns),
               ),
           );
           insertGeneratedHashes();

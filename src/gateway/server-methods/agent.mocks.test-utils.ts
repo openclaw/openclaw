@@ -3,6 +3,11 @@
 import { subagentRegistryMocks } from "./agent.subagent-registry.mocks.test-support.js";
 import { vi } from "vitest";
 import type { readAcpSessionMetaAsync } from "../../acp/runtime/session-meta.js";
+import type {
+  PreparedModelRuntimeInput,
+  PreparedModelRuntimeLease,
+  PreparedModelRuntimePluginGeneration,
+} from "../../agents/prepared-model-runtime.types.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type {
   hasSessionTranscriptEventsSync,
@@ -12,6 +17,8 @@ import type {
   stageSessionPendingInput,
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { createAgentTestUserTurnRecorder } from "./agent.user-turn-recorder.test-support.js";
 
 const mocks = vi.hoisted(() => ({
@@ -131,6 +138,13 @@ vi.mock("../../config/sessions.js", async () => {
   };
 });
 
+// mock-isolation: Handler fixtures supply lifecycle timestamps without opening transcript readers.
+vi.mock("../../config/sessions/lifecycle-read.js", () => ({
+  resolveSessionLifecycleTimestampsAsync: async (
+    params: Parameters<typeof mocks.resolveSessionLifecycleTimestamps>[0],
+  ) => mocks.resolveSessionLifecycleTimestamps(params),
+}));
+
 vi.mock("../../config/sessions/session-accessor.js", async () => {
   const actual = await vi.importActual<typeof import("../../config/sessions/session-accessor.js")>(
     "../../config/sessions/session-accessor.js",
@@ -181,28 +195,74 @@ vi.mock("../../commands/agent.js", () => {
   };
 });
 
-vi.mock("../../agents/prepared-model-runtime.js", () => {
+vi.mock("../../agents/prepared-model-runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../agents/prepared-model-runtime.js")>();
   // Direct handler tests bypass Gateway startup, so provide the lifecycle fact
   // that production publishes before admitting agent RPCs.
-  const pluginGeneration = {
+  const pluginRegistry = createEmptyPluginRegistry();
+  const pluginGeneration: PreparedModelRuntimePluginGeneration = {
     remoteCatalog: null,
-    pluginMetadataSnapshot: {},
+    pluginMetadataSnapshot: createPluginMetadataSnapshotFixture(),
+    pluginRegistry,
+    inboundPluginRegistry: pluginRegistry,
     configuredCatalogEntries: [],
     inlineProviderModels: [],
   };
+  const createLease = (input: PreparedModelRuntimeInput): PreparedModelRuntimeLease => {
+    let open = true;
+    const agentId = input.agentId ?? "main";
+    const workspaceDir = input.workspaceDir ?? "/tmp/workspace";
+    return {
+      snapshot: {
+        ...input,
+        agentId,
+        workspaceDir,
+        observationConfig: input.config,
+        catalogOwner: { agentId, workspaceDir },
+        metadataSnapshot: pluginGeneration.pluginMetadataSnapshot,
+        pluginRegistry,
+        activeProjectKeys: [],
+        allowGatewaySubagentBinding: input.allowGatewaySubagentBinding === true,
+        authModes: {},
+        modelCatalog: { entries: [], routeVariants: [] },
+        configuredRuntimeModels: [],
+        findConfiguredRuntimeModel: () => undefined,
+        inlineProviderModels: [],
+        isCurrent: () => open,
+        createStores: () => {
+          throw new Error("Direct handler fixture does not execute model stores");
+        },
+      },
+      pluginGeneration,
+      [Symbol.asyncDispose]: vi.fn(async () => {
+        open = false;
+      }),
+    };
+  };
   return {
-    acquireAgentRunPreparedModelRuntime: vi.fn(async () => ({
-      [Symbol.asyncDispose]: vi.fn(async () => {}),
-      snapshot: {},
-      pluginGeneration,
-    })),
-    loadPublishedGatewayReplyDispatchRuntime: async ({ agentId }: { agentId: string }) => ({
+    ...actual,
+    acquireAgentRunPreparedModelRuntime: vi.fn(async (input: PreparedModelRuntimeInput) =>
+      createLease(input),
+    ),
+    loadPublishedGatewayReplyDispatchRuntime: async ({
       agentId,
-      agentDir: "/tmp/agent",
-      config: resolveAgentTestConfig(),
-      pluginGeneration,
-      workspaceDir: "/tmp/workspace",
-    }),
+      onRuntimeLease,
+    }: {
+      agentId: string;
+      onRuntimeLease?: (lease: PreparedModelRuntimeLease) => void;
+    }) => {
+      const runtime = {
+        agentId,
+        agentDir: "/tmp/agent",
+        config: resolveAgentTestConfig(),
+        pluginGeneration,
+        workspaceDir: "/tmp/workspace",
+        modelCatalog: { entries: [], routeVariants: [] },
+        inboundPluginRegistry: pluginRegistry,
+      };
+      onRuntimeLease?.(createLease({ ...runtime, allowGatewaySubagentBinding: true }));
+      return runtime;
+    },
   };
 });
 

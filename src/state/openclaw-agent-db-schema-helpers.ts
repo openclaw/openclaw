@@ -20,16 +20,21 @@ import {
   AGENT_V14_BOARD_SCHEMA_SQL,
   ensureOpenClawAgentBoardSchemaInTransaction,
 } from "./openclaw-agent-board-schema.js";
+import {
+  ensureLegacySessionEntryValidityTriggers,
+  withLegacyCanonicalSessionValidationTriggers,
+} from "./openclaw-agent-canonical-validation-migration.js";
 import { withoutCanonicalSessionValidationSchema } from "./openclaw-agent-canonical-validation-schema.js";
 import {
   CANONICAL_SESSION_VALIDATION_SCHEMA_VERSION,
-  OPENCLAW_AGENT_SCHEMA_VERSION,
+  CANONICAL_SESSION_WRITER_VALIDATION_SCHEMA_VERSION,
   AGENT_STORAGE_SCHEMA_VERSION,
 } from "./openclaw-agent-db-contract.js";
 import { AGENT_SCHEMA_COMPATIBILITY } from "./openclaw-agent-db-schema-compatibility.js";
 import {
   readExistingAgentSchemaMeta,
   assertExistingAgentSchemaOwner,
+  assertCurrentAgentSchemaMetadata,
 } from "./openclaw-agent-db-schema-read.js";
 import {
   ensureSessionAdditiveColumns,
@@ -63,6 +68,7 @@ import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 
 export {
   assertSupportedAgentSchemaVersion,
+  assertCurrentAgentSchemaMetadata,
   assertCanonicalAgentPersistenceVersion,
   readExistingAgentSchemaMeta,
   assertExistingAgentSchemaOwner,
@@ -70,10 +76,14 @@ export {
 
 /** Compare historical migration targets against only the representation they support. */
 export function getOpenClawAgentMigrationSchema(targetVersion: number): string {
+  const canonicalSchemaSql =
+    targetVersion < CANONICAL_SESSION_WRITER_VALIDATION_SCHEMA_VERSION
+      ? withLegacyCanonicalSessionValidationTriggers(OPENCLAW_AGENT_SCHEMA_SQL)
+      : OPENCLAW_AGENT_SCHEMA_SQL;
   const sessionSchemaSql =
     targetVersion < SESSION_ENTRY_SNAPSHOTS_SCHEMA_VERSION
-      ? withoutSessionEntrySnapshotsSchema(OPENCLAW_AGENT_SCHEMA_SQL)
-      : OPENCLAW_AGENT_SCHEMA_SQL;
+      ? withoutSessionEntrySnapshotsSchema(canonicalSchemaSql)
+      : canonicalSchemaSql;
   const targetSchemaSql =
     targetVersion < AGENT_STORAGE_SCHEMA_VERSION
       ? withLegacyAgentStorageSchema(sessionSchemaSql, targetVersion)
@@ -145,17 +155,7 @@ export function assertOpenClawAgentCurrentRuntimeSchema(
 ): void {
   const agentId = normalizeAgentId(options.agentId);
   const metadata = readExistingAgentSchemaMeta(database);
-  if (!metadata) {
-    throw new SqliteSchemaMismatchError(
-      `OpenClaw agent database ${options.pathname} has no schema ownership metadata. Run openclaw doctor --fix to inspect and repair its ownership.`,
-    );
-  }
-  assertExistingAgentSchemaOwner(metadata, agentId, options.pathname);
-  if (metadata.schemaVersion !== OPENCLAW_AGENT_SCHEMA_VERSION) {
-    throw new SqliteSchemaMismatchError(
-      `OpenClaw agent database ${options.pathname} metadata schema version ${metadata.schemaVersion ?? "invalid"} does not match ${OPENCLAW_AGENT_SCHEMA_VERSION}; run openclaw doctor --fix before using it.`,
-    );
-  }
+  assertCurrentAgentSchemaMetadata(metadata, agentId, options.pathname);
   if (hasRetiredAgentStateLeaseSchema(database)) {
     throw new SqliteSchemaMismatchError(
       `OpenClaw agent database ${options.pathname} retains retired state_leases storage; run openclaw doctor --fix before using it.`,
@@ -236,6 +236,7 @@ export function repairAndAssertOpenClawAgentV14SchemaForMigration(
 
   ensureSessionAdditiveColumns(database);
   ensureSessionEntryValidityProjection(database);
+  ensureLegacySessionEntryValidityTriggers(database);
   ensureSessionKeyContractSchemaInTransaction(database);
 
   // v14 always owned the core schema. Board and collaboration groups were

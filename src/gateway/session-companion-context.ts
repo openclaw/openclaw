@@ -3,6 +3,10 @@ import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coer
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { collectTextContentBlocks } from "../agents/content-blocks.js";
 import { extractStoredAssistantText } from "../agents/tools/chat-history-text.js";
+import {
+  captureIncognitoSessionSource,
+  withIncognitoSessionEntry,
+} from "../config/sessions/session-incognito-binding.js";
 import { redactToolPayloadText } from "../logging/redact.js";
 import {
   selectSessionCompanionReferenceItems,
@@ -26,11 +30,7 @@ type SessionCompanionContextReadResult =
 
 export type SessionCompanionContextReader = {
   currentSessionId: (params: { agentId: string; sessionKey: string }) => string | undefined;
-  read: (params: {
-    agentId: string;
-    sessionKey: string;
-    signal?: AbortSignal;
-  }) => Promise<SessionCompanionContextReadResult>;
+  read: typeof readSessionCompanionContext;
 };
 
 function normalizeContextText(value: string): string {
@@ -75,7 +75,34 @@ async function readSessionCompanionContext(params: {
   sessionKey: string;
   signal?: AbortSignal;
 }): Promise<SessionCompanionContextReadResult> {
-  const loaded = loadGatewaySessionEntryReadOnly(params.sessionKey, { agentId: params.agentId });
+  const binding = captureIncognitoSessionSource(params);
+  if (binding) {
+    return withIncognitoSessionEntry(
+      binding,
+      params.sessionKey,
+      () => params.signal?.throwIfAborted(),
+      (entry, assertCurrent) =>
+        readSessionCompanionContextFromEntry(
+          params,
+          {
+            entry,
+            storePath: "kind" in binding ? binding.path : binding.actor.path,
+          },
+          assertCurrent,
+        ),
+    );
+  }
+  return readSessionCompanionContextFromEntry(
+    params,
+    loadGatewaySessionEntryReadOnly(params.sessionKey, { agentId: params.agentId }),
+  );
+}
+
+async function readSessionCompanionContextFromEntry(
+  params: { agentId: string; sessionKey: string; signal?: AbortSignal },
+  loaded: { entry?: { sessionId: string }; storePath: string },
+  assertCurrent?: () => void,
+): Promise<SessionCompanionContextReadResult> {
   const sessionId = loaded.entry?.sessionId?.trim();
   if (!sessionId) {
     return { kind: "missing" };
@@ -116,6 +143,7 @@ async function readSessionCompanionContext(params: {
         ),
         offset,
       });
+      assertCurrent?.();
       if (params.signal?.aborted) {
         return { kind: "unavailable" };
       }
@@ -179,6 +207,7 @@ async function readSessionCompanionContext(params: {
     ) {
       return { kind: "unavailable" };
     }
+    assertCurrent?.();
     return {
       kind: "ready",
       context: {
@@ -193,7 +222,16 @@ async function readSessionCompanionContext(params: {
 }
 
 export const defaultSessionCompanionContextReader: SessionCompanionContextReader = {
-  currentSessionId: ({ agentId, sessionKey }) =>
-    loadGatewaySessionEntryReadOnly(sessionKey, { agentId }).entry?.sessionId?.trim() || undefined,
+  currentSessionId: ({ agentId, sessionKey }) => {
+    const binding = captureIncognitoSessionSource({ agentId, sessionKey });
+    if (binding) {
+      return "kind" in binding
+        ? undefined
+        : binding.actor.sessions.readSharing(sessionKey)?.entry?.sessionId?.trim();
+    }
+    return (
+      loadGatewaySessionEntryReadOnly(sessionKey, { agentId }).entry?.sessionId?.trim() || undefined
+    );
+  },
   read: readSessionCompanionContext,
 };

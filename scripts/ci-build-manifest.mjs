@@ -11,6 +11,8 @@ import { classifyReleaseTrain, parseReleaseVersion } from "./lib/release-version
 
 // The script belongs to the trusted harness; target modules belong to the cwd.
 const fromTarget = (specifier) => pathToFileURL(path.resolve(process.cwd(), specifier)).href;
+const escapeSummaryHtml = (value) =>
+  value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
 
 const workflowEventName = process.env.OPENCLAW_CI_EVENT_NAME ?? "";
 // Dispatch fallbacks retain their existing scope even when they use PR planning.
@@ -588,14 +590,13 @@ let uiTestGroups =
   (!frozenTarget || releaseGate) &&
   typeof nodeTestPlan.createUiTestShardGroups === "function"
     ? nodeTestPlan.createUiTestShardGroups({
-        // Preserve the ordinary owner-family inventory. Protected or directly
-        // selected files opt into the existing release-only UI tier below.
+        // Only edited test files opt into the release-only UI tier on automatic CI.
         includeReleaseOnlyTests: includeReleaseOnlyUiTests,
         ...(typeof nodeTestPlan.resolveUiE2ePrTestSelection === "function"
           ? { includeReleaseOnlyE2eTests: forceFullUiE2e }
           : {}),
         includePrExemptRuntimeTests: selectedTestTargets ? true : includePrExemptRuntimeTests,
-        changedPaths: selectedTestTargets ?? changedPaths ?? [],
+        changedPaths: changedPaths ?? [],
         ...(uiE2eSelection ? { uiE2eFiles: uiE2eSelection.files } : {}),
       })
     : null;
@@ -656,6 +657,10 @@ if (selectedTestTargets) {
   uiE2eJobCount = Math.min(uiE2eJobCount - 1, controlTargets.length) + 1;
 }
 if (uiE2eSelection) {
+  const includedFiles = new Set(
+    uiTestGroups?.e2e.flatMap((group) => group.includePatterns ?? []) ?? uiE2eSelection.files,
+  );
+  uiE2eSelection.files = uiE2eSelection.files.filter((file) => includedFiles.has(file));
   // Selection also applies to UI-only plans without a Node target inventory.
   runControlUiE2e = uiE2eSelection.files.length > 0;
   runUiE2e = runControlUiE2e || runBrowserExtensionE2e;
@@ -666,6 +671,23 @@ if (uiE2eSelection) {
       : uiE2eSelection.files.length;
   uiE2eJobCount = Math.min(uiE2eJobCount - 1, controlUiRows) + 1;
 }
+// WebKit shares the first UI row; it never adds a runner or matrix slot.
+// Keep its browser-only contracts scoped to their interaction and style owners.
+const uiWebkitOwners = [
+  "ui/vitest.config.ts",
+  "ui/test/webkit-expected-failures{,.setup}.ts",
+  "ui/src/components/{web-awesome*,modal-dialog*,tooltip*,menu-*,overlay*,composer-menu*,dropdown-menu*,anchored-overlay*,textarea-token-anchor*,panel-tab-strip*,select-picker*,multi-select*,agent-select*}.{ts,tsx}",
+  "ui/src/pages/chat/chat-composer*.{ts,tsx}",
+  "ui/src/pages/chat/components/chat-{composer*,picker-overlay*,model-picker*,effort-picker*}.{ts,tsx}",
+  "ui/src/pages/new-session/{composer*,draft-composer*}.{ts,tsx}",
+  "ui/src/lib/native-overlay-occlusion.{ts,tsx}",
+  "ui/src/styles/{base,layout,components,sidebar-menus,select-picker,multi-select,hub-tabs,*tooltip*,modal*,menu*,session-menu*}.css",
+  "ui/src/styles/chat/{composer*,emoji-menu*,mention-menu*,model-picker*}.css",
+];
+const runUiWebkit =
+  runUiTests &&
+  !frozenTarget &&
+  Boolean(changedPaths?.some((file) => uiWebkitOwners.some((owner) => matchesGlob(file, owner))));
 if (selectedTestTargets && runWindows && !windowsTestPlan) {
   throw new Error("Current PR CI requires a target-owned Windows planner");
 }
@@ -1093,6 +1115,12 @@ const knownToolingConfigs = new Set([
   "test/vitest/vitest.tooling-isolated.config.ts",
   "test/vitest/vitest.tooling-docker.config.ts",
 ]);
+const compactReleaseMatrixRows =
+  eventName === "workflow_dispatch" &&
+  !mainValidation &&
+  !releaseGate &&
+  !ciQualification &&
+  nodeRunnerBackend === "github";
 // The same capped matrix owns compact and plugin work; admit its longest rows first.
 const nodeTestShards = targetNodeTestShards
   .toSorted(
@@ -1116,7 +1144,7 @@ const nodeTestShards = targetNodeTestShards
         : undefined);
     const packedGroups =
       groups?.length && nodeTestGroupsCodec ? encodeNodeTestGroups(groups) : undefined;
-    return {
+    const row = {
       check_name: shard.checkName,
       test_runtime_policy: testRuntimeMode,
       requires_bun:
@@ -1181,6 +1209,28 @@ const nodeTestShards = targetNodeTestShards
         return plan.configs?.includes("test/vitest/vitest.e2e.config.ts") ?? false;
       }),
     };
+    if (compactReleaseMatrixRows) {
+      // The workflow treats absent feature flags as false and history as [].
+      // Encoded groups own their names; the outer name is only a legacy fallback.
+      for (const key of [
+        "requires_bun",
+        "requires_dist",
+        "requires_go",
+        "requires_ripgrep",
+        "requires_sandbox_image",
+      ]) {
+        if (row[key] === false) {
+          delete row[key];
+        }
+      }
+      if (row.git_commits.length === 0) {
+        delete row.git_commits;
+      }
+      if (packedGroups && groups.every((group) => group.shard_name)) {
+        delete row.shard_name;
+      }
+    }
+    return row;
   });
 const nodeTestNonDistShards = nodeTestShards.filter((shard) => !shard.requires_dist);
 // Bound the final matrix: precise plans and appended plugin rows can bypass compact caps.
@@ -1291,6 +1341,10 @@ if (sharedSdkDeclarations) {
     1,
   );
 }
+const runPrMadgeImportCycles =
+  runCheck && ordinaryPullRequest && (proposedCheckScope?.madgeImportCycles ?? true);
+const runPrKyselyGuardrails =
+  runCheck && ordinaryPullRequest && (proposedCheckScope?.kyselyGuardrails ?? true);
 const checkTasks = [
   ...["guards", "npm-lock", "bundled-channel-config-metadata", "prod-types"].map((task) => ({
     check_name: `check-${task}`,
@@ -1317,6 +1371,17 @@ const checkTasks = [
     : narrowCheckScope.checkTasks.includes(row.task);
 });
 
+// Keep the selected source scans independent of the other PR guards.
+const guardRow = checkTasks.find(({ task }) => task === "guards");
+const splitPrGuards = guardRow !== undefined && (runPrMadgeImportCycles || runPrKyselyGuardrails);
+if (splitPrGuards) {
+  checkTasks.push({
+    check_name: "check-guards-architecture",
+    task: "guards-architecture",
+    runner: guardRow.runner,
+  });
+}
+
 // The selected guards row owns the same coercion scan; fast-only plans retain its row.
 if (
   !frozenTarget &&
@@ -1332,7 +1397,7 @@ if (
 
 // These rows need no compiler plan; retain their existing full-check placement.
 if (runCheckPlan && runNodeFull && !releaseFastLane) {
-  for (const task of ["guards", "dependencies"]) {
+  for (const task of ["guards", "guards-architecture", "dependencies"]) {
     const index = checkTasks.findIndex((row) => row.task === task);
     if (index >= 0) {
       const { task: group, ...row } = checkTasks.splice(index, 1)[0];
@@ -1395,6 +1460,10 @@ const manifest = {
   checks_node_core_nondist_matrix: createMatrix(nodeTestNonDistShards),
   run_checks_node_core_dist: runNodeCoreDist,
   run_check: runCheck,
+  // Older scope owners retain these guards rather than silently dropping coverage.
+  run_pr_madge_import_cycles: runPrMadgeImportCycles,
+  run_pr_kysely_guardrails: runPrKyselyGuardrails,
+  split_pr_guards: splitPrGuards,
   narrow_check_paths_json: runCheckPlan ? JSON.stringify(changedPaths) : "",
   run_check_plan: runCheckPlan,
   check_plan_input_json: runCheckPlan
@@ -1439,6 +1508,7 @@ const manifest = {
   run_format_check: runFormatCheck,
   run_control_ui_i18n: runControlUiI18n,
   run_ui_tests: runUiTests,
+  run_ui_webkit: runUiWebkit,
   ui_test_runtime_policy: uiTestRuntimePolicy,
   ui_test_shard_count: uiTestShardCount,
   ui_test_matrix: createMatrix(
@@ -1879,8 +1949,6 @@ if (process.env.GITHUB_STEP_SUMMARY) {
       }
     }
     // Paths are diff-controlled; render them as escaped HTML text, never Markdown.
-    const escape = (value) =>
-      value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
     appendFileSync(
       process.env.GITHUB_STEP_SUMMARY,
       `### PR Node test selection (${nodeSelectionMode})\n\n` +
@@ -1889,7 +1957,7 @@ if (process.env.GITHUB_STEP_SUMMARY) {
         "<details><summary>Selected files and selection rules</summary>\n<pre>" +
         selectedTestTargets
           .map((file) =>
-            escape(
+            escapeSummaryHtml(
               `${file}\t${[...(reasons.get(file) ?? [])].toSorted((left, right) => left.localeCompare(right)).join(", ")}`,
             ),
           )
@@ -1904,4 +1972,45 @@ if (process.env.GITHUB_STEP_SUMMARY) {
         ? "- Native app qualification: deferred; Linux, macOS, and Windows Node coverage retained.\n"
         : ""),
   );
+}
+
+// Preflight runs once per workflow attempt; shard selection stays silent.
+if (
+  process.env.GITHUB_ACTIONS === "true" &&
+  typeof testRuntimePolicy?.inspectNativeBunQualifications === "function"
+) {
+  try {
+    const { staleEntries, changedInputs } = testRuntimePolicy.inspectNativeBunQualifications(
+      process.cwd(),
+    );
+    if (staleEntries.length > 0) {
+      let detail = "Detailed job summary unavailable.";
+      if (process.env.GITHUB_STEP_SUMMARY) {
+        try {
+          appendFileSync(
+            process.env.GITHUB_STEP_SUMMARY,
+            "### Native Bun qualification staleness\n\n" +
+              `${staleEntries.length} recorded native qualifications are stale. Existing Vitest coverage is retained.\n\n` +
+              "Changed or unreadable inputs:\n\n<pre>" +
+              changedInputs
+                .map(({ file, reason }) => escapeSummaryHtml(`${file}\t${reason}`))
+                .join("\n") +
+              "</pre>\n\n<details><summary>Stale entries</summary>\n<pre>" +
+              staleEntries.map(escapeSummaryHtml).join("\n") +
+              "</pre>\n</details>\n\n",
+          );
+          detail = "See the job summary for stale entries and changed inputs.";
+        } catch {
+          // Reporting is advisory even when the summary cannot be written.
+        }
+      }
+      console.warn(
+        `::notice title=Native Bun qualification staleness::${staleEntries.length} recorded entries have ${changedInputs.length} changed or unreadable inputs; existing Vitest coverage is retained. ${detail}`,
+      );
+    }
+  } catch {
+    console.warn(
+      "::notice title=Native Bun qualification staleness::Could not inspect native qualification fingerprints. Runtime selection is unchanged.",
+    );
+  }
 }

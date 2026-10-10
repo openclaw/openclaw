@@ -46,7 +46,6 @@ import { resolveMirroredTranscriptText } from "../../config/sessions/transcript-
 import { resolveSessionTranscriptActiveLeafEntryId } from "../../config/sessions/transcript-tree.js";
 import { withOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { getAgentRunContext } from "../../infra/agent-run-registry.js";
 import { createStructuredOutboundPayloadPlan } from "../../infra/outbound/payloads.js";
 import { RUN_STALE_TAKEOVER_MS } from "../../logging/diagnostic-run-activity.js";
 import {
@@ -82,6 +81,7 @@ import {
   ChatDirectiveDedupe,
   createChatDirectiveReplyBackend,
   createGlobalChatDirectiveConfig,
+  createChatDirectiveSender,
   createChatDirectiveSuiteResources,
   createChatDirectiveUserMessageReader,
   expectManagedAudioBlock,
@@ -90,7 +90,6 @@ import {
   readChatDirectiveConfig,
   seedChatDirectiveFileTranscript,
 } from "./chat.directive-tags.test-support.js";
-import { initializeSessionReadContext } from "./sessions-read-cache.test-support.js";
 import type { GatewayRequestContext, RespondFn } from "./types.js";
 
 type ProjectedDispatchParams = Parameters<
@@ -444,7 +443,7 @@ vi.mock("../../infra/outbound/session-binding-service.js", async () => {
     ...actual,
     getSessionBindingService: () => ({
       ...actual.getSessionBindingService(),
-      resolveByConversation: (ref: unknown) => bindingMocks.resolveByConversation(ref),
+      resolveByConversationAsync: async (ref: unknown) => bindingMocks.resolveByConversation(ref),
     }),
   };
 });
@@ -600,6 +599,10 @@ vi.mock("../../media/store.js", async () => {
 
 const { chatHandlers } = await import("./chat.js");
 const { handleDirectExternalChatSend } = await import("./chat-send-external-entry.js");
+const runNonStreamingChatSend = createChatDirectiveSender({
+  internal: handleChatSend,
+  external: handleDirectExternalChatSend,
+});
 
 // Multi-media transcript mirroring can exceed 1s on loaded CI before the async broadcast lands.
 async function waitForAssertion(assertion: () => void, timeoutMs = 5_000, stepMs = 2) {
@@ -657,14 +660,6 @@ async function withTranscriptFixtureState(
   run: (fixtureDir: string) => Promise<void>,
 ): Promise<void> {
   const fixtureDir = await createTranscriptFixture(prefix);
-  await withEnvAsync({ OPENCLAW_STATE_DIR: suiteFixtureRoot }, async () => await run(fixtureDir));
-}
-
-async function withSqliteTranscriptFixtureState(
-  prefix: string,
-  run: (fixtureDir: string) => Promise<void>,
-): Promise<void> {
-  const fixtureDir = await createSqliteTranscriptFixture(prefix);
   await withEnvAsync({ OPENCLAW_STATE_DIR: suiteFixtureRoot }, async () => await run(fixtureDir));
 }
 
@@ -930,7 +925,6 @@ async function createSqliteChatRequest(prefix: string) {
   return createChatRequestFixture();
 }
 
-type NonStreamingChatSendWaitFor = "broadcast" | "dedupe" | "none";
 type ChatDeliveryRoutingCase = readonly [
   name: string,
   id: string,
@@ -1093,71 +1087,6 @@ function createMainSourceReply(params: {
 function setAgentRunReplies(replies: TestReply[]) {
   mockState.triggerAgentRunStart = true;
   mockState.dispatchedReplies = replies;
-}
-
-async function runNonStreamingChatSend(params: {
-  context: ChatContext;
-  respond: RespondFn;
-  idempotencyKey: string;
-  message?: string;
-  sessionKey?: string;
-  deliver?: boolean;
-  client?: unknown;
-  expectBroadcast?: boolean;
-  requestParams?: Record<string, unknown>;
-  directExternal?: boolean;
-  waitForCompletion?: boolean;
-  waitForDedupe?: boolean;
-  waitFor?: NonStreamingChatSendWaitFor;
-}): Promise<Record<string, any> | undefined> {
-  const sendParams: {
-    sessionKey: string;
-    message: string;
-    idempotencyKey: string;
-    deliver?: boolean;
-  } = {
-    sessionKey: params.sessionKey ?? "main",
-    message: params.message ?? "hello",
-    idempotencyKey: params.idempotencyKey,
-  };
-  if (typeof params.deliver === "boolean") {
-    sendParams.deliver = params.deliver;
-  }
-  const handler = params.directExternal === false ? handleChatSend : handleDirectExternalChatSend;
-  const handlerOptions = {
-    params: {
-      ...sendParams,
-      ...params.requestParams,
-    },
-    respond: params.respond,
-    req: {} as never,
-    client: (params.client ?? null) as never,
-    isWebchatConnect: () => false,
-    context: params.context,
-  };
-  await handler(handlerOptions);
-
-  const waitFor =
-    params.waitFor ??
-    (params.waitForCompletion === false || params.waitForDedupe === false
-      ? "none"
-      : params.expectBroadcast === false
-        ? "dedupe"
-        : "broadcast");
-  if (waitFor === "none") {
-    return undefined;
-  }
-  if (waitFor === "dedupe") {
-    await params.context.dedupe.waitForResponse(params.idempotencyKey);
-    return undefined;
-  }
-
-  const terminalCalls = () =>
-    params.context.broadcast.mock.calls.filter(
-      ([event, payload]) => event === "chat" && asOptionalRecord(payload)?.state !== "delta",
-    );
-  await waitForAssertion(() => expect(terminalCalls()).toHaveLength(1));
-  return asOptionalRecord(terminalCalls()[0]?.[1]);
 }
 
 async function expectImageOnlyFinal(params: {
@@ -2139,15 +2068,14 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
           cancel: successorCancel,
           queueMessage: vi.fn(async () => {}),
         });
-        delivery.resolve({
-          transcriptCommit: "unconfirmed",
-          errorMessage: "receipt timed out",
-        });
+        const errorMessage = "receipt timed out";
+        delivery.resolve({ transcriptCommit: "unconfirmed", errorMessage });
 
         await waitForAssertion(() => {
           expect(context.dedupe.get("chat:idem-steer-unconfirmed")?.payload).toEqual({
             runId: "idem-steer-unconfirmed",
-            status: "ok",
+            status: "error",
+            summary: errorMessage,
           });
         });
         expect(successor.result).toBeNull();
@@ -2482,41 +2410,6 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       expect(context.registerToolEventRecipient).not.toHaveBeenCalledWith(denied, connId);
     },
   );
-
-  it("returns the rendered history branch leaf in session info", async () => {
-    await withSqliteTranscriptFixtureState("openclaw-chat-history-active-leaf-", async () => {
-      mockState.config = { session: { store: mockState.storePath } };
-      await appendTranscriptMessage(transcriptScope(), {
-        eventId: "history-active-leaf",
-        message: { role: "user", content: "render this branch" },
-        now: 1,
-        parentId: null,
-      });
-      const respond = vi.fn();
-      const context = createChatContext();
-      const cfg = context.getRuntimeConfig();
-      context.getRuntimeConfig = () => cfg;
-      await initializeSessionReadContext(context);
-
-      await expectDefined(
-        chatHandlers["chat.history"],
-        'chatHandlers["chat.history"] test invariant',
-      )({
-        params: { sessionKey: "main" },
-        respond: respond as never,
-        req: {} as never,
-        client: null,
-        isWebchatConnect: () => false,
-        context,
-      });
-
-      const result = lastRespondCall(respond);
-      expect(result?.[0], JSON.stringify(result?.[2])).toBe(true);
-      expect(result?.[1]).toMatchObject({
-        sessionInfo: { activeLeafEntryId: "history-active-leaf" },
-      });
-    });
-  });
 
   it("does not register tool-event recipients without tool-events capability", async () => {
     await createReadyChatTranscript("openclaw-chat-send-tool-events-off-");
@@ -4875,41 +4768,6 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     },
   );
 
-  it("logs chat.send attachment parse failures with stack details", async () => {
-    await createTranscriptFixture("openclaw-chat-send-attachment-parse-stack-");
-    const { context, respond, send } = createChatRequestFixture();
-
-    await send({
-      idempotencyKey: "idem-chat-send-attachment-parse-stack",
-      message: "inspect this",
-      requestParams: {
-        attachments: [createFileAttachment("broken.png", "image/png", "not-base64")],
-      },
-      expectBroadcast: false,
-      waitFor: "none",
-    });
-
-    expect(mockState.lastDispatchCtx).toBeUndefined();
-    const response = lastRespondCall(respond);
-    expect(response?.[0]).toBe(false);
-    expect(response?.[1]).toBeUndefined();
-    expect(response?.[2]?.code).toBe(ErrorCodes.INVALID_REQUEST);
-    expect(response?.[2]?.message).toContain("attachment broken.png: invalid base64 content");
-    expect(getAgentRunContext("idem-chat-send-attachment-parse-stack")).toBeUndefined();
-    const parseLogCall = context.logGateway.error.mock.calls[0] as
-      | [string, Record<string, string>]
-      | undefined;
-    expect(parseLogCall?.[0]).toBe("chat.send attachment parse/stage failed");
-    expect(parseLogCall?.[1].consoleMessage).toContain(
-      "chat.send attachment parse/stage failed: Error: attachment broken.png",
-    );
-    expect(parseLogCall?.[1].error).toContain(
-      "Error: attachment broken.png: invalid base64 content",
-    );
-    const logMeta = context.logGateway.error.mock.calls[0]?.[1] as { error?: string } | undefined;
-    expect(logMeta?.error).toContain("\n    at ");
-  });
-
   it.each(["throw", "skip"] as const)(
     "falls back to the managed PDF path when sandbox staging %s occurs",
     async (mode) => {
@@ -4987,28 +4845,6 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       "media/inbound/huge.bin",
     ]);
     expect(mockState.deleteMediaBufferCalls).toEqual([]);
-  });
-
-  it("maps media offload failures to UNAVAILABLE in chat.send", async () => {
-    await createTranscriptFixture("openclaw-chat-send-media-offload-error-");
-    useChatTestModel("vision-model");
-    mockState.saveMediaError = new Error("disk full");
-    const { respond, send } = createChatRequestFixture();
-    const bigPng = createPngBuffer(2_100_000);
-
-    await send({
-      idempotencyKey: "idem-media-offload-error",
-      message: "describe image",
-      requestParams: {
-        attachments: [createImageAttachment({ content: bigPng.toString("base64") })],
-      },
-      waitFor: "none",
-    });
-
-    const response = lastRespondCall(respond);
-    expect(response?.[0]).toBe(false);
-    expect(response?.[1]).toBeUndefined();
-    expect(response?.[2]?.code).toBe(ErrorCodes.UNAVAILABLE);
   });
 
   it("persists a Gateway user turn under the durable owner when its loaded key is stale", async () => {

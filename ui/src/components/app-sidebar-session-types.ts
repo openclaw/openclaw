@@ -12,11 +12,11 @@ import type {
   SessionCreatedActor,
   SessionOwner,
 } from "../../../packages/gateway-protocol/src/schema/sessions.js";
-import type { SessionAgentAttentionIconId } from "../../../packages/gateway-protocol/src/session-agent-status.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { GatewaySessionRow, SessionRunStatus } from "../api/types.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import type { BoardFace } from "../lib/board/settings.ts";
+import type { SessionRowAttention } from "../lib/session-attention.ts";
 import type { SessionChannelPresentation } from "../lib/session-channel.ts";
 import type { SessionWorkContext } from "../lib/session-display.ts";
 import {
@@ -41,11 +41,9 @@ type SidebarAttentionRequest = {
 };
 
 export type SidebarSessionAttention =
-  | { kind: "none" }
+  | SessionRowAttention
   | { kind: "question"; requests: readonly SidebarAttentionRequest[] }
-  | { kind: "approval"; requests: readonly SidebarAttentionRequest[] }
-  | { kind: "agent"; note: string; icon: SessionAgentAttentionIconId }
-  | { kind: "error"; reason: string; childLabel?: string };
+  | { kind: "approval"; requests: readonly SidebarAttentionRequest[] };
 
 export const SIDEBAR_SESSION_NO_ATTENTION: SidebarSessionAttention = { kind: "none" };
 
@@ -118,11 +116,13 @@ export type SidebarRecentSession = {
   hasActiveRun: boolean;
   /** Raw Gateway liveness used for operations even when display status is terminal. */
   gatewayHasActiveRun?: boolean;
+  hasActiveSubagentRun?: boolean;
   activeRunIds?: readonly string[];
   modelSelectionLocked: boolean;
   kind?: string;
   pinned: boolean;
   pinnable: boolean;
+  sidebarRoot?: boolean;
   snoozedUntil?: number;
   archived?: boolean;
   visibility?: SessionVisibility;
@@ -163,11 +163,14 @@ export type SidebarRecentSession = {
   ownWorkspaceConflictCount?: number;
   unreadChildCount?: number;
   queuedChildCount?: number;
+  /** Unread hidden runs folded into this row; acknowledged together with it. */
+  unreadHiddenRuns?: readonly SidebarRecentSession[];
   /** Hidden run state remains visible when persistent children are expanded. */
   subagentSummary?: Pick<
     SidebarRecentSession,
     | "attention"
     | "unreadChildCount"
+    | "unreadHiddenRuns"
     | "queuedChildCount"
     | "runningChildCount"
     | "failedChildCount"
@@ -312,7 +315,15 @@ export type SidebarCatalogSessionMutationScope = SidebarSessionMutationScope & {
 
 export type SidebarSessionPatch = Pick<
   SessionsPatchMutation,
-  "archived" | "pinned" | "snoozedUntil" | "unread" | "label" | "icon" | "color" | "category"
+  | "archived"
+  | "pinned"
+  | "sidebarRoot"
+  | "snoozedUntil"
+  | "unread"
+  | "label"
+  | "icon"
+  | "color"
+  | "category"
 >;
 
 export const SIDEBAR_SESSION_PAGE_SIZE = 10;

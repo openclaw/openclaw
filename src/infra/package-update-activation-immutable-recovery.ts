@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import { sha256Hex } from "./crypto-digest.js";
 import { requireDirectorySync, syncDirectorySync } from "./directory-durability.js";
 import { resolveOpenClawPackageRoot } from "./openclaw-root.js";
@@ -290,11 +289,4 @@ export async function verifyImmutableRecoveryRuntime(params: {
   if (facts.identity !== reference.identity || facts.buildDigest !== reference.buildDigest) {
     throw new Error("Immutable recovery runtime no longer matches its recorded artifact.");
   }
-}
-
-export function resolveImmutableRecoveryCommand(
-  reference: ImmutableRecoveryRuntimeReference,
-  descriptor: ImmutableInstallDescriptor,
-): string {
-  return `${quoteCliArg(descriptor.runtime.path)} ${quoteCliArg(reference.helperPath)}`;
 }

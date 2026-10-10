@@ -97,14 +97,7 @@ impl GatewayOperationQueue {
     }
 
     pub(crate) fn submit_recovery(&self, child_id: u64) {
-        // Capture the latest intent in the same critical section as explicit
-        // submission, so recovery follows it in FIFO order without replacing it.
-        let selection = self.selection.lock().expect("selection");
-        let _ = self.sender.send(QueuedGatewayOperation {
-            operation: GatewayOperation::RecoverRemote { child_id },
-            reply: None,
-            selection: *selection,
-        });
+        self.submit_detached(GatewayOperation::RecoverRemote { child_id });
     }
 
     pub(crate) fn submit_connect(&self) {
@@ -144,10 +137,12 @@ impl GatewayOperationQueue {
         operation: GatewayOperation,
         reply: Option<oneshot::Sender<Result<GatewaySnapshot, String>>>,
     ) -> Result<(), String> {
-        // Invalidate automatic work at submission, while retaining every
-        // explicit operation in channel order.
+        // Recovery follows the latest explicit intent in FIFO order without
+        // replacing it; explicit submissions invalidate older automatic work.
         let mut selection = self.selection.lock().expect("selection");
-        *selection = selection.wrapping_add(1);
+        if !matches!(operation, GatewayOperation::RecoverRemote { .. }) {
+            *selection = selection.wrapping_add(1);
+        }
         self.sender
             .send(QueuedGatewayOperation {
                 operation,

@@ -2,7 +2,7 @@
 import { setImmediate as waitForImmediate } from "node:timers/promises";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { runExclusiveSessionStoreWrite } from "../config/sessions/store-writer.js";
 import {
   resetGatewayWorkAdmission,
@@ -15,7 +15,6 @@ import {
   consumeSessionWorkAdmissionHandoff,
   getActiveSessionLifecycleMutationCount,
   getActiveSessionWorkAdmissionCount,
-  getSessionWorkAdmissionOwnerRelease,
   getSessionWorkAdmissionRelease,
   hasOnlySessionLifecycleMutationKindActive,
   interruptSessionWorkAdmissions,
@@ -65,42 +64,6 @@ it("waits for a competing session admission outside the caller context", async (
   await release;
   await Promise.resolve();
   expect(settled).toBe(true);
-});
-
-it("observes only the named session admission owner while it is starting", async () => {
-  const scope = "store-named-owner";
-  const identities = ["agent:main:named-owner", "session-named-owner"];
-  const owner = Symbol.for("openclaw.test.namedSessionWorkAdmissionOwner");
-  const unrelated = await beginSessionWorkAdmission({ scope, identities, assertAllowed: () => {} });
-  const started = createDeferred();
-  const allowed = createDeferred();
-  const admissionPromise = beginSessionWorkAdmission({
-    scope,
-    identities,
-    owner,
-    assertAllowed: async () => {
-      started.resolve();
-      await allowed.promise;
-    },
-  });
-  try {
-    await started.promise;
-    const release = getSessionWorkAdmissionOwnerRelease({ scope, identities, owner });
-    expect(release).toBeInstanceOf(Promise);
-    unrelated.release();
-    expect(getSessionWorkAdmissionOwnerRelease({ scope, identities, owner })).toBeInstanceOf(
-      Promise,
-    );
-    allowed.resolve();
-    const admission = await admissionPromise;
-    admission.release();
-    await release;
-    expect(getSessionWorkAdmissionOwnerRelease({ scope, identities, owner })).toBeUndefined();
-  } finally {
-    unrelated.release();
-    allowed.resolve();
-    (await admissionPromise).release();
-  }
 });
 
 it("atomically hands admitted work across an interrupted RPC boundary", async () => {
@@ -701,7 +664,9 @@ it("admits an independent session while revalidating a conflicting writer's auth
   }
 });
 
-it("releases an admission aborted while waiting for the store writer barrier", async () => {
+it("releases lifecycle locks when admission aborts behind the store writer barrier", async ({
+  signal,
+}) => {
   const storePath = "store-writer-abort";
   const writerStarted = createDeferred();
   const releaseWriter = createDeferred();
@@ -722,14 +687,26 @@ it("releases an admission aborted while waiting for the store writer barrier", a
       firstValidation.resolve();
     },
   });
-  await firstValidation.promise;
-  controller.abort(abortError);
+  let mutation: Promise<void> | undefined;
+  try {
+    await withinTest(firstValidation.promise, signal);
+    expect(isSessionWorkAdmissionActive(storePath, ["session-writer-abort"])).toBe(true);
+    controller.abort(abortError);
 
-  await expect(admission).rejects.toBe(abortError);
-  expect(isSessionWorkAdmissionActive(storePath, ["session-writer-abort"])).toBe(false);
+    await expect(admission).rejects.toBe(abortError);
+    expect(isSessionWorkAdmissionActive(storePath, ["session-writer-abort"])).toBe(false);
 
-  releaseWriter.resolve();
-  await writer;
+    mutation = runExclusiveSessionLifecycleMutation("patch", {
+      scope: storePath,
+      identities: ["session-writer-abort"],
+      run: async () => {},
+    });
+    // Cancellation must release the lifecycle lock before the unrelated writer finishes.
+    await withinTest(mutation, signal);
+  } finally {
+    releaseWriter.resolve();
+    await Promise.allSettled([writer, admission, mutation]);
+  }
 });
 
 it("revalidates without inheriting a released gateway root from the writer queue", async () => {

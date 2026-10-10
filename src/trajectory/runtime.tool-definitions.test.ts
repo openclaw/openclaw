@@ -41,15 +41,15 @@ describe("trajectory tool definition preparation", () => {
     expect(digest).toHaveBeenCalledTimes(3);
   });
 
-  it("rechecks changed schemas and current secret registrations after repeated projections", () => {
+  it("rechecks changed schemas and current secret registrations after repeated projections", async () => {
     const writes: string[] = [];
     const description = "trajectory-fixture-value";
-    vi.spyOn(runtimeStoreWriter, "createSqliteTrajectoryRuntimeSink").mockReturnValueOnce({
+    vi.spyOn(runtimeStoreWriter, "createSqliteTrajectoryRuntimeSink").mockResolvedValueOnce({
       write: (_event, line) => writes.push(line),
       flush: async () => {},
       describeFlushState: () => undefined,
     });
-    const recorder = createTrajectoryRuntimeRecorder({
+    const recorder = await createTrajectoryRuntimeRecorder({
       sessionId: "tool-projection",
     });
     const record = (text: string) =>

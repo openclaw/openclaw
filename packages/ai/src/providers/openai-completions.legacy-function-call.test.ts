@@ -246,7 +246,8 @@ describe("OpenAI Chat Completions stream", () => {
         chunk({}, "function_call"),
       ],
       { ...FIXTURE_OPTIONS, reasoningEffort: "medium" },
-      { ...model, reasoning: true },
+      // Official OpenAI sends reasoning tool turns through Responses.
+      { ...model, reasoning: true, baseUrl: "https://provider.example/v1" },
     );
 
     expect(result.stopReason).toBe("toolUse");

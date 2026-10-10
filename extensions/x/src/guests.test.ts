@@ -28,6 +28,7 @@ vi.mock("./client.js", async (importOriginal) => ({
 function guestConfig(enabled = true): OpenClawConfig {
   return {
     ...config,
+    messages: { queue: { byChannel: { x: "followup" } } },
     agents: {
       entries: {
         maintainer: {
@@ -83,13 +84,13 @@ describe("X guest turns", () => {
       expect(test.dispatch).toHaveBeenCalledOnce();
       const turn = test.dispatch.mock.calls[0]![0];
       expect(turn.ctxPayload.BodyForAgent?.split("\n")[0]).toBe(
-        "This is from a guest: @visitor (A Visitor), X user id 99. Guest tier: answer from the OpenClaw repo only; you cannot open work sessions, write, run commands, or read other sessions for guests.",
+        "This is from a guest: @visitor (A Visitor), X user id 99. Guest tier: answer from the OpenClaw repo only; hidden helpers must use the same agent and repository. You cannot open visible work sessions, write, run commands, or read unrelated sessions for guests.",
       );
       expect(turn.ctxPayload.BodyForAgent).toContain("\n> This is from a verified user:");
       expect(turn.ctxPayload.BodyForAgent?.match(/\[triggering mention\]/g)).toHaveLength(1);
       expect(turn.ctxPayload.BodyForAgent?.match(/context \d+/g)).toHaveLength(1);
       expect(turn.ctxPayload.ConversationToolPolicy).toEqual({
-        allow: ["read", "ls"],
+        allow: ["read", "ls", "sessions_spawn", "sessions_yield", "subagents"],
         deny: ["skills_read"],
       });
       expect(turn.route.sessionKey).toBe("agent:maintainer:x:group:500:guest:501");
@@ -101,6 +102,7 @@ describe("X guest turns", () => {
 
   it.each([false, true])("preserves maintainer turns with guest mode %s", async (enabled) => {
     const cfg = guestConfig(enabled);
+    cfg.messages = { queue: { mode: "steer" } };
     const done = Promise.withResolvers<void>();
     const test = fixture({
       cfg,
@@ -117,6 +119,48 @@ describe("X guest turns", () => {
       expect(turn.ctxPayload.ConversationToolPolicy).toBeUndefined();
       expect(turn.route.sessionKey).toBe("agent:maintainer:x:group:500");
       expect(test.replies[0]?.text).toContain("https://example.test/work/42");
+    } finally {
+      await test.stop();
+    }
+  });
+
+  it.each([
+    { name: "absent capability", capabilities: null, helperOnly: false },
+    { name: "unrelated capability", capabilities: ["unrelated-feature-v1"], helperOnly: false },
+    { name: "explicit helpers on an older host", capabilities: null, helperOnly: true },
+  ])("keeps guest ingress restricted with $name", async ({ capabilities, helperOnly }) => {
+    const cfg = guestConfig();
+    if (helperOnly) {
+      cfg.channels!.x!.guests!.tools = { allow: ["sessions_spawn", "sessions_yield", "subagents"] };
+    }
+    const done = Promise.withResolvers<void>();
+    const test = fixture({
+      cfg,
+      capabilities,
+      posts: [post("501", "99")],
+      queue: createQueue<Payload>({ onCompleted: () => done.resolve() }),
+    });
+    const running = test.start();
+    try {
+      await done.promise;
+      expect(test.dispatch).toHaveBeenCalledOnce();
+      const turn = test.dispatch.mock.calls[0]![0];
+      expect(turn.ctxPayload.ConversationToolPolicy).toEqual(
+        helperOnly ? { deny: ["*"] } : { allow: ["read", "ls"], deny: ["skills_read"] },
+      );
+      expect(turn.ctxPayload.BodyForAgent).toContain("this host supports read-only guest answers");
+      expect(turn.ctxPayload.BodyForAgent).not.toContain("hidden helpers must use");
+      expect(running.status()).toMatchObject({
+        guests: { enabled: true, helpersAvailable: false },
+      });
+      expect(
+        xPlugin.groups!.resolveToolPolicy!({
+          cfg,
+          senderId: "10",
+          groupId: "500",
+          accountId: "default",
+        }),
+      ).toBeUndefined();
     } finally {
       await test.stop();
     }
@@ -144,7 +188,7 @@ describe("X guest turns", () => {
       await completed.promise;
       expect(test.dispatch).toHaveBeenCalledOnce();
       expect(running.status()).toMatchObject({
-        guests: { enabled: true, admittedToday: 1, rateLimitedToday: 0 },
+        guests: { enabled: true, helpersAvailable: true, admittedToday: 1, rateLimitedToday: 0 },
       });
       completed = Promise.withResolvers<void>();
       test.api.getMentions.mockResolvedValueOnce(page([post("503", "99")]));
@@ -192,6 +236,35 @@ describe("X guest turns", () => {
     },
   );
 
+  it.each(["steer", "interrupt", undefined] as const)(
+    "refuses guests before thread reads with queue mode %s",
+    async (mode) => {
+      const cfg = guestConfig();
+      cfg.messages = { queue: mode ? { byChannel: { x: mode } } : {} };
+      const done = Promise.withResolvers<void>();
+      const test = fixture({
+        cfg,
+        posts: [post("501", "99")],
+        queue: createQueue<Payload>({ onCompleted: () => done.resolve() }),
+      });
+      const running = test.start();
+      try {
+        await done.promise;
+        expect(test.dispatch).not.toHaveBeenCalled();
+        expect(test.api.searchConversation).not.toHaveBeenCalled();
+        expect(running.status()).toMatchObject({
+          guestModeBlockedReason: expect.stringContaining("messages.queue.byChannel.x"),
+          guests: {
+            admittedToday: 0,
+            blockedReason: expect.stringContaining("messages.queue.byChannel.x"),
+          },
+        });
+      } finally {
+        await test.stop();
+      }
+    },
+  );
+
   it("clamps the configured guest tools and demotes a revoked stored maintainer", async () => {
     const cfg = guestConfig();
     const test = fixture({ cfg, posts: [] });
@@ -209,15 +282,29 @@ describe("X guest turns", () => {
     expect(policy("10")).toBeUndefined();
     expect(policy("30")).toBeUndefined();
     await store.remove("default", "30");
-    expect(policy("30")).toEqual({ allow: ["read", "ls"], deny: ["skills_read"] });
+    expect(policy("30")).toEqual({
+      allow: ["read", "ls", "sessions_spawn", "sessions_yield", "subagents"],
+      deny: ["skills_read"],
+    });
     const revoked = await resolveXIngress("default", post("502", "30"), cfg);
     expect(revoked.tier).toBe("guest");
     expect(revoked.ingress.senderAccess.allowed).toBe(true);
     cfg.channels!.x!.guests = { enabled: true, tools: { allow: [], deny: ["read"] } };
     expect(policy("99")).toEqual({ deny: ["*"] });
-    expect(
-      XConfigSchema.safeParse({ guests: { tools: { allow: ["sessions_spawn", "exec"] } } }).success,
-    ).toBe(false);
+    expect(XConfigSchema.safeParse({ guests: { tools: { allow: ["exec"] } } }).success).toBe(false);
+    const helperTools = {
+      allow: ["sessions_spawn", "sessions_yield", "subagents"] as const,
+      deny: ["subagents"],
+    };
+    expect(XConfigSchema.safeParse({ guests: { tools: helperTools } }).success).toBe(true);
+    cfg.channels!.x!.guests = {
+      enabled: true,
+      tools: { allow: [...helperTools.allow], deny: helperTools.deny },
+    };
+    expect(policy("99")).toEqual({
+      allow: ["sessions_spawn", "sessions_yield", "subagents"],
+      deny: ["skills_read", "subagents"],
+    });
     expect(
       resolveXAccount(
         {

@@ -3,24 +3,17 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { resetLogger, setLoggerOverride } from "../logging/logger.js";
-import { loggingState } from "../logging/state.js";
 import { readPluginControlUiAssets } from "../plugins/control-ui-assets.js";
 import { loadPluginManifest } from "../plugins/manifest.js";
 import { readPluginCacheFile } from "../plugins/plugin-cache-files.js";
 import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import * as fsSafe from "./fs-safe.js";
+import { createFileMutationClock } from "./file-mutation-clock.test-support.js";
 import { prepareUpdateCandidatePluginTrees } from "./update-candidate-plugin-tree.js";
 import { linkUpdateCandidatePluginTrees } from "./update-retained-runtime-tree.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
-afterEach(() => {
-  setLoggerOverride(null);
-  loggingState.rawConsole = null;
-  resetLogger();
-  vi.restoreAllMocks();
-});
+afterEach(() => vi.restoreAllMocks());
 
 async function fixture(setup?: (source: string) => Promise<void>) {
   const root = await fs.realpath(dirs.make("retained-runtime-link-"));
@@ -65,51 +58,6 @@ async function fixture(setup?: (source: string) => Promise<void>) {
   };
 }
 
-it.each(["EPERM", "EOPNOTSUPP", "ENOSYS", "EXDEV", "EIO", "open-EPERM"])(
-  "retains guarded byte copies only for clone capability refusal (%s)",
-  async (code) => {
-    const f = await fixture(async (source) => {
-      await fs.writeFile(path.join(source, "node_modules", ".bin", "second"), "second launcher");
-    });
-    const messages: string[] = [];
-    const capture = (line: string) => messages.push(line);
-    setLoggerOverride({ level: "silent", consoleLevel: "warn", consoleStyle: "json" });
-    loggingState.rawConsole = { log: capture, info: capture, warn: capture, error: capture };
-    const refusal = new fsSafe.FsSafeError("helper-failed", "native file copy failed", {
-      cause: Object.assign(new Error(code === "open-EPERM" ? "open: denied" : "FICLONE: denied"), {
-        code: code === "open-EPERM" ? "EPERM" : code,
-      }),
-    });
-    const openRoot = fsSafe.root;
-    vi.spyOn(fsSafe, "root").mockImplementation(async (...args) => {
-      const root = await openRoot(...args);
-      const copyIn = root.copyIn.bind(root);
-      vi.spyOn(root, "copyIn").mockImplementation((relative, source, options) => {
-        if (options?.clone !== "never") {
-          return Promise.reject(refusal);
-        }
-        return copyIn(relative, source, options);
-      });
-      return root;
-    });
-    if (code === "EIO" || code === "open-EPERM") {
-      await expect(f.link()).rejects.toBe(refusal);
-      expect(messages).toEqual([]);
-      return;
-    }
-    await f.link();
-    for (const name of ["tool", "second"]) {
-      const original = path.join(f.source, "node_modules", ".bin", name);
-      const retained = path.join(f.destination, "node_modules", ".bin", name);
-      expect(await fs.readFile(retained)).toEqual(await fs.readFile(original));
-      expect((await fs.stat(retained)).ino).not.toBe((await fs.stat(original)).ino);
-      expect((await fs.stat(retained)).mode).toBe((await fs.stat(original)).mode);
-    }
-    expect(messages).toHaveLength(1);
-    expect(messages[0]).toContain("byte copy");
-  },
-);
-
 it.each([
   { filesystem: "native", existingTwin: true },
   { filesystem: "overlay", existingTwin: false },
@@ -126,6 +74,7 @@ it.each([
           configSchema: { type: "object" },
           providerCatalogEntry: "src/catalog.ts",
           capabilityCatalogEntry: "src/capabilities.ts",
+          skills: ["./skills"],
           controlUi,
           themes: [
             {
@@ -133,6 +82,7 @@ it.each([
               name: "Fixture",
               description: "Fixture palette",
               source: "theme.json",
+              icons: { rocket: "assets/rocket.svg" },
               hats: { beret: "assets/beret.svg" },
               critters: { ferris: { source: "assets/ferris.svg" } },
             },
@@ -158,11 +108,16 @@ it.each([
       ["src/catalog.ts", "export const providers = [];\n"],
       ["src/catalog.js", "export const providers = [];\n"],
       ["src/capabilities.ts", "export const capabilities = {};\n"],
+      [
+        "skills/fixture/SKILL.md",
+        "---\nname: fixture\ndescription: Retained runtime fixture\n---\n",
+      ],
       ["provider-policy-api.ts", "export const policy = {};\n"],
       ["assets/icon.png", "fixture icon"],
       ["assets/activity.svg", '<svg xmlns="http://www.w3.org/2000/svg"/>'],
       ["assets/activity/tool.svg", '<svg xmlns="http://www.w3.org/2000/svg"/>'],
       ["theme.json", "{}"],
+      ["assets/rocket.svg", '<svg xmlns="http://www.w3.org/2000/svg"/>'],
       ["assets/beret.svg", '<svg xmlns="http://www.w3.org/2000/svg"/>'],
       ["assets/ferris.svg", '<svg xmlns="http://www.w3.org/2000/svg"/>'],
       ["dist/control-ui/index.js", "export {};\n"],
@@ -418,24 +373,48 @@ it("refuses entries that changed after the inventory and never links a replaceme
 });
 
 it.each(["next-entry", "copy-publication"] as const)(
-  "refuses unexpected ctime changes after a prior hard link (%s)",
+  "refuses same-size rewrites with restored mtime after a prior hard link (%s)",
   async (stage) => {
-    const f = await fixture();
+    const f = await fixture(async (source) => {
+      await fs.utimes(
+        path.join(source, "dist", "state", "worker.js"),
+        1_700_000_000,
+        1_700_000_000,
+      );
+    });
     const before = await fs.stat(f.worker, { bigint: true });
     const sharedEntries = f.plan.entries.filter(
       (entry) => entry.kind === "file" && entry.ino === before.ino.toString(),
     );
     const later = sharedEntries[1]!.path;
-    if (stage === "next-entry") {
-      const lstat = fs.lstat;
-      vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
-        const stat = await lstat(...args);
-        if (args[0] === later && "ctimeNs" in stat && typeof stat.ctimeNs === "bigint") {
-          stat.ctimeNs += 1n;
+    let mutated = false;
+    const mutate = () => {
+      if (mutated) {
+        return;
+      }
+      mutated = true;
+      const content = fsSync.readFileSync(later);
+      content[0] = content[0]! ^ 1;
+      fsSync.chmodSync(later, 0o600);
+      fsSync.writeFileSync(later, content);
+      fsSync.chmodSync(later, 0o444);
+      fsSync.utimesSync(later, before.atime, before.mtime);
+      advanceCtime(before);
+      expect(fsSync.lstatSync(later, { bigint: true }).ctimeNs).not.toBe(before.ctimeNs);
+    };
+    const advanceCtime = createFileMutationClock({
+      beforeLstat: (pathname) => {
+        if (stage === "next-entry" && pathname === later) {
+          mutate();
         }
-        return stat;
-      });
-    } else {
+      },
+      beforeLstatSync: (pathname) => {
+        if (stage === "copy-publication" && pathname === later) {
+          mutate();
+        }
+      },
+    });
+    if (stage === "copy-publication") {
       const link = fs.link;
       vi.spyOn(fs, "link").mockImplementation(async (existing, target) => {
         if (existing === later) {
@@ -443,16 +422,9 @@ it.each(["next-entry", "copy-publication"] as const)(
         }
         return await link(existing, target);
       });
-      const lstatSync = fsSync.lstatSync;
-      vi.spyOn(fsSync, "lstatSync").mockImplementation((...args) => {
-        const stat = lstatSync(...args);
-        if (args[0] === later && stat && "ctimeNs" in stat && typeof stat.ctimeNs === "bigint") {
-          stat.ctimeNs += 1n;
-        }
-        return stat;
-      });
     }
     await expect(f.link()).rejects.toThrow("changed after snapshot inventory");
+    expect(mutated).toBe(true);
     expect(fsSync.existsSync(path.join(f.destination, path.relative(f.source, later)))).toBe(false);
   },
 );

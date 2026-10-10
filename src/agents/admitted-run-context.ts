@@ -9,7 +9,12 @@ import {
   type ExecutionIdentityAdmissionToken,
 } from "../audit/execution-identity-admission.js";
 import { executionIdentitySpawnAdmission } from "../audit/execution-identity-spawn-admission.js";
-import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
+import {
+  composeSessionSourceAssertion,
+  prepareSessionSourceScope,
+  runWithSessionSourceScope,
+  type SessionSourceAssertion,
+} from "../config/sessions/session-source-authority.js";
 import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -24,6 +29,7 @@ import {
 import type { GatewayAccessGrantRef } from "../plugins/gateway-access-policy.types.js";
 import { prepareGatewayContextBindingOwner } from "../plugins/runtime/gateway-context-binding-owner.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { freezeJsonSnapshot } from "../shared/immutable-data.js";
 import type { PreparedOperatorModelPolicy } from "./operator-model-policy.types.js";
 
 /** Operational lifecycle correlation. This is never identity or authorization evidence. */
@@ -42,10 +48,12 @@ export type AdmittedRunContext = Readonly<{
 
 export type AdmittedRunOperatorAuthority = Readonly<{
   profileId: string;
+  /** Host-captured original authenticated input, consumed only by restart-claim admission. */
+  recoverySnapshot?: import("../gateway/operator-run-recovery-source.js").OperatorRunRecoverySnapshot;
   scopes: readonly string[];
   /** Original access dependency; null is proven independent, undefined is unclassified. */
   gatewayAccessGrant?: GatewayAccessGrantRef | null;
-  assertCurrent: () => void;
+  assertCurrent: SessionSourceAssertion;
   signal?: AbortSignal;
   /** Opaque original source identity used only to compare compatible queued input. */
   source?: object;
@@ -93,10 +101,20 @@ export function createAdmittedRunOperatorAuthority(
       throw error;
     }
   });
-  const readCurrentRoleAssignment = source.readCurrentRoleAssignment;
-  const readCurrentGithubLogin = source.readCurrentGithubLogin;
+  const bindCurrentReader = (read: (() => string | null) | undefined) =>
+    read
+      ? () => {
+          assertCurrent();
+          return read();
+        }
+      : undefined;
+  const readCurrentRoleAssignment = bindCurrentReader(source.readCurrentRoleAssignment);
+  const readCurrentGithubLogin = bindCurrentReader(source.readCurrentGithubLogin);
   const authority = Object.freeze({
     profileId: source.profileId,
+    recoverySnapshot: source.recoverySnapshot
+      ? freezeJsonSnapshot(structuredClone(source.recoverySnapshot))
+      : undefined,
     scopes: Object.freeze([...source.scopes]),
     gatewayAccessGrant: source.gatewayAccessGrant
       ? Object.freeze({ ...source.gatewayAccessGrant })
@@ -109,18 +127,8 @@ export function createAdmittedRunOperatorAuthority(
       return source.modelPolicy;
     },
     assertCurrent,
-    readCurrentRoleAssignment: readCurrentRoleAssignment
-      ? () => {
-          assertCurrent();
-          return readCurrentRoleAssignment();
-        }
-      : undefined,
-    readCurrentGithubLogin: readCurrentGithubLogin
-      ? () => {
-          assertCurrent();
-          return readCurrentGithubLogin();
-        }
-      : undefined,
+    readCurrentRoleAssignment,
+    readCurrentGithubLogin,
     rolePolicy: source.rolePolicy
       ? Object.freeze({
           ...source.rolePolicy,
@@ -148,17 +156,27 @@ export function assertOperatorModelAllowed(
   authority: AdmittedRunOperatorAuthority | undefined,
   model: ModelRef | undefined,
 ): void {
-  if (!authority) {
-    return;
-  }
-  assertAdmittedRunOperatorAuthority(authority);
-  authority.assertCurrent();
-  const policy = authority.modelPolicy;
-  if (policy && (!model || !policy.allows(model))) {
-    throw new Error(
-      "Your operator role cannot use this model. Choose an allowed model or ask a gateway administrator to update your role's model policy.",
-    );
-  }
+  createOperatorModelSelectionAssertion(authority, model)();
+}
+
+/** Carry the operator's source checks into writes without rereading its store on the host. */
+export function createOperatorModelSelectionAssertion(
+  authority: AdmittedRunOperatorAuthority | undefined,
+  model: ModelRef | undefined,
+): SessionSourceAssertion {
+  return composeSessionSourceAssertion([authority?.assertCurrent], (assertSource) => {
+    if (!authority) {
+      return;
+    }
+    assertAdmittedRunOperatorAuthority(authority);
+    assertSource();
+    const policy = authority.modelPolicy;
+    if (policy && (!model || !policy.allows(model))) {
+      throw new Error(
+        "Your operator role cannot use this model. Choose an allowed model or ask a gateway administrator to update your role's model policy.",
+      );
+    }
+  });
 }
 
 /** Keeps one selected model current without revoking other work from the same source. */
@@ -259,6 +277,27 @@ const activeNativeHookRecoveryLeases = new Map<
   { lease: DelegatedAuthorityLease; releaseOperatorAuthority?: () => void }
 >();
 
+/** Reprepare source predicates after the caller establishes an exact transcript fence. */
+export function runWithPreparedRunSourceScope<T>(
+  params: {
+    preparedRunAdmission?: PreparedAgentRunAdmission;
+    admittedRunContext?: AdmittedRunContext;
+  },
+  run: () => Promise<T>,
+): Promise<T> {
+  let assertion = params.preparedRunAdmission?.assertSourceCurrent;
+  if (params.admittedRunContext) {
+    const lease = delegatedAuthorityLeases.get(params.admittedRunContext);
+    const captured =
+      lease && captureAdmittedRunActiveAssertion(params.admittedRunContext, lease.authority);
+    if (!captured) {
+      return Promise.reject(new Error("admitted run authority is no longer active"));
+    }
+    assertion = captured;
+  }
+  return runWithSessionSourceScope(assertion, run);
+}
+
 function bindAdmittedRunDelegatedAuthority(
   context: AdmittedRunContext,
   assertSourceCurrent?: () => void,
@@ -330,7 +369,7 @@ export function getAdmittedRunSource(
 export function resolveAdmittedRunActiveAssertion(
   context: AdmittedRunContext,
   signal?: AbortSignal,
-): (() => void) | undefined {
+): SessionSourceAssertion | undefined {
   const authority = getAdmittedRunDelegatedAuthority(context);
   return authority ? captureAdmittedRunActiveAssertion(context, authority, signal) : undefined;
 }
@@ -353,7 +392,7 @@ export function captureAdmittedRunActiveAssertion(
   if (!lease || lease.foregroundClosed || lease.authority !== authority || !source) {
     return undefined;
   }
-  return composeSessionSourceAssertion([source.assertCurrent], (assertSource) => {
+  const assertLocalCurrent = (assertSource: () => void) => {
     if (
       signal?.aborted ||
       context.operationalRunInstance !== operationalRunInstance ||
@@ -363,6 +402,9 @@ export function captureAdmittedRunActiveAssertion(
       refuse();
     }
     assertSource();
+  };
+  return Object.assign(composeSessionSourceAssertion([source.assertCurrent], assertLocalCurrent), {
+    assertScopeCurrent: () => assertLocalCurrent(source.assertBinding),
   });
 }
 
@@ -534,9 +576,24 @@ export function prepareAgentRunAdmission(params: {
   let admitted: Promise<AdmittedRunContext> | undefined;
   let admittedContext: AdmittedRunContext | undefined;
   let closed = false;
+  const assertPreparationOpen = () => {
+    if (closed) {
+      throw new Error("prepared execution context is already closed");
+    }
+  };
+  const scopedSource = composeSessionSourceAssertion([assertSourceCurrent], (assertSource) => {
+    assertPreparationOpen();
+    assertSource();
+  });
   return Object.freeze({
     operationalRunInstance,
-    assertSourceCurrent: () => assertSourceCurrent?.(),
+    assertSourceCurrent: Object.assign(composeSessionSourceAssertion([assertSourceCurrent]), {
+      assertScopeCurrent: assertPreparationOpen,
+      prepareSessionSourceScope: () => {
+        assertPreparationOpen();
+        return prepareSessionSourceScope(scopedSource);
+      },
+    }),
     readOperatorAuthority: () => {
       if (operatorAuthority) {
         if (closed) {

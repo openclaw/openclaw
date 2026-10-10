@@ -23,6 +23,11 @@ enum GatewayLaunchAgentManager {
     /// A first-run daemon command may wait behind state integrity checks and the shared startup-
     /// migration lease. Keep the app from killing healthy migration work before it can finish.
     static let startupMigrationTolerance: TimeInterval = 120
+    /// A launchd PID started at login has no install evidence, and a cold start after reboot can
+    /// outlast the first-run budget (a real reboot measured about 139s on Apple silicon). The app
+    /// re-proves that the same PID owns the port at every deadline, so this wider budget only
+    /// delays repair of a PID that is still alive and still holding the port.
+    static let reusedLaunchdColdStartTolerance: TimeInterval = 300
 
     private static var disableLaunchAgentMarkerURL: URL {
         #if DEBUG
@@ -116,26 +121,19 @@ enum GatewayLaunchAgentManager {
 
     static func setLaunchAgentWriteDisabled(_ disabled: Bool) -> String? {
         let marker = self.disableLaunchAgentMarkerURL
-        if disabled {
-            do {
+        do {
+            if disabled {
                 try FileManager().createDirectory(
                     at: marker.deletingLastPathComponent(),
                     withIntermediateDirectories: true)
                 if !FileManager().fileExists(atPath: marker.path) {
                     FileManager().createFile(atPath: marker.path, contents: nil)
                 }
-            } catch {
-                return error.localizedDescription
-            }
-            return nil
-        }
-
-        if FileManager().fileExists(atPath: marker.path) {
-            do {
+            } else if FileManager().fileExists(atPath: marker.path) {
                 try FileManager().removeItem(at: marker)
-            } catch {
-                return error.localizedDescription
             }
+        } catch {
+            return error.localizedDescription
         }
         return nil
     }
@@ -565,10 +563,13 @@ extension GatewayLaunchAgentManager {
             timeout: 15,
             quiet: true,
             installedCLI: installedCLI)
-        guard result.success else {
-            throw ServiceInspectionError(message: result.message ?? "Gateway service inspection failed")
+        let payload: Data?
+        switch result {
+        case let .success(data): payload = data
+        case let .failure(message):
+            throw ServiceInspectionError(message: message ?? "Gateway service inspection failed")
         }
-        guard let payload = result.payload else { return nil }
+        guard let payload else { return nil }
         guard
             let json = try? JSONSerialization.jsonObject(with: payload) as? [String: Any],
             let service = json["service"] as? [String: Any]
@@ -618,10 +619,9 @@ extension GatewayLaunchAgentManager {
         return Int32(pid)
     }
 
-    private struct CommandResult {
-        let success: Bool
-        let payload: Data?
-        let message: String?
+    private enum CommandResult {
+        case success(Data?)
+        case failure(String?)
     }
 
     static let runtimePinSelectionChanged = "Gateway service or runtime pin changed before installation. " +
@@ -654,8 +654,8 @@ extension GatewayLaunchAgentManager {
             legacyAuthority: legacyAuthority,
             expectedServiceAuthority: expectedServiceAuthority,
             checkCurrent: checkCurrent)
-        if result.success { return nil }
-        return result.message ?? "Gateway daemon command failed"
+        if case let .failure(message) = result { return message ?? "Gateway daemon command failed" }
+        return nil
     }
 
     private static func runDaemonCommandResult(
@@ -681,10 +681,7 @@ extension GatewayLaunchAgentManager {
                   ], options: [.sortedKeys, .withoutEscapingSlashes]),
                   let restoration = String(bytes: data, encoding: .utf8)
             else {
-                return CommandResult(
-                    success: false,
-                    payload: nil,
-                    message: "Gateway recovery requires this app's bundled installer. Reinstall OpenClaw.app.")
+                return .failure("Gateway recovery requires this app's bundled installer. Reinstall OpenClaw.app.")
             }
             selectedCLI = InstalledServiceCLI(
                 prefix: runtime.cliCommand,
@@ -698,7 +695,7 @@ extension GatewayLaunchAgentManager {
         if args.first.map(["install", "uninstall", "restart"].contains) == true {
             let custody: ServiceAuthority
             do { custody = try expectedServiceAuthority ?? self.gatewayServiceAuthority() } catch {
-                return CommandResult(success: false, payload: nil, message: error.localizedDescription)
+                return .failure(error.localizedDescription)
             }
             let authority = legacyAuthority ?? restoring ?? selectedCLI
             beforeSpawn = {
@@ -718,7 +715,7 @@ extension GatewayLaunchAgentManager {
                 invocation: invocation,
                 timeout: timeout,
                 quiet: true)
-            guard observation.success, let payload = observation.payload,
+            guard case let .success(payload?) = observation,
                   let json = try? JSONSerialization.jsonObject(with: payload) as? [String: Any],
                   let service = json["service"] as? [String: Any],
                   let intent = service["runtimeIntent"] as? [String: Any],
@@ -730,7 +727,7 @@ extension GatewayLaunchAgentManager {
                       "definition": intent["definition"] ?? NSNull(),
                   ], options: [.sortedKeys, .withoutEscapingSlashes]),
                   let expectation = String(bytes: expected, encoding: .utf8)
-            else { return CommandResult(success: false, payload: nil, message: self.runtimePinSelectionChanged) }
+            else { return .failure(self.runtimePinSelectionChanged) }
             arguments += ["--expected-runtime-pin", expectation]
         }
         return await self.executeDaemonCommand(
@@ -750,13 +747,13 @@ extension GatewayLaunchAgentManager {
         beforeSpawn: (@Sendable () -> String?)? = nil,
         checkCurrent: (@MainActor @Sendable () async throws -> Void)? = nil) async -> CommandResult
     {
-        let command = invocation.prefix + self.withJsonFlag(args)
+        let command = invocation.prefix + (args.contains("--json") ? args : args + ["--json"])
         #if DEBUG
         if self.testingState.withLock({ $0.resolveCLI != nil }) {
             do { try await checkCurrent?() } catch {
-                return CommandResult(success: false, payload: nil, message: error.localizedDescription)
+                return .failure(error.localizedDescription)
             }
-            if let error = beforeSpawn?() { return CommandResult(success: false, payload: nil, message: error) }
+            if let error = beforeSpawn?() { return .failure(error) }
             // Snapshot each response and remove it from the queue before a hook can suspend
             // or reenter. Commands run off-actor while tests read their call snapshots.
             let (hook, payload) = self.testingState.withLock { state in
@@ -770,46 +767,36 @@ extension GatewayLaunchAgentManager {
             }
             await hook?(args)
             let parsed = JSONObjectExtractionSupport.extract(from: payload)
-            return CommandResult(
-                success: (parsed?.object["ok"] as? Bool) ?? true,
-                payload: Data(payload.utf8),
-                message: parsed?.message)
+            return (parsed?.object["ok"] as? Bool) ?? true
+                ? .success(Data(payload.utf8)) : .failure(parsed?.message)
         }
         if ProcessInfo.processInfo.isRunningTests {
-            return CommandResult(
-                success: false,
-                payload: nil,
-                message: "Gateway daemon commands require explicit interception during tests")
+            return .failure("Gateway daemon commands require explicit interception during tests")
         }
         #endif
         do { try await checkCurrent?() } catch {
-            return CommandResult(success: false, payload: nil, message: error.localizedDescription)
+            return .failure(error.localizedDescription)
         }
         let response = await ShellExecutor.runDetailed(
             command: command, cwd: nil, env: invocation.environment, timeout: timeout, beforeSpawn: beforeSpawn)
-        if let error = response.preflightError { return CommandResult(success: false, payload: nil, message: error) }
+        if let error = response.preflightError { return .failure(error) }
         let parsed = JSONObjectExtractionSupport.extract(from: response.stdout)
             ?? JSONObjectExtractionSupport.extract(from: response.stderr)
         let ok = parsed?.object["ok"] as? Bool
         let message = parsed?.message
         let payload = parsed?.text.data(using: .utf8)
             ?? (response.stdout.isEmpty ? response.stderr : response.stdout).data(using: .utf8)
-        let success = response.success && (ok ?? true)
-        if success {
-            return CommandResult(success: true, payload: payload, message: nil)
-        }
+        if response.success, ok ?? true { return .success(payload) }
 
         let detail = message ?? TextSummarySupport.summarizeLastLine(response.stderr)
             ?? TextSummarySupport.summarizeLastLine(response.stdout)
-        if quiet {
-            return CommandResult(success: false, payload: payload, message: detail)
+        if !quiet {
+            let exit = response.exitCode.map { "exit \($0)" } ?? (response.errorMessage ?? "failed")
+            let fullMessage = detail.map { "Gateway daemon command failed (\(exit)): \($0)" }
+                ?? "Gateway daemon command failed (\(exit))"
+            self.logger.error("\(fullMessage, privacy: .public)")
         }
-
-        let exit = response.exitCode.map { "exit \($0)" } ?? (response.errorMessage ?? "failed")
-        let fullMessage = detail.map { "Gateway daemon command failed (\(exit)): \($0)" }
-            ?? "Gateway daemon command failed (\(exit))"
-        self.logger.error("\(fullMessage, privacy: .public)")
-        return CommandResult(success: false, payload: payload, message: detail)
+        return .failure(detail)
     }
 
     private static func daemonInvocation(
@@ -831,21 +818,18 @@ extension GatewayLaunchAgentManager {
             prefix: prefix,
             environment: self.daemonEnvironment(
                 runtime: runtime,
-                installedCLI: installedCLI,
-                environment: ProcessInfo.processInfo.environment,
-                profile: .current,
-                searchPaths: CommandResolver.preferredPaths()),
+                installedCLI: installedCLI),
             // Only an explicitly selected bundled CLI carries this interop contract.
             supportsExpectedRuntimePin: runtime != nil &&
                 (installedCLI == nil || installedCLI?.prefix == runtime?.cliCommand))
     }
 
     static func daemonEnvironment(
-        runtime: BundledRuntime?,
+        runtime: BundledRuntime? = nil,
         installedCLI: InstalledServiceCLI? = nil,
-        environment: [String: String],
-        profile: AppProfile,
-        searchPaths: [String]) -> [String: String]
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        profile: AppProfile = .current,
+        searchPaths: [String] = CommandResolver.preferredPaths()) -> [String: String]
     {
         var result = environment.merging(installedCLI?.environment ?? [:]) { _, installed in installed }
         let installedPaths = installedCLI?.environment["PATH"]?.split(separator: ":").map(String.init) ?? []
@@ -869,11 +853,6 @@ extension GatewayLaunchAgentManager {
             result["OPENCLAW_CONFIG_PATH"] = directory.appendingPathComponent("openclaw.json").path
         }
         return GatewayChildSupervisor.environmentWithoutSupervisorMarkers(result)
-    }
-
-    private static func withJsonFlag(_ args: [String]) -> [String] {
-        if args.contains("--json") { return args }
-        return args + ["--json"]
     }
 
     #if DEBUG

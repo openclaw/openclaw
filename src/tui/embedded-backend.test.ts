@@ -309,7 +309,8 @@ vi.mock("../gateway/server-methods/chat-history-budget.js", async (importOrigina
   replaceOversizedChatHistoryMessages: ({ messages }: { messages: unknown[] }) => ({ messages }),
 }));
 
-vi.mock("../gateway/server-methods/chat-history-page-kernel.js", () => ({
+// mock-isolation: The embedded backend fixture bypasses Gateway history presentation.
+vi.mock("../gateway/server-methods/chat-history-response-page.js", () => ({
   enrichChatHistoryCompactionMarkers: (messages: unknown[]) => messages,
 }));
 

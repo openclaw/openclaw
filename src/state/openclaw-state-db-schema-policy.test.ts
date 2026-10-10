@@ -6,6 +6,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { admitSqliteSchema, runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
 import { SqliteSchemaMismatchError } from "../infra/sqlite-schema-issues.js";
 import {
   captureSqliteWorkerStateContext,
@@ -18,7 +20,10 @@ import { createOpenClawStateDatabaseAsyncLifecycle } from "./openclaw-state-db-a
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import { assertExistingOpenClawStateRuntimeSchema } from "./openclaw-state-db-existing-schema.js";
 import { openTrackedStateDatabase } from "./openclaw-state-db-handle.js";
-import { withOpenClawStateReadOnlyLocation } from "./openclaw-state-db-read-connection.js";
+import {
+  closeRetainedOpenClawStateReadConnections,
+  withOpenClawStateReadOnlyLocation,
+} from "./openclaw-state-db-read-connection.js";
 import {
   getExistingOpenClawStateSchemaPath,
   withExistingOpenClawStateSchema,
@@ -77,6 +82,9 @@ function createExistingState(mutate?: (db: DatabaseSync) => void) {
   const env = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-existing-schema-") };
   const pathname = openOpenClawStateDatabase({ env }).path;
   closeOpenClawStateDatabase();
+  const seedPath = `${pathname}.seed`;
+  renameSync(pathname, seedPath);
+  copyFileSync(seedPath, pathname);
   const db = new DatabaseSync(pathname);
   try {
     db.prepare("UPDATE schema_meta SET app_version = ? WHERE meta_key = 'primary'").run(
@@ -103,6 +111,118 @@ function insertForeignKeyCorruption(db: DatabaseSync) {
       VALUES ('missing-session', 1, 10, 'session', NULL, '{}', 0);
   `);
 }
+
+describe("ordinary shared-state reader admission", () => {
+  it("reuses cold schema facts without adding a warm freshness probe", () => {
+    const { options } = createExistingState();
+    const read = () =>
+      withOpenClawStateReadOnlyLocation(
+        ({ db }) =>
+          db.prepare("SELECT app_version FROM schema_meta WHERE meta_key = 'primary'").get(),
+        options.path,
+        options.path,
+        undefined,
+        undefined,
+        undefined,
+        true,
+      );
+    const reads = observeSqliteReadSql(StatementSync.prototype);
+    try {
+      expect(read()).toEqual({ app_version: previousAppVersion });
+      const coldVersionReads = reads.queries.filter((sql) => /^PRAGMA user_version\b/iu.test(sql));
+      const coldContentReads = reads.queries.filter((sql) =>
+        /\bconfig_machine_state\b/iu.test(sql),
+      );
+      reads.queries.length = 0;
+      expect(read()).toEqual({ app_version: previousAppVersion });
+      expect({
+        coldPublishedVersion: coldVersionReads.length,
+        coldContentVersion: coldContentReads.length,
+        warmPublishedVersion: reads.queries.filter((sql) => /^PRAGMA user_version\b/iu.test(sql))
+          .length,
+        warmContentVersion: reads.queries.filter((sql) => /\bconfig_machine_state\b/iu.test(sql))
+          .length,
+        warmFreshness: reads.queries.filter((sql) =>
+          /(?:^PRAGMA data_version\b|\bFROM main\.pragma_data_version\(\))/iu.test(sql),
+        ).length,
+      }).toEqual({
+        coldPublishedVersion: 1,
+        coldContentVersion: 1,
+        warmPublishedVersion: 0,
+        warmContentVersion: 0,
+        warmFreshness: 1,
+      });
+    } finally {
+      reads.restore();
+      closeRetainedOpenClawStateReadConnections();
+    }
+  });
+
+  it("refuses a peer's newer content marker before its first admission", () => {
+    const { options } = createExistingState();
+    const peer = new DatabaseSync(options.path);
+    peer.exec("PRAGMA journal_mode = WAL");
+    let upgraded = false;
+    // oxlint-disable-next-line typescript/unbound-method -- The proxy retains the native statement receiver.
+    const nativeGet = StatementSync.prototype.get;
+    const observer = vi.spyOn(StatementSync.prototype, "get").mockImplementation(
+      new Proxy(nativeGet, {
+        apply(target, receiver: StatementSync, args) {
+          const publishedVersion = /^PRAGMA user_version\b/iu.test(receiver.sourceSQL);
+          const result = Reflect.apply(target, receiver, args);
+          if (publishedVersion && !upgraded) {
+            upgraded = true;
+            peer.exec(
+              `INSERT INTO config_machine_state VALUES
+                       ('state.schema.contentVersion', '${OPENCLAW_STATE_SCHEMA_VERSION + 1}', 1)`,
+            );
+          }
+          return result;
+        },
+      }),
+    );
+    const read = vi.fn(() => "must not run");
+    try {
+      expect(() => withOpenClawStateReadOnlyLocation(read, options.path, options.path)).toThrow(
+        `uses newer schema version ${OPENCLAW_STATE_SCHEMA_VERSION + 1}`,
+      );
+      expect(upgraded).toBe(true);
+      expect(read).not.toHaveBeenCalled();
+    } finally {
+      observer.mockRestore();
+      peer.close();
+    }
+  });
+
+  it.skipIf(typeof DatabaseSync.prototype.setAuthorizer !== "function").each([false, true])(
+    "rechecks content-marker authorization after a successful read (admitted=%s)",
+    (admitted) => {
+      const { options } = createExistingState();
+      const db = openTrackedStateDatabase(options.path);
+      const read = () => runSqliteReadOperationSync(db, () => readStateSchemaContentVersion(db));
+      try {
+        if (admitted) {
+          admitSqliteSchema(db);
+        }
+        expect(read()).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
+        let allow = true;
+        db.setAuthorizer((action, table) =>
+          !allow && action === constants.SQLITE_READ && table === "config_machine_state"
+            ? constants.SQLITE_DENY
+            : constants.SQLITE_OK,
+        );
+        expect(read()).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
+        allow = false;
+        expect(read).toThrow(/not authorized|prohibited/iu);
+        allow = true;
+        expect(read()).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
+      } finally {
+        db.setAuthorizer(null);
+        db.close();
+      }
+    },
+  );
+});
 
 describe("existing shared-state schema admission", () => {
   it.each(["ordinary", "required", "existing"] as const)(
@@ -147,7 +267,7 @@ describe("existing shared-state schema admission", () => {
   );
 
   it.each(["schema rollback", "canonical close", "replacement"] as const)(
-    "shares completed worker integrity admission and revokes it after %s",
+    "shares completed worker integrity admission across %s and validates replacement files",
     async (change) => {
       const replacement =
         change === "replacement" ? createExistingState(insertForeignKeyCorruption) : undefined;
@@ -182,24 +302,17 @@ describe("existing shared-state schema admission", () => {
             const fresh = capture();
             expect(read(fresh)).toEqual(before);
             expect(read(fresh)).toEqual(before);
-            expect(checkCount()).toBe(2);
+            expect(checkCount()).toBe(1);
             expect(read()).toEqual(before);
-          } else {
-            if (replacement) {
-              renameSync(options.path, `${options.path}.previous`);
-              copyFileSync(replacement.options.path, options.path);
-            } else {
-              await closeOpenClawStateDatabaseAsync();
-              const db = new DatabaseSync(options.path);
-              try {
-                insertForeignKeyCorruption(db);
-              } finally {
-                db.close();
-              }
-            }
+          } else if (replacement) {
+            renameSync(options.path, `${options.path}.previous`);
+            copyFileSync(replacement.options.path, options.path);
             expect(() => read()).toThrow(/foreign_key_check/i);
+          } else {
+            await closeOpenClawStateDatabaseAsync();
+            expect(read()).toEqual(before);
           }
-          expect(checkCount()).toBe(change === "schema rollback" ? 3 : 2);
+          expect(checkCount()).toBe(replacement ? 2 : 1);
         } finally {
           reads.restore();
         }
@@ -372,46 +485,6 @@ describe("existing shared-state schema admission", () => {
     } finally {
       preserved.close();
     }
-  });
-
-  it("observes peer content-marker updates after its pinned read transaction ends", () => {
-    const { options } = createExistingState((db) => {
-      db.prepare("INSERT INTO config_machine_state VALUES (?, ?, ?)").run(
-        "state.schema.contentVersion",
-        String(OPENCLAW_STATE_SCHEMA_VERSION),
-        1,
-      );
-    });
-    withExistingOpenClawStateSchema(options, () => {
-      const { db } = openOpenClawStateDatabase(options);
-      const peer = new DatabaseSync(options.path);
-      try {
-        expect(readStateSchemaContentVersion(db)).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
-        db.exec("BEGIN");
-        expect(
-          db
-            .prepare(
-              "SELECT value_json FROM config_machine_state WHERE state_key = 'state.schema.contentVersion'",
-            )
-            .get(),
-        ).toEqual({
-          value_json: String(OPENCLAW_STATE_SCHEMA_VERSION),
-        });
-        peer
-          .prepare(
-            "UPDATE config_machine_state SET value_json = ? WHERE state_key = 'state.schema.contentVersion'",
-          )
-          .run(String(OPENCLAW_STATE_SCHEMA_VERSION + 1));
-        expect(readStateSchemaContentVersion(db)).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
-        db.exec("COMMIT");
-        expect(readStateSchemaContentVersion(db)).toBe(OPENCLAW_STATE_SCHEMA_VERSION + 1);
-      } finally {
-        if (db.isTransaction) {
-          db.exec("ROLLBACK");
-        }
-        peer.close();
-      }
-    });
   });
 
   it("writes node state and initializes its lazy store without taking over release repair", async () => {
@@ -644,7 +717,7 @@ describe("existing shared-state schema admission", () => {
     },
   );
 
-  it("inspects schema indexes once and revalidates same-version changes before handle reuse", () => {
+  it("inspects schema indexes once and observes managed same-version changes before handle reuse", () => {
     const { options } = createExistingState();
     const reads = observeSqliteReadSql(StatementSync.prototype);
     try {
@@ -655,7 +728,7 @@ describe("existing shared-state schema admission", () => {
             (sql) => sql.includes("index_xinfo") && sql.includes("idx_plugin_state_listing"),
           ).length,
         ).toBeLessThanOrEqual(1);
-        const external = new DatabaseSync(options.path);
+        const external = openNodeSqliteDatabase(options.path);
         try {
           external.exec("ALTER TABLE worker_environments DROP COLUMN preparation_purpose");
         } finally {

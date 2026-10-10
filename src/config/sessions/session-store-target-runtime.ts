@@ -1,10 +1,11 @@
 import { isDeepStrictEqual } from "node:util";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../state/openclaw-agent-db-contract.js";
+import type { AgentDatabaseRegistryChange } from "../../state/openclaw-agent-db-contract.js";
 import {
   AgentDatabaseRegistryChangedError,
+  AgentDatabaseRegistryPendingError,
   prepareOpenClawAgentDatabaseRegistrySnapshotRead,
-  type AgentDatabaseRegistryChange,
 } from "../../state/openclaw-agent-db-registry-listing.js";
 import { assertSessionStoreReadCandidate } from "./session-store-read-candidates.js";
 import {
@@ -15,8 +16,8 @@ import {
   type SessionStoreTargetReadResult,
 } from "./session-store-target-inventory.js";
 import {
+  targetDiscoveryLane,
   withSessionHistoryWorkerReadCandidates,
-  type SessionHistoryWorkerLane,
 } from "./session-transcript-worker-resources.js";
 
 type PreparedStoreTarget = Extract<SessionStoreTargetReadResult, { kind: "session-store-target" }>;
@@ -117,45 +118,49 @@ export function prepareSessionStoreTargetInventoryRead(
       ) => Promise<T>,
       assertCallerCurrent?: () => void,
     ) {
-      return withSessionHistoryWorkerReadCandidates(candidates, async (discovery) => {
-        const assertCurrent = () => {
-          assertCallerCurrent?.();
-          discovery.assertCurrent();
-          assertRegistryCurrent();
-        };
-        let inventory = await discovery.readTargetInventory({
-          ...prepared,
-          registeredDatabases: { status: "deferred" },
-        });
-        assertCurrent();
-        if (inventory.kind === "session-target-registry-required") {
-          registryStarted = true;
-          let current;
-          try {
-            current = await registry.read();
-          } catch (error) {
-            if (!(error instanceof AgentDatabaseRegistryChangedError)) {
-              throw error;
-            }
-            registry = captureRegistry();
-            current = await registry.read();
-          }
-          assertCurrent();
-          registry = unchangedBy ? registry : prepareSessionStoreRegistryRead(request);
-          inventory = await discovery.readTargetInventory({
+      return withSessionHistoryWorkerReadCandidates(
+        candidates,
+        async (discovery) => {
+          const assertCurrent = () => {
+            assertCallerCurrent?.();
+            discovery.assertCurrent();
+            assertRegistryCurrent();
+          };
+          let inventory = await discovery.readTargetInventory({
             ...prepared,
-            registeredDatabases:
-              current.result.status === "available"
-                ? current.result.entries
-                : { status: "unavailable" },
+            registeredDatabases: { status: "deferred" },
           });
           assertCurrent();
-        }
-        if (inventory.kind !== "session-target-inventory") {
-          throw new Error("Session store inventory requested registry rows twice");
-        }
-        return operation(inventory, assertCurrent);
-      });
+          if (inventory.kind === "session-target-registry-required") {
+            registryStarted = true;
+            let current;
+            try {
+              current = await registry.read();
+            } catch (error) {
+              if (!(error instanceof AgentDatabaseRegistryChangedError)) {
+                throw error;
+              }
+              registry = captureRegistry();
+              current = await registry.read();
+            }
+            assertCurrent();
+            registry = unchangedBy ? registry : prepareSessionStoreRegistryRead(request);
+            inventory = await discovery.readTargetInventory({
+              ...prepared,
+              registeredDatabases:
+                current.result.status === "available"
+                  ? current.result.entries
+                  : { status: "unavailable" },
+            });
+            assertCurrent();
+          }
+          if (inventory.kind !== "session-target-inventory") {
+            throw new Error("Session store inventory requested registry rows twice");
+          }
+          return operation(inventory, assertCurrent);
+        },
+        targetDiscoveryLane,
+      );
     },
   };
 }
@@ -165,17 +170,18 @@ export async function withSessionStoreTarget<T>(
   operation: (target: PreparedStoreTarget, owner: StoreTargetReadOwner) => Promise<T>,
   assertCallerCurrent?: () => void,
   onReadError?: (error: unknown, assertCurrent: () => void) => Promise<T>,
-  { lane }: { lane?: SessionHistoryWorkerLane } = {},
 ): Promise<T> {
   assertCallerCurrent?.();
   const { candidates, ...targetRequest } = request;
   let selectedTarget: PreparedStoreTarget | undefined;
   let registryRead = prepareSessionStoreRegistryRead(request, () => selectedTarget);
+  const assertRegistryAdmissionCurrent = registryRead.assertAdmissionCurrent;
   return withSessionHistoryWorkerReadCandidates(
     candidates,
     async (discovery) => {
       const assertDiscoveryCurrent = () => {
         assertCallerCurrent?.();
+        assertRegistryAdmissionCurrent();
         discovery.assertCurrent();
         registryRead.assertCurrent();
       };
@@ -186,38 +192,55 @@ export async function withSessionStoreTarget<T>(
         }
         return await onReadError(error, assertDiscoveryCurrent);
       };
-      let read = await discovery.readStoreTargetResult({
-        ...targetRequest,
-        registeredDatabases: { status: "deferred" },
-      });
+      const readTarget = async () => {
+        let read = await discovery.readStoreTargetResult({
+          ...targetRequest,
+          registeredDatabases: { status: "deferred" },
+        });
+        if (read.ok && read.value.kind === "session-target-registry-required") {
+          registryRead.assertCurrent();
+          const registry = await registryRead.read();
+          assertDiscoveryCurrent();
+          read = await discovery.readStoreTargetResult({
+            ...targetRequest,
+            registeredDatabases:
+              registry.result.status === "available"
+                ? registry.result.entries
+                : { status: "unavailable" },
+          });
+        }
+        if (read.ok && read.value.kind === "session-store-target") {
+          selectedTarget = read.value;
+        }
+        assertDiscoveryCurrent();
+        return read;
+      };
+      let read: Awaited<ReturnType<typeof readTarget>>;
+      try {
+        read = await readTarget();
+      } catch (error) {
+        if (!(error instanceof AgentDatabaseRegistryPendingError)) {
+          throw error;
+        }
+        // Join only the first refusal's pending set; later registrations must not prolong admission.
+        await error.waitForSettlement();
+        assertCallerCurrent?.();
+        assertRegistryAdmissionCurrent();
+        discovery.assertCurrent();
+        selectedTarget = undefined;
+        registryRead = prepareSessionStoreRegistryRead(request, () => selectedTarget);
+        read = await readTarget();
+      }
       if (!read.ok) {
         return await failedRead(read.error);
       }
-      let resolved = read.value;
-      let registry: Awaited<ReturnType<typeof registryRead.read>> | undefined;
-      if (resolved.kind === "session-target-registry-required") {
-        registryRead.assertCurrent();
-        registry = await registryRead.read();
-        assertDiscoveryCurrent();
-        read = await discovery.readStoreTargetResult({
-          ...targetRequest,
-          registeredDatabases:
-            registry.result.status === "available"
-              ? registry.result.entries
-              : { status: "unavailable" },
-        });
-        if (!read.ok) {
-          return await failedRead(read.error);
-        }
-        resolved = read.value;
-        if (resolved.kind === "session-target-registry-required") {
-          throw new Error("Session store target requested registry rows twice");
-        }
+      if (read.value.kind === "session-target-registry-required") {
+        throw new Error("Session store target requested registry rows twice");
       }
-      const target = resolved;
-      selectedTarget = target;
+      const target = read.value;
       const assertSourceCurrent = () => {
         assertCallerCurrent?.();
+        assertRegistryAdmissionCurrent();
         discovery.assertCurrent();
         assertSessionStoreReadCandidate(target.sourcePath, candidates);
       };
@@ -248,7 +271,6 @@ export async function withSessionStoreTarget<T>(
           throw new Error("Session store registration changed its selected target");
         }
         registryRead = currentRead;
-        registry = currentRegistry;
         registrationChanged = false;
       };
       assertCurrent();
@@ -256,10 +278,8 @@ export async function withSessionStoreTarget<T>(
       const result = await operation(target, {
         assertCurrent,
         onRegistryChange(change) {
-          if (registry) {
-            registry.followRegistration(change);
-            registrationChanged = true;
-          }
+          registryRead.followRegistration(change);
+          registrationChanged = true;
         },
         async refreshBeforeDispatch(assertRetainedTarget) {
           try {
@@ -287,6 +307,6 @@ export async function withSessionStoreTarget<T>(
       }
       return result;
     },
-    lane,
+    targetDiscoveryLane,
   );
 }
