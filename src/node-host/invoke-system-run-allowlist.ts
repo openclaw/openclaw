@@ -128,8 +128,11 @@ export async function resolveSystemRunExecArgv(params: {
   ) {
     return execArgv;
   }
-  const transportKind = resolvePosixShellInlineCommandTransportKind(params.argv);
-  if (transportKind === "opaque") {
+  const transportArgv = resolveShellWrapperTransportArgv(params.argv);
+  const executable = normalizeExecutableToken(transportArgv?.[0] ?? "");
+  const parseableTransport =
+    transportArgv && POSIX_PARSEABLE_SHELL_WRAPPERS.has(executable) ? transportArgv : null;
+  if (POSIX_SHELL_WRAPPERS.has(executable) && !parseableTransport) {
     return null;
   }
   if (params.isWindows) {
@@ -140,7 +143,7 @@ export async function resolveSystemRunExecArgv(params: {
       : execArgv;
   }
   if (
-    transportKind !== "parseable" ||
+    !parseableTransport ||
     !params.segmentSatisfiedBy.some((entry) => entry === "safeBins" || entry === "inlineChain")
   ) {
     return execArgv;
@@ -158,23 +161,10 @@ export async function resolveSystemRunExecArgv(params: {
   }
   return replacePosixShellInlineCommand({
     argv: params.argv,
+    transportArgv: parseableTransport,
     oldCommand: params.shellCommand,
     nextCommand: rebuilt.command,
   });
-}
-
-function resolvePosixShellInlineCommandTransportKind(
-  argv: string[],
-): "none" | "opaque" | "parseable" {
-  const transportArgv = resolveShellWrapperTransportArgv(argv);
-  if (!transportArgv) {
-    return "none";
-  }
-  const executable = normalizeExecutableToken(transportArgv[0] ?? "");
-  if (!POSIX_SHELL_WRAPPERS.has(executable)) {
-    return "none";
-  }
-  return POSIX_PARSEABLE_SHELL_WRAPPERS.has(executable) ? "parseable" : "opaque";
 }
 
 function findSubsequence(haystack: readonly string[], needle: readonly string[]): number {
@@ -191,16 +181,11 @@ function findSubsequence(haystack: readonly string[], needle: readonly string[])
 
 function replacePosixShellInlineCommand(params: {
   argv: string[];
+  transportArgv: string[];
   oldCommand: string;
   nextCommand: string;
 }): string[] | null {
-  const transportArgv = resolveShellWrapperTransportArgv(params.argv);
-  if (
-    !transportArgv ||
-    !POSIX_PARSEABLE_SHELL_WRAPPERS.has(normalizeExecutableToken(transportArgv[0] ?? ""))
-  ) {
-    return null;
-  }
+  const { transportArgv } = params;
   const transportStart = findSubsequence(params.argv, transportArgv);
   if (transportStart < 0) {
     return null;
