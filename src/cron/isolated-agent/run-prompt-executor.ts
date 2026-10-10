@@ -432,6 +432,7 @@ export function createCronPromptExecutor(
             fastModeStartedAtMs,
             fastModeAutoProgressState,
             isFinalFallbackAttempt: runOptions.isFinalFallbackAttempt,
+            modelRoutingProvenance: runOptions.modelRoutingProvenance,
             contextEngineLogicalTurnLease: runOptions.contextEngineLogicalTurnLease,
             onContextEngineTurnCandidate: runOptions.onContextEngineTurnCandidate,
             userTurnTranscriptRecorder,
