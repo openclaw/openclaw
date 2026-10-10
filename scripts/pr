@@ -516,7 +516,7 @@ usage() {
 Usage:
   scripts/pr [--dev-wrapper] <subcommand> ...
   scripts/pr ls
-  scripts/pr gc [--dry-run]
+  scripts/pr gc [--pr <number>] [--dry-run]
   scripts/pr lock-recover <PR> <OWNER_OID> --confirmed-no-running-tools
   scripts/pr review-init <PR>
   scripts/pr review-checkout-main <PR>
@@ -650,10 +650,22 @@ main() {
   case "$cmd" in
     ls) ;;
     gc)
-      [ "$#" -eq 0 ] || { [ "$#" -eq 1 ] && [ "$1" = "--dry-run" ]; } || {
-        usage
-        exit 2
-      }
+      local gc_dry_run=false gc_pr=""
+      while [ "$#" -gt 0 ]; do
+        case "$1" in
+          --dry-run)
+            [ "$gc_dry_run" = false ] || { usage; exit 2; }
+            gc_dry_run=true
+            shift
+            ;;
+          --pr)
+            [ -z "$gc_pr" ] && [ "$#" -ge 2 ] && is_canonical_pr_number "$2" || { usage; exit 2; }
+            gc_pr="$2"
+            shift 2
+            ;;
+          *) usage; exit 2 ;;
+        esac
+      done
       ;;
     review-tests)
       [ "$#" -ge 2 ] || { usage; exit 2; }
@@ -792,11 +804,7 @@ main() {
       list_pr_worktrees
       ;;
     gc)
-      local dry_run=false
-      if [ "$#" -eq 1 ]; then
-        dry_run=true
-      fi
-      gc_pr_worktrees "$dry_run"
+      gc_pr_worktrees "$gc_dry_run" "$gc_pr"
       ;;
     review-init)
       local pr="${1-}"
