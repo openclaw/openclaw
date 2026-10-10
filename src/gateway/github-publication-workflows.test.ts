@@ -486,8 +486,8 @@ describe("accepted GitHub workflow publication", () => {
       .mockImplementation((params) =>
         execute({
           ...params,
-          recordEffect: (effect, observed) => {
-            params.recordEffect?.(effect, observed);
+          recordEffect: async (effect, observed) => {
+            await params.recordEffect?.(effect, observed);
             if (effect === "push" && observed === undefined) {
               pushRecorded = true;
             }

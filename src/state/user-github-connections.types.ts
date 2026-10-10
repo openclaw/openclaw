@@ -105,7 +105,9 @@ export type UserGitHubConnectionCommit = z.infer<typeof connectionCommitSchema>;
 export function projectUserGitHubConnectionAuthority(
   connection: UserGitHubConnection | undefined,
 ): UserGitHubConnectionAuthority | null {
-  if (!connection) return null;
+  if (!connection) {
+    return null;
+  }
   const selected = connection.selection;
   return {
     generation: connection.generation,

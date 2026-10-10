@@ -70,6 +70,7 @@ export function githubPublicationEffectFacts(
         requireAction: false,
       };
   }
+  throw new Error("Unknown GitHub publication effect transition.");
 }
 
 /** Released synchronous adapters and worker transitions share the same effect reducer. */
