@@ -15,7 +15,7 @@ export function createSolidApplicationContextProvider(initial: ApplicationContex
     setContext(value: ApplicationContext) {
       setContext(normalizeApplicationContext(value));
     },
-    wrapper(props: { children: JSX.Element }) {
+    wrapper(this: void, props: { children: JSX.Element }) {
       // Solid's context is owner-scoped; replacing it retires the old consumer tree.
       return (
         <Show when={context()} keyed>
