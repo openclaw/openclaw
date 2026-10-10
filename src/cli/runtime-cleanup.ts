@@ -4,7 +4,6 @@ import {
   stopActiveManagedProviderLocalServices,
 } from "../agents/provider-runtime-lifecycle.js";
 import { finalizeActiveDebugProxyCaptures } from "../proxy-capture/runtime-cleanup.js";
-import { closeSkillsWatchers } from "../skills/runtime/refresh.js";
 import type { CliHarnessCleanup } from "./runtime-cleanup-scope.js";
 
 // Match Gateway's harness/MCP shutdown grace; local-provider TERM/KILL already
@@ -120,9 +119,8 @@ export async function closeCliResources(cleanup?: CliHarnessCleanup): Promise<vo
     },
     "skills-watchers": async () => {
       if (cleanup) {
-        // Retain this callback before a command can replace its package. Local
-        // agent turns own observation; embedded callers and Gateway retain theirs.
-        await closeSkillsWatchers();
+        // Only the executable owner retires process-wide skill observation.
+        await cleanup.closeSkillsWatchers();
       }
     },
     "provider-local-services": stopActiveManagedProviderLocalServices,

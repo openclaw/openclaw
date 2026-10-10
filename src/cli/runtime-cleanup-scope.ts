@@ -13,6 +13,8 @@ export type CliHarnessCleanup = {
   scheduler: GatewayScheduler;
   harnesses: Map<AgentHarness, () => Promise<void>>;
   registries: Set<PluginRegistry>;
+  /** Captured before dispatch so source replacement cannot invalidate cleanup. */
+  closeSkillsWatchers: () => Promise<void>;
   pluginResources?: CliPluginInvocationResources;
   /** Executable routing stays available until admitted command work has settled. */
   releaseManagedProxy?: () => Promise<void>;
@@ -69,6 +71,7 @@ export async function withCliCommandCleanup<T>(
   const { closeOpenClawStateDatabaseAsync } = await import("../state/openclaw-state-db-cache.js");
   const { closeDefaultRetainedNativeWorkerSource } =
     await import("../infra/worker-native-lifecycle.js");
+  const { closeSkillsWatchers } = await import("../skills/runtime/refresh.js");
   const pluginResources = new CliPluginInvocationResources();
   const releaseSignals = installCliSignalExitHandlers();
   pluginResources.adopt({ release: async () => releaseSignals() });
@@ -81,6 +84,7 @@ export async function withCliCommandCleanup<T>(
     scheduler,
     harnesses: new Map(),
     registries: new Set(),
+    closeSkillsWatchers,
     pluginResources,
   };
   const finished = createDeferredCore();

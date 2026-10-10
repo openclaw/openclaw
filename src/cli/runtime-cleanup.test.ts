@@ -10,10 +10,6 @@ import { closeCliResources, getPendingCliDisposers } from "./runtime-cleanup.js"
 const memoryClosed = vi.hoisted(() => vi.fn(async () => {}));
 const databasesClosed = vi.hoisted(() => vi.fn(async () => {}));
 const skillsClosed = vi.hoisted(() => vi.fn(async () => {}));
-vi.mock("../skills/runtime/refresh.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../skills/runtime/refresh.js")>()),
-  closeSkillsWatchers: skillsClosed,
-}));
 vi.mock("../state/openclaw-agent-db-resources.js", () => ({
   hasOpenClawAgentDatabaseAsyncResources: () => true,
 }));
@@ -69,6 +65,7 @@ it("continues later cleanup when a harness disposer never settles", async () => 
     scheduler: createTestGatewayScheduler(),
     harnesses: new Map([[harness, dispose]]),
     registries: new Set(),
+    closeSkillsWatchers: skillsClosed,
   });
   try {
     await entered.promise;
@@ -110,6 +107,7 @@ it("stops scheduling and joins admitted callbacks before dependent CLI resources
     scheduler,
     harnesses: new Map(),
     registries: new Set(),
+    closeSkillsWatchers: skillsClosed,
   });
   try {
     expect(scheduler.signal.aborted).toBe(true);
