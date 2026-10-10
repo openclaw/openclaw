@@ -1,20 +1,15 @@
-import type { DatabaseSync, StatementSync } from "node:sqlite";
+import type { DatabaseSync } from "node:sqlite";
 import { hashText, type MemorySource } from "openclaw/plugin-sdk/memory-core-host-engine-indexing";
-import {
-  MEMORY_INDEX_FTS_TABLE,
-  MEMORY_INDEX_VECTOR_TABLE,
-} from "openclaw/plugin-sdk/memory-core-host-engine-schema";
+import { MEMORY_INDEX_VECTOR_TABLE } from "openclaw/plugin-sdk/memory-core-host-engine-schema";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
   runSqliteImmediateTransactionSync,
+  tableExists,
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import { createMemoryChunkWriter, type IndexedMemoryChunk } from "./manager-chunk-writer.js";
-import {
-  markMemoryVectorRebuildRequired,
-  memoryTableExists,
-} from "./manager-vector-rebuild-state.js";
+import { markMemoryVectorRebuildRequired } from "./manager-vector-rebuild-state.js";
 import { createMemoryVectorWriter } from "./manager-vector-write.js";
 
 const MAX_VECTOR_POINT_DELETES = 32;
@@ -71,23 +66,11 @@ export class MemorySourceIndexKernel {
     private readonly state: SourceIndexState,
   ) {}
 
-  replace(params: MemorySourceIndexReplacement): void {
-    this.replaceRows(
-      params,
-      (function* () {
-        for (const [index, chunk] of params.chunks.entries()) {
-          yield { chunk, embedding: params.embeddings[index] ?? [] };
-        }
-      })(),
-    );
-  }
-
   replaceRows(params: MemorySourceIndexHeader, rows: Iterable<MemorySourceIndexRow>): void {
     const { entry, source, model, now, vectorReady } = params;
     this.clear(entry.path, source);
     let writeChunk: ReturnType<typeof createMemoryChunkWriter> | undefined;
     let writeVector: ReturnType<typeof createMemoryVectorWriter> | undefined;
-    let ftsStatement: StatementSync | undefined;
     let hasEmbeddings = false;
     for (const { chunk, embedding } of rows) {
       hasEmbeddings ||= embedding.length > 0;
@@ -102,15 +85,8 @@ export class MemorySourceIndexKernel {
       });
       writeChunk(id, chunk, embedding);
       if (vectorReady && embedding.length > 0) {
-        writeVector ??= createMemoryVectorWriter(this.database, MEMORY_INDEX_VECTOR_TABLE);
+        writeVector ??= createMemoryVectorWriter(this.database);
         writeVector(id, embedding);
-      }
-      if (this.state.fts.enabled && this.state.fts.available) {
-        ftsStatement ??= this.database.prepare(
-          `INSERT INTO ${MEMORY_INDEX_FTS_TABLE} (text, id, path, source, model, start_line, end_line)\n` +
-            ` VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        );
-        ftsStatement.run(chunk.text, id, entry.path, source, model, chunk.startLine, chunk.endLine);
       }
     }
     const db = getNodeSqliteKysely<SourceIndexDatabase>(this.database);
@@ -158,7 +134,7 @@ export class MemorySourceIndexKernel {
   }
 
   private clear(pathname: string, source: MemorySource): void {
-    if (memoryTableExists(this.database, MEMORY_INDEX_VECTOR_TABLE)) {
+    if (tableExists(this.database, MEMORY_INDEX_VECTOR_TABLE)) {
       if (!this.state.vector.enabled || this.state.vector.available !== true) {
         markMemoryVectorRebuildRequired(this.database);
       } else {
@@ -196,14 +172,6 @@ export class MemorySourceIndexKernel {
           markMemoryVectorRebuildRequired(this.database);
         }
       }
-    }
-    if (this.state.fts.enabled && this.state.fts.available) {
-      try {
-        // Lexical search is model-agnostic; remove every model for this source.
-        this.database
-          .prepare(`DELETE FROM ${MEMORY_INDEX_FTS_TABLE} WHERE path = ? AND source = ?`)
-          .run(pathname, source);
-      } catch {}
     }
     executeSqliteQuerySync(
       this.database,

@@ -3,6 +3,11 @@ import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { chatSessionListResponse } from "./chat-flow.test-support.ts";
+import {
+  logSwarmDiagnostic,
+  type SwarmDiagnosticPane,
+  type SwarmDiagnosticWindow,
+} from "./chat-swarm-lifecycle-diagnostic.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -127,6 +132,11 @@ suite.define(() => {
           )
           .toBe(true);
         const outcomeClearance = await summary.evaluate((element) => {
+          const pane = element.closest<SwarmDiagnosticPane>("openclaw-chat-pane");
+          (window as SwarmDiagnosticWindow).openclawSwarmDiagnostic = {
+            expandedDetails: element.parentElement,
+            expandedEpoch: pane?.state?.connectionEpoch,
+          };
           const outcome = element.parentElement?.querySelector(".chat-swarm__outcome");
           if (!outcome) {
             throw new Error("Expanded Swarm outcome is missing");
@@ -174,13 +184,19 @@ suite.define(() => {
           agentId: "main",
           reason: "swarm",
         });
-        await expect
-          .poll(() =>
-            widget
-              .getByText("Child runs finished. Check the conversation for the final response.")
-              .isVisible(),
-          )
-          .toBe(true);
+        try {
+          await expect
+            .poll(() =>
+              widget
+                .getByText("Child runs finished. Check the conversation for the final response.")
+                .isVisible(),
+            )
+            .toBe(true);
+        } finally {
+          await logSwarmDiagnostic(page, gateway, sessionKey).catch(() => {
+            console.info("[swarm-final-diagnostic] unavailable");
+          });
+        }
         await page.screenshot({
           path: path.join(proofDir, "settled-details.png"),
           animations: "disabled",

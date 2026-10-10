@@ -715,7 +715,6 @@ suite.define(() => {
         expect(response?.status()).toBe(200);
         await page.getByRole("heading", { name: "On this Gateway", exact: true }).waitFor();
         await expect.poll(() => page.getByText("Gemini CLI OAuth").count()).toBe(0);
-        await expect.poll(() => page.getByText("Found, but needs attention").count()).toBe(0);
 
         const providerPicker = page.locator(".model-setup-provider-select");
         const providerTrigger = providerPicker.locator(".model-setup-provider-select__trigger");

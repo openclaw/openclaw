@@ -38,13 +38,8 @@ final class CanvasSchemeHandler: NSObject, WKURLSchemeHandler {
         // no-op
     }
 
-    private struct CanvasResponse {
-        let mime: String
-        let data: Data
-    }
-
-    private func response(for url: URL) -> CanvasResponse {
-        guard let scheme = url.scheme, CanvasScheme.allSchemes.contains(scheme) else {
+    private func response(for url: URL) -> (mime: String, data: Data) {
+        guard url.scheme == CanvasScheme.scheme else {
             return self.html("Invalid scheme.")
         }
         guard let session = url.host, !session.isEmpty else {
@@ -64,8 +59,7 @@ final class CanvasSchemeHandler: NSObject, WKURLSchemeHandler {
         if path.hasPrefix("/") { path.removeFirst() }
         path = path.removingPercentEncoding ?? path
 
-        let resolved = self.resolveFileURL(sessionRoot: sessionRoot, requestPath: path)
-        guard let fileURL = resolved else {
+        guard let fileURL = self.resolveFileURL(sessionRoot: sessionRoot, requestPath: path) else {
             return self.html("Not Found", title: "Canvas: 404")
         }
 
@@ -83,7 +77,7 @@ final class CanvasSchemeHandler: NSObject, WKURLSchemeHandler {
             let servedPath = resolvedFile.path
             canvasLogger.debug(
                 "served \(session, privacy: .public)/\(path, privacy: .public) -> \(servedPath, privacy: .public)")
-            return CanvasResponse(mime: mime, data: data)
+            return (mime, data)
         } catch {
             let failedPath = resolvedFile.path
             let errorText = error.localizedDescription
@@ -96,42 +90,17 @@ final class CanvasSchemeHandler: NSObject, WKURLSchemeHandler {
 
     private func resolveFileURL(sessionRoot: URL, requestPath: String) -> URL? {
         let fm = FileManager()
-        var candidate = sessionRoot.appendingPathComponent(requestPath, isDirectory: false)
-
+        let candidate = sessionRoot.appendingPathComponent(requestPath, isDirectory: false)
         var isDir: ObjCBool = false
-        if fm.fileExists(atPath: candidate.path, isDirectory: &isDir) {
-            if isDir.boolValue {
-                if let idx = self.resolveIndex(in: candidate) { return idx }
-                return nil
-            }
-            return candidate
-        }
-
-        // Directory index behavior:
-        // - "/yolo" serves "<yolo>/index.html" if that directory exists.
-        if !requestPath.isEmpty, !requestPath.hasSuffix("/") {
-            candidate = sessionRoot.appendingPathComponent(requestPath, isDirectory: true)
-            if fm.fileExists(atPath: candidate.path, isDirectory: &isDir), isDir.boolValue {
-                if let idx = self.resolveIndex(in: candidate) { return idx }
-            }
-        }
-
-        // Root fallback:
-        // - "/" serves "<sessionRoot>/index.html" if present.
-        if requestPath.isEmpty {
-            return self.resolveIndex(in: sessionRoot)
-        }
-
-        return nil
+        guard fm.fileExists(atPath: candidate.path, isDirectory: &isDir) else { return nil }
+        return isDir.boolValue ? self.resolveIndex(in: candidate) : candidate
     }
 
     private func resolveIndex(in dir: URL) -> URL? {
         let fm = FileManager()
-        let a = dir.appendingPathComponent("index.html", isDirectory: false)
-        if fm.fileExists(atPath: a.path) { return a }
-        let b = dir.appendingPathComponent("index.htm", isDirectory: false)
-        if fm.fileExists(atPath: b.path) { return b }
-        return nil
+        return ["index.html", "index.htm"].lazy
+            .map { dir.appendingPathComponent($0, isDirectory: false) }
+            .first { fm.fileExists(atPath: $0.path) }
     }
 
     private func isFileURL(_ fileURL: URL, withinDirectory rootURL: URL) -> Bool {
@@ -139,7 +108,7 @@ final class CanvasSchemeHandler: NSObject, WKURLSchemeHandler {
         return fileURL.path == rootURL.path || fileURL.path.hasPrefix(rootPath)
     }
 
-    private func html(_ body: String, title: String = "Canvas") -> CanvasResponse {
+    private func html(_ body: String, title: String = "Canvas") -> (mime: String, data: Data) {
         let html = """
         <!doctype html>
         <html>
@@ -176,7 +145,7 @@ final class CanvasSchemeHandler: NSObject, WKURLSchemeHandler {
           </body>
         </html>
         """
-        return CanvasResponse(mime: "text/html", data: Data(html.utf8))
+        return ("text/html", Data(html.utf8))
     }
 
     private func textEncodingName(forMimeType mimeType: String) -> String? {
@@ -193,8 +162,7 @@ final class CanvasSchemeHandler: NSObject, WKURLSchemeHandler {
 #if DEBUG
 extension CanvasSchemeHandler {
     func _testResponse(for url: URL) -> (mime: String, data: Data) {
-        let response = self.response(for: url)
-        return (response.mime, response.data)
+        self.response(for: url)
     }
 
     func _testTextEncodingName(for mimeType: String) -> String? {

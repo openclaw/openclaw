@@ -37,11 +37,13 @@ jobs:
           EXPECTED_INSTALLER_DIGESTS: ${{ inputs.expected_installer_digests }}
           GH_TOKEN: ${{ github.token }}
         run: |
-          if ($env:RELEASE_TAG -notmatch '^v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*((-(alpha|beta)\.[1-9][0-9]*)|(-[1-9][0-9]*))?$') {
+          if ($env:RELEASE_TAG.Contains("-alpha.") -or $env:GITHUB_REF -like "*tideclaw/alpha/*") {
+            throw "Alpha releases are retired; use a beta prerelease."
+          }
+          if ($env:RELEASE_TAG -notmatch '^v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*((-beta\.[1-9][0-9]*)|(-[1-9][0-9]*))?$') {
             throw "Invalid OpenClaw release tag: $env:RELEASE_TAG"
           }
           $stableRelease = -not (
-            $env:RELEASE_TAG.Contains("-alpha.") -or
             $env:RELEASE_TAG.Contains("-beta.")
           )
           if ($env:WINDOWS_NODE_TAG -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$') {

@@ -3,6 +3,7 @@
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import type { Dispatcher } from "undici";
 import { logWarn } from "../../logger.js";
+import { captureEffectAuthority } from "../../shared/effect-authority.js";
 import { buildTimeoutAbortSignal } from "../../utils/fetch-timeout.js";
 import {
   normalizeHeadersInitForFetch,
@@ -14,6 +15,7 @@ import {
   shouldResolveConfiguredLocalOriginManagedProxyBypass,
   type ConfiguredLocalOriginManagedProxyBypass,
 } from "./configured-local-origin-bypass.js";
+import { captureGuardedFetchRequestAuthority } from "./fetch-request-authority.js";
 import { responseWithAbortSignal } from "./guarded-body-stream.js";
 import { PinnedDispatcherPool, type PinnedDispatcherLease } from "./pinned-dispatcher-pool.js";
 import { shouldUseEnvHttpProxyForUrl } from "./proxy-env.js";
@@ -35,19 +37,13 @@ import {
   SsrFBlockedError,
   type SsrFPolicy,
 } from "./ssrf.js";
+import { globalUndiciStreamTimeoutMs } from "./undici-dispatcher-options.js";
 import { resolveUndiciAutoSelectFamilyConnectOptions } from "./undici-family-policy.js";
-import { globalUndiciStreamTimeoutMs } from "./undici-global-dispatcher.js";
 import {
   createHttp1Agent,
   createHttp1EnvHttpProxyAgent,
   createHttp1ProxyAgent,
 } from "./undici-runtime.js";
-
-function resolveDispatcherTimeoutMs(fromParams: number | undefined): number | undefined {
-  // Fall back to module-level bridge set by ensureGlobalUndiciStreamTimeouts
-  // (avoids reading Undici's non-public `.options` field)
-  return fromParams !== undefined ? fromParams : globalUndiciStreamTimeoutMs;
-}
 
 type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
@@ -64,6 +60,8 @@ export type GuardedFetchOptions = {
   fetchImpl?: FetchLike;
   /** Final synchronous check after transport preparation and before each request or redirect. */
   beforeRequest?: () => void | undefined;
+  /** Observes response headers for each hop, including redirects, before cleanup. */
+  onResponse?: (status: number) => void;
   init?: RequestInit;
   capture?:
     | false
@@ -79,6 +77,8 @@ export type GuardedFetchOptions = {
    * Defaults to false.
    */
   allowCrossOriginUnsafeRedirectReplay?: boolean;
+  /** Reject cross-origin redirects that would replay an unsafe body. Mutually exclusive with allow. */
+  rejectCrossOriginUnsafeRedirectReplay?: boolean;
   timeoutMs?: number;
   signal?: AbortSignal;
   requireHttps?: boolean;
@@ -287,21 +287,15 @@ function isAmbientGlobalFetch(params: {
   );
 }
 
-export function retainSafeHeadersForCrossOriginRedirectHeaders(
-  headers?: HeadersInit,
-): Record<string, string> | undefined {
-  return retainSafeRedirectHeaders(headers);
-}
-
 async function prepareGuardedFetchCapture(params: GuardedFetchOptions, fetchImpl: FetchLike) {
   if (params.capture === false || !isTruthyEnvValue(process.env[OPENCLAW_DEBUG_PROXY_ENABLED])) {
     return { fetchImpl };
   }
-  const { prepareHttpCapture, resolveDebugProxyFetchTransport } =
+  const { prepareHttpCaptureForTransport, resolveDebugProxyFetchTransport } =
     await import("../../proxy-capture/runtime.js");
   return {
     fetchImpl: resolveDebugProxyFetchTransport(fetchImpl),
-    capture: prepareHttpCapture(),
+    capture: prepareHttpCaptureForTransport(),
   };
 }
 
@@ -363,9 +357,11 @@ function dropBodyHeaders(headers?: HeadersInit): HeadersInit | undefined {
   return nextHeaders;
 }
 
-function rewriteRedirectInitForMethod(params: {
+function rewriteRedirectInit(params: {
   init?: RequestInit;
   status: number;
+  crossOrigin: boolean;
+  allowUnsafeReplay: boolean;
 }): RequestInit | undefined {
   const { init, status } = params;
   if (!init) {
@@ -378,40 +374,22 @@ function rewriteRedirectInitForMethod(params: {
       ? currentMethod !== "GET" && currentMethod !== "HEAD"
       : (status === 301 || status === 302) && currentMethod === "POST";
 
-  if (!shouldForceGet) {
+  const shouldDropUnsafeBody =
+    params.crossOrigin &&
+    !params.allowUnsafeReplay &&
+    currentMethod !== "GET" &&
+    currentMethod !== "HEAD";
+  if (!shouldForceGet && !shouldDropUnsafeBody) {
     return init;
   }
 
   return {
     ...init,
-    method: "GET",
+    ...(shouldForceGet ? { method: "GET" } : {}),
     body: undefined,
     headers: dropBodyHeaders(init.headers),
   };
 }
-
-function rewriteRedirectInitForCrossOrigin(params: {
-  init?: RequestInit;
-  allowUnsafeReplay: boolean;
-}): RequestInit | undefined {
-  const { init, allowUnsafeReplay } = params;
-  if (!init || allowUnsafeReplay) {
-    return init;
-  }
-
-  const currentMethod = init.method?.toUpperCase() ?? "GET";
-  if (currentMethod === "GET" || currentMethod === "HEAD") {
-    return init;
-  }
-
-  return {
-    ...init,
-    body: undefined,
-    headers: dropBodyHeaders(init.headers),
-  };
-}
-
-export { fetchWithRuntimeDispatcher } from "./runtime-fetch.js";
 
 export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<GuardedFetchResult> {
   const { managedProxyBypass: _ignoredManagedProxyBypass, ...publicParams } =
@@ -437,6 +415,14 @@ export async function fetchConfiguredLocalOriginWithSsrFGuard({
 async function fetchWithSsrFGuardInternal(
   params: GuardedFetchInternalOptions,
 ): Promise<GuardedFetchResult> {
+  const assertCurrent = captureGuardedFetchRequestAuthority();
+  const effect = captureEffectAuthority();
+  if (
+    params.allowCrossOriginUnsafeRedirectReplay === true &&
+    params.rejectCrossOriginUnsafeRedirectReplay === true
+  ) {
+    throw new TypeError("Cross-origin unsafe redirect replay cannot be both allowed and rejected");
+  }
   const globalFetch = globalThis.fetch;
   const defaultFetch: FetchLike | undefined = params.fetchImpl ?? globalFetch;
   if (!defaultFetch) {
@@ -558,7 +544,7 @@ async function fetchWithSsrFGuardInternal(
         !canUseManagedProxy &&
         !usesTrustedExplicitProxyMode &&
         params.pinDns !== false;
-      const timeoutMs = resolveDispatcherTimeoutMs(params.timeoutMs);
+      const timeoutMs = params.timeoutMs;
 
       // Trusted env-proxy, managed proxy, and pinDns=false can skip local DNS
       // pinning, so keep the pre-DNS hostname/IP policy checks from the pinned path.
@@ -616,6 +602,7 @@ async function fetchWithSsrFGuardInternal(
             origin: parsedUrl.origin,
             addresses: [...pinned.addresses].toSorted(),
             timeoutMs: timeoutMs ?? null,
+            streamTimeoutMs: timeoutMs ?? globalUndiciStreamTimeoutMs ?? null,
             familyConnect: familyConnect ?? null,
             policy: policyForUrl ?? null,
           });
@@ -652,18 +639,12 @@ async function fetchWithSsrFGuardInternal(
       // because the default global fetch path will not honor per-request
       // dispatchers.
       const shouldUseRuntimeFetch = Boolean(dispatcher) && !supportsDispatcherInit;
-      const beforeRequestResult: unknown = params.beforeRequest?.();
-      if (isPromiseLike(beforeRequestResult)) {
-        void Promise.resolve(beforeRequestResult).catch(() => undefined);
-        throw new TypeError("beforeRequest must be synchronous.");
-      }
       const captureParams = {
         url: parsedUrl.toString(),
         method: currentInit?.method ?? "GET",
         signal: process.versions.bun ? (init.signal ?? undefined) : undefined,
         requestHeaders: currentInit?.headers as Headers | Record<string, string> | undefined,
-        requestBody:
-          (currentInit as (RequestInit & { body?: BodyInit | null }) | undefined)?.body ?? null,
+        requestBody: currentInit?.body ?? null,
         transport: "http" as const,
         flowId: params.capture === false ? undefined : params.capture?.flowId,
         meta: {
@@ -676,15 +657,28 @@ async function fetchWithSsrFGuardInternal(
         },
       };
       // Only transport rejection belongs here, not policy or capture failures.
+      let initiated = false;
       try {
-        response = shouldUseRuntimeFetch
-          ? await fetchWithRuntimeDispatcher(parsedUrl.toString(), init)
-          : await captureAdmission.fetchImpl(parsedUrl.toString(), init);
+        response = await effect.initiate(() => {
+          const beforeRequestResult: unknown = params.beforeRequest?.();
+          if (isPromiseLike(beforeRequestResult)) {
+            void Promise.resolve(beforeRequestResult).catch(() => undefined);
+            throw new TypeError("beforeRequest must be synchronous.");
+          }
+          assertCurrent?.();
+          initiated = true;
+          return shouldUseRuntimeFetch
+            ? fetchWithRuntimeDispatcher(parsedUrl.toString(), init)
+            : captureAdmission.fetchImpl(parsedUrl.toString(), init);
+        });
       } catch (error) {
-        captureAdmission.capture?.({ ...captureParams, error });
+        if (initiated) {
+          void captureAdmission.capture?.({ ...captureParams, error });
+        }
         throw error;
       }
-      captureAdmission.capture?.({ ...captureParams, response });
+      params.onResponse?.(response.status);
+      void captureAdmission.capture?.({ ...captureParams, response });
 
       if (isRedirectStatus(response.status)) {
         redirectCount += 1;
@@ -702,12 +696,34 @@ async function fetchWithSsrFGuardInternal(
           nextUrl: nextParsedUrl,
           hostnameAllowlist: params.retainAuthorizationRedirectHostnameAllowlist,
         });
-        currentInit = rewriteRedirectInitForMethod({ init: currentInit, status: response.status });
-        if (nextParsedUrl.origin !== parsedUrl.origin) {
-          currentInit = rewriteRedirectInitForCrossOrigin({
-            init: currentInit,
-            allowUnsafeReplay: params.allowCrossOriginUnsafeRedirectReplay === true,
-          });
+        const crossOrigin = nextParsedUrl.origin !== parsedUrl.origin;
+        const methodRedirectInit = rewriteRedirectInit({
+          init: currentInit,
+          status: response.status,
+          crossOrigin: false,
+          allowUnsafeReplay: true,
+        });
+        if (crossOrigin) {
+          const redirectedMethod = methodRedirectInit?.method?.toUpperCase() ?? "GET";
+          const redirectedBody = methodRedirectInit?.body;
+          if (
+            params.rejectCrossOriginUnsafeRedirectReplay === true &&
+            redirectedMethod !== "GET" &&
+            redirectedMethod !== "HEAD" &&
+            redirectedBody != null
+          ) {
+            throw new Error(
+              `Refusing to follow cross-origin redirect for ${redirectedMethod} request body (${parsedUrl.origin} -> ${nextParsedUrl.origin})`,
+            );
+          }
+        }
+        currentInit = rewriteRedirectInit({
+          init: methodRedirectInit,
+          status: response.status,
+          crossOrigin,
+          allowUnsafeReplay: params.allowCrossOriginUnsafeRedirectReplay === true,
+        });
+        if (crossOrigin) {
           currentInit = retainSafeHeadersForCrossOriginRedirect(currentInit);
           currentInit = restoreRedirectAuthorization({
             init: currentInit,

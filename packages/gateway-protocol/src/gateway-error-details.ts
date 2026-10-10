@@ -34,7 +34,6 @@ export const GatewayErrorDetailCodes = {
   OUTBOUND_DELIVERY_QUEUED: "OUTBOUND_DELIVERY_QUEUED",
   USER_PREFS_LIMIT_EXCEEDED: "USER_PREFS_LIMIT_EXCEEDED",
   SESSION_COMPANION_BUSY: "SESSION_COMPANION_BUSY",
-  SKILL_PROPOSAL_REVISION_CHANGED: "SKILL_PROPOSAL_REVISION_CHANGED",
   PROJECT_CLONE_FAILED: "PROJECT_CLONE_FAILED",
   UNKNOWN_AGENT_ID: "UNKNOWN_AGENT_ID",
   WIZARD_NOT_FOUND: "WIZARD_NOT_FOUND",
@@ -42,6 +41,7 @@ export const GatewayErrorDetailCodes = {
   GITHUB_PUBLICATION_SELECTION_REJECTED: "GITHUB_PUBLICATION_SELECTION_REJECTED",
   SESSION_WORKSPACE_RECOVERY_REQUIRED: "SESSION_WORKSPACE_RECOVERY_REQUIRED",
   TASK_WORKTREE_SOURCE_REQUIRED: "TASK_WORKTREE_SOURCE_REQUIRED",
+  TASK_HISTORY_PREVIEW_CAPACITY: "TASK_HISTORY_PREVIEW_CAPACITY",
 } as const;
 
 /** Missing cron automation identified by its exact store key. */
@@ -107,13 +107,6 @@ export type ProjectCloneErrorDetails = {
   cause: ProjectCloneFailureCause;
 };
 
-/** Optimistic-concurrency mismatch for an operator-reviewed Skill Workshop draft. */
-export type SkillProposalRevisionChangedErrorDetails = {
-  code: typeof GatewayErrorDetailCodes.SKILL_PROPOSAL_REVISION_CHANGED;
-  expectedRevisionHash: string;
-  currentRevisionHash: string;
-};
-
 /** Exact retained workspace owner that must be recovered or explicitly abandoned. */
 export type SessionWorkspaceRecoveryRequiredErrorDetails = {
   code: typeof GatewayErrorDetailCodes.SESSION_WORKSPACE_RECOVERY_REQUIRED;
@@ -136,24 +129,16 @@ export type GatewayErrorDetails =
   | McpAppViewExpiredErrorDetails
   | OutboundDeliveryQueuedErrorDetails
   | UserPrefsLimitExceededErrorDetails
-  | SkillProposalRevisionChangedErrorDetails
   | ProjectCloneErrorDetails
   | UnknownAgentIdErrorDetails
   | WizardNotFoundErrorDetails
   | SetupAdmissionBusyErrorDetails
   | GitHubPublicationSelectionRejectedErrorDetails
   | SessionWorkspaceRecoveryRequiredErrorDetails
-  | TaskWorktreeSourceRequiredErrorDetails;
-
-type GatewayErrorLike = {
-  code?: unknown;
-  gatewayCode?: unknown;
-  message?: unknown;
-  details?: unknown;
-};
+  | TaskWorktreeSourceRequiredErrorDetails
+  | { code: typeof GatewayErrorDetailCodes.TASK_HISTORY_PREVIEW_CAPACITY };
 
 const LEGACY_MISSING_SCOPE_PATTERN = /\bmissing scope:\s*([a-z0-9._-]+)/i;
-const SHA256_PATTERN = /^[a-fA-F0-9]{64}$/;
 
 export function readGitHubPublicationSelectionRejectedError(
   error: unknown,
@@ -178,40 +163,6 @@ export function readCronJobNotFoundError(error: unknown): CronJobNotFoundErrorDe
   }
   const jobId = typeof details.jobId === "string" ? details.jobId.trim() : "";
   return jobId ? { code: GatewayErrorDetailCodes.CRON_JOB_NOT_FOUND, jobId } : null;
-}
-
-/** Builds the canonical stale-draft details shared by Skill Workshop RPCs. */
-export function buildSkillProposalRevisionChangedErrorDetails(params: {
-  expectedRevisionHash: string;
-  currentRevisionHash: string;
-}): SkillProposalRevisionChangedErrorDetails {
-  return {
-    code: GatewayErrorDetailCodes.SKILL_PROPOSAL_REVISION_CHANGED,
-    expectedRevisionHash: params.expectedRevisionHash,
-    currentRevisionHash: params.currentRevisionHash,
-  };
-}
-
-/** Reads a stale Skill Workshop decision without parsing operator-facing prose. */
-export function readSkillProposalRevisionChangedError(
-  error: unknown,
-): SkillProposalRevisionChangedErrorDetails | null {
-  const record = asProtocolRecord(error);
-  const details = asProtocolRecord(record?.details);
-  if (details?.code !== GatewayErrorDetailCodes.SKILL_PROPOSAL_REVISION_CHANGED) {
-    return null;
-  }
-  const expectedRevisionHash =
-    typeof details.expectedRevisionHash === "string" ? details.expectedRevisionHash : "";
-  const currentRevisionHash =
-    typeof details.currentRevisionHash === "string" ? details.currentRevisionHash : "";
-  if (!SHA256_PATTERN.test(expectedRevisionHash) || !SHA256_PATTERN.test(currentRevisionHash)) {
-    return null;
-  }
-  return buildSkillProposalRevisionChangedErrorDetails({
-    expectedRevisionHash,
-    currentRevisionHash,
-  });
 }
 
 /** Reads validated missing-scope details from an untrusted protocol payload. */
@@ -252,17 +203,16 @@ export function readMissingScopeError(error: unknown): MissingScopeErrorDetails 
   if (structured) {
     return structured;
   }
-  const gatewayError = record as GatewayErrorLike;
   const code =
-    typeof gatewayError.gatewayCode === "string"
-      ? gatewayError.gatewayCode
-      : typeof gatewayError.code === "string"
-        ? gatewayError.code
+    typeof record.gatewayCode === "string"
+      ? record.gatewayCode
+      : typeof record.code === "string"
+        ? record.code
         : "";
   if (code !== ErrorCodes.FORBIDDEN && code !== ErrorCodes.INVALID_REQUEST) {
     return null;
   }
-  const message = typeof gatewayError.message === "string" ? gatewayError.message : "";
+  const message = typeof record.message === "string" ? record.message : "";
   const missingScope = message.match(LEGACY_MISSING_SCOPE_PATTERN)?.[1];
   return missingScope
     ? {

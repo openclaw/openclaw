@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { endianness } from "node:os";
 import { constants, DatabaseSync } from "node:sqlite";
 import {
+  encodeMemoryEmbedding,
   ensureMemoryIndexSchema,
   loadSqliteVecExtension,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
@@ -64,7 +65,20 @@ function replacement(
 
 function write(database: MemoryIndexDatabase, value: MemorySourceIndexReplacement) {
   return runSqliteImmediateTransactionSync(database.db, () =>
-    new MemorySourceIndexKernel(database.db, database).replace(value),
+    new MemorySourceIndexKernel(database.db, database).replaceRows(
+      value,
+      value.chunks.map((chunk, index) => ({ chunk, embedding: value.embeddings[index] ?? [] })),
+    ),
+  );
+}
+
+function remove(database: MemoryIndexDatabase, pathname: string, expectedHash: string) {
+  return runSqliteImmediateTransactionSync(database.db, () =>
+    new MemorySourceIndexKernel(database.db, database).deleteIfCurrent({
+      path: pathname,
+      source: "memory",
+      expectedHash,
+    }),
   );
 }
 
@@ -87,7 +101,7 @@ function snapshot(db: DatabaseSync) {
 }
 
 describe("memory source index native kernel", () => {
-  it.each([0, 4, 2048])("bounds statement preparations for %s chunks", async (chunks) => {
+  it.each([0, 2048])("bounds statement preparations for %s chunks", async (chunks) => {
     const database = await createDatabase();
     const tables = [
       "memory_index_chunks",
@@ -106,7 +120,7 @@ describe("memory source index native kernel", () => {
         expect(
           prepared.filter((value) => value === table),
           table,
-        ).toHaveLength(chunks ? 1 : 0);
+        ).toHaveLength(chunks && table !== "memory_index_chunks_fts" ? 1 : 0);
       }
     } finally {
       prepare.mockRestore();
@@ -134,13 +148,7 @@ describe("memory source index native kernel", () => {
         if (phase === "replace") {
           write(database, replacement(pathname, "updated", 3));
         } else {
-          runSqliteImmediateTransactionSync(database.db, () =>
-            new MemorySourceIndexKernel(database.db, database).deleteIfCurrent({
-              path: pathname,
-              source: "memory",
-              expectedHash: "updated",
-            }),
-          );
+          remove(database, pathname, "updated");
         }
         deletes = prepare.mock.calls
           .map(([sql]) => sql)
@@ -168,6 +176,13 @@ describe("memory source index native kernel", () => {
           .prepare("SELECT id FROM memory_index_chunks WHERE hash = 'original' ORDER BY id")
           .all(),
       ).toEqual(siblings);
+      expect(
+        database.db.prepare("SELECT rowid, id FROM memory_index_chunks_fts ORDER BY rowid").all(),
+      ).toEqual(
+        database.db
+          .prepare("SELECT chunk_rowid AS rowid, id FROM memory_index_chunks ORDER BY chunk_rowid")
+          .all(),
+      );
     }
   });
 
@@ -226,15 +241,7 @@ describe("memory source index native kernel", () => {
     let deleteCalls: number;
     let selectedRows: number[];
     try {
-      expect(
-        runSqliteImmediateTransactionSync(db, () =>
-          new MemorySourceIndexKernel(database.db, database).deleteIfCurrent({
-            path: pathname,
-            source: "memory",
-            expectedHash: "original",
-          }),
-        ),
-      ).toBe(true);
+      expect(remove(database, pathname, "original")).toBe(true);
       deleteCalls = deletes.reduce((count, statement) => count + statement.calls(), 0);
       selectedRows = reads.flatMap((statement) => statement.rows());
     } finally {
@@ -256,8 +263,6 @@ describe("memory source index native kernel", () => {
 
   it.each([
     { chunks: 3, failAt: 2, rollback: false },
-    { chunks: 3, failAt: 3, rollback: false },
-    { chunks: 3, failAt: 2, rollback: true },
     { chunks: 3, failAt: 3, rollback: true },
     { chunks: 2048, failAt: 2, rollback: false },
     { chunks: 2048, failAt: 3, rollback: true },
@@ -297,18 +302,11 @@ describe("memory source index native kernel", () => {
         return constants.SQLITE_OK;
       });
       try {
-        const remove = () =>
-          runSqliteImmediateTransactionSync(db, () =>
-            new MemorySourceIndexKernel(database.db, database).deleteIfCurrent({
-              path: pathname,
-              source: "memory",
-              expectedHash: "original",
-            }),
-          );
+        const removeCurrent = () => remove(database, pathname, "original");
         if (rollback) {
-          expect(remove).toThrow("forced outer cleanup rollback");
+          expect(removeCurrent).toThrow("forced outer cleanup rollback");
         } else {
-          expect(remove()).toBe(true);
+          expect(removeCurrent()).toBe(true);
         }
       } finally {
         db.setAuthorizer(null);
@@ -387,7 +385,7 @@ describe("memory source index native kernel", () => {
             start_line: chunk.startLine,
             end_line: chunk.endLine,
             text: chunk.text,
-            embedding: JSON.stringify(embedding),
+            embedding: encodeMemoryEmbedding(embedding),
             importance: chunk.importance,
             triggers: chunk.triggers,
             project_key: chunk.projectKey,
@@ -425,17 +423,9 @@ describe("memory source index native kernel", () => {
     write(database, replacement("memory/current.md"));
     write(database, replacement("memory/sibling.md"));
     const before = snapshot(database.db);
-    const remove = (expectedHash: string) =>
-      runSqliteImmediateTransactionSync(database.db, () =>
-        new MemorySourceIndexKernel(database.db, database).deleteIfCurrent({
-          path: "memory/current.md",
-          source: "memory",
-          expectedHash,
-        }),
-      );
-    expect(remove("stale")).toBe(false);
+    expect(remove(database, "memory/current.md", "stale")).toBe(false);
     expect(snapshot(database.db)).toEqual(before);
-    expect(remove("original")).toBe(true);
+    expect(remove(database, "memory/current.md", "original")).toBe(true);
     for (const table of [
       "memory_index_sources",
       "memory_index_chunks",

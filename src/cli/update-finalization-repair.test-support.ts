@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { GatewayRestartResult } from "./daemon-cli/restart-health.types.js";
 
 /** Executable CLI fixture: native service state is shared with the Doctor child. */
 export async function prepareRepairDeadlineFixture(
@@ -7,6 +8,7 @@ export async function prepareRepairDeadlineFixture(
   sourceUrl: (relative: string) => string,
   root: string,
   entrypoint: string,
+  outcome: GatewayRestartResult["outcome"],
 ) {
   const statePath = path.join(process.env.OPENCLAW_STATE_DIR!, "managed-service-state");
   await fs.writeFile(statePath, "running");
@@ -59,17 +61,37 @@ const service = {
   },
 };
 export const resolveGatewayService = () => service;
-export const readGatewayServiceState = async () => ({ env: env(), command,
-  runtime: { status: (await fs.readFile(statePath, 'utf8')) } });
+export const readGatewayServiceState = async () => {
+  const status = await fs.readFile(statePath, 'utf8');
+  return { env: env(), command, installed: true, running: status === 'running',
+    loadState: { status: 'loaded' }, runtime: { status } };
+};
 `,
   );
+  const health: GatewayRestartResult = {
+    outcome,
+    healthy: outcome === "ready",
+    waitOutcome:
+      outcome === "ready" ? "healthy" : outcome === "starting" ? "still-starting" : "stopped-free",
+    staleGatewayPids: [],
+    runtime:
+      outcome === "failed"
+        ? { status: "stopped", state: "failed", lastExitStatus: 1 }
+        : { status: "running" },
+    portUsage: {
+      port: Number(process.env.OPENCLAW_GATEWAY_PORT),
+      status: outcome === "ready" ? "busy" : "free",
+      listeners: [],
+      hints: [],
+    },
+  };
   override(
     "./daemon-cli/restart-health.ts",
     `${shared}
-export const waitForGatewayHealthyRestart = async () => ({
-  healthy: (await fs.readFile(statePath, 'utf8')) === 'running', staleGatewayPids: [],
-  runtime: { status: 'running' }, portUsage: { port: Number(process.env.OPENCLAW_GATEWAY_PORT), status: 'busy', listeners: [], hints: [] },
-});
+export const waitForGatewayHealthyRestart = async () => {
+  if ((await fs.readFile(statePath, 'utf8')) !== 'running') throw new Error('Gateway was not restored');
+  return ${JSON.stringify(health)};
+};
 `,
   );
   stubs.delete(sourceUrl("../plugins/plugin-lifecycle-lease.ts"));

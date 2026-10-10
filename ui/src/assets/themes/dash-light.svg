@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1000" viewBox="0 0 1600 1000" fill="none">
+  <defs>
+    <linearGradient id="ink" x1="0" y1="1000" x2="1600" y2="0" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#938976"/>
+      <stop offset="0.7" stop-color="#9e7345"/>
+      <stop offset="1" stop-color="#938976"/>
+    </linearGradient>
+    <radialGradient id="quiet">
+      <stop offset="0.15" stop-color="white" stop-opacity="0"/>
+      <stop offset="0.8" stop-color="white" stop-opacity="0.5"/>
+      <stop offset="1" stop-color="white"/>
+    </radialGradient>
+    <mask id="edges"><path fill="url(#quiet)" d="M0 0h1600v1000H0z"/></mask>
+  </defs>
+  <g stroke="url(#ink)" stroke-width="2" opacity="0.07" mask="url(#edges)">
+    <path d="M970 1060V405a320 320 0 0 1 640 0v655M1005 1060V405a285 285 0 0 1 570 0v655M1040 1060V405a250 250 0 0 1 500 0v655M1075 1060V405a215 215 0 0 1 430 0v655M1110 1060V405a180 180 0 0 1 360 0v655M1145 1060V405a145 145 0 0 1 290 0v655M1180 1060V405a110 110 0 0 1 220 0v655"/>
+<path d="M1085-90v195a245 245 0 0 0 490 0V-90M1120-90v195a210 210 0 0 0 420 0V-90M1155-90v195a175 175 0 0 0 350 0V-90M1190-90v195a140 140 0 0 0 280 0V-90"/>
+<path d="M-155 1080V780a250 250 0 0 1 500 0v95h450M-120 1080V780a215 215 0 0 1 430 0v130h485M-85 1080V780a180 180 0 0 1 360 0v165h520M-50 1080V780a145 145 0 0 1 290 0v200h555"/>
+  </g>
+</svg>

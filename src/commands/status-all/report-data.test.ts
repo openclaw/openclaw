@@ -7,11 +7,13 @@ import type { RestartSentinelPayload } from "../../infra/restart-sentinel.js";
 import type { UpdateRunRecord } from "../../infra/update-run-record.js";
 import { writeSkill } from "../../skills/test-support/e2e-test-helpers.js";
 import { withEnvAsync } from "../../test-utils/env.js";
+import { createStatusGatewayProbeBudget } from "../status.gateway-probe-budget.js";
 import { baseStatusGatewaySnapshot, baseStatusOverviewSurface } from "../status.test-support.ts";
 
 const mocks = vi.hoisted(() => ({
-  listUpdateRuns: vi.fn<() => UpdateRunRecord[]>(() => []),
-  findActiveUpdateRun: vi.fn<() => UpdateRunRecord | undefined>(),
+  history: vi.fn<typeof import("../../infra/update-run-reader.js").getUpdateRunHistoryStatusAsync>(
+    async () => ({}),
+  ),
   getUpdateRun: vi.fn<(runId: string) => UpdateRunRecord | undefined>(),
   readRestartSentinelReadOnly: vi.fn<() => Promise<{ payload: RestartSentinelPayload } | null>>(
     async () => null,
@@ -52,10 +54,12 @@ vi.mock("../../infra/exec-approvals.js", () => ({
   loadExecApprovalsReadOnly: mocks.loadExecApprovalsReadOnly,
 }));
 vi.mock("../../infra/update-run-ledger.js", () => ({
-  findActiveUpdateRun: mocks.findActiveUpdateRun,
   getUpdateRun: mocks.getUpdateRun,
-  listUpdateRuns: mocks.listUpdateRuns,
-  reconcileAbandonedUpdateRuns: () => [],
+  getUpdateRunAsync: async (runId: string) => mocks.getUpdateRun(runId),
+  reconcileAbandonedUpdateRunsAsync: async () => [],
+}));
+vi.mock("../../infra/update-run-reader.js", () => ({
+  getUpdateRunHistoryStatusAsync: mocks.history,
 }));
 vi.mock("../../infra/restart-sentinel.js", () => ({
   readRestartSentinelReadOnly: mocks.readRestartSentinelReadOnly,
@@ -108,12 +112,16 @@ describe("buildStatusAllReportData", () => {
       eligible: 0,
       missing: 0,
     });
-    mocks.listUpdateRuns.mockReturnValue([]);
-    mocks.findActiveUpdateRun.mockReturnValue(undefined);
+    vi.spyOn(performance, "now").mockReturnValue(0);
+    mocks.history.mockResolvedValue({});
     mocks.getUpdateRun.mockReturnValue(undefined);
     mocks.readRestartSentinelReadOnly.mockResolvedValue(null);
     mocks.resolveStatusGatewayDiagnosticsSafe.mockResolvedValue({ ok: true, value: {} });
     mocks.resolveStatusGatewayHealthSafe.mockResolvedValue(undefined);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   it.each([
@@ -126,6 +134,7 @@ describe("buildStatusAllReportData", () => {
     "different-run",
     "same-prose",
     "generic-sentinel",
+    "failed-healthy",
   ] as const)(
     "keeps current update availability alongside %s history without observing config",
     async (history) => {
@@ -162,14 +171,17 @@ describe("buildStatusAllReportData", () => {
         "generic-sentinel",
       ].includes(history);
       if (hasRun) {
-        mocks.listUpdateRuns.mockReturnValue([completed]);
+        if (history === "failed-healthy") {
+          completed.status = "failed";
+          completed.reason = "post-update-failed";
+        }
+        mocks.history.mockResolvedValue({ lastRun: completed });
         mocks.getUpdateRun.mockReturnValue(completed);
       }
       if (history === "active") {
-        mocks.findActiveUpdateRun.mockReturnValue({
-          ...completed,
-          status: "running",
-          phase: "verifying",
+        mocks.history.mockResolvedValue({
+          lastRun: completed,
+          activeRun: { ...completed, status: "running", phase: "verifying" },
         });
       }
       if (hasSentinel) {
@@ -197,6 +209,7 @@ describe("buildStatusAllReportData", () => {
         });
       }
       const report = await buildStatusAllReportData({
+        ...createStatusGatewayProbeBudget(),
         overview: {
           ...baseStatusOverviewSurface,
           cfg: {},
@@ -207,9 +220,13 @@ describe("buildStatusAllReportData", () => {
           gatewaySnapshot: {
             ...baseStatusGatewaySnapshot,
             gatewayReachable: false,
-            gatewayProbe: null,
+            gatewayProbe:
+              history === "failed-healthy"
+                ? { server: { version: "2026.9.2", buildId: "fixture-build" } }
+                : null,
             gatewayCallOverrides: undefined,
             remoteUrlMissing: false,
+            localGatewayHealthy: history === "failed-healthy",
           },
           secretDiagnostics: [],
           tailscaleMode: "off",
@@ -238,7 +255,11 @@ describe("buildStatusAllReportData", () => {
               {
                 Item: "Update run",
                 Value:
-                  history === "active" ? "⬆️ OpenClaw update in progress: verifying." : success,
+                  history === "active"
+                    ? "⬆️ OpenClaw update in progress: verifying."
+                    : history === "failed-healthy"
+                      ? "Last update run failed (post-update-failed) — Gateway is serving 2026.9.2; run `openclaw update` to clear the record."
+                      : success,
               },
             ]
           : []),
@@ -264,47 +285,61 @@ describe("buildStatusAllReportData", () => {
     },
   );
 
-  it("collects delivery and exporter stability projections in parallel", async () => {
-    await buildStatusAllReportData({
-      overview: {
-        cfg: {},
-        gatewaySnapshot: {
-          gatewayReachable: true,
-          gatewayProbe: { error: null },
-          gatewayCallOverrides: undefined,
-          gatewayConnection: {},
-          remoteUrlMissing: false,
-        },
-        secretDiagnostics: [],
-        tailscaleMode: "off",
-        tailscaleDns: null,
-        agentStatus: { agents: [], defaultId: null },
-        channels: { rows: [], details: [] },
-        channelIssues: [],
-        runtimeDegradation: { degradedSecretOwners: [], degradedPlugins: [] },
-        osSummary: { label: "test" },
-      } as never,
-      daemon: {} as never,
-      nodeService: {} as never,
-      nodeOnlyGateway: null,
-      progress: { setLabel: vi.fn(), tick: vi.fn() },
-    });
+  it.each([false, true])(
+    "collects stability projections only after readiness (starting: %s)",
+    async (starting) => {
+      const report = await buildStatusAllReportData({
+        ...createStatusGatewayProbeBudget(),
+        overview: {
+          cfg: {},
+          gatewaySnapshot: {
+            gatewayReachable: !starting,
+            gatewayProbe: { error: null, ...(starting ? { startupPhase: "plugins" } : {}) },
+            gatewayCallOverrides: undefined,
+            gatewayConnection: {},
+            remoteUrlMissing: false,
+          },
+          secretDiagnostics: [],
+          tailscaleMode: "off",
+          tailscaleDns: null,
+          agentStatus: { agents: [], defaultId: null },
+          channels: { rows: [], details: [] },
+          channelIssues: [],
+          runtimeDegradation: { degradedSecretOwners: [], degradedPlugins: [] },
+          osSummary: { label: "test" },
+        } as never,
+        daemon: {} as never,
+        nodeService: {} as never,
+        nodeOnlyGateway: null,
+        progress: { setLabel: vi.fn(), tick: vi.fn() },
+      });
 
-    expect(mocks.resolveStatusGatewayDiagnosticsSafe.mock.calls).toEqual([
-      [
-        expect.objectContaining({
-          gatewayReachable: true,
-        }),
-      ],
-      [
-        expect.objectContaining({
-          gatewayReachable: true,
-          type: "telemetry.exporter",
-        }),
-      ],
-    ]);
-    expect(mocks.resolveStatusSummaryFromOverview).not.toHaveBeenCalled();
-  });
+      if (starting) {
+        expect(mocks.resolveStatusGatewayDiagnosticsSafe).not.toHaveBeenCalled();
+        expect(mocks.resolveStatusGatewayHealthSafe).not.toHaveBeenCalled();
+        expect(report.diagnosis.gatewayStartupPhase).toBe("plugins");
+        expect(report.diagnosis.health).toBeUndefined();
+        return;
+      }
+
+      expect(mocks.resolveStatusGatewayDiagnosticsSafe.mock.calls).toEqual([
+        [
+          expect.objectContaining({
+            gatewayReachable: true,
+            gatewayProbeDeadlineMs: 60_000,
+          }),
+        ],
+        [
+          expect.objectContaining({
+            gatewayReachable: true,
+            gatewayProbeDeadlineMs: 60_000,
+            type: "telemetry.exporter",
+          }),
+        ],
+      ]);
+      expect(mocks.resolveStatusSummaryFromOverview).not.toHaveBeenCalled();
+    },
+  );
 
   it("renders the system agent's unfiltered readiness and refreshes newly installed binaries", async () => {
     const rootDir = tempDirs.make("openclaw-status-readiness-");
@@ -342,6 +377,7 @@ describe("buildStatusAllReportData", () => {
     );
     mocks.buildWorkspaceSkillReadiness.mockImplementation(actual.buildWorkspaceSkillReadiness);
     const params = {
+      ...createStatusGatewayProbeBudget(),
       overview: {
         cfg: {
           plugins: { enabled: false },
@@ -442,6 +478,7 @@ describe("buildStatusAllReportData", () => {
 
   it("does not inspect the first workspace when an explicit fleet has no owner", async () => {
     await buildStatusAllReportData({
+      ...createStatusGatewayProbeBudget(),
       overview: {
         cfg: {
           agents: {

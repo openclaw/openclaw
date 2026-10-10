@@ -4,7 +4,9 @@ import type {
 } from "../../../packages/gateway-protocol/src/schema/themes.ts";
 import {
   isBuiltinThemeId,
-  parseThemeDefinition,
+  normalizeThemeDefinition,
+  resolveThemeBranding,
+  type ThemeBranding,
   type ThemeColorMode,
   type ThemeDescriptor,
 } from "../../../packages/gateway-protocol/src/theme.ts";
@@ -20,6 +22,7 @@ export type ThemeCatalogSnapshot = {
 };
 
 export type CatalogTheme = {
+  branding: ThemeBranding;
   mode?: ThemeColorMode;
   palette: Pick<ImportedCustomTheme, "light" | "dark">;
 };
@@ -45,7 +48,17 @@ export function createThemeCatalog(gateway: ApplicationGateway, onChange: () => 
     gateway.snapshot.selfUser?.id === ownerProfile;
 
   const rememberDefinition = (result: ThemesGetResult) => {
-    const definition = parseThemeDefinition(result.definition);
+    let definition;
+    const artwork = result.theme.source === "plugin" ? result.theme.artwork : undefined;
+    try {
+      definition = normalizeThemeDefinition(result.definition, {
+        iconIds: Object.keys(artwork?.icons ?? {}),
+        hatIds: Object.keys(artwork?.hats ?? {}),
+        critterIds: Object.keys(artwork?.critters ?? {}),
+      });
+    } catch {
+      return;
+    }
     const light = definition?.light ?? definition?.dark;
     const dark = definition?.dark ?? definition?.light;
     if (definition && light && dark) {
@@ -53,6 +66,7 @@ export function createThemeCatalog(gateway: ApplicationGateway, onChange: () => 
       definitions.set(result.theme.id, {
         generation,
         theme: {
+          branding: { ...resolveThemeBranding(definition), ...(artwork ? { artwork } : {}) },
           mode: !definition.light ? "dark" : !definition.dark ? "light" : undefined,
           palette: {
             light: normalizeThemePalette("light", light, undefined),
@@ -79,14 +93,11 @@ export function createThemeCatalog(gateway: ApplicationGateway, onChange: () => 
         return;
       }
       const available = new Set<string>(result.themes.map((theme) => theme.id));
-      for (const id of definitions.keys()) {
-        if (!available.has(id)) {
-          definitions.delete(id);
-        }
-      }
-      for (const id of definitionErrors.keys()) {
-        if (!available.has(id)) {
-          definitionErrors.delete(id);
+      for (const entries of [definitions, definitionErrors]) {
+        for (const id of entries.keys()) {
+          if (!available.has(id)) {
+            entries.delete(id);
+          }
         }
       }
       rememberDefinition(result);
@@ -176,9 +187,10 @@ export function createThemeCatalog(gateway: ApplicationGateway, onChange: () => 
     }
   });
   const stopEvents = gateway.subscribeEvents((event) => {
-    if (event.event === "plugins.changed") {
-      void refresh();
-    } else if (event.event === "users.prefs.changed" && gateway.snapshot.selfUser?.id) {
+    if (
+      event.event === "plugins.changed" ||
+      (event.event === "users.prefs.changed" && gateway.snapshot.selfUser?.id)
+    ) {
       void refresh();
     }
   });

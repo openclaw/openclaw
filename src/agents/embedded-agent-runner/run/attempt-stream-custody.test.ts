@@ -18,7 +18,10 @@ import {
 import { createDiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
 import { createDiagnosticEmbeddedRunOwner } from "../../../logging/diagnostic-run-activity.js";
 import { AsyncWorkScope } from "../../../shared/async-work-scope.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "../../../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.paths.js";
 import { runOpenClawAgentWorkerWrite } from "../../../state/openclaw-agent-write-admission.js";
 import { createAgentCleanupScope } from "../../run-cleanup-timeout.js";
@@ -50,8 +53,9 @@ type ReplayOptions = NonNullable<Parameters<StreamFn>[2]> & {
   onCompactionRejected?: (rejected: OpenAIResponsesCompactionRejection) => void;
 };
 
-afterEach(() => {
+afterEach(async () => {
   vi.useRealTimers();
+  await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
 });
 
@@ -294,7 +298,7 @@ describe("installed replay repair ownership", () => {
     }
   });
 
-  describe.each(["request-rejection", "stream-rejection"] as const)(
+  describe.each(["request-rejection", "stream-rejection", "promised-stream-rejection"] as const)(
     "thinking recovery after %s",
     (failureMode) => {
       it.each(["event", "concurrent-results", "return-before-next"] as const)(
@@ -325,7 +329,7 @@ describe("installed replay repair ownership", () => {
                   ]),
                 });
               }
-              return stream;
+              return failureMode === "promised-stream-rejection" ? Promise.resolve(stream) : stream;
             },
             { thinkingRecovery: true },
           );
@@ -583,7 +587,6 @@ describe("installed replay repair ownership", () => {
         transcriptLifecycle: lifecycle,
         trajectoryRecorder: null,
         trajectoryEndRecorded: false,
-        sessionAgentId: "main",
         buildAbortSettlePromise: tracker.buildAbortSettlePromise,
         state: {
           terminal: { kind: "aborted", source: "external" },

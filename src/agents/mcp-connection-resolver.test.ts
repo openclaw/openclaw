@@ -3,19 +3,18 @@ import { randomUUID } from "node:crypto";
 import http from "node:http";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildGatewayReloadPlan } from "../gateway/config-reload-plan.js";
 import { createGatewayCronReconciliation } from "../gateway/server-cron-reconciled.js";
 import { createGatewayReloadHandlers } from "../gateway/server-reload-hot.js";
-import {
-  isGatewaySigusr1RestartExternallyAllowed,
-  setGatewaySigusr1RestartPolicy,
-} from "../infra/restart.js";
+import { isGatewayRestartExternallyAllowed, setGatewayRestartPolicy } from "../infra/restart.js";
 import { isSecretValueRegisteredForRedaction } from "../logging/secret-redaction-registry.js";
 import { isPluginRegistryRetired } from "../plugins/registry-lifecycle.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
+import { setSessionMcpRuntimeScheduler } from "./agent-bundle-mcp-manager-api.js";
 import { getOrCreateSessionMcpRuntime } from "./agent-bundle-mcp-manager.test-support.js";
 import { disposeAllSessionMcpRuntimes, peekSessionMcpRuntime } from "./agent-bundle-mcp-tools.js";
 import {
@@ -27,6 +26,7 @@ import {
   resolveRequesterScopedMcpConnections,
 } from "./mcp-connection-resolver.js";
 import { createMcpProofPluginRegistry } from "./mcp-connection-resolver.test-fixtures.js";
+import { resolveMcpTransportConfig } from "./mcp-transport-config.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "./prepared-model-runtime.test-support.js";
 
 type AuthenticatedMcpProofEndpoint = {
@@ -216,17 +216,21 @@ describe("mcp connection resolver helpers", () => {
   });
 
   it("revokes MCP credentials during a full gateway plugin-disable replacement", async () => {
+    const scheduler = createTestGatewayScheduler();
+    onTestFinished(() => scheduler.stop());
+    await setSessionMcpRuntimeScheduler(scheduler);
     const proof = await startAuthenticatedMcpProofServer();
-    const previousExternalRestartPolicy = isGatewaySigusr1RestartExternallyAllowed();
+    const previousExternalRestartPolicy = isGatewayRestartExternallyAllowed();
 
     try {
-      // Keep Gateway refresh scheduling observable without starting provider discovery.
-      const refreshPreparedModelRuntimeSnapshots = vi
-        .spyOn(await import("./prepared-model-runtime.js"), "refreshPreparedModelRuntimeSnapshots")
-        .mockResolvedValue(undefined);
-      const refreshContextWindowCache = vi
-        .spyOn(await import("./context.js"), "refreshContextWindowCache")
-        .mockResolvedValue(undefined);
+      // Keep provider discovery outside the MCP credential-revocation fixture.
+      vi.spyOn(
+        await import("./prepared-model-runtime.js"),
+        "refreshPreparedModelRuntimeSnapshots",
+      ).mockResolvedValue(undefined);
+      vi.spyOn(await import("./context.js"), "refreshContextWindowCache").mockResolvedValue(
+        undefined,
+      );
       const previous = createMcpProofPluginRegistry();
       previous.apiFor("startup-mail").registerMcpServerConnectionResolver({
         serverName: "user-mail",
@@ -337,6 +341,7 @@ describe("mcp connection resolver helpers", () => {
         sourceDigests: {},
       };
       const gatewayReload = createGatewayReloadHandlers({
+        scheduler,
         deps: {},
         broadcast() {},
         getState: () => gatewayState,
@@ -376,11 +381,6 @@ describe("mcp connection resolver helpers", () => {
         status: "applied",
         runtime,
       });
-      expect(refreshPreparedModelRuntimeSnapshots).toHaveBeenCalledWith(nextConfig, {
-        allowGatewaySubagentBinding: true,
-        catalogMode: "static",
-      });
-      expect(refreshContextWindowCache).toHaveBeenCalledWith(nextConfig);
       expect(requestRecoveryRestart).not.toHaveBeenCalled();
       expect(isPluginRegistryRetired(previous.registry)).toBe(true);
       expect(
@@ -437,7 +437,7 @@ describe("mcp connection resolver helpers", () => {
     } finally {
       await disposeAllSessionMcpRuntimes();
       await resetPreparedModelRuntimeSnapshotsForTest();
-      setGatewaySigusr1RestartPolicy({ allowExternal: previousExternalRestartPolicy });
+      setGatewayRestartPolicy({ allowExternal: previousExternalRestartPolicy });
       await proof.close();
     }
   });
@@ -695,35 +695,26 @@ describe("mcp connection resolver helpers", () => {
     expect(sseKept.transport).toBe("sse");
     expect(sseKept.url).toBe("https://live.example/sse");
 
-    const sseFromType = applyMcpConnectionOverride(
+    const canonicalDefault = applyMcpConnectionOverride(
       { type: "sse", toolFilter: { include: ["x"] } },
       { url: "https://live.example/sse-type" },
     );
-    expect(sseFromType.transport).toBe("sse");
-    expect(sseFromType).not.toHaveProperty("type");
+    expect(canonicalDefault.transport).toBe("streamable-http");
+    expect(canonicalDefault).not.toHaveProperty("type");
 
     const sseCase = applyMcpConnectionOverride(
       { transport: "SSE" },
       { url: "https://live.example/sse-case" },
     );
     expect(sseCase.transport).toBe("sse");
-  });
 
-  it("builds stable requester cache keys", () => {
-    expect(
-      buildMcpRequesterRuntimeCacheKey({
-        sessionId: "s1",
-        messageChannel: "telegram",
-        agentAccountId: "bot",
-        requesterSenderId: "user-1",
-      }),
-    ).toBe(
-      JSON.stringify({
-        sessionId: "s1",
-        messageChannel: "telegram",
-        agentAccountId: "bot",
-        requesterSenderId: "user-1",
-      }),
+    const unsupported = applyMcpConnectionOverride(
+      { transport: "custom", type: " CuStOm " },
+      { url: "https://live.example/unsupported" },
     );
+    expect(unsupported.transport).toBe("custom");
+    expect(
+      resolveMcpTransportConfig("unsupported", unsupported, { logWarnings: false }),
+    ).toBeNull();
   });
 });

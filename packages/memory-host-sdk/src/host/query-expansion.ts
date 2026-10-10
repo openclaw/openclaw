@@ -1,17 +1,7 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
-/**
- * Query expansion for lexical FTS search.
- *
- * FTS works best with specific keywords, but users often ask conversational queries
- * like "that thing we discussed yesterday" or "之前讨论的那个方案". This helps both
- * hybrid retrieval and FTS-only fallback mode find those keywords.
- *
- * This module extracts meaningful keywords from such queries to improve FTS results.
- */
-
-// Common stop words that don't add search value
-const STOP_WORDS_EN = new Set([
+const STOP_WORDS_GENERAL = new Set([
+  // English
   // Articles and determiners
   "a",
   "an",
@@ -118,9 +108,7 @@ const STOP_WORDS_EN = new Set([
   "get",
   "tell",
   "give",
-]);
-
-const STOP_WORDS_ES = new Set([
+  // Spanish
   // Articles and determiners
   "el",
   "la",
@@ -192,9 +180,7 @@ const STOP_WORDS_ES = new Set([
   "porqué",
   "favor",
   "ayuda",
-]);
-
-const STOP_WORDS_PT = new Set([
+  // Portuguese
   // Articles and determiners
   "o",
   "a",
@@ -262,9 +248,7 @@ const STOP_WORDS_PT = new Set([
   "porquê",
   "favor",
   "ajuda",
-]);
-
-const STOP_WORDS_AR = new Set([
+  // Arabic
   // Articles and connectors
   "ال",
   "و",
@@ -481,7 +465,8 @@ function isUsefulKoreanStem(stem: string): boolean {
   return /^[a-z0-9_]+$/i.test(stem);
 }
 
-const STOP_WORDS_JA = new Set([
+const STOP_WORDS_JA_ZH = new Set([
+  // Japanese
   // Pronouns and references
   "これ",
   "それ",
@@ -532,9 +517,7 @@ const STOP_WORDS_JA = new Set([
   "さっき",
   "前",
   "後",
-]);
-
-const STOP_WORDS_ZH = new Set([
+  // Chinese
   // Pronouns
   "我",
   "我们",
@@ -634,87 +617,53 @@ const STOP_WORDS_ZH = new Set([
 
 /** Returns true for low-value conversational tokens that should not drive FTS matching. */
 export function isQueryStopWordToken(token: string): boolean {
+  return STOP_WORDS_GENERAL.has(token) || STOP_WORDS_JA_ZH.has(token) || STOP_WORDS_KO.has(token);
+}
+
+function isValidKeyword(token: string): boolean {
   return (
-    STOP_WORDS_EN.has(token) ||
-    STOP_WORDS_ES.has(token) ||
-    STOP_WORDS_PT.has(token) ||
-    STOP_WORDS_AR.has(token) ||
-    STOP_WORDS_ZH.has(token) ||
-    STOP_WORDS_KO.has(token) ||
-    STOP_WORDS_JA.has(token)
+    token.length > 0 &&
+    !(token.length < 3 && /^[a-zA-Z]+$/.test(token)) &&
+    !/^\d+$/.test(token) &&
+    !/^[\p{P}\p{S}]+$/u.test(token)
   );
 }
 
-/**
- * Check if a token looks like a meaningful keyword.
- * Returns false for short tokens, numbers-only, etc.
- */
-function isValidKeyword(token: string): boolean {
-  if (!token || token.length === 0) {
-    return false;
-  }
-  // Skip very short English words (likely stop words or fragments)
-  if (/^[a-zA-Z]+$/.test(token) && token.length < 3) {
-    return false;
-  }
-  // Skip pure numbers (not useful for semantic search)
-  if (/^\d+$/.test(token)) {
-    return false;
-  }
-  // Skip tokens that are all punctuation
-  if (/^[\p{P}\p{S}]+$/u.test(token)) {
-    return false;
-  }
-  return true;
-}
-
-/**
- * Simple tokenizer that handles English, Chinese, Korean, and Japanese text.
- * For Chinese, we do character-based splitting since we don't have a proper segmenter.
- * For English, we split on whitespace and punctuation.
- */
-function tokenize(text: string, opts?: { ftsTokenizer?: "unicode61" | "trigram" }): string[] {
+/** Extract ordered, unique keywords from a conversational query for FTS search. */
+export function extractKeywords(
+  query: string,
+  opts?: { ftsTokenizer?: "unicode61" | "trigram" },
+): string[] {
   const useTrigram = opts?.ftsTokenizer === "trigram";
   const tokens: string[] = [];
-  const normalized = normalizeLowercaseStringOrEmpty(text);
+  const normalized = normalizeLowercaseStringOrEmpty(query);
 
-  // Split into segments (English words, Chinese character sequences, etc.)
   const segments = normalized.split(/[\s\p{P}]+/u).filter(Boolean);
 
   for (const segment of segments) {
-    // Japanese text often mixes scripts (kanji/kana/ASCII) without spaces.
-    // Extract script-specific chunks so technical terms like "API" / "バグ" are retained.
-    if (/[\u3040-\u30ff]/.test(segment)) {
-      const jpParts =
-        segment.match(/[a-z0-9_]+|[\u30a0-\u30ffー]+|[\u4e00-\u9fff]+|[\u3040-\u309f]{2,}/g) ?? [];
-      for (const part of jpParts) {
-        if (/^[\u4e00-\u9fff]+$/.test(part)) {
-          tokens.push(part);
-          if (!useTrigram) {
-            for (let i = 0; i < part.length - 1; i++) {
-              tokens.push(part.slice(i, i + 2));
-            }
-          }
+    const japanese = /[\u3040-\u30ff]/.test(segment);
+    if (japanese || /[\u4e00-\u9fff]/.test(segment)) {
+      // Keep script runs separate so embedded ASCII terms survive and Han
+      // characters on either side are never joined into one term.
+      const parts =
+        segment.match(
+          japanese
+            ? /[a-z0-9_]+|[\u30a0-\u30ffー]+|[\u4e00-\u9fff]+|[\u3040-\u309f]{2,}/g
+            : /[a-z0-9_]+|[\u4e00-\u9fff]+/g,
+        ) ?? [];
+      for (const part of parts) {
+        const han = /^[\u4e00-\u9fff]+$/.test(part);
+        // Chinese default queries use unigrams; Japanese and trigram queries
+        // retain whole runs. Trigram FTS cannot match individual characters.
+        if (!japanese && han && !useTrigram) {
+          tokens.push(...Array.from(part));
         } else {
           tokens.push(part);
         }
-      }
-    } else if (/[\u4e00-\u9fff]/.test(segment)) {
-      // Check if segment contains CJK characters (Chinese)
-      const chars = Array.from(segment).filter((c) => /[\u4e00-\u9fff]/.test(c));
-      if (useTrigram) {
-        // In trigram mode, push the whole contiguous CJK block (mirroring the
-        // Japanese kanji path). SQLite's trigram FTS requires at least 3 characters
-        // per query term — individual characters silently return no results.
-        const block = chars.join("");
-        if (block.length > 0) {
-          tokens.push(block);
-        }
-      } else {
-        // Default mode: unigrams + bigrams for phrase matching
-        tokens.push(...chars);
-        for (let i = 0; i < chars.length - 1; i++) {
-          tokens.push(chars.slice(i, i + 2).join(""));
+        if (han && !useTrigram) {
+          for (let i = 0; i < part.length - 1; i++) {
+            tokens.push(part.slice(i, i + 2));
+          }
         }
       }
     } else if (/[\uac00-\ud7af\u3131-\u3163]/.test(segment)) {
@@ -730,46 +679,11 @@ function tokenize(text: string, opts?: { ftsTokenizer?: "unicode61" | "trigram" 
         tokens.push(stem);
       }
     } else {
-      // For non-CJK, keep as single token
       tokens.push(segment);
     }
   }
 
-  return tokens;
-}
-
-/**
- * Extract keywords from a conversational query for FTS search.
- *
- * Examples:
- * - "that thing we discussed about the API" → ["discussed", "API"]
- * - "之前讨论的那个方案" → ["讨论", "方案"]
- * - "what was the solution for the bug" → ["solution", "bug"]
- */
-export function extractKeywords(
-  query: string,
-  opts?: { ftsTokenizer?: "unicode61" | "trigram" },
-): string[] {
-  const tokens = tokenize(query, opts);
-  const keywords: string[] = [];
-  const seen = new Set<string>();
-
-  for (const token of tokens) {
-    // Skip stop words
-    if (isQueryStopWordToken(token)) {
-      continue;
-    }
-    // Skip invalid keywords
-    if (!isValidKeyword(token)) {
-      continue;
-    }
-    // Skip duplicates
-    if (seen.has(token)) {
-      continue;
-    }
-    seen.add(token);
-    keywords.push(token);
-  }
-
-  return keywords;
+  return [
+    ...new Set(tokens.filter((token) => !isQueryStopWordToken(token) && isValidKeyword(token))),
+  ];
 }

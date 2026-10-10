@@ -5,11 +5,10 @@ import type { EncryptedFile } from "./types.js";
 import type {
   MatrixVerificationCryptoApi,
   MatrixVerificationManager,
-  MatrixVerificationMethod,
 } from "./verification-manager.js";
 
 type MatrixCryptoFacadeClient = {
-  getCrypto: () => unknown;
+  getCrypto: () => MatrixVerificationCryptoApi | undefined;
   getUserId: () => string | null;
 };
 
@@ -34,20 +33,6 @@ async function loadMatrixCryptoNodeBindings() {
   return runtime.loadMatrixCryptoNodeBindings();
 }
 
-function trackInProgressToDeviceVerifications(deps: {
-  client: MatrixCryptoFacadeClient;
-  verificationManager: MatrixVerificationManager;
-}) {
-  const crypto = deps.client.getCrypto() as MatrixVerificationCryptoApi | undefined;
-  const userId = deps.client.getUserId();
-  if (!userId || typeof crypto?.getVerificationRequestsToDeviceInProgress !== "function") {
-    return;
-  }
-  for (const request of crypto.getVerificationRequestsToDeviceInProgress(userId)) {
-    deps.verificationManager.trackVerificationRequest(request);
-  }
-}
-
 export function createMatrixCryptoFacade(deps: {
   client: MatrixCryptoFacadeClient;
   verificationManager: MatrixVerificationManager;
@@ -58,21 +43,24 @@ export function createMatrixCryptoFacade(deps: {
     opts?: { maxBytes?: number; readIdleTimeoutMs?: number },
   ) => Promise<Buffer>;
 }) {
+  const manager = deps.verificationManager;
+  function withTrackedVerifications<TArgs extends unknown[], TResult>(
+    run: (...args: TArgs) => TResult,
+  ) {
+    return async (...args: TArgs): Promise<Awaited<TResult>> => {
+      const crypto = deps.client.getCrypto();
+      const userId = deps.client.getUserId();
+      if (userId && crypto) {
+        for (const request of crypto.getVerificationRequestsToDeviceInProgress(userId)) {
+          manager.trackVerificationRequest(request);
+        }
+      }
+      return await run(...args);
+    };
+  }
+
   return {
-    updateSyncData: async (
-      _toDeviceMessages: unknown,
-      _otkCounts: unknown,
-      _unusedFallbackKeyAlgs: unknown,
-      _changedDeviceLists: unknown,
-      _leftDeviceLists: unknown,
-    ) => {
-      // compatibility no-op
-    },
     isRoomEncrypted: deps.isRoomEncrypted,
-    requestOwnUserVerification: async () => {
-      const crypto = deps.client.getCrypto() as MatrixVerificationCryptoApi | undefined;
-      return await deps.verificationManager.requestOwnUserVerification(crypto);
-    },
     encryptMedia: async (
       buffer: Buffer,
     ): Promise<{ buffer: Buffer; file: Omit<EncryptedFile, "url"> }> => {
@@ -116,16 +104,9 @@ export function createMatrixCryptoFacade(deps: {
     getRecoveryKey: async () => {
       return deps.recoveryKeyStore.getRecoveryKeySummary();
     },
-    listVerifications: async () => {
-      trackInProgressToDeviceVerifications(deps);
-      return deps.verificationManager.listVerifications();
-    },
+    listVerifications: withTrackedVerifications(manager.listVerifications.bind(manager)),
     ensureVerificationDmTracked: async ({ roomId, userId }: { roomId: string; userId: string }) => {
-      const crypto = deps.client.getCrypto() as MatrixVerificationCryptoApi | undefined;
-      const request =
-        typeof crypto?.findVerificationRequestDMInProgress === "function"
-          ? crypto.findVerificationRequestDMInProgress(roomId, userId)
-          : undefined;
+      const request = deps.client.getCrypto()?.findVerificationRequestDMInProgress(roomId, userId);
       if (!request) {
         return null;
       }
@@ -137,45 +118,21 @@ export function createMatrixCryptoFacade(deps: {
       deviceId?: string;
       roomId?: string;
     }) => {
-      const crypto = deps.client.getCrypto() as MatrixVerificationCryptoApi | undefined;
-      return await deps.verificationManager.requestVerification(crypto, params);
+      return await deps.verificationManager.requestVerification(deps.client.getCrypto(), params);
     },
-    acceptVerification: async (id: string) => {
-      trackInProgressToDeviceVerifications(deps);
-      return await deps.verificationManager.acceptVerification(id);
-    },
-    cancelVerification: async (id: string, params?: { reason?: string; code?: string }) => {
-      trackInProgressToDeviceVerifications(deps);
-      return await deps.verificationManager.cancelVerification(id, params);
-    },
-    startVerification: async (id: string, method: MatrixVerificationMethod = "sas") => {
-      trackInProgressToDeviceVerifications(deps);
-      return await deps.verificationManager.startVerification(id, method);
-    },
-    generateVerificationQr: async (id: string) => {
-      trackInProgressToDeviceVerifications(deps);
-      return await deps.verificationManager.generateVerificationQr(id);
-    },
-    scanVerificationQr: async (id: string, qrDataBase64: string) => {
-      trackInProgressToDeviceVerifications(deps);
-      return await deps.verificationManager.scanVerificationQr(id, qrDataBase64);
-    },
-    confirmVerificationSas: async (id: string) => {
-      trackInProgressToDeviceVerifications(deps);
-      return await deps.verificationManager.confirmVerificationSas(id);
-    },
-    mismatchVerificationSas: async (id: string) => {
-      trackInProgressToDeviceVerifications(deps);
-      return deps.verificationManager.mismatchVerificationSas(id);
-    },
-    confirmVerificationReciprocateQr: async (id: string) => {
-      trackInProgressToDeviceVerifications(deps);
-      return deps.verificationManager.confirmVerificationReciprocateQr(id);
-    },
-    getVerificationSas: async (id: string) => {
-      trackInProgressToDeviceVerifications(deps);
-      return deps.verificationManager.getVerificationSas(id);
-    },
+    acceptVerification: withTrackedVerifications(manager.acceptVerification.bind(manager)),
+    cancelVerification: withTrackedVerifications(manager.cancelVerification.bind(manager)),
+    startVerification: withTrackedVerifications(manager.startVerification.bind(manager)),
+    generateVerificationQr: withTrackedVerifications(manager.generateVerificationQr.bind(manager)),
+    scanVerificationQr: withTrackedVerifications(manager.scanVerificationQr.bind(manager)),
+    confirmVerificationSas: withTrackedVerifications(manager.confirmVerificationSas.bind(manager)),
+    mismatchVerificationSas: withTrackedVerifications(
+      manager.mismatchVerificationSas.bind(manager),
+    ),
+    confirmVerificationReciprocateQr: withTrackedVerifications(
+      manager.confirmVerificationReciprocateQr.bind(manager),
+    ),
+    getVerificationSas: withTrackedVerifications(manager.getVerificationSas.bind(manager)),
   };
 }
 

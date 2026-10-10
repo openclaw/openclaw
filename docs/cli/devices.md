@@ -64,6 +64,10 @@ Approval behavior:
 
 Reject a pending device pairing request.
 
+A connected waiting Control UI browser shows **Access request declined** and
+stops retrying automatically. It can submit a new request with **Request again**;
+reloading the page can also request again. Rejection does not persist a device ban.
+
 ```bash
 openclaw devices reject <requestId>
 ```
@@ -87,7 +91,28 @@ endpoints can use HTTP, provided the joining machine can reach that loopback
 endpoint, for example through a local tunnel.
 
 With only the default loopback bind and no advertised endpoint, URL discovery
-refuses to mint a link. Configure a reachable secure endpoint first; see
+refuses to mint a link. For a loopback Gateway behind public HTTPS ingress, set
+`gateway.publicOrigin` to the proxy's bare HTTPS origin and include the proxy's
+source address in `gateway.trustedProxies`.
+
+Join codes, `/pair`, and QR setup preserve existing endpoint selection:
+`plugins.entries.device-pair.config.publicUrl`, an explicitly preferred
+`gateway.remote.url`, Tailscale Serve/Funnel, the non-preferred remote URL,
+then bind-derived addresses. `gateway.publicOrigin` is used only as the final
+fallback before the loopback-only error; it does not replace an existing route.
+Callers targeting the local Gateway omit the remote URL. HTTP(S) URLs become
+matching `ws:`/`wss:` pairing endpoints.
+
+Join codes preserve the context path of a fully qualified `publicUrl`: for
+`https://pair.example/extra`, the join URL begins with
+`https://pair.example/extra/j/`. The device-pair plugin's `/pair` command instead
+retains its historical origin-only WebSocket endpoint, `wss://pair.example`.
+
+[Cloud node enrollment](/gateway/cloud-workers) uses the same resolver with an
+explicit public-ingress preference: the pairing-specific override still wins,
+then `gateway.publicOrigin` precedes discovery for freshly provisioned workers.
+
+For other deployment prerequisites, see
 [Gateway deployments that cannot host nodes](/nodes/node-host#gateway-deployments-that-cannot-host-nodes).
 Plaintext LAN pairing can use a setup code directly instead of an HTTP join URL.
 See [Connect a machine](/cli/connect).

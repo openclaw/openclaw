@@ -1,5 +1,6 @@
 // Registry Jiti mock helpers install Vitest mocks for plugin registry import tests.
 import { vi } from "vitest";
+import "../../test-utils/prepare-compiled-subprocesses.js";
 
 const registryJitiMocks = vi.hoisted(() => ({
   createJiti: vi.fn(),
@@ -18,10 +19,12 @@ vi.mock("../discovery.js", () => ({
   ) => registryJitiMocks.discoverOpenClawPlugins(...args),
 }));
 
-vi.mock("../manifest-registry.js", () => ({
+vi.mock("../manifest-registry-build.js", () => ({
   loadBundledPluginManifestRegistry: (
     ...args: Parameters<typeof registryJitiMocks.loadPluginManifestRegistry>
   ) => registryJitiMocks.loadPluginManifestRegistry(...args),
+}));
+vi.mock("../manifest-registry.js", () => ({
   loadPluginManifestRegistryCore: (
     ...args: Parameters<typeof registryJitiMocks.loadPluginManifestRegistry>
   ) => registryJitiMocks.loadPluginManifestRegistry(...args),

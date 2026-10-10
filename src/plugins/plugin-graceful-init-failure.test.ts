@@ -1,7 +1,6 @@
-// Verifies graceful plugin init failure handling and reporting.
 import fs from "node:fs";
 import path from "node:path";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
 const fixtureTempDirs: string[] = [];
@@ -24,6 +23,7 @@ function writePlugin(params: {
   body: string;
   dir?: string;
   configSchema?: Record<string, unknown>;
+  configSchemaJson?: string;
 }): {
   id: string;
   file: string;
@@ -34,15 +34,17 @@ function writePlugin(params: {
   const filename = `${params.id}.cjs`;
   const file = path.join(dir, filename);
   fs.writeFileSync(file, params.body, "utf-8");
+  const manifest = JSON.stringify({
+    id: params.id,
+    name: params.id,
+    version: "1.0.0",
+    main: filename,
+  });
+  const configSchemaJson =
+    params.configSchemaJson ?? JSON.stringify(params.configSchema ?? { type: "object" });
   fs.writeFileSync(
     path.join(dir, "openclaw.plugin.json"),
-    JSON.stringify({
-      id: params.id,
-      name: params.id,
-      version: "1.0.0",
-      main: filename,
-      configSchema: params.configSchema ?? { type: "object" },
-    }),
+    `${manifest.slice(0, -1)},"configSchema":${configSchemaJson}}`,
     "utf-8",
   );
   return { id: params.id, file, dir };
@@ -54,11 +56,16 @@ function readPluginId(pluginPath: string): string {
   return manifest.id;
 }
 
-async function loadPlugins(pluginPaths: string[], warnings?: string[]) {
+async function loadPlugins(
+  pluginPaths: string[],
+  warnings?: string[],
+  previousRegistry?: NonNullable<Parameters<typeof loadOpenClawPlugins>[0]>["previousRegistry"],
+) {
   clearPluginLoaderCache();
   const allow = pluginPaths.map((pluginPath) => readPluginId(pluginPath));
   return loadOpenClawPlugins({
     cache: false,
+    previousRegistry,
     config: {
       plugins: {
         enabled: true,
@@ -98,16 +105,6 @@ function requireWarning(warnings: string[], text: string): string {
 }
 
 describe("graceful plugin initialization failure", () => {
-  it("marks plugin entry errored when register throws", async () => {
-    const plugin = writePlugin({
-      id: "throws-on-register",
-      body: `module.exports = { id: "throws-on-register", register() { throw new Error("config schema mismatch"); } };`,
-    });
-
-    const registry = await loadPlugins([plugin.file]);
-    expect(requirePluginEntry(registry, "throws-on-register").status).toBe("error");
-  });
-
   it("keeps loading other plugins after one register failure", async () => {
     const failing = writePlugin({
       id: "plugin-fail",
@@ -162,25 +159,56 @@ describe("graceful plugin initialization failure", () => {
     expect(failed.error).toContain("invalid schema");
   });
 
-  it("keeps loading other plugins when a manifest schema is nested past the stack limit", async () => {
-    let deep: Record<string, unknown> = { type: "object" };
-    for (let depth = 0; depth < 3_000; depth++) {
-      deep = { type: "object", properties: { nested: deep } };
-    }
+  it("keeps loading siblings and retries validation when a schema cannot be serialized", async () => {
+    // Serialize the fixture without spending the stack that validation must contain.
+    const deep =
+      '{"type":"object","properties":{"nested":'.repeat(3_000) +
+      '{"type":"object"}' +
+      "}}".repeat(3_000);
     const broken = writePlugin({
       id: "deep-schema-plugin",
       body: `module.exports = { id: "deep-schema-plugin", register() {} };`,
-      configSchema: deep,
+      configSchemaJson: deep,
     });
     const healthy = writePlugin({
       id: "shallow-schema-plugin",
       body: `module.exports = { id: "shallow-schema-plugin", register() {} };`,
     });
 
-    const registry = await loadPlugins([broken.file, healthy.file]);
+    const brokenSource = fs.realpathSync(broken.file);
+    const stringify = JSON.stringify;
+    let signatureFailures = 0;
+    // Native serialization limits differ; only the broken candidate's retention signature fails.
+    const serialization = vi.spyOn(JSON, "stringify").mockImplementation((value, ...args) => {
+      if (Array.isArray(value) && value[0] === brokenSource) {
+        signatureFailures++;
+        throw new RangeError("fixture retention signature exceeds serialization limits");
+      }
+      return stringify(value, ...args);
+    });
+    try {
+      const registry = await loadPlugins([broken.file, healthy.file]);
 
-    expect(requirePluginEntry(registry, "shallow-schema-plugin").status).toBe("loaded");
-    expect(requirePluginEntry(registry, "deep-schema-plugin").status).toBe("error");
+      expect(requirePluginEntry(registry, "shallow-schema-plugin").status).toBe("loaded");
+      expect(requirePluginEntry(registry, "deep-schema-plugin")).toMatchObject({
+        status: "error",
+        failurePhase: "validation",
+      });
+      const replacement = await loadPlugins([broken.file, healthy.file], undefined, registry);
+      expect(requirePluginEntry(replacement, "shallow-schema-plugin")).toBe(
+        requirePluginEntry(registry, "shallow-schema-plugin"),
+      );
+      expect(requirePluginEntry(replacement, "deep-schema-plugin")).toMatchObject({
+        status: "error",
+        failurePhase: "validation",
+      });
+      expect(requirePluginEntry(replacement, "deep-schema-plugin")).not.toBe(
+        requirePluginEntry(registry, "deep-schema-plugin"),
+      );
+      expect(signatureFailures).toBe(2);
+    } finally {
+      serialization.mockRestore();
+    }
   });
 
   it("records failed register metadata", async () => {

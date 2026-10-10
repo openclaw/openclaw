@@ -138,13 +138,9 @@ suite.define(() => {
         const teamHealth = gatewayRow(page, "profile:team").locator(".sidebar-gateway-health");
         await expect.poll(() => teamHealth.getAttribute("data-health")).toBe("ok");
         expect(await teamHealth.getAttribute("aria-label")).toBe("Connected");
-        await expect
-          .poll(() =>
-            page
-              .locator(".sidebar-identity-card .sidebar-gateway-health")
-              .getAttribute("data-health"),
-          )
-          .toBe("ok");
+        const identity = page.locator(".sidebar-identity-card");
+        expect(await identity.locator(".sidebar-gateway-health").count()).toBe(0);
+        await expect.poll(() => identity.locator(".gateway-status__label").count()).toBe(0);
         await assertSelectionUnchanged(page);
         await page.mouse.move(1100, 850);
         if (proof) {
@@ -170,14 +166,10 @@ suite.define(() => {
         await gateway.waitForRequest("connect", { after: firstConnectCount });
         await waitForControlUiGatewayReady(page);
         await expect.poll(() => teamHealth.getAttribute("data-health")).toBe("ok");
+        expect(await teamHealth.getAttribute("aria-label")).toBe("Connected");
         await assertSelectionUnchanged(page);
-        await expect
-          .poll(() =>
-            page
-              .locator(".sidebar-identity-card .sidebar-gateway-health")
-              .getAttribute("data-health"),
-          )
-          .toBe("ok");
+        expect(await identity.locator(".sidebar-gateway-health").count()).toBe(0);
+        await expect.poll(() => identity.locator(".gateway-status__label").count()).toBe(0);
         const reportedHealth = await page.evaluate(() => {
           const reports = Reflect.get(window, "nativeHealthReports") as Array<{ health: string }>;
           return reports.map((report) => report.health);

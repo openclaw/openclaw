@@ -11,6 +11,7 @@ import { keyed } from "lit/directives/keyed.js";
 import { ref } from "lit/directives/ref.js";
 import { titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
+import { shellLayoutTraits } from "../../app/shell-layout-traits.ts";
 import { icon } from "../../components/icons.ts";
 import type { PortalPanelToggleDetail } from "../../components/panel-toggle-contract.ts";
 import { t } from "../../i18n/index.ts";
@@ -22,7 +23,7 @@ import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { PollController } from "../../lit/poll-controller.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { probePortalReachable, type PortalReachability } from "./portal-reachability.ts";
-import { resolvePortalUrl } from "./portal-url.ts";
+import { portalNeedsNewTab, portalNeedsRemoteIngress } from "./portal-url.ts";
 import "./portals.css";
 
 registerPortalsEnglish();
@@ -32,7 +33,7 @@ const PORTAL_FRAME_SANDBOX =
 
 type PortalProbeState = {
   key: string;
-  status: "probing" | PortalReachability;
+  status: "probing" | "ingress-required" | "new-tab-required" | PortalReachability;
 };
 
 class PortalsPage extends OpenClawLightDomElement {
@@ -101,11 +102,7 @@ class PortalsPage extends OpenClawLightDomElement {
       )
     ) {
       this.requestGeneration += 1;
-      this.environmentRequestGeneration += 1;
-      this.environmentLoading = false;
-      this.pendingEnvironment = null;
-      this.environmentFailure = null;
-      this.environmentPoll.stop();
+      this.resetPendingEnvironment();
       this.loading = false;
       this.portalProbeGeneration += 1;
       this.portalProbeState = null;
@@ -152,22 +149,17 @@ class PortalsPage extends OpenClawLightDomElement {
     return this.requestedPortalId ? null : this.requestedEnvironmentId;
   }
 
-  private async loadPresentation(): Promise<void> {
-    if (this.pendingEnvironmentId) {
-      await this.loadPendingEnvironment();
-    } else {
-      await this.loadPortals();
-    }
+  private loadPresentation(): Promise<void> {
+    return this.pendingEnvironmentId ? this.loadPendingEnvironment() : this.loadPortals();
   }
 
   private async loadPendingEnvironment(): Promise<void> {
     const environmentId = this.pendingEnvironmentId;
-    const client = this.gateway.client;
     const scope = this.gateway.capture();
     if (
       !environmentId ||
-      !client ||
       !scope ||
+      !this.canReadPortalState ||
       this.environmentLoading ||
       (this.embedded && !this.presented)
     ) {
@@ -181,7 +173,7 @@ class PortalsPage extends OpenClawLightDomElement {
     this.environmentLoading = true;
     this.environmentFailure = null;
     try {
-      const environment = await client.request<EnvironmentSummary>("environments.status", {
+      const environment = await scope.client.request<EnvironmentSummary>("environments.status", {
         environmentId,
       });
       if (!isCurrent()) {
@@ -212,16 +204,29 @@ class PortalsPage extends OpenClawLightDomElement {
     return isGatewayMethodAdvertised(this.gateway.snapshot ?? {}, "portal.list") !== false;
   }
 
+  private get canReadPortalState(): boolean {
+    return canCallGatewayMethod(
+      this.gateway.snapshot,
+      this.pendingEnvironmentId ? "environments.status" : "portal.list",
+      "operator.read",
+      { requireAdvertisement: false },
+    );
+  }
+
   private get canClosePortal(): boolean {
     return canCallGatewayMethod(this.gateway.snapshot, "portal.close", "operator.write");
   }
 
-  private resetGatewayState() {
+  private resetPendingEnvironment() {
     this.environmentRequestGeneration += 1;
     this.environmentLoading = false;
     this.pendingEnvironment = null;
     this.environmentFailure = null;
     this.environmentPoll.stop();
+  }
+
+  private resetGatewayState() {
+    this.resetPendingEnvironment();
     this.requestGeneration += 1;
     this.portalSetRevision += 1;
     this.portals = [];
@@ -257,24 +262,25 @@ class PortalsPage extends OpenClawLightDomElement {
     }
   }
 
-  private portalUrl(portal: PortalSummary, tokenQuery: string): string {
-    return resolvePortalUrl(
-      { ...portal, tokenQuery },
-      this.context.gateway.connection.gatewayUrl,
-      window.location.origin,
-    );
-  }
-
   private ensurePortalProbe(portal: PortalSummary, force = false) {
-    const tokenQuery = portal.tokenQuery;
-    if (!tokenQuery) {
+    if (!portal.tokenQuery || !portal.url) {
       this.portalProbeGeneration += 1;
       this.portalProbeState = null;
       return;
     }
-    const url = this.portalUrl(portal, tokenQuery);
+    const url = portal.url;
     const key = `${portal.id}\u0000${url}`;
     if (!force && this.portalProbeState?.key === key) {
+      return;
+    }
+    if (portalNeedsRemoteIngress(url, this.context.gateway.connection.gatewayUrl)) {
+      this.portalProbeGeneration += 1;
+      this.portalProbeState = { key, status: "ingress-required" };
+      return;
+    }
+    if (portalNeedsNewTab(url, location.href)) {
+      this.portalProbeGeneration += 1;
+      this.portalProbeState = { key, status: "new-tab-required" };
       return;
     }
     const cached = force ? undefined : this.portalProbeCache.get(key);
@@ -286,8 +292,8 @@ class PortalsPage extends OpenClawLightDomElement {
     const generation = ++this.portalProbeGeneration;
     this.portalProbeState = { key, status: "probing" };
     void probePortalReachable(url).then((reachability) => {
-      this.portalProbeCache.set(key, reachability);
       if (generation === this.portalProbeGeneration && this.portalProbeState?.key === key) {
+        this.portalProbeCache.set(key, reachability);
         this.portalProbeState = { key, status: reachability };
       }
     });
@@ -304,42 +310,34 @@ class PortalsPage extends OpenClawLightDomElement {
   private async loadPortals() {
     if (
       this.pendingEnvironmentId ||
-      !this.gateway.connected ||
+      !this.canReadPortalState ||
       !this.portalListSupported ||
       this.loading ||
       (this.embedded && !this.presented)
     ) {
       return;
     }
-    const client = this.gateway.client;
     const scope = this.gateway.capture();
-    if (!client || !scope) {
+    if (!scope) {
       return;
     }
     const generation = ++this.requestGeneration;
     const portalSetRevision = this.portalSetRevision;
+    const isCurrent = () => generation === this.requestGeneration && this.gateway.isCurrent(scope);
     this.loading = true;
     this.error = null;
     try {
-      const result = await client.request<PortalListResult>("portal.list", {});
-      if (
-        generation === this.requestGeneration &&
-        portalSetRevision === this.portalSetRevision &&
-        this.gateway.isCurrent(scope)
-      ) {
+      const result = await scope.client.request<PortalListResult>("portal.list", {});
+      if (isCurrent() && portalSetRevision === this.portalSetRevision) {
         this.applyPortalSet(result.portals);
       }
     } catch (error) {
-      if (
-        generation === this.requestGeneration &&
-        this.gateway.isCurrent(scope) &&
-        this.portalListSupported
-      ) {
+      if (isCurrent() && this.portalListSupported) {
         this.error = t("portalsPage.loadFailed", { error: formatUiError(error) });
         this.loaded = true;
       }
     } finally {
-      if (generation === this.requestGeneration && this.gateway.isCurrent(scope)) {
+      if (isCurrent()) {
         this.loading = false;
       }
     }
@@ -349,15 +347,14 @@ class PortalsPage extends OpenClawLightDomElement {
     if (!this.canClosePortal || this.closingPortalId) {
       return;
     }
-    const client = this.gateway.client;
     const scope = this.gateway.capture();
-    if (!client || !scope) {
+    if (!scope) {
       return;
     }
     this.closingPortalId = portal.id;
     this.error = null;
     try {
-      await client.request<PortalCloseResult>("portal.close", { id: portal.id });
+      await scope.client.request<PortalCloseResult>("portal.close", { id: portal.id });
       if (this.gateway.isCurrent(scope)) {
         void this.loadPortals();
       }
@@ -374,6 +371,13 @@ class PortalsPage extends OpenClawLightDomElement {
 
   private renderEmptyState() {
     const unsupported = !this.portalListSupported;
+    if (this.gateway.connected && !this.canReadPortalState) {
+      return html`<section class="portals-empty" role="status" aria-live="polite">
+        <div class="portals-empty__note">
+          ${t("sessionsView.actionRequiresScope", { scope: "operator.read" })}
+        </div>
+      </section>`;
+    }
     return html`
       <section class="portals-empty" role="status" aria-live="polite">
         ${
@@ -405,7 +409,7 @@ class PortalsPage extends OpenClawLightDomElement {
   }
 
   private renderPortal(portal: PortalSummary) {
-    if (!portal.tokenQuery) {
+    if (!portal.tokenQuery || !portal.url) {
       return html`
         <section class="portals-preview">
           <div class="portals-preview__notice" role="status">
@@ -417,12 +421,18 @@ class PortalsPage extends OpenClawLightDomElement {
         </section>
       `;
     }
-    const portalUrl = this.portalUrl(portal, portal.tokenQuery);
+    const portalUrl = portal.url;
     const displayUrl = new URL(portalUrl);
     displayUrl.search = "";
     const frameKey = `${portal.id}\u0000${portalUrl}`;
     const probeStatus =
       this.portalProbeState?.key === frameKey ? this.portalProbeState.status : "probing";
+    const noticeKey =
+      probeStatus === "new-tab-required"
+        ? "newTabRequired"
+        : probeStatus === "ingress-required"
+          ? "ingressRequired"
+          : "unreachable";
     return html`
       <section class="portals-preview">
         <header class="portals-preview__header">
@@ -450,7 +460,9 @@ class PortalsPage extends OpenClawLightDomElement {
         </header>
         ${
           this.error
-            ? html`<div class="callout danger portals-preview__error">${this.error}</div>`
+            ? html`<div class="callout danger portals-preview__error" role="alert">
+                ${this.error}
+              </div>`
             : nothing
         }
         ${
@@ -460,13 +472,15 @@ class PortalsPage extends OpenClawLightDomElement {
                   <div class="portals-empty__title">${t("portalsPage.loading")}</div>
                 </div>
               `
-            : probeStatus === "unreachable"
+            : probeStatus === "unreachable" ||
+                probeStatus === "ingress-required" ||
+                probeStatus === "new-tab-required"
               ? html`
                   <div class="portals-preview__notice" role="status">
                     <div class="portals-preview__notice-title">
-                      ${t("portalsPage.unreachableTitle")}
+                      ${t(`portalsPage.${noticeKey}Title`)}
                     </div>
-                    <p>${t("portalsPage.unreachableBody")}</p>
+                    <p>${t(`portalsPage.${noticeKey}Body`)}</p>
                     <a
                       class="portals-preview__notice-url"
                       href=${portalUrl}
@@ -503,7 +517,7 @@ class PortalsPage extends OpenClawLightDomElement {
   }
 
   override render() {
-    if (this.pendingEnvironmentId) {
+    if (this.pendingEnvironmentId && (!this.gateway.connected || this.canReadPortalState)) {
       const environment =
         this.pendingEnvironment?.id === this.pendingEnvironmentId ? this.pendingEnvironment : null;
       const error =
@@ -530,9 +544,12 @@ class PortalsPage extends OpenClawLightDomElement {
       </div>`;
     }
     return html`
-      <section class="content-header content-header--page">
+      <section
+        class="content-header content-header--page"
+        ${shellLayoutTraits({ toolbarHeader: true })}
+      >
         <div>
-          <div class="page-title">${titleForRoute("portals")}</div>
+          <h1 class="page-title">${titleForRoute("portals")}</h1>
         </div>
       </section>
       ${

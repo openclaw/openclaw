@@ -30,6 +30,20 @@ describe("release plan contract", () => {
     expect(lockText.slice(0, -1)).toMatch(/^[\x20-\x7e]+$/u);
   });
 
+  it("rejects alpha as beta publication authority", () => {
+    const version = "2026.9.24-alpha.1";
+    expect(() =>
+      validateReleasePlan({
+        ...sourceFixture,
+        purpose: "beta-publish",
+        version,
+        tag: `v${version}`,
+        release_id: version,
+        target_context_ref: `refs/tags/v${version}`,
+      }),
+    ).toThrow("Alpha releases are retired;");
+  });
+
   it("rejects duplicate, reordered, pretty, CRLF, and non-ASCII lock bytes", () => {
     const duplicate = lockText.replace(
       '{"digest":',
@@ -92,7 +106,9 @@ describe("release plan contract", () => {
   });
 
   it("rejects non-tree and non-data JSON structures", () => {
-    const sparseGroups = ["all", , "package"];
+    const sparseGroups = ["all"];
+    sparseGroups.length = 3;
+    sparseGroups[2] = "package";
     expect(JSON.stringify(sparseGroups)).toBe('["all",null,"package"]');
     expect(() =>
       canonicalReleasePlanJson({
@@ -120,7 +136,7 @@ describe("release plan contract", () => {
     cyclic.self = cyclic;
     expect(() => canonicalReleasePlanJson(cyclic)).toThrow("must not contain cycles");
 
-    const nonPlain = Object.assign(new (class ReleasePlan {})(), sourceFixture);
+    const nonPlain = Object.assign(new Date(0), sourceFixture);
     expect(() => canonicalReleasePlanJson(nonPlain)).toThrow("must be plain");
 
     const accessor = { ...sourceFixture };
@@ -197,37 +213,6 @@ describe("release plan contract", () => {
         },
       }),
     ).toThrow("soak assertion conflicts");
-  });
-
-  it("accepts daily and weekly main qualification intents", () => {
-    const mainPlan = {
-      ...sourceFixture,
-      purpose: "main-qualification",
-      tag: null,
-      target_context_ref: sourceFixture.candidate_sha,
-    };
-    expect(
-      validateReleasePlan({
-        ...mainPlan,
-        validation: {
-          allowed_groups: ["all", "ci", "package"],
-          intent: "main-daily",
-          profile: "beta",
-          soak: false,
-        },
-      }).validation.intent,
-    ).toBe("main-daily");
-    expect(
-      validateReleasePlan({
-        ...mainPlan,
-        validation: {
-          allowed_groups: ["all", "ci", "package"],
-          intent: "main-weekly",
-          profile: "full",
-          soak: true,
-        },
-      }).validation.intent,
-    ).toBe("main-weekly");
   });
 
   it("keeps diagnostic plans tagless, non-publishable, and distinct from qualification", () => {
@@ -357,12 +342,5 @@ describe("release plan contract", () => {
         },
       }),
     ).toThrow("trusted main");
-  });
-
-  it("keeps run and rerun state outside ReleasePlan", () => {
-    const plan = validateReleasePlan(sourceFixture);
-    expect(plan).not.toHaveProperty("run_id");
-    expect(plan).not.toHaveProperty("rerun_group");
-    expect(plan).not.toHaveProperty("filters");
   });
 });

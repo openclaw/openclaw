@@ -72,11 +72,13 @@ vi.mock("./inbound-context.js", async () => {
   };
 });
 
-vi.mock("./session-reset-model.runtime.js", () => ({
+vi.mock("./session-reset-model.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./session-reset-model.js")>()),
   applyResetModelOverride: vi.fn(async () => undefined),
 }));
 
-vi.mock("./stage-sandbox-media.runtime.js", () => ({
+vi.mock("./stage-sandbox-media.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./stage-sandbox-media.js")>()),
   stageSandboxMedia: vi.fn(async (): Promise<StageSandboxMediaResult> => ({ staged: new Map() })),
 }));
 

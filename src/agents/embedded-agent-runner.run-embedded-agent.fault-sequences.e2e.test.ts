@@ -1,11 +1,11 @@
 // Exercises ordered provider faults through the embedded runner failover boundary.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeTextToolResult } from "../../test/helpers/text-tool-result.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ContextEngine } from "../context-engine/types.js";
+import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import {
   classifyEmbeddedAgentRunResultForModelFallback,
   mergeEmbeddedAgentRunResultForModelFallbackExhaustion,
@@ -33,6 +33,10 @@ type ProviderFault =
   | { status: 402 }
   | { status: 413 }
   | { status: 429; window: "short" | "long" }
+  // A 429 whose message matches no usage-window keyword and carries the reset only
+  // in a Retry-After header of `retryAfterSeconds`, capped by retry.provider
+  // .maxRetryDelayMs. This is Anthropic's session-window shape (#148558/#143274).
+  | { status: 429; window: "header-floor"; retryAfterSeconds: number; maxRetryDelayMs: number }
   | { status: 500 }
   | { status: "context_overflow" };
 
@@ -53,6 +57,7 @@ type ScenarioOutcome =
     }
   | { kind: "error"; error: Error & { attempts?: unknown[] } };
 
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-fault-sequences-");
 const runEmbeddedAttemptMock = vi.fn<(params: unknown) => Promise<EmbeddedRunAttemptResult>>();
 const { sleepWithAbortMock } = vi.hoisted(() => ({
   sleepWithAbortMock: vi.fn(async (_ms: number, _abortSignal?: AbortSignal) => undefined),
@@ -118,7 +123,7 @@ function makeProviderConfig(fallbacks: string[]): OpenClawConfig {
   return {
     agents: {
       defaults: { model: { primary: "openai/mock-1", fallbacks } },
-      list: [{ id: "test" }],
+      entries: { test: {} },
     },
     models: {
       providers: {
@@ -132,8 +137,7 @@ function makeProviderConfig(fallbacks: string[]): OpenClawConfig {
 async function withScenarioWorkspace<T>(
   run: (paths: { agentDir: string; workspaceDir: string }) => Promise<T>,
 ): Promise<T> {
-  const rawRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-fault-sequences-"));
-  const root = await fs.realpath(rawRoot);
+  const root = sessionDirs.make();
   const agentDir = path.join(root, "agents", "test", "agent");
   const workspaceDir = path.join(root, "workspace");
   await Promise.all([
@@ -147,15 +151,12 @@ async function withScenarioWorkspace<T>(
     random.mockRestore();
     const { waitForSessionTranscriptIndexReconcile } =
       await import("../config/sessions/session-transcript-reconcile.js");
-    const { closeOpenClawAgentDatabaseByPath } = await import("../state/openclaw-agent-db.js");
     const { closeAuthProfileReadPool } = await import("./auth-profiles/sqlite.js");
     const databasePath = path.join(agentDir, "openclaw-agent.sqlite");
     try {
       await waitForSessionTranscriptIndexReconcile({ agentId: "test", path: databasePath });
     } finally {
       closeAuthProfileReadPool({ kind: "database", databasePath });
-      closeOpenClawAgentDatabaseByPath(databasePath);
-      await fs.rm(root, { recursive: true, force: true });
     }
   }
 }
@@ -195,6 +196,29 @@ function makeAttemptForFault(
         model: ref.model,
         stopReason: "stop",
         content: [{ type: "text", text: fault.text }],
+      }),
+    });
+  }
+  if (fault.status === 429 && fault.window === "header-floor") {
+    // Anthropic's session-window 429 arrives as an assistant error whose text
+    // avoids weekly/usage/quota wording; only errorBody.headers["retry-after"]
+    // reveals the multi-hour floor. buildAssistantFailoverSignal reads exactly
+    // that, so resolveRetryAfterMs returns the header seconds while the text
+    // guard stays quiet. providerRetryMaxDelayMs rides on the attempt as the
+    // real runtime attaches the prepared session setting.
+    return makeEmbeddedRunnerAttempt({
+      providerRetryMaxRetries: 3,
+      providerRetryMaxDelayMs: fault.maxRetryDelayMs,
+      lastAssistant: buildEmbeddedRunnerAssistant({
+        provider: ref.provider,
+        model: ref.model,
+        stopReason: "error",
+        errorMessage:
+          "This request would exceed your account's rate limit. Please try again later.",
+        errorType: "rate_limit_error",
+        // errorBody is the raw provider response body string, which is what the
+        // runtime stores; resolveRetryAfterMs parses it back to the same record.
+        errorBody: JSON.stringify({ headers: { "retry-after": String(fault.retryAfterSeconds) } }),
       }),
     });
   }
@@ -437,7 +461,9 @@ async function expectPreparationInvalidationToDropRoutingWork(
           await replacementAdmission.admit("embedded");
         }
         releasePreparation.resolve();
-        await expect(run).rejects.toThrow("admitted run authority is no longer active");
+        await expect(run).rejects.toThrow(
+          "embedded attempt reached dispatch without an active admitted run",
+        );
       });
 
       expect(decisionWork).toHaveLength(0);
@@ -555,6 +581,50 @@ describe("runEmbeddedAgent provider fault sequences", () => {
     });
   });
 
+  it("fails over a header-only multi-hour 429 past retry.provider.maxRetryDelayMs instead of sleeping it", async () => {
+    // The regression: Anthropic's session-window 429 carries the reset only in
+    // Retry-After and matches no usage-window keyword, so the controller slept
+    // the full ~2.75h floor in-turn and the configured fallback never ran
+    // (#148558/#143274). With the cap wired through, the run fails over to the
+    // model fallback and completes, and the floor is never handed to the sleep.
+    await withScenarioWorkspace(async ({ agentDir, workspaceDir }) => {
+      writeProfiles(agentDir, { openai: 1, groq: true });
+      const observations: AttemptObservation[] = [];
+      installFaultScript(
+        [
+          { status: 429, window: "header-floor", retryAfterSeconds: 9897, maxRetryDelayMs: 30_000 },
+          { status: 200, text: "fallback after header floor" },
+        ],
+        observations,
+      );
+
+      const outcome = expectResult(
+        await runScenario({
+          agentDir,
+          workspaceDir,
+          config: makeProviderConfig(["groq/mock-2"]),
+          runId: "header-floor-failover",
+        }),
+      );
+
+      // The single openai attempt failed over to the groq fallback: the floor was
+      // declined, not slept, and no same-model retry sat between them.
+      expect(observations.map(({ provider, model }) => [provider, model])).toEqual([
+        ["openai", "mock-1"],
+        ["groq", "mock-2"],
+      ]);
+      // Nothing slept the 9,897,000ms floor; the only sleeps are the backoff
+      // controller's between-candidate waits, never the provider floor.
+      expect(sleepWithAbortMock.mock.calls.map(([delay]) => delay)).not.toContain(9_897_000);
+      expect(outcome.provider).toBe("groq");
+      expect(outcome.model).toBe("mock-2");
+      expect(outcome.result.payloads?.[0]?.text).toContain("fallback after header floor");
+
+      const usageStats = await readUsageStats(agentDir);
+      expect(usageStats["openai:p1"]?.cooldownReason).toBe("rate_limit");
+    });
+  });
+
   it("persists a ten-minute initial billing disable and surfaces billing copy for 402", async () => {
     await withScenarioWorkspace(async ({ agentDir, workspaceDir }) => {
       writeProfiles(agentDir, { openai: 1 });
@@ -575,7 +645,9 @@ describe("runEmbeddedAgent provider fault sequences", () => {
         { provider: "openai", model: "mock-1", profileId: "openai:p1", fault: { status: 402 } },
       ]);
       expect(error.message).toContain("returned a billing error");
-      expect(error.message).toContain("insufficient balance");
+      expect(error.message).toContain(
+        "check your account's balance and usage limits before trying again.",
+      );
       const usageStats = await readUsageStats(agentDir);
       expect(usageStats["openai:p1"]?.disabledReason).toBe("billing");
       expect(usageStats["openai:p1"]?.failureCounts?.billing).toBe(1);

@@ -119,7 +119,7 @@ suite.define(() => {
           await page.locator(".chat-header-session-menu__trigger").click();
         } else {
           await rowFor(archived.key).hover();
-          await rowFor(archived.key).getByRole("button", { name: "Open session menu" }).click();
+          await rowFor(archived.key).click({ button: "right" });
         }
         await activateSelfRemovingControl(
           page
@@ -221,7 +221,7 @@ suite.define(() => {
           await sidebar.getByRole("button", { name: /Switch agent/ }).click();
           await sidebar
             .locator("wa-dropdown.sidebar-agent-menu")
-            .getByRole("menuitemradio", { name, exact: true })
+            .getByRole("menuitem", { name, exact: true })
             .click();
         };
         await rowFor(archived.key).waitFor({ state: "visible" });
@@ -235,6 +235,7 @@ suite.define(() => {
         const undo = page.getByRole("button", { name: "Undo", exact: true });
         await undo.waitFor({ state: "visible" });
         if (queued) {
+          await undo.hover();
           const listsBefore = (
             await gateway.getRequests("sessions.list", { agentId: "main", includeGlobal: true })
           ).length;

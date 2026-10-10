@@ -1,7 +1,9 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import {
   deliveryContextFromSession,
+  rethrowIncognitoSessionError,
   sessionDeliveryOrigin,
+  type SessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { normalizeOptionalString, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
@@ -9,49 +11,56 @@ import {
   ACTIVE_MEMORY_STATUS_PREFIX,
   type ActiveMemorySearchDebug,
   type ActiveRecallResult,
-  type PluginDebugEntry,
   type ResolvedActiveRecallPluginConfig,
 } from "./types.js";
 
-function resolveCanonicalSessionKeyFromSessionId(params: {
-  api: OpenClawPluginApi;
-  agentId: string;
-  sessionId?: string;
-}): string | undefined {
-  const sessionId = params.sessionId?.trim();
-  if (!sessionId) {
-    return undefined;
-  }
-  try {
-    let bestMatch:
-      | {
-          sessionKey: string;
-          updatedAt: number;
-        }
-      | undefined;
-    for (const { sessionKey, entry } of params.api.runtime.agent.session.listSessionEntries({
-      agentId: params.agentId,
-      readOnly: true,
-    })) {
-      if (!entry || normalizeOptionalString(entry.sessionId) !== sessionId) {
-        continue;
-      }
-      const updatedAt = typeof entry.updatedAt === "number" ? entry.updatedAt : 0;
-      if (!bestMatch || updatedAt > bestMatch.updatedAt) {
-        bestMatch = { sessionKey, updatedAt };
-      }
-    }
-    return bestMatch?.sessionKey?.trim() || undefined;
-  } catch {
-    return undefined;
-  }
-}
+export type ActiveMemorySessionSnapshot = {
+  sessionKey?: string;
+  entry: SessionEntry | undefined;
+  readFailed: boolean;
+};
 
-function resolveRecallRunChannelContext(params: {
+/** Request-owned preparation only; the host audience still guards recall and publication. */
+export async function prepareActiveMemorySession(params: {
   api: OpenClawPluginApi;
   agentId: string;
   sessionKey?: string;
   sessionId?: string;
+  storePath?: string;
+}): Promise<ActiveMemorySessionSnapshot> {
+  const sessionKey = params.sessionKey?.trim() || undefined;
+  const sessionId = params.sessionId?.trim();
+  try {
+    if (sessionKey) {
+      const entry = await params.api.runtime.agent.session.getSessionEntryAsync({
+        agentId: params.agentId,
+        sessionKey,
+        storePath: params.storePath,
+        readConsistency: "latest",
+      });
+      return { sessionKey, entry, readFailed: false };
+    }
+    const match = sessionId
+      ? await params.api.runtime.agent.session.getSessionEntryByIdAsync({
+          agentId: params.agentId,
+          sessionId,
+          storePath: params.storePath,
+          orderBy: "updatedAt",
+        })
+      : undefined;
+    return {
+      sessionKey: match?.sessionKey.trim() || undefined,
+      entry: match?.entry,
+      readFailed: false,
+    };
+  } catch (error) {
+    rethrowIncognitoSessionError(error);
+    return { sessionKey, entry: undefined, readFailed: true };
+  }
+}
+
+export function resolveRecallRunChannelContext(params: {
+  sessionEntry?: SessionEntry;
   messageProvider?: string;
   channelId?: string;
 }): {
@@ -74,28 +83,14 @@ function resolveRecallRunChannelContext(params: {
     (!explicitProvider || explicitProvider === "webchat")
       ? runnableExplicitChannel
       : undefined;
-  const resolvedSessionKey =
-    normalizeOptionalString(params.sessionKey) ??
-    resolveCanonicalSessionKeyFromSessionId({
-      api: params.api,
-      agentId: params.agentId,
-      sessionId: params.sessionId,
-    });
-  let strongEntryChannel: string | undefined;
-  let weakEntryChannel: string | undefined;
-  if (resolvedSessionKey) {
-    try {
-      const sessionEntry = params.api.runtime.agent.session.getSessionEntry({
-        agentId: params.agentId,
-        sessionKey: resolvedSessionKey,
-      });
-      const channel = normalizeOptionalString(deliveryContextFromSession(sessionEntry)?.channel);
-      strongEntryChannel = channel && isRunnableChannelName(channel) ? channel : undefined;
-      weakEntryChannel = normalizeOptionalString(sessionDeliveryOrigin(sessionEntry)?.provider);
-    } catch {
-      // Explicit hints still identify the channel if session lookup is unavailable.
-    }
-  }
+  const entryChannel = normalizeOptionalString(
+    deliveryContextFromSession(params.sessionEntry)?.channel,
+  );
+  const strongEntryChannel =
+    entryChannel && isRunnableChannelName(entryChannel) ? entryChannel : undefined;
+  const weakEntryChannel = normalizeOptionalString(
+    sessionDeliveryOrigin(params.sessionEntry)?.provider,
+  );
   const channel =
     trustedExplicitChannel ??
     strongEntryChannel ??
@@ -105,7 +100,7 @@ function resolveRecallRunChannelContext(params: {
   return { messageChannel: channel, messageProvider: channel };
 }
 
-function resolveStatusUpdateAgentId(ctx: { agentId?: string; sessionKey?: string }): string {
+export function resolveStatusUpdateAgentId(ctx: { agentId?: string; sessionKey?: string }): string {
   const explicit = ctx.agentId?.trim();
   if (explicit) {
     return explicit;
@@ -129,7 +124,7 @@ function formatElapsedMsCompact(elapsedMs: number): string {
   return `${Math.round(elapsedMs)}ms`;
 }
 
-function buildPluginStatusLine(params: {
+export function buildPluginStatusLine(params: {
   result: ActiveRecallResult;
   config: ResolvedActiveRecallPluginConfig;
 }): string {
@@ -145,7 +140,7 @@ function buildPluginStatusLine(params: {
   return parts.join(" ");
 }
 
-function buildPersistedDebugSummary(result: ActiveRecallResult): string | null {
+export function buildPersistedDebugSummary(result: ActiveRecallResult): string | null {
   if (result.status === "timeout_partial") {
     return `timeout_partial: ${String(result.summary.length)} chars recovered (not persisted)`;
   }
@@ -202,7 +197,7 @@ function sanitizeDebugText(text: string): string {
   return sanitized.replace(/\s+/g, " ").trim();
 }
 
-async function persistPluginStatusLines(params: {
+export async function persistPluginStatusLines(params: {
   api: OpenClawPluginApi;
   agentId: string;
   sessionKey?: string;
@@ -224,7 +219,7 @@ async function persistPluginStatusLines(params: {
   }
   try {
     if (!params.statusLine && !debugLine) {
-      const existingEntry = params.api.runtime.agent.session.getSessionEntry({
+      const existingEntry = await params.api.runtime.agent.session.getSessionEntryAsync({
         agentId,
         sessionKey,
       });
@@ -244,7 +239,7 @@ async function persistPluginStatusLines(params: {
           ? existing.pluginDebugEntries
           : [];
         const nextEntries = previousEntries.filter(
-          (entry): entry is PluginDebugEntry =>
+          (entry) =>
             Boolean(entry) &&
             typeof entry === "object" &&
             typeof entry.pluginId === "string" &&
@@ -269,17 +264,9 @@ async function persistPluginStatusLines(params: {
       },
     });
   } catch (error) {
+    rethrowIncognitoSessionError(error);
     params.api.logger.debug?.(
       `active-memory: failed to persist session status note (${error instanceof Error ? error.message : String(error)})`,
     );
   }
 }
-
-export {
-  buildPersistedDebugSummary,
-  buildPluginStatusLine,
-  persistPluginStatusLines,
-  resolveCanonicalSessionKeyFromSessionId,
-  resolveRecallRunChannelContext,
-  resolveStatusUpdateAgentId,
-};

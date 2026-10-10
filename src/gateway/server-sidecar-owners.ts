@@ -3,7 +3,7 @@ import {
   runWithProcessCleanupBudget,
   type ProcessCleanupBudget,
 } from "../process/supervisor/cleanup-budget.js";
-import type { GatewayPostReadySidecarHandle } from "./server-startup-post-attach.js";
+import type { GatewayPostReadySidecarHandle } from "./server-startup-sidecar-scheduler.js";
 
 export type GatewaySidecarStopOwner = ReturnType<typeof createGatewaySidecarStopOwner>;
 
@@ -114,5 +114,13 @@ export function createGatewaySidecarStopOwner() {
     beginClose,
     stop,
     sealAndJoin,
+    async stopAndJoin(this: void) {
+      // Seal late acquisition cleanup before its supervisor transport can retire.
+      try {
+        await stop();
+      } finally {
+        await sealAndJoin();
+      }
+    },
   };
 }

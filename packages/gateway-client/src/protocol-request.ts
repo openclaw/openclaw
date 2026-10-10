@@ -12,7 +12,7 @@ export function isGatewayProtocolResponseError(
 export type GatewayProtocolRequestOptions = {
   timeoutMs?: number | null;
   expectFinal?: boolean;
-  onSent?: () => void;
+  onSent?: (requestId: string) => void;
   onAccepted?: (payload: unknown) => void;
   signal?: AbortSignal;
 };

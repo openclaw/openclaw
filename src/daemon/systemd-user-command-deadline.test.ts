@@ -77,7 +77,7 @@ it("does not dispatch machine fallback after the original stop owner retires", a
   expect(exec).toHaveBeenCalledTimes(1);
 });
 
-it.each(["current", "retired", "guard-deadline"] as const)(
+it.each(["current", "retired", "slow-guard"] as const)(
   "LoadUnit fallback retains the original %s authority and budget",
   async (mode) => {
     let active = true;
@@ -110,7 +110,7 @@ it.each(["current", "retired", "guard-deadline"] as const)(
         if (!active) {
           throw new Error("original load owner retired");
         }
-        if (mode === "guard-deadline" && firstProbeCompleted) {
+        if (mode === "slow-guard" && firstProbeCompleted) {
           elapsed = 500;
         }
       },
@@ -118,11 +118,13 @@ it.each(["current", "retired", "guard-deadline"] as const)(
     if (mode === "retired") {
       await expect(result).rejects.toThrow("original load owner retired");
     } else {
-      expect((await result).termination).toBe(mode === "current" ? "exit" : "timeout");
+      const outcome = await result;
+      expect(outcome.termination).toBe("exit");
+      expect(outcome.inspectionReason).toBeUndefined();
     }
-    expect(exec).toHaveBeenCalledTimes(mode === "current" ? 3 : 1);
+    expect(exec).toHaveBeenCalledTimes(mode === "retired" ? 1 : 3);
     expect(exec.mock.calls.filter((call) => call[1].includes("LoadUnit"))).toHaveLength(
-      mode === "current" ? 1 : 0,
+      mode === "retired" ? 0 : 1,
     );
   },
 );

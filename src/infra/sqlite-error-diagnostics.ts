@@ -36,7 +36,6 @@ export function classifyGatewayStorageFailure(error: unknown): GatewayStorageFai
 }
 
 const SQLITE_INSPECTION_OPERATIONS = {
-  coordinator: "acquiring its state-handles coordinator",
   source: "opening the source database",
   snapshot: "creating its private snapshot",
 } as const;
@@ -46,6 +45,31 @@ const inspectionOperations = resolveGlobalSingleton(
   Symbol.for("openclaw.sqliteInspectionOperations"),
   () => new WeakMap<object, SqliteInspectionOperation>(),
 );
+
+const nativeOpenFailures = resolveGlobalSingleton(
+  Symbol.for("openclaw.sqliteNativeOpenFailures"),
+  () => new WeakSet<object>(),
+);
+
+export function markSqliteNativeOpenFailure(error: unknown): void {
+  if (error !== null && typeof error === "object") {
+    nativeOpenFailures.add(error);
+  }
+}
+
+/** Record the native effect without changing its error or tagging surrounding authority checks. */
+export function withSqliteNativeOpen<T>(open: () => T): T {
+  try {
+    return open();
+  } catch (error) {
+    markSqliteNativeOpenFailure(error);
+    throw error;
+  }
+}
+
+export function isSqliteNativeOpenFailure(error: unknown): boolean {
+  return error !== null && typeof error === "object" && nativeOpenFailures.has(error);
+}
 
 export function markSqliteInspectionOperation(
   error: unknown,

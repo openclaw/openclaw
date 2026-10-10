@@ -1,4 +1,3 @@
-// ClawRouter plugin entrypoint registers credential-scoped model routing and quota reporting.
 import type {
   ProviderDefaultThinkingPolicyContext,
   ProviderResolveDynamicModelContext,
@@ -231,9 +230,9 @@ export default defineSingleProviderPluginEntry({
         }
         return openAiReplay.buildReplayPolicy?.(ctx);
       },
-      sanitizeReplayHistory: (ctx) =>
+      sanitizeReplayHistoryAsync: (ctx) =>
         ctx.modelApi === "google-generative-ai"
-          ? googleReplay.sanitizeReplayHistory?.(ctx)
+          ? googleReplay.sanitizeReplayHistoryAsync?.(ctx)
           : undefined,
       resolveReasoningOutputMode: (ctx) =>
         ctx.modelApi === "google-generative-ai"
@@ -254,6 +253,7 @@ export default defineSingleProviderPluginEntry({
           token: ctx.token,
           baseUrl: configuredBaseUrl(ctx.config),
           timeoutMs: ctx.timeoutMs,
+          signal: ctx.signal,
         }),
     };
   },

@@ -9,7 +9,7 @@ import { preserveAtPrefixedRelativePath, resolvePathFromInput } from "./path-pol
 import { normalizeFileReferencePrefix, resolveSandboxInputPath } from "./sandbox-paths.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 
-export function relativePathEscapesRoot(relativePath: string): boolean {
+function relativePathEscapesRoot(relativePath: string): boolean {
   return (
     relativePath === ".." ||
     relativePath.startsWith("../") ||
@@ -20,7 +20,7 @@ export function relativePathEscapesRoot(relativePath: string): boolean {
 
 export function toDisplayPath(resolved: string, cwd: string): string {
   const relative = path.relative(cwd, resolved);
-  if (!relative || relative === "") {
+  if (!relative) {
     return path.basename(resolved);
   }
   if (relativePathEscapesRoot(relative)) {
@@ -29,31 +29,8 @@ export function toDisplayPath(resolved: string, cwd: string): string {
   return relative;
 }
 
-/**
- * Lightweight path extractor for the `apply_patch` envelope grammar.
- *
- * The full parser in `apply-patch.ts` validates and applies a patch end-to-end.
- * Plugins running inside `before_tool_call` only need the destination paths so
- * they can compute path policy decisions before the patch is applied. This
- * helper walks the input lines and collects every path mentioned by:
- *
- *   - `*** Add File: <path>`
- *   - `*** Update File: <path>`         (and the optional `*** Move to: <new>`
- *                                         sub-marker that immediately follows)
- *   - `*** Delete File: <path>`
- *
- * Unlike the strict parser, this helper is forgiving: it does not require the
- * `*** Begin Patch` / `*** End Patch` envelope, it ignores non-marker lines
- * while scanning the full input, and it may therefore still pick up marker-like
- * lines that appear later in malformed input. Top-level hunk headers are matched
- * after trimming leading whitespace, like the executor parser; marker-like patch
- * body lines remain ignored while scanning an update hunk. Empty paths are dropped.
- *
- * The shape of the input mirrors how `apply_patch` receives it: either a
- * string (the full patch text) or an object with an `input` field carrying the
- * patch text. Anything else returns an empty array.
- */
-
+// Policy hooks accept malformed envelopes; the executor owns strict validation.
+// Target scanning still follows its header/body rules and keeps first-seen order.
 export type ApplyPatchPathExtractionOptions = {
   /** Tool execution cwd. Defaults to process.cwd(), matching createApplyPatchTool. */
   cwd?: string;
@@ -114,39 +91,19 @@ function normalizePatchPath(
   }
 }
 
-function pushPath(
-  target: string[],
-  seen: Set<string>,
-  raw: string,
-  options: ApplyPatchPathExtractionOptions,
-): void {
-  const normalized = normalizePatchPath(raw, options);
-  if (!normalized) {
-    return;
-  }
-  if (seen.has(normalized)) {
-    return;
-  }
-  seen.add(normalized);
-  target.push(normalized);
-}
-
-/**
- * Walk an apply_patch envelope and return every destination path found, in
- * the order they appear. Duplicates are de-duplicated (the same file may be
- * referenced multiple times within a single envelope). Returns `[]` for any
- * input that is not a recognised envelope.
- */
+/** Resolve distinct target paths without admitting or executing the patch. */
 export function extractApplyPatchTargetPaths(
   input: unknown,
   options: ApplyPatchPathExtractionOptions = {},
 ): string[] {
-  const paths: string[] = [];
-  const seen = new Set<string>();
+  const paths = new Set<string>();
   for (const target of extractApplyPatchTargets(input)) {
-    pushPath(paths, seen, target.path, options);
+    const normalized = normalizePatchPath(target.path, options);
+    if (normalized) {
+      paths.add(normalized);
+    }
   }
-  return paths;
+  return [...paths];
 }
 
 /** Derive policy-visible paths using the asynchronous resolver used by execution. */
@@ -154,8 +111,7 @@ export async function extractResolvedApplyPatchTargetPaths(
   input: unknown,
   options: ApplyPatchPathExtractionOptions = {},
 ): Promise<string[]> {
-  const paths: string[] = [];
-  const seen = new Set<string>();
+  const paths = new Set<string>();
   const cwd = options.cwd ?? options.sandbox?.root ?? process.cwd();
   for (const target of extractApplyPatchTargets(input)) {
     try {
@@ -166,14 +122,13 @@ export async function extractResolvedApplyPatchTargetPaths(
         : resolved
           ? path.posix.normalize(resolved.containerPath)
           : path.normalize(resolveSandboxInputPath(filePath, cwd));
-      if (normalized && normalized !== "." && !seen.has(normalized)) {
-        seen.add(normalized);
-        paths.push(normalized);
+      if (normalized && normalized !== ".") {
+        paths.add(normalized);
       }
     } catch {
       options.signal?.throwIfAborted();
       // Derived paths are best-effort metadata; execution remains authoritative.
     }
   }
-  return paths;
+  return [...paths];
 }

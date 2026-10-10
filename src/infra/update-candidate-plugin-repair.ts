@@ -8,25 +8,25 @@ import { discoverConfiguredPluginLoadPaths } from "../plugins/discovery.js";
 import { inspectPluginSourceDependencies } from "../plugins/plugin-generation-source-inspection.js";
 import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
 import { resolveOpenClawPackageRootSync } from "./openclaw-root.js";
-import { hasNodeErrorCode, isPathInside } from "./path-guards.js";
+import { isPathInside } from "./path-guards.js";
+import { ignoreMissingUpdateCandidateFile } from "./update-candidate-files.js";
 import {
   resolveUpdateCandidatePluginPath,
   resolveUpdateCandidatePluginSourcePath,
 } from "./update-candidate-paths.js";
-import { resolveUpdateCandidatePluginSourceEntries } from "./update-candidate-plugin-sources.js";
+import {
+  inspectUpdateCandidatePluginSource,
+  resolveUpdateCandidatePluginSourceEntries,
+} from "./update-candidate-plugin-sources.js";
 import {
   copyUpdateCandidatePluginTrees,
   prepareUpdateCandidatePluginTrees,
 } from "./update-candidate-plugin-tree.js";
 import { resolveUpdateRehearsalRoot } from "./update-rehearsal-paths.js";
+import { UPDATE_RUN_DIAGNOSTIC_LIMIT, UPDATE_RUN_TEXT_LIMIT } from "./update-run-limits.js";
 
 async function readOptionalFile(file: string): Promise<Buffer | undefined> {
-  return fs.readFile(file).catch((error: unknown) => {
-    if (hasNodeErrorCode(error, "ENOENT")) {
-      return undefined;
-    }
-    throw error;
-  });
+  return fs.readFile(file).catch(ignoreMissingUpdateCandidateFile);
 }
 
 /** Complete a published driver's private snapshot before candidate Doctor loads plugins. */
@@ -91,7 +91,7 @@ export async function completeUpdateCandidatePluginRehearsal(params: {
     ),
     params.config,
   );
-  const originals: Array<{ rootDir: string; entryFile: string }> = [];
+  const originals: Array<ReturnType<typeof inspectPluginSourceDependencies>> = [];
   const comparedFiles = new Map<string, string>();
   const project = (source: string) =>
     resolveUpdateCandidatePluginPath(privateRoot, privateRoot, source);
@@ -113,7 +113,22 @@ export async function completeUpdateCandidatePluginRehearsal(params: {
   for (const entry of entries) {
     assertPrivate(entry.rootDir);
     assertPrivate(entry.entryFile);
-    const copiedGraph = inspectPluginSourceDependencies([entry]);
+    const copiedGraph = inspectUpdateCandidatePluginSource(entry, warnings, {
+      root: privateRoot,
+      onUnresolvable: (name, importer) => {
+        if (warnings.length < UPDATE_RUN_DIAGNOSTIC_LIMIT) {
+          warnings.push(
+            `Plugin dependency ${name} is unresolvable inside the temporary update copy: undeclared ancestor lookup from ${importer}. Continuing without this optional dependency.`.slice(
+              0,
+              UPDATE_RUN_TEXT_LIMIT,
+            ),
+          );
+        }
+      },
+    });
+    if (!copiedGraph) {
+      continue;
+    }
     for (const reference of copiedGraph.references) {
       // Explicit external imports retain their source semantics. Lookups naming
       // private paths must not escape through a symlink, including absolute paths.
@@ -146,12 +161,7 @@ export async function completeUpdateCandidatePluginRehearsal(params: {
         return original ? [JSON.stringify([original, specifier])] : [];
       }),
     );
-    const canonicalSource = await fs.realpath(entryFile).catch((error: unknown) => {
-      if (hasNodeErrorCode(error, "ENOENT")) {
-        return undefined;
-      }
-      throw error;
-    });
+    const canonicalSource = await fs.realpath(entryFile).catch(ignoreMissingUpdateCandidateFile);
     if (!canonicalSource) {
       warnings.push(`Plugin source for update checks is no longer available: ${entryFile}.`);
       continue;
@@ -159,10 +169,12 @@ export async function completeUpdateCandidatePluginRehearsal(params: {
     let available: ReturnType<typeof inspectPluginSourceDependencies>;
     try {
       available = inspectPluginSourceDependencies([{ rootDir, entryFile }]);
-    } catch {
+    } catch (error) {
       // Source edits cannot invalidate an already runnable copy. Without a
       // supplied missing edge, candidate execution still owns optional imports.
-      warnings.push(`Update checks could not inspect the original plugin source: ${entryFile}.`);
+      warnings.push(
+        `Update checks could not inspect the original source for plugin ${entry.pluginId} (${entryFile}): ${String(error)}`,
+      );
       continue;
     }
     if (
@@ -184,13 +196,14 @@ export async function completeUpdateCandidatePluginRehearsal(params: {
       comparedFiles.set(source, copied);
     }
     available.assertSourceCurrent();
-    originals.push({ rootDir, entryFile });
+    originals.push(available);
   }
   if (originals.length === 0) {
     return { copiedFiles: 0, warnings };
   }
-  const graph = inspectPluginSourceDependencies(originals);
-  for (const source of graph.files) {
+  const files = new Set(originals.flatMap((graph) => graph.files));
+  const assertSourcesCurrent = () => originals.forEach((graph) => graph.assertSourceCurrent());
+  for (const source of files) {
     const copied = project(source);
     assertPrivate(copied);
     if (await readOptionalFile(copied)) {
@@ -204,16 +217,18 @@ export async function completeUpdateCandidatePluginRehearsal(params: {
     ) {
       throw new Error("Update authority changed during plugin dependency preparation");
     }
-    graph.assertSourceCurrent();
+    assertSourcesCurrent();
     for (const [source, copied] of comparedFiles) {
       await assertMatchingFile(source, copied);
     }
-    graph.assertSourceCurrent();
+    assertSourcesCurrent();
   };
   await assertCurrent();
   const plan = await prepareUpdateCandidatePluginTrees({
     roots: new Map(
-      [...graph.packageRoots, ...graph.files].map((source) => [source, project(source)]),
+      originals
+        .flatMap((graph) => graph.packageRoots.concat(graph.files))
+        .map((source) => [source, project(source)]),
     ),
     project,
     targetStateDir: privateRoot,
@@ -223,12 +238,7 @@ export async function completeUpdateCandidatePluginRehearsal(params: {
   for (const entry of plan.entries) {
     const destination = project(entry.path);
     assertPrivate(destination);
-    const existing = await fs.lstat(destination).catch((error: unknown) => {
-      if (hasNodeErrorCode(error, "ENOENT")) {
-        return undefined;
-      }
-      throw error;
-    });
+    const existing = await fs.lstat(destination).catch(ignoreMissingUpdateCandidateFile);
     if (!existing) {
       missing.push(entry);
     } else if (

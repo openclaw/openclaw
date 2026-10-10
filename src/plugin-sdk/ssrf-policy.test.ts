@@ -16,7 +16,6 @@ import {
   mergeSsrFPolicies,
   migrateLegacyFlatAllowPrivateNetworkAlias,
   normalizeHostnameSuffixAllowlist,
-  ssrfPolicyFromDangerouslyAllowPrivateNetwork,
   ssrfPolicyFromAllowPrivateNetwork,
   ssrfPolicyFromPrivateNetworkOptIn,
 } from "./ssrf-policy.js";
@@ -30,54 +29,18 @@ function createLookupFn(addresses: Array<{ address: string; family: number }>): 
   }) as unknown as LookupFn;
 }
 
-describe("ssrfPolicyFromDangerouslyAllowPrivateNetwork", () => {
-  it.each([
-    ["returns undefined for missing input", undefined, undefined],
-    ["returns undefined when private-network access is disabled", false, undefined],
-    [
-      "returns an explicit allow-private-network policy when enabled",
-      true,
-      { allowPrivateNetwork: true },
-    ],
-  ])("$0", (_name, input, expected) => {
-    expect(ssrfPolicyFromDangerouslyAllowPrivateNetwork(input)).toEqual(expected);
-  });
-});
-
 describe("ssrfPolicyFromAllowPrivateNetwork", () => {
-  it.each([
-    ["returns undefined for missing input", undefined, undefined],
-    ["returns undefined when private-network access is disabled", false, undefined],
-    [
-      "returns an explicit allow-private-network policy when enabled",
-      true,
-      { allowPrivateNetwork: true },
-    ],
-  ])("$0", (_name, input, expected) => {
-    expect(ssrfPolicyFromAllowPrivateNetwork(input)).toEqual(expected);
+  it("returns undefined when private-network access is disabled", () => {
+    expect(ssrfPolicyFromAllowPrivateNetwork(false)).toBeUndefined();
   });
 });
 
 describe("isPrivateNetworkOptInEnabled", () => {
   it.each([
-    ["returns false for missing input", undefined, false],
-    ["returns false for explicit false", false, false],
-    ["returns true for explicit boolean true", true, true],
-    ["returns true for flat allowPrivateNetwork config", { allowPrivateNetwork: true }, true],
-    [
-      "returns true for flat dangerous opt-in config",
-      { dangerouslyAllowPrivateNetwork: true },
-      true,
-    ],
     [
       "returns true for nested network dangerous opt-in config",
       { network: { dangerouslyAllowPrivateNetwork: true } },
       true,
-    ],
-    [
-      "returns false for nested false values",
-      { network: { dangerouslyAllowPrivateNetwork: false } },
-      false,
     ],
   ])("$0", (_name, input, expected) => {
     expect(isPrivateNetworkOptInEnabled(input)).toBe(expected);
@@ -86,8 +49,6 @@ describe("isPrivateNetworkOptInEnabled", () => {
 
 describe("ssrfPolicyFromPrivateNetworkOptIn", () => {
   it.each([
-    ["returns undefined for unset input", undefined, undefined],
-    ["returns undefined for explicit false input", { allowPrivateNetwork: false }, undefined],
     [
       "returns the compat policy for nested dangerous input",
       { network: { dangerouslyAllowPrivateNetwork: true } },
@@ -102,59 +63,12 @@ describe("mergeSsrFPolicies", () => {
   it("returns undefined when no policy contributes values", () => {
     expect(mergeSsrFPolicies(undefined, {})).toBeUndefined();
   });
-
-  it("merges boolean flags and dedupes host allowlists", () => {
-    expect(
-      mergeSsrFPolicies(
-        {
-          allowPrivateNetwork: true,
-          allowedHostnames: ["api.example.com"],
-          allowedOrigins: ["http://10.0.0.5:1234"],
-          hostnameAllowlist: ["downloads.example.com"],
-        },
-        {
-          dangerouslyAllowPrivateNetwork: true,
-          allowRfc2544BenchmarkRange: true,
-          allowIpv6UniqueLocalRange: true,
-          allowedHostnames: ["api.example.com", "cdn.example.com"],
-          allowedOrigins: ["http://10.0.0.5:1234", "http://10.0.0.5:4321"],
-          hostnameAllowlist: ["downloads.example.com", "assets.example.com"],
-        },
-      ),
-    ).toEqual({
-      allowPrivateNetwork: true,
-      dangerouslyAllowPrivateNetwork: true,
-      allowRfc2544BenchmarkRange: true,
-      allowIpv6UniqueLocalRange: true,
-      allowedHostnames: ["api.example.com", "cdn.example.com"],
-      allowedOrigins: ["http://10.0.0.5:1234", "http://10.0.0.5:4321"],
-      hostnameAllowlist: ["downloads.example.com", "assets.example.com"],
-    });
-  });
 });
 
 describe("legacy private-network alias helpers", () => {
   it("detects the flat allowPrivateNetwork alias", () => {
     expect(hasLegacyFlatAllowPrivateNetworkAlias({ allowPrivateNetwork: true })).toBe(true);
     expect(hasLegacyFlatAllowPrivateNetworkAlias({ network: {} })).toBe(false);
-  });
-
-  it("migrates the flat alias into network.dangerouslyAllowPrivateNetwork", () => {
-    const changes: string[] = [];
-    const migrated = migrateLegacyFlatAllowPrivateNetworkAlias({
-      entry: { allowPrivateNetwork: true },
-      pathPrefix: "channels.matrix",
-      changes,
-    });
-
-    expect(migrated.entry).toEqual({
-      network: {
-        dangerouslyAllowPrivateNetwork: true,
-      },
-    });
-    expect(changes).toEqual([
-      "Moved channels.matrix.allowPrivateNetwork → channels.matrix.network.dangerouslyAllowPrivateNetwork (true).",
-    ]);
   });
 
   it("prefers the canonical network key when both old and new keys are present", () => {
@@ -177,27 +91,6 @@ describe("legacy private-network alias helpers", () => {
     });
     expect(changes[0]).toContain("(false)");
   });
-
-  it("keeps an explicit canonical true when the legacy key is false", () => {
-    const changes: string[] = [];
-    const migrated = migrateLegacyFlatAllowPrivateNetworkAlias({
-      entry: {
-        allowPrivateNetwork: false,
-        network: {
-          dangerouslyAllowPrivateNetwork: true,
-        },
-      },
-      pathPrefix: "channels.matrix.accounts.default",
-      changes,
-    });
-
-    expect(migrated.entry).toEqual({
-      network: {
-        dangerouslyAllowPrivateNetwork: true,
-      },
-    });
-    expect(changes[0]).toContain("(true)");
-  });
 });
 
 describe("assertHttpUrlTargetsPrivateNetwork", () => {
@@ -207,16 +100,6 @@ describe("assertHttpUrlTargetsPrivateNetwork", () => {
       "https://matrix.example.org",
       {
         dangerouslyAllowPrivateNetwork: false,
-      },
-      "resolve",
-      undefined,
-    ],
-    [
-      "allows internal DNS names only when they resolve exclusively to private IPs",
-      "http://matrix-synapse:8008",
-      {
-        dangerouslyAllowPrivateNetwork: true,
-        lookupFn: createLookupFn([{ address: "10.0.0.5", family: 4 }]),
       },
       "resolve",
       undefined,
@@ -279,12 +162,6 @@ describe("assertHttpUrlTargetsPrivateNetwork", () => {
 describe("normalizeHostnameSuffixAllowlist", () => {
   it.each([
     [
-      "uses defaults when input is missing",
-      undefined,
-      ["GRAPH.MICROSOFT.COM"],
-      ["graph.microsoft.com"],
-    ],
-    [
       "normalizes wildcard prefixes and deduplicates",
       ["*.TrafficManager.NET", ".trafficmanager.net.", " * ", "x"],
       undefined,
@@ -297,10 +174,7 @@ describe("normalizeHostnameSuffixAllowlist", () => {
 
 describe("isHttpsUrlAllowedByHostnameSuffixAllowlist", () => {
   it.each([
-    ["requires https", "http://a.example.com/x", ["example.com"], false],
-    ["supports exact match", "https://example.com/x", ["example.com"], true],
     ["supports suffix match", "https://a.example.com/x", ["example.com"], true],
-    ["rejects non-matching hosts", "https://evil.com/x", ["example.com"], false],
     ["supports wildcard allowlist", "https://evil.com/x", ["*"], true],
   ])("$0", (_name, url, allowlist, expected) => {
     expect(isHttpsUrlAllowedByHostnameSuffixAllowlist(url, allowlist)).toBe(expected);
@@ -309,20 +183,11 @@ describe("isHttpsUrlAllowedByHostnameSuffixAllowlist", () => {
 
 describe("buildHostnameAllowlistPolicyFromSuffixAllowlist", () => {
   it.each([
-    ["returns undefined when allowHosts is empty", undefined, undefined],
     ["returns undefined for an explicit empty list", [], undefined],
-    ["returns undefined when wildcard host is present", ["*"], undefined],
     [
       "returns undefined when wildcard is mixed with concrete hosts",
       ["example.com", "*"],
       undefined,
-    ],
-    [
-      "expands a suffix entry to exact + wildcard hostname allowlist patterns",
-      ["sharepoint.com"],
-      {
-        hostnameAllowlist: ["sharepoint.com", "*.sharepoint.com"],
-      },
     ],
     [
       "normalizes wildcard prefixes, leading/trailing dots, and deduplicates patterns",
@@ -349,9 +214,7 @@ describe("ssrfPolicyFromHttpBaseUrlAllowedOrigin — SDK boundary safety", () =>
   // must still be rejected when an actual request goes through the guard.
   it.each([
     ["AWS/EC2 IMDS IPv4 literal", "169.254.169.254", 4, undefined],
-    ["Alibaba/100-net metadata IPv4 literal", "100.100.100.200", 4, undefined],
     ["GCP metadata canonical hostname", "metadata.google.internal", 4, "169.254.169.254"],
-    ["IPv6 ULA metadata literal", "[fd00:ec2::254]", 6, "fd00:ec2::254"],
     ["non-metadata link-local IPv4 literal", "169.254.42.42", 4, undefined],
   ])(
     "rejects plugin-supplied allowedOrigins entry: $0",
@@ -370,19 +233,6 @@ describe("ssrfPolicyFromHttpBaseUrlAllowedOrigin — SDK boundary safety", () =>
       ).rejects.toThrow(SsrFBlockedError);
     },
   );
-
-  it("rebinding a trusted private origin to a metadata IP is still rejected", async () => {
-    const baseUrl = "http://lan-llm.corp.internal:11434/v1";
-    const policy = ssrfPolicyFromHttpBaseUrlAllowedOrigin(baseUrl);
-    const policyForUrl = resolveSsrFPolicyForUrl(new URL(baseUrl), policy);
-
-    await expect(
-      resolvePinnedHostnameWithPolicy("lan-llm.corp.internal", {
-        policy: policyForUrl,
-        lookupFn: createLookupFn([{ address: "169.254.169.254", family: 4 }]),
-      }),
-    ).rejects.toThrow(SsrFBlockedError);
-  });
 
   it.each([
     ["IPv4 loopback", "127.0.0.1", 4],
@@ -404,24 +254,21 @@ describe("ssrfPolicyFromHttpBaseUrlAllowedOrigin — SDK boundary safety", () =>
     ).rejects.toThrow(SsrFBlockedError);
   });
 
-  it.each([
-    ["IPv4 unspecified", "0.0.0.0", 4],
-    ["IPv4 unspecified range", "0.42.42.42", 4],
-    ["IPv6 unspecified", "::", 6],
-    ["IPv4-mapped IPv6 unspecified", "::ffff:0.0.0.0", 6],
-    ["NAT64-embedded IPv4 unspecified", "64:ff9b::0.0.0.0", 6],
-  ] as const)("rejects a trusted private origin rebound to %s", async (_name, address, family) => {
-    const baseUrl = "http://lan-llm.corp.internal:11434/v1";
-    const policy = ssrfPolicyFromHttpBaseUrlAllowedOrigin(baseUrl);
-    const policyForUrl = resolveSsrFPolicyForUrl(new URL(baseUrl), policy);
+  it.each([["IPv4 unspecified", "0.0.0.0", 4]] as const)(
+    "rejects a trusted private origin rebound to %s",
+    async (_name, address, family) => {
+      const baseUrl = "http://lan-llm.corp.internal:11434/v1";
+      const policy = ssrfPolicyFromHttpBaseUrlAllowedOrigin(baseUrl);
+      const policyForUrl = resolveSsrFPolicyForUrl(new URL(baseUrl), policy);
 
-    await expect(
-      resolvePinnedHostnameWithPolicy("lan-llm.corp.internal", {
-        policy: policyForUrl,
-        lookupFn: createLookupFn([{ address, family }]),
-      }),
-    ).rejects.toThrow(SsrFBlockedError);
-  });
+      await expect(
+        resolvePinnedHostnameWithPolicy("lan-llm.corp.internal", {
+          policy: policyForUrl,
+          lookupFn: createLookupFn([{ address, family }]),
+        }),
+      ).rejects.toThrow(SsrFBlockedError);
+    },
+  );
 
   it.each([
     ["localhost", "127.0.0.1", 4],

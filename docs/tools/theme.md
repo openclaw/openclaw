@@ -14,9 +14,22 @@ plugin, and personal themes. Theme descriptions explain their palette,
 typography, and character so the agent can choose a theme from a request such
 as "make this look like an alien spacecraft."
 
+Theme branding is cosmetic and applies to the Control UI, not the CLI or native
+applications. It does not rewrite technical command text, package paths,
+authentication protocols, or legal and copyright notices. An anonymous cold
+login cannot use an authenticated person’s theme until their profile and theme
+catalog have loaded; only the existing locally remembered mascot fallback is
+available before that point. These fields add no Gateway configuration options
+or configuration migrations.
+
 The tool is available in the coding and messaging profiles and `group:ui`.
 It does not require a connected browser. Personal changes require a trusted
-requesting profile; the agent cannot supply another person's profile ID.
+participant profile.
+
+CRT and Phosphor use a neutral terminal mark, dot working indicators, and no
+Lobsterdex. They retain the OpenClaw name and help links. Other built-in themes,
+including Claw, keep their existing mascot and branding. Hiding Lobsterdex does
+not delete the browser's collection or saved favicon preference.
 
 ## Select a theme
 
@@ -42,6 +55,14 @@ Use an ID returned by `list`. Plugin IDs are qualified as
 | `get`    | Optional `id`                                | Current selection and the requested theme, including its editable definition when available. Without `id`, inspects the current theme. |
 | `set`    | `id` and/or `mode`                           | Saves profile overrides and returns the resulting selection.                                                                           |
 | `import` | `id`, `definition`; optional `apply`, `mode` | Saves a personal theme. `apply: true` selects it in the same call.                                                                     |
+
+Every action accepts optional `user`, the person's verified `requester_profile.id`
+from the Control UI message's conversation context. When several people have
+steered the turn, `user` is required; the agent chooses the person who asked or
+asks them if it is unclear. Only the turn's owner or an accepted participant
+can be selected. Reads, including the
+current selection in `list` and `get`, use that person's profile; changes save
+only to that profile. If their access has changed, they must ask again.
 
 `mode` is `system`, `light`, or `dark`. `set` accepts `null` for either `id` or
 `mode` to clear that profile override and inherit the Gateway setting. Setting
@@ -76,6 +97,17 @@ and may include `font-sans` and `font-mono`. Use CSS color values such as hex,
 `rgb()`, `hsl()`, or `oklch()`. Font families describe locally available fonts;
 definitions cannot load external stylesheets or resources.
 
+Definitions can also supply these optional presentation fields, shared by built-in, plugin, and personal themes:
+
+- `mascot`: `"claw"` (the default) or `"none"`. `"none"` defaults to a neutral prompt mark and hides the resident lobster and visiting lobster strangers. Ordinary critters can still cross the composer ledge when Lobster visits is enabled; the theme does not change that toggle.
+- `brandName`: a display name of 1–80 printable characters, trimmed before saving. Omit it to keep “OpenClaw.” This is appearance text, not a change to agent identities or product configuration.
+- `brandIcon`: `"claw"` or the neutral `"mark"`. Omission follows `mascot`: claw for `"claw"`, mark for `"none"`. Plugin themes can also select a declared icon artwork ID.
+- `workingIndicator`: `"claw"`, `"dots"`, `"brand"` (the selected brand icon), or `"none"`. Omission uses claw for the claw mascot and dots for no mascot. This choice is independent of long-wait phrases.
+- `lobsterdex` and `communityLinks`: booleans controlling their respective navigation entries. Both default to `true`, independently of `mascot`. Hiding an entry does not delete discoveries or change access permissions.
+- `workingPhrases`: up to 24 literal status phrases, each trimmed to 1–24 characters with no control characters or duplicates after trimming. These authored strings are not translated. Omit the field to use the default whimsical vocabulary, or set it to `[]` to hide long-wait phrases.
+- `critters`: up to 8 unique IDs from the built-in `"penguin"` and `"fedora"` catalog. These add occasional visitors to ordinary composer ledge traffic while Lobster visits is enabled. Omit the field or use `[]` to add none; unknown IDs and duplicates are rejected.
+- `avatarHat`: `"fedora"`, `"crown"`, `"santa"`, `"party"`, or `"pumpkin"` adds an occasional decorative hat to agent avatars. Omit the field for no theme-supplied avatar hat.
+
 Use consistent CSS separators: `rgb(20 30 40 / 50%)` or
 `rgba(20, 30, 40, 0.5)`. Modern functions such as `oklch()` use spaces between
 components and `/` before opacity. Font lists use comma-separated family names;
@@ -95,6 +127,15 @@ This example creates and activates a dark theme in one call:
   "definition": {
     "name": "Xenovessel",
     "description": "Indigo spacecraft surfaces, lime controls, cyan highlights, and monospace typography.",
+    "mascot": "none",
+    "brandName": "Mission Control",
+    "brandIcon": "mark",
+    "workingIndicator": "dots",
+    "lobsterdex": false,
+    "communityLinks": false,
+    "workingPhrases": ["Navigating", "Calibrating", "Scanning"],
+    "critters": ["penguin", "fedora"],
+    "avatarHat": "fedora",
     "dark": {
       "background": "#090818",
       "foreground": "#e8f2ff",
@@ -130,6 +171,10 @@ publishing the definition elsewhere.
 ## Plugin themes and hot reload
 
 Plugins contribute theme definitions declaratively through their manifest.
+Personal themes use only the built-in brand icon, hat, and critter catalog IDs; plugin themes
+may also reference their own SVG artwork IDs declared in the
+[plugin manifest](/plugins/manifest/surfaces#themes). Definitions never contain
+artwork markup or external URLs.
 The shared catalog updates when the plugin is enabled, disabled, or reloaded;
 a Gateway restart is not required. The agent continues using the same `theme`
 tool rather than receiving a new tool for each plugin.

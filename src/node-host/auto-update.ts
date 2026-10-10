@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { sleepWithAbort } from "@openclaw/retry";
-import type { OpenClawConfig } from "../config/config.js";
 import { createConfigIO } from "../config/io.js";
 import { resolveStateDir } from "../config/paths.js";
 import { isTruthyEnvValue } from "../infra/env.js";
@@ -12,6 +11,7 @@ import {
   compareSemverStrings,
   resolveNpmChannelTag,
   resolveUpdateInstallKind,
+  resolveUpdateRegistryTarget,
 } from "../infra/update-check.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { runCommandWithTimeout } from "../process/exec.js";
@@ -24,18 +24,9 @@ const IDLE_CHECK_INTERVAL_MS = 30_000;
 const MIN_ACTIVATION_INTERVAL_MS = 12 * CHECK_INTERVAL_MS;
 
 type NodeUpdateRuntime = {
-  tryPauseForUpdate(): boolean;
+  tryPauseForUpdate(): Promise<boolean>;
   resumeAfterUpdate(): void;
 };
-
-function updatesEnabled(config: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {
-  return (
-    config.nodeHost?.autoUpdate?.enabled !== false &&
-    config.update?.checkOnStart !== false &&
-    !isTruthyEnvValue(env.OPENCLAW_NO_AUTO_UPDATE) &&
-    !isTruthyEnvValue(env.OPENCLAW_NO_RESPAWN)
-  );
-}
 
 /** Owns discovery and idle admission; the launcher owns executable activation. */
 export function startNodeHostAutoUpdate(params: {
@@ -67,7 +58,12 @@ export function startNodeHostAutoUpdate(params: {
       installKind: "package",
     }).channel;
     return {
-      enabled: updatesEnabled(snapshot.config, env) && (channel === "stable" || channel === "beta"),
+      enabled:
+        snapshot.config.nodeHost?.autoUpdate?.enabled !== false &&
+        snapshot.config.update?.checkOnStart !== false &&
+        !isTruthyEnvValue(env.OPENCLAW_NO_AUTO_UPDATE) &&
+        !isTruthyEnvValue(env.OPENCLAW_NO_RESPAWN) &&
+        (channel === "stable" || channel === "beta"),
       channel,
     };
   };
@@ -93,7 +89,7 @@ export function startNodeHostAutoUpdate(params: {
       return CHECK_INTERVAL_MS;
     }
     signal.throwIfAborted();
-    if (!params.runtime.tryPauseForUpdate()) {
+    if (!(await params.runtime.tryPauseForUpdate())) {
       if (!waitingLogged) {
         params.log(
           `node auto-update ${candidate.version} is ready; waiting for active work to finish`,
@@ -149,10 +145,16 @@ export function startNodeHostAutoUpdate(params: {
       }
       return await tryActivate();
     }
+    // Bun-only installs have no npm to spawn; read the registry in-process there,
+    // as `openclaw update` does for installs npm does not manage.
     const available = await resolveNpmChannelTag({
       channel: policy.channel,
       env,
-      runCommand: (argv, options) => runCommandWithTimeout(argv, { ...options, signal }),
+      signal,
+      ...(process.versions.bun ? resolveUpdateRegistryTarget({ env }) : {}),
+      runCommand: process.versions.bun
+        ? undefined
+        : (argv, options) => runCommandWithTimeout(argv, { ...options, signal }),
     });
     signal.throwIfAborted();
     if (available.error) {

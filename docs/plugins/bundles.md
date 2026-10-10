@@ -141,6 +141,8 @@ These are recognized and shown in diagnostics, but OpenClaw does not run them:
 ## MCP for embedded OpenClaw
 
 - Enabled bundles can contribute MCP server config.
+- Stdio commands default their working directory to the plugin config directory.
+  Remote HTTP servers do not receive an implicit working directory.
 - OpenClaw merges bundle MCP config into the effective embedded OpenClaw
   settings as `mcpServers`.
 - OpenClaw exposes supported bundle MCP tools during embedded OpenClaw agent
@@ -201,7 +203,9 @@ MCP servers can use stdio or HTTP transport.
   descriptions and logs.
 - `connectionTimeoutMs` overrides the default 30-second connection timeout for
   both stdio and HTTP transports. Request timeout defaults to 60 seconds and
-  can be overridden with `requestTimeoutMs`.
+  can be overridden with `requestTimeoutMs`. Tool listing (`tools/list`) at
+  session start uses `requestTimeoutMs` when it is set, and 10 seconds
+  otherwise.
 
 ### Tool naming
 

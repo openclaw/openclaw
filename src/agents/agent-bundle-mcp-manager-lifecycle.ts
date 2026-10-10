@@ -1,6 +1,8 @@
-/** Session MCP runtime manager lifecycle: maps, idle sweep, dispose, advertised catalog. */
 import { AsyncLocalStorage } from "node:async_hooks";
+import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
+import type { GatewayScheduler, GatewayScheduledJob } from "../infra/gateway-scheduler.js";
 import { logWarn } from "../logger.js";
+import { compareMcpCatalogTools } from "./agent-bundle-mcp-names.js";
 import { sessionMcpRuntimeOwners } from "./agent-bundle-mcp-runtime-owner.js";
 import {
   SESSION_MCP_MAX_LIVE_RUNTIMES,
@@ -43,68 +45,22 @@ type SessionMcpRuntimeManagerStore = {
   disposalInFlight?: Promise<void>;
   pendingDisposals: Map<string, Set<Promise<void>>>;
   createRuntime: CreateSessionMcpRuntime;
-  now: () => number;
-  idleSweepIntervalMs: number;
   runtimeSlots: WeakMap<SessionMcpRuntime, { idleTtlMs: number }>;
   liveRuntimeSlots: Set<{ idleTtlMs: number }>;
-  enableIdleSweepTimer: boolean;
-  idleSweepTimer: ReturnType<typeof setInterval> | undefined;
-  idleSweepInFlight: Promise<void> | undefined;
+  scheduler: GatewayScheduler;
+  idleSweepJob: GatewayScheduledJob | undefined;
 };
 
 export type SessionMcpRuntimeManagerOpts = {
+  scheduler: GatewayScheduler;
   createRuntime?: CreateSessionMcpRuntime;
-  now?: () => number;
-  enableIdleSweepTimer?: boolean;
-  idleSweepIntervalMs?: number;
 };
 
 function parseRuntimeCacheSessionId(runtimeKey: string): string {
-  if (!runtimeKey.startsWith("{")) {
-    return runtimeKey;
-  }
-  try {
-    const parsed = JSON.parse(runtimeKey) as { sessionId?: unknown };
-    return typeof parsed.sessionId === "string" ? parsed.sessionId : runtimeKey;
-  } catch {
-    return runtimeKey;
-  }
-}
-
-export function createSessionMcpRuntimeManagerStore(
-  opts: SessionMcpRuntimeManagerOpts,
-  createSessionMcpRuntime: CreateSessionMcpRuntime,
-): SessionMcpRuntimeManagerStore {
-  return {
-    // Keys are bare sessionId for static runtimes, or requester composite JSON keys.
-    runtimesBySessionId: new Map<string, SessionMcpRuntime>(),
-    sessionIdBySessionKey: new Map<string, string>(),
-    deferredRetirementSessionIds: new Set<string>(),
-    requiredRetirementSessionIds: new Set<string>(),
-    // Manager-side only: connection hash + resolve time. Never stores raw url/headers.
-    connectionMetaByRuntimeKey: new Map(),
-    /**
-     * Session-stable advertised catalogs for requester-scoped servers.
-     * Keyed by sessionId → serverName. Specs must not vary per sender or shared
-     * Codex threads rotate (dynamicToolsFingerprint churn).
-     */
-    advertisedScopedCatalogBySessionId: new Map(),
-    /**
-     * Per-runtimeKey serialization for acquisition and dispose.
-     * Sections never overlap for one key, so a slow resolve cannot clobber a newer install.
-     * Entries are removed when their chain drains.
-     */
-    runtimeWorkChains: new Map(),
-    pendingDisposals: new Map(),
-    createRuntime: opts.createRuntime ?? createSessionMcpRuntime,
-    now: opts.now ?? Date.now,
-    idleSweepIntervalMs: opts.idleSweepIntervalMs ?? SESSION_MCP_RUNTIME_SWEEP_INTERVAL_MS,
-    runtimeSlots: new WeakMap(),
-    liveRuntimeSlots: new Set(),
-    enableIdleSweepTimer: opts.enableIdleSweepTimer !== false,
-    idleSweepTimer: undefined,
-    idleSweepInFlight: undefined,
-  };
+  const sessionId = runtimeKey.startsWith("{")
+    ? safeParseJsonRecord(runtimeKey)?.sessionId
+    : undefined;
+  return typeof sessionId === "string" ? sessionId : runtimeKey;
 }
 
 export type SessionMcpRuntimeManagerLifecycle = ReturnType<
@@ -127,7 +83,40 @@ function scopedCatalogToolsSignature(tools: readonly McpCatalogTool[]): string {
   );
 }
 
-export function createSessionMcpRuntimeManagerLifecycle(store: SessionMcpRuntimeManagerStore) {
+export function createSessionMcpRuntimeManagerLifecycle(
+  options: SessionMcpRuntimeManagerOpts,
+  createSessionMcpRuntime: CreateSessionMcpRuntime,
+) {
+  const store: SessionMcpRuntimeManagerStore = {
+    // Keys are bare sessionId for static runtimes, or requester composite JSON keys.
+    runtimesBySessionId: new Map<string, SessionMcpRuntime>(),
+    sessionIdBySessionKey: new Map<string, string>(),
+    deferredRetirementSessionIds: new Set<string>(),
+    requiredRetirementSessionIds: new Set<string>(),
+    // Manager-side only: connection hash + resolve time. Never stores raw url/headers.
+    connectionMetaByRuntimeKey: new Map(),
+    /**
+     * Session-stable advertised catalogs for requester-scoped servers.
+     * Keyed by sessionId → serverName. Specs must not vary per sender or shared
+     * Codex threads rotate (dynamicToolsFingerprint churn).
+     */
+    advertisedScopedCatalogBySessionId: new Map(),
+    /**
+     * Per-runtimeKey serialization for acquisition and dispose.
+     * Sections never overlap for one key, so a slow resolve cannot clobber a newer install.
+     * Entries are removed when their chain drains.
+     */
+    runtimeWorkChains: new Map(),
+    pendingDisposals: new Map(),
+    createRuntime: options.createRuntime ?? createSessionMcpRuntime,
+    runtimeSlots: new WeakMap(),
+    liveRuntimeSlots: new Set(),
+    scheduler: options.scheduler,
+    idleSweepJob: undefined,
+  };
+  let cleanupUncertain = false;
+  const schedulers = new Set<GatewayScheduler>();
+  let schedulerScope = store.scheduler.scope();
   const reserveRuntimeSlot = (
     existing: SessionMcpRuntime | undefined,
     hasServers: boolean,
@@ -186,6 +175,7 @@ export function createSessionMcpRuntimeManagerLifecycle(store: SessionMcpRuntime
         store.runtimeSlots.delete(runtime);
       }
     } catch (error) {
+      cleanupUncertain = true;
       recordAgentCleanupFailure();
       throw error;
     }
@@ -194,6 +184,7 @@ export function createSessionMcpRuntimeManagerLifecycle(store: SessionMcpRuntime
     const disposal = Promise.resolve()
       .then(close)
       .catch((error: unknown) => {
+        cleanupUncertain = true;
         recordAgentCleanupFailure();
         throw error;
       })
@@ -203,6 +194,12 @@ export function createSessionMcpRuntimeManagerLifecycle(store: SessionMcpRuntime
           pending?.delete(disposal);
           if (pending?.size === 0) {
             store.pendingDisposals.delete(runtimeKey);
+          }
+        }
+        // A pending close can outlive the last empty runtime or queued acquisition.
+        for (const sessionId of new Set(runtimeKeys.map(parseRuntimeCacheSessionId))) {
+          if (runtimeKeysForSessionId(sessionId).length === 0) {
+            forgetSessionKeysForSessionId(sessionId);
           }
         }
       });
@@ -228,7 +225,10 @@ export function createSessionMcpRuntimeManagerLifecycle(store: SessionMcpRuntime
         keys.add(runtimeKey);
       }
     }
-    for (const runtimeKey of store.runtimeWorkChains.keys()) {
+    for (const runtimeKey of [
+      ...store.runtimeWorkChains.keys(),
+      ...store.pendingDisposals.keys(),
+    ]) {
       if (parseRuntimeCacheSessionId(runtimeKey) === sessionId) {
         keys.add(runtimeKey);
       }
@@ -276,7 +276,7 @@ export function createSessionMcpRuntimeManagerLifecycle(store: SessionMcpRuntime
   };
 
   const sweepIdleRuntimes = async (): Promise<number> => {
-    const nowMs = store.now();
+    const nowMs = store.scheduler.now();
     const expired: Array<{ runtimeKey: string; runtime: SessionMcpRuntime }> = [];
     for (const [runtimeKey, runtime] of store.runtimesBySessionId.entries()) {
       const idleTtlMs = store.runtimeSlots.get(runtime)?.idleTtlMs ?? 0;
@@ -311,20 +311,6 @@ export function createSessionMcpRuntimeManagerLifecycle(store: SessionMcpRuntime
     return expired.length;
   };
 
-  const queueIdleSweep = () => {
-    if (store.idleSweepInFlight) {
-      return;
-    }
-    store.idleSweepInFlight = sweepIdleRuntimes()
-      .then(() => undefined)
-      .catch((error: unknown) => {
-        logWarn(`bundle-mcp: idle runtime sweep failed: ${String(error)}`);
-      })
-      .finally(() => {
-        store.idleSweepInFlight = undefined;
-      });
-  };
-
   const ensureIdleSweepTimer = () => {
     const enabled = [...store.runtimesBySessionId.values()].some(
       (runtime) => (store.runtimeSlots.get(runtime)?.idleTtlMs ?? 0) > 0,
@@ -333,21 +319,65 @@ export function createSessionMcpRuntimeManagerLifecycle(store: SessionMcpRuntime
       clearIdleSweepTimer();
       return;
     }
-    if (!store.enableIdleSweepTimer || store.idleSweepIntervalMs <= 0 || store.idleSweepTimer) {
+    if (store.idleSweepJob || schedulerScope.signal.aborted) {
       return;
     }
-    store.idleSweepTimer = runInMcpManagerContext(() =>
-      setInterval(queueIdleSweep, store.idleSweepIntervalMs),
+    store.idleSweepJob = runInMcpManagerContext(() =>
+      schedulerScope.schedule({
+        id: "mcp:idle-runtimes",
+        atMs: store.scheduler.now() + SESSION_MCP_RUNTIME_SWEEP_INTERVAL_MS,
+        everyMs: SESSION_MCP_RUNTIME_SWEEP_INTERVAL_MS,
+        run: () =>
+          sweepIdleRuntimes().catch((error: unknown) => {
+            logWarn(`bundle-mcp: idle runtime sweep failed: ${String(error)}`);
+          }),
+      }),
     );
-    store.idleSweepTimer.unref?.();
   };
 
   const clearIdleSweepTimer = () => {
-    if (!store.idleSweepTimer) {
+    store.idleSweepJob?.cancel();
+    store.idleSweepJob = undefined;
+  };
+
+  const selectScheduler = async () => {
+    const scheduler = [...schedulers].findLast((candidate) => !candidate.signal.aborted);
+    if (scheduler === store.scheduler) {
       return;
     }
-    clearInterval(store.idleSweepTimer);
-    store.idleSweepTimer = undefined;
+    const previous = schedulerScope;
+    previous.beginClose();
+    if (scheduler) {
+      store.scheduler = scheduler;
+    }
+    const selected = store.scheduler;
+    // The closed scope fences rearming while acquisitions use the successor host.
+    await previous.stop();
+    if (schedulerScope !== previous || store.scheduler !== selected) {
+      return;
+    }
+    store.idleSweepJob = undefined;
+    if (scheduler) {
+      schedulerScope = scheduler.scope();
+    }
+    ensureIdleSweepTimer();
+  };
+
+  const setScheduler = (scheduler: GatewayScheduler): Promise<void> => {
+    scheduler.signal.throwIfAborted();
+    if (schedulers.has(scheduler)) {
+      return Promise.resolve();
+    }
+    schedulers.add(scheduler);
+    scheduler.signal.addEventListener(
+      "abort",
+      () => {
+        schedulers.delete(scheduler);
+        void selectScheduler();
+      },
+      { once: true },
+    );
+    return selectScheduler();
   };
 
   const disposeRuntimeKeyNow = async (runtimeKey: string): Promise<void> => {
@@ -361,7 +391,7 @@ export function createSessionMcpRuntimeManagerLifecycle(store: SessionMcpRuntime
 
   const disposeManagedRuntimes = (
     sessionId?: string,
-    opts?: { preserveRequiredRetirement?: boolean },
+    opts?: { preserveRequiredRetirement?: boolean; requireStoppedScheduler?: boolean },
   ): Promise<void> => {
     const runtimeKeys = [
       ...new Set(
@@ -371,13 +401,7 @@ export function createSessionMcpRuntimeManagerLifecycle(store: SessionMcpRuntime
               ...store.runtimeWorkChains.keys(),
               ...store.pendingDisposals.keys(),
             ]
-          : [
-              sessionId,
-              ...runtimeKeysForSessionId(sessionId),
-              ...[...store.pendingDisposals.keys()].filter(
-                (key) => parseRuntimeCacheSessionId(key) === sessionId,
-              ),
-            ],
+          : [sessionId, ...runtimeKeysForSessionId(sessionId)],
       ),
     ];
     // Capture before queuing: the previous owner may unpublish and settle before
@@ -388,6 +412,13 @@ export function createSessionMcpRuntimeManagerLifecycle(store: SessionMcpRuntime
     const priorDisposal = store.disposalInFlight;
     const queued = runExclusiveOnRuntimeKeys(runtimeKeys, async () => {
       await priorDisposal;
+      if (
+        opts?.requireStoppedScheduler &&
+        (!store.scheduler.signal.aborted ||
+          (sessionId !== undefined && totalActiveLeasesForSessionId(sessionId) > 0))
+      ) {
+        return;
+      }
       // Clear bookkeeping after admitted acquisitions finish, before successors run.
       if (sessionId === undefined) {
         clearIdleSweepTimer();
@@ -422,6 +453,10 @@ export function createSessionMcpRuntimeManagerLifecycle(store: SessionMcpRuntime
     return disposal.finally(() => {
       if (store.disposalInFlight === disposal) {
         store.disposalInFlight = undefined;
+      }
+      // Unpublished runtimes can fail before this caller opens its cleanup scope.
+      if (sessionId === undefined && cleanupUncertain) {
+        recordAgentCleanupFailure();
       }
     });
   };
@@ -473,16 +508,10 @@ export function createSessionMcpRuntimeManagerLifecycle(store: SessionMcpRuntime
       servers[serverName] = entry.servers.get(serverName)!;
       tools.push(...(entry.toolsByServer.get(serverName) ?? []));
     }
-    tools.sort((a, b) => {
-      const serverOrder = a.safeServerName.localeCompare(b.safeServerName);
-      if (serverOrder !== 0) {
-        return serverOrder;
-      }
-      return a.toolName.localeCompare(b.toolName);
-    });
+    tools.sort(compareMcpCatalogTools);
     return {
       version: 1,
-      generatedAt: store.now(),
+      generatedAt: store.scheduler.now(),
       servers,
       tools,
     };
@@ -505,12 +534,14 @@ export function createSessionMcpRuntimeManagerLifecycle(store: SessionMcpRuntime
     });
   };
 
+  void setScheduler(store.scheduler);
   return {
     store,
     runtimeKeysForSessionId,
     totalActiveLeasesForSessionId,
     runExclusiveOnRuntimeKeys,
     sweepIdleRuntimes,
+    setScheduler,
     reserveRuntimeSlot,
     releaseEmptyRuntimeSlot,
     disposeRuntime,

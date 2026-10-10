@@ -1,4 +1,3 @@
-// Detects plugin version drift between config, manifests, and installs.
 import type { OpenClawConfig } from "../config/types.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import {
@@ -21,7 +20,7 @@ import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-st
 import { checkMinHostVersion } from "./min-host-version.js";
 import {
   resolveTrustedSourceLinkedOfficialClawHubInstall,
-  resolveTrustedSourceLinkedOfficialNpmSpec,
+  resolveTrustedSourceLinkedOfficialNpmInstall,
 } from "./official-external-install-records.js";
 import { satisfiesPluginApiRange } from "./package-compat.js";
 import { resolveClawHubUpdateSpecs } from "./update-source.js";
@@ -169,12 +168,12 @@ async function fetchClawHubLatestVersion(
   }
 }
 
-async function resolveClawHubEntryTarget(
+async function resolveClawHubTarget(
   entry: PluginVersionDriftEntry,
-): Promise<PluginVersionDriftEntry> {
+): Promise<PluginVersionDriftTargetResolution | undefined> {
   const packageName = entry.clawhubPackage;
   if (!packageName) {
-    return entry;
+    return undefined;
   }
   const requestedTarget = resolveOpenClawReleaseCohortVersion(entry.gatewayVersion);
   // Ask the update owner which spec it would install, so a stale recorded pin
@@ -193,20 +192,14 @@ async function resolveClawHubEntryTarget(
     const parsed = parseClawHubPluginSpec(selectedSpec);
     if (!parsed || (parsed.version && parsed.version.toLowerCase() !== "latest")) {
       return {
-        ...entry,
-        targetResolution: {
-          status: "unresolved",
-          packageName,
-          requestedTarget,
-          error: `ClawHub latest metadata cannot confirm the selected target ${selectedSpec}`,
-        },
+        status: "unresolved",
+        packageName,
+        requestedTarget,
+        error: `ClawHub latest metadata cannot confirm the selected target ${selectedSpec}`,
       };
     }
   } catch (err) {
-    return {
-      ...entry,
-      targetResolution: { status: "unresolved", packageName, requestedTarget, error: String(err) },
-    };
+    return { status: "unresolved", packageName, requestedTarget, error: String(err) };
   }
   const { version: latestVersion, error } = await fetchClawHubLatestVersion(
     packageName,
@@ -216,56 +209,42 @@ async function resolveClawHubEntryTarget(
   if (!latestVersion) {
     // Leave drift reported when ClawHub cannot answer: silence would hide a real gap.
     return {
-      ...entry,
-      targetResolution: {
-        status: "unresolved",
-        packageName,
-        requestedTarget,
-        error: error ?? `ClawHub reported no latest version for ${packageName}`,
-      },
+      status: "unresolved",
+      packageName,
+      requestedTarget,
+      error: error ?? `ClawHub reported no latest version for ${packageName}`,
     };
   }
   // Cohorts erase correction suffixes and SemVer precedence ignores build metadata.
   // Only the exact package version proves that the registry target is installed.
   if (latestVersion === entry.installedVersion) {
-    // ClawHub has nothing newer to install. Dropping the entry would hide the
-    // registry-lag gap from every downstream diagnostic, so keep the observed
-    // registry version and the expected Gateway version and suppress only the
-    // no-op update command.
+    // Retain registry lag in diagnostics while suppressing the no-op update command.
     return {
-      ...entry,
-      targetResolution: {
-        status: "registry-current",
-        packageName,
-        requestedTarget,
-        version: latestVersion,
-      },
+      status: "registry-current",
+      packageName,
+      requestedTarget,
+      version: latestVersion,
     };
   }
   // A withdrawn latest release must not turn diagnostic repair advice into a downgrade.
   // Share the updater's release ordering, including OpenClaw correction versions.
   if (isPackageVersionDowngrade(entry.installedVersion, latestVersion)) {
     return {
-      ...entry,
-      targetResolution: {
-        status: "unresolved",
-        packageName,
-        requestedTarget,
-        error: `ClawHub latest ${latestVersion} is older than installed ${entry.installedVersion}`,
-      },
+      status: "unresolved",
+      packageName,
+      requestedTarget,
+      error: `ClawHub latest ${latestVersion} is older than installed ${entry.installedVersion}`,
     };
   }
-  return {
-    ...entry,
-    targetResolution: { status: "resolved", packageName, requestedTarget, version: latestVersion },
-  };
+  return { status: "resolved", packageName, requestedTarget, version: latestVersion };
 }
 
 async function resolveEntryTarget(
   entry: PluginVersionDriftEntry,
 ): Promise<PluginVersionDriftEntry> {
   if (entry.source === "clawhub") {
-    return await resolveClawHubEntryTarget(entry);
+    const targetResolution = await resolveClawHubTarget(entry);
+    return targetResolution ? { ...entry, targetResolution } : entry;
   }
   const packageName = resolveExactNpmPinPackageName(entry);
   if (!packageName) {
@@ -315,7 +294,7 @@ function shouldCompareOfficialInstallToGateway(params: {
   pluginId: string;
   record: PluginInstallRecord;
 }): boolean {
-  const officialNpmSpec = resolveTrustedSourceLinkedOfficialNpmSpec(params);
+  const officialNpmSpec = resolveTrustedSourceLinkedOfficialNpmInstall(params)?.npmSpec;
   if (officialNpmSpec) {
     return parseRegistryNpmSpec(officialNpmSpec)?.selectorKind !== "exact-version";
   }
@@ -343,18 +322,35 @@ export function hasOfficialPluginVersionCandidates(params: {
   );
 }
 
-/**
- * Compare active official external plugin installs against an OpenClaw host
- * version and return any mismatches.
- *
- * @param params.gatewayVersion The host version the plugins must match.
- * @param params.installRecords The full set of recorded plugin installs (as
- *   produced by `loadInstalledPluginIndexInstallRecords`).
- * @param params.config The merged daemon-side OpenClawConfig (optional).
- *   Plugins inactive under the effective activation policy are skipped.
- *
- * The returned `drifts` list is sorted by `pluginId` for stable output.
- */
+/** Exact cohort targets shared by automatic updates and Doctor's drift repair. */
+export function resolveOfficialPluginCohortNpmSpecs(params: {
+  gatewayVersion: string;
+  installRecords: Record<string, PluginInstallRecord>;
+  config?: OpenClawConfig;
+}): Record<string, string> {
+  const version = resolveOpenClawReleaseCohortVersion(params.gatewayVersion);
+  const specs: Record<string, string> = {};
+  for (const [pluginId, record] of Object.entries(params.installRecords)) {
+    if (
+      record.source !== "npm" ||
+      !isPluginEnabled(params.config, pluginId) ||
+      !shouldCompareOfficialInstallToGateway({ pluginId, record })
+    ) {
+      continue;
+    }
+    const official = resolveTrustedSourceLinkedOfficialNpmInstall({ pluginId, record })?.npmSpec;
+    const packageName = official ? parseRegistryNpmSpec(official)?.name : undefined;
+    if (
+      packageName &&
+      parseRegistryNpmSpec(`${packageName}@${version}`)?.selectorKind === "exact-version"
+    ) {
+      specs[pluginId] = `${packageName}@${version}`;
+    }
+  }
+  return specs;
+}
+
+/** Compare active official installs to the host cohort, sorted by plugin id for diagnostics. */
 export function detectPluginVersionDrift(params: {
   gatewayVersion: string;
   installRecords: Record<string, PluginInstallRecord>;
@@ -365,25 +361,15 @@ export function detectPluginVersionDrift(params: {
   const drifts: PluginVersionDriftEntry[] = [];
 
   for (const [pluginId, record] of Object.entries(installRecords)) {
-    if (!record) {
-      continue;
-    }
-    if (!isPluginEnabled(config, pluginId)) {
-      continue;
-    }
     if (
-      !shouldCompareOfficialInstallToGateway({
-        pluginId,
-        record,
-      })
+      !record ||
+      !isPluginEnabled(config, pluginId) ||
+      !shouldCompareOfficialInstallToGateway({ pluginId, record })
     ) {
       continue;
     }
     const installedVersion = record.resolvedVersion ?? record.version;
     if (!installedVersion) {
-      // No version recorded for this install — nothing to compare against.
-      // Don't fabricate drift; surface tooling (status.print) can flag this
-      // separately if desired.
       continue;
     }
     if (resolveOpenClawReleaseCohortVersion(installedVersion) === normalizedGateway) {

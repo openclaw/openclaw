@@ -5,270 +5,12 @@ import {
   createPluginStateKeyedStore,
   registerMigratedPluginStateEntry,
 } from "../plugin-state/plugin-state-store.js";
-import { inspectPersistedInstalledPluginIndexInstallRecordsSync } from "../plugins/installed-plugin-index-record-state.js";
-import { writePersistedInstalledPluginIndexSync } from "../plugins/installed-plugin-index-store-write.js";
-import {
-  readPersistedInstalledPluginIndexSync,
-  resolveLegacyInstalledPluginIndexStorePath,
-} from "../plugins/installed-plugin-index-store.js";
-import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
-import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
-import {
-  executeSqliteQuerySync,
-  executeSqliteQueryTakeFirstSync,
-  getNodeSqliteKysely,
-} from "./kysely-sync.js";
-import { ensureMigrationDir, migrationFileExists } from "./state-migrations.fs.js";
-import {
-  PLUGIN_STATE_SQLITE_SIDECAR_SUFFIXES,
-  archiveLegacyImportSource,
-  archiveLegacyInstalledPluginIndex,
-  archiveLegacyPluginStateSidecar,
-  hasPendingSqliteSidecarArchive,
-  isLegacyPluginStateRowExpired,
-  legacyInstalledPluginIndexMatches,
-  legacyPluginStateRowsMatch,
-  mergeLegacyInstalledPluginIndexRecords,
-  normalizeLegacySqliteInteger,
-  readLegacyInstalledPluginIndex,
-  readLegacyPluginStateSidecarRows,
-  resolveLegacyPluginStateSidecarPath,
-  type LegacyPluginStateSidecarRow,
-} from "./state-migrations.storage.js";
+import { migrationFileExists } from "./state-migrations.fs.js";
+import { archiveLegacyImportSource } from "./state-migrations.storage.js";
 import type { MigrationMessages } from "./state-migrations.types.js";
-
-type LegacyPluginStateImportDatabase = Pick<OpenClawStateKyselyDatabase, "plugin_state_entries">;
-
-export async function migrateLegacyPluginStateSidecar(params: {
-  stateDir: string;
-}): Promise<{ changes: string[]; warnings: string[] }> {
-  const sourcePath = resolveLegacyPluginStateSidecarPath(params.stateDir);
-  if (!migrationFileExists(sourcePath)) {
-    const changes: string[] = [];
-    const warnings: string[] = [];
-    if (hasPendingSqliteSidecarArchive(sourcePath, PLUGIN_STATE_SQLITE_SIDECAR_SUFFIXES)) {
-      archiveLegacyPluginStateSidecar({ sourcePath, changes, warnings });
-    }
-    return { changes, warnings };
-  }
-
-  const changes: string[] = [];
-  const warnings: string[] = [];
-  let rows: LegacyPluginStateSidecarRow[];
-  try {
-    rows = readLegacyPluginStateSidecarRows(sourcePath);
-  } catch (err) {
-    return {
-      changes,
-      warnings: [`Failed reading plugin-state sidecar ${sourcePath}: ${String(err)}`],
-    };
-  }
-
-  try {
-    const conflictedKeys: string[] = [];
-    const rowsToInsert: LegacyPluginStateSidecarRow[] = [];
-    let imported = 0;
-    let skippedExpired = 0;
-    const now = Date.now();
-    runOpenClawStateWriteTransaction(
-      ({ db }) => {
-        const stateDb = getNodeSqliteKysely<LegacyPluginStateImportDatabase>(db);
-        for (const row of rows) {
-          executeSqliteQuerySync(
-            db,
-            stateDb
-              .deleteFrom("plugin_state_entries")
-              .where("plugin_id", "=", row.plugin_id)
-              .where("namespace", "=", row.namespace)
-              .where("entry_key", "=", row.entry_key)
-              .where("expires_at", "is not", null)
-              .where("expires_at", "<=", now),
-          );
-          const existing = executeSqliteQueryTakeFirstSync(
-            db,
-            stateDb
-              .selectFrom("plugin_state_entries")
-              .select(["value_json", "created_at", "expires_at"])
-              .where("plugin_id", "=", row.plugin_id)
-              .where("namespace", "=", row.namespace)
-              .where("entry_key", "=", row.entry_key),
-          );
-          const legacyExpired = isLegacyPluginStateRowExpired(row, now);
-          if (existing) {
-            if (!legacyPluginStateRowsMatch(existing, row)) {
-              const existingCreatedAt = normalizeLegacySqliteInteger(existing.created_at) ?? 0;
-              const rowCreatedAt = normalizeLegacySqliteInteger(row.created_at) ?? 0;
-              if (existingCreatedAt > rowCreatedAt) {
-                // Canonical row is strictly newer — migration already satisfied
-              } else if (legacyExpired) {
-                skippedExpired += 1;
-              } else {
-                conflictedKeys.push(`${row.plugin_id}/${row.namespace}/${row.entry_key}`);
-              }
-            }
-            continue;
-          }
-          if (legacyExpired) {
-            skippedExpired += 1;
-            continue;
-          }
-          rowsToInsert.push(row);
-        }
-        for (const row of rowsToInsert) {
-          executeSqliteQuerySync(
-            db,
-            stateDb
-              .insertInto("plugin_state_entries")
-              .values({
-                plugin_id: row.plugin_id,
-                namespace: row.namespace,
-                entry_key: row.entry_key,
-                value_json: row.value_json,
-                created_at: normalizeLegacySqliteInteger(row.created_at) ?? 0,
-                expires_at: normalizeLegacySqliteInteger(row.expires_at),
-              })
-              .onConflict((conflict) =>
-                conflict.columns(["plugin_id", "namespace", "entry_key"]).doNothing(),
-              ),
-          );
-          imported += 1;
-        }
-      },
-      { env: { ...process.env, OPENCLAW_STATE_DIR: params.stateDir } },
-    );
-    if (imported > 0) {
-      changes.push(
-        `Migrated ${imported} plugin-state sidecar ${imported === 1 ? "entry" : "entries"} → shared SQLite state`,
-      );
-    }
-    if (conflictedKeys.length > 0) {
-      return {
-        changes,
-        warnings: [
-          `Left plugin-state sidecar in place because ${conflictedKeys.length} ${conflictedKeys.length === 1 ? "row differs" : "rows differ"} from shared state without a newer canonical timestamp. First key: ${conflictedKeys[0]}`,
-        ],
-      };
-    }
-    if (skippedExpired > 0) {
-      changes.push(
-        `Dropped ${skippedExpired} expired plugin-state sidecar ${skippedExpired === 1 ? "entry" : "entries"}`,
-      );
-    }
-  } catch (err) {
-    return {
-      changes,
-      warnings: [`Failed migrating plugin-state sidecar ${sourcePath}: ${String(err)}`],
-    };
-  }
-
-  archiveLegacyPluginStateSidecar({ sourcePath, changes, warnings });
-  return { changes, warnings };
-}
-
-export async function migrateLegacyInstalledPluginIndex(params: {
-  stateDir: string;
-}): Promise<MigrationMessages> {
-  const sourcePath = resolveLegacyInstalledPluginIndexStorePath({ stateDir: params.stateDir });
-  if (!migrationFileExists(sourcePath)) {
-    return { changes: [], warnings: [] };
-  }
-
-  const changes: string[] = [];
-  const warnings: string[] = [];
-  const persistedState = inspectPersistedInstalledPluginIndexInstallRecordsSync({
-    stateDir: params.stateDir,
-  });
-  if (persistedState.status === "invalid") {
-    return {
-      changes,
-      warnings: [
-        `Left plugin install index in place because persisted install records in ${params.stateDir} are invalid`,
-      ],
-    };
-  }
-  const legacy = readLegacyInstalledPluginIndex(sourcePath);
-  if (!legacy) {
-    return {
-      changes,
-      warnings: [`Left plugin install index in place because ${sourcePath} is invalid`],
-    };
-  }
-
-  const storeOptions = { stateDir: params.stateDir };
-  const current = readPersistedInstalledPluginIndexSync(storeOptions);
-  if (current && !legacyInstalledPluginIndexMatches(current, legacy)) {
-    const merged = mergeLegacyInstalledPluginIndexRecords(current, legacy);
-    if (merged.addedCount > 0) {
-      try {
-        writePersistedInstalledPluginIndexSync(merged.merged, storeOptions);
-        changes.push(
-          `Merged ${merged.addedCount} legacy plugin install ${merged.addedCount === 1 ? "record" : "records"} → shared SQLite state`,
-        );
-      } catch (err) {
-        return {
-          changes,
-          warnings: [`Failed merging plugin install index ${sourcePath}: ${String(err)}`],
-        };
-      }
-    }
-    if (merged.conflicts.length > 0) {
-      // SQLite owns the install ledger; discovery can omit disabled or currently unloadable plugins.
-      // Archive the retired JSON for recovery instead of blocking startup on conflicting metadata.
-      archiveLegacyInstalledPluginIndex({ sourcePath, changes, warnings });
-      return {
-        changes,
-        warnings,
-        notices: [
-          `Kept canonical shared SQLite plugin install metadata despite differing legacy records for: ${merged.conflicts.join(", ")}`,
-        ],
-      };
-    }
-  }
-
-  if (!current) {
-    try {
-      writePersistedInstalledPluginIndexSync(legacy, storeOptions);
-      const recordCount = Object.keys(legacy.installRecords).length;
-      changes.push(
-        `Migrated plugin install index ${recordCount} ${recordCount === 1 ? "record" : "records"} → shared SQLite state`,
-      );
-    } catch (err) {
-      return {
-        changes,
-        warnings: [`Failed migrating plugin install index ${sourcePath}: ${String(err)}`],
-      };
-    }
-  }
-
-  archiveLegacyInstalledPluginIndex({ sourcePath, changes, warnings });
-  return { changes, warnings };
-}
-
-export function preflightLegacyInstalledPluginIndexMigration(params: {
-  stateDir: string;
-}): string | null {
-  const persistedState = inspectPersistedInstalledPluginIndexInstallRecordsSync(params);
-  if (persistedState.status === "invalid") {
-    return `State dir migration skipped because persisted plugin install records in ${params.stateDir} are invalid`;
-  }
-  const sourcePath = resolveLegacyInstalledPluginIndexStorePath(params);
-  if (migrationFileExists(sourcePath) && !readLegacyInstalledPluginIndex(sourcePath)) {
-    return `State dir migration skipped because plugin install index ${sourcePath} is invalid`;
-  }
-  return null;
-}
 
 function resolvePluginStateImportTargetKey(scopeKey: string, key: string): string {
   return scopeKey ? `${scopeKey}:${key}` : key;
-}
-
-function findMissingKey(expected: Set<string>, actual: Set<string>): string | undefined {
-  for (const key of expected) {
-    if (!actual.has(key)) {
-      return key;
-    }
-  }
-  return undefined;
 }
 
 function compareImportEntriesNewestFirst(
@@ -430,10 +172,10 @@ export async function runLegacyMigrationPlans(
                 ...(entry.ttlMs != null ? { ttlMs: entry.ttlMs } : {}),
                 ...(entry.timestamp !== undefined ? { createdAtMs: entry.timestamp } : {}),
               });
-              const nextExpectedKeys = new Set(expectedKeys);
-              nextExpectedKeys.add(entry.targetKey);
               const liveKeys = new Set((await store.entries()).map(({ key }) => key));
-              const missingKey = findMissingKey(nextExpectedKeys, liveKeys);
+              const missingKey = [...expectedKeys, entry.targetKey].find(
+                (key) => !liveKeys.has(key),
+              );
               if (missingKey) {
                 // A concurrent write pushed the store over a cap and evicted a row. Roll back
                 // only the entry whose write triggered the eviction, restore the evicted live
@@ -541,7 +283,7 @@ export async function runLegacyMigrationPlans(
       if (migrationFileExists(plan.targetPath)) {
         continue;
       }
-      ensureMigrationDir(path.dirname(plan.targetPath));
+      fs.mkdirSync(path.dirname(plan.targetPath), { recursive: true });
       if (plan.kind === "move") {
         fs.renameSync(plan.sourcePath, plan.targetPath);
         changes.push(`Moved ${plan.label} → ${plan.targetPath}`);

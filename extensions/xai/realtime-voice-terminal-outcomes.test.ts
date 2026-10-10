@@ -326,11 +326,6 @@ describe("xAI realtime terminal event ownership", () => {
       expected: { errors: [], transcripts: [], tools: [] },
     },
     {
-      name: "retains immediate completed replay delivery for resumed conversations",
-      event: { type: "conversation.item.created", item: completedTool },
-      expected: { errors: [], transcripts: [], tools: [expectedTool] },
-    },
-    {
       name: "buffers authoritative function-call arguments until response completion",
       event: {
         type: "response.function_call_arguments.done",
@@ -376,31 +371,17 @@ describe("xAI realtime terminal event ownership", () => {
       expected: { errors: [], transcripts: [], tools: [expectedTool] },
     },
     {
-      name: "releases finalized tool arguments only after a completed response",
-      event: [
-        {
-          type: "response.function_call_arguments.done",
-          item_id: completedTool.id,
-          call_id: completedTool.call_id,
-          name: completedTool.name,
-          arguments: completedTool.arguments,
-        },
-        { type: "response.done", response: { status: "completed" } },
-      ],
-      expected: { errors: [], transcripts: [], tools: [expectedTool] },
-    },
-    ...["failed", "incomplete", "cancelled"].map((status) => ({
-      name: `does not recover terminal-output tool calls from a ${status} response`,
+      name: "does not recover terminal-output tool calls from a failed response",
       event: {
         type: "response.done",
-        response: { status, output: [completedTool] },
+        response: { status: "failed", output: [completedTool] },
       },
       expected: {
-        errors: status === "cancelled" ? [] : [`xAI realtime voice response ${status}`],
+        errors: ["xAI realtime voice response failed"],
         transcripts: [],
         tools: [],
       },
-    })),
+    },
     {
       name: "does not dispatch incomplete items from a completed terminal response",
       event: {

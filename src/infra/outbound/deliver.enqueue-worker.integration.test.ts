@@ -3,7 +3,10 @@ import path from "node:path";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { onTrustedMessageAuditEvent } from "../../audit/message-audit-events.js";
 import { createMessageReceiptFromOutboundResults } from "../../channels/message/receipt.js";
-import type { ChannelMessageSendMediaContext } from "../../channels/message/types.js";
+import type {
+  ChannelMessageSendMediaContext,
+  ChannelMessageSendTextContext,
+} from "../../channels/message/types.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
@@ -11,10 +14,6 @@ import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/c
 import { loadDeliveryQueueEntries } from "../delivery-queue-sqlite.js";
 import { isDeliveryRecoveryOwnedRetry } from "../delivery-recovery.shared.js";
 import { sqliteWorkerPreloadEnv } from "../sqlite-worker-preload.test-support.js";
-import {
-  captureStateDatabaseCoordinatorRuntime,
-  resolveStateDatabaseCoordinatorPath,
-} from "../state-database-coordinator.js";
 import * as queueAdmission from "./deliver-queue-admission.js";
 import {
   drainMatrixReconnect,
@@ -29,17 +28,20 @@ import {
   loadPendingDeliveries,
   setQueuedEntryState,
 } from "./delivery-queue.test-helpers.js";
+import { createStructuredOutboundPayloadPlan } from "./payloads.js";
 import {
   acceptedPreparedOutboundEntries,
   createUnmodifiedPreparedOutboundBatch,
 } from "./prepared-batch.js";
 
 let deliverOutboundPayloads: typeof import("./deliver.js").deliverOutboundPayloads;
+let deliverStructuredOutboundPayloadsInternal: typeof import("./deliver.js").deliverStructuredOutboundPayloadsInternal;
 
 describe("enqueue publication custody through the real sender", () => {
   const fixtures = installDeliveryQueueTmpDirHooks();
   beforeAll(async () => {
-    ({ deliverOutboundPayloads } = await import("./deliver.js"));
+    ({ deliverOutboundPayloads, deliverStructuredOutboundPayloadsInternal } =
+      await import("./deliver.js"));
   });
   afterEach(() => {
     vi.restoreAllMocks();
@@ -55,16 +57,37 @@ describe("enqueue publication custody through the real sender", () => {
     return { stateDir, mediaUrl };
   }
 
+  function deliveryParams(stateDir: string) {
+    return {
+      cfg: {},
+      channel: "matrix",
+      to: "!synthetic:example",
+      mediaAccess: { localRoots: [stateDir] },
+      queuePolicy: "best_effort",
+    } satisfies Omit<Parameters<typeof deliverOutboundPayloads>[0], "payloads">;
+  }
+
+  async function expectReleasedMedia(stateDir: string) {
+    expect(await loadPendingDeliveries(stateDir)).toEqual([]);
+    expect(loadDeliveryQueueEntries(DELIVERY_QUEUE_MEDIA_STAGING_QUEUE_NAME, stateDir)).toEqual([]);
+    expect(await fs.readdir(path.join(stateDir, "delivery-queue-media"))).toEqual([]);
+  }
+
   function installSender() {
     const send = vi.fn(
-      async ({ mediaUrl, onPlatformSendDispatch }: ChannelMessageSendMediaContext) => {
-        await onPlatformSendDispatch?.();
-        expect(await fs.readFile(mediaUrl, "utf8")).toBe("synthetic retained media");
+      async (context: ChannelMessageSendMediaContext | ChannelMessageSendTextContext) => {
+        await context.onPlatformSendDispatch?.();
+        const isMedia = "mediaUrl" in context;
+        if (isMedia) {
+          expect(await fs.readFile(context.mediaUrl, "utf8")).toBe("synthetic retained media");
+        } else {
+          expect(context.text).toBe("synthetic retained text");
+        }
         return {
           messageId: "synthetic-delivered",
           receipt: createMessageReceiptFromOutboundResults({
             results: [{ channel: "matrix", messageId: "synthetic-delivered" }],
-            kind: "media",
+            kind: isMedia ? "media" : "text",
           }),
         };
       },
@@ -78,8 +101,8 @@ describe("enqueue publication custody through the real sender", () => {
             ...createOutboundTestPlugin({ id: "matrix", outbound: matrixOutboundForQueueTest }),
             message: {
               id: "matrix",
-              durableFinal: { capabilities: { media: true } },
-              send: { media: send },
+              durableFinal: { capabilities: { text: true, media: true } },
+              send: { text: send, media: send },
             },
           },
         },
@@ -88,7 +111,7 @@ describe("enqueue publication custody through the real sender", () => {
     return send;
   }
 
-  it("retains media after a committed reply is lost, suppresses live fallback, and recovers exactly once", async () => {
+  it("retains prepared media after a committed reply is lost, suppresses live fallback, and recovers exactly once", async () => {
     const { stateDir, mediaUrl } = await source();
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     const send = installSender();
@@ -100,13 +123,9 @@ describe("enqueue publication custody through the real sender", () => {
     });
     try {
       const reply = holdEnqueueReply();
-      const delivery = deliverOutboundPayloads({
-        cfg: {},
-        channel: "matrix",
-        to: "!synthetic:example",
-        payloads: [{ mediaUrl }],
-        mediaAccess: { localRoots: [stateDir] },
-        queuePolicy: "best_effort",
+      const delivery = deliverStructuredOutboundPayloadsInternal({
+        ...deliveryParams(stateDir),
+        plan: createStructuredOutboundPayloadPlan([{ mediaUrl }]),
       });
       const outcome = delivery.then(
         (value) => ({ value }),
@@ -154,196 +173,98 @@ describe("enqueue publication custody through the real sender", () => {
     }
   });
 
-  it("releases staged media after a known serialization failure and still permits best-effort delivery", async () => {
-    const { stateDir, mediaUrl } = await source();
-    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-    const send = installSender();
-    const reply = holdEnqueueReply();
-    const identity = {
-      name: "synthetic",
-      toJSON() {
-        throw new Error("known JSON preparation failure");
-      },
-    };
-    try {
-      await deliverOutboundPayloads({
-        cfg: {},
-        channel: "matrix",
-        to: "!synthetic:example",
-        payloads: [{ mediaUrl }],
-        mediaAccess: { localRoots: [stateDir] },
-        queuePolicy: "best_effort",
-        identity,
-      });
-      expect(send).toHaveBeenCalledOnce();
-      expect(reply.attempts()).toBe(0);
-      expect(await loadPendingDeliveries(stateDir)).toEqual([]);
-      expect(loadDeliveryQueueEntries(DELIVERY_QUEUE_MEDIA_STAGING_QUEUE_NAME, stateDir)).toEqual(
-        [],
-      );
-      expect(await fs.readdir(path.join(stateDir, "delivery-queue-media"))).toEqual([]);
-    } finally {
-      reply.restore();
-    }
-  });
-
-  it("cleans a fully rolled-back native enqueue and preserves best-effort live sending", async () => {
-    const { stateDir, mediaUrl } = await source();
-    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-    const databasePath = openOpenClawStateDatabase().path;
-    const armPath = path.join(stateDir, "arm-rollback");
-    const preloadPath = path.join(stateDir, "enqueue-rollback.cjs");
-    await fs.writeFile(
-      preloadPath,
-      `
+  it.each([{ failure: "native rollback", kind: "media", attempts: 1 }] as const)(
+    "releases $kind staging after $failure and permits best-effort live sending",
+    async ({ failure, kind, attempts }) => {
+      const { stateDir, mediaUrl } = await source();
+      vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+      if (failure === "native rollback") {
+        await fs.mkdir(path.join(stateDir, "delivery-queue-media"), { recursive: true });
+        const databasePath = openOpenClawStateDatabase().path;
+        const armPath = path.join(stateDir, "arm-rollback");
+        const preloadPath = path.join(stateDir, "enqueue-rollback.cjs");
+        await fs.writeFile(
+          preloadPath,
+          `
 const { isMainThread } = require("node:worker_threads");
 if (!isMainThread) {
   const fs = require("node:fs");
   const { DatabaseSync } = require("node:sqlite");
   const exec = DatabaseSync.prototype.exec;
+  const prepare = DatabaseSync.prototype.prepare;
   let installed = false;
-  DatabaseSync.prototype.exec = function(sql) {
-    const result = Reflect.apply(exec, this, [sql]);
-    if (!installed && sql === "BEGIN IMMEDIATE" && fs.realpathSync(this.location()) === fs.realpathSync(${JSON.stringify(databasePath)}) && fs.existsSync(${JSON.stringify(armPath)})) {
-      installed = true;
-      Reflect.apply(exec, this, ["CREATE TEMP TRIGGER reject_synthetic_enqueue BEFORE INSERT ON delivery_queue_entries WHEN NEW.queue_name = 'outbound-prepared-v1' BEGIN SELECT RAISE(ABORT, 'synthetic enqueue transaction rejected'); END"]);
-    }
-    return result;
-  };
-}
-`,
-    );
-    for (const [key, value] of Object.entries(sqliteWorkerPreloadEnv(preloadPath))) {
-      vi.stubEnv(key, value);
-    }
-    const warmId = await enqueueDelivery(
-      { channel: "matrix", to: "!synthetic:example", payloads: [{ text: "warm" }] },
-      stateDir,
-    );
-    await ackDelivery(warmId, stateDir);
-    await fs.writeFile(armPath, "armed");
-    const send = installSender();
-    const queued = vi.fn();
-    const reply = holdEnqueueReply();
-    const admit = queueAdmission.stageAndEnqueueOutboundDelivery;
-    let admissionFailure: unknown;
-    vi.spyOn(queueAdmission, "stageAndEnqueueOutboundDelivery").mockImplementation(
-      async (...args) => {
-        try {
-          return await admit(...args);
-        } catch (error) {
-          admissionFailure = error;
-          throw error;
+  DatabaseSync.prototype.prepare = function(sql) {
+    const statement = Reflect.apply(prepare, this, [sql]);
+    if (sql.startsWith('insert into "delivery_queue_entries"')) {
+      const database = this;
+      const run = statement.run;
+      statement.run = function(...args) {
+        if (!installed && fs.realpathSync(database.location()) === fs.realpathSync(${JSON.stringify(databasePath)}) && fs.existsSync(${JSON.stringify(armPath)})) {
+          installed = true;
+          Reflect.apply(exec, database, ["CREATE TEMP TRIGGER reject_synthetic_enqueue BEFORE INSERT ON delivery_queue_entries WHEN NEW.queue_name = 'outbound-prepared-v1' BEGIN SELECT RAISE(ABORT, 'synthetic enqueue transaction rejected'); END"]);
         }
-      },
-    );
-    try {
-      await deliverOutboundPayloads({
-        cfg: {},
-        channel: "matrix",
-        to: "!synthetic:example",
-        payloads: [{ mediaUrl }],
-        mediaAccess: { localRoots: [stateDir] },
-        queuePolicy: "best_effort",
-        onDeliveryIntent: queued,
-      });
-      expect(admissionFailure).toMatchObject({ message: "synthetic enqueue transaction rejected" });
-      expect(reply.attempts()).toBe(1);
-      expect(send).toHaveBeenCalledOnce();
-      expect(queued).not.toHaveBeenCalled();
-      expect(await loadPendingDeliveries(stateDir)).toEqual([]);
-      expect(loadDeliveryQueueEntries(DELIVERY_QUEUE_MEDIA_STAGING_QUEUE_NAME, stateDir)).toEqual(
-        [],
-      );
-      expect(await fs.readdir(path.join(stateDir, "delivery-queue-media"))).toEqual([]);
-    } finally {
-      reply.restore();
+        return Reflect.apply(run, this, args);
+      };
     }
-  });
-
-  it("preserves a committed enqueue result when native coordinator cleanup then fails", async () => {
-    const { stateDir, mediaUrl } = await source();
-    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-    const databasePath = openOpenClawStateDatabase().path;
-    const coordinatorPath = resolveStateDatabaseCoordinatorPath({
-      databasePath,
-      runtimeDirectory: captureStateDatabaseCoordinatorRuntime().directory,
-      uid: process.getuid?.(),
-    });
-    const armPath = path.join(stateDir, "arm-cleanup");
-    const failedPath = path.join(stateDir, "cleanup-failed");
-    const preloadPath = path.join(stateDir, "enqueue-cleanup.cjs");
-    await fs.writeFile(
-      preloadPath,
-      `
-const { isMainThread, parentPort } = require("node:worker_threads");
-if (!isMainThread) {
-  const fs = require("node:fs");
-  const { deserialize } = require("node:v8");
-  const { DatabaseSync } = require("node:sqlite");
-  const exec = DatabaseSync.prototype.exec;
-  const close = DatabaseSync.prototype.close;
-  let enqueueRequest = false;
-  let committed = false;
-  let injected = false;
-  let failedDatabase;
-  parentPort.on("message", (request) => {
-    enqueueRequest = request?.type === "execute" &&
-      request.input instanceof Uint8Array &&
-      deserialize(request.input)?.type === "deliveryQueue.enqueue";
-    committed = false;
-  });
-  DatabaseSync.prototype.exec = function(sql) {
-    if (enqueueRequest && committed && !injected && sql === "ROLLBACK" && fs.realpathSync(this.location()) === fs.realpathSync(${JSON.stringify(coordinatorPath)})) {
-      injected = true;
-      failedDatabase = this;
-      fs.writeFileSync(${JSON.stringify(failedPath)}, "after commit");
-      throw new Error("Synthetic enqueue coordinator rollback failure");
-    }
-    const result = Reflect.apply(exec, this, [sql]);
-    if (enqueueRequest && sql === "COMMIT" && fs.existsSync(${JSON.stringify(armPath)}) && fs.realpathSync(this.location()) === fs.realpathSync(${JSON.stringify(databasePath)})) {
-      fs.unlinkSync(${JSON.stringify(armPath)});
-      committed = true;
-    }
-    return result;
-  };
-  DatabaseSync.prototype.close = function(...args) {
-    if (this === failedDatabase) {
-      failedDatabase = undefined;
-      throw new Error("Synthetic enqueue coordinator close failure");
-    }
-    return Reflect.apply(close, this, args);
+    return statement;
   };
 }
 `,
-    );
-    for (const [key, value] of Object.entries(sqliteWorkerPreloadEnv(preloadPath))) {
-      vi.stubEnv(key, value);
-    }
-    const warmId = await enqueueDelivery(
-      { channel: "matrix", to: "!synthetic:example", payloads: [{ text: "warm" }] },
-      stateDir,
-    );
-    await ackDelivery(warmId, stateDir);
-    await fs.writeFile(armPath, "armed");
-    const warnings = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
-    const send = installSender();
-    const queued = vi.fn();
-    await deliverOutboundPayloads({
-      cfg: {},
-      channel: "matrix",
-      to: "!synthetic:example",
-      payloads: [{ mediaUrl }],
-      mediaAccess: { localRoots: [stateDir] },
-      queuePolicy: "best_effort",
-      onDeliveryIntent: queued,
-    });
-    expect(await fs.readFile(failedPath, "utf8")).toBe("after commit");
-    expect(warnings).toHaveBeenCalled();
-    expect(queued).toHaveBeenCalledOnce();
-    expect(send).toHaveBeenCalledOnce();
-    expect(await loadPendingDeliveries(stateDir)).toEqual([]);
-  });
+        );
+        for (const [key, value] of Object.entries(sqliteWorkerPreloadEnv(preloadPath))) {
+          vi.stubEnv(key, value);
+        }
+        const warmId = await enqueueDelivery(
+          { channel: "matrix", to: "!synthetic:example", payloads: [{ text: "warm" }] },
+          stateDir,
+        );
+        await ackDelivery(warmId, stateDir);
+        await fs.writeFile(armPath, "armed");
+      }
+      const send = installSender();
+      const queued = vi.fn();
+      const reply = holdEnqueueReply();
+      const admit = queueAdmission.stageAndEnqueueOutboundDelivery;
+      let admissionFailure: unknown;
+      vi.spyOn(queueAdmission, "stageAndEnqueueOutboundDelivery").mockImplementation(
+        async (...args) => {
+          try {
+            return await admit(...args);
+          } catch (error) {
+            admissionFailure = error;
+            throw error;
+          }
+        },
+      );
+      try {
+        await deliverOutboundPayloads({
+          ...deliveryParams(stateDir),
+          payloads: kind === "media" ? [{ mediaUrl }] : [{ text: "synthetic retained text" }],
+          onDeliveryIntent: queued,
+        });
+        expect(admissionFailure).toMatchObject({
+          name: "OutboundDeliveryError",
+          stage: "queue",
+          queueCustody: "released",
+          sentBeforeError: false,
+          results: [],
+          payloadOutcomes: [],
+          cause: {
+            name: "PlatformMessageNotDispatchedError",
+            code: "OPENCLAW_PLATFORM_MESSAGE_NOT_DISPATCHED",
+            retryable: true,
+            cause: { message: "synthetic enqueue transaction rejected" },
+          },
+        });
+        expect(reply.attempts()).toBe(attempts);
+        expect(send).toHaveBeenCalledOnce();
+        expect(queued).not.toHaveBeenCalled();
+        await expectReleasedMedia(stateDir);
+      } finally {
+        reply.restore();
+      }
+    },
+  );
 
   it("does not resume a lost preparation when independent cleanup errors wrap it", async () => {
     const { stateDir, mediaUrl } = await source();
@@ -357,12 +278,8 @@ if (!isMainThread) {
     vi.spyOn(queueAdmission, "stageAndEnqueueOutboundDelivery").mockRejectedValueOnce(failure);
     await expect(
       deliverOutboundPayloads({
-        cfg: {},
-        channel: "matrix",
-        to: "!synthetic:example",
+        ...deliveryParams(stateDir),
         payloads: [{ mediaUrl }],
-        mediaAccess: { localRoots: [stateDir] },
-        queuePolicy: "best_effort",
       }),
     ).rejects.toBe(failure);
     expect(send).not.toHaveBeenCalled();
@@ -390,8 +307,6 @@ if (!isMainThread) {
         },
       ),
     ).rejects.toThrow("preparation owner closed");
-    expect(await loadPendingDeliveries(stateDir)).toEqual([]);
-    expect(loadDeliveryQueueEntries(DELIVERY_QUEUE_MEDIA_STAGING_QUEUE_NAME, stateDir)).toEqual([]);
-    expect(await fs.readdir(path.join(stateDir, "delivery-queue-media"))).toEqual([]);
+    await expectReleasedMedia(stateDir);
   });
 });

@@ -245,27 +245,11 @@ async function discoverForSetup(
       apiKey,
       headers,
       signal: ctx.signal,
-      cacheTtlMs: 0,
     });
     return discovery.kind === "success" ? discovery : null;
   } catch {
     return null;
   }
-}
-
-async function discoverWithAccess(params: {
-  baseUrl: string;
-  apiKey?: string;
-  headers?: Record<string, string>;
-  signal?: AbortSignal;
-}): Promise<LlamaServerDiscoveryResult> {
-  return await discoverLlamaServer({
-    baseUrl: params.baseUrl,
-    apiKey: params.apiKey,
-    headers: params.headers,
-    signal: params.signal,
-    cacheTtlMs: 0,
-  });
 }
 
 /** Read-only discovery for the guided local-provider setup ladder. */
@@ -316,7 +300,17 @@ export async function runLlamaServerSetup(ctx: ProviderAuthContext): Promise<Pro
     message: `${LLAMA_CPP_PROVIDER_LABEL} URL`,
     initialValue: defaultOrigin,
     placeholder: LLAMA_SERVER_DEFAULT_ORIGIN,
-    validate: (value) => (value?.trim() ? undefined : "Required"),
+    validate: (value) => {
+      if (!value?.trim()) {
+        return "Required";
+      }
+      try {
+        resolveLlamaServerEndpoint(value);
+        return undefined;
+      } catch {
+        return "Enter a valid HTTP or HTTPS URL without embedded credentials (e.g. http://localhost:8080).";
+      }
+    },
   });
   const endpoint = resolveLlamaServerEndpoint(baseUrl);
   const endpointChanged =
@@ -376,7 +370,7 @@ export async function runLlamaServerSetup(ctx: ProviderAuthContext): Promise<Pro
     }
   }
 
-  const discovery = await discoverWithAccess({
+  const discovery = await discoverLlamaServer({
     baseUrl: endpoint.inferenceBaseUrl,
     apiKey,
     headers,
@@ -408,7 +402,7 @@ async function validateNonInteractiveDiscovery(
   modelId: string;
   resetEndpoint: boolean;
   persistence: AuthPersistence<NonNullable<Awaited<ReturnType<typeof ctx.resolveApiKey>>>>;
-} | null> {
+}> {
   const configuredProvider = ctx.config.models?.providers?.[LLAMA_CPP_PROVIDER_ID];
   const baseUrl =
     normalizeOptionalSecretInput(ctx.opts.customBaseUrl) ??
@@ -453,23 +447,19 @@ async function validateNonInteractiveDiscovery(
   } else {
     persistence = { kind: "remove" };
   }
-  const discovery = await discoverWithAccess({ baseUrl, apiKey, headers });
+  const discovery = await discoverLlamaServer({ baseUrl, apiKey, headers });
   if (discovery.kind !== "success") {
-    ctx.runtime.error(describeDiscoveryFailure(discovery));
-    ctx.runtime.exit(1);
-    return null;
+    throw new Error(describeDiscoveryFailure(discovery));
   }
   const requestedModelId = normalizeOptionalSecretInput(ctx.opts.customModelId);
   const modelId = requestedModelId ?? selectSetupModelId(discovery);
   if (!modelId || !discovery.models.some((model) => model.config.id === modelId)) {
     const available = discovery.models.map((model) => model.config.id).join(", ");
-    ctx.runtime.error(
+    throw new Error(
       requestedModelId
         ? `llama-server model ${requestedModelId} was not found. Available models: ${available}`
         : `No llama-server text models were found at ${discovery.endpoint.origin}.`,
     );
-    ctx.runtime.exit(1);
-    return null;
   }
   return {
     discovery,
@@ -482,7 +472,8 @@ async function validateNonInteractiveDiscovery(
 export async function validateLlamaServerNonInteractive(
   ctx: Omit<ProviderAuthMethodNonInteractiveContext, "toApiKeyCredential">,
 ): Promise<boolean> {
-  return Boolean(await validateNonInteractiveDiscovery(ctx));
+  await validateNonInteractiveDiscovery(ctx);
+  return true;
 }
 
 /** Non-interactive setup with optional API-key persistence. */
@@ -490,14 +481,9 @@ export async function configureLlamaServerNonInteractive(
   ctx: ProviderAuthMethodNonInteractiveContext,
 ): Promise<OpenClawConfig | null> {
   const validated = await validateNonInteractiveDiscovery(ctx);
-  if (!validated) {
-    return null;
-  }
   const providerConfig = buildExistingProviderConfig({
     config: ctx.config,
-    discovery: validated.discovery,
-    resetEndpoint: validated.resetEndpoint,
-    persistence: validated.persistence,
+    ...validated,
   });
   let config: OpenClawConfig = {
     ...ctx.config,

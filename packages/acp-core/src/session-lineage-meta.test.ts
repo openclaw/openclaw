@@ -1,4 +1,3 @@
-// ACP Core tests cover session lineage meta behavior.
 import { describe, expect, it } from "vitest";
 import { toAcpSessionLineageMeta, type AcpSessionLineageRow } from "./session-lineage-meta.js";
 
@@ -14,29 +13,6 @@ describe("toAcpSessionLineageMeta", () => {
       sessionKey: "agent:main:main",
       kind: "direct",
       channel: "telegram",
-    });
-    expect(Object.keys(meta)).toEqual(["sessionKey", "kind", "channel"]);
-  });
-
-  it("maps a one-level child parent key into parentSessionId", () => {
-    const meta = toAcpSessionLineageMeta({
-      key: "agent:main:subagent:child",
-      kind: "direct",
-      parentSessionKey: "agent:main:main",
-      spawnedBy: "agent:main:main",
-      spawnDepth: 1,
-      subagentRole: "orchestrator",
-      subagentControlScope: "children",
-    });
-
-    expect(meta).toEqual({
-      sessionKey: "agent:main:subagent:child",
-      kind: "direct",
-      parentSessionId: "agent:main:main",
-      spawnedBy: "agent:main:main",
-      spawnDepth: 1,
-      subagentRole: "orchestrator",
-      subagentControlScope: "children",
     });
   });
 

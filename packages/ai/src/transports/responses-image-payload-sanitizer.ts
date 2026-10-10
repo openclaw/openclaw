@@ -8,12 +8,6 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 
 const IMAGE_OMITTED_TEXT = "omitted image payload: invalid inline image data";
 
-type JsonRecord = Record<string, unknown>;
-
-function invalidSnakeImage(): JsonRecord {
-  return { type: "input_text", text: `[${IMAGE_OMITTED_TEXT}]` };
-}
-
 function sanitizeValue(value: unknown): unknown {
   if (Array.isArray(value)) {
     return value.map(sanitizeValue);
@@ -24,10 +18,12 @@ function sanitizeValue(value: unknown): unknown {
 
   if (value.type === "input_image" && typeof value.image_url === "string") {
     const imageUrl = sanitizeSharedInlineImageDataUrl(value.image_url);
-    return imageUrl ? { ...value, image_url: imageUrl } : invalidSnakeImage();
+    return imageUrl
+      ? { ...value, image_url: imageUrl }
+      : { type: "input_text", text: `[${IMAGE_OMITTED_TEXT}]` };
   }
 
-  const next: JsonRecord = {};
+  const next: Record<string, unknown> = {};
   for (const [key, child] of Object.entries(value)) {
     next[key] = sanitizeValue(child);
   }

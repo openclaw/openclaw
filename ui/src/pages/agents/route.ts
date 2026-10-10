@@ -13,30 +13,7 @@ export type AgentsRouteData = AgentsRouteLocation & {
   settingsAgentSelection: ApplicationContext["settingsAgentSelection"];
   selectionIntentRevision: number;
   agentsList: AgentsListResult | null;
-  error: string | null;
 };
-
-async function loadAgentsRouteData(
-  context: ApplicationContext,
-  location: RouteLocation,
-): Promise<AgentsRouteData> {
-  const route = resolveAgentsRouteLocation(location, context.basePath);
-  const gateway = context.gateway;
-  const gatewaySnapshot = gateway.snapshot;
-  const settingsAgentSelection = context.settingsAgentSelection;
-  const selectionIntentRevision = settingsAgentSelection.intentRevision;
-  const rawAgentsList = context.agents.state.agentsList ?? (await context.agents.ensureList());
-  const agentsList = rawAgentsList ? selectableAgentsList(rawAgentsList) : null;
-  return {
-    ...route,
-    gateway,
-    gatewaySnapshot,
-    settingsAgentSelection,
-    selectionIntentRevision,
-    agentsList,
-    error: context.agents.state.agentsError,
-  };
-}
 
 export const page = definePage({
   ...routePageSpec("agents"),
@@ -45,6 +22,21 @@ export const page = definePage({
     return `${route.pathname}\u0000${route.search}\u0000${route.hash}\u0000${context.settingsAgentSelection.intentRevision}`;
   },
   // Cached selections must settle without a module-loading delay that retains stale controls.
-  loader: (context: ApplicationContext, { location }) => loadAgentsRouteData(context, location),
+  loader: async (context: ApplicationContext, { location }): Promise<AgentsRouteData> => {
+    const route = resolveAgentsRouteLocation(location, context.basePath);
+    const gateway = context.gateway;
+    const gatewaySnapshot = gateway.snapshot;
+    const settingsAgentSelection = context.settingsAgentSelection;
+    const selectionIntentRevision = settingsAgentSelection.intentRevision;
+    const rawAgentsList = context.agents.state.agentsList ?? (await context.agents.ensureList());
+    return {
+      ...route,
+      gateway,
+      gatewaySnapshot,
+      settingsAgentSelection,
+      selectionIntentRevision,
+      agentsList: rawAgentsList ? selectableAgentsList(rawAgentsList) : null,
+    };
+  },
   component: () => import("./agents-page.ts"),
 });

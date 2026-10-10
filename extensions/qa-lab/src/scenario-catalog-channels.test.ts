@@ -1,25 +1,21 @@
-import { describe, expect, it } from "vitest";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
+import { extractToolPayload } from "openclaw/plugin-sdk/tool-payload";
+import { afterEach, describe, expect, it } from "vitest";
 import { createQaBusState } from "./bus-state.js";
 import {
   readQaScenarioById,
   readQaScenarioExecutionConfig,
-  validateQaScenarioExecutionConfig,
+  readQaScenarioFile,
 } from "./scenario-catalog.js";
+import { requireFlowScenario } from "./scenario-catalog.test-utils.js";
 import { runLoadedScenarioFlow } from "./scenario-flow-runner.test-support.js";
 import { recentOutboundSummary } from "./suite-runtime-transport.js";
+import { projectQaToolActivity } from "./tool-activity.js";
 
-type CatalogScenario = ReturnType<typeof readQaScenarioById>;
-type FlowCatalogScenario = CatalogScenario & {
-  execution: Extract<CatalogScenario["execution"], { kind: "flow" }>;
-};
-
-function requireFlowScenario(scenario: CatalogScenario): FlowCatalogScenario {
-  expect(scenario.execution.kind).toBe("flow");
-  if (scenario.execution.kind !== "flow") {
-    throw new Error(`expected ${scenario.id} to be a flow scenario`);
-  }
-  return scenario as FlowCatalogScenario;
-}
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const telegramStreamingFinalScenarios = [
   {
@@ -43,19 +39,16 @@ const telegramStreamingFinalScenarios = [
 function runTelegramStreamingFinalScenario(params: {
   scenarioId: string;
   finalTexts: readonly string[];
-  deletedPreview: boolean;
 }) {
   return runLoadedScenarioFlow(params.scenarioId, {
     state: createQaBusState(),
     onWaitForOutboundMessage: ({ state }) => {
-      if (params.deletedPreview) {
-        const preview = state.addOutboundMessage({
-          accountId: "qa-channel",
-          to: "channel:telegram-stream-room",
-          text: "deleted streaming preview",
-        });
-        state.deleteMessage({ accountId: "qa-channel", messageId: preview.id });
-      }
+      const preview = state.addOutboundMessage({
+        accountId: "qa-channel",
+        to: "channel:telegram-stream-room",
+        text: "deleted streaming preview",
+      });
+      state.deleteMessage({ accountId: "qa-channel", messageId: preview.id });
       for (const text of params.finalTexts) {
         state.addOutboundMessage({
           accountId: "qa-channel",
@@ -63,6 +56,114 @@ function runTelegramStreamingFinalScenario(params: {
           text,
         });
       }
+    },
+  });
+}
+
+function runFanoutScenario(
+  options: {
+    receipt?:
+      | "missing"
+      | "failed"
+      | "unlinked"
+      | "same-child"
+      | "wrong-label"
+      | "missing-run"
+      | "same-run";
+    providerMode?: "live-frontier" | "mock-openai";
+    reply?: string;
+    completion?: "unfinished" | "failed" | "wrong-run" | "yielded" | "empty" | "wrong-result";
+  } = {},
+) {
+  const providerMode = options.providerMode ?? "live-frontier";
+  return runLoadedScenarioFlow("subagent-fanout-synthesis", {
+    api: {
+      env: {
+        providerMode,
+      },
+      readSessionToolActivity: async (_env: unknown, sessionKey: string) => {
+        const attempt = sessionKey.split(":")[3];
+        const messages = ["alpha", "beta"].flatMap((worker) => {
+          const isBeta = worker === "beta";
+          const callId = `spawn-${worker}`;
+          const call = {
+            role: "assistant",
+            content: [
+              {
+                type: "toolCall",
+                id: callId,
+                name: "sessions_spawn",
+                arguments: {
+                  label:
+                    options.receipt === "wrong-label" && isBeta
+                      ? "unrelated"
+                      : `qa-fanout-${worker}${providerMode === "mock-openai" ? "" : `-${attempt}`}`,
+                  cleanup: "delete",
+                },
+              },
+            ],
+          };
+          const result = {
+            role: "toolResult",
+            toolName: "sessions_spawn",
+            toolCallId: options.receipt === "unlinked" && isBeta ? "unrelated" : callId,
+            isError: options.receipt === "failed" && isBeta,
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify({
+                  status: options.receipt === "failed" && isBeta ? "error" : "accepted",
+                  childSessionKey: `agent:qa:subagent:${options.receipt === "same-child" ? "alpha" : worker}`,
+                  runId:
+                    options.receipt === "missing-run" && isBeta
+                      ? undefined
+                      : `run-${options.receipt === "same-run" ? "alpha" : worker}`,
+                }),
+              },
+            ],
+          };
+          return options.receipt === "missing" && isBeta ? [call] : [call, result];
+        });
+        return projectQaToolActivity(messages);
+      },
+      waitForAgentRun: async (_env: unknown, runId: string) => {
+        const completion = runId === "run-beta" ? options.completion : undefined;
+        if (completion === "unfinished") {
+          return { runId, status: "timeout" };
+        }
+        const reply =
+          providerMode === "mock-openai" ? (runId === "run-alpha" ? "ALPHA-OK" : "BETA-OK") : "ok";
+        return {
+          runId: completion === "wrong-run" ? "unrelated-run" : runId,
+          status: completion === "failed" ? "error" : "ok",
+          endedAt: 200,
+          ...(completion === "yielded" ? { yielded: true } : {}),
+          terminalReply:
+            completion === "empty"
+              ? { disposition: "empty" }
+              : {
+                  disposition: "visible",
+                  text: completion === "wrong-result" ? "ALPHA-OK" : reply,
+                },
+        };
+      },
+      startAgentRun: async () => ({ runId: "parent-run" }),
+      waitForAgentHistoryReply: async (
+        _env: unknown,
+        _sessionKey: string,
+        matches: (text: string) => boolean,
+      ) => {
+        const text = options.reply ?? "subagent-1: ok\nsubagent-2: ok";
+        if (!matches(text)) {
+          throw new Error("parent synthesis missing");
+        }
+        return { text };
+      },
+      // Delete-cleanup retires these rows after the requester has consumed both results.
+      readNativeQaSubagentRuns: async () => [],
+      extractQaToolPayload: extractToolPayload,
+      normalizeLowercaseStringOrEmpty,
+      formatErrorMessage: (error: Error) => error.message,
     },
   });
 }
@@ -315,27 +416,46 @@ describe("qa scenario catalog channel contracts", () => {
     expect(matrixProgress.execution.isolationReason).toContain("streaming progress configuration");
   });
 
-  it("uses public parent history and durable task records before accepting fanout", () => {
-    const scenario = requireFlowScenario(readQaScenarioById("subagent-fanout-synthesis"));
-    const flow = JSON.stringify(scenario.execution.flow);
+  it.each(["live-frontier", "mock-openai"] as const)(
+    "accepts %s fanout after delete-cleanup retires native child rows",
+    async (providerMode) => {
+      await expect(runFanoutScenario({ providerMode })).resolves.toMatchObject({ status: "pass" });
+    },
+  );
 
-    expect(flow).toContain('"call":"startAgentRun"');
-    expect(flow).not.toContain('"call":"runAgentPrompt"');
-    expect(flow).toContain('"taskTracking":false');
-    expect(flow).toContain('"saveAs":"parentOutbound"');
-    expect(flow).toContain("waitForAgentHistoryReply");
-    expect(flow).not.toContain('"call":"waitForOutboundMessage"');
-    expect(flow).not.toContain("childCompletionMarker");
-    expect(flow).toContain("['tasks', 'list', '--json', '--runtime', 'subagent']");
-    expect(flow).toContain("task.requesterSessionKey === sessionKey");
-    expect(flow).toContain("task?.status === 'succeeded'");
-    expect(flow).toContain("task.deliveryStatus === 'delivered'");
-    expect(flow).not.toContain("readRawQaSessionStore");
-    expect(flow).not.toContain("readSessionTranscriptSummary");
-    expect(flow).not.toContain('"value":"subagent-1: ok\\nsubagent-2: ok"');
+  it("rejects beta completing with alpha's mock result", async () => {
+    await expect(
+      runFanoutScenario({ providerMode: "mock-openai", completion: "wrong-result" }),
+    ).rejects.toThrow("child completion missing");
   });
 
-  it("settles terminal-reply scenarios from durable task facts instead of sleeps", () => {
+  it.each([
+    "missing",
+    "failed",
+    "unlinked",
+    "same-child",
+    "wrong-label",
+    "missing-run",
+    "same-run",
+  ] as const)("rejects %s spawn evidence despite matching parent synthesis", async (receipt) => {
+    await expect(runFanoutScenario({ receipt })).rejects.toThrow("test condition was not met");
+  });
+
+  it.each(["unfinished", "failed", "wrong-run", "yielded", "empty", "wrong-result"] as const)(
+    "rejects %s child completion despite accepted spawns and matching parent synthesis",
+    async (completion) => {
+      await expect(runFanoutScenario({ completion })).rejects.toThrow("child completion missing");
+    },
+  );
+
+  it.each(["subagent-1: ok", "still waiting: subagent-1: ok\nsubagent-2: ok"])(
+    "rejects incomplete parent synthesis %j despite accepted spawns",
+    async (reply) => {
+      await expect(runFanoutScenario({ reply })).rejects.toThrow("parent synthesis missing");
+    },
+  );
+
+  it("settles terminal-reply scenarios from native run facts instead of sleeps", () => {
     const scenario = requireFlowScenario(readQaScenarioById("subagent-completion-direct-fallback"));
     const flow = JSON.stringify(scenario.execution.flow);
     const config = scenario.execution.config as
@@ -364,32 +484,16 @@ describe("qa scenario catalog channel contracts", () => {
         expectedSendCount: 1,
       },
     ]);
-    expect(flow).toContain("env.gateway.call('tasks.list'");
-    expect(flow).toContain("task.title === `qa-terminal-${caseName}`");
-    expect(flow).toContain("terminalTask.status === 'completed'");
-    expect(flow).toContain("task.deliveryStatus === 'delivered'");
-    expect(flow).toContain("readSettledTerminalTask('restart')");
+    expect(flow).toContain("readNativeQaSubagentRuns(env)");
+    expect(flow).not.toContain("tasks.list");
+    expect(flow).toContain("run.label === `qa-terminal-${caseName}`");
+    expect(flow).toContain("terminalRun.execution.status === 'terminal'");
+    expect(flow).toContain("run.delivery?.status === 'delivered'");
+    expect(flow).toContain("readSettledTerminalRun('restart')");
     expect(flow).toContain("postRestartUnexpectedPayloads.length === 0");
     expect(flow).toContain("env.providerMode === config.requiredProviderMode");
     expect(flow).not.toContain("interrupted by a gateway restart");
     expect(flow).toContain("verdicts.length === 5");
-    expect(flow).not.toContain('"call":"sleep"');
-  });
-
-  it("proves empty subagent completion from durable non-delivery state", () => {
-    const scenario = requireFlowScenario(
-      readQaScenarioById("subagent-empty-completion-non-delivery"),
-    );
-    const flow = JSON.stringify(scenario.execution.flow);
-
-    expect(scenario.execution.providerMode).toBe("mock-openai");
-    expect(flow).toContain("task.deliveryStatus === 'not_applicable'");
-    expect(flow).toContain("task.terminalOutcome === 'succeeded'");
-    expect(flow).toContain("emptyTerminalOutbound.length === 0");
-    expect(flow).toContain('"saveAs":"requesterAcknowledgements"');
-    expect(flow).toContain("requesterAcknowledgements.length === 1");
-    expect(flow).toContain("request.plannedToolName === 'write'");
-    expect(flow).toContain("postRestartCompletionRequests.length === 0");
     expect(flow).not.toContain('"call":"sleep"');
   });
 
@@ -407,13 +511,8 @@ describe("qa scenario catalog channel contracts", () => {
     expect(scenario.gatewayConfigPatch).not.toHaveProperty("channels.telegram.groups");
   });
 
-  it.each(
-    telegramStreamingFinalScenarios.flatMap((scenario) => [
-      { ...scenario, deletedPreview: false },
-      { ...scenario, deletedPreview: true },
-    ]),
-  )(
-    "counts only visible Telegram finals for $scenarioId (deleted preview: $deletedPreview)",
+  it.each(telegramStreamingFinalScenarios)(
+    "counts only visible Telegram finals for $scenarioId after deleting its preview",
     async (scenario) => {
       await expect(runTelegramStreamingFinalScenario(scenario)).resolves.toMatchObject({
         status: "pass",
@@ -429,7 +528,6 @@ describe("qa scenario catalog channel contracts", () => {
           "TELEGRAM-LONG-FINAL-3CHUNK-BEGIN first",
           "second TELEGRAM-LONG-FINAL-3CHUNK-END",
         ],
-        deletedPreview: true,
       }),
     ).rejects.toThrow("expected three complete final chunks; saw 2");
   });
@@ -525,12 +623,26 @@ describe("qa scenario catalog channel contracts", () => {
     expect(config?.requiredChannelDriver).toBe("crabline");
   });
 
-  it("rejects malformed string matcher lists before running a flow", () => {
-    expect(() =>
-      validateQaScenarioExecutionConfig({
-        gracefulFallbackAny: [{ confirmed: "the hidden fact is present" }],
+  it("rejects malformed string matcher lists before running a flow", async () => {
+    const filePath = path.join(tempDirs.make("qa-catalog-"), "scenario.yaml");
+    await fs.writeFile(
+      filePath,
+      JSON.stringify({
+        title: "Malformed matcher",
+        scenario: {
+          id: "malformed-matcher",
+          surface: "qa",
+          execution: {
+            kind: "flow",
+            config: { gracefulFallbackAny: [{ confirmed: "the hidden fact is present" }] },
+          },
+        },
+        flow: { steps: [{ name: "validate", actions: [{ assert: "true" }] }] },
       }),
-    ).toThrow(/gracefulFallbackAny entries must be strings/);
+    );
+    expect(() => readQaScenarioFile(filePath)).toThrow(
+      /gracefulFallbackAny entries must be strings/,
+    );
   });
 
   it("returns undefined execution config for an unknown scenario id", () => {

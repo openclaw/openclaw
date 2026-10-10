@@ -1,0 +1,148 @@
+{
+  "codexDynamicToolsLoading": "direct",
+  "codexDynamicToolsExclude": [
+    "private_tool"
+  ],
+  "sessionCatalog": {
+    "enabled": true,
+    "homes": [
+      "/tmp/codex",
+      {
+        "path": "/tmp/other",
+        "label": "Other"
+      }
+    ]
+  },
+  "discovery": {
+    "enabled": true,
+    "timeoutMs": 1000
+  },
+  "computerUse": {
+    "enabled": false,
+    "autoInstall": false,
+    "marketplaceDiscoveryTimeoutMs": 1000,
+    "liveTestTimeoutMs": 1000,
+    "toolCallTimeoutMs": 1000,
+    "healthCheckEnabled": true,
+    "healthCheckIntervalMinutes": 60,
+    "pluginCacheMode": "shared",
+    "strictReadiness": true,
+    "autoRepair": false,
+    "marketplaceSource": "source",
+    "marketplacePath": "path",
+    "marketplaceName": "marketplace",
+    "pluginName": "plugin",
+    "mcpServerName": "server"
+  },
+  "codexPlugins": {
+    "enabled": true,
+    "allow_all_plugins": false,
+    "allow_destructive_actions": "ask",
+    "plugins": {
+      "example": {
+        "enabled": true,
+        "marketplaceName": "marketplace",
+        "pluginName": "plugin",
+        "allow_destructive_actions": false
+      }
+    }
+  },
+  "supervision": {
+    "allowRawTranscripts": false,
+    "allowWriteControls": false,
+    "endpoints": [
+      {
+        "id": "local",
+        "label": "Local",
+        "transport": "stdio-proxy",
+        "command": "codex",
+        "args": [
+          "app-server"
+        ],
+        "cwd": "/tmp"
+      },
+      {
+        "id": "remote",
+        "label": "Remote",
+        "transport": "websocket",
+        "url": "wss://codex.example.test",
+        "authTokenEnv": "CODEX_TOKEN"
+      }
+    ]
+  },
+  "appServer": {
+    "mode": "guardian",
+    "transport": "stdio",
+    "homeScope": "user",
+    "command": "/usr/bin/true",
+    "args": [
+      "app-server",
+      "--listen",
+      "stdio://"
+    ],
+    "url": "",
+    "authToken": {
+      "source": "store",
+      "provider": "default",
+      "id": "CODEX_TOKEN"
+    },
+    "headers": {
+      "x-env": {
+        "source": "env",
+        "provider": "default",
+        "id": "CODEX_TOKEN"
+      },
+      "x-file": {
+        "source": "file",
+        "provider": "mounted-json",
+        "id": "/codex/token~1value"
+      },
+      "x-exec": {
+        "source": "exec",
+        "provider": "vault",
+        "id": "codex/token#value"
+      }
+    },
+    "clearEnv": [
+      "OPENAI_API_KEY"
+    ],
+    "remoteWorkspaceRoot": "/workspaces",
+    "codeModeOnly": true,
+    "loopDetectionPreToolUseRelay": false,
+    "requestTimeoutMs": 1000,
+    "approvalPolicy": "on-request",
+    "sandbox": "workspace-write",
+    "approvalsReviewer": "user",
+    "serviceTier": "priority",
+    "enableUltrafast": false,
+    "cyberFailover": {
+      "mode": "off",
+      "model": "example-model",
+      "cooloffMs": 1000
+    },
+    "networkProxy": {
+      "enabled": true,
+      "profileName": "openclaw",
+      "baseProfile": "workspace",
+      "mode": "limited",
+      "domains": {
+        "example.test": "allow"
+      },
+      "unixSockets": {
+        "/tmp/service.sock": "allow"
+      },
+      "proxyUrl": "http://127.0.0.1:8080",
+      "socksUrl": "socks5://127.0.0.1:1080",
+      "enableSocks5": true,
+      "enableSocks5Udp": false,
+      "allowUpstreamProxy": false,
+      "allowLocalBinding": false,
+      "dangerouslyAllowNonLoopbackProxy": false,
+      "dangerouslyAllowAllUnixSockets": false
+    },
+    "defaultWorkspaceDir": "",
+    "experimental": {
+      "sandboxExecServer": false
+    }
+  }
+}

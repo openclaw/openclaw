@@ -1,4 +1,3 @@
-// Tlon plugin module implements fetch behavior.
 import {
   fetchWithSsrFGuard,
   type LookupFn,
@@ -19,7 +18,6 @@ type UrbitFetchOptions = {
   maxRedirects?: number;
   signal?: AbortSignal;
   auditContext?: string;
-  pinDns?: boolean;
 };
 
 export async function urbitFetch(params: UrbitFetchOptions) {
@@ -40,7 +38,6 @@ export async function urbitFetch(params: UrbitFetchOptions) {
     policy: params.ssrfPolicy,
     lookupFn: params.lookupFn,
     auditContext: params.auditContext,
-    pinDns: params.pinDns,
   });
 
   return {

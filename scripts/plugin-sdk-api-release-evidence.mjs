@@ -204,6 +204,13 @@ export function createPluginSdkApiReleaseEvidenceSet(selectors) {
   };
 }
 
+export class PluginSdkApiAcknowledgementError extends Error {
+  constructor(digest) {
+    super(`Plugin SDK API changes require acknowledgement digest ${digest}`);
+    this.digest = digest;
+  }
+}
+
 export function validatePluginSdkApiReleaseEvidence({
   acknowledgement,
   currentSelectorRef = "",
@@ -274,9 +281,7 @@ export function validatePluginSdkApiReleaseEvidence({
   }
   const expectedAcknowledgement = digest.slice(0, 8);
   if (changed && acknowledgement !== expectedAcknowledgement) {
-    throw new Error(
-      `Plugin SDK API changes require acknowledgement digest ${expectedAcknowledgement}`,
-    );
+    throw new PluginSdkApiAcknowledgementError(expectedAcknowledgement);
   }
   return {
     acknowledgement: changed ? expectedAcknowledgement : null,
@@ -284,10 +289,6 @@ export function validatePluginSdkApiReleaseEvidence({
     hasChanges: changed,
     status: "checked",
   };
-}
-
-function readJson(filePath) {
-  return JSON.parse(fs.readFileSync(filePath, "utf8"));
 }
 
 function readArgs(argv) {
@@ -312,7 +313,7 @@ function readArgs(argv) {
 
 function main() {
   const args = readArgs(process.argv.slice(2));
-  const manifest = readJson(args.get("--manifest"));
+  const manifest = JSON.parse(fs.readFileSync(args.get("--manifest"), "utf8"));
   const result = validatePluginSdkApiReleaseEvidence({
     acknowledgement: args.get("--acknowledge") ?? "",
     currentSelectorRef: args.get("--current-selector-ref"),

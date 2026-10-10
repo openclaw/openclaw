@@ -1,6 +1,6 @@
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
-import { buildRestartRecoveryClaimCleanupPatch } from "../../config/sessions/restart-recovery-state.js";
 import {
   applySessionEntryReplacements,
   persistSessionTranscriptTurn,
@@ -8,20 +8,32 @@ import {
   updateSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import { buildRestartRecoveryExpectedState } from "../../config/sessions/session-transcript-turn-state.js";
+import { isTerminalSessionStatus } from "../../config/sessions/types.js";
+import {
+  readSessionTranscriptSummaryAsync,
+  type SessionTranscriptReadScope,
+} from "../../gateway/session-transcript-readers.js";
 import { buildRunUserTurnIdempotencyKey } from "../../sessions/user-turn-transcript.js";
-import { getOwedHarnessCompletionTask } from "../../tasks/agent-harness-completion-recovery.js";
+import { getOwedHarnessCompletionTask } from "../agent-harness-completion-recovery.js";
 import {
   getTranscriptMessageRole as getMessageRole,
   isTerminalSilentAssistantMessage,
   readTerminalSourceReplyDeliveryMirror,
 } from "../embedded-agent-runner/message-visibility.js";
-import { buildMainSessionRecoveryClearPatch } from "./main-session-recovery-clear.js";
+import { buildMainSessionRecoverySettlementPatch } from "./main-session-recovery-clear.js";
 import type { MainSessionRecoveryStoreTarget } from "./main-session-recovery-store.js";
 import { isRestartAbortTailArtifact } from "./main-session-restart-recovery-resume-policy.js";
 import {
   mainSessionRecoveryLog,
   resolveRestartRecoveryTerminalClientRunId,
 } from "./main-session-restart-recovery-shared.js";
+
+export async function readMainSessionRecoveryCheckpoint(scope: SessionTranscriptReadScope) {
+  const { checkpoint } = await readSessionTranscriptSummaryAsync(scope, {
+    kind: "recovery-checkpoint",
+  });
+  return checkpoint;
+}
 
 export async function reconcileInvalidHarnessCompletion(
   params: MainSessionRecoveryStoreTarget & {
@@ -35,7 +47,6 @@ export async function reconcileInvalidHarnessCompletion(
       const claim = entry.restartRecoveryHarnessCompletion;
       if (
         entry.sessionId !== params.entry.sessionId ||
-        entry.status !== "running" ||
         entry.abortedLastRun !== true ||
         !claim ||
         claim.taskId !== params.entry.restartRecoveryHarnessCompletion?.taskId ||
@@ -49,12 +60,10 @@ export async function reconcileInvalidHarnessCompletion(
       didReconcile = true;
       const endedAt = Date.now();
       return {
-        ...buildRestartRecoveryClaimCleanupPatch({ entry, recordTerminalSource: false }),
-        ...buildMainSessionRecoveryClearPatch(entry),
+        ...buildMainSessionRecoverySettlementPatch({ entry, recordTerminalSource: false }),
         status: "killed",
         lifecycleRunId: undefined,
         lastRunId: resolveRestartRecoveryTerminalClientRunId(entry),
-        abortedLastRun: false,
         endedAt,
         lastRunError: undefined,
         runtimeMs:
@@ -83,42 +92,34 @@ function findSourceTurnRange(params: {
   const continuationTurnId = params.continuationRunId
     ? buildRunUserTurnIdempotencyKey(params.continuationRunId)
     : undefined;
-  for (let index = params.messages.length - 1; index >= 0; index -= 1) {
-    const message = params.messages[index];
-    if (
+  const startIndex = params.messages.findLastIndex(
+    (message) =>
       getMessageRole(message) === "user" &&
-      message &&
+      Boolean(message) &&
       typeof message === "object" &&
       sourceTurnIds.has(
         normalizeOptionalString((message as { idempotencyKey?: unknown }).idempotencyKey) ?? "",
-      )
-    ) {
-      let endIndex = params.messages.length;
-      for (let nextIndex = index + 1; nextIndex < params.messages.length; nextIndex += 1) {
-        const nextMessage = params.messages[nextIndex];
-        if (getMessageRole(nextMessage) !== "user") {
-          continue;
-        }
-        const nextIdempotencyKey =
-          nextMessage && typeof nextMessage === "object"
-            ? normalizeOptionalString((nextMessage as { idempotencyKey?: unknown }).idempotencyKey)
-            : undefined;
-        // Late media and the exact restart continuation extend the same logical source turn.
-        if (
-          nextIdempotencyKey === `${params.sourceTurnId}:late-media` ||
-          nextIdempotencyKey === continuationTurnId ||
-          (continuationTurnId !== undefined &&
-            nextIdempotencyKey === `${continuationTurnId}:late-media`)
-        ) {
-          continue;
-        }
-        endIndex = nextIndex;
-        break;
-      }
-      return { startIndex: index, endIndex };
-    }
+      ),
+  );
+  if (startIndex === -1) {
+    return undefined;
   }
-  return undefined;
+  const endIndex = params.messages.findIndex((message, index) => {
+    if (index <= startIndex || getMessageRole(message) !== "user") {
+      return false;
+    }
+    const idempotencyKey =
+      message && typeof message === "object"
+        ? normalizeOptionalString((message as { idempotencyKey?: unknown }).idempotencyKey)
+        : undefined;
+    // Late media and the exact restart continuation extend the same logical source turn.
+    return !(
+      idempotencyKey === `${params.sourceTurnId}:late-media` ||
+      idempotencyKey === continuationTurnId ||
+      (continuationTurnId !== undefined && idempotencyKey === `${continuationTurnId}:late-media`)
+    );
+  });
+  return { startIndex, endIndex: endIndex === -1 ? params.messages.length : endIndex };
 }
 
 function readToolCallId(message: Record<string, unknown>): string | undefined {
@@ -134,62 +135,18 @@ function readToolCallId(message: Record<string, unknown>): string | undefined {
     .find(Boolean);
 }
 
-function findMessageToolCallIndexInSourceTurn(params: {
-  messages: readonly unknown[];
-  sourceTurnRange: { startIndex: number; endIndex: number };
-  toolCallId: string;
-}): number | undefined {
-  for (
-    let index = params.sourceTurnRange.endIndex - 1;
-    index > params.sourceTurnRange.startIndex;
-    index -= 1
-  ) {
-    const message = params.messages[index];
-    if (!message || typeof message !== "object" || getMessageRole(message) !== "assistant") {
-      continue;
-    }
-    const content = (message as { content?: unknown }).content;
-    if (!Array.isArray(content)) {
-      continue;
-    }
-    const matched = content.some((block) => {
-      if (!block || typeof block !== "object") {
-        return false;
-      }
-      const record = block as Record<string, unknown>;
-      const type = normalizeOptionalString(record.type);
-      return (
-        (type === "toolCall" || type === "toolUse" || type === "tool_use") &&
-        normalizeOptionalString(record.id) === params.toolCallId &&
-        normalizeOptionalString(record.name) === "message"
-      );
-    });
-    if (matched) {
-      return index;
-    }
+function readAssistantToolCalls(message: unknown): Record<string, unknown>[] | undefined {
+  const content = asOptionalObjectRecord(message)?.content;
+  if (getMessageRole(message) !== "assistant" || !Array.isArray(content)) {
+    return undefined;
   }
-  return undefined;
-}
-
-function hasSiblingAssistantToolCalls(message: unknown): boolean {
-  if (!message || typeof message !== "object" || getMessageRole(message) !== "assistant") {
-    return true;
-  }
-  const content = (message as { content?: unknown }).content;
-  if (!Array.isArray(content)) {
-    return true;
-  }
-  let toolCallCount = 0;
-  for (const block of content) {
-    if (!block || typeof block !== "object") {
-      continue;
-    }
-    const type = normalizeOptionalString((block as { type?: unknown }).type);
-    if (type === "toolCall" || type === "toolUse" || type === "tool_use") {
-      toolCallCount += 1;
-    }
-  }
-  return toolCallCount !== 1;
+  return content.flatMap((block) => {
+    const record = asOptionalObjectRecord(block);
+    const type = normalizeOptionalString(record?.type);
+    return record && (type === "toolCall" || type === "toolUse" || type === "tool_use")
+      ? [record]
+      : [];
+  });
 }
 
 function isSuccessfulMessageToolResult(message: unknown, toolCallId: string): boolean {
@@ -205,47 +162,16 @@ function isSuccessfulMessageToolResult(message: unknown, toolCallId: string): bo
   );
 }
 
-function findSuccessfulMessageToolResultIndex(params: {
-  messages: readonly unknown[];
-  sourceTurnRange: { startIndex: number; endIndex: number };
-  toolCallId: string;
-  toolCallIndex: number;
-}): number | undefined {
-  for (let index = params.toolCallIndex + 1; index < params.sourceTurnRange.endIndex; index += 1) {
-    if (isSuccessfulMessageToolResult(params.messages[index], params.toolCallId)) {
-      return index;
-    }
-  }
-  return undefined;
-}
-
-function isSafeTerminalDeliveryTailMessage(params: {
-  message: unknown;
-  sourceTurnId: string;
-  toolCallId: string;
-}): boolean {
-  const mirror = readTerminalSourceReplyDeliveryMirror(params.message);
-  if (mirror?.sourceTurnId === params.sourceTurnId && mirror.toolCallId === params.toolCallId) {
-    return true;
-  }
-  // An empty provider abort is restart lifecycle noise. Partial output remains unsafe.
-  return isRestartAbortTailArtifact(params.message);
-}
-
 function canReconcileTerminalDeliveryAtSourceTurnTail(params: {
   messages: readonly unknown[];
   sourceTurnId: string;
-  sourceTurnRange: { startIndex: number; endIndex: number };
   toolCallId: string;
   toolCallIndex: number;
-  successfulToolResultIndex?: number;
+  successfulToolResultIndex: number;
 }): boolean {
-  if (params.sourceTurnRange.endIndex !== params.messages.length) {
-    return false;
-  }
   for (
     let messageIndex = params.toolCallIndex + 1;
-    messageIndex < params.sourceTurnRange.endIndex;
+    messageIndex < params.messages.length;
     messageIndex += 1
   ) {
     if (messageIndex === params.successfulToolResultIndex) {
@@ -253,29 +179,24 @@ function canReconcileTerminalDeliveryAtSourceTurnTail(params: {
     }
     const message = params.messages[messageIndex];
     if (
-      params.successfulToolResultIndex !== undefined &&
+      params.successfulToolResultIndex !== -1 &&
       messageIndex > params.successfulToolResultIndex &&
-      messageIndex === params.sourceTurnRange.endIndex - 1 &&
+      messageIndex === params.messages.length - 1 &&
       isTerminalSilentAssistantMessage(message)
     ) {
       continue;
     }
-    if (
-      isSafeTerminalDeliveryTailMessage({
-        message,
-        sourceTurnId: params.sourceTurnId,
-        toolCallId: params.toolCallId,
-      })
-    ) {
+    const mirror = readTerminalSourceReplyDeliveryMirror(message);
+    if (mirror?.sourceTurnId === params.sourceTurnId && mirror.toolCallId === params.toolCallId) {
+      continue;
+    }
+    // An empty provider abort is restart lifecycle noise. Partial output remains unsafe.
+    if (isRestartAbortTailArtifact(message)) {
       continue;
     }
     return false;
   }
   return true;
-}
-
-function buildRecoveryToolResultIdempotencyKey(sourceTurnId: string, toolCallId: string): string {
-  return `restart-recovery:message-tool-result:${sourceTurnId}:${toolCallId}`;
 }
 
 type RecoveryCheckpointCompletion =
@@ -298,26 +219,26 @@ export async function markSessionCompletedAfterRecoveryCheckpoint(params: {
   const expectedRecoverySourceRunId = normalizeOptionalString(
     params.entry.restartRecoveryDeliverySourceRunId,
   );
-  const endedAt = Date.now();
+  const settled =
+    isTerminalSessionStatus(params.entry.status) && params.entry.status !== "interrupted";
+  const endedAt = settled ? (params.entry.endedAt ?? Date.now()) : Date.now();
   const lifecyclePatch: SessionTranscriptTurnLifecyclePatch = {
-    ...buildRestartRecoveryClaimCleanupPatch({
+    ...buildMainSessionRecoverySettlementPatch({
       entry: params.entry,
       recordTerminalSource: expectedRecoverySourceRunId !== undefined,
       terminalSourceRunId: expectedRecoverySourceRunId,
     }),
-    abortedLastRun: false,
     lifecycleRunId: undefined,
-    lastRunId: resolveRestartRecoveryTerminalClientRunId(params.entry),
+    lastRunId: settled
+      ? params.entry.lastRunId
+      : resolveRestartRecoveryTerminalClientRunId(params.entry),
     endedAt,
     pendingFinalDelivery: undefined,
-    restartRecoveryForceSafeTools: undefined,
-    restartRecoveryRuns: undefined,
-    ...buildMainSessionRecoveryClearPatch(params.entry),
     runtimeMs:
       typeof params.entry.startedAt === "number"
         ? Math.max(0, endedAt - params.entry.startedAt)
         : undefined,
-    status: "done",
+    status: settled ? params.entry.status : "done",
     updatedAt: endedAt,
   };
   const sourceTurnId = normalizeOptionalString(params.sourceTurnId);
@@ -347,114 +268,92 @@ export async function markSessionCompletedAfterRecoveryCheckpoint(params: {
       reason: "recovery checkpoint belongs to an earlier transcript turn",
     };
   }
-  if (toolCallId && !sourceTurnId) {
-    return {
-      outcome: "unsafe-transcript",
-      reason: "terminal delivery lacks its durable source turn",
-    };
-  }
-  const messageToolCallIndex =
-    toolCallId && sourceTurnRange
-      ? findMessageToolCallIndexInSourceTurn({
-          messages: params.messages,
-          sourceTurnRange,
-          toolCallId,
-        })
-      : undefined;
-  if (toolCallId && messageToolCallIndex === undefined) {
-    return {
-      outcome: "unsafe-transcript",
-      reason: "terminal delivery cannot be matched to its message tool call",
-    };
-  }
-  if (
-    messageToolCallIndex !== undefined &&
-    hasSiblingAssistantToolCalls(params.messages[messageToolCallIndex])
-  ) {
-    return {
-      outcome: "unsafe-transcript",
-      reason: "terminal message tool call has sibling tool work",
-    };
-  }
-  const recoveryToolResultIdempotencyKey =
-    toolCallId && sourceTurnId
-      ? buildRecoveryToolResultIdempotencyKey(sourceTurnId, toolCallId)
-      : undefined;
-  const successfulToolResultIndex =
-    toolCallId && sourceTurnRange && messageToolCallIndex !== undefined
-      ? findSuccessfulMessageToolResultIndex({
-          messages: params.messages,
-          sourceTurnRange,
-          toolCallId,
-          toolCallIndex: messageToolCallIndex,
-        })
-      : undefined;
-  if (
-    toolCallId &&
-    sourceTurnId &&
-    sourceTurnRange !== undefined &&
-    messageToolCallIndex !== undefined &&
-    !canReconcileTerminalDeliveryAtSourceTurnTail({
-      messages: params.messages,
-      sourceTurnId,
-      sourceTurnRange,
-      toolCallId,
-      toolCallIndex: messageToolCallIndex,
-      successfulToolResultIndex,
-    })
-  ) {
-    return {
-      outcome: "unsafe-transcript",
-      reason:
-        successfulToolResultIndex === undefined
-          ? "terminal delivery would require an out-of-order transcript repair"
-          : "terminal delivery result is followed by unfinished transcript work",
-    };
-  }
-  if (
-    toolCallId &&
-    sourceTurnId &&
-    sourceTurnRange !== undefined &&
-    messageToolCallIndex !== undefined &&
-    recoveryToolResultIdempotencyKey &&
-    successfulToolResultIndex === undefined
-  ) {
-    const expectedSessionState = buildRestartRecoveryExpectedState(params.entry);
-    const persisted = await persistSessionTranscriptTurn(
-      {
-        agentId: params.agentId,
-        sessionId: params.entry.sessionId,
-        sessionKey: params.sessionKey,
-        storePath: params.storePath,
-      },
-      {
-        expectedSessionId: params.entry.sessionId,
-        expectedSessionState,
-        messages: [
-          {
-            idempotencyLookup: "scan",
-            message: {
-              role: "toolResult",
-              toolCallId,
-              toolName: "message",
-              content: [{ type: "text", text: "Message delivered before gateway restart." }],
-              idempotencyKey: recoveryToolResultIdempotencyKey,
-              isError: false,
-              timestamp: endedAt,
-            },
-          },
-        ],
-        sessionLifecyclePatch: lifecyclePatch,
-        updateMode: "none",
-      },
-    );
-    const completed = persisted.sessionEntry?.status === "done";
-    if (completed) {
-      mainSessionRecoveryLog.info(
-        `reconciled delivered terminal reply after restart: ${params.sessionKey}`,
-      );
+  if (toolCallId) {
+    if (!sourceTurnId || !sourceTurnRange) {
+      return {
+        outcome: "unsafe-transcript",
+        reason: "terminal delivery lacks its durable source turn",
+      };
     }
-    return { outcome: completed ? "completed" : "changed" };
+    const messageToolCallIndex = params.messages.findLastIndex(
+      (message, index) =>
+        index > sourceTurnRange.startIndex &&
+        readAssistantToolCalls(message)?.some(
+          (block) =>
+            normalizeOptionalString(block.id) === toolCallId &&
+            normalizeOptionalString(block.name) === "message",
+        ),
+    );
+    if (messageToolCallIndex === -1) {
+      return {
+        outcome: "unsafe-transcript",
+        reason: "terminal delivery cannot be matched to its message tool call",
+      };
+    }
+    if (readAssistantToolCalls(params.messages[messageToolCallIndex])?.length !== 1) {
+      return {
+        outcome: "unsafe-transcript",
+        reason: "terminal message tool call has sibling tool work",
+      };
+    }
+    const successfulToolResultIndex = params.messages.findIndex(
+      (message, index) =>
+        index > messageToolCallIndex && isSuccessfulMessageToolResult(message, toolCallId),
+    );
+    if (
+      !canReconcileTerminalDeliveryAtSourceTurnTail({
+        messages: params.messages,
+        sourceTurnId,
+        toolCallId,
+        toolCallIndex: messageToolCallIndex,
+        successfulToolResultIndex,
+      })
+    ) {
+      return {
+        outcome: "unsafe-transcript",
+        reason:
+          successfulToolResultIndex === -1
+            ? "terminal delivery would require an out-of-order transcript repair"
+            : "terminal delivery result is followed by unfinished transcript work",
+      };
+    }
+    if (successfulToolResultIndex === -1) {
+      const persisted = await persistSessionTranscriptTurn(
+        {
+          agentId: params.agentId,
+          sessionId: params.entry.sessionId,
+          sessionKey: params.sessionKey,
+          storePath: params.storePath,
+        },
+        {
+          expectedSessionId: params.entry.sessionId,
+          expectedSessionState: buildRestartRecoveryExpectedState(params.entry),
+          messages: [
+            {
+              idempotencyLookup: "scan",
+              message: {
+                role: "toolResult",
+                toolCallId,
+                toolName: "message",
+                content: [{ type: "text", text: "Message delivered before gateway restart." }],
+                idempotencyKey: `restart-recovery:message-tool-result:${sourceTurnId}:${toolCallId}`,
+                isError: false,
+                timestamp: endedAt,
+              },
+            },
+          ],
+          sessionLifecyclePatch: lifecyclePatch,
+          updateMode: "none",
+        },
+      );
+      const completed = persisted.sessionEntry?.status === lifecyclePatch.status;
+      if (completed) {
+        mainSessionRecoveryLog.info(
+          `reconciled delivered terminal reply after restart: ${params.sessionKey}`,
+        );
+      }
+      return { outcome: completed ? "completed" : "changed" };
+    }
   }
   const marked = await applySessionEntryReplacements({
     agentId: params.agentId,
@@ -468,7 +367,6 @@ export async function markSessionCompletedAfterRecoveryCheckpoint(params: {
         entry.sessionId !== params.entry.sessionId ||
         (params.pendingFinalDeliveryIntentId !== undefined &&
           entry.pendingFinalDelivery?.intentId !== params.pendingFinalDeliveryIntentId) ||
-        entry.status !== "running" ||
         entry.abortedLastRun !== true ||
         normalizeOptionalString(entry.restartRecoveryDeliveryRunId) !== expectedRecoveryRunId ||
         normalizeOptionalString(entry.restartRecoveryDeliverySourceRunId) !==

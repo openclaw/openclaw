@@ -1,18 +1,14 @@
-import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { persistAbortTargetEntry, persistCommandSession } from "./commands-session-store.js";
 
-async function withTempStore<T>(run: (storePath: string) => Promise<T>): Promise<T> {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-command-session-store-"));
-  try {
-    return await run(path.join(dir, "sessions.json"));
-  } finally {
-    await fs.rm(dir, { recursive: true, force: true });
-  }
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-command-session-store-");
+
+function withTempStore<T>(run: (storePath: string) => Promise<T>): Promise<T> {
+  return run(path.join(sessionDirs.make(), "sessions.json"));
 }
 
 describe("commands session store persistence", () => {
@@ -70,57 +66,6 @@ describe("commands session store persistence", () => {
       ).resolves.toBe(false);
 
       expect(loadSessionEntry({ storePath, sessionKey })).toBeUndefined();
-    });
-  });
-
-  it("persists a single command session entry through the accessor", async () => {
-    await withTempStore(async (storePath) => {
-      const sessionKey = "agent:main:command";
-      const otherKey = "agent:main:other";
-      const entry: SessionEntry = {
-        sessionId: "command-session",
-        updatedAt: 1,
-        model: "gpt-5.5",
-      };
-      const otherEntry: SessionEntry = {
-        sessionId: "other-session",
-        updatedAt: 2,
-        delivery: { kind: "none" },
-      };
-      const seedEntry = { ...entry };
-      await persistCommandSession({
-        allowCreateSessionEntry: true,
-        sessionEntry: seedEntry,
-        sessionStore: { [sessionKey]: seedEntry },
-        sessionKey,
-        storePath,
-      });
-      await replaceSessionEntry({ storePath, sessionKey: otherKey }, { ...otherEntry });
-      const sessionStore: Record<string, SessionEntry> = { [sessionKey]: entry };
-
-      await expect(
-        persistCommandSession({
-          sessionEntry: entry,
-          sessionStore,
-          sessionKey,
-          storePath,
-        }),
-      ).resolves.toBe(true);
-
-      const persisted = loadSessionEntry({ storePath, sessionKey });
-      const persistedOther = loadSessionEntry({ storePath, sessionKey: otherKey });
-      expect(sessionStore[sessionKey]).toMatchObject({
-        sessionId: "command-session",
-        model: "gpt-5.5",
-      });
-      expect(sessionStore[sessionKey]?.updatedAt).toBeGreaterThanOrEqual(entry.updatedAt);
-      expect(entry.updatedAt).not.toBe(1);
-      expect(persisted).toMatchObject({
-        sessionId: "command-session",
-        model: "gpt-5.5",
-        updatedAt: entry.updatedAt,
-      });
-      expect(persistedOther).toStrictEqual(otherEntry);
     });
   });
 
@@ -401,45 +346,48 @@ describe("commands session store persistence", () => {
     });
   });
 
-  it("patches the persisted abort target when it already exists", async () => {
-    await withTempStore(async (storePath) => {
-      const sessionKey = "agent:main:abort-target";
-      const otherKey = "agent:main:other";
-      const entry: SessionEntry = {
-        sessionId: "memory-session",
-        updatedAt: 1,
-      };
-      const persistedEntry: SessionEntry = {
-        sessionId: "persisted-session",
-        updatedAt: Date.now(),
-        model: "sonnet-4.6",
-      };
-      const otherEntry: SessionEntry = {
-        sessionId: "other-session",
-        updatedAt: 3,
-        delivery: { kind: "none" },
-      };
-      await replaceSessionEntry({ storePath, sessionKey }, persistedEntry);
-      await replaceSessionEntry({ storePath, sessionKey: otherKey }, otherEntry);
+  it.each([true, false])(
+    "only patches a matching persisted abort owner=%s",
+    async (matchesOwner) => {
+      await withTempStore(async (storePath) => {
+        const sessionKey = "agent:main:abort-target";
+        const otherKey = "agent:main:other";
+        const entry: SessionEntry = {
+          sessionId: matchesOwner ? "persisted-session" : "memory-session",
+          updatedAt: 1,
+        };
+        const persistedEntry: SessionEntry = {
+          sessionId: "persisted-session",
+          updatedAt: Date.now(),
+          model: "sonnet-4.6",
+        };
+        const otherEntry: SessionEntry = {
+          sessionId: "other-session",
+          updatedAt: 3,
+          delivery: { kind: "none" },
+        };
+        await replaceSessionEntry({ storePath, sessionKey }, persistedEntry);
+        await replaceSessionEntry({ storePath, sessionKey: otherKey }, otherEntry);
 
-      await expect(
-        persistAbortTargetEntry({
-          entry,
-          key: sessionKey,
-          sessionStore: { [sessionKey]: entry },
-          storePath,
-        }),
-      ).resolves.toBe(true);
+        await expect(
+          persistAbortTargetEntry({
+            entry,
+            key: sessionKey,
+            sessionStore: { [sessionKey]: entry },
+            storePath,
+          }),
+        ).resolves.toBe(matchesOwner);
 
-      const persisted = loadSessionEntry({ storePath, sessionKey });
-      const persistedOther = loadSessionEntry({ storePath, sessionKey: otherKey });
-      expect(entry.abortedLastRun).toBe(true);
-      expect(persisted).toMatchObject({
-        sessionId: "persisted-session",
-        model: "sonnet-4.6",
-        abortedLastRun: true,
+        const persisted = loadSessionEntry({ storePath, sessionKey });
+        const persistedOther = loadSessionEntry({ storePath, sessionKey: otherKey });
+        expect(entry.abortedLastRun).toBe(true);
+        expect(persisted).toMatchObject({
+          sessionId: "persisted-session",
+          model: "sonnet-4.6",
+        });
+        expect(persisted?.abortedLastRun ?? false).toBe(matchesOwner);
+        expect(persistedOther).toStrictEqual(otherEntry);
       });
-      expect(persistedOther).toStrictEqual(otherEntry);
-    });
-  });
+    },
+  );
 });

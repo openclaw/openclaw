@@ -25,9 +25,12 @@ export async function fetchClawHubPluginSkill(
   params: Pick<
     ClawHubRequestParams,
     "baseUrl" | "token" | "skipAuth" | "timeoutMs" | "fetchImpl"
-  > & { packageName: string; version: string; skillName: string },
+  > & { packageName: string; version: string; skillName: string; path?: string },
 ): Promise<PluginsSkillsReadResult> {
-  // One read must fit the modal request budget, including all file bodies.
+  // Inventory plus one selected body share the request budget; never prefetch siblings.
+  if (params.path !== undefined) {
+    validatePluginSkillPath(params.path);
+  }
   const deadline = Date.now() + (params.timeoutMs ?? 30_000);
   const remainingMs = () => Math.max(1, deadline - Date.now());
   const basePath = `/api/v1/packages/${encodeURIComponent(params.packageName)}`;
@@ -100,6 +103,10 @@ export async function fetchClawHubPluginSkill(
   ) {
     throw new Error("ClawHub skill inventory is incomplete or ambiguous.");
   }
+  const selectedPath = params.path ?? entryPath;
+  if (!files.some((file) => file.path === selectedPath)) {
+    throw new Error("Plugin skill file not found.");
+  }
   const directories = new Set(
     files.flatMap((file) => {
       const parts = file.path.split("/");
@@ -127,12 +134,17 @@ export async function fetchClawHubPluginSkill(
       result.files.push({ path: file.path, sizeBytes: file.size, status: "too-large" });
       continue;
     }
+    // Charge the complete eligible inventory in deterministic order so selections
+    // cannot evade the aggregate bundle limit. Only the chosen body is transferred.
+    totalBytes += file.size;
+    if (file.path !== selectedPath) {
+      result.files.push({ path: file.path, sizeBytes: file.size, status: "deferred" });
+      continue;
+    }
     if (Date.now() >= deadline) {
       result.files.push({ path: file.path, sizeBytes: file.size, status: "unavailable" });
       continue;
     }
-    // Reserve advertised bytes even for failed reads, keeping the entire operation bounded.
-    totalBytes += file.size;
     try {
       const read = await withClawHubResponse(
         {

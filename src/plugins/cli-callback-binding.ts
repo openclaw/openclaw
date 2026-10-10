@@ -1,6 +1,10 @@
 import { EventEmitter } from "node:events";
 import type { Argument, Command, Option } from "commander";
 import { pluginInstanceInvocation } from "./plugin-instance-invocation.js";
+import {
+  getPluginServiceSchedulerBinding,
+  withPluginServiceSchedulerBinding,
+} from "./service-scheduler-binding.js";
 
 // These mark native objects whose public registration methods have been adapted,
 // not runtime owners. Each callback resolves its owner from the existing invocation.
@@ -12,8 +16,11 @@ function bindCallback<T>(value: T): T {
   if (typeof value !== "function" || !instance) {
     return value;
   }
+  const scheduler = getPluginServiceSchedulerBinding();
   const bound = function (this: unknown, ...args: unknown[]) {
-    return instance.run(() => Reflect.apply(value, this, args));
+    return withPluginServiceSchedulerBinding(scheduler, () =>
+      instance.run(() => Reflect.apply(value, this, args)),
+    );
   };
   // CLI callbacks receive native Commander objects and parser-produced data, not plugin views.
   // SAFETY: The wrapper forwards the same receiver, arguments, and return value.
@@ -69,19 +76,12 @@ function bindStoredCallbackCollection(
     if ("value" in entry) {
       if (Array.isArray(entry.value)) {
         const values: unknown[] = entry.value;
-        const descriptors: PropertyDescriptorMap = {};
-        for (const ownKey of Reflect.ownKeys(values)) {
-          const value = Object.getOwnPropertyDescriptor(values, ownKey);
-          if (value) {
-            // Define keys literally, including __proto__, without invoking array accessors.
-            Object.defineProperty(descriptors, ownKey, {
-              value,
-              configurable: true,
-              enumerable: true,
-              writable: true,
-            });
-          }
-        }
+        const descriptors = Object.fromEntries(
+          Reflect.ownKeys(values).flatMap((arrayKey) => {
+            const arrayDescriptor = Object.getOwnPropertyDescriptor(values, arrayKey);
+            return arrayDescriptor ? [[arrayKey, arrayDescriptor] as const] : [];
+          }),
+        );
         for (let index = 0; index < values.length; index++) {
           const value = descriptors[index];
           if (value && "value" in value) {

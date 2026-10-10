@@ -1,5 +1,6 @@
-import type { GatewayBrowserClient } from "../api/gateway.ts";
+import type { GatewayBrowserClient, GatewayHelloOk } from "../api/gateway.ts";
 import { bumpCanvasWidgetFrameConnectionGeneration } from "../lib/chat/canvas-widget-frame-generation.ts";
+import { hasOperatorReadAccess } from "./operator-access.ts";
 type CanvasSurfaceLeaseModule = typeof import("./canvas-surface-lease.runtime.ts");
 type CanvasSurfaceLease = ReturnType<CanvasSurfaceLeaseModule["createCanvasSurfaceLease"]>;
 
@@ -11,16 +12,11 @@ export function createGatewayCanvasSurfaceLease(
   let canvasSurfaceLeaseLoad: Promise<CanvasSurfaceLease> | null = null;
   let canvasSurfaceLeaseClient: GatewayBrowserClient | null = null;
   let canvasSurfaceLeaseGeneration = 0;
-  const loadCanvasSurfaceLease = (): Promise<CanvasSurfaceLease> => {
-    if (canvasSurfaceLease) {
-      return Promise.resolve(canvasSurfaceLease);
-    }
-    if (canvasSurfaceLeaseLoad) {
-      return canvasSurfaceLeaseLoad;
-    }
-    const load = import("./canvas-surface-lease.runtime.ts").then(
-      ({ createCanvasSurfaceLease }) => {
-        const lease = createCanvasSurfaceLease({
+  let canRefresh = false;
+  const loadCanvasSurfaceLease = (): Promise<CanvasSurfaceLease> =>
+    (canvasSurfaceLeaseLoad ??= import("./canvas-surface-lease.runtime.ts")
+      .then(({ createCanvasSurfaceLease }) => {
+        canvasSurfaceLease = createCanvasSurfaceLease({
           request: (method, params) => {
             const requestClient = canvasSurfaceLeaseClient;
             if (!requestClient || currentClient() !== requestClient) {
@@ -37,23 +33,21 @@ export function createGatewayCanvasSurfaceLease(
             onChange(canvasPluginSurfaceUrl);
           },
         });
-        canvasSurfaceLease = lease;
-        return lease;
-      },
-    );
-    canvasSurfaceLeaseLoad = load;
-    void load.catch(() => {
-      if (canvasSurfaceLeaseLoad === load) {
+        return canvasSurfaceLease;
+      })
+      .catch((error: unknown) => {
         canvasSurfaceLeaseLoad = null;
-      }
-    });
-    return load;
-  };
-  const beginCanvasSurfaceLease = (nextClient: GatewayBrowserClient): number => {
+        throw error;
+      }));
+  const beginCanvasSurfaceLease = (
+    nextClient: GatewayBrowserClient,
+    auth: GatewayHelloOk["auth"],
+  ): number => {
     canvasSurfaceLeaseClient = null;
     canvasSurfaceLease?.stop();
     canvasSurfaceLeaseGeneration += 1;
     canvasSurfaceLeaseClient = nextClient;
+    canRefresh = hasOperatorReadAccess(auth);
     // Rotation keeps mounted frames; a new hello starts a connection and must
     // re-key them before the synchronously published URL can render.
     bumpCanvasWidgetFrameConnectionGeneration();
@@ -64,6 +58,9 @@ export function createGatewayCanvasSurfaceLease(
     expectedGeneration: number,
     helloUrl: string | undefined,
   ): void => {
+    if (!canRefresh) {
+      return;
+    }
     void loadCanvasSurfaceLease()
       .then((lease) => {
         if (

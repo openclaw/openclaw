@@ -19,11 +19,9 @@ import { appendTranscriptEventInTransaction } from "../config/sessions/session-a
 import { runSessionStartupMigration } from "../config/sessions/startup-migration.js";
 import { resetAgentRunRegistryForTest } from "../infra/agent-run-registry.js";
 import {
-  beginAgentDeletionJournal,
   completeAgentDeletionJournalInDatabase,
   readAgentDeletionJournal,
 } from "../state/agent-deletion-journal.js";
-import { readAgentProvenance } from "../state/agent-provenance.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
@@ -34,6 +32,8 @@ import {
   closeOpenClawStateDatabaseForTest,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import { beginAgentDeletionJournal } from "../test-utils/agent-deletion-journal.js";
+import { readAgentProvenance } from "../test-utils/agent-provenance.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { ensureOnboardingAgent } from "./onboard-agent.js";
 
@@ -126,12 +126,18 @@ describe("onboarding authored config persistence", () => {
   it.each([
     { entries: { existing: { name: "Existing" } } },
     { entries: { main: {} } },
-    { list: [{ id: "main", default: true }] },
     {
-      list: [
-        { id: "alpha", default: true, model: "fixture/alpha" },
-        { id: "beta", model: "fixture/beta" },
-      ],
+      ownership: "explicit",
+      defaults: { systemAgent: { agentId: "main" } },
+      entries: { main: {} },
+    },
+    {
+      ownership: "explicit",
+      defaults: { systemAgent: { agentId: "alpha" } },
+      entries: {
+        alpha: { model: "fixture/alpha" },
+        beta: { model: "fixture/beta" },
+      },
     },
   ])("leaves an existing roster config byte-identical: %j", async (agents) => {
     await withTempHome(async (home) => {
@@ -142,6 +148,7 @@ describe("onboarding authored config persistence", () => {
       await fs.writeFile(configPath, raw);
       resetConfigRuntimeState();
       const snapshot = await readConfigFileSnapshot();
+      expect(snapshot.valid).toBe(true);
 
       const result = await ensureOnboardingAgent({
         config: snapshot.config,
@@ -152,7 +159,7 @@ describe("onboarding authored config persistence", () => {
       expect(result.createdAgent).toBe(false);
       expect(result.config.agents?.entries).toEqual(snapshot.config.agents?.entries);
       expect(snapshot.sourceConfigBeforeMigrations?.agents).toEqual(agents);
-      expect(snapshot.sourceConfig.agents?.list).toBeUndefined();
+      expect(snapshot.sourceConfig.agents).not.toHaveProperty("list");
       expect(await fs.readFile(configPath, "utf8")).toBe(raw);
     });
   });

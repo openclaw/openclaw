@@ -17,7 +17,6 @@ import type {
 } from "./slack-live.contracts.js";
 import { assertSlackCodexApprovalModelSupported } from "./slack-live.contracts.js";
 import { waitForSlackChannelStable } from "./slack-live.message-observations.js";
-import { sendSlackChannelMessage } from "./slack-live.observations.js";
 
 type AdapterFactory = NonNullable<QaRunnerCliRegistration["adapterFactory"]>;
 type AdapterDefinition = Awaited<ReturnType<AdapterFactory["create"]>>;
@@ -31,11 +30,9 @@ export type SlackQaScenarioEnvironment = {
     run: SlackQaScenarioRun;
   }>;
   context: Omit<SlackQaScenarioContext, "sentTs">;
-  gatewayDebugDirPath: string;
-  getMessageWriteCursor: () => number;
+  getMessageWriteCursor: () => Promise<number>;
   observedMessages: SlackObservedMessage[];
   readMessageWrites: (afterRequestEventId: number) => Promise<SlackObservedMessage[]>;
-  outputDir: string;
   scenario: SlackQaScenarioMetadata;
   stopGateway: (preserveDebugArtifacts: boolean) => Promise<void>;
   sutAccountId: string;
@@ -43,25 +40,12 @@ export type SlackQaScenarioEnvironment = {
   sutWriteClient: WebClient;
 };
 
-function resolveSlackQaReplacePaths(accountId: string, channelId: string): string[] {
-  return [
-    "agents",
-    "approvals",
-    "channels.slack",
-    `channels.slack.accounts.${accountId}.allowFrom`,
-    `channels.slack.accounts.${accountId}.channels.${channelId}.users`,
-    "messages",
-    "plugins",
-    "tools",
-  ];
-}
-
 export function createSlackQaScenarioEnvironment(params: {
   accountId: string;
   channelId: string;
   driverBotUserId: string;
   driverClient: WebClient;
-  getMessageWriteCursor: () => number;
+  getMessageWriteCursor: () => Promise<number>;
   readMessageWrites: (afterRequestEventId: number) => Promise<SlackObservedMessage[]>;
   sutAppToken: string;
   sutBotToken: string;
@@ -78,17 +62,8 @@ export function createSlackQaScenarioEnvironment(params: {
       channelId: params.channelId,
       driverClient: params.driverClient,
       gateway: input.gateway as never,
-      postSlackMessage: async (message: { text: string; threadTs?: string }) =>
-        await sendSlackChannelMessage({
-          channelId: params.channelId,
-          client: params.driverClient,
-          text: message.text,
-          threadTs: message.threadTs,
-        }),
       sutIdentity: params.sutIdentity,
       sutReadClient: params.sutReadClient,
-      waitForReady: async () =>
-        await waitForSlackChannelStable(input.gateway as never, params.accountId, "connected"),
     } satisfies Omit<SlackQaScenarioContext, "sentTs">;
     return {
       slackScenarioContext: {
@@ -115,7 +90,16 @@ export function createSlackQaScenarioEnvironment(params: {
           await patchLiveQaGatewayConfig({
             gateway: input.gateway,
             patch: cfg as Record<string, unknown>,
-            replacePaths: resolveSlackQaReplacePaths(params.accountId, params.channelId),
+            replacePaths: [
+              "agents",
+              "approvals",
+              "channels.slack",
+              `channels.slack.accounts.${params.accountId}.allowFrom`,
+              `channels.slack.accounts.${params.accountId}.channels.${params.channelId}.users`,
+              "messages",
+              "plugins",
+              "tools",
+            ],
             timeoutMs: input.timeoutMs,
             waitForConfigRestartSettle: input.waitForConfigRestartSettle,
           });
@@ -125,11 +109,9 @@ export function createSlackQaScenarioEnvironment(params: {
           return { cfg, primaryModel, run };
         },
         context,
-        gatewayDebugDirPath: path.join(input.outputDir, "gateway-debug"),
         getMessageWriteCursor: params.getMessageWriteCursor,
         observedMessages,
         readMessageWrites: params.readMessageWrites,
-        outputDir: input.outputDir,
         scenario: {
           id: input.scenarioId,
           timeoutMs: input.timeoutMs,

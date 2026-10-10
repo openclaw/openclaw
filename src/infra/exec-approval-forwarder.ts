@@ -15,21 +15,27 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { channelRouteDedupeKey } from "../plugin-sdk/channel-route.js";
 import { runWithRetainedGatewayRootWork } from "../process/gateway-work-admission.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
-import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { createPendingApprovalRegistry } from "../shared/pending-approval-registry.js";
 import { isDeliverableMessageChannel, normalizeMessageChannel } from "../utils/message-channel.js";
+import { canChannelEnforcePluginReviewerPolicy } from "./approval-channel-policy-support.js";
 import {
   hasActiveNativeApprovalRoute,
   type ApprovalNativeRouteCoordinator,
 } from "./approval-native-route-coordinator.js";
 import { matchesApprovalRequestFilters } from "./approval-request-filters.js";
-import type { ChannelApprovalKind } from "./approval-types.js";
+import {
+  resolveApprovalRequestKind,
+  type ApprovalRequestInput,
+  type ChannelApprovalKind,
+} from "./approval-types.js";
 import {
   buildForwardedExecApprovalExpired,
   buildForwardedExecPendingPayload,
   buildForwardedExecResolvedPayload,
   buildForwardedPluginPendingPayload,
   buildForwardedPluginResolvedPayload,
+  buildForwardedSystemAgentPendingPayload,
+  buildForwardedSystemAgentResolvedPayload,
 } from "./exec-approval-forwarder.messages.js";
 import type { ExecApprovalRequest, ExecApprovalResolved } from "./exec-approvals.js";
 import {
@@ -37,9 +43,13 @@ import {
   type PluginApprovalRequest,
   type PluginApprovalResolved,
 } from "./plugin-approvals.js";
+import type {
+  SystemAgentApprovalRequest,
+  SystemAgentApprovalResolved,
+} from "./system-agent-approvals.js";
 
-// Approval forwarding mirrors foreground exec/plugin approvals into configured
-// chat targets, then sends resolution/expiry notices to the same targets.
+// Approval forwarding mirrors foreground approvals into chat targets, then sends
+// resolution/expiry notices to the same targets.
 const log = createSubsystemLogger("gateway/exec-approvals");
 type DeliverApprovalPayloads =
   typeof import("../channels/message/runtime.js").sendDurableMessageBatchCore;
@@ -73,11 +83,17 @@ type ApprovalRenderContext = {
 type ApprovalStrategy<TRequest, TResolved> = {
   kind: ChannelApprovalKind;
   config: (cfg: OpenClawConfig) => ExecApprovalForwardingConfig | undefined;
-  buildExpiredText: (request: TRequest) => string;
+  /** Omitted when the durable terminal publication owns expiry; no local timer runs. */
+  buildExpiredText?: (request: TRequest) => string;
   buildPendingPayload: (
     params: ApprovalRenderContext & { request: TRequest; nowMs: number },
   ) => ReplyPayload;
   buildResolvedPayload: (params: ApprovalRenderContext & { resolved: TResolved }) => ReplyPayload;
+  /**
+   * Answer only the live messaging chat that made the request: no saved session
+   * route, and no terminal notice without this forwarder's own pending entry.
+   */
+  liveOriginOnly?: boolean;
 };
 
 export type ExecApprovalForwarder = {
@@ -85,6 +101,8 @@ export type ExecApprovalForwarder = {
   handleResolved: (resolved: ExecApprovalResolved) => Promise<void>;
   handlePluginApprovalRequested?: (request: PluginApprovalRequest) => Promise<boolean>;
   handlePluginApprovalResolved?: (resolved: PluginApprovalResolved) => Promise<void>;
+  handleSystemAgentApprovalRequested?: (request: SystemAgentApprovalRequest) => Promise<boolean>;
+  handleSystemAgentApprovalResolved?: (resolved: SystemAgentApprovalResolved) => Promise<void>;
   stop: () => Promise<void>;
 };
 
@@ -98,30 +116,6 @@ type ExecApprovalForwarderDeps = {
 };
 
 const SYNTHETIC_APPROVAL_REQUEST_ID = "__approval-routing__";
-
-const loadExecApprovalForwarderRuntime = createLazyRuntimeModule(
-  () => import("./exec-approval-forwarder.runtime.js"),
-);
-
-function shouldForwardRoute(params: {
-  config?: {
-    enabled?: boolean;
-    agentFilter?: string[];
-    sessionFilter?: string[];
-  };
-  routeRequest: ApprovalRouteRequest;
-}): boolean {
-  const config = params.config;
-  if (!config?.enabled) {
-    return false;
-  }
-  return matchesApprovalRequestFilters({
-    request: params.routeRequest,
-    agentFilter: config.agentFilter,
-    sessionFilter: config.sessionFilter,
-    fallbackAgentIdFromSessionKey: true,
-  });
-}
 
 function buildTargetKey(target: ExecApprovalForwardTarget): string {
   const channel = normalizeMessageChannel(target.channel) ?? target.channel;
@@ -139,16 +133,38 @@ function buildSyntheticApprovalRequest(routeRequest: ApprovalRouteRequest): Exec
     id: SYNTHETIC_APPROVAL_REQUEST_ID,
     request: {
       command: "",
-      agentId: routeRequest.agentId ?? null,
-      sessionKey: routeRequest.sessionKey ?? null,
-      turnSourceChannel: routeRequest.turnSourceChannel ?? null,
-      turnSourceTo: routeRequest.turnSourceTo ?? null,
-      turnSourceAccountId: routeRequest.turnSourceAccountId ?? null,
-      turnSourceThreadId: routeRequest.turnSourceThreadId ?? null,
+      ...extractApprovalRouteRequest(routeRequest),
     },
     createdAtMs: 0,
     expiresAtMs: 0,
   };
+}
+
+function restoreApprovalRequestForSuppression(params: {
+  approvalKind: ChannelApprovalKind;
+  id: string;
+  request?: ApprovalRouteRequest | null;
+}): ApprovalRequestInput | undefined {
+  if (!params.request) {
+    return undefined;
+  }
+  // The resolved snapshot retains its original payload; reconstruct only its
+  // owner so a cache-miss notice cannot route through an exec-shaped placeholder.
+  const restored = {
+    id: params.id,
+    request: params.request,
+    createdAtMs: 0,
+    expiresAtMs: 0,
+  };
+  try {
+    if (resolveApprovalRequestKind(restored) !== params.approvalKind) {
+      return undefined;
+    }
+    // SAFETY: resolved.request retains the typed approval payload; the derived owner matches it.
+    return restored as ApprovalRequestInput;
+  } catch {
+    return undefined;
+  }
 }
 
 function shouldSkipForwardingFallback(params: {
@@ -156,6 +172,7 @@ function shouldSkipForwardingFallback(params: {
   target: ExecApprovalForwardTarget;
   cfg: OpenClawConfig;
   routeRequest: ApprovalRouteRequest;
+  approvalRequest?: ApprovalRequestInput;
   nativeRouteCoordinator: ApprovalNativeRouteCoordinator | undefined;
 }): boolean {
   const channel = normalizeMessageChannel(params.target.channel) ?? params.target.channel;
@@ -165,14 +182,23 @@ function shouldSkipForwardingFallback(params: {
   // Channel adapters can suppress generic fallback delivery when they already
   // own native approval UX for the same target.
   const plugin = getLoadedChannelPlugin(channel);
+  if (
+    params.approvalKind === "plugin" &&
+    !canChannelEnforcePluginReviewerPolicy(params.cfg, channel, plugin?.approvalCapability)
+  ) {
+    return true;
+  }
   const adapter = resolveChannelApprovalAdapter(plugin);
-  const suppress =
-    adapter?.delivery?.shouldSuppressForwardingFallback?.({
-      cfg: params.cfg,
-      approvalKind: params.approvalKind,
-      target: params.target,
-      request: buildSyntheticApprovalRequest(params.routeRequest),
-    }) ?? false;
+  const fallbackInput = {
+    cfg: params.cfg,
+    approvalKind: params.approvalKind,
+    target: params.target,
+    request: params.approvalRequest ?? buildSyntheticApprovalRequest(params.routeRequest),
+  };
+  if (adapter?.delivery?.shouldBlockForwardingFallback?.(fallbackInput)) {
+    return true;
+  }
+  const suppress = adapter?.delivery?.shouldSuppressForwardingFallback?.(fallbackInput) ?? false;
   if (!suppress || !plugin) {
     return false;
   }
@@ -229,29 +255,31 @@ function defaultResolveSessionTarget(params: {
   cfg: OpenClawConfig;
   request: ExecApprovalRequest;
 }): Promise<ExecApprovalForwardTarget | null> {
-  return loadExecApprovalForwarderRuntime().then(({ resolveExecApprovalSessionTarget }) => {
-    const resolvedTarget = resolveExecApprovalSessionTarget({
-      cfg: params.cfg,
-      request: params.request,
-      turnSourceChannel: normalizeTurnSourceChannel(params.request.request.turnSourceChannel),
-      turnSourceTo: normalizeOptionalString(params.request.request.turnSourceTo),
-      turnSourceAccountId: normalizeOptionalString(params.request.request.turnSourceAccountId),
-      turnSourceThreadId: params.request.request.turnSourceThreadId ?? undefined,
-    });
-    if (!resolvedTarget?.channel || !resolvedTarget.to) {
-      return null;
-    }
-    const channel = resolvedTarget.channel;
-    if (!isDeliverableMessageChannel(channel)) {
-      return null;
-    }
-    return {
-      channel,
-      to: resolvedTarget.to,
-      accountId: resolvedTarget.accountId,
-      threadId: resolvedTarget.threadId,
-    };
-  });
+  return import("./exec-approval-forwarder.runtime.js").then(
+    ({ resolveExecApprovalSessionTarget }) => {
+      const resolvedTarget = resolveExecApprovalSessionTarget({
+        cfg: params.cfg,
+        request: params.request,
+        turnSourceChannel: normalizeTurnSourceChannel(params.request.request.turnSourceChannel),
+        turnSourceTo: normalizeOptionalString(params.request.request.turnSourceTo),
+        turnSourceAccountId: normalizeOptionalString(params.request.request.turnSourceAccountId),
+        turnSourceThreadId: params.request.request.turnSourceThreadId ?? undefined,
+      });
+      if (!resolvedTarget?.channel || !resolvedTarget.to) {
+        return null;
+      }
+      const channel = resolvedTarget.channel;
+      if (!isDeliverableMessageChannel(channel)) {
+        return null;
+      }
+      return {
+        channel,
+        to: resolvedTarget.to,
+        accountId: resolvedTarget.accountId,
+        threadId: resolvedTarget.threadId,
+      };
+    },
+  );
 }
 
 async function deliverToTargets(params: {
@@ -316,10 +344,8 @@ async function resolveForwardTargets(params: {
     });
     if (sessionTarget) {
       const key = buildTargetKey(sessionTarget);
-      if (!seen.has(key)) {
-        seen.add(key);
-        targets.push({ ...sessionTarget, source: "session" });
-      }
+      seen.add(key);
+      targets.push({ ...sessionTarget, source: "session" });
     }
   }
 
@@ -339,16 +365,13 @@ async function resolveForwardTargets(params: {
 }
 
 function createApprovalHandlers<
-  TRequest extends { id: string; request: ApprovalRouteRequest; expiresAtMs: number },
+  TRequest extends ApprovalRequestInput,
   TResolved extends { id: string; request?: ApprovalRouteRequest | null },
->(params: {
-  strategy: ApprovalStrategy<TRequest, TResolved>;
-  getConfig: () => OpenClawConfig;
-  deliver: DeliverApprovalPayloads;
-  nowMs: () => number;
-  resolveSessionTarget: ResolveSessionTargetFn;
-  getNativeApprovalRouteCoordinator: () => ApprovalNativeRouteCoordinator | undefined;
-}) {
+>(
+  params: {
+    strategy: ApprovalStrategy<TRequest, TResolved>;
+  } & Required<ExecApprovalForwarderDeps>,
+) {
   const pending = createPendingApprovalRegistry<PendingApproval>();
   const work = new AsyncWorkScope();
   let stopped = false;
@@ -360,9 +383,28 @@ function createApprovalHandlers<
     cfg: OpenClawConfig;
     config?: ExecApprovalForwardingConfig;
     routeRequest: ApprovalRouteRequest;
+    approvalRequest?: ApprovalRequestInput;
   }): Promise<ForwardTarget[]> => {
-    if (!shouldForwardRoute(paramsForRoute)) {
+    if (
+      !paramsForRoute.config?.enabled ||
+      !matchesApprovalRequestFilters({
+        request: paramsForRoute.routeRequest,
+        agentFilter: paramsForRoute.config.agentFilter,
+        sessionFilter: paramsForRoute.config.sessionFilter,
+        fallbackAgentIdFromSessionKey: true,
+      })
+    ) {
       return [];
+    }
+    if (params.strategy.liveOriginOnly) {
+      const origin = normalizeMessageChannel(paramsForRoute.routeRequest.turnSourceChannel ?? "");
+      if (
+        !origin ||
+        !isDeliverableMessageChannel(origin) ||
+        !normalizeOptionalString(paramsForRoute.routeRequest.turnSourceTo)
+      ) {
+        return [];
+      }
     }
     const targets = await resolveForwardTargets({
       ...paramsForRoute,
@@ -377,6 +419,7 @@ function createApprovalHandlers<
           target,
           cfg: paramsForRoute.cfg,
           routeRequest: paramsForRoute.routeRequest,
+          approvalRequest: paramsForRoute.approvalRequest,
           nativeRouteCoordinator,
         }),
     );
@@ -392,6 +435,11 @@ function createApprovalHandlers<
             cfg,
             config: params.strategy.config(cfg),
             routeRequest,
+            approvalRequest: restoreApprovalRequestForSuppression({
+              approvalKind: params.strategy.kind,
+              id: resolved.id,
+              request: resolved.request,
+            }),
           })
         : []);
     if (!targets.length) {
@@ -419,7 +467,12 @@ function createApprovalHandlers<
     const pendingEntry = pending.begin(requestId, { routeRequest, targets: [] });
     let filteredTargets: ForwardTarget[];
     try {
-      filteredTargets = await resolveTargets({ cfg, config, routeRequest });
+      filteredTargets = await resolveTargets({
+        cfg,
+        config,
+        routeRequest,
+        approvalRequest: request,
+      });
     } catch (error) {
       pending.remove(requestId, pendingEntry);
       throw error;
@@ -430,21 +483,24 @@ function createApprovalHandlers<
     }
 
     pendingEntry.value = { routeRequest, targets: filteredTargets };
-    const expiresInMs = Math.max(0, request.expiresAtMs - params.nowMs());
-    pending.scheduleExpiry(pendingEntry, expiresInMs, (expired) =>
-      trackDelivery(() =>
-        deliverToTargets({
-          cfg,
-          targets: expired.value.targets,
-          buildPayload: () => ({ text: params.strategy.buildExpiredText(request) }),
-          deliver: params.deliver,
+    const buildExpiredText = params.strategy.buildExpiredText;
+    if (buildExpiredText) {
+      const expiresInMs = Math.max(0, request.expiresAtMs - params.nowMs());
+      pending.scheduleExpiry(pendingEntry, expiresInMs, (expired) =>
+        trackDelivery(() =>
+          deliverToTargets({
+            cfg,
+            targets: expired.value.targets,
+            buildPayload: () => ({ text: buildExpiredText(request) }),
+            deliver: params.deliver,
+          }),
+        ).catch((err: unknown) => {
+          log.error(
+            `${params.strategy.kind} approvals: failed to deliver expiry notification for ${requestId}: ${String(err)}`,
+          );
         }),
-      ).catch((err: unknown) => {
-        log.error(
-          `${params.strategy.kind} approvals: failed to deliver expiry notification for ${requestId}: ${String(err)}`,
-        );
-      }),
-    );
+      );
+    }
 
     void trackDelivery(() =>
       deliverToTargets({
@@ -492,7 +548,11 @@ function createApprovalHandlers<
       await settled.terminal(settled.entry);
       return;
     }
-    await deliverResolved(resolved);
+    // Only this forwarder's own entry proves the chat was asked; without it the
+    // request went to a native card or had no live chat to answer.
+    if (!params.strategy.liveOriginOnly) {
+      await deliverResolved(resolved);
+    }
   };
 
   return {
@@ -528,6 +588,21 @@ const pluginApprovalStrategy = {
   buildResolvedPayload: buildForwardedPluginResolvedPayload,
 } satisfies ApprovalStrategy<PluginApprovalRequest, PluginApprovalResolved>;
 
+// A delegated OpenClaw change blocks the requesting tool until someone decides,
+// so the requesting messaging chat always gets a reply path. A native card for
+// the same target suppresses this text through the shared fallback check.
+const SYSTEM_AGENT_FORWARDING: ExecApprovalForwardingConfig = { enabled: true, mode: "session" };
+
+const systemAgentApprovalStrategy = {
+  kind: "system-agent",
+  config: () => SYSTEM_AGENT_FORWARDING,
+  // No local expiry timer: an approved change may still be applying at the
+  // deadline, so only the Gateway's recorded expiry reports a lapse.
+  buildPendingPayload: buildForwardedSystemAgentPendingPayload,
+  buildResolvedPayload: buildForwardedSystemAgentResolvedPayload,
+  liveOriginOnly: true,
+} satisfies ApprovalStrategy<SystemAgentApprovalRequest, SystemAgentApprovalResolved>;
+
 export function createExecApprovalForwarder(
   deps: ExecApprovalForwarderDeps = {},
 ): ExecApprovalForwarder {
@@ -535,7 +610,7 @@ export function createExecApprovalForwarder(
   const deliver =
     deps.deliver ??
     (async (params) => {
-      const { sendDurableMessageBatchCore } = await loadExecApprovalForwarderRuntime();
+      const { sendDurableMessageBatchCore } = await import("./exec-approval-forwarder.runtime.js");
       return sendDurableMessageBatchCore(params);
     });
   const nowMs = deps.nowMs ?? Date.now;
@@ -543,21 +618,24 @@ export function createExecApprovalForwarder(
   const getNativeApprovalRouteCoordinator =
     deps.getNativeApprovalRouteCoordinator ?? (() => undefined);
 
-  const execHandlers = createApprovalHandlers({
-    strategy: execApprovalStrategy,
+  const handlerDeps = {
     getConfig,
     deliver,
     nowMs,
     resolveSessionTarget,
     getNativeApprovalRouteCoordinator,
+  };
+  const execHandlers = createApprovalHandlers({
+    ...handlerDeps,
+    strategy: execApprovalStrategy,
   });
   const pluginHandlers = createApprovalHandlers({
+    ...handlerDeps,
     strategy: pluginApprovalStrategy,
-    getConfig,
-    deliver,
-    nowMs,
-    resolveSessionTarget,
-    getNativeApprovalRouteCoordinator,
+  });
+  const systemAgentHandlers = createApprovalHandlers({
+    ...handlerDeps,
+    strategy: systemAgentApprovalStrategy,
   });
 
   return {
@@ -565,8 +643,10 @@ export function createExecApprovalForwarder(
     handleResolved: execHandlers.handleResolved,
     handlePluginApprovalRequested: pluginHandlers.handleRequested,
     handlePluginApprovalResolved: pluginHandlers.handleResolved,
+    handleSystemAgentApprovalRequested: systemAgentHandlers.handleRequested,
+    handleSystemAgentApprovalResolved: systemAgentHandlers.handleResolved,
     stop: async () => {
-      await Promise.all([execHandlers.stop(), pluginHandlers.stop()]);
+      await Promise.all([execHandlers.stop(), pluginHandlers.stop(), systemAgentHandlers.stop()]);
     },
   };
 }

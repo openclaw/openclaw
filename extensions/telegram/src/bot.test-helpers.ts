@@ -127,24 +127,6 @@ export function createTelegramCallbackContext(params: {
   };
 }
 
-export function createTelegramReactionContext(params: {
-  updateId: number;
-  reaction?: Record<string, unknown>;
-}): TelegramTestContext {
-  return {
-    update: { update_id: params.updateId },
-    messageReaction: {
-      chat: { id: 1234, type: "private" },
-      message_id: 42,
-      user: { id: 9, first_name: "Ada" },
-      date: 1_736_380_800,
-      old_reaction: [],
-      new_reaction: [{ type: "emoji", emoji: "👍" }],
-      ...params.reaction,
-    },
-  };
-}
-
 export async function runTelegramTestMiddlewareChain(
   middlewareUseSpy: MiddlewareUseSpy,
   ctx: TelegramTestContext,

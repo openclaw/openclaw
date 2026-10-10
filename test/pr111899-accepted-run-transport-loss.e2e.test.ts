@@ -194,7 +194,7 @@ describe("accepted agent run transport loss against a real gateway", () => {
                 [provider.modelRef]: { params: { transport: "sse", openaiWsWarmup: false } },
               },
             },
-            entries: { main: { default: true } },
+            entries: { main: {} },
           },
           models: { mode: "replace", providers: { [provider.providerId]: provider.config } },
           session: { store: path.join(stateDir, "sessions.json"), mainKey: "main" },

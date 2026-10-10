@@ -2,7 +2,36 @@ import { expect, it, vi } from "vitest";
 import { BUILTIN_THEMES } from "../../../../packages/gateway-protocol/src/theme.ts";
 import { updatePickers } from "../../test-helpers/select-picker.ts";
 import "../../styles.css";
-import { renderConfigView } from "./config-view.test-support.ts";
+import { renderAppearance, renderConfigView } from "./config-view.test-support.ts";
+
+it("hides the collection and visit controls without changing their saved preferences", () => {
+  const { container, props } = renderAppearance({
+    theme: "user/quiet",
+    themeCatalog: {
+      error: null,
+      themes: [
+        {
+          id: "user/quiet",
+          name: "Quiet",
+          description: "A quiet theme",
+          source: "user",
+          modes: ["dark"],
+          lobsterdex: false,
+        },
+      ],
+    },
+    lobsterPetVisits: true,
+    lobsterPetSounds: true,
+    lobsterdexHref: "/settings/lobsterdex",
+  });
+  expect(container.querySelector(".lobsterdex__gallery")).toBeNull();
+  expect(container.querySelector(".lobsterdex__open")).toBeNull();
+  expect(container.textContent).not.toContain("Lobster visits");
+  expect(container.textContent).not.toContain("Lobster sounds");
+  expect(props.lobsterPetVisits).toBe(true);
+  expect(props.lobsterPetSounds).toBe(true);
+  expect(props.onAppearanceChange).not.toHaveBeenCalled();
+});
 
 it("offers plugin and personal themes from the shared catalog with their descriptions", () => {
   const setTheme = vi.fn();
@@ -39,7 +68,7 @@ it("offers plugin and personal themes from the shared catalog with their descrip
     "Alien indigo surfaces, lime controls, and monospace typography.",
   );
   pluginTheme?.click();
-  expect(setTheme).toHaveBeenCalledWith("space-pack/xenovessel", { element: pluginTheme });
+  expect(setTheme).toHaveBeenCalledWith("space-pack/xenovessel");
   expect(container.querySelector('[data-theme-id="user/candlelight"]')?.textContent).toContain(
     "Candlelight",
   );
@@ -80,7 +109,7 @@ it.each(["profile", "device-local"] as const)(
     }
     expect(props.theme).toBe(missingTheme);
     claw?.click();
-    expect(props.setTheme).toHaveBeenCalledWith("claw", { element: claw });
+    expect(props.setTheme).toHaveBeenCalledWith("claw");
   },
 );
 

@@ -1,35 +1,33 @@
 import fs from "node:fs";
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import {
   SKILL_LIBRARY_MAX_FILE_BYTES,
   SKILL_LIBRARY_MAX_SELECTIONS,
   type SkillLibrarySelection,
   type SkillsLibraryActivateParams,
 } from "../../../packages/gateway-protocol/src/schema/skill-library.js";
+import { cloneEnvWithPlatformSemantics } from "../../config/config-env-vars.js";
 import { resolveStateDir } from "../../config/paths.js";
 import { openRootFileSync, readFileDescriptorBoundedSync } from "../../infra/boundary-file-read.js";
-import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import type { OpenClawStateDatabaseOptions } from "../../state/openclaw-state-db.js";
+import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import {
   parseSkillFrontmatter,
   resolveSkillInvocationPolicy,
   resolveSkillManifestMetadata,
 } from "../loading/frontmatter.js";
 import { materializeSkill } from "../loading/skill-materializer.js";
+import { SkillLibraryError } from "../skill-library-error.js";
 import type { SkillEntry } from "../types.js";
 import { readSkillLibraryManifestTree, skillLibraryRevisionDir } from "./bundle.js";
-import { SkillLibraryError } from "./errors.js";
 import {
-  projectSkillLibraryEntry,
-  readSkillLibraryStore,
-  requireSkillLibraryEntry,
-  resolveSkillLibraryActor,
-  selectSkillLibraryRevision,
-  selectSkillLibraryRevisionMetadata,
-  selectSkillLibraryRevisionMetadataBatch,
-  skillLibraryDb,
-  type SkillLibraryAuthority,
-} from "./store.js";
+  readSkillLibrarySelectionDescriptions,
+  readSkillLibrarySelectionManifests,
+} from "./selection-read.js";
+import { selectSkillLibraryRevisionMetadataBatch } from "./selection-read.kernel.js";
+import { captureSkillLibraryAccess } from "./store-access.js";
+import { readSkillLibraryStore, type SkillLibraryAuthority } from "./store.js";
 const preparedSelections = new WeakMap<readonly SkillLibrarySelection[], () => void>();
 
 /** Only uncommitted human seeds carry this closure. Persisted session pins intentionally do not. */
@@ -41,115 +39,81 @@ export function assertPreparedSkillLibrarySelection(
   }
 }
 
+function bindPreparedSelection(prepared: {
+  value: SkillLibrarySelection[];
+  assertCurrent: () => void;
+}) {
+  const pins = captureSkillLibrarySelection(prepared.value);
+  preparedSelections.set(prepared.value, () => {
+    prepared.assertCurrent();
+    if (!isDeepStrictEqual(pins, prepared.value)) {
+      throw new SkillLibraryError("CONFLICT", "Prepared skill selection changed. Retry.");
+    }
+  });
+  return prepared.value;
+}
+
 const selectedEntryCache = new Map<string, SkillEntry[]>();
+
+/** Async preparation retains pin values even when a caller later edits its snapshot. */
+function captureSkillLibrarySelection(selections: readonly SkillLibrarySelection[]) {
+  return selections.map(({ skillId, revision, name, ownerProfileId }) => ({
+    skillId,
+    revision,
+    name,
+    ownerProfileId,
+  }));
+}
+
+export function captureSkillLibraryPreparation(
+  selections: readonly SkillLibrarySelection[],
+  assertCallerCurrent?: () => void,
+) {
+  const librarySelections = captureSkillLibrarySelection(selections);
+  const libraryContext = librarySelections.length ? captureOpenClawStateWorkerContext() : undefined;
+  return {
+    librarySelections,
+    libraryContext,
+    assertCurrent: () => {
+      assertCallerCurrent?.();
+      libraryContext?.maintenanceScope?.assertAdmission();
+      libraryContext?.admission.assertCurrent();
+    },
+  };
+}
 
 /** The session owner has already authorized this exact immutable pin. */
 export async function readSelectedSkillLibraryFiles(
   selection: SkillLibrarySelection,
   options: OpenClawStateDatabaseOptions = {},
 ) {
-  const metadata = readSkillLibraryStore(
-    (db) => selectSkillLibraryRevision(db, selection.skillId, selection.revision),
-    options,
-  );
+  const directory = skillLibraryRevisionDir(selection.skillId, selection.revision, options.env);
+  const metadata = (await readSkillLibrarySelectionManifests([selection], options))?.[0];
   if (!metadata) {
     throw new SkillLibraryError("NOT_FOUND", "Selected skill revision is unavailable.");
   }
-  return await readSkillLibraryManifestTree(
-    skillLibraryRevisionDir(selection.skillId, selection.revision, options.env),
-    metadata.files_json,
-    selection.revision,
-  );
+  return await readSkillLibraryManifestTree(directory, metadata.files_json, selection.revision);
 }
 
 /** Called only by a fresh human-session admission, never from creator/assignee attribution. */
-export function seedSkillLibrarySelection(
+export async function seedSkillLibrarySelection(
   authority: SkillLibraryAuthority,
   options: OpenClawStateDatabaseOptions = {},
-): SkillLibrarySelection[] {
+): Promise<SkillLibrarySelection[]> {
   if (!authority.profileId) {
     return [];
   }
-  const result =
-    readSkillLibraryStore((db) => {
-      const actor = resolveSkillLibraryActor(db, authority);
-      if (!actor.profileId) {
-        return [];
-      }
-      const entries = executeSqliteQuerySync(
-        db,
-        skillLibraryDb(db)
-          .selectFrom("skill_library_entries")
-          .selectAll()
-          .where("removed", "=", 0)
-          .where("enabled", "=", 1)
-          .orderBy("skill_id"),
-      ).rows;
-      const selections = entries.flatMap((row) => {
-        const entry = projectSkillLibraryEntry(db, row, authority);
-        if (
-          !entry ||
-          (entry.ownerProfileId !== actor.profileId &&
-            entry.ownerProfileId !== null &&
-            !entry.shared)
-        ) {
-          return [];
-        }
-        return [
-          {
-            skillId: entry.skillId,
-            revision: entry.revision,
-            name: entry.name,
-            ownerProfileId: entry.ownerProfileId,
-          },
-        ];
-      });
-      // Personal defaults take priority; an overflowing team library never prevents session creation.
-      return selections
-        .toSorted(
-          (a, b) =>
-            Number(b.ownerProfileId === actor.profileId) -
-            Number(a.ownerProfileId === actor.profileId),
-        )
-        .slice(0, SKILL_LIBRARY_MAX_SELECTIONS);
-    }, options) ?? [];
-  if (result.length) {
-    preparedSelections.set(result, () => {
-      authority.assertCurrent();
-      const checked = readSkillLibraryStore((db) => {
-        for (const pin of result) {
-          const entry = requireSkillLibraryEntry(db, pin.skillId, authority);
-          if (
-            entry.removed ||
-            !entry.enabled ||
-            !selectSkillLibraryRevisionMetadata(db, pin.skillId, pin.revision)
-          ) {
-            throw new SkillLibraryError(
-              "CONFLICT",
-              "Default skill access changed during session creation. Retry to select current defaults.",
-            );
-          }
-        }
-        return true;
-      }, options);
-      if (!checked) {
-        throw new SkillLibraryError(
-          "CONFLICT",
-          "Default skill library changed during session creation; retry.",
-        );
-      }
-    });
-  }
-  return result;
+  const prepared = await captureSkillLibraryAccess(authority, options).read("seed", undefined);
+  return bindPreparedSelection(prepared);
 }
 
-/** Session mutation authorization is separate; this checks the collaborator's library access. */
-export function changeSkillLibrarySelection(
+/** Session mutation authorization is separate; retain library authority through its commit. */
+export async function changeSkillLibrarySelection(
   authority: SkillLibraryAuthority,
   current: readonly SkillLibrarySelection[],
   params: SkillsLibraryActivateParams,
   options: OpenClawStateDatabaseOptions = {},
-): SkillLibrarySelection[] {
+): Promise<SkillLibrarySelection[]> {
   if (params.action !== "refresh" && !params.skillId) {
     throw new SkillLibraryError("INVALID_BUNDLE", "attach/detach requires skillId.");
   }
@@ -157,42 +121,14 @@ export function changeSkillLibrarySelection(
     authority.assertCurrent();
     return current.filter((item) => item.skillId !== params.skillId);
   }
-  const result = readSkillLibraryStore((db) => {
-    const next = new Map(current.map((item) => [item.skillId, item]));
-    const ids = params.skillId ? [params.skillId] : current.map((item) => item.skillId);
-    for (const skillId of ids) {
-      const entry = requireSkillLibraryEntry(db, skillId, authority);
-      if (entry.removed) {
-        throw new SkillLibraryError(
-          "NOT_FOUND",
-          "Removed skill cannot be selected. Existing pinned selections remain available.",
-        );
-      }
-      const revision = params.revision ?? entry.revision;
-      if (!selectSkillLibraryRevisionMetadata(db, skillId, revision)) {
-        throw new SkillLibraryError("NOT_FOUND", "Skill revision not found.");
-      }
-      next.set(skillId, {
-        skillId,
-        revision,
-        name: entry.name,
-        ownerProfileId: entry.ownerProfileId,
-      });
-    }
-    if (next.size > SKILL_LIBRARY_MAX_SELECTIONS) {
-      throw new SkillLibraryError("LIMIT", "A session can select at most 64 library skills.");
-    }
-    return [...next.values()].toSorted((a, b) =>
-      a.skillId < b.skillId ? -1 : a.skillId > b.skillId ? 1 : 0,
-    );
-  }, options);
-  if (!result) {
-    throw new SkillLibraryError("NOT_FOUND", "Skill library is empty.");
-  }
-  return result;
+  const prepared = await captureSkillLibraryAccess(authority, options).read("change", {
+    current,
+    params,
+  });
+  return bindPreparedSelection(prepared);
 }
 
-/** Resolve already-authorized pins only when rebuilding a snapshot, independent of current sharing. */
+/** v2026.9.8 synchronous command discovery and harness createToolSurface SDK compatibility; runtime prepares pins asynchronously. */
 export function loadSkillLibrarySelection(
   selections: readonly SkillLibrarySelection[],
   options: OpenClawStateDatabaseOptions = {},
@@ -208,71 +144,123 @@ export function loadSkillLibrarySelection(
   if (selections.length > SKILL_LIBRARY_MAX_SELECTIONS) {
     throw new SkillLibraryError("LIMIT", "Invalid session skill selection.");
   }
-  const entries = readSkillLibraryStore((db) => {
-    const revisions = selectSkillLibraryRevisionMetadataBatch(db, selections);
-    return selections.map((selection, index) => {
-      const revision = revisions[index];
-      if (!revision) {
-        throw new SkillLibraryError(
-          "NOT_FOUND",
-          "A pinned skill revision is unavailable; restore the library artifact or detach it explicitly.",
-        );
-      }
-      const baseDir = skillLibraryRevisionDir(selection.skillId, selection.revision, options.env);
-      const filePath = path.join(baseDir, "SKILL.md");
-      const opened = openRootFileSync({
-        absolutePath: filePath,
-        rootPath: baseDir,
-        boundaryLabel: "skill library revision",
-        maxBytes: SKILL_LIBRARY_MAX_FILE_BYTES,
-        rejectHardlinks: true,
-        symlinks: "reject",
-      });
-      if (!opened.ok) {
-        throw new SkillLibraryError(
-          "INVALID_BUNDLE",
-          "Pinned skill instructions could not be read; restore the library artifact or detach it explicitly.",
-          undefined,
-          { cause: opened.error },
-        );
-      }
-      let content: string;
-      try {
-        content = readFileDescriptorBoundedSync(opened.fd, SKILL_LIBRARY_MAX_FILE_BYTES).toString(
-          "utf8",
-        );
-      } finally {
-        fs.closeSync(opened.fd);
-      }
-      const frontmatter = parseSkillFrontmatter(content);
-      const metadata = resolveSkillManifestMetadata(frontmatter);
-      const invocation = resolveSkillInvocationPolicy(frontmatter);
-      const name = selection.name;
-      return {
-        skill: materializeSkill({
-          content,
-          frontmatter,
-          name,
-          description: revision.description,
-          baseDir,
-          filePath,
-          source: "openclaw-library",
-          sourceOptions: { source: "openclaw-library" },
-        }),
-        frontmatter,
-        invocation,
-        // Untrusted frontmatter can constrain executable eligibility, but cannot claim global credentials/config.
-        metadata: {
-          skillKey: name,
-          os: metadata?.os,
-          requires: metadata?.requires,
-        },
-        disableCommandDispatch: true,
-        syncSourceDir: baseDir,
-        syncDirName: `library-${selection.skillId}-${selection.revision}`,
-      } satisfies SkillEntry;
+  const entries = readSkillLibraryStore(
+    (db) =>
+      materializeSkillLibrarySelection(
+        selections,
+        selectSkillLibraryRevisionMetadataBatch(db, selections),
+        options.env,
+      ),
+    options,
+  );
+  return cacheSkillLibrarySelection(cacheKey, entries);
+}
+
+/** Prepare immutable pins without borrowing a caller's synchronous database handle. */
+export async function prepareSkillLibrarySelection(
+  inputSelections: readonly SkillLibrarySelection[],
+  options: Pick<OpenClawStateDatabaseOptions, "path" | "env">,
+  assertCurrent: () => void,
+): Promise<SkillEntry[]> {
+  assertCurrent();
+  if (!inputSelections.length) {
+    return [];
+  }
+  const capturedOptions = {
+    ...options,
+    env: cloneEnvWithPlatformSemantics(options.env ?? process.env),
+  };
+  const selections = captureSkillLibrarySelection(inputSelections);
+  const cacheKey = JSON.stringify([
+    resolveStateDir(capturedOptions.env),
+    capturedOptions.path,
+    selections,
+  ]);
+  const cached = selectedEntryCache.get(cacheKey);
+  if (cached) {
+    return [...cached];
+  }
+  if (selections.length > SKILL_LIBRARY_MAX_SELECTIONS) {
+    throw new SkillLibraryError("LIMIT", "Invalid session skill selection.");
+  }
+  const revisions = await readSkillLibrarySelectionDescriptions(selections, capturedOptions);
+  assertCurrent();
+  return cacheSkillLibrarySelection(
+    cacheKey,
+    revisions && materializeSkillLibrarySelection(selections, revisions, capturedOptions.env),
+  );
+}
+
+function materializeSkillLibrarySelection(
+  selections: readonly SkillLibrarySelection[],
+  revisions: ReturnType<typeof selectSkillLibraryRevisionMetadataBatch>,
+  env: NodeJS.ProcessEnv | undefined,
+): SkillEntry[] {
+  return selections.map((selection, index) => {
+    const revision = revisions[index];
+    if (!revision) {
+      throw new SkillLibraryError(
+        "NOT_FOUND",
+        "A pinned skill revision is unavailable; restore the library artifact or detach it explicitly.",
+      );
+    }
+    const baseDir = skillLibraryRevisionDir(selection.skillId, selection.revision, env);
+    const filePath = path.join(baseDir, "SKILL.md");
+    const opened = openRootFileSync({
+      absolutePath: filePath,
+      rootPath: baseDir,
+      boundaryLabel: "skill library revision",
+      maxBytes: SKILL_LIBRARY_MAX_FILE_BYTES,
+      rejectHardlinks: true,
+      symlinks: "reject",
     });
-  }, options);
+    if (!opened.ok) {
+      throw new SkillLibraryError(
+        "INVALID_BUNDLE",
+        "Pinned skill instructions could not be read; restore the library artifact or detach it explicitly.",
+        undefined,
+        { cause: opened.error },
+      );
+    }
+    let content: string;
+    try {
+      content = readFileDescriptorBoundedSync(opened.fd, SKILL_LIBRARY_MAX_FILE_BYTES).toString(
+        "utf8",
+      );
+    } finally {
+      fs.closeSync(opened.fd);
+    }
+    const frontmatter = parseSkillFrontmatter(content);
+    const metadata = resolveSkillManifestMetadata(frontmatter);
+    const invocation = resolveSkillInvocationPolicy(frontmatter);
+    const name = selection.name;
+    return {
+      skill: materializeSkill({
+        content,
+        frontmatter,
+        name,
+        description: revision.description,
+        baseDir,
+        filePath,
+        source: "openclaw-library",
+        sourceOptions: { source: "openclaw-library" },
+      }),
+      frontmatter,
+      invocation,
+      // Untrusted frontmatter can constrain executable eligibility, but cannot claim global credentials/config.
+      metadata: {
+        skillKey: name,
+        os: metadata?.os,
+        requires: metadata?.requires,
+      },
+      disableCommandDispatch: true,
+      syncSourceDir: baseDir,
+      syncDirName: `library-${selection.skillId}-${selection.revision}`,
+    } satisfies SkillEntry;
+  });
+}
+
+function cacheSkillLibrarySelection(cacheKey: string, entries: SkillEntry[] | undefined) {
   if (!entries) {
     throw new SkillLibraryError(
       "NOT_FOUND",

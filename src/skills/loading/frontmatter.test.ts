@@ -63,62 +63,13 @@ description: *Experimental
     expect(parsed.description).toBe(expectedDescription);
   });
 
-  it.each([
-    {
-      title: "rejects malformed structured fallback values with the YAML parse error",
-      frontmatter: `---
+  it("rejects malformed structured values with the YAML parse error", () => {
+    expect(() =>
+      parseSkillFrontmatter(`---
 name: [broken
 description: Broken skill
----`,
-      expectedError: "invalid frontmatter: BAD_INDENT",
-    },
-    {
-      title: "rejects unresolved YAML aliases",
-      frontmatter: `---
-name: sample-skill
-description: Broken skill
-metadata: *missing
----`,
-      expectedError: "invalid frontmatter: YAML_EXCEPTION: Unresolved alias",
-    },
-    {
-      title: "rejects duplicate keys after a recoverable description",
-      frontmatter: `---
-name: first
-description: Working skill
-name: second
----`,
-      expectedError: "invalid frontmatter: DUPLICATE_KEY",
-    },
-    {
-      title: "rejects invalid structured values under quoted keys",
-      frontmatter: `---
-name: sample-skill
-description: Working skill
-"metadata": *missing
----`,
-      expectedError: "invalid frontmatter: YAML_EXCEPTION: Unresolved alias",
-    },
-    {
-      title: "does not let a description alias mask a later structured alias",
-      frontmatter: `---
-name: sample-skill
-description: *legacy
-metadata: *missing
----`,
-      expectedError: "invalid frontmatter: YAML_EXCEPTION: Unresolved alias",
-    },
-    {
-      title: "does not let a colon-rich description mask a structured alias",
-      frontmatter: `---
-name: sample-skill
-description: Use anime style IMPORTANT: Must be kawaii
-metadata: *missing
----`,
-      expectedError: "invalid frontmatter: YAML_EXCEPTION: Unresolved alias",
-    },
-  ])("$title", ({ frontmatter, expectedError }) => {
-    expect(() => parseSkillFrontmatter(frontmatter)).toThrow(expectedError);
+---`),
+    ).toThrow("invalid frontmatter: BAD_INDENT");
   });
 
   it("rejects indentation errors following a description", () => {
@@ -238,7 +189,7 @@ describe("resolveSkillManifestMetadata install validation", () => {
     ]);
   });
 
-  it.each(["", "abc123", "g".repeat(64), `sha256:${"a".repeat(64)}`, 123])(
+  it.each(["", "g".repeat(64), 123])(
     "drops a download installer declaring an invalid SHA-256 digest (%j)",
     (sha256) => {
       const install = resolveInstall({

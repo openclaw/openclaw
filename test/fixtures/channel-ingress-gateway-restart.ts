@@ -137,6 +137,7 @@ const idleStartedAt = Date.now();
 await ingress.waitForIdle();
 const idleMs = Date.now() - idleStartedAt;
 const finalActivity = activity.at(-1);
+process.send?.({ type: "ingress-restart-idle" });
 
 await ingress.stop();
 releaseFirstClose();

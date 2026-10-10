@@ -5,13 +5,15 @@
   },
   "include": [
     "../../src/gateway/*/**/*.test.ts",
-    "../../src/gateway/*/**/*.test.tsx"
+    "../../src/gateway/*/**/*.test.tsx",
+    "../../src/node-host/**/*.test.ts",
+    "../../src/node-host/**/*.test.tsx",
+    "../../src/worker/**/*.test.ts",
+    "../../src/worker/**/*.test.tsx"
   ],
   "exclude": [
     "../../src/gateway/server/**/*.test.ts",
     "../../src/gateway/server/**/*.test.tsx",
-    "../../src/gateway/worker-environments/**/*.test.ts",
-    "../../src/gateway/worker-environments/**/*.test.tsx",
     "../../src/gateway/server-methods/**/*.test.ts",
     "../../src/gateway/server-methods/**/*.test.tsx"
   ]

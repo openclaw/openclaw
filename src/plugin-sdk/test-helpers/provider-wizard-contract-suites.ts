@@ -5,7 +5,6 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveProviderPluginChoice } from "../../plugins/provider-auth-choice.runtime.js";
 import {
-  buildProviderPluginMethodChoice,
   resolveProviderModelPickerEntries,
   setProviderWizardProvidersResolverForTest,
 } from "../../plugins/provider-wizard.js";
@@ -104,25 +103,6 @@ function sortedValues(values: readonly string[]) {
   return [...values].toSorted((left, right) => left.localeCompare(right));
 }
 
-function resolveExpectedModelPickerValues(providers: ProviderPlugin[]) {
-  return sortedValues(
-    providers.flatMap((provider) => {
-      const modelPicker = provider.wizard?.modelPicker;
-      if (!modelPicker) {
-        return [];
-      }
-      const explicitMethodId = modelPicker.methodId?.trim();
-      if (explicitMethodId) {
-        return [buildProviderPluginMethodChoice(provider.id, explicitMethodId)];
-      }
-      if (provider.auth.length === 1) {
-        return [provider.id];
-      }
-      return [buildProviderPluginMethodChoice(provider.id, provider.auth[0]?.id ?? "default")];
-    }),
-  );
-}
-
 function expectAllChoicesResolve(
   values: readonly string[],
   resolver: (choice: string) => ReturnType<typeof resolveProviderPluginChoice>,
@@ -217,9 +197,10 @@ export function describeProviderWizardModelPickerContract() {
     it("exposes every model-picker entry through the shared wizard layer", () => {
       const entries = resolveProviderModelPickerEntries({ config: {}, env: process.env });
 
-      expect(sortedValues(entries.map((entry) => entry.value))).toEqual(
-        resolveExpectedModelPickerValues(TEST_PROVIDERS),
-      );
+      expect(sortedValues(entries.map((entry) => entry.value))).toEqual([
+        "beta",
+        "provider-plugin:alpha:oauth",
+      ]);
       expectAllChoicesResolve(
         entries.map((entry) => entry.value),
         (choice) =>

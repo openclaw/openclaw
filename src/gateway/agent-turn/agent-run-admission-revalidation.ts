@@ -3,15 +3,51 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { registerChatAbortController } from "../chat-abort.js";
 import { errorShapeFromError } from "../error-shape.js";
 import type { readInProcessSubagentResume } from "../in-process-subagent-resume.js";
+import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { assertParentSubagentResumeCurrent } from "../session-subagent-resume.js";
+import { formatForLog } from "../ws-log.js";
 import { setAbortedAgentDedupeEntries } from "./agent-dedupe.js";
+import {
+  releasePreparedAgentRunUserTurn,
+  releasePreparedAgentRunUserTurnAfterFailure,
+  type PreparedAgentRunUserTurn,
+} from "./agent-run-user-turn.js";
 import type { AgentTurnContext, AgentTurnPrincipal } from "./types.js";
+
+/** Keep owner-provided policy failures intact across every preaccept preparation phase. */
+export function resolveAgentRunAdmissionError(
+  code: Parameters<typeof errorShapeFromError>[0],
+  error: unknown,
+): ErrorShape {
+  return error instanceof SessionMutationAuthorizationChangedError
+    ? error.error
+    : errorShapeFromError(code, error);
+}
+
+/** Join rejected input and preaccept cleanup without losing either failure. */
+export async function releaseFailedAgentRunAdmission(
+  userTurn: PreparedAgentRunUserTurn,
+  error: unknown,
+  cleanupPreaccept: () => Promise<void>,
+): Promise<never> {
+  const failure = await releasePreparedAgentRunUserTurnAfterFailure(userTurn, error, "interrupted");
+  try {
+    await cleanupPreaccept();
+  } catch (cleanupError) {
+    throw new AggregateError(
+      [failure, cleanupError],
+      `${formatForLog(failure)}; agent admission cleanup failed: ${formatForLog(cleanupError)}`,
+      { cause: cleanupError },
+    );
+  }
+  throw failure;
+}
 
 /** Revalidate the same prepared admission after each asynchronous preparation step. */
 export function createAgentRunAdmissionRevalidator(options: {
   source: {
     context: AgentTurnContext;
-    agentDedupeKeys: readonly string[];
+    getOwnedAgentDedupeKeys: () => readonly string[];
     admissionAgentId: () => string | undefined;
     runId: string;
     assertGatewayWorkAdmissionAllowed: () => void;
@@ -19,6 +55,7 @@ export function createAgentRunAdmissionRevalidator(options: {
     cfg: OpenClawConfig;
     resolvedSessionKey?: string;
     getAdmittedSessionId: () => string;
+    hasGatewayAdmissionOutcome: () => boolean;
     respondToGatewayAdmissionOutcome: () => boolean;
   };
   activeRunAbort: ReturnType<typeof registerChatAbortController>;
@@ -33,16 +70,19 @@ export function createAgentRunAdmissionRevalidator(options: {
     rejectPreaccept,
     cleanupPreaccept,
   } = options;
-  return (): true | Promise<undefined> => {
+  const publishAborted = () => {
     if (activeRunAbort.controller.signal.aborted) {
       setAbortedAgentDedupeEntries({
         dedupe: params.context.dedupe,
-        keys: params.agentDedupeKeys,
+        keys: params.getOwnedAgentDedupeKeys(),
         agentId: params.admissionAgentId(),
         runId: params.runId,
         stopReason: activeRunAbort.entry?.abortStopReason ?? "rpc",
       });
     }
+  };
+  return (userTurn?: PreparedAgentRunUserTurn): true | Promise<undefined> => {
+    const disposition = parentResume ? "cancelled" : "interrupted";
     try {
       params.assertGatewayWorkAdmissionAllowed();
       if (parentResume) {
@@ -57,11 +97,33 @@ export function createAgentRunAdmissionRevalidator(options: {
         });
       }
     } catch (err) {
-      return rejectPreaccept(errorShapeFromError(ErrorCodes.INVALID_REQUEST, err));
+      return (async () => {
+        const failure = userTurn
+          ? await releasePreparedAgentRunUserTurnAfterFailure(userTurn, err, disposition)
+          : err;
+        if (failure === err) {
+          publishAborted();
+        }
+        return rejectPreaccept(resolveAgentRunAdmissionError(ErrorCodes.INVALID_REQUEST, failure));
+      })();
     }
-    if (!params.respondToGatewayAdmissionOutcome()) {
+    if (!activeRunAbort.controller.signal.aborted && !params.hasGatewayAdmissionOutcome()) {
       return true;
     }
-    return cleanupPreaccept(true).then(() => undefined);
+    return (async () => {
+      try {
+        if (userTurn) {
+          await releasePreparedAgentRunUserTurn(userTurn, disposition);
+        }
+        // Abort replay must not publish before pending input has durably settled.
+        publishAborted();
+        params.assertGatewayWorkAdmissionAllowed();
+      } catch (error) {
+        return rejectPreaccept(resolveAgentRunAdmissionError(ErrorCodes.INVALID_REQUEST, error));
+      }
+      const admissionReleased = params.respondToGatewayAdmissionOutcome();
+      await cleanupPreaccept(admissionReleased);
+      return undefined;
+    })();
   };
 }

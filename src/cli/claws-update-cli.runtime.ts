@@ -1,5 +1,6 @@
 import { assertExperimentalClawsEnabled } from "../claws/experimental.js";
 import { readClawStatus } from "../claws/lifecycle-state.js";
+import { withAuthoredAgentRoster } from "../claws/migrate-validation.js";
 import { preflightClawPackage } from "../claws/packages.js";
 import { readClawManifestFile } from "../claws/reader.js";
 import { CLAW_OUTPUT_STABILITY } from "../claws/types.js";
@@ -61,8 +62,10 @@ export async function runClawsUpdateCommand(
     });
     return;
   }
-  const config = listedMcpServers.config;
-
+  const config = withAuthoredAgentRoster(
+    listedMcpServers.runtimeConfig ?? listedMcpServers.config,
+    listedMcpServers.sourceConfigBeforeMigrations,
+  );
   let source = opts.from;
   if (!source) {
     const database = await openExistingOpenClawStateDatabaseReadOnly();

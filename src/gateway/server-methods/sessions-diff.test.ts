@@ -6,18 +6,15 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import * as execRunner from "../../process/exec-runner.js";
 import { ensureSessionDiffBaseline } from "../../sessions/session-diff-baseline.js";
-import {
-  parseNameStatusZ,
-  parseNumstatZ,
-  splitPatchByFile,
-} from "../../sessions/session-diff-parser.js";
+import { parseNumstatZ, splitPatchByFile } from "../../sessions/session-diff-parser.js";
 import { captureSessionDiffBaseline } from "../../sessions/session-diff.js";
 import { loadSessionDiff, sessionsDiffHandlers } from "./sessions-diff.js";
 
 const hoisted = vi.hoisted(() => ({
-  loadSessionEntryReadOnly: vi.fn(),
+  readSessionEntryReadOnlyInWorker: vi.fn(),
   loadSessionEntry: vi.fn(),
   patchSessionEntryCore: vi.fn(),
   resolveAgentWorkspaceDir: vi.fn(),
@@ -35,9 +32,14 @@ vi.mock("../../agents/agent-scope.js", async (importOriginal) => ({
   resolveDefaultAgentId: hoisted.resolveDefaultAgentId,
 }));
 
+// mock-isolation: Diff RPC cases control session persistence independently of throwaway Git repos.
 vi.mock("../../config/sessions/session-accessor.js", () => ({
-  loadSessionEntryReadOnly: hoisted.loadSessionEntryReadOnly,
   patchSessionEntryCore: hoisted.patchSessionEntryCore,
+}));
+
+// mock-isolation: Baseline policy uses the supplied session row without opening a read worker.
+vi.mock("../../config/sessions/session-entry-read-runtime.js", () => ({
+  readSessionEntryReadOnlyInWorker: hoisted.readSessionEntryReadOnlyInWorker,
 }));
 
 function git(cwd: string, ...args: string[]): string {
@@ -69,15 +71,6 @@ function mockSession(spawnedCwd: string, entry: Record<string, unknown> = {}): v
 }
 
 describe("sessions.diff parsers", () => {
-  it("parses name-status -z including renames", () => {
-    const entries = parseNameStatusZ("M\0a.txt\0R100\0old.txt\0new.txt\0D\0gone.txt\0");
-    expect(entries).toEqual([
-      { path: "a.txt", status: "modified" },
-      { path: "new.txt", oldPath: "old.txt", status: "renamed" },
-      { path: "gone.txt", status: "deleted" },
-    ]);
-  });
-
   it("parses numstat -z including rename and binary entries", () => {
     // NUL separators written as \u0000: a bare \0 before a digit would
     // parse as an octal escape.
@@ -169,6 +162,22 @@ describe("loadSessionDiff", () => {
     expect(result.unavailableReason).toBe("not_git");
   });
 
+  it.each([
+    { pendingWorktree: { titleSource: "New checkout" } },
+    { pendingProjectGitUrl: "https://github.com/example/project.git" },
+  ])("keeps pending checkouts separate from the agent workspace: %j", async (pending) => {
+    initRepo(repoRoot);
+    fs.writeFileSync(path.join(repoRoot, "AGENTS.md"), "Agent workspace bootstrap\n");
+    mockSession(repoRoot, { spawnedCwd: undefined, ...pending });
+
+    expect(await loadSessionDiff({ sessionKey: "agent:main:s1" })).toEqual({
+      sessionKey: "agent:main:s1",
+      files: [],
+      additions: 0,
+      deletions: 0,
+    });
+  });
+
   // Diff and baseline reads run inside the Gateway process against user
   // checkouts, so a checkout-configured core.fsmonitor command (or hook) must
   // never execute — same invariant as the publication git transport.
@@ -251,7 +260,10 @@ describe("loadSessionDiff", () => {
       client: null,
       isWebchatConnect: () => false,
       respond: (ok, payload, error) => calls.push({ ok, payload, error }),
-      context: { getRuntimeConfig: () => cfg } as never,
+      context: {
+        getRuntimeConfig: () => cfg,
+        logGateway: createSubsystemLogger("test/sessions-diff"),
+      } as never,
     });
 
     expect(calls).toEqual([
@@ -260,7 +272,10 @@ describe("loadSessionDiff", () => {
         payload: expect.objectContaining({ root: repoRoot }),
       }),
     ]);
-    expect(hoisted.loadSessionEntry).toHaveBeenCalledWith("global", { agentId: "ops" });
+    expect(hoisted.loadSessionEntry).toHaveBeenCalledWith(
+      "global",
+      expect.objectContaining({ agentId: "ops" }),
+    );
     expect(hoisted.resolveAgentWorkspaceDir).toHaveBeenCalledWith(cfg, "ops");
   });
 
@@ -1029,9 +1044,10 @@ describe("ensureSessionDiffBaseline", () => {
       sessionId: "existing-session",
       updatedAt: Date.now(),
     };
-    hoisted.loadSessionEntryReadOnly.mockReturnValue(entry);
+    hoisted.readSessionEntryReadOnlyInWorker.mockResolvedValue(entry);
 
     const result = await ensureSessionDiffBaseline({
+      agentId: "main",
       cwd: "/unused",
       entry,
       isNewSession: false,

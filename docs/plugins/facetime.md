@@ -1,70 +1,68 @@
 ---
-summary: "Experimental FaceTime carrier for a private OpenClaw voice session on a dedicated Mac"
+summary: "Set up FaceTime voice calls with your OpenClaw agent on a Mac"
 read_when:
   - You want to configure FaceTime calls with your OpenClaw agent
-  - You are evaluating or developing the FaceTime plugin
-  - You need its owner, driver, or private-API requirements
+  - You need to install the native helper and configure Mac audio
 title: "FaceTime plugin"
 sidebarTitle: "FaceTime (experimental)"
+doc-schema-version: 1
 ---
 
-The FaceTime plugin is an experimental external plugin for an Apple Silicon Mac.
-It can answer configured owner handles, place an explicitly
-approved outgoing call, bridge call audio to a realtime provider, consult the
-configured OpenClaw agent, and request carrier hangup.
+Connect FaceTime to your OpenClaw agent for two-way voice conversations. The
+plugin automatically answers calls from your configured handles and lets your
+agent call you with approval. A realtime voice provider handles speech, and your
+OpenClaw agent handles requests that need tools or memory.
 
-**Status: experimental, disabled by default.** Configure this voice plugin under
-`plugins.entries.facetime`. It does not use iMessage channel configuration.
-Run the Gateway and native helper in the same signed-in Mac user session.
-The realtime provider handles speech; your configured agent handles calendar,
-memory, and other tool-backed requests through its normal tools and permissions.
+**Status: experimental, disabled by default.** Run the Gateway and native helper
+on the same Mac, in the same signed-in user session. Configure FaceTime under
+`plugins.entries.facetime`, not as a messaging channel.
 
 <Warning>
-This plugin injects a helper into protected Apple call applications and uses
-private APIs. It is appropriate only on a dedicated, patched, physically
-controlled Mac whose operator accepts that security boundary. The plugin never
-changes System Integrity Protection, developer-tools policy, TCC permissions,
-or System Settings automatically.
+FaceTime integration uses private Apple APIs and injects a helper into Apple call
+applications. It requires reduced SIP debugging protections. Use a dedicated,
+up-to-date Mac that you physically control. OpenClaw does not change SIP,
+developer-tools access, or macOS privacy permissions automatically.
 </Warning>
 
 ## Requirements
 
-- Apple Silicon and macOS 14.4 or later
-- OpenClaw 2026.9.4 or later
-- signed native helpers from `openclaw/openclaw-facetime`
-- full Xcode at `/Applications/Xcode.app`
-- FaceTime signed in for the logged-in user
-- a configured realtime voice provider
-- consent from everyone whose audio will be processed
+- An Apple Silicon Mac running macOS 14.4 or later.
+- OpenClaw 2026.9.4 or later.
+- FaceTime signed in to your Apple Account on the Gateway Mac.
+- Full Xcode installed at `/Applications/Xcode.app`.
+- The FaceTime plugin and matching signed native companion.
+- A realtime voice provider with working credentials.
+- An administrator account for the audio driver and Mac setup.
 
-The setup below requires published plugin and matching signed native artifacts.
-If the npm package or Homebrew formula is unavailable, stop at installation and
-wait for the native release owners. A working development installation is not
-proof that the public release is available.
+Everyone on a call must consent to having their audio processed by the voice
+provider.
+
+Keep calls one-to-one. The configured handle authorizes the call; the integration
+does not authenticate each speaker or check the membership of a group call. Do
+not add other participants to a call with agent tool access.
 
 ## Install the plugin and native companion
 
-Install the plugin and its signed and notarized native helpers, then restart the
-Gateway:
+Run these commands on the Gateway Mac:
 
 ```bash
 openclaw plugins install @openclaw/facetime
 brew install openclaw/tap/openclaw-facetime
-openclaw gateway restart
 ```
 
-The plugin requires native protocol version 1. Before staging the injected
-helper, it requires the exact `Developer ID Application: OpenClaw Foundation
-(FWJYW4S8P8)` identity and an accepted Apple notarization ticket. It fails
-closed when the installed package is missing, incompatible, or signed by any
-other identity.
+The native companion is maintained in
+[openclaw/openclaw-facetime](https://github.com/openclaw/openclaw-facetime).
+Use its matching signed release. If the package or formula is not available,
+installation cannot continue until it is published.
 
 ## Configure owner identities
 
-Every accepted handle receives owner authority. There is no guest tier.
-Use only your own FaceTime email addresses or full international phone numbers.
-Merge this example into your existing configuration; preserve other plugin
-entries and append `facetime` to an existing `plugins.allow` list.
+Add your FaceTime email address or full international phone number to
+`ownerHandles`. Only listed handles can use the integration. Every listed handle
+has owner authority; there is no guest tier.
+
+Merge this into your OpenClaw configuration. Preserve existing plugin entries
+and add `facetime` to your existing `plugins.allow` list if you use one.
 
 ```json5
 {
@@ -76,7 +74,6 @@ entries and append `facetime` to an existing `plugins.allow` list.
         config: {
           ownerHandles: ["owner@example.com", "+12065550123"],
           realtime: {
-            // Pin the provider to keep automatic selection from changing it.
             provider: "openai",
             sessionKey: "main",
             toolPolicy: "owner",
@@ -88,21 +85,17 @@ entries and append `facetime` to an existing `plugins.allow` list.
 }
 ```
 
-`realtime.provider`, `realtime.model`, and `realtime.voice` are optional
-overrides. When omitted, the registered realtime voice providers own provider
-auto-selection, authentication, model defaults, and voice defaults. The OpenAI
-provider above is an explicit choice, not a FaceTime plugin default. Leave
-`model` and `voice` unset to use that provider's defaults, or set them explicitly
-to supported values when you need a consistent voice.
-
 ### Configure voice credentials
 
-The realtime provider needs its own usable credentials. A working text-agent
-login does not by itself prove realtime voice authentication is configured.
-Use the provider's normal authentication or an existing
-[SecretRef](/gateway/secrets) at
-`plugins.entries.facetime.config.realtime.providers.openai.apiKey`.
-For an environment-backed key, the additional configuration is:
+The example selects OpenAI for realtime speech. Voice credentials are separate
+from your text agent's login. Configure credentials supported by the selected
+realtime provider; a text-agent subscription alone may not provide voice access.
+
+Provider authentication uses the agent selected by `realtime.sessionKey`. For
+OpenAI, that agent's API-key auth profile can supply voice credentials when no
+plugin-specific API key is configured.
+
+For an environment-backed OpenAI API key, merge this additional configuration:
 
 ```json5
 {
@@ -129,197 +122,232 @@ For an environment-backed key, the additional configuration is:
 }
 ```
 
-Make `OPENAI_API_KEY` available to the Gateway process, not just an interactive
-terminal. If you already have a file-backed or other supported SecretRef, reuse
-it instead of copying the key into configuration. Never share credential values
-in logs or support reports.
+Make `OPENAI_API_KEY` available to the Gateway process, not just your terminal.
+You can also reuse an existing file-backed or other supported
+[SecretRef](/gateway/secrets) instead of storing the key in configuration.
 
 ### Choose the agent and tool access
 
-`realtime.sessionKey: "main"` selects the default agent. To select another
-configured agent, use an agent-qualified key such as `agent:assistant:main`,
-replacing `assistant` with its agent ID. Each call gets a separate FaceTime
-consult session for that agent. It can inherit context from the source session
-without appending the call's turns to that source chat.
-The agent's workspace, tools, authentication, and approval policies still apply.
-Configure and verify calendar access for that agent before testing it by phone.
+`realtime.sessionKey` defaults to `main`, which selects the default agent. To
+choose another agent, use an agent-qualified key such as `agent:assistant:main`,
+replacing `assistant` with its configured ID.
 
-`realtime.toolPolicy` accepts `safe-read-only`, `owner`, or `none`. An invalid
-explicit value fails configuration; it is never upgraded to `owner`.
+Each call uses a separate consult session. It can inherit context from the
+selected source session without adding the call's turns to that chat. The
+agent's workspace, tool credentials, and approval policies still apply.
 
-- `owner` uses the selected agent's normal tool policy and approval checks. Use
-  this for your existing calendar and other plugin tools.
-- `safe-read-only` restricts consults to a fixed set of file, search, web-fetch,
-  and memory tools. It does not include arbitrary read-only calendar plugins.
-- `none` disables agent consults. Voice conversation and call control remain,
-  but the voice provider cannot retrieve your calendar through the agent.
+Choose a `realtime.toolPolicy`:
 
-Outgoing targets must match `ownerHandles`. Agent-initiated calls through
-`facetime_call` require one-shot approval; the Gateway dial method below is an
-explicit operator action requiring `operator.write` access.
-A matching phone number is never sufficient to grant owner authority: the
-native helper and plugin both require a provider-classified FaceTime transport
-and reject cellular, baseband, Wi-Fi Calling/PSTN, emergency, and unknown calls.
+| Value             | Behavior                                                                                                                             |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `owner` (default) | Use the selected agent's normal tools and approval checks.                                                                           |
+| `safe-read-only`  | Limit agent requests to a fixed set of file, search, web-fetch, and memory tools. Other plugin tools are not included automatically. |
+| `none`            | Disable agent consults. Voice conversation and call control remain available.                                                        |
 
-Prototype builds used `whitelistHandles`, `helperHost`, `helperPort`, and
-`realtime.brain`. Run `openclaw doctor --fix` once after upgrading. Doctor moves
-the old caller list to `ownerHandles` and removes the retired helper and brain
-keys before strict plugin validation.
+Invalid policy values are rejected. Only add your own identities to
+`ownerHandles`, even when choosing a restricted tool policy.
+
+### Choose a voice
+
+Set `realtime.provider` explicitly to keep provider selection consistent.
+`realtime.model` and `realtime.voice` are optional; when omitted, the selected
+provider supplies its defaults. Set a supported voice explicitly if you do not
+want to follow changes to the provider's default voice.
+
+If `realtime.provider` is omitted, the registered realtime providers select the
+provider automatically. OpenAI is an example here, not the plugin's default.
 
 ## Prepare the Mac
 
-The helper requires debugger attachment to FaceTime and Phone. Setup reports
-developer-tools and SIP debugging restrictions, but does not repair them.
-Review the security tradeoff and manual recovery steps in
-[FaceTime recovery and removal](/plugins/facetime-recovery).
+After saving your configuration, restart the Gateway and run setup:
 
-If you accept that tradeoff, use an interactive administrator session to enable
-developer-tools access:
+```bash
+openclaw gateway restart
+openclaw gateway call facetime.setup --json
+```
+
+Setup reports required actions and can start the native helper, open the call
+apps, and attach the helper. It does not dial a call.
+
+### Enable developer-tools access
+
+From an interactive administrator session, run:
 
 ```bash
 sudo /usr/sbin/DevToolsSecurity -enable
 ```
 
-If setup reports that SIP debugging restrictions block attachment, shut down
-the Mac, hold the power button for startup options, choose **Options**, and
-open **Utilities > Terminal** in macOS Recovery. Run:
+### Allow debugger attachment
 
-```bash
-csrutil enable --without debug
-```
+The native helper needs to attach to FaceTime and Phone. If setup reports that
+SIP debugging restrictions block attachment:
 
-Reboot into your normal user session and rerun `facetime.setup`. This reduces
-macOS security by allowing debugger attachment while retaining the other SIP
-protections. Do not disable all of SIP or change it to troubleshoot unrelated
-credential or driver errors. Complete any reported macOS permission prompts
-from the same user session that runs the Gateway.
+1. Shut down the Mac.
+2. Hold the power button until startup options appear, then choose **Options**.
+3. Open **Utilities > Terminal** in macOS Recovery.
+4. Run:
 
-Install or update the local paired audio driver through the admin-scoped
-methods:
+   ```bash
+   csrutil enable --without debug
+   ```
+
+5. Restart into your normal user session and rerun `facetime.setup`.
+
+This disables SIP's debugging restriction while retaining its other protections.
+Do not disable all of SIP or change it to resolve unrelated authentication or
+audio-driver errors. If setup cannot determine SIP status, run `csrutil status`
+and inspect the result before making changes.
+
+See [FaceTime recovery and removal](/plugins/facetime-recovery) to restore the
+standard security settings when you remove the integration.
+
+### Grant permissions and allow incoming calls
+
+Complete macOS permission prompts from the same user session that runs the
+Gateway. Check **System Settings > Privacy & Security > Screen & System Audio
+Recording** if preflight reports that app-audio capture is blocked.
+
+Setup also checks whether Focus or notification settings can block calls. Allow
+FaceTime calls through your active Focus, and enable notifications while sharing
+or mirroring the display if setup reports that setting is blocking notifications.
+
+### Install the audio driver
+
+Run the admin-only installer and complete its administrator prompt:
 
 ```bash
 openclaw gateway call facetime.installDriver --json
-openclaw gateway call facetime.updateDriver --json
 openclaw gateway call facetime.driverStatus --json
 ```
 
-The administrator phase downloads pinned BlackHole v0.7.1 source, verifies its
-fixed SHA-256, and builds it with fixed options in a root-only temporary
-directory. Before compilation it requires the canonical
-`/Applications/Xcode.app` bundle, its complete sealed contents, and the selected
-`xcodebuild`, `clang`, linker, and libtool binaries to be Apple-signed,
-root-owned, and not group/world writable. It does not accept a caller-built
-driver, digest, or compiler path.
-If Xcode fails this trust check, reinstall Xcode from Apple into `/Applications`
-through an administrator-managed installation; the plugin does not change
-Xcode ownership, permissions, or signatures. Driver replacement remains
-transactional: failure restores the previous driver, and Core Audio restarts
-only after a committed replacement. Generated GPL artifacts are not
-distributed with OpenClaw.
+The installer builds a pinned BlackHole-based driver locally using Xcode. It
+checks the Xcode installation before building and does not accept a manually
+built driver. If installation fails, follow the reported error or the
+[driver recovery steps](/plugins/facetime-recovery#recover-a-failed-driver-update).
 
-Configure FaceTime and Phone to use:
+### Select the call audio devices
 
-- microphone: `OpenClaw-Mic`
-- output: physical speakers or headphones
+In FaceTime, and in Phone when it handles FaceTime Audio, select:
 
-Do not use an aggregate, multi-output, BlackHole, `OpenClaw-Mic`, or
-`OpenClaw-Feed` device as call output.
+- **Microphone:** `OpenClaw-Mic`.
+- **Output:** physical speakers or headphones.
+
+Do not select `OpenClaw-Mic`, `OpenClaw-Feed`, BlackHole, an aggregate device, or a
+multi-output device as the call output.
 
 ## Inspect and activate
 
-After saving configuration, restart the Gateway when no call is active, then
-inspect the plugin without placing a call:
-
-```bash
-openclaw gateway restart
-openclaw gateway call facetime.status --json
-```
-
-`facetime.status`, model `get_status`, and model `check_readiness` perform
-static inspection when the runtime is inactive. They do not compile helpers,
-open apps, inject, install, or start call media.
-
-Explicit live inspection and repair are admin actions:
+Run setup again after completing the Mac and driver steps, then check audio
+readiness:
 
 ```bash
 openclaw gateway call facetime.setup --json
 openclaw gateway call facetime.preflight --json
+openclaw gateway call facetime.status --json
 ```
 
-Runtime flags such as `audioReady`, `realtimeActive`,
-`processInputVerified`, and `processOutputSuppressed` describe internal stages.
-They do not prove that a remote participant heard audio. Only a consensual live
-round trip can prove remote audibility, and no such call is run automatically.
+Resolve reported setup or preflight errors before making a call. These commands
+do not dial anyone. `setup` and `preflight` are admin operations that can perform
+live setup and audio checks. `status` can inspect an inactive runtime without
+opening apps, staging helpers, or starting call audio.
 
 ## Verify your first call
 
-1. Obtain the participant's consent and confirm no call or dial is already active.
-2. Ask your agent to call one of the configured owner handles using `facetime_call`
-   and approve the exact outgoing call. Start with FaceTime Audio.
-3. Answer and wait for the greeting before speaking. Confirm that you hear it on
-   the receiving device, not just the Gateway Mac's speakers.
-4. Ask a simple question, then a read-only tool question such as your calendar.
-   Wait for the actual answer; an acknowledgement such as "one sec" is not success.
-5. Ask to hang up, then check `facetime.status` for no active or pending call.
+Start with FaceTime Audio:
 
-Do not treat a successful preflight as a successful call. Record greeting,
-two-way audio, the tool-backed answer, and closure separately. Obtain fresh
-consent before calling again.
+1. Confirm that the receiving device is available and its user consents to the call.
+2. Ask your agent to call one of your configured owner handles, then approve
+   the outgoing call.
+3. Answer on the receiving device and check that you can hear the greeting and
+   hold a two-way conversation.
+4. Ask the agent to hang up, or end the call yourself.
+
+The agent uses `facetime_call` and requests one-shot approval before dialing.
+You can also call the Gateway Mac's FaceTime account from a configured owner
+handle.
 
 ## Place and end calls
+
+To dial directly as a Gateway operator:
 
 ```bash
 openclaw gateway call facetime.dial \
   --params '{"handle":"owner@example.com","mode":"audio"}' \
   --json
-
-openclaw gateway call facetime.hangup --json
 ```
 
-The caller-generated dial identity remains in the helper's process-local
-correlation state and plugin SQLite state. It is not stamped into Apple's call
-object. After Gateway restart, the plugin adopts only a call correlated by the
-exact persisted dial identity, UUID alias, or proxy identity.
+The target must be in `ownerHandles`. Direct dialing requires `operator.write`
+access and counts as an explicit operator action.
 
-Hangup acknowledgement means only that termination was requested. The plugin
-keeps local suppression until a native ended event or stable complete-topology
-absence proves closure. On shutdown or capture loss, unproven closure escalates
-to the exact authenticated carrier process before the tap is released.
+To end a call and check its status:
+
+```bash
+openclaw gateway call facetime.hangup --json
+openclaw gateway call facetime.status --json
+```
+
+Wait until status shows no active or pending call before starting another.
+A hangup acknowledgement means the request was sent, not that the call has
+already ended.
+
+A pending outbound dial reserves the call slot, so incoming calls are not
+automatically answered until it finishes or its cancellation is confirmed. If a
+helper disconnects or reports an uncertain dial outcome, the pending state stays
+visible while OpenClaw reconciles the call.
+
+## Update the integration
+
+After updating the plugin and native companion, check `facetime.driverStatus`.
+If the driver is outdated, update it from an interactive administrator session:
+
+```bash
+openclaw gateway call facetime.updateDriver --json
+```
+
+If upgrading a prototype configuration, run `openclaw doctor --fix`. Doctor
+migrates `whitelistHandles` to `ownerHandles` and removes the retired
+`helperHost`, `helperPort`, and `realtime.brain` settings.
 
 ## Remove the integration
 
-Use the explicit admin uninstall, then follow the app-restart and SIP recovery
-steps in [FaceTime recovery and removal](/plugins/facetime-recovery):
+End any active call, then run:
 
 ```bash
 openclaw gateway call facetime.uninstall --json
+openclaw plugins disable facetime
 ```
+
+Follow [FaceTime recovery and removal](/plugins/facetime-recovery) to restart the
+Apple call apps, check that the audio devices are removed, and restore SIP.
 
 ## Limits
 
-- one managed call at a time
-- FaceTime video and Phone-owned FaceTime Audio require separate live proof
-- private numeric call statuses use one versioned mapping; unknown states fail closed
-- playback drain is a host-side timing estimate after PCM reaches SoX; it does not prove Core Audio consumption or remote delivery
-- no FaceTime-specific realtime-model fallback; the selected provider owns its defaults
-- tool-backed answers can take substantially longer than greetings; consult latency remains an experimental limitation
-- successful calls on one configured Mac do not establish clean-install or repeat-call reliability
+- One managed call at a time.
+- FaceTime calls only. Cellular, Wi-Fi Calling/PSTN, emergency, and unrecognized
+  call types are rejected, even when the number matches an owner handle.
+- Start with FaceTime Audio. Video and Phone-hosted FaceTime Audio remain
+  experimental and may behave differently across macOS versions.
+- Requests that use the agent's tools can take longer than ordinary voice replies.
+- There is no FaceTime-specific realtime model fallback; provider behavior and
+  defaults come from the selected realtime provider.
 
 ## Troubleshooting
 
-| Symptom                                                          | Check                                                                                                                                         |
-| ---------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| Voice changes unexpectedly                                       | Set `realtime.provider` explicitly and check that provider's credentials. Pin a supported `voice` if you do not want its default.             |
-| Greeting works but calendar fails                                | Verify the selected agent's calendar tool and authentication. Voice credentials and calendar credentials are separate.                        |
-| "One sec" followed by a long wait                                | Inspect Gateway and agent-session timings. Separate agent/model turns from calendar-tool execution; do not redial while the call is active.   |
-| No greeting or audio comes from the Mac                          | Check FaceTime/Phone microphone selection, physical output, setup and preflight results. Internal audio flags do not prove remote audibility. |
-| Missing helper, failed signature check, or incompatible protocol | Install the matching signed native release. Do not bypass signature checks or substitute an arbitrary local build.                            |
-| Incomplete helper topology or unknown native status              | Check `facetime.status` for closure, then inspect the exact setup/preflight failure. Do not repeatedly dial or weaken carrier checks.         |
-| Xcode trust or driver installation fails                         | Follow [FaceTime recovery and removal](/plugins/facetime-recovery#recover-a-failed-driver-update).                                            |
+| Symptom                                      | What to check                                                                                                                                          |
+| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Plugin does not start                        | Confirm that it is enabled, `ownerHandles` is nonempty, and the Gateway runs in the signed-in Mac user session.                                        |
+| Native helper is missing or rejected         | Install the matching signed, notarized native companion. Do not bypass its signature or protocol checks.                                               |
+| Setup reports debugger attachment is blocked | Check developer-tools access and SIP debugging status in [Prepare the Mac](/plugins/facetime#prepare-the-mac).                                         |
+| Audio driver installation fails              | Verify full Xcode is installed at `/Applications/Xcode.app`, then follow [driver recovery](/plugins/facetime-recovery#recover-a-failed-driver-update). |
+| No greeting or one-way audio                 | Check the microphone and physical output selection in the Apple call app, then rerun setup and preflight.                                              |
+| Voice authentication fails                   | Check the selected realtime provider's credentials in the Gateway process. A text-agent login is not sufficient for every voice provider.              |
+| Voice changes unexpectedly                   | Set `realtime.provider` and a supported `realtime.voice` explicitly.                                                                                   |
+| Voice works but agent tools do not           | Check `realtime.sessionKey`, `realtime.toolPolicy`, and the selected agent's tool credentials and approvals.                                           |
+| Slow tool-backed responses                   | Use [Gateway logs](/logging) and [session inspection](/cli/sessions) to distinguish agent response time from tool execution time.                      |
+| Call does not end                            | Check `facetime.status` before dialing again. Use the Apple call app to end the call if needed.                                                        |
 
-Use [Gateway logs](/logging) and [session inspection](/cli/sessions) to diagnose
-failures. Remove phone numbers, calendar contents, credentials, and private
-transcripts before sharing evidence.
+Remove account identifiers, credentials, and private conversation content before
+sharing logs.
 
 ## Related
 

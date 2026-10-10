@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 363407,
-  "reason": "Maintainer-approved measured refresh for #152240: the reviewed tooltip repair measured 363407 B startup gzip with Vite 8.3.0/Pako 3.0.1 on Node 26.8.2; a subsequent canonical build measured 363421 B, within the existing 64 B variance allowance. Pristine main 95b8e0335450 measured 363276 B; repaired raw startup JavaScript is 825 B smaller. The 355 KiB committed-baseline cap and existing 512 B growth / 64 B variance allowances are unchanged.",
-  "updatedAt": "2026-09-19"
+  "startupJsGzipBytes": 374285,
+  "reason": "Personal backgrounds: Peter authorized fix and landing on 2026-10-10 after the scoped 1,407 B (0.38%) cap proposal. Paired candidate measured 374,285 B before the final deferred-drain repair and 374,327 B afterward; the 42 B difference stays within the existing 512 B growth allowance. Retain the 64 B build-variance allowance and all request, CSS, asset, and route budgets.",
+  "updatedAt": "2026-10-10"
 }

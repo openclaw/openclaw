@@ -4,7 +4,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { registerGatewayInstallationReplacementHandler } from "../gateway/stale-install.js";
 import { isRetryableDeliveryNotSentError } from "../infra/delivery-recovery.shared.js";
 import { PlatformMessageNotDispatchedError } from "../infra/outbound/deliver-types.js";
-import { deliverInboundReplyWithMessageSendContext } from "./channel-outbound.js";
+import {
+  createStructuredOutboundPayloadPlan,
+  deliverInboundReplyWithMessageSendContext,
+  deliverStructuredInboundReplyWithMessageSendContext,
+} from "./channel-outbound.js";
 
 const params: Parameters<typeof deliverInboundReplyWithMessageSendContext>[0] = {
   cfg: {},
@@ -15,7 +19,18 @@ const params: Parameters<typeof deliverInboundReplyWithMessageSendContext>[0] = 
   info: { kind: "final" },
 };
 
-describe("durable reply runtime replacement", () => {
+describe.each(["raw", "prepared"] as const)("durable reply runtime replacement (%s)", (mode) => {
+  function deliver() {
+    if (mode === "raw") {
+      return deliverInboundReplyWithMessageSendContext(params);
+    }
+    const { payload, ...context } = params;
+    const [plan] = createStructuredOutboundPayloadPlan([payload]);
+    if (!plan) {
+      throw new Error("Expected a sendable synthetic plan");
+    }
+    return deliverStructuredInboundReplyWithMessageSendContext({ ...context, plan });
+  }
   let stopObserving: (() => void) | undefined;
   afterEach(() => {
     stopObserving?.();
@@ -39,9 +54,7 @@ describe("durable reply runtime replacement", () => {
       throw missingChunk;
     });
 
-    const error = await deliverInboundReplyWithMessageSendContext(params).catch(
-      (cause: unknown) => cause,
-    );
+    const error = await deliver().catch((cause: unknown) => cause);
     expect(error).toBeInstanceOf(PlatformMessageNotDispatchedError);
     expect(isRetryableDeliveryNotSentError(error)).toBe(true);
     expect(onReplacement).toHaveBeenCalledExactlyOnceWith(
@@ -58,9 +71,12 @@ describe("durable reply runtime replacement", () => {
       deliverInboundReplyWithMessageSendContextCore: async () => {
         throw deliveryFailure;
       },
+      deliverStructuredInboundReplyWithMessageSendContextCore: async () => {
+        throw deliveryFailure;
+      },
     }));
 
-    await expect(deliverInboundReplyWithMessageSendContext(params)).rejects.toBe(deliveryFailure);
+    await expect(deliver()).rejects.toBe(deliveryFailure);
     expect(isRetryableDeliveryNotSentError(deliveryFailure)).toBe(false);
   });
 });

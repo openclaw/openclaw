@@ -16,6 +16,8 @@ import {
   requireRecord,
 } from "./chat-flow.test-support.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
+import { waitForSessionRosterHydration } from "./session-management.test-support.ts";
+import { closeSidebarMenu, openSidebarMenu } from "./sidebar-session-menu.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 const rosterMatch = { includeGlobal: true };
@@ -81,13 +83,43 @@ suite.define(() => {
           ),
         )
         .toBe(true);
+      const narrationText = "Checking the running session";
+      await gateway.emitGatewayEvent("chat", {
+        sessionKey: secondKey,
+        runId: "run-second",
+        state: "delta",
+        message: { role: "assistant", content: [{ type: "text", text: narrationText }] },
+      });
       await gateway.emitGatewayEvent("agent", {
         sessionKey: secondKey,
         runId: "run-second",
         stream: "tool",
-        data: { name: "bash" },
+        data: { name: "bash", toolCallId: "sidebar-tool", phase: "start" },
       });
-      await secondRow.getByText("Using bash").waitFor();
+      await gateway.emitGatewayEvent("agent", {
+        sessionKey: secondKey,
+        runId: "run-second",
+        stream: "item",
+        data: {
+          kind: "tool",
+          itemId: "tool:sidebar-tool",
+          toolCallId: "sidebar-tool",
+          name: "bash",
+          phase: "update",
+          title: "Shell",
+          progressText: "Checking the running session",
+        },
+      });
+      const narration = secondRow.getByText("Checking the running session", { exact: true });
+      const tool = secondRow.getByRole("img", { name: "Tool: bash", exact: true });
+      await narration.waitFor();
+      await tool.waitFor();
+      expect(
+        await secondRow.locator(".sidebar-recent-session__title-row .sidebar-session-tool").count(),
+      ).toBe(0);
+      expect(
+        await secondRow.locator(".sidebar-recent-session__details .sidebar-session-tool").count(),
+      ).toBe(1);
       const heightBefore = await secondRow.evaluate((row) => row.getBoundingClientRect().height);
       if (captureUiProofEnabled) {
         await page.waitForTimeout(800);
@@ -96,15 +128,14 @@ suite.define(() => {
             path.join(suite.artifactDir, "sidebar-subtitle-stability"),
             "01-running-before-open.png",
           ),
-          await takeControlUiElementScreenshot(page, secondRow, [
-            secondRow.getByText("Using bash"),
-          ]),
+          await takeControlUiElementScreenshot(page, secondRow, [narration, tool]),
         );
       }
 
       await secondRow.locator("a.sidebar-recent-session__link").click();
       await expect.poll(() => secondRow.getAttribute("class")).toContain("--active");
-      await secondRow.getByText("Using bash").waitFor();
+      await narration.waitFor();
+      await tool.waitFor();
       const heightAfter = await secondRow.evaluate((row) => row.getBoundingClientRect().height);
 
       // Sub-pixel tolerance: getBoundingClientRect returns 1/65536 fractions that
@@ -118,9 +149,7 @@ suite.define(() => {
             path.join(suite.artifactDir, "sidebar-subtitle-stability"),
             "02-running-after-open.png",
           ),
-          await takeControlUiElementScreenshot(page, secondRow, [
-            secondRow.getByText("Using bash"),
-          ]),
+          await takeControlUiElementScreenshot(page, secondRow, [narration, tool]),
         );
       }
     } finally {
@@ -218,6 +247,7 @@ suite.define(() => {
           await takeControlUiViewportScreenshot(page, page.locator(".shell"), [row]),
         );
       }
+      await waitForSessionRosterHydration(page);
       await gateway.setSessionsListResponse(completed);
       const listCount = (await gateway.getRequests("sessions.list", rosterMatch)).length;
       await gateway.emitGatewayEvent("session.message", {
@@ -312,7 +342,7 @@ suite.define(() => {
         await expect.poll(offset).toBeLessThan(-2);
         const movingOffset = await offset();
         await expect.poll(offset).toBeLessThan(movingOffset - 5);
-        const controls = row.locator("button[data-session-menu]");
+        const controls = row.locator("button[data-sidebar-session-archive]");
         await expect
           .poll(() => controls.evaluate((element) => Number(getComputedStyle(element).opacity)))
           .toBe(1);
@@ -355,7 +385,7 @@ suite.define(() => {
         await row.locator("a.sidebar-recent-session__link").focus();
         await expect.poll(offset).toBeLessThan(-2);
         const focusedOffset = await offset();
-        await row.locator("button[data-session-menu]").focus();
+        await row.locator("button[data-sidebar-session-archive]").focus();
         await expect.poll(offset).toBeLessThan(focusedOffset - 5);
 
         await page.emulateMedia({ reducedMotion: "reduce" });
@@ -479,13 +509,14 @@ suite.define(() => {
         );
       }
       await page.locator(".sidebar-session-toolbar .sidebar-session-sort").click();
-      const previewToggle = page.locator('wa-dropdown-item[value="show-preview"]');
-      expect(
-        await previewToggle.evaluate(
-          (item) => (item as HTMLElement & { checked: boolean }).checked,
-        ),
-      ).toBe(false);
+      await openSidebarMenu(page);
+      const previewToggle = page.getByRole("switch", {
+        name: "Show message preview",
+        exact: true,
+      });
+      expect(await previewToggle.getAttribute("aria-checked")).toBe("false");
       await previewToggle.click();
+      await closeSidebarMenu(page);
       await busyRow.locator(".sidebar-recent-session__subtitle").waitFor();
       const sidebar = page.locator("openclaw-app-sidebar");
       expect(await sidebar.getByRole("img", { name: "Dashboard available" }).count()).toBe(0);
@@ -714,7 +745,7 @@ suite.define(() => {
       expect(restingWidth - hoverWidth).toBeCloseTo(actionReserve, 0);
       await page.mouse.move(900, 400);
       await unreadBadge.waitFor({ state: "visible" });
-      await unreadRow.locator("[data-session-menu]").focus();
+      await unreadRow.locator("[data-sidebar-session-archive]").focus();
       await unreadBadge.waitFor({ state: "visible" });
       expect(await unreadBadge.boundingBox()).toEqual(restingBadge);
       expect((await unreadTitle.boundingBox())?.x).toBe(restingTitle?.x);
@@ -733,7 +764,7 @@ suite.define(() => {
       await expect
         .poll(() =>
           busyRow
-            .locator("[data-session-menu]")
+            .locator("[data-sidebar-session-archive]")
             .evaluate((element) => getComputedStyle(element).opacity),
         )
         .toBe("1");
