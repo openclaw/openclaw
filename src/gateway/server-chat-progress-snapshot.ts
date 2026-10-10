@@ -13,7 +13,7 @@ const CHAT_RUN_PROGRESS_MAX_EVENT_BYTES = 64 * 1024;
 const CHAT_RUN_PROGRESS_MAX_REVIEWS_PER_TOOL = 16;
 const TOOL_PROGRESS_FIELDS = new Map<string, readonly string[]>([
   ["start", ["args"]],
-  ["input_delta", ["diff"]],
+  ["input_delta", ["diff", "inputChars"]],
   ["update", ["partialResult"]],
   ["review", ["review", "approvalReviewOutcome"]],
   ["result", ["approvalReviewOutcome", "isError", "result"]],

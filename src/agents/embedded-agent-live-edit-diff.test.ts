@@ -73,7 +73,7 @@ describe("updateLiveEditDiffProgress", () => {
     expect(state.size).toBe(0);
   });
 
-  it("counts canonical write and patch arguments but ignores non-edit tools", () => {
+  it("counts canonical write and patch arguments", () => {
     vi.useFakeTimers();
     vi.setSystemTime(2_000);
     const state = new Map();
@@ -101,14 +101,89 @@ describe("updateLiveEditDiffProgress", () => {
         }),
       )?.diff,
     ).toEqual({ added: 2, removed: 1 });
+  });
 
-    vi.setSystemTime(2_600);
+  it("reports counts-only input progress for any tool, throttled and without content", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(3_000);
+    const state = new Map();
+    const secret = "SECRET-ARGUMENT-CONTENT";
+    const call = (partialJson: string) =>
+      updateLiveEditDiffProgress(
+        state,
+        toolCallEvent({ id: "draft-1", name: "Sites_Update_Draft", partialJson }),
+      );
+
+    const first = call(`{"html":"${secret}`);
+    expect(first).toEqual({
+      toolCallId: "draft-1",
+      name: "sites_update_draft",
+      inputChars: `{"html":"${secret}`.length,
+    });
+    expect(JSON.stringify(first)).not.toContain(secret);
+
+    vi.setSystemTime(3_100);
+    expect(call(`{"html":"${secret}${secret}`)).toBeUndefined();
+
+    vi.setSystemTime(3_250);
+    const large = `{"html":"${"x".repeat(2 * 1024 * 1024)}`;
+    expect(call(large)).toEqual({
+      toolCallId: "draft-1",
+      name: "sites_update_draft",
+      inputChars: large.length,
+    });
+
+    vi.setSystemTime(3_500);
+    expect(call(large)).toBeUndefined();
+
+    updateLiveEditDiffProgress(
+      state,
+      toolCallEvent({ type: "toolcall_end", id: "draft-1", name: "x", partialJson: "" }),
+    );
+    expect(state.size).toBe(0);
+  });
+
+  it("keeps edit counts frozen past the parse cap while length keeps reporting", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(4_000);
+    const state = new Map();
+    const prefix = '{"path":"a","content":"one\\ntwo\\n';
     expect(
       updateLiveEditDiffProgress(
         state,
-        toolCallEvent({ id: "read-1", name: "read", partialJson: '{"path":"a\\n' }),
+        toolCallEvent({ id: "write-big", name: "write", partialJson: prefix }),
+      )?.diff,
+    ).toEqual({ added: 2, removed: 0 });
+
+    vi.setSystemTime(4_250);
+    const oversized = `${prefix}${"three\\n".repeat(200_000)}`;
+    expect(
+      updateLiveEditDiffProgress(
+        state,
+        toolCallEvent({ id: "write-big", name: "write", partialJson: oversized }),
+      ),
+    ).toEqual({
+      toolCallId: "write-big",
+      name: "write",
+      inputChars: oversized.length,
+      diff: { added: 2, removed: 0 },
+    });
+  });
+
+  it("bounds tracked calls", () => {
+    const state = new Map();
+    for (let index = 0; index < 64; index += 1) {
+      updateLiveEditDiffProgress(
+        state,
+        toolCallEvent({ id: `call-${index}`, name: "exec", partialJson: "{" }),
+      );
+    }
+    expect(
+      updateLiveEditDiffProgress(
+        state,
+        toolCallEvent({ id: "call-overflow", name: "exec", partialJson: "{" }),
       ),
     ).toBeUndefined();
-    expect(state.has("read-1")).toBe(false);
+    expect(state.size).toBe(64);
   });
 });

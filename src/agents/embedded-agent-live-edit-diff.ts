@@ -12,13 +12,17 @@ export type LiveEditDiffProgressState = {
   removed: number;
   emittedAdded: number;
   emittedRemoved: number;
+  emittedInputChars: number;
   lastCheckedAtMs: number;
 };
 
 type LiveEditDiffProgress = {
   toolCallId: string;
   name: string;
-  diff: { added: number; removed: number };
+  /** Length of the streamed argument JSON so far. Counts only, never content. */
+  inputChars: number;
+  /** Best-effort line counts, present only for file-mutation tools. */
+  diff?: { added: number; removed: number };
 };
 
 function readToolCallBlock(event: Record<string, unknown>): Record<string, unknown> | undefined {
@@ -52,7 +56,11 @@ function readToolCallId(event: Record<string, unknown>): string | undefined {
   return typeof block?.id === "string" && block.id ? block.id : undefined;
 }
 
-/** Update one run's bounded best-effort diff counters from a model stream event. */
+/**
+ * Update one run's bounded, throttled progress for a tool call whose input is
+ * still streaming. Every tool reports the streamed input length, so a long
+ * argument stays visibly alive; file-mutation tools also report line counts.
+ */
 export function updateLiveEditDiffProgress(
   stateByToolCallId: Map<string, LiveEditDiffProgressState>,
   event: Record<string, unknown> | undefined,
@@ -61,6 +69,7 @@ export function updateLiveEditDiffProgress(
     return undefined;
   }
   const eventType = event.type;
+
   if (eventType === "toolcall_end") {
     const toolCallId = readToolCallId(event);
     if (toolCallId) {
@@ -75,13 +84,8 @@ export function updateLiveEditDiffProgress(
   const block = readToolCallBlock(event);
   const toolCallId = typeof block?.id === "string" ? block.id : "";
   const name = typeof block?.name === "string" ? block.name : "";
-  const kind = resolveFileMutationToolName(name);
   const partialJson = typeof block?.partialJson === "string" ? block.partialJson : "";
-  if (!toolCallId || !kind || !partialJson) {
-    return undefined;
-  }
-  if (partialJson.length > LIVE_EDIT_DIFF_MAX_PARTIAL_JSON_CHARS) {
-    stateByToolCallId.delete(toolCallId);
+  if (!toolCallId || !name || !partialJson) {
     return undefined;
   }
 
@@ -90,7 +94,14 @@ export function updateLiveEditDiffProgress(
     if (stateByToolCallId.size >= LIVE_EDIT_DIFF_MAX_TRACKED_CALLS) {
       return undefined;
     }
-    progress = { added: 0, removed: 0, emittedAdded: 0, emittedRemoved: 0, lastCheckedAtMs: 0 };
+    progress = {
+      added: 0,
+      removed: 0,
+      emittedAdded: 0,
+      emittedRemoved: 0,
+      emittedInputChars: 0,
+      lastCheckedAtMs: 0,
+    };
     stateByToolCallId.set(toolCallId, progress);
   }
 
@@ -101,22 +112,34 @@ export function updateLiveEditDiffProgress(
   ) {
     return undefined;
   }
-  // Parsing is the expensive part. Rate-limit it before touching cumulative JSON
-  // so fragmented large arguments cannot create quadratic work on the event path.
   progress.lastCheckedAtMs = now;
-  const counted = countStreamingFileMutationLines(kind, parseStreamingJson(partialJson));
-  // Streaming parses are best effort. Never move a visible counter backwards if
-  // an incomplete JSON boundary temporarily exposes less of the same arguments.
-  progress.added = Math.max(progress.added, counted.added);
-  progress.removed = Math.max(progress.removed, counted.removed);
-  if (progress.added === progress.emittedAdded && progress.removed === progress.emittedRemoved) {
+  const kind = resolveFileMutationToolName(name);
+  // Parsing is the expensive part: only file-mutation tools parse, after the
+  // throttle and under the size cap, so fragmented large arguments cannot create
+  // quadratic work on the event path. Past the cap the line counts stay frozen
+  // while the length keeps reporting progress.
+  if (kind && partialJson.length <= LIVE_EDIT_DIFF_MAX_PARTIAL_JSON_CHARS) {
+    const counted = countStreamingFileMutationLines(kind, parseStreamingJson(partialJson));
+    // Streaming parses are best effort. Never move a visible counter backwards if
+    // an incomplete JSON boundary temporarily exposes less of the same arguments.
+    progress.added = Math.max(progress.added, counted.added);
+    progress.removed = Math.max(progress.removed, counted.removed);
+  }
+  const inputChars = Math.max(progress.emittedInputChars, partialJson.length);
+  if (
+    inputChars === progress.emittedInputChars &&
+    progress.added === progress.emittedAdded &&
+    progress.removed === progress.emittedRemoved
+  ) {
     return undefined;
   }
+  progress.emittedInputChars = inputChars;
   progress.emittedAdded = progress.added;
   progress.emittedRemoved = progress.removed;
   return {
     toolCallId,
     name: normalizeLowercaseStringOrEmpty(name),
-    diff: { added: progress.added, removed: progress.removed },
+    inputChars,
+    ...(kind ? { diff: { added: progress.added, removed: progress.removed } } : {}),
   };
 }

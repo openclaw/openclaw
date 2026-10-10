@@ -301,6 +301,7 @@ export async function startGatewayWithClient(
     origin?: string;
     clientDisplayName?: string;
     scopes?: string[];
+    caps?: string[];
     onEvent?: (evt: { event?: string; payload?: unknown }) => void;
     hotReloadRecovery?: GatewayServerOptions["hotReloadRecovery"];
   } & ({ port?: number; portClaim?: never } | { port?: never; portClaim: TestPortClaim }),
@@ -349,6 +350,7 @@ export async function startGatewayWithClient(
       origin: params.origin,
       clientDisplayName: params.clientDisplayName,
       scopes: params.scopes,
+      caps: params.caps,
       onEvent: params.onEvent,
     });
 
