@@ -21,7 +21,7 @@ const { default: workboard } = await loadBundledPluginFacade<{
   default: { register(api: OpenClawPluginApi): void };
 }>({ pluginId: "workboard", artifactBasename: "index.js" });
 const { registerWorkboardGatewayMethods } = await loadBundledPluginFacade<{
-  registerWorkboardGatewayMethods(params: { api: OpenClawPluginApi }): void;
+  registerWorkboardGatewayMethods: (params: { api: OpenClawPluginApi }) => void;
 }>({ pluginId: "workboard", artifactBasename: "runtime-api.js" });
 async function program() {
   const result = new Command().exitOverride();
