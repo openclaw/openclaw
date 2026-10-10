@@ -15,7 +15,6 @@ const PORTAL_SESSION_WRITE = {
 export const CORE_GATEWAY_METHOD_SPECS = [
   ["health", "health", "operator.read", "<=2026.7"],
   ["diagnostics.stability", "diagnostics", "operator.read", "<=2026.7"],
-  ["debugProxy.capture", "debug-proxy", "operator.admin", "2026.9"],
   ["doctor.memory.status", "doctor", "operator.read", "<=2026.7"],
   ["doctor.memory.dreamDiary", "doctor", "operator.read", "<=2026.7"],
   ["doctor.memory.backfillDreamDiary", "doctor", "operator.write", "<=2026.7"],
@@ -728,4 +727,5 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["users.background.get", "users", "operator.read", "2026.9"],
   ["users.background.upload", "users", "operator.write", "2026.9"],
   ["users.background.remove", "users", "operator.write", "2026.9"],
+  ["debugProxy.capture", "debug-proxy", "operator.admin", "2026.9"],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];

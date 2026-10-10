@@ -1539,6 +1539,8 @@ src/process/supervisor/service-child-group-ownership.ts
 src/process/supervisor/service-child-windows-job-native.ts
 src/process/windows-command-line.ts
 src/process/windows-command.ts
+src/proxy-capture/child-transport.ts
+src/proxy-capture/cli-contract.ts
 src/proxy-capture/env.ts
 src/proxy-capture/header-redaction.ts
 src/proxy-capture/paths.ts
