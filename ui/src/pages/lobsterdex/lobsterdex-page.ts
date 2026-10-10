@@ -1,21 +1,33 @@
+import { consume } from "@lit/context";
 import { html } from "lit";
 import { state } from "lit/decorators.js";
 import { titleForRoute } from "../../app-navigation.ts";
+import { pathForRoute } from "../../app-route-paths.ts";
+import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { shellLayoutTraits } from "../../app/shell-layout-traits.ts";
 import { getLobsterdexEntries } from "../../components/lobster-dex.ts";
 import type { LobsterPetPaletteId } from "../../components/lobster-pet-contract.ts";
 import { LOBSTER_PET_PALETTES } from "../../components/lobster-pet-palettes.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
+import { t } from "../../i18n/index.ts";
 import { copyToClipboard } from "../../lib/clipboard.ts";
+import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
+import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { renderLobsterdex, type LobsterdexCopyFeedback } from "./view.ts";
 
 class LobsterdexPage extends OpenClawLightDomElement {
+  @consume({ context: applicationContext, subscribe: true })
+  private context!: ApplicationContext;
+  private readonly subscriptions = new SubscriptionsController(this).watchStore(
+    () => this.context?.theme,
+  );
   @state() private copyFeedback: LobsterdexCopyFeedback | null = null;
   private copyAttempt = 0;
   private copyResetTimer: number | null = null;
 
   override disconnectedCallback(): void {
+    this.subscriptions.clear();
     this.copyAttempt += 1;
     this.copyFeedback = null;
     window.clearTimeout(this.copyResetTimer ?? undefined);
@@ -82,10 +94,25 @@ class LobsterdexPage extends OpenClawLightDomElement {
         <h1 class="page-title">${titleForRoute("lobsterdex")}</h1>
       </section>
       ${renderSettingsWorkspace(
-        renderLobsterdex(getLobsterdexEntries(), {
-          copyFeedback: this.copyFeedback,
-          onCopyLink: (paletteId) => void this.copyLink(paletteId),
-        }),
+        !this.context.theme.branding.lobsterdex
+          ? html`<section class="settings-section" role="status">
+              <p>${t("quickSettings.appearance.lobsterdexThemeHidden")}</p>
+              <a
+                class="btn btn--sm"
+                href=${pathForRoute("appearance", this.context.basePath)}
+                @click=${(event: MouseEvent) => {
+                  if (shouldHandleNavigationClick(event)) {
+                    event.preventDefault();
+                    this.context.navigate("appearance");
+                  }
+                }}
+                >${titleForRoute("appearance")}</a
+              >
+            </section>`
+          : renderLobsterdex(getLobsterdexEntries(), {
+              copyFeedback: this.copyFeedback,
+              onCopyLink: (paletteId) => void this.copyLink(paletteId),
+            }),
       )}
     `;
   }

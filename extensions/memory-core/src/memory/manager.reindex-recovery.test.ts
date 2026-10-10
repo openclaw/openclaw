@@ -251,7 +251,9 @@ describe("memory manager reindex recovery", () => {
         expect(inputs.length).toBeGreaterThan(1);
         return inputs.map((_, index) => (index === 0 ? [0, 1, 0] : invalid));
       });
-    await expect(memoryManager.sync({ reason: "cli", force: true })).rejects.toThrow();
+    await expect(memoryManager.sync({ reason: "cli", force: true })).rejects.toThrow(
+      /openai embeddings failed \(model: mock-embed, batch size: \d+\): non-finite or non-numeric coordinate at position 1/,
+    );
     expect(harness.db.prepare("SELECT hash FROM memory_embedding_cache").all()).toEqual([]);
     await memoryManager.sync({ reason: "cli", force: true });
     expect(embed).toHaveBeenCalledTimes(2);
@@ -302,7 +304,9 @@ describe("memory manager reindex recovery", () => {
       ).toBeGreaterThan(0);
       reservation?.release();
       await reservation?.done;
-      await expect(sync).rejects.toThrow("malformed vector response");
+      await expect(sync).rejects.toThrow(
+        /openai embeddings failed \(model: mock-embed, batch size: \d+\): expected 2 dimensions, got 3 at position 0/,
+      );
     } finally {
       reservation?.release();
       await reservation?.done;

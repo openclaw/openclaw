@@ -5,6 +5,7 @@ import "../../../components/modal-dialog.ts";
 import { t } from "../../../i18n/index.ts";
 import { registerChatCameraEnglish } from "../../../i18n/locales/en-chat-camera.ts";
 import { OpenClawLitElement } from "../../../lit/openclaw-element.ts";
+import { useNativeAttachmentCapture } from "./chat-attachment-picker-policy.ts";
 import { cameraCaptureStyles } from "./chat-camera-capture.styles.ts";
 
 registerChatCameraEnglish();
@@ -61,6 +62,12 @@ export class OpenClawChatCameraCapture extends OpenClawLitElement {
 
   show(): void {
     if (!this.isConnected || this.disabled || this.readSignal?.aborted || this.stage !== "closed") {
+      return;
+    }
+    if (this.onNativeCapture && useNativeAttachmentCapture()) {
+      // Keep the native input click in the original gesture, without requesting
+      // a web camera stream or mounting a second capture UI first.
+      this.onNativeCapture(this);
       return;
     }
     this.activeSignal = this.readSignal;

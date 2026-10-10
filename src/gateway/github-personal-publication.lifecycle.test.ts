@@ -7,7 +7,7 @@ import {
 } from "./github-publication.test-support.js";
 import { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   applySessionEntryLifecycleMutation,
   deleteSessionEntryLifecycle,
@@ -18,6 +18,7 @@ import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/sess
 import * as operationAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { githubPublicationReceipts } from "../state/github-publication-receipts.js";
 import { readGitHubPublicationSessionLifecycle } from "../state/github-publication-session-lifecycles.js";
 import * as stateWorker from "../state/openclaw-state-worker-store.js";
 import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
@@ -399,6 +400,16 @@ describe("personal publication session lifecycle", () => {
 
   it("retains logical-session receipts across archive and reset, then removes them through permanent deletion", async () => {
     const { owner, generation, placements } = fixture;
+    const installed = new Map<string, unknown>();
+    onTestFinished(
+      githubPublicationReceipts.subscribeFacts((change) => {
+        if (change.kind === "committed") {
+          for (const [key, fact] of change.receipt.facts) {
+            installed.set(key, fact);
+          }
+        }
+      }),
+    );
     const {
       session,
       published: result,
@@ -406,6 +417,15 @@ describe("personal publication session lifecycle", () => {
       binding,
       lifecycle: originalLifecycle,
     } = await publishReceipt();
+    const { title: _title, body: _body, next_action: _nextAction, ...authority } = receipt!;
+    expect(installed.get(JSON.stringify(["personal", result.requestId]))).toEqual({
+      kind: "postimage",
+      value: authority,
+    });
+    expect(installed.get(JSON.stringify(["personal-lifecycle", result.requestId]))).toEqual({
+      kind: "postimage",
+      value: { ...originalLifecycle, publication_kind: "personal", request_id: result.requestId },
+    });
     const lifecycle_revision = session.read().lifecycleRevision;
     expect(originalLifecycle).toEqual({ lifecycle_revision, requester_authority_json: null });
     await session.reset(placements);
@@ -425,14 +445,30 @@ describe("personal publication session lifecycle", () => {
     const target = { canonicalKey: SESSION_KEY, storeKeys: [SESSION_KEY] };
     expect(readPersonalGitHubPublication(owner, { requestId: result.requestId })).toEqual(receipt);
     expect(readGitHubPublicationSessionLifecycle(binding)).toEqual(originalLifecycle);
-    await deleteSessionEntryLifecycle({
-      agentId: "main",
-      storePath,
-      target,
-      archiveTranscript: false,
+    const lostReply = probe.command(stateWorker, async (command, options, scope) => {
+      const outcome = await scope.execute(command, options);
+      if (command.type === "githubPublication.deleteSessionReceipts") {
+        throw new Error("committed receipt cleanup reply lost");
+      }
+      return outcome;
     });
+    await expect(
+      deleteSessionEntryLifecycle({
+        agentId: "main",
+        storePath,
+        target,
+        archiveTranscript: false,
+      }),
+    ).rejects.toThrow("committed receipt cleanup reply lost");
+    lostReply.mockRestore();
     expect(readPersonalGitHubPublication(owner, { requestId: result.requestId })).toBeUndefined();
     expect(readGitHubPublicationSessionLifecycle(binding)).toBeUndefined();
+    expect(installed.get(JSON.stringify(["personal", result.requestId]))).toEqual({
+      kind: "absent",
+    });
+    expect(installed.get(JSON.stringify(["personal-lifecycle", result.requestId]))).toEqual({
+      kind: "absent",
+    });
     expect(readUserGitHubConnection(owner)?.generation).toBe(generation);
   });
 });

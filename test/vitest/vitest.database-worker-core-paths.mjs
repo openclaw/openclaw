@@ -1,5 +1,10 @@
 // These consumers need the host-owned SQLite broker, which runs in forked processes.
 export const databaseWorkerCoreTestFiles = [
+  "src/agents/command-runtime.incognito.test.ts",
+  "src/agents/runtime-recovery.incognito.test.ts",
+  "src/agents/cli-runner/history-boundary.incognito.test.ts",
+  "src/agents/sandbox/runtime-status.incognito.test.ts",
+  "src/agents/harness/host-capability.node-authority.test.ts",
   "src/infra/sqlite-foreign-observation.worker.test.ts",
   "src/state/openclaw-state-db-current-reader.test.ts",
   "src/cli/admin-state-owner.process.test.ts",
@@ -29,6 +34,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/model-picker/apply-session-model-selection.test.ts",
   "src/plugin-sdk/session-store-history-boundary.test.ts",
   "src/plugin-sdk/session-store-runtime.recovery.test.ts",
+  "src/plugin-sdk/session-store-runtime.async.test.ts",
   "src/plugin-sdk/session-store-runtime.writer-claim.test.ts",
   "src/talk/client-voice-session.digest-retry.test.ts",
   "src/talk/voice-consult-transcript-race.test.ts",
@@ -1087,6 +1093,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/node-host/runner.inventory.test.ts",
   "src/node-host/node-worker-workspace-retention.test.ts",
   "src/node-host/node-worker-prepared-workspace.test.ts",
+  "src/node-host/node-worker-prepared-workspace-publication.test.ts",
   "src/state/agent-deletion-journal.snapshot.test.ts",
   "src/state/agent-deletion-journal.startup.test.ts",
   "src/state/agent-deletion-journal.native-startup.test.ts",

@@ -229,7 +229,7 @@ describe("live progress placement", () => {
   beforeEach(installTranscriptDomMocks);
   afterEach(resetTranscriptTestDom);
 
-  it("keeps target-run progress after its output and above its steers", () => {
+  it("keeps progress after accepted steers and before queued input", () => {
     const runId = "active-run";
     const prompt = (id: string, seq: number, target?: string) => ({
       role: "user",
@@ -307,7 +307,7 @@ describe("live progress placement", () => {
         Node.DOCUMENT_POSITION_FOLLOWING,
       );
       for (const steer of [earlierSteer, latestSteer]) {
-        expect(progress.compareDocumentPosition(steer) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(
+        expect(steer.compareDocumentPosition(progress) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(
           Node.DOCUMENT_POSITION_FOLLOWING,
         );
       }
