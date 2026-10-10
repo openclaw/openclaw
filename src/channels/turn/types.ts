@@ -289,6 +289,8 @@ type ChannelTurnContext = {
   storePath: string;
   ctxPayload: FinalizedMsgContext;
   recordInboundSession: RecordInboundSession;
+  /** Current channel authority at record and dispatch initiation, after awaited preparation. */
+  assertAuthority?: () => void;
   afterRecord?: () => void | Promise<void>;
   record?: ChannelTurnRecordOptions;
   history?: ChannelTurnHistoryFinalizeOptions;
