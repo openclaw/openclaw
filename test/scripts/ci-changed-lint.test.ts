@@ -311,6 +311,7 @@ describe("CI changed lint", () => {
         ...paths.toSorted(),
       ]);
       expect(central.some(({ args }) => args[0] === "lint:ui:i18n")).toBe(true);
+      expect(central.some(({ args }) => args[0] === "check:control-ui-lit-ratchet")).toBe(true);
       expect(
         central.some(
           ({ args }) =>
@@ -418,6 +419,36 @@ describe("CI changed lint", () => {
         runnerProfile: "hybrid",
       }),
     ).toBeNull(),
+  );
+
+  it.each(["ui/src/app.ts", ".oxlintrc.json"])(
+    "retains the Lit ratchet and its Git scope when CI splits lint for %s",
+    (file) => {
+      const result = detectChangedLanes([file]);
+      for (const staged of [false, true]) {
+        const commands = createChangedCheckPlan(result, {
+          lintOnly: true,
+          base: "fixture-base",
+          staged,
+          lintSelection: {
+            files: [],
+            coreStripes: [],
+            extensionStripes: [],
+            groups: [],
+            fullGroups: ["scripts"],
+            central: true,
+          },
+        }).commands;
+        expect(
+          commands.find(({ args }) => args[0] === "check:control-ui-lit-ratchet")?.args,
+        ).toEqual([
+          "check:control-ui-lit-ratchet",
+          ...(staged ? ["--staged"] : []),
+          "--base",
+          "fixture-base",
+        ]);
+      }
+    },
   );
 
   it("uses the owning compiler configs for changed files without unrelated lint or type checks", () => {
