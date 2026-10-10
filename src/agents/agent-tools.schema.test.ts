@@ -1,3 +1,4 @@
+import { normalizeToolParameterSchema } from "@openclaw/ai/internal/tool-schema";
 import { runAgentLoop, type AgentEvent, type StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { createAssistantMessageEventStream, validateToolArguments } from "openclaw/plugin-sdk/llm";
 import { Type, type TSchema } from "typebox";
@@ -95,6 +96,108 @@ describe("direct process tool schema", () => {
     expect(events.find((event) => event.type === "tool_execution_end")).toMatchObject({
       executionStarted: false,
       errorKind: "argument-validation",
+    });
+  });
+});
+
+describe("normalizeToolParameterSchema", () => {
+  it("keeps normalized tool-schema profile behavior aligned with the cache key", () => {
+    const schema = {
+      type: "object",
+      properties: {
+        sessionKey: {
+          anyOf: [{ type: "string" }, { type: "null" }],
+        },
+      },
+    };
+
+    const defaultSchema = normalizeToolParameterSchema(schema, {
+      modelProvider: "openai-compatible",
+      modelId: "custom-model",
+    });
+    const mixedCaseGeminiProfileSchema = normalizeToolParameterSchema(schema, {
+      modelProvider: "openai-compatible",
+      modelId: "custom-model",
+      modelCompat: { toolSchemaProfile: "Gemini" },
+    });
+
+    expect(defaultSchema).toEqual(schema);
+    expect(mixedCaseGeminiProfileSchema).toEqual({
+      type: "object",
+      properties: {
+        sessionKey: { type: "string" },
+      },
+    });
+  });
+
+  it("applies llama.cpp cleaning only for the explicit tool-schema profile", () => {
+    const schema = {
+      type: "object",
+      properties: {
+        declarationKey: { type: "string", pattern: "^\\S+$", maxLength: 200 },
+        safe: { type: "string", maxLength: 1999 },
+        boundary: { type: "string", maxLength: 2000 },
+        script: { type: "string", minLength: 1, maxLength: 65_536 },
+      },
+    };
+
+    expect(normalizeToolParameterSchema(schema, { modelProvider: "openai" })).toEqual(schema);
+    expect(
+      normalizeToolParameterSchema(schema, {
+        modelProvider: "openai-compatible",
+        modelCompat: { toolSchemaProfile: "llamacpp" },
+      }),
+    ).toEqual({
+      type: "object",
+      properties: {
+        declarationKey: { type: "string", maxLength: 200 },
+        safe: { type: "string", maxLength: 1999 },
+        boundary: { type: "string" },
+        script: { type: "string", minLength: 1 },
+      },
+    });
+  });
+
+  it("applies explicit unsupported keyword stripping after Gemini cleanup", () => {
+    expect(
+      normalizeToolParameterSchema(
+        {
+          type: "object",
+          properties: {
+            count: {
+              anyOf: [{ type: "integer", vendorOnly: true }, { type: "null" }],
+            },
+          },
+        },
+        {
+          modelProvider: "jjcc",
+          modelId: "gemini-3.1-pro-preview",
+          modelCompat: { unsupportedToolSchemaKeywords: ["vendorOnly"] },
+        },
+      ),
+    ).toEqual({
+      type: "object",
+      properties: {
+        count: { type: "integer" },
+      },
+    });
+  });
+
+  it("rejects noncanonical array indices in local $ref paths", () => {
+    const indices = ["0", "1", "0x1", "1e0", "01", "+0", "-0", "", " "];
+    const properties = Object.fromEntries(
+      indices.map((index) => [index, { $ref: `#/$defs/Choice/anyOf/${index}` }]),
+    );
+    const unresolved = structuredClone(properties);
+    const normalized = normalizeToolParameterSchema({
+      type: "object",
+      properties,
+      $defs: { Choice: { anyOf: [{ type: "string" }, { type: "number" }] } },
+    });
+    expect(normalized).toHaveProperty("properties", {
+      ...unresolved,
+      "0": { type: "string" },
+      "1": { type: "number" },
     });
   });
 });
@@ -212,6 +315,16 @@ describe("assertRequiredParams", () => {
     expect(normalizeFileToolPathParam("echo test</arg_value>>>>>")).toBe("echo test");
     expect(normalizeFileToolPathParam("echo test</arg_value>")).toBe("echo test</arg_value>");
     expect(normalizeFileToolPathParam("echo </arg_value>> test")).toBe("echo </arg_value>> test");
+  });
+
+  it("rejects paths that become empty after malformed XML arg-value suffix stripping", async () => {
+    const execute = vi.fn();
+    const tool = makeValidatedFileTool("write", execute);
+
+    await expect(tool.execute("id", { path: "</arg_value>>", content: "x" })).rejects.toThrow(
+      /Missing required parameter: path/,
+    );
+    expect(execute).not.toHaveBeenCalled();
   });
 
   it("preserves edit replacement payloads while cleaning the path", async () => {

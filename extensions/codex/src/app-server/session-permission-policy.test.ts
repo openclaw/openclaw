@@ -34,6 +34,44 @@ function applyPolicy(overrides: Partial<Parameters<typeof applyCodexSessionPermi
 }
 
 describe("Codex session permission policy", () => {
+  it.each([
+    {
+      mode: "read-only" as const,
+      sandbox: "read-only",
+      approvalPolicy: "on-request",
+      approvalsReviewer: "user",
+    },
+    {
+      mode: "guarded" as const,
+      sandbox: "workspace-write",
+      approvalPolicy: "on-request",
+      approvalsReviewer: "user",
+    },
+    {
+      mode: "workspace" as const,
+      sandbox: "workspace-write",
+      approvalPolicy: "on-request",
+      approvalsReviewer: "auto_review",
+    },
+    {
+      mode: "full" as const,
+      sandbox: "danger-full-access",
+      approvalPolicy: "never",
+      approvalsReviewer: "user",
+    },
+  ])("maps $mode to one complete app-server tuple", (expected) => {
+    const resolved = applyPolicy({
+      permissionMode: expected.mode,
+    });
+
+    expect(resolved).toMatchObject({
+      sandbox: expected.sandbox,
+      approvalPolicy: expected.approvalPolicy,
+      approvalsReviewer: expected.approvalsReviewer,
+      sessionRoot: "/workspace/project",
+    });
+  });
+
   it("downgrades workspace review to the user when model-backed review is untrusted", () => {
     expect(
       applyPolicy({
@@ -66,6 +104,11 @@ describe("Codex session permission policy", () => {
       policies: ["untrusted"],
       approvalsReviewer: "user",
     },
+    {
+      mode: "workspace" as const,
+      policies: ["untrusted", "never"],
+      approvalsReviewer: "auto_review",
+    },
   ])("preserves managed prompting approval for a $mode session", (expected) => {
     const resolved = applyPolicy({
       permissionMode: expected.mode,
@@ -85,6 +128,14 @@ describe("Codex session permission policy", () => {
     {
       mode: "read-only" as const,
       allowedSandbox: "workspace-write",
+    },
+    {
+      mode: "read-only" as const,
+      allowedSandbox: "danger-full-access",
+    },
+    {
+      mode: "guarded" as const,
+      allowedSandbox: "danger-full-access",
     },
     {
       mode: "workspace" as const,
@@ -168,7 +219,7 @@ describe("Codex session permission policy", () => {
     },
   );
 
-  it.each(["workspace"] as const)(
+  it.each(["read-only", "guarded", "workspace"] as const)(
     "keeps mandatory per-command approval when applying %s session permissions",
     (permissionMode) => {
       expect(

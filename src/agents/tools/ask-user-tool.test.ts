@@ -386,6 +386,60 @@ describe("ask_user execution", () => {
     },
   );
 
+  it("leaves the prompt to a harness that already reserved one", async () => {
+    const sessionKey = "agent:main:reserved-prompt";
+    const normalized = normalizeAskUserParams(validArgs);
+    const reservation = reserveAskUserPromptDelivery({
+      toolCallId: "call-reserved",
+      sessionKey,
+      questions: normalized.questions,
+      timeoutSeconds: normalized.timeoutSeconds,
+    });
+    const sent: SentPrompt[] = [];
+    const gateway = gatewayStub(async (method, _opts, params) =>
+      method === "question.request" ? { id: params.id } : { status: "expired" },
+    );
+
+    const result = await createAskUserTool({
+      sessionKey,
+      gatewayCall: gateway.call,
+      questionPrompt: {
+        send: (payload) => {
+          sent.push(payload);
+        },
+      },
+    }).execute("call-reserved", validArgs);
+
+    expect(reservation).toBeDefined();
+    expect(sent).toEqual([]);
+    expect(result.details).toEqual({ status: "no_answer" });
+  });
+
+  it.each([
+    ["expired", "No answer arrived"],
+    ["pending", "No answer arrived"],
+    ["cancelled", "question was cancelled"],
+  ] as const)("maps %s to no_answer", async (status, text) => {
+    const gateway = gatewayStub(async (method, _opts, params) =>
+      method === "question.request" ? { id: params.id } : { status },
+    );
+    const result = await createAskUserTool({
+      sessionKey: `agent:main:${status}`,
+      gatewayCall: gateway.call,
+    }).execute(`call-${status}`, validArgs);
+    const questionId = requestedQuestionId(gateway.mock);
+
+    expect(result.details).toEqual({ status: "no_answer" });
+    expect(result.content[0]).toMatchObject({ text: expect.stringContaining(text) });
+    if (status === "pending") {
+      expect(gateway.mock).toHaveBeenCalledWith(
+        "question.resolve",
+        { timeoutMs: 10_000 },
+        { id: questionId, cancel: true, resolvedBy: "wait-timeout" },
+      );
+    }
+  });
+
   it("rejects a second pending question in the same session", async () => {
     let finishWait: ((value: unknown) => void) | undefined;
     const gateway = gatewayStub(async (method, _opts, params) => {
@@ -763,6 +817,62 @@ describe("ask_user execution", () => {
       { timeoutMs: 10_000 },
       { id: reservation.questionId, cancel: true, resolvedBy: "run-abort" },
     );
+  });
+
+  it("claims unmatched plain text as free text without steering it into the run", async () => {
+    let finishWait: ((value: unknown) => void) | undefined;
+    const gateway = gatewayStub(async (method, _opts, params) => {
+      if (method === "question.request") {
+        return { id: params.id };
+      }
+      if (method === "question.waitAnswer") {
+        return await new Promise((resolve) => {
+          finishWait = resolve;
+        });
+      }
+      if (method === "question.resolve") {
+        const answers = params.answers;
+        finishWait?.({ status: "answered", answers });
+        return { status: "answered", answers };
+      }
+      throw new Error(`unexpected method ${method}`);
+    });
+    const pending = createAskUserTool({
+      sessionKey: "agent:main:claim",
+      gatewayCall: gateway.call,
+    }).execute("call-claim", validArgs);
+    await gateway.waitForCall("question.waitAnswer");
+    expect(finishWait).toBeTypeOf("function");
+    const questionId = requestedQuestionId(gateway.mock);
+    const steer = vi.fn(async () => undefined);
+    const activeSession = { steer, subscribe: vi.fn(() => () => undefined) };
+    const persistApproved = vi.fn(async () => undefined);
+    const recorder = { persistApproved } as unknown as UserTurnTranscriptRecorder;
+
+    await steerActiveSessionWithOptionalDeliveryWait(
+      activeSession,
+      "A custom destination",
+      {
+        isInboundUserMessage: true,
+        waitForTranscriptCommit: true,
+        userTurnTranscriptRecorder: recorder,
+      },
+      "agent:main:claim",
+    );
+
+    expect(steer).not.toHaveBeenCalled();
+    expect(persistApproved).toHaveBeenCalledOnce();
+    expect(gateway.mock).toHaveBeenCalledWith(
+      "question.resolve",
+      {},
+      {
+        id: questionId,
+        answers: { answers: { deploy_target: ["A custom destination"] } },
+        resolvedBy: "plain-text",
+        resolutionId: expect.stringMatching(/^[a-f0-9]{32}$/),
+      },
+    );
+    await expect(pending).resolves.toMatchObject({ details: { status: "answered" } });
   });
 
   it.each([

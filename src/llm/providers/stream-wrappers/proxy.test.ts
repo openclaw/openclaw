@@ -70,6 +70,17 @@ describe("proxy stream wrappers", () => {
     ]);
   });
 
+  it("adds opt-in OpenRouter response caching headers", () => {
+    const calls = captureHeaders(
+      { responseCache: true, responseCacheTtlSeconds: 900 },
+      { baseUrl: "https://openrouter.ai/api/v1" },
+    );
+
+    expect(calls[0]?.headers?.["HTTP-Referer"]).toBe("https://openclaw.ai");
+    expect(calls[0]?.headers?.["X-OpenRouter-Cache"]).toBe("true");
+    expect(calls[0]?.headers?.["X-OpenRouter-Cache-TTL"]).toBe("900");
+  });
+
   it("sends OpenRouter response cache disables for preset opt-outs", () => {
     const calls = captureHeaders(
       { response_cache: false, response_cache_ttl_seconds: 600 },
@@ -88,7 +99,7 @@ describe("proxy stream wrappers", () => {
     expect(calls[0]?.headers?.["X-OpenRouter-Cache-TTL"]).toBe("86400");
   });
 
-  it.each([Number.NaN])("omits non-finite response cache TTL %s", (ttl) => {
+  it.each([Number.NaN, Infinity, -Infinity])("omits non-finite response cache TTL %s", (ttl) => {
     const calls = captureHeaders({ responseCache: true, responseCacheTtlSeconds: ttl });
 
     expect(calls[0]?.headers?.["X-OpenRouter-Cache"]).toBe("true");
@@ -104,6 +115,22 @@ describe("proxy stream wrappers", () => {
     expect(calls[0]?.headers).toBeUndefined();
   });
 
+  it("injects cache_control markers for declared OpenRouter Anthropic models on the default route", () => {
+    const payload = runSystemCacheWrapper({});
+
+    expect(payload.messages[0]?.content).toEqual([
+      { type: "text", text: "system prompt", cache_control: { type: "ephemeral" } },
+    ]);
+  });
+
+  it("does not inject cache_control markers for declared OpenRouter providers on custom proxy URLs", () => {
+    const payload = runSystemCacheWrapper({
+      baseUrl: "https://proxy.example.com/v1",
+    });
+
+    expect(payload.messages[0]?.content).toBe("system prompt");
+  });
+
   it("does not inject Anthropic cache_control markers for automatic OpenRouter DeepSeek cache models", () => {
     const payload = runSystemCacheWrapper({
       id: "deepseek/deepseek-v3.2",
@@ -112,7 +139,23 @@ describe("proxy stream wrappers", () => {
     expect(payload.messages[0]?.content).toBe("system prompt");
   });
 
-  it.each([["none", false]] as const)(
+  it("injects cache_control markers for native OpenRouter hosts behind custom provider ids", () => {
+    const payload = runSystemCacheWrapper({
+      provider: "custom-openrouter",
+      baseUrl: "https://openrouter.ai/api/v1",
+    });
+
+    expect(payload.messages[0]?.content).toEqual([
+      { type: "text", text: "system prompt", cache_control: { type: "ephemeral" } },
+    ]);
+  });
+
+  it.each([
+    ["none", false],
+    ["short", false],
+    ["long", false],
+    ["short", true],
+  ] as const)(
     "composes managed requests with %s retention and string-only=%s",
     (cacheRetention, requiresStringContent) => {
       const model: Model<"openai-completions"> & {
@@ -153,10 +196,23 @@ describe("proxy stream wrappers", () => {
             ],
           });
           const wire = JSON.stringify(payload);
-          expect(wire.match(/"cache_control":/g) ?? []).toHaveLength(0);
+          expect(wire.match(/"cache_control":/g) ?? []).toHaveLength(
+            cacheRetention === "none" || requiresStringContent
+              ? 0
+              : Number(Boolean(stable)) + Number(hasUser),
+          );
           expect(wire).not.toContain('"text":"VOLATILE","cache_control"');
           expect(wire).not.toContain('"text":"Runtime","cache_control"');
-          expect(wire).not.toContain('"ttl":"1h"');
+          if (requiresStringContent) {
+            expect(payload.messages).toEqual([
+              { role: "system", content: `${stable}\nVOLATILE` },
+              ...(hasUser ? [{ role: "user", content: "Question" }] : []),
+              { role: "developer", content: "OpenClaw runtime context:\nRuntime" },
+            ]);
+          }
+          expect(wire.includes('"ttl":"1h"')).toBe(
+            cacheRetention === "long" && Boolean(stable || hasUser),
+          );
         }
       }
     },
@@ -190,5 +246,37 @@ describe("proxy stream wrappers", () => {
       { cacheRetention: "long" },
     );
     expect(payload).toEqual(original);
+  });
+
+  it("forwards OpenRouter Anthropic cacheRetention to the underlying transport", () => {
+    const payload = {
+      messages: [{ role: "system", content: "system prompt" }],
+    };
+    const calls: Array<{ cacheRetention?: unknown }> = [];
+    const baseStreamFn: StreamFn = (resolvedModel, _context, options) => {
+      calls.push({ cacheRetention: options?.cacheRetention });
+      options?.onPayload?.(payload, resolvedModel);
+      return createAssistantMessageEventStream();
+    };
+
+    const wrapped = createOpenRouterSystemCacheWrapper(baseStreamFn);
+    void wrapped(
+      {
+        api: "openai-completions",
+        provider: "openrouter",
+        id: "anthropic/claude-sonnet-4.6",
+      } as Model<"openai-completions">,
+      { messages: [] },
+      { cacheRetention: "long" },
+    );
+
+    expect(calls[0]).toEqual({ cacheRetention: "long" });
+    expect(payload.messages[0]?.content).toEqual([
+      {
+        type: "text",
+        text: "system prompt",
+        cache_control: { type: "ephemeral", ttl: "1h" },
+      },
+    ]);
   });
 });

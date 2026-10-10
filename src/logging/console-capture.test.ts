@@ -9,7 +9,7 @@ import {
 } from "../../packages/terminal-core/src/progress-line.js";
 import { registerSignalExitGate, waitForSignalExitBarriers } from "../cli/signal-exit-barrier.js";
 import { setVerbose } from "../global-state.js";
-import { logError, logInfo } from "../logger.js";
+import { logError, logInfo, logWarn } from "../logger.js";
 import { defaultRuntime } from "../runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withEnv } from "../test-utils/env.js";
@@ -121,6 +121,49 @@ describe("enableConsoleCapture", () => {
     expect(console.log("hello")).toBeUndefined();
   });
 
+  it("swallows EIO from original console writes", () => {
+    setLoggerOverride({ level: "info", file: tempLogPath() });
+    console.log = () => {
+      throw eioError();
+    };
+    enableConsoleCapture();
+    expect(console.log("hello")).toBeUndefined();
+  });
+
+  it("does not double-prefix timestamps", () => {
+    setLoggerOverride({ level: "info", file: tempLogPath() });
+    const warn = vi.fn();
+    console.warn = warn;
+    setConsoleTimestampPrefix(true);
+    enableConsoleCapture();
+    console.warn("12:34:56 [exec] hello");
+    expect(warn).toHaveBeenCalledWith("12:34:56 [exec] hello");
+  });
+
+  it.each(["json", "compact"] as const)("formats %s console passthrough output", (consoleStyle) => {
+    setLoggerOverride({
+      level: consoleStyle === "json" ? "silent" : "info",
+      file: tempLogPath(),
+      consoleLevel: "info",
+      consoleStyle,
+    });
+    const warn = vi.fn();
+    console.warn = warn;
+    enableConsoleCapture();
+
+    console.warn("tool failed", { attempt: 1 });
+
+    expect(warn).toHaveBeenCalledTimes(1);
+    if (consoleStyle === "json") {
+      expect(JSON.parse(String(mockCall(warn)[0]))).toMatchObject({
+        level: "warn",
+        message: "tool failed { attempt: 1 }",
+      });
+    } else {
+      expect(warn).toHaveBeenCalledWith("tool failed { attempt: 1 }");
+    }
+  });
+
   it("does not rewrap structured subsystem output", () => {
     setLoggerOverride({ level: "info", consoleLevel: "warn", consoleStyle: "json" });
     const warn = vi.fn();
@@ -140,6 +183,8 @@ describe("enableConsoleCapture", () => {
 
   it.each([
     { consoleStyle: "compact", forced: false },
+    { consoleStyle: "compact", forced: true },
+    { consoleStyle: "json", forced: false },
     { consoleStyle: "json", forced: true },
   ] as const)(
     "captures $consoleStyle traces once with their stack (forced: $forced)",
@@ -331,6 +376,18 @@ describe("enableConsoleCapture", () => {
     expect(stdoutWrite).toHaveBeenCalledWith('{\n  "ok": true\n}\n');
   });
 
+  it("routes subsystem-prefixed warnings through one file-log sink", async () => {
+    const logPath = tempLogPath();
+    setLoggerOverride({ level: "info", file: logPath });
+    enableConsoleCapture();
+
+    logWarn("mcp-loopback: conflicting schema definitions");
+    await testApi.flushFileLogQueueForTests();
+
+    const content = fs.readFileSync(logPath, "utf-8");
+    expect(countMatchingLines(content, "conflicting schema definitions")).toBe(1);
+  });
+
   it("uses the current applied logger generation for each forwarded console call", async () => {
     vi.stubEnv("OPENCLAW_TEST_FILE_LOG", "1");
     const firstFile = tempLogPath();
@@ -374,6 +431,34 @@ describe("enableConsoleCapture", () => {
     },
   );
 
+  it("redacts credentials before forwarding console output", () => {
+    setLoggerOverride({ level: "info", file: tempLogPath() });
+    const log = vi.fn();
+    console.log = log;
+    enableConsoleCapture();
+
+    console.log("apiKey:", secret);
+
+    expect(log).toHaveBeenCalledTimes(1);
+    const line = String(mockCall(log)[0]);
+    expect(line).toContain("apiKey:");
+    expect(line).not.toContain(secret);
+  });
+
+  it("redacts credentials before writing forced stderr console output", () => {
+    setLoggerOverride({ level: "info", file: tempLogPath() });
+    const stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    routeLogsToStderr();
+    enableConsoleCapture();
+
+    console.error(`Authorization: Bearer ${secret}`);
+
+    expect(stderrWrite).toHaveBeenCalledTimes(1);
+    const line = String(mockCall(stderrWrite)[0]);
+    expect(line).toContain("Authorization: Bearer");
+    expect(line).not.toContain(secret);
+  });
+
   it("redacts credentials when timestamp prefixing console output", () => {
     setLoggerOverride({ level: "info", file: tempLogPath() });
     const warn = vi.fn();
@@ -390,25 +475,23 @@ describe("enableConsoleCapture", () => {
     expect(line).not.toContain(secret);
   });
 
-  it.each([{ name: "stderr", stream: process.stderr }])(
-    "exits on async EPIPE on $name",
-    ({ stream }) => {
-      const exitSpy = vi
-        .spyOn(process, "exit")
-        .mockImplementation((() => {}) as typeof process.exit);
-      try {
-        setLoggerOverride({ level: "info", file: tempLogPath() });
-        loggingState.streamErrorHandlersInstalled = false;
-        enableConsoleCapture();
-        const epipe = new Error("write EPIPE") as NodeJS.ErrnoException;
-        epipe.code = "EPIPE";
-        stream.emit("error", epipe);
-        expect(exitSpy).toHaveBeenCalledWith(0);
-      } finally {
-        exitSpy.mockRestore();
-      }
-    },
-  );
+  it.each([
+    { name: "stdout", stream: process.stdout },
+    { name: "stderr", stream: process.stderr },
+  ])("exits on async EPIPE on $name", ({ stream }) => {
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation((() => {}) as typeof process.exit);
+    try {
+      setLoggerOverride({ level: "info", file: tempLogPath() });
+      loggingState.streamErrorHandlersInstalled = false;
+      enableConsoleCapture();
+      const epipe = new Error("write EPIPE") as NodeJS.ErrnoException;
+      epipe.code = "EPIPE";
+      stream.emit("error", epipe);
+      expect(exitSpy).toHaveBeenCalledWith(0);
+    } finally {
+      exitSpy.mockRestore();
+    }
+  });
 
   it.each([
     { outcome: "recovered", code: 0 },

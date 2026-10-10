@@ -76,6 +76,14 @@ describe("diagnostic session context", () => {
     tempDir = undefined;
   });
 
+  it("logs cron provenance without an active session", async () => {
+    expect(
+      await captureSessionLog({
+        sessionKey: "agent:clawblocker:cron:unlisted-job:run:unlisted-run",
+      }),
+    ).toBe("cronJobId=unlisted-job cronRunId=unlisted-run");
+  });
+
   it("formats cron job and last assistant context for stalled session logs", async () => {
     const stateDir = tempDir!;
     await saveCronStore(path.join(stateDir, "cron", "jobs.json"), {
@@ -124,6 +132,7 @@ describe("diagnostic session context", () => {
   });
 
   it.each([
+    { label: "short", reply: "latest visible reply", expected: "latest visible reply" },
     {
       label: "unicode",
       reply: "a".repeat(136) + "😀" + "b".repeat(200),
@@ -195,7 +204,7 @@ describe("diagnostic session context", () => {
     expect(await message).toBe("");
   });
 
-  it.each(["internal-session-effects"])(
+  it.each(["dashboard", "subagent", "internal-session-effects"])(
     "never exposes a %s incognito assistant reply to durable diagnostics",
     async (sessionSurface) => {
       const sessionKey = `agent:incognito-agent:${sessionSurface}:incognito-private`;
@@ -271,5 +280,41 @@ describe("diagnostic session context", () => {
         activeSessionId: "main-session",
       }),
     ).toBe("");
+  });
+
+  it("does not treat channel-owned cron segments as cron metadata", async () => {
+    const sessionKey = "agent:oauth-agent:slack:cron:job-123:run:run-456";
+    await seedSessionTranscript({
+      agentId: "oauth-agent",
+      sessionId: "slack-session",
+      sessionKey,
+      messages: [{ role: "assistant", content: "channel reply" }],
+    });
+
+    const message = await captureSessionLog({
+      sessionKey,
+      activeSessionId: "slack-session",
+    });
+
+    expect(message).toBe('lastAssistant="channel reply"');
+  });
+
+  it("does not create an agent database when its session store is missing", async () => {
+    const databasePath = path.join(
+      tempDir!,
+      "agents",
+      "missing-agent",
+      "agent",
+      "openclaw-agent.sqlite",
+    );
+    expect(fs.existsSync(databasePath)).toBe(false);
+
+    expect(
+      await captureSessionLog({
+        sessionKey: "agent:missing-agent:main",
+        activeSessionId: "missing",
+      }),
+    ).toBe("");
+    expect(fs.existsSync(databasePath)).toBe(false);
   });
 });

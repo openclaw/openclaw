@@ -45,24 +45,33 @@ function fakeRepeatedToken(chars: readonly string[], length = 40): string {
 describe("diagnostic support redaction", () => {
   const tempDir = path.join(os.tmpdir(), "openclaw-support-redaction-test");
 
-  it.each([`'/synthetic/private owner/state.sqlite' private suffix`])(
-    "hides the complete quoted path suffix in %s",
-    (source) => {
-      expect(
-        redactSupportDiagnosticLine(`EACCES: permission denied, open ${source}`, {
-          env: {},
-          stateDir: tempDir,
-        }),
-      ).toBe("EACCES: permission denied, open [redacted-path]");
-    },
-  );
+  it.each([
+    `'/synthetic/private owner/state.sqlite' private suffix`,
+    `'/synthetic/o'brien/customer.sqlite' private suffix`,
+    `"/synthetic/private "quoted" owner/state.sqlite" private suffix`,
+    String.raw`"C:\Users\Private Owner\state.sqlite" private suffix`,
+    String.raw`'\\private-server\private share\state.sqlite' private suffix`,
+    `"file:///synthetic/private owner/state.sqlite" private suffix`,
+  ])("hides the complete quoted path suffix in %s", (source) => {
+    expect(
+      redactSupportDiagnosticLine(`EACCES: permission denied, open ${source}`, {
+        env: {},
+        stateDir: tempDir,
+      }),
+    ).toBe("EACCES: permission denied, open [redacted-path]");
+  });
 
   it.each([
     ['"dist/index.js": fields=size,mtimeNs,ctimeNs,sha256', true],
+    ['"node_modules/.package-lock.json": fields=added', true],
     ['"node_modules/@openclaw/fs-safe/index.js": fields=sha256', true],
+    ['".": fields=dev:ino,mode', true],
+    ['"/private/state.js": fields=sha256', false],
     ['"../private/state.js": fields=sha256', false],
     ['"node_modules/@private_team/module/index.js": fields=sha256', false],
+    ['"node_modules/@org/module/index.js": fields=sha256', false],
     ['"dist/index.js": fields=sha256,private-value', false],
+    ['"dist/index.js": fields=sha256; private-text', false],
   ])("bounds public package drift diagnostics: %s", (detail, allowed) => {
     const line = `Package rollback entry ${detail}`;
     expect(redactPublicSupportDiagnosticLine(line, { env: {}, stateDir: tempDir })).toBe(
@@ -76,11 +85,19 @@ describe("diagnostic support redaction", () => {
       true,
     ],
     [
+      'helper "recovery.mjs" unsafe: mode=0644 nlink=1 uid=1000; expected owner-only mode nlink=1.',
+      true,
+    ],
+    [
       'journal "operation.sqlite" unsafe: mode=0600 nlink=2 uid=1000; expected owner-only mode nlink=1. private-text',
       false,
     ],
     [
       'journal "/private/operation.sqlite" unsafe: mode=0600 nlink=2 uid=1000; expected owner-only mode nlink=1.',
+      false,
+    ],
+    [
+      'unknown "operation.sqlite" unsafe: mode=0600 nlink=2 uid=1000; expected owner-only mode nlink=1.',
       false,
     ],
   ])("bounds public package recovery diagnostics: %s", (detail, allowed) => {
@@ -90,7 +107,22 @@ describe("diagnostic support redaction", () => {
     );
   });
 
-  it.each(["EACCES"])("keeps the npm error code %s without publishing its log", (code) => {
+  it.each([
+    "EACCES",
+    "EPERM",
+    "ENOTEMPTY",
+    "EEXIST",
+    "ETARGET",
+    "E404",
+    "ENOTFOUND",
+    "ECONNRESET",
+    "ETIMEDOUT",
+    "EOTP",
+    "E401",
+    "E403",
+    "ENOSPC",
+    "EINTEGRITY",
+  ])("keeps the npm error code %s without publishing its log", (code) => {
     expect(
       redactPublicSupportDiagnosticLine(
         `npm warn private-package\nnpm ERR! code ${code}\nnpm ERR! log /private/example/npm.log at private-host.example`,
@@ -108,14 +140,16 @@ describe("diagnostic support redaction", () => {
     ).toBe("EACCES; Permission denied");
   });
 
-  it.each(["ERR_PNPM_PRIVATE_CUSTOMER"])(
-    "does not allow arbitrary npm error identifiers (%s)",
-    (code) => {
-      expect(
-        redactPublicSupportDiagnosticLine(`npm ERR! code ${code}`, { env: {}, stateDir: tempDir }),
-      ).toBe("[redacted-diagnostic]");
-    },
-  );
+  it.each([
+    "ERR_PNPM_PRIVATE_CUSTOMER",
+    "ERR_OSSL_PRIVATE_CUSTOMER",
+    "EPRIVATE_CUSTOMER",
+    "EOTP_PRIVATE_CUSTOMER",
+  ])("does not allow arbitrary npm error identifiers (%s)", (code) => {
+    expect(
+      redactPublicSupportDiagnosticLine(`npm ERR! code ${code}`, { env: {}, stateDir: tempDir }),
+    ).toBe("[redacted-diagnostic]");
+  });
 
   it.each(["", " private-customer-text"])(
     "recognizes only the fixed npm layout refusal (%s)",
@@ -127,6 +161,22 @@ describe("diagnostic support redaction", () => {
       ).toBe(suffix ? "[redacted-diagnostic]" : message);
     },
   );
+
+  it("redacts numeric private fields in support snapshots and config", () => {
+    const redaction = {
+      env: {
+        HOME: tempDir,
+        OPENCLAW_STATE_DIR: tempDir,
+      },
+      stateDir: tempDir,
+    };
+
+    expect(sanitizeSupportSnapshotValue(15555551212, redaction, "chatId")).toBe("<redacted>");
+    expect(sanitizeSupportSnapshotValue(15555551212, redaction, "messageId")).toBe("<redacted>");
+    expect(sanitizeSupportSnapshotValue(200, redaction, "statusCode")).toBe(200);
+    expect(sanitizeSupportConfigValue(15555551212, redaction, "ownerId")).toBe("<redacted>");
+    expect(sanitizeSupportConfigValue(18789, redaction, "port")).toBe(18789);
+  });
 
   it("blocks prototype keys and caps support sanitizer width", () => {
     const redaction = {
@@ -263,7 +313,7 @@ describe("diagnostic support redaction", () => {
     }
   });
 
-  it.each(["@openclaw/codex"])(
+  it.each(["@openclaw/codex", "@openclaw/codex@latest", "@openclaw/codex@2026.9.3"])(
     "preserves install guidance for %s beside private diagnostics across support handoffs",
     (packageSpec) => {
       const redaction = { env: {}, stateDir: tempDir };

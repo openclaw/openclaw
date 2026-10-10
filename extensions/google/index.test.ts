@@ -3,12 +3,17 @@ import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { Context, Model } from "openclaw/plugin-sdk/llm";
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import type {
+  OpenClawPluginApi,
+  ProviderReplaySessionEntry,
+  ProviderSanitizeReplayHistoryContextV2,
+} from "openclaw/plugin-sdk/plugin-entry";
 import {
   registerProviderPlugin,
   requireRegisteredProvider,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { createCapturedThinkingConfigStream } from "openclaw/plugin-sdk/provider-test-contracts";
+import { makeAgentAssistantMessage } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
 import { buildGoogleGeminiCliProvider } from "./gemini-cli-provider.js";
 import googleProviderDiscovery from "./provider-discovery.js";
@@ -30,6 +35,109 @@ function registerGoogleProviders() {
 }
 
 describe("google provider plugin hooks", () => {
+  it("owns replay policy and reasoning mode for the direct Gemini provider", async () => {
+    const { providers } = await registerGoogleProviders();
+    const provider = requireRegisteredProvider(providers, "google");
+    const customEntries: ProviderReplaySessionEntry[] = [];
+
+    expect(
+      provider.buildReplayPolicy?.({
+        provider: "google",
+        modelApi: "google-generative-ai",
+        modelId: "gemini-3.1-pro-preview",
+      } as never),
+    ).toEqual({
+      sanitizeMode: "full",
+      appendOnlyRuntimeContext: false,
+      sanitizeToolCallIds: true,
+      toolCallIdMode: "strict",
+      sanitizeThoughtSignatures: {
+        allowBase64Only: true,
+        includeCamelCase: true,
+      },
+      repairToolUseResultPairing: true,
+      applyAssistantFirstOrderingFix: true,
+      validateGeminiTurns: true,
+      validateAnthropicTurns: false,
+      allowSyntheticToolResults: true,
+    });
+
+    expect(
+      provider.resolveReasoningOutputMode?.({
+        provider: "google",
+        modelApi: "google-generative-ai",
+        modelId: "gemini-3.1-pro-preview",
+      } as never),
+    ).toBe("native");
+    expect(
+      provider.resolveReasoningOutputMode?.({
+        provider: "google",
+        modelId: "gemini-3.1-pro-preview",
+      } as never),
+    ).toBe("native");
+
+    const assistantMessage = makeAgentAssistantMessage({
+      api: "google-generative-ai",
+      provider: "google",
+      model: "gemini-3.1-pro-preview",
+      content: [{ type: "text", text: "hello" }],
+    });
+    const sanitized = await Promise.resolve(
+      provider.sanitizeReplayHistoryAsync?.({
+        provider: "google",
+        modelApi: "google-generative-ai",
+        modelId: "gemini-3.1-pro-preview",
+        sessionId: "session-1",
+        messages: [structuredClone(assistantMessage)],
+        sessionState: {
+          getCustomEntries: () => customEntries,
+          appendCustomEntry: () => {
+            throw new Error("legacy persistence used");
+          },
+          appendCustomEntryAsync: async (customType: string, data: unknown) => {
+            customEntries.push({ customType, data });
+            return "bootstrap";
+          },
+        },
+      } satisfies ProviderSanitizeReplayHistoryContextV2),
+    );
+
+    const bootstrapMessage = sanitized?.[0] as
+      | { role?: string; content?: unknown; timestamp?: unknown }
+      | undefined;
+    expect(bootstrapMessage?.role).toBe("user");
+    expect(bootstrapMessage?.content).toBe("(session bootstrap)");
+    expect(typeof bootstrapMessage?.timestamp).toBe("number");
+    expect(sanitized?.[1]).toEqual(assistantMessage);
+    expect(customEntries).toHaveLength(1);
+    expect(customEntries[0]?.customType).toBe("google-turn-ordering-bootstrap");
+  });
+
+  it("keeps google-gemini-cli on tagged reasoning mode", async () => {
+    const { providers } = await registerGoogleProviders();
+    const cliProvider = requireRegisteredProvider(providers, "google-gemini-cli");
+    expect(
+      cliProvider.resolveReasoningOutputMode?.({
+        provider: "google-gemini-cli",
+        modelApi: "google-gemini-cli",
+        modelId: "gemini-2.5-pro",
+      } as never),
+    ).toBe("tagged");
+  });
+
+  it("keeps the Gemini CLI runtime without OpenClaw-owned OAuth surfaces", async () => {
+    const { providers } = await registerGoogleProviders();
+    const cliProvider = requireRegisteredProvider(providers, "google-gemini-cli");
+
+    expect(cliProvider.label).toBe("Gemini CLI runtime");
+    expect(cliProvider.auth).toEqual([]);
+    expect(cliProvider.envVars).toEqual([]);
+    expect(cliProvider.wizard).toBeUndefined();
+    expect(cliProvider.refreshOAuth).toBeUndefined();
+    expect(cliProvider.resolveUsageAuth).toBeUndefined();
+    expect(cliProvider.fetchUsageSnapshot).toBeUndefined();
+  });
+
   it("keeps google-antigravity hook aliases on tagged reasoning mode", async () => {
     const { providers } = await registerGoogleProviders();
     const provider = requireRegisteredProvider(providers, "google-antigravity");
@@ -40,6 +148,24 @@ describe("google provider plugin hooks", () => {
         modelId: "gemini-3-pro-low",
       } as never),
     ).toBe("tagged");
+  });
+
+  it("keeps google-vertex hook aliases on native reasoning mode", async () => {
+    const { providers } = await registerGoogleProviders();
+    const provider = requireRegisteredProvider(providers, "google-vertex");
+    expect(
+      provider.resolveReasoningOutputMode?.({
+        provider: "google-vertex",
+        modelApi: "google-vertex",
+        modelId: "gemini-3.1-pro-preview",
+      } as never),
+    ).toBe("native");
+    expect(
+      provider.resolveReasoningOutputMode?.({
+        provider: "google-vertex",
+        modelId: "gemini-3.1-pro-preview",
+      } as never),
+    ).toBe("native");
   });
 
   it("keeps google-interactions hook aliases on native reasoning mode", async () => {
@@ -177,6 +303,53 @@ describe("google provider plugin hooks", () => {
         env: missingRelocatedCredentialsEnv,
       }),
     ).toBeUndefined();
+  });
+
+  it("owns Gemini tool schema normalization for direct and CLI providers", async () => {
+    const { providers } = await registerGoogleProviders();
+    const providerIds = ["google", "google-gemini-cli"] as const;
+
+    for (const providerId of providerIds) {
+      const provider = requireRegisteredProvider(providers, providerId);
+      const [tool] =
+        provider.normalizeToolSchemas?.({
+          provider: providerId,
+          tools: [
+            {
+              name: "write_file",
+              description: "Write a file",
+              parameters: {
+                type: "object",
+                additionalProperties: false,
+                properties: {
+                  path: { type: "string", pattern: "^src/" },
+                },
+              },
+            },
+          ],
+        } as never) ?? [];
+
+      expect(tool).toEqual({
+        name: "write_file",
+        description: "Write a file",
+        parameters: {
+          type: "object",
+          properties: {
+            path: { type: "string" },
+          },
+        },
+      });
+      expect(tool?.parameters).not.toHaveProperty("additionalProperties");
+      expect(
+        (tool?.parameters as { properties?: { path?: Record<string, unknown> } })?.properties?.path,
+      ).not.toHaveProperty("pattern");
+      expect(
+        provider.inspectToolSchemas?.({
+          provider: providerId,
+          tools: [tool],
+        } as never),
+      ).toEqual([]);
+    }
   });
 
   it("wires google-thinking stream hooks for direct and Gemini CLI providers", async () => {

@@ -3,7 +3,77 @@ import { canonicalizeTelegramPresentationPayload } from "./interactive-fallback.
 import { parseTelegramQuestionCallbackData } from "./question-callback-data.js";
 
 describe("canonicalizeTelegramPresentationPayload", () => {
-  it.each([true])(
+  it("preserves mixed presentation order while moving controls to Telegram buttons", () => {
+    const result = canonicalizeTelegramPresentationPayload({
+      text: "Top-level summary",
+      presentation: {
+        title: "FY25 outlook",
+        blocks: [
+          { type: "text", text: "Before table" },
+          {
+            type: "table",
+            caption: "Pipeline",
+            headers: ["Account", "Stage"],
+            rows: [
+              ["Acme", "Won"],
+              ["Globex", "Review"],
+            ],
+          },
+          { type: "context", text: "After table" },
+          { type: "buttons", buttons: [{ label: "Refresh", value: "refresh" }] },
+        ],
+      },
+    });
+
+    const text = result.text ?? "";
+    const orderedMarkers = [
+      "Top-level summary",
+      "FY25 outlook",
+      "Before table",
+      "Pipeline (table)",
+      "- Account: Acme; Stage: Won",
+      "- Account: Globex; Stage: Review",
+      "After table",
+    ];
+    for (const [index, marker] of orderedMarkers.entries()) {
+      expect(text.indexOf(marker)).toBeGreaterThan(
+        index === 0 ? -1 : text.indexOf(orderedMarkers[index - 1]!),
+      );
+    }
+    expect(text).not.toContain("Refresh");
+    expect(result.presentation).toBeUndefined();
+    expect(result.channelData?.telegram).toEqual({
+      buttons: [[{ text: "Refresh", callback_data: "refresh" }]],
+    });
+  });
+
+  it.each([
+    { richTables: false, text: undefined },
+    { richTables: false, text: "Retry the operation." },
+    { richTables: true, text: "Retry the operation." },
+  ])("keeps control-only payloads deliverable: %j", ({ richTables, text }) => {
+    const result = canonicalizeTelegramPresentationPayload(
+      {
+        text,
+        presentationTextMode: "fallback",
+        presentation: {
+          blocks: [{ type: "buttons", buttons: [{ label: "Retry", value: "retry" }] }],
+        },
+      },
+      { richTables },
+    );
+
+    expect(result).toMatchObject({
+      text: "Choose an option.",
+      channelData: {
+        telegram: { buttons: [[{ text: "Retry", callback_data: "retry" }]] },
+      },
+    });
+    expect(result.text).not.toContain("Retry");
+    expect(result.presentation).toBeUndefined();
+  });
+
+  it.each([false, true])(
     "replaces marked choice text with native actions (richTables=%s)",
     (richTables) => {
       const result = canonicalizeTelegramPresentationPayload(
@@ -192,6 +262,127 @@ describe("canonicalizeTelegramPresentationPayload", () => {
     ]);
   });
 
+  it.each([
+    {
+      label: "reordered options",
+      optionValues: ["A", "B", "C"],
+      renderedValues: ["C", "A"],
+      expectedIndices: [2, 0],
+    },
+    {
+      label: "a filtered subset",
+      optionValues: ["A", "B", "C", "D"],
+      renderedValues: ["D", "B"],
+      expectedIndices: [3, 1],
+    },
+    {
+      label: "normalized and Unicode values",
+      optionValues: [" Deploy ", "東京", "Production 🚀"],
+      renderedValues: ["production 🚀", "東京", "deploy", " Deploy "],
+      expectedIndices: [2, 1, 0, 0],
+    },
+  ])(
+    "uses authoritative Gateway indices for $label",
+    ({ optionValues, renderedValues, expectedIndices }) => {
+      const questionId = "ask_0123456789abcdef0123456789abcdef";
+      const result = canonicalizeTelegramPresentationPayload({
+        channelData: { askUser: { questionId, optionValues } },
+        presentation: {
+          blocks: [
+            {
+              type: "buttons",
+              buttons: renderedValues.map((optionValue) => ({
+                label: optionValue,
+                action: { type: "question" as const, questionId, optionValue },
+              })),
+            },
+          ],
+        },
+      });
+      const telegram = result.channelData?.telegram as
+        | { buttons?: ReadonlyArray<ReadonlyArray<{ callback_data?: string }>> }
+        | undefined;
+
+      expect(
+        telegram?.buttons?.flatMap((row) => row.map((button) => button.callback_data)),
+      ).toEqual(expectedIndices.map((optionIndex) => `tgq1:${questionId}:${optionIndex}`));
+    },
+  );
+
+  it.each([
+    { label: "missing", askUser: undefined },
+    {
+      label: "wrong question",
+      askUser: {
+        questionId: "ask_fedcba9876543210fedcba9876543210",
+        optionValues: ["A", "C"],
+      },
+    },
+    {
+      label: "unmatched",
+      askUser: {
+        questionId: "ask_0123456789abcdef0123456789abcdef",
+        optionValues: ["A", "B"],
+      },
+    },
+    {
+      label: "oversized",
+      askUser: {
+        questionId: "ask_0123456789abcdef0123456789abcdef",
+        optionValues: ["A", "B", "C", "D", "E"],
+      },
+    },
+  ])("visibly falls back when canonical question metadata is $label", ({ askUser }) => {
+    const questionId = "ask_0123456789abcdef0123456789abcdef";
+    const result = canonicalizeTelegramPresentationPayload({
+      text: "Choose:",
+      ...(askUser ? { channelData: { askUser } } : {}),
+      presentation: {
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [
+              {
+                label: "C",
+                action: { type: "question" as const, questionId, optionValue: "C" },
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    expect(result.text).toContain("C");
+    expect(result.channelData?.telegram).toBeUndefined();
+  });
+
+  it("falls back only controls that Telegram cannot encode", () => {
+    const result = canonicalizeTelegramPresentationPayload({
+      presentation: {
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [
+              { label: "Retry", value: "retry" },
+              { label: "Copy manually", value: "x".repeat(65) },
+              {
+                label: "Hosted widget",
+                action: { type: "web-app", widgetId: "AAAAAAAAAAAAAAAAAAAAAA" },
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    expect(result.text).toContain("Copy manually");
+    expect(result.text).toContain("Hosted widget");
+    expect(result.text).not.toContain("Retry");
+    expect(result.channelData?.telegram).toEqual({
+      buttons: [[{ text: "Retry", callback_data: "retry" }]],
+    });
+  });
+
   it("uses native web_app only for a confirmed direct target", () => {
     const payload = {
       text: "Open app:",
@@ -227,7 +418,7 @@ describe("canonicalizeTelegramPresentationPayload", () => {
     );
   });
 
-  it.each(["select"] as const)("keeps full fallback labels beside native %s", (type) => {
+  it.each(["buttons", "select"] as const)("keeps full fallback labels beside native %s", (type) => {
     const nativeLabel =
       "Continue with the selected workspace and its existing settings for production";
     const fallbackLabel =
@@ -242,16 +433,27 @@ describe("canonicalizeTelegramPresentationPayload", () => {
         presentationTextMode: "fallback",
         presentation: {
           blocks: [
-            {
-              type,
-              options: [
-                nativeControl,
-                {
-                  label: fallbackLabel,
-                  action: { type: "callback", value: "unavailable".repeat(8) },
+            type === "buttons"
+              ? {
+                  type,
+                  buttons: [
+                    nativeControl,
+                    {
+                      label: fallbackLabel,
+                      action: { type: "web-app", url: "https://example.com/app" },
+                    },
+                  ],
+                }
+              : {
+                  type,
+                  options: [
+                    nativeControl,
+                    {
+                      label: fallbackLabel,
+                      action: { type: "callback", value: "unavailable".repeat(8) },
+                    },
+                  ],
                 },
-              ],
-            },
           ],
         },
       },

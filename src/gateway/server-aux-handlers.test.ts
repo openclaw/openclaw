@@ -129,6 +129,31 @@ function slackZaloConfig(slackSigningSecret: string, zaloWebhookSecret: string) 
   });
 }
 
+function slackZaloDiscordConfig(
+  slackSigningSecret: string,
+  zaloWebhookSecret: string,
+  discordToken: string,
+) {
+  return asConfig({
+    channels: {
+      slack: { signingSecret: slackSigningSecret },
+      zalo: { webhookSecret: zaloWebhookSecret },
+      discord: { token: discordToken },
+    },
+  });
+}
+
+function gatewayTokenSlackConfig(token: string, signingSecret: string) {
+  return asConfig({
+    gateway: {
+      auth: { mode: "token", token },
+    },
+    channels: {
+      slack: { signingSecret },
+    },
+  });
+}
+
 function activateSnapshot(config: OpenClawConfig) {
   activateSecretsRuntimeSnapshot(createSnapshot(config));
 }
@@ -354,6 +379,62 @@ describe("gateway aux handlers", () => {
     expect(okFlag).toBe(false);
     expect(successPayload).toBeUndefined();
     expect(errorPayload?.message ?? "").toBe("secrets.reload failed");
+  });
+
+  it("restarts only channels whose resolved secret-backed config changed on secrets.reload", async () => {
+    const buildReloadPlanCalls: string[][] = [];
+    const buildReloadPlan = (changedPaths: string[]) => {
+      buildReloadPlanCalls.push([...changedPaths]);
+      return createReloadPlan({
+        restartChannels: new Set(["slack", "zalo"]),
+      });
+    };
+    activateSnapshot(
+      slackZaloDiscordConfig("old-slack-secret", "old-zalo-secret", "unchanged-discord-token"),
+    );
+    const prepared = createSnapshot(
+      slackZaloDiscordConfig("new-slack-secret", "new-zalo-secret", "unchanged-discord-token"),
+    );
+    const prepareRuntimeSecretsSnapshot = vi.fn().mockResolvedValue(prepared);
+    const { reload, respond, startChannel, stopChannel } =
+      createSecretsReloadHarnessWithChannelMocks({
+        prepareRuntimeSecretsSnapshot,
+        buildReloadPlan,
+      });
+
+    await reload();
+
+    expect(prepareRuntimeSecretsSnapshot).toHaveBeenCalledTimes(1);
+    expect(buildReloadPlanCalls).toEqual([
+      ["channels.slack.signingSecret", "channels.zalo.webhookSecret"],
+    ]);
+    expect(stopChannel.mock.calls.map(([ch]) => ch).toSorted((a, b) => a.localeCompare(b))).toEqual(
+      ["slack", "zalo"],
+    );
+    expect(
+      startChannel.mock.calls.map(([ch]) => ch).toSorted((a, b) => a.localeCompare(b)),
+    ).toEqual(["slack", "zalo"]);
+    expect(respond).toHaveBeenCalledWith(true, { ok: true, warningCount: 0 });
+  });
+
+  it("restarts only the changed account when a secret change is account-scoped", async () => {
+    const buildReloadPlan = () =>
+      createReloadPlan({
+        restartChannelAccounts: new Map([["slack", new Set(["ops"])]]),
+      });
+    activateSnapshot(slackConfig("old-slack-secret"));
+    const prepareRuntimeSecretsSnapshot = mockResolvedSecrets(slackConfig("new-slack-secret"));
+    const { reload, respond, startChannel, stopChannel } =
+      createSecretsReloadHarnessWithChannelMocks({
+        prepareRuntimeSecretsSnapshot,
+        buildReloadPlan,
+      });
+
+    await reload();
+
+    expect(stopChannel.mock.calls).toEqual([["slack", "ops", { manual: false }]]);
+    expect(startChannel.mock.calls).toEqual([["slack", "ops", { preserveManualStop: true }]]);
+    expect(respond).toHaveBeenCalledWith(true, { ok: true, warningCount: 0 });
   });
 
   registerGatewaySecretCredentialReloadCases(createCredentialReloadHarness);
@@ -740,5 +821,30 @@ describe("gateway aux handlers", () => {
       ],
     ]);
     expect(getActiveSecretsRuntimeSnapshot()?.config).toEqual(slackConfig("old-slack-secret"));
+  });
+
+  it("does not restart channels when resolved secrets do not change channel config", async () => {
+    const buildReloadPlanCalls: string[][] = [];
+    const buildReloadPlan = (changedPaths: string[]) => {
+      buildReloadPlanCalls.push([...changedPaths]);
+      return createReloadPlan();
+    };
+    activateSnapshot(gatewayTokenSlackConfig("old-token", "same-secret"));
+    const prepareRuntimeSecretsSnapshot = mockResolvedSecrets(
+      gatewayTokenSlackConfig("new-token", "same-secret"),
+    );
+
+    const { reload, respond, startChannel, stopChannel } =
+      createSecretsReloadHarnessWithChannelMocks({
+        prepareRuntimeSecretsSnapshot,
+        buildReloadPlan,
+      });
+
+    await reload();
+
+    expect(buildReloadPlanCalls).toEqual([["gateway.auth.token"]]);
+    expect(stopChannel).not.toHaveBeenCalled();
+    expect(startChannel).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(true, { ok: true, warningCount: 0 });
   });
 });

@@ -131,6 +131,89 @@ describe("conversation tools", () => {
     });
   });
 
+  it("routes sends through the Gateway with a stable operation id", async () => {
+    const callGateway = mockGateway();
+    const tool = createConversationsSendTool({
+      agentId: "main",
+      agentSessionId: "operator-session",
+      agentSessionKey: "agent:main:telegram:direct:operator",
+      config: {},
+    });
+    const args = {
+      conversationRef: conversation.conversationRef,
+      message: "hello peer",
+    };
+
+    const firstResult = await tool.execute("tool-call-1", args);
+    const secondResult = await tool.execute("tool-call-1", args);
+    const first = callGateway.mock.calls[0]![0];
+    const second = callGateway.mock.calls[1]![0];
+
+    expect(first).toMatchObject({
+      method: "conversations.send",
+      params: {
+        agentId: "main",
+        sourceSessionKey: "agent:main:telegram:direct:operator",
+        conversationRef: conversation.conversationRef,
+        message: "hello peer",
+      },
+      config: {},
+    });
+    expect(first.params).toMatchObject({
+      operationId: expect.stringMatching(/^convop_[a-f0-9]{32}$/u),
+    });
+    expect(second.params).toEqual(first.params);
+    expect(firstResult.details).toEqual(secondResult.details);
+    expect(firstResult.details).toMatchObject({
+      status: "sent",
+      messageId: "reef-outbound-1",
+      queueId: "queue-1",
+    });
+  });
+
+  it("reports Gateway suppression without claiming delivery", async () => {
+    const callGateway = mockGateway();
+    callGateway.mockResolvedValueOnce({
+      status: "suppressed",
+      conversationRef: conversation.conversationRef,
+      channel: "reef",
+      queueId: "queue-suppressed",
+    });
+
+    const result = await createConversationsSendTool({ agentId: "main", config: {} }).execute(
+      "suppressed-call",
+      {
+        conversationRef: conversation.conversationRef,
+        message: "suppressed hello",
+      },
+    );
+
+    expect(result.details).toEqual({
+      status: "suppressed",
+      conversationRef: conversation.conversationRef,
+      channel: "reef",
+      queueId: "queue-suppressed",
+    });
+  });
+
+  it("keeps a transient Gateway send failure retryable under the stable tool call id", async () => {
+    const callGateway = mockGateway();
+    callGateway.mockRejectedValueOnce(new Error("gateway unavailable"));
+    const tool = createConversationsSendTool({ agentId: "main", config: {} });
+    const args = {
+      conversationRef: conversation.conversationRef,
+      message: "retry me",
+    };
+
+    await expect(tool.execute("retryable-call", args)).rejects.toThrow("gateway unavailable");
+    await expect(tool.execute("retryable-call", args)).resolves.toMatchObject({
+      details: { status: "sent", messageId: "reef-outbound-1" },
+    });
+    const first = callGateway.mock.calls[0]![0];
+    const second = callGateway.mock.calls[1]![0];
+    expect(second.params).toEqual(first.params);
+  });
+
   it("uses a stable operation id for correlated turns and cancels on abort", async () => {
     const callGateway = mockGateway();
     const tool = createConversationsTurnTool({
