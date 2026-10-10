@@ -5,8 +5,9 @@ import { selectApplicationSession } from "../../app/agent-selection.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { LazyCustomElementRequestController } from "../../app/lazy-custom-element.ts";
 import type { ImageLightboxItem } from "../../components/image-lightbox.types.ts";
-import "../../styles/new-session-attachment-panel.css";
 import { renderLazyViewError } from "../../components/lazy-view-error.ts";
+import "../../styles/new-session-attachment-panel.css";
+import { renderSessionBackground } from "../../components/session-background-view.ts";
 import { t } from "../../i18n/index.ts";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import { normalizeAgentTargetLabel, resolveAgentTextAvatar } from "../../lib/agents/display.ts";
@@ -568,6 +569,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
           incognito ? "new-session-page--incognito" : ""
         }"
       >
+        ${renderSessionBackground(this.context, "new-session")}
         ${
           catalog.isTarget(this.data)
             ? nothing

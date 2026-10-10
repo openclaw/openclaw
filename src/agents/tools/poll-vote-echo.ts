@@ -82,7 +82,7 @@ function normalizePollEchoText(text: string): NormalizedPollEchoText {
   return { emojiSignature, words };
 }
 
-export function isPollVoteEchoText(option: string, outboundText: string): boolean {
+function isPollVoteEchoText(option: string, outboundText: string): boolean {
   const normalizedOption = normalizePollEchoText(option);
   const normalizedOutbound = normalizePollEchoText(outboundText);
   const optionHasContent = Boolean(normalizedOption.words || normalizedOption.emojiSignature);

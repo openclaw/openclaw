@@ -448,10 +448,12 @@ function formatOptionalSignedBytes(value: number | null): string {
 
 function pushRows<Entry>(
   lines: string[],
+  label: string,
   entries: Entry[],
   limit: number,
   formatRow: (entry: Entry, index: number) => string,
 ): void {
+  lines.push("", `${label} (${Math.min(limit, entries.length)} of ${entries.length})`);
   const selected = entries.slice(0, limit);
   if (selected.length === 0) {
     lines.push("  (none)");
@@ -488,20 +490,11 @@ export function renderGroupedTestComparison(
     lines.push(`[test-group-report:compare] warning: ${warning}`);
   }
 
-  lines.push(
-    "",
-    `Top group regressions (${Math.min(limit, groupRegressions.length)} of ${groupRegressions.length})`,
-  );
-  pushRows(lines, groupRegressions, limit, formatChangeRow);
+  pushRows(lines, "Top group regressions", groupRegressions, limit, formatChangeRow);
 
-  lines.push("", `Top group gains (${Math.min(limit, groupGains.length)} of ${groupGains.length})`);
-  pushRows(lines, groupGains, limit, formatChangeRow);
+  pushRows(lines, "Top group gains", groupGains, limit, formatChangeRow);
 
-  lines.push(
-    "",
-    `Config duration deltas (${Math.min(limit, comparison.configs.length)} of ${comparison.configs.length})`,
-  );
-  pushRows(lines, comparison.configs, limit, formatChangeRow);
+  pushRows(lines, "Config duration deltas", comparison.configs, limit, formatChangeRow);
 
   if (comparison.runs.length > 0) {
     lines.push(
@@ -515,14 +508,9 @@ export function renderGroupedTestComparison(
     }
   }
 
-  lines.push(
-    "",
-    `Top file regressions (${Math.min(topFiles, fileRegressions.length)} of ${fileRegressions.length})`,
-  );
-  pushRows(lines, fileRegressions, topFiles, formatFileChangeRow);
+  pushRows(lines, "Top file regressions", fileRegressions, topFiles, formatFileChangeRow);
 
-  lines.push("", `Top file gains (${Math.min(topFiles, fileGains.length)} of ${fileGains.length})`);
-  pushRows(lines, fileGains, topFiles, formatFileChangeRow);
+  pushRows(lines, "Top file gains", fileGains, topFiles, formatFileChangeRow);
 
   return lines.join("\n");
 }
