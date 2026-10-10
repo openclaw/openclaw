@@ -161,8 +161,9 @@ export function copyPluginSourceFile(
       const mode = options.preserveSourceMode
         ? Number(admitted.mode & 0o777n)
         : 0o600 | Number(admitted.mode & 0o100n);
+      // Windows needs this path most: fs-safe skips native copies and path-admission
+      // caching on win32, so guarded clones of every small file stall Gateway startup.
       if (
-        process.platform !== "win32" &&
         admitted.size <= BigInt(SMALL_SOURCE_COPY_BYTES) &&
         !/\.(?:node|so|dylib|dll)$/iu.test(source) &&
         !isPluginNativeDescriptor(fd) &&
