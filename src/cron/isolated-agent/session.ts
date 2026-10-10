@@ -23,8 +23,10 @@ import {
   preserveSqliteSameKeySessionRolloverLineage,
 } from "../../config/sessions/session-entry-lineage.js";
 import { preserveCreationStamp } from "../../config/sessions/session-entry-provenance.js";
-import { readSessionEntryInWorker } from "../../config/sessions/session-entry-read-runtime.js";
-import { withSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
+import {
+  readSessionEntryInWorker,
+  withSessionEntryReadOnlyInWorker,
+} from "../../config/sessions/session-entry-read-runtime.js";
 import { captureIncognitoSessionSource } from "../../config/sessions/session-incognito-binding.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";

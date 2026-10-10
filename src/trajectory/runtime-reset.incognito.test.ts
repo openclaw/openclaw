@@ -86,10 +86,13 @@ describe("incognito trajectory and reset continuation sources", () => {
         sessionTarget: { ...scope, sessionId: entry.sessionId },
       };
       const { sink, cleanup } = await withIncognitoSessionActor(actor, async () => {
-        const sink = await createSqliteTrajectoryRuntimeSink(input);
-        assert(sink);
-        const cleanup = createSessionResetCleanupGuard({ ...scope, expectedSession: entry });
-        expect(cleanup).not.toThrow();
+        const retainedSink = await createSqliteTrajectoryRuntimeSink(input);
+        assert(retainedSink);
+        const retainedCleanup = createSessionResetCleanupGuard({
+          ...scope,
+          expectedSession: entry,
+        });
+        expect(retainedCleanup).not.toThrow();
         expect(
           await createSqliteTrajectoryRuntimeSink({
             ...input,
@@ -102,7 +105,7 @@ describe("incognito trajectory and reset continuation sources", () => {
             },
           }),
         ).toBeNull();
-        return { sink, cleanup };
+        return { sink: retainedSink, cleanup: retainedCleanup };
       });
       const event: TrajectoryEvent = {
         traceSchema: "openclaw-trajectory",
