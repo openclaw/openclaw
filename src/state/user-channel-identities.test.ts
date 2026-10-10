@@ -22,6 +22,7 @@ import {
   listCanonicalUserChannelIdentities,
   prepareUserChannelIdentityAuthority,
   prepareUserProfileRoleAuthority,
+  prepareUserProfileRolePolicyAuthority,
   prepareUserProfileSelectionAuthority,
 } from "./user-channel-identity-operations.js";
 import { readUserProfileAliasRevision } from "./user-profile-events.js";
@@ -77,9 +78,11 @@ it.each(["email binding", "stale role reply"] as const)(
     await changeCanonicalUserChannelIdentity("link", source.id, identity, options);
     const selection = await prepareUserProfileSelectionAuthority(source.id, options);
     const admin = await prepareUserProfileRoleAuthority(source.id, options);
+    const rolePolicy = await prepareUserProfileRolePolicyAuthority(source.id, options);
     const channel = await prepareUserChannelIdentityAuthority(identity, options);
     expect(selection?.isCurrent()).toBe(true);
     expect(admin?.isCurrent()).toBe(true);
+    expect(rolePolicy?.isCurrent()).toBe(true);
     expect(channel?.isCurrent()).toBe(true);
 
     const execute = stateReads.executeExistingOpenClawStateRead;
@@ -119,6 +122,7 @@ it.each(["email binding", "stale role reply"] as const)(
       expect(prepared?.isCurrent()).toBe(true);
       expect(resolveUserProfileId(source.id, options)).toBe(source.id);
       expect(admin?.isCurrent()).toBe(false);
+      expect(rolePolicy?.isCurrent()).toBe(false);
       expect(channel?.isCurrent()).toBe(false);
       expect(selection?.isCurrent()).toBe(true);
       expect((await prepareUserChannelIdentityAuthority(identity, options))?.isCurrent()).toBe(
@@ -133,10 +137,12 @@ it.each(["email binding", "stale role reply"] as const)(
 it("does not create state or identity tables while resolving absent links", async () => {
   const options = stateOptions();
   expect(await prepareUserChannelIdentityAuthority(identity, options)).toBeUndefined();
+  expect(await prepareUserProfileRolePolicyAuthority("absent", options)).toBeUndefined();
   expect(await listCanonicalUserChannelIdentities("absent", options)).toEqual([]);
   expect(resolveUserChannelIdentity(identity, options)).toBeUndefined();
   expect(existsSync(options.path)).toBe(false);
   const { db } = openOpenClawStateDatabase(options);
+  expect(await prepareUserProfileRolePolicyAuthority("absent", options)).toBeUndefined();
   expect(resolveUserChannelIdentity(identity, options)).toBeUndefined();
   expect(await listCanonicalUserChannelIdentities("absent", options)).toEqual([]);
   expect(tableExists(db, "user_profiles")).toBe(false);
