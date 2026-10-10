@@ -28,9 +28,10 @@ suite.define(() => {
     "uses configured defaults without erasing $source preferences (required: $required)",
     async ({ source, required }) => {
       const policies = required
-        ? (["configured"] as const)
+        ? ([undefined, "last-used", "configured"] as const)
         : (["last-used", "configured"] as const);
       for (const policy of policies) {
+        const configuredDefaults = required || policy === "configured";
         await suite.withPage(
           { ...createControlUiE2eContextOptions(), reducedMotion: "reduce" },
           async ({ page }) => {
@@ -121,28 +122,28 @@ suite.define(() => {
             });
             await page.route("**/control-ui-config.json", (route) =>
               route.fulfill({
-                json: { ...createControlUiMockBootstrapConfig(), newSessionModelDefaults: policy },
+                json: {
+                  ...createControlUiMockBootstrapConfig(),
+                  ...(policy === undefined ? {} : { newSessionModelDefaults: policy }),
+                },
               }),
             );
             await page.goto(suite.server.baseUrl + "new");
             const effort = page.locator('[data-chat-thinking-select="true"]');
             await expect
               .poll(() => effort.getAttribute("data-chat-thinking-value"))
-              .toBe(policy === "configured" ? "" : "low");
-            if (policy === "configured") {
+              .toBe(configuredDefaults ? "" : "low");
+            if (configuredDefaults) {
               await expect
                 .poll(async () => (await effort.textContent())?.toLowerCase())
                 .toContain("high");
             }
             await expect
               .poll(() => page.locator('[data-chat-model-select="true"]').textContent())
-              .toContain(policy === "configured" ? "GPT-4.1" : "GPT-4.1 mini");
+              .toContain(configuredDefaults ? "GPT-4.1" : "GPT-4.1 mini");
             if (source === "browser" && process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
               await page.screenshot({
-                path: path.join(
-                  suite.artifactDir,
-                  policy === "configured" ? "after.png" : "before.png",
-                ),
+                path: path.join(suite.artifactDir, configuredDefaults ? "after.png" : "before.png"),
                 animations: "disabled",
               });
             }
@@ -157,7 +158,7 @@ suite.define(() => {
                 ),
               )
               .toBe("low");
-            if (policy === "configured") {
+            if (configuredDefaults) {
               if (source === "browser") {
                 // A draft with no explicit model choice has exactly the pre-change row
                 // format: content and blobs, without the optional modelSelection field.
@@ -372,7 +373,7 @@ suite.define(() => {
             expect(request.params).toMatchObject({ model: preference.model, thinkingLevel: "low" });
             expect(request.params).toHaveProperty("fastMode", true);
             const initialTurn = required ? await gateway.waitForRequest("sessions.send") : request;
-            if (policy === "configured" && source === "browser") {
+            if (configuredDefaults && source === "browser") {
               expect(initialTurn.params).toMatchObject({
                 attachments: [
                   {
@@ -383,7 +384,7 @@ suite.define(() => {
                 ],
               });
             }
-            if (policy === "configured") {
+            if (configuredDefaults) {
               await waitForCommittedChatRoute(page);
               // Replacing the document must not interrupt the submitted draft's cleanup.
               await waitForCommittedComposerDraft(page, JSON.stringify(["", "", ""]), null, 0);
