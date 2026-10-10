@@ -9,8 +9,29 @@ import {
 } from "./sqlite-source-fence-contract.js";
 import type { SqliteWalCheckpointSnapshot } from "./sqlite-wal-checkpoint.js";
 import type { DatabasePathIdentity } from "./sqlite-worker-identity.js";
+import type { SqliteWorkerOperationContext } from "./sqlite-worker-operation-settlement.js";
 import type { SqliteWorkerStateContext } from "./sqlite-worker-state-context.js";
 import type { SqliteWorkerTransferHandle } from "./sqlite-worker-transfer.js";
+
+export type SqliteWorkerAdmissionRequest = {
+  stage: "open" | "prepare" | "transaction" | "commit";
+  facts: unknown;
+};
+
+export type SqliteWorkerDatabaseAuthority = {
+  databasePath: string;
+  assertRequest?(): void;
+  assertAccess(): void;
+  assertCreate?(databasePath: string): void;
+  acquireSchema(): { assertCurrent(): void; release(): void };
+};
+
+export type SqliteWorkerAdmissionScope = {
+  // Published SDK request helpers share these port/active carrier fields.
+  port: MessagePort;
+  owner: SqliteWorkerOperationContext;
+  active: boolean;
+};
 
 export type SqliteWorkerOperations = Record<string, { input: unknown; output: unknown }>;
 /** Process-private locator; live owner admission remains separate from this identity. */

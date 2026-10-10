@@ -22,7 +22,12 @@ import {
   type SqliteDatabaseAdmissions,
 } from "./sqlite-database-admission.js";
 import { currentSqliteOperationTiming } from "./sqlite-reader-lifecycle.js";
-import { SqliteWorkerError } from "./sqlite-worker-contract.js";
+import {
+  SqliteWorkerError,
+  type SqliteWorkerAdmissionRequest,
+  type SqliteWorkerDatabaseAuthority as DatabaseAuthority,
+  type SqliteWorkerAdmissionScope as WorkerAdmissionScope,
+} from "./sqlite-worker-contract.js";
 import {
   deferSqliteWorkerNativeCommitReceipt,
   readNativeCommitReceipt,
@@ -58,19 +63,9 @@ export function bindSqliteDatabaseAdmissionUpstream(port: MessagePort): void {
   port.unref();
 }
 
-export type SqliteWorkerAdmissionRequest = {
-  stage: "open" | "prepare" | "transaction" | "commit";
-  facts: unknown;
-};
+export type { SqliteWorkerAdmissionRequest } from "./sqlite-worker-contract.js";
 
 type AdmissionFailureSource = "authority" | "domain" | "protocol";
-type DatabaseAuthority = {
-  databasePath: string;
-  assertRequest?(): void;
-  assertAccess(): void;
-  assertCreate?(databasePath: string): void;
-  acquireSchema(): { assertCurrent(): void; release(): void };
-};
 
 export type SqliteWorkerOperationAdmission = SqliteWorkerNativeSettlementOwner & {
   readonly port: MessagePort;
@@ -560,12 +555,6 @@ function createOperationAdmission(
   return admission;
 }
 
-type WorkerAdmissionScope = {
-  // Published SDK request helpers share these port/active carrier fields.
-  port: MessagePort;
-  owner: SqliteWorkerOperationContext;
-  active: boolean;
-};
 // Source brokers and built plugin backends can load separate module copies in
 // one Worker. Share the carrier, while each operation still owns its private port.
 const currentAdmission = resolveGlobalSingleton(
