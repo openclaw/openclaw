@@ -125,6 +125,15 @@ export type SessionTranscriptDeltaWorkerInput = Omit<
     | { kind: "transcript-visible-delta"; limits: SessionTranscriptVisibleMessageDeltaLimits }
   );
 
+export type SessionTranscriptLatestAssistantWorkerInput = Omit<
+  SessionTranscriptWatermarkWorkerInput,
+  "kind"
+> & {
+  kind: "transcript-latest-assistant";
+  resolved: ResolvedTranscriptReadScope;
+  admission?: UserTurnTranscriptAdmissionReceipt;
+};
+
 export type SessionMemoryCaptureWorkerInput = Omit<
   SessionTranscriptWatermarkWorkerInput,
   "kind"

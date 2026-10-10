@@ -5,6 +5,8 @@ import { expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { cleanupSessionLifecycleArtifactsCore } from "../config/sessions/session-accessor.sqlite-artifact-cleanup.js";
 import { deleteSessionEntryLifecycle } from "../config/sessions/session-accessor.sqlite-lifecycle.js";
+import { emptySessionEntryMaintenancePlan } from "../config/sessions/session-accessor.sqlite-maintenance-store.js";
+import { finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort } from "../config/sessions/session-accessor.sqlite-maintenance.js";
 import {
   forkSessionAtMessage,
   rewindSessionToMessage,
@@ -37,7 +39,10 @@ import {
   markPluginRegistryRetired,
 } from "../plugins/registry-lifecycle.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
-import { onSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
+import {
+  onSessionIdentityMutation,
+  type SessionIdentityMutation,
+} from "../sessions/session-lifecycle-events.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { IncognitoSessionEndedError } from "./incognito-session-error.js";
@@ -61,6 +66,63 @@ export function registerIncognitoLifecycleSourceTests(
   fixture: Pick<LifecycleFacadeFixture, "env" | "authority" | "actor" | "create">,
 ) {
   const { authority } = fixture;
+  it("publishes only committed maintenance identities captured before observers run", async () => {
+    const { actor, env } = fixture;
+    const first = await fixture.create("maintenance-first");
+    const changed = await fixture.create("maintenance-changed");
+    const last = await fixture.create("maintenance-last");
+    const plan = emptySessionEntryMaintenancePlan();
+    plan.entryRemovals = [first, changed, last].map(({ sessionKey, entry }) => ({
+      sessionKey,
+      expectedEntry: { ...entry },
+      maintenanceReason: "pruned",
+    }));
+    plan.entryRemovals[1]!.expectedEntry!.label = "stale";
+    const rows: string[] = [];
+    const identities: SessionIdentityMutation[] = [];
+    const stopRows = sessionChanges.subscribe((change) => {
+      if ("sessionKey" in change && change.storePath === actor.path) {
+        rows.push(change.sessionKey);
+        if (change.sessionKey === first.sessionKey) {
+          const later = plan.entryRemovals[2]!;
+          later.sessionKey = "agent:main:dashboard:incognito-forged";
+          later.expectedEntry!.sessionId = "forged";
+          later.expectedEntry!.lifecycleRevision = "forged";
+          later.maintenanceReason = "capped";
+        }
+      }
+    });
+    const stopIdentities = onSessionIdentityMutation((mutation) => identities.push(mutation));
+    try {
+      const result = await withIncognitoSessionBinding({ actor }, () =>
+        finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort(
+          { agentId: actor.agentId, path: actor.path, env },
+          [plan],
+        ),
+      );
+      expect(result).toMatchObject({ pruned: 2, capped: 0, archivedTranscripts: [] });
+      expect(rows).toEqual([first.sessionKey, last.sessionKey]);
+      expect(identities).toEqual(
+        [first, last].map((target) => ({
+          kind: "delete",
+          agentId: actor.agentId,
+          databaseIdentity: actor.identity.incarnation,
+          previous: { sessionId: target.entry.sessionId, sessionKeys: [target.sessionKey] },
+        })),
+      );
+      for (const target of [first, last]) {
+        expect(
+          (await actor.sessions.read(authority, { sessionKey: target.sessionKey })).entry,
+        ).toBeUndefined();
+      }
+      expect(
+        (await actor.sessions.read(authority, { sessionKey: changed.sessionKey })).entry,
+      ).toEqual(changed.entry);
+    } finally {
+      stopRows();
+      stopIdentities();
+    }
+  });
   it.each(["before", "after"] as const)(
     "refuses deletion when captured admission closes %s its entry read",
     async (phase) => {

@@ -91,20 +91,19 @@ export class SqliteWorkerInputAdmission {
     this.bytes += bytes;
     const settled = createDeferredCore();
     this.inputPreparations.add(settled.promise);
-    let released = false;
     let handedOff = false;
     const release = () => {
-      if (!released) {
-        released = true;
+      if (this.inputPreparations.delete(settled.promise)) {
         this.bytes -= bytes;
-        this.inputPreparations.delete(settled.promise);
         settled.resolve();
       }
     };
     const assertCurrent = () => {
       if (
         !handedOff &&
-        (released || this.owner.isClosing() || generation !== this.inputPreparationGeneration)
+        (!this.inputPreparations.has(settled.promise) ||
+          this.owner.isClosing() ||
+          generation !== this.inputPreparationGeneration)
       ) {
         throw new SqliteWorkerError("SQLite worker input preparation is closed", "closed");
       }
@@ -113,7 +112,7 @@ export class SqliteWorkerInputAdmission {
       assertCurrent,
       handoff: (dispatch) => {
         try {
-          if (released) {
+          if (!this.inputPreparations.has(settled.promise)) {
             throw new SqliteWorkerError("SQLite worker input preparation is closed", "closed");
           }
           assertCurrent();

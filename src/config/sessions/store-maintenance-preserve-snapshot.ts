@@ -1,5 +1,5 @@
 import type { SessionEntryMaintenancePlan } from "./session-accessor.sqlite-lifecycle-types.js";
-import { SessionMaintenancePreservationConflictError } from "./session-mutation-conflict-error.js";
+import { SqliteSessionMutationConflictError } from "./session-mutation-conflict-error.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
 import type { SessionMaintenancePreservationSnapshot } from "./store-maintenance-preserve-snapshot.types.js";
 import type { SessionEntry } from "./types.js";
@@ -100,6 +100,6 @@ export function assertMaintenancePreservationCompatible(
         plan.stateDeletePlans.some((row) => protectsRow("", row.sessionId)),
     )
   ) {
-    throw new SessionMaintenancePreservationConflictError();
+    throw new SqliteSessionMutationConflictError("session maintenance");
   }
 }

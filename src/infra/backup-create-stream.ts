@@ -89,8 +89,7 @@ export async function writeArchiveStreamToFile(params: {
   let idleTimeoutError: Error | undefined;
   let lastEntryPath: string | undefined;
   let lastProgress: BackupArchiveProgress | undefined;
-  let outputBytes = 0;
-  let producerBytes = 0;
+  const bytes = { output: 0, raw: 0 };
   let settled = false;
   const reportProgress = (progress?: BackupArchiveProgress) => {
     // One archive owns this watchdog. Late producer callbacks must not refresh
@@ -104,10 +103,10 @@ export async function writeArchiveStreamToFile(params: {
         lastEntryPath = progress.entryPath;
       }
       if (progress.bytes) {
-        if (progress.phase === "output") {
-          outputBytes += progress.bytes;
-        } else if (progress.phase === "raw") {
-          producerBytes += progress.bytes;
+        const phase =
+          progress.phase === "output" ? "output" : progress.phase === "raw" ? "raw" : undefined;
+        if (phase) {
+          bytes[phase] += progress.bytes;
         }
       }
     }
@@ -118,7 +117,7 @@ export async function writeArchiveStreamToFile(params: {
           ? `, entry=${JSON.stringify(sliceUtf16Safe(lastEntryPath, -512))}`
           : "";
         idleTimeoutError = new Error(
-          `Backup archive write stalled: no progress observed for ${BACKUP_ARCHIVE_IDLE_TIMEOUT_MS}ms (phase=${lastProgress?.phase ?? "starting"}${entrySuffix}, rawBytes=${producerBytes}, outputBytes=${outputBytes})`,
+          `Backup archive write stalled: no progress observed for ${BACKUP_ARCHIVE_IDLE_TIMEOUT_MS}ms (phase=${lastProgress?.phase ?? "starting"}${entrySuffix}, rawBytes=${bytes.raw}, outputBytes=${bytes.output})`,
         );
         archiveStream?.destroy(idleTimeoutError);
         controller.abort(idleTimeoutError);

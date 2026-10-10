@@ -962,6 +962,7 @@ export const en: TranslationMap & {
     renameSession: "Rename session",
     renameSessionPrompt: "Rename session",
     renameSessionMenu: "Rename…",
+    sessionNameInUse: "A session with this name already exists.",
     setIconMenu: "Set icon",
     setColorMenu: "Color",
     setIconColorMenu: "Icon & color",
@@ -1398,6 +1399,8 @@ export const en: TranslationMap & {
       lobsterdexCardShinySeen: "✦ Shiny spotted {date}",
       lobsterdexCardCopyLink: "Copy link",
       lobsterdexOpen: "Open Lobsterdex",
+      lobsterdexThemeHidden:
+        "This theme hides Lobsterdex. Your collection and preferences are preserved.",
     },
     security: {
       intro: "Review gateway access, tool policy, device authentication, and approvals.",
@@ -1624,6 +1627,7 @@ export const en: TranslationMap & {
     forward: "Forward",
     settings: "Settings",
     askOpenClaw: "Ask OpenClaw",
+    askBrand: "Ask {brand}",
     settingsGroupDevice: "This Mac",
     settingsGroupThisComputer: "This computer",
     settingsGroupThisIPhone: "This iPhone",

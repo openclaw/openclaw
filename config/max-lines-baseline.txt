@@ -99,7 +99,6 @@ extensions/memory-core/doctor-contract-api.test.ts
 extensions/memory-core/src/cli.test.ts
 extensions/memory-core/src/dreaming-phases.test.ts
 extensions/memory-core/src/dreaming-phases.ts
-extensions/memory-core/src/dreaming.test.ts
 extensions/memory-core/src/memory/index.test.ts
 extensions/memory-core/src/memory/manager-embedding-ops.ts
 extensions/memory-core/src/rem-evidence.ts
@@ -275,7 +274,6 @@ src/agents/tools/cron-tool.test.ts
 src/agents/tools/image-generate-tool.test.ts
 src/agents/tools/image-tool.test.ts
 src/agents/tools/message-tool.test.ts
-src/agents/tools/music-generate-tool.test.ts
 src/agents/tools/sessions-spawn-tool.test.ts
 src/agents/tools/sessions.test.ts
 src/agents/tools/video-generate-tool.test.ts
@@ -353,8 +351,6 @@ src/commands/doctor/shared/codex-route-warnings.test.ts
 src/commands/doctor/shared/legacy-config-migrate.test.ts
 src/commands/doctor/shared/legacy-config-migrations.runtime.agents.ts
 src/commands/doctor/shared/missing-configured-plugin-install.test.ts
-src/commands/doctor/shared/preview-warnings.test.ts
-src/commands/doctor/shared/stale-auth-order.test.ts
 src/commands/gateway-status.test.ts
 src/commands/migrate.test.ts
 src/commands/model-picker.test.ts

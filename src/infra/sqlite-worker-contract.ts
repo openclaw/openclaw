@@ -1,6 +1,10 @@
 import { isNativeError, isProxy } from "node:util/types";
 import type { MessagePort } from "node:worker_threads";
 import type { OpenClawStateWorkerErrorPayload } from "../state/openclaw-state-worker-error.js";
+import {
+  SQLITE_WORKER_SOURCE_FENCE,
+  type SqliteSourceFence,
+} from "./sqlite-source-fence-contract.js";
 import type { SqliteWalCheckpointSnapshot } from "./sqlite-wal-checkpoint.js";
 import type { DatabasePathIdentity } from "./sqlite-worker-identity.js";
 import type { SqliteWorkerStateContext } from "./sqlite-worker-state-context.js";
@@ -47,6 +51,10 @@ export type SqliteWorkerPreparedBackend<Operations extends SqliteWorkerOperation
       command: SqliteWorkerCommand<Operations>,
     ): void | Promise<void>;
     [SQLITE_WORKER_OPERATION_CLEANUP]?(command: SqliteWorkerCommand<Operations>): void;
+    /** Internal typed durable operations only; legacy callbacks keep their native adapter. */
+    [SQLITE_WORKER_SOURCE_FENCE]?(
+      command: SqliteWorkerCommand<Operations>,
+    ): SqliteSourceFence | undefined;
     [SQLITE_WORKER_CLOSE_RECEIPT]?(): SqliteWorkerCloseReceipt | undefined;
   };
 

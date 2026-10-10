@@ -32,7 +32,9 @@ After a Gateway restart, an agent may need a few minutes to prepare its database
 
 Automatic read acknowledgements and identity refreshes pause while the Gateway reports a restart or suspension. Pending read acknowledgements are shared across repeated session updates. If an acknowledgement is rejected, later updates respect the server's retry delay and use randomized backoff instead of immediately sending another patch.
 
-Reconnect bootstrap reads also pause together: agent identity, session subscriptions, session groups, pending questions, and the session list. A restart rejection holds these reads on that connection, with one delayed probe at a time in case the restart is canceled. Readiness or a new connection resumes loading automatically; writes are never replayed by this mechanism.
+Reconnect bootstrap reads also pause together: agent identity, session subscriptions, session groups, pending questions, and the session list. An announced restart or suspension holds these reads until readiness or a new connection resumes loading. If a restart rejection arrives without an announcement, one delayed probe at a time checks for recovery after at least a minute, in case the restart is canceled. Writes are never replayed by this mechanism.
+
+Agent identities are shared across views on the same connection and refresh after configuration or agent changes, rather than expiring while a tab is idle. Reload the tab to pick up direct edits to workspace `IDENTITY.md` or avatar image files that do not publish a configuration change.
 
 If the Gateway's request queue is full, automatic sidebar session discovery keeps the current rows and retries up to three times, respecting the server's retry delay. A persistent failure shows "The server is busy. Please try again in a moment." Other actions can show this message immediately; wait briefly, then retry the action.
 
@@ -75,7 +77,7 @@ catalog cache and appear independently of slower search categories.
 
 Provider authentication status is shared across views and refreshes after account changes and near credential warning or expiry deadlines. Credentials without an expiry do not need periodic refreshes. Hidden tabs defer deadline refreshes until visible again.
 
-The sidebar loads automation status once per connection and refreshes after automation or configuration changes. Failed reads retry once per minute while the tab is visible and stop retrying after success. Overdue warnings advance on a local deadline without polling the Gateway. Hidden tabs catch up when visible; returning to an unchanged tab does not poll automations. Command palette searches reuse their automation inventory on the same connection until one of those changes or a reconnect.
+The sidebar loads automation status once per connection and refreshes after automation or configuration changes. Failed reads retry once per minute while the tab is visible and stop retrying after success. Sidebar health and Automations page refreshes pause during announced restarts or suspension and catch up when the Gateway is available again. Overdue warnings advance on a local deadline without polling the Gateway. Hidden tabs catch up when visible; returning to an unchanged tab does not poll automations. Command palette searches reuse their automation inventory on the same connection until one of those changes or a reconnect.
 
 Automation inputs appear as compact, collapsed activity rows instead of message bubbles. Expand a row to read the full prompt and access its message actions. Each automation input stays separate, even when several jobs run in the same conversation. The expanded **From** link opens that automation's History tab and highlights the originating run; open the run's transcript from History when needed.
 
@@ -98,10 +100,12 @@ non-success outcomes remain visible even when collapsed, such as
 Still-streaming assistant text stays at the bottom of its run, below saved output, and
 takes its transcript position once saved.
 
-Steering keeps the current response intact. A steer appears below all server
-output from the run it targets, including live text, restored text, commentary,
-and saved assistant messages. These display rules do not rewrite the stored
-transcript or split an assistant message around a steer.
+Accepted steering messages keep their saved transcript positions. Earlier saved
+output stays above the message; later answers and live output appear below it,
+including when the same run continues after steering. Reloading or reconnecting
+does not move the message to the end of that run. Unsaved assistant text remains
+one live tail until saved rows replace it; the UI does not split or rewrite
+stored assistant messages.
 
 Consecutive tool activity shares one expandable log, including when background
 work resumes in a new run. Visible messages, media, and conversation markers
