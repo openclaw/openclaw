@@ -38,11 +38,14 @@ export async function preparePluginExecAuthorizationAsync(
 ): Promise<() => void> {
   params.assertActive();
   const context = captureOpenClawStateWorkerContext();
-  const { file } = await runOpenClawStateWorkerOperation(
-    context,
-    () => readExecApprovalsSnapshotAsync(context),
-    { assertCurrent: params.assertActive },
-  );
+  // Only first use needs the writer to initialize a missing database.
+  const { file } = context.admission.identity.key.startsWith("file:")
+    ? await readExecApprovalsSnapshotAsync(context)
+    : await runOpenClawStateWorkerOperation(
+        context,
+        () => readExecApprovalsSnapshotAsync(context),
+        { assertCurrent: params.assertActive },
+      );
   params.assertActive();
   return retainPluginExecAuthorization(params, file, prepareExecApprovalsCurrentRead(context));
 }

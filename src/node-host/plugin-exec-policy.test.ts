@@ -106,6 +106,18 @@ function setPolicy(
 }
 
 describe("plugin node execution authorization", () => {
+  it("initializes missing state before the first authorized invocation", async () => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "first-use"));
+    setRuntimeConfigSnapshot({ tools: { exec: { security: "full", ask: "off" } } });
+    const databasePath = resolveDatabasePath();
+    expect(fs.existsSync(databasePath)).toBe(false);
+
+    const { result, spawn } = launch("session-full");
+    await expect(result).resolves.toBe("{}");
+    expect(spawn).toHaveBeenCalledOnce();
+    expect(fs.existsSync(databasePath)).toBe(true);
+  });
+
   it("prepares policy off-thread and performs no host SQL after cold reader admission", async () => {
     for (const phase of ["cold", "warm"] as const) {
       const observation = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
