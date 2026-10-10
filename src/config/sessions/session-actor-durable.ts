@@ -26,11 +26,11 @@ export function captureDurableSessionActor(params: {
     expectedIdentity: params.target.database,
   });
   const lifetime = {
-    assertCurrent() {
+    assertCurrent: () => {
       params.lifetime.assertCurrent();
       execution.assertCurrent();
     },
-    assertReadable() {
+    assertReadable: () => {
       params.lifetime.assertReadable();
       execution.assertCurrent();
     },

@@ -468,35 +468,31 @@ it("completes usage through the existing unbound native incognito owner", async 
           ],
         }),
       ).toThrow("another database");
-      const outcome = await actor.withPhase(
-        "terminal",
-        authority,
-        async ({ actor: held, patch }) => {
-          callbackCount += 1;
-          patch([usage]);
-          return held.completeTurn(
-            {
-              commandId: "native-complete",
-              phaseId: "terminal",
-              expected: before.version,
-              turn: {
-                agentId: scope.agentId,
-                sessionKey: scope.sessionKey,
-                ownerSources,
-                options: {
-                  expectedSessionId: entry.sessionId,
-                  expectedWriterRunId: "native-run",
-                  expectedSessionState: buildRestartRecoveryExpectedState(entry),
-                  sessionLifecyclePatch: { status: "done", endedAt: 50 },
-                  sessionFile: "native-session.jsonl",
-                  messages: [],
-                },
+      const outcome = await actor.withPhase("terminal", authority, async (phase) => {
+        callbackCount += 1;
+        phase.patch([usage]);
+        return phase.actor.completeTurn(
+          {
+            commandId: "native-complete",
+            phaseId: "terminal",
+            expected: before.version,
+            turn: {
+              agentId: scope.agentId,
+              sessionKey: scope.sessionKey,
+              ownerSources,
+              options: {
+                expectedSessionId: entry.sessionId,
+                expectedWriterRunId: "native-run",
+                expectedSessionState: buildRestartRecoveryExpectedState(entry),
+                sessionLifecyclePatch: { status: "done", endedAt: 50 },
+                sessionFile: "native-session.jsonl",
+                messages: [],
               },
             },
-            authority,
-          );
-        },
-      );
+          },
+          authority,
+        );
+      });
       expect(callbackCount).toBe(1);
       expect(outcome.kind).toBe("committed");
       if (outcome.kind !== "committed") {

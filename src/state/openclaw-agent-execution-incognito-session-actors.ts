@@ -23,13 +23,14 @@ import type { AgentDatabaseIncognitoIdentity } from "./openclaw-agent-execution-
 export function createIncognitoSessionActorFactory(params: {
   options: OpenClawAgentDatabaseOptions & { path: string };
   identity: AgentDatabaseIncognitoIdentity;
-  assertOutsideGrant(): void;
-  assertBorrowed(): void;
-  assertReferenceCurrent(): void;
-  assertRetainedCurrent(): void;
-  withGrant<T>(operation: () => T): T;
-  retain<T>(operation: () => Promise<T>): Promise<T>;
+  assertOutsideGrant(this: void): void;
+  assertBorrowed(this: void): void;
+  assertReferenceCurrent(this: void): void;
+  assertRetainedCurrent(this: void): void;
+  withGrant<T>(this: void, operation: () => T): T;
+  retain<T>(this: void, operation: () => Promise<T>): Promise<T>;
   run<T>(
+    this: void,
     authority: IncognitoSessionAuthority,
     operation: (scope: Pick<SqliteWorkerStore<SessionActorOperations>, "execute">) => Promise<T>,
     admission: SqliteWorkerAdmissionFactory,
@@ -38,7 +39,7 @@ export function createIncognitoSessionActorFactory(params: {
   sessionFacts: { invalidate(sessionKey: string): void };
   sessionActors: Set<SessionActor>;
   acquiredActors: Set<SessionActor>;
-  getExecution(): IncognitoSessionActor;
+  getExecution(this: void): IncognitoSessionActor;
 }): SessionActorFactory {
   const {
     options,
@@ -169,7 +170,7 @@ export function createIncognitoSessionActorFactory(params: {
           async afterCommitted(outcome) {
             const execution = getExecution();
             if (!outcome.receipt.transcript.projectionNeedsReconcile) {
-              return;
+              return undefined;
             }
             const entry = outcome.receipt.postimage.entry;
             if (!entry) {

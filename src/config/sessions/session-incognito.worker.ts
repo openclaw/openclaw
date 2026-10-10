@@ -96,7 +96,7 @@ export function createIncognitoSessionWorker(
   const history = createIncognitoHistoryWorker(database, env);
   const read = createIncognitoSessionSnapshotReader(database, identity, {
     revision: (sessionKey) => sessionRevisions.get(sessionKey) ?? 0,
-    completionSources: history.completionFacts,
+    completionSources: (sessionKey) => history.completionFacts(sessionKey),
   });
   const assertKey = (sessionKey: string) => {
     assertCanonicalSessionKeyWrite(sessionKey, database.agentId);
