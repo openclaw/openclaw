@@ -562,7 +562,7 @@ const observedBinding: CodexAppServerThreadBinding = {
 function createOwnershipFixture() {
   const bindingStore = createCodexTestBindingStore();
   const harness = createCodexAppServerAgentHarness({ bindingStore });
-  const resolveOwnership = harness.resolveSessionRuntimeOwnership?.bind(harness);
+  const resolveOwnership = harness.resolveSessionRuntimeOwnershipAsync?.bind(harness);
   if (!resolveOwnership) {
     throw new Error("expected Codex session runtime ownership capability");
   }
@@ -570,7 +570,13 @@ function createOwnershipFixture() {
     bindingStore,
     harness,
     resolveOwnership: (overrides: Partial<Parameters<typeof resolveOwnership>[0]> = {}) =>
-      resolveOwnership({ ...session, assertCurrent() {}, ...overrides }),
+      resolveOwnership({
+        version: 2,
+        ...session,
+        assertCurrent() {},
+        readPreviousSessionId: async () => undefined,
+        ...overrides,
+      }),
   };
 }
 
@@ -602,8 +608,8 @@ describe("Codex session runtime ownership", () => {
     const fixture = createOwnershipFixture();
     await fixture.bindingStore.mutate(identity, { kind: "set", binding });
 
-    const readPreviousSessionId = vi.fn(() => undefined);
-    expect(fixture.resolveOwnership({ readPreviousSessionId })).toEqual(expected);
+    const readPreviousSessionId = vi.fn(async () => undefined);
+    expect(await fixture.resolveOwnership({ readPreviousSessionId })).toEqual(expected);
     expect(readPreviousSessionId).not.toHaveBeenCalled();
     expect(fixture.bindingStore.read(identity)).toEqual(binding);
   });
@@ -655,7 +661,7 @@ describe("Codex session runtime ownership", () => {
     });
     await fixture.bindingStore.mutate(identity, { kind: "set", binding });
     await patchSessionEntry({ ...scope, update: () => ({ sessionId: successor.sessionId }) });
-    const readPreviousSessionId = () => {
+    const readPreviousSessionId = async () => {
       const entry = getSessionEntry({
         ...scope,
         hydrateSkillPromptRefs: false,
@@ -665,7 +671,7 @@ describe("Codex session runtime ownership", () => {
     };
 
     expect(
-      fixture.resolveOwnership({
+      await fixture.resolveOwnership({
         sessionId: successor.sessionId,
         readPreviousSessionId,
         storePath,
@@ -685,7 +691,7 @@ describe("Codex session runtime ownership", () => {
     const binding = { ...observedBinding, preserveNativeModel: true as const };
     await fixture.bindingStore.mutate(identity, { kind: "set", binding });
 
-    expect(fixture.resolveOwnership({ sessionId: "session-successor" })).toBeUndefined();
+    expect(await fixture.resolveOwnership({ sessionId: "session-successor" })).toBeUndefined();
     expect(fixture.bindingStore.read(identity)).toEqual(binding);
   });
 
@@ -695,21 +701,21 @@ describe("Codex session runtime ownership", () => {
       kind: "set",
       binding: { ...observedBinding, preserveNativeModel: true },
     });
-    expect(fixture.resolveOwnership()).toEqual({
+    expect(await fixture.resolveOwnership()).toEqual({
       model: "native",
       auth: "host",
       modelRef: { provider: "native-provider", model: "native-model" },
     });
     await fixture.bindingStore.retireSessionGeneration(identity);
 
-    expect(fixture.resolveOwnership()).toBeUndefined();
+    expect(await fixture.resolveOwnership()).toBeUndefined();
   });
 
   it.each(["revoked", "disposed"] as const)(
     "refuses %s admission before reading private state",
     async (reason) => {
       const fixture = createOwnershipFixture();
-      const read = vi.spyOn(fixture.bindingStore, "read");
+      const read = vi.spyOn(fixture.bindingStore, "readAsync");
       if (reason === "disposed") {
         await fixture.harness.dispose?.();
       }
@@ -719,7 +725,7 @@ describe("Codex session runtime ownership", () => {
         }
       };
 
-      expect(() => fixture.resolveOwnership({ assertCurrent })).toThrow(
+      await expect(fixture.resolveOwnership({ assertCurrent })).rejects.toThrow(
         reason === "disposed" ? "harness is disposed" : "admission revoked",
       );
       expect(read).not.toHaveBeenCalled();
@@ -734,23 +740,25 @@ describe("Codex session runtime ownership", () => {
         kind: "set",
         binding: { ...observedBinding, preserveNativeModel: true },
       });
-      const readBinding = fixture.bindingStore.read.bind(fixture.bindingStore);
+      const readBinding = fixture.bindingStore.readAsync.bind(fixture.bindingStore);
       let current = true;
       const cleanup: { disposal?: Promise<void> } = {};
-      vi.spyOn(fixture.bindingStore, "read").mockImplementationOnce((requestedIdentity) => {
-        const binding = readBinding(requestedIdentity);
-        if (reason === "disposed") {
-          const disposal = fixture.harness.dispose?.();
-          if (disposal) {
-            cleanup.disposal = disposal;
+      vi.spyOn(fixture.bindingStore, "readAsync").mockImplementationOnce(
+        async (requestedIdentity) => {
+          const binding = await readBinding(requestedIdentity);
+          if (reason === "disposed") {
+            const disposal = fixture.harness.dispose?.();
+            if (disposal) {
+              cleanup.disposal = disposal;
+            }
+          } else {
+            current = false;
           }
-        } else {
-          current = false;
-        }
-        return binding;
-      });
+          return binding;
+        },
+      );
       try {
-        expect(() =>
+        await expect(
           fixture.resolveOwnership({
             assertCurrent() {
               if (!current) {
@@ -758,7 +766,7 @@ describe("Codex session runtime ownership", () => {
               }
             },
           }),
-        ).toThrow(reason === "disposed" ? "harness is disposed" : "admission revoked");
+        ).rejects.toThrow(reason === "disposed" ? "harness is disposed" : "admission revoked");
       } finally {
         if (cleanup.disposal) {
           await cleanup.disposal;

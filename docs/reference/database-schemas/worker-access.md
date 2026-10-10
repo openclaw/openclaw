@@ -215,6 +215,11 @@ the destination and any same-plugin namespace conditions in one synchronous
 worker transaction. An explicit conflict requires fresh preparation. Neither an
 unknown outcome nor a failed worker request selects a native fallback.
 
+Native binding deletion normally joins the
+existing durable worker transaction; initialization, incognito, or a mixed
+released participant can explicitly select the existing native atomic settlement
+before dispatch. This compatibility selection is never a recovery fallback.
+
 Released synchronous stores and opaque callbacks remain named
 compatibility paths until removed in the next Plugin SDK major. They preserve
 commit-before-return and use one shared migration-warning budget per plugin and

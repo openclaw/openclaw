@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import {
-  createPluginStateKeyedStoreForTests,
+  createPluginStateKeyedStoreV2ForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import type {
@@ -34,20 +34,26 @@ import { legacyCodexConversationBindingId } from "./src/conversation-binding-dat
 function createDoctorContext(
   env: NodeJS.ProcessEnv,
   afterRegister?: () => Promise<void>,
+  beforeCompare?: (key: string) => Promise<void>,
 ): PluginDoctorStateMigrationContext {
   return {
     openPluginStateKeyedStore<T>(options: OpenKeyedStoreOptions) {
-      const store = createPluginStateKeyedStoreForTests<T>("codex", {
-        ...options,
-        env: options.env ?? env,
-      });
-      return afterRegister
+      const store = createPluginStateKeyedStoreV2ForTests<T>(
+        "codex",
+        { ...options, env: options.env ?? env },
+        { assertCurrent() {} },
+      );
+      return afterRegister || beforeCompare
         ? {
             ...store,
             async registerIfAbsent(...args: Parameters<typeof store.registerIfAbsent>) {
               const registered = await store.registerIfAbsent(...args);
-              await afterRegister();
+              await afterRegister?.();
               return registered;
+            },
+            async compareAndApply(...args: Parameters<typeof store.compareAndApply>) {
+              await beforeCompare?.(args[0]);
+              return await store.compareAndApply(...args);
             },
           }
         : store;
@@ -606,9 +612,12 @@ describe("codex doctor contract", () => {
     await removeCodexDoctorFixture(fixture.stateDir);
   });
 
-  it.each([{ label: "pre-existing", preexisting: true }])(
-    "retires a $label session row when its owner rebinds during migration",
-    async ({ preexisting }) => {
+  it.each([
+    { label: "unleased", leaseConflict: false },
+    { label: "concurrently leased", leaseConflict: true },
+  ])(
+    "revalidates a $label session row when its owner rebinds during migration",
+    async ({ leaseConflict }) => {
       const sessionKey = "agent:main:session-1";
       const fixture = await createBindingMigrationFixture({
         name: "session-current",
@@ -625,46 +634,65 @@ describe("codex doctor contract", () => {
         throw new Error("missing imported Codex binding");
       }
       const store = openBindingStore(fixture.env);
-      if (preexisting) {
-        await store.register(sessionStateKey, { ...imported, sessionId: "session-current" });
-      }
+      const sessionRow = { ...imported, sessionId: "session-current" };
+      await store.register(sessionStateKey, sessionRow);
       let rebound = false;
-      const context = createDoctorContext(fixture.env, async () => {
-        if (rebound) {
-          return;
-        }
-        rebound = true;
-        await upsertSessionEntry({
-          agentId: "main",
-          env: fixture.env,
-          sessionKey,
-          storePath: fixture.storePath,
-          entry: {
-            sessionId: "session-current",
-            lifecycleRevision: "rev-2",
-            updatedAt: Date.now(),
-          },
-        });
-      });
+      let leased = false;
+      const context = createDoctorContext(
+        fixture.env,
+        async () => {
+          if (rebound) {
+            return;
+          }
+          rebound = true;
+          await upsertSessionEntry({
+            agentId: "main",
+            env: fixture.env,
+            sessionKey,
+            storePath: fixture.storePath,
+            entry: {
+              sessionId: "session-current",
+              lifecycleRevision: "rev-2",
+              updatedAt: Date.now(),
+            },
+          });
+        },
+        async (key) => {
+          if (!leaseConflict || leased || key !== sessionStateKey) {
+            return;
+          }
+          leased = true;
+          await store.register(key, {
+            ...sessionRow,
+            lease: { token: "concurrent-owner", expiresAt: Date.now() + 60_000 },
+          });
+        },
+      );
 
       const result = await fixture.migration.migrateLegacyState({ ...fixture.params, context });
 
-      expect(result.warnings).toEqual([]);
-      expect(result.notices).toEqual([
-        expect.stringContaining("session owner changed before Codex ownership could be recorded"),
-      ]);
+      if (leaseConflict) {
+        expect(result.warnings).toEqual([
+          expect.stringContaining("its stale session binding could not be retired"),
+        ]);
+        expect(result.notices ?? []).toEqual([]);
+      } else {
+        expect(result.warnings).toEqual([]);
+        expect(result.notices).toEqual([
+          expect.stringContaining("session owner changed before Codex ownership could be recorded"),
+        ]);
+      }
       await expect(fs.access(fixture.sidecarPath)).resolves.toBeUndefined();
       await expect(fs.access(`${fixture.sidecarPath}.migrated`)).rejects.toThrow();
       await expect(
         fs.readFile(path.join(fixture.sessionsDir, "sessions.json"), "utf8").then(JSON.parse),
       ).resolves.not.toHaveProperty(`${sessionKey}.agentHarnessId`);
       expect(fixture.readSession(sessionKey)).toMatchObject({ lifecycleRevision: "rev-2" });
-      await expect(store.lookup(sessionStateKey)).resolves.toMatchObject({
-        version: 1,
-        state: "cleared",
-        sessionId: "session-current",
-        retired: true,
-      });
+      await expect(store.lookup(sessionStateKey)).resolves.toMatchObject(
+        leaseConflict
+          ? { ...sessionRow, lease: { token: "concurrent-owner" } }
+          : { version: 1, state: "cleared", sessionId: "session-current", retired: true },
+      );
 
       await removeCodexDoctorFixture(fixture.stateDir);
     },

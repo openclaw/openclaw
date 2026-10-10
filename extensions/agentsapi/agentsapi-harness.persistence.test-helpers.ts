@@ -158,6 +158,13 @@ function createBindingRuntime(env: NodeJS.ProcessEnv, current: () => OpenClawCon
   const runtime = createPluginRuntimeMock({ config: { current } });
   runtime.state.openKeyedStore = <T>(options: Parameters<typeof runtime.state.openKeyedStore>[0]) =>
     createPluginStateKeyedStoreForTests<T>("agentsapi", { ...options, env });
+  runtime.state.openKeyedStoreV2 = <T>(
+    options: Parameters<typeof runtime.state.openKeyedStoreV2>[0],
+    authority?: Parameters<typeof runtime.state.openKeyedStoreV2>[1],
+  ) => {
+    const store = createPluginStateKeyedStoreForTests<T>("agentsapi", { ...options, env });
+    return authority ? store.withCurrent(authority) : store;
+  };
   runtime.state.openSyncKeyedStore = <T>(
     options: Parameters<typeof runtime.state.openSyncKeyedStore>[0],
   ) => createPluginStateSyncKeyedStoreForTests<T>("agentsapi", { ...options, env });

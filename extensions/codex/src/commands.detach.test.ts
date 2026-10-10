@@ -658,7 +658,11 @@ describe("Codex diagnostics confirmation", () => {
   ])("rejects diagnostics confirmation when the $change changes", async ({ replacement }) => {
     let binding: CodexAppServerThreadBinding = supervisedTestBinding("thread-scope-change");
     const f = await fixture(binding, {}, { supervision: { enabled: true } });
-    f.deps.bindingStore = { ...bindingStore, read: () => binding };
+    f.deps.bindingStore = {
+      ...bindingStore,
+      read: () => binding,
+      readAsync: async () => binding,
+    };
     const token = readDiagnosticsConfirmationToken(await f.run("diagnostics"));
     binding = replacement;
     await expect(f.run(`diagnostics confirm ${token}`)).resolves.toEqual({

@@ -20,7 +20,11 @@ export function createCodexTestBindingStateStore(
     comparison: JSON.stringify([key, values.get(key)]),
   });
   return {
-    asyncReads: { lookup: async (key) => values.get(key) },
+    asyncReads: {
+      lookup: async (key) => values.get(key),
+      lookupMany: async (keys) => keys.map((key) => ({ ok: true, value: values.get(key) })),
+      entries: async () => [...values].map(([key, value]) => ({ key, value, createdAt: 0 })),
+    },
     withCurrent({ assertCurrent }) {
       assertCurrent();
       return {

@@ -2321,7 +2321,13 @@ describe("runCodexAppServerSideQuestion", () => {
         hostCapabilities: host.hostCapabilities,
         opts: { runId },
       }),
-      { bindingStore: { ...createCodexTestBindingStore(), read: () => parent } },
+      {
+        bindingStore: {
+          ...createCodexTestBindingStore(),
+          read: () => parent,
+          readAsync: async () => parent,
+        },
+      },
     );
     try {
       await Promise.race([

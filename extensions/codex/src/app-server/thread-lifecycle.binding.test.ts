@@ -1396,11 +1396,13 @@ describe("Codex app-server thread lifecycle bindings", () => {
         await release.promise;
       });
       await entered.promise;
-      const readBinding = testCodexAppServerBindingStore.read.bind(testCodexAppServerBindingStore);
-      const read = vi.spyOn(testCodexAppServerBindingStore, "read");
+      const readBinding = testCodexAppServerBindingStore.readAsync.bind(
+        testCodexAppServerBindingStore,
+      );
+      const read = vi.spyOn(testCodexAppServerBindingStore, "readAsync");
       const pendingRead = createDeferred<void>();
-      read.mockImplementationOnce((identity) => {
-        const binding = readBinding(identity);
+      read.mockImplementationOnce(async (identity) => {
+        const binding = await readBinding(identity);
         pendingRead.resolve();
         return binding;
       });

@@ -2,7 +2,7 @@ import type {
   AgentHarnessSessionDeletionMutation,
   AgentHarnessSessionDeletionParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { createNativeSessionBindingLifecycle } from "openclaw/plugin-sdk/agent-harness-session-runtime";
+import { createNativeSessionBindingLifecycleV2 } from "openclaw/plugin-sdk/agent-harness-session-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import {
   bindingSchema,
@@ -34,18 +34,21 @@ export function createAgentsApiBindings(
     maxEntries: 100_000,
     overflowPolicy: "reject-new" as const,
   };
-  const state = runtime.state.openSyncKeyedStore<StoredBinding>(stateOptions);
-  const mutationState = runtime.state.openKeyedStore<StoredBinding>(stateOptions);
-  const lifecycle = createNativeSessionBindingLifecycle(
+  const state = runtime.state.openKeyedStoreV2<StoredBinding>(stateOptions);
+  const lifecycle = createNativeSessionBindingLifecycleV2(
     {
       lookup: state.lookup.bind(state),
-      deleteIf: state.deleteIf?.bind(state),
-      registerIfAbsent: state.registerIfAbsent.bind(state),
-      withCurrent(authority) {
-        if (!mutationState.withCurrent) {
-          throw new Error("Agents API bindings require action-bound plugin-state mutations");
+      assertLeaseCurrent(key, token) {
+        // Legacy SDK writers cannot publish revocation; only this final effect guard stays sync.
+        const current = readRecord(
+          runtime.state.openSyncKeyedStore<StoredBinding>(stateOptions).lookup(key),
+        );
+        if (current?.lease?.token !== token || current.lease.expiresAt <= Date.now()) {
+          throw new Error(`Agents API binding lease lost: ${key}`);
         }
-        return mutationState.withCurrent(authority);
+      },
+      withCurrent(authority) {
+        return runtime.state.openKeyedStoreV2<StoredBinding>(stateOptions, authority);
       },
     },
     {
@@ -121,11 +124,10 @@ export function createAgentsApiBindings(
               assertCurrent();
             };
             try {
-              return await run(
-                nativeBinding(readRecord(state.lookup(localSessionId))),
-                bind,
-                assertLeaseCurrent,
-              );
+              const binding = nativeBinding(readRecord(await state.lookup(localSessionId)));
+              assertCurrent();
+              assertLeaseCurrent();
+              return await run(binding, bind, assertLeaseCurrent);
             } finally {
               active = false;
             }
@@ -144,7 +146,8 @@ export function createAgentsApiBindings(
               assertCurrent();
               assertLeaseCurrent();
             };
-            const binding = nativeBinding(readRecord(state.lookup(localSessionId)));
+            const binding = nativeBinding(readRecord(await state.lookup(localSessionId)));
+            assertResetCurrent();
             if (binding?.executor) {
               if (!executorCleanup) {
                 throw new Error("Agents API self-hosted executor cleanup is unavailable");

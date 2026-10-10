@@ -114,7 +114,9 @@ export async function bindConversation(
     currentConversationData?.kind === "codex-app-server-session"
       ? conversationBindingIdentity(currentConversationData.bindingId)
       : sessionOwner;
-  const existingBinding = currentOwner ? deps.bindingStore.read(currentOwner) : undefined;
+  const existingBinding = currentOwner
+    ? await deps.bindingStore.readAsync(currentOwner)
+    : undefined;
   assertCodexBindingMayBeReplaced(existingBinding, "binding this conversation to another thread");
   const sessionSource =
     sessionOwner && existingBinding
@@ -183,7 +185,7 @@ export async function detachConversation(
   let expectedThreadId: string | undefined;
   let expectedStartId: string | undefined;
   if (data?.kind === "codex-app-server-session") {
-    const binding = deps.bindingStore.read(identity!);
+    const binding = await deps.bindingStore.readAsync(identity!);
     assertCodexBindingMayBeReplaced(binding, "detaching its conversation binding");
     if (deps.readCodexConversationActiveTurn(identity!)) {
       return "This Codex conversation has an active run; use /codex stop before detaching it.";
@@ -245,7 +247,7 @@ export async function describeConversationBinding(
     ].join("\n");
   }
   const identity = conversationBindingIdentity(data.bindingId);
-  const threadBinding = deps.bindingStore.read(identity);
+  const threadBinding = await deps.bindingStore.readAsync(identity);
   const active = deps.readCodexConversationActiveTurn(identity);
   const sessionKey = ctx.sessionKey?.trim();
   const { agentId } = resolveCodexConversationControlScope(ctx);
@@ -364,7 +366,7 @@ export async function resumeThread(
         if (generation.kind !== "resolved" || !generation.result) {
           throw createCodexSessionGenerationSupersededError(identity.sessionId);
         }
-        const currentBinding = deps.bindingStore.read(identity);
+        const currentBinding = await deps.bindingStore.readAsync(identity);
         assertCodexBindingMayBeReplaced(currentBinding, "attaching a different resumed thread");
         let pendingResumeConfiguration = false;
         const commitResumedThread = async (
@@ -524,7 +526,7 @@ async function bindCodexCliNodeSession(
   }
   if (ctx.sessionId) {
     const scope = resolveCodexConversationControlScope(ctx);
-    const binding = deps.bindingStore.read(
+    const binding = await deps.bindingStore.readAsync(
       sessionBindingIdentity({
         sessionId: ctx.sessionId,
         sessionKey: ctx.sessionKey,

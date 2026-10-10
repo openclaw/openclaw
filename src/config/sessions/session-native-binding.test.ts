@@ -75,6 +75,49 @@ const bindingWrites = (queries: readonly string[]) =>
     /\b(?:delete\s+from|insert(?:\s+or\s+\w+)?\s+into)\s+["`]?plugin_state_entries\b/i.test(sql),
   );
 
+it("deletes only the requested Codex binding owner through the host worker", async () => {
+  await withNativeBindingFixture("codex", async (fixture) => {
+    const siblingKey = `${fixture.bindingKey}:sibling`;
+    const sibling = fixture.readBinding();
+    fixture.bindingStore.register(siblingKey, sibling!);
+    await expect(fixture.remove()).resolves.toMatchObject({ deleted: true });
+    expect(fixture.readBinding()).toBeUndefined();
+    expect(fixture.bindingStore.lookup(siblingKey)).toEqual(sibling);
+  });
+});
+
+it.each(["retired", "absent"] as const)(
+  "deletes the session without leaving a %s Codex binding row",
+  async (condition) => {
+    await withNativeBindingFixture("codex", async (fixture) => {
+      if (condition === "retired") {
+        fixture.bindingStore.register(fixture.bindingKey, {
+          version: 1,
+          state: "cleared",
+          sessionId: fixture.scope.sessionId,
+          retired: true,
+        });
+      } else {
+        fixture.bindingStore.delete(fixture.bindingKey);
+      }
+      await expect(fixture.remove()).resolves.toMatchObject({ deleted: true });
+      expect(fixture.readEntry()).toBeUndefined();
+      expect(fixture.readBinding()).toBeUndefined();
+    });
+  },
+);
+
+it("rejects host deletion of a stale Codex binding generation", async () => {
+  await withNativeBindingFixture("codex", async (fixture) => {
+    const entry = fixture.readEntry();
+    const successor = { ...fixture.readBinding(), sessionId: "new-generation" };
+    fixture.bindingStore.register(fixture.bindingKey, successor);
+    await expect(fixture.remove()).rejects.toThrow("generation changed");
+    expect(fixture.readEntry()).toEqual(entry);
+    expect(fixture.readBinding()).toEqual(successor);
+  });
+});
+
 it("uses each installed plugin owner's packaged codec during real binding deletion", async () => {
   await withNativeBindingFixture("codex", async (fixture) => {
     const entry = fixture.readEntry();

@@ -661,7 +661,16 @@ describe("codex conversation binding", () => {
         pluginConfig: {},
         runtime: {
           modelAuth: { resolveProviderIdForAuth: agentRuntimeMocks.resolveProviderIdForAuth },
-          state: { openSyncKeyedStore: () => stateStore, openKeyedStore: () => stateStore },
+          state: {
+            openSyncKeyedStore: () => stateStore,
+            openKeyedStoreV2: (
+              _options: unknown,
+              authority?: Parameters<typeof stateStore.withCurrent>[0],
+            ) => ({
+              ...stateStore.asyncReads,
+              ...stateStore.withCurrent(authority ?? { assertCurrent() {} }),
+            }),
+          },
         } as never,
         on,
       }),
@@ -760,8 +769,10 @@ describe("codex conversation binding", () => {
     await retirementStarted.promise;
     const bindingStore = {
       ...testCodexAppServerBindingStore,
-      read: (requestedIdentity: Parameters<typeof testCodexAppServerBindingStore.read>[0]) => {
-        const binding = testCodexAppServerBindingStore.read(requestedIdentity);
+      readAsync: async (
+        requestedIdentity: Parameters<typeof testCodexAppServerBindingStore.readAsync>[0],
+      ) => {
+        const binding = await testCodexAppServerBindingStore.readAsync(requestedIdentity);
         ownerCaptured.resolve();
         return binding;
       },

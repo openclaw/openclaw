@@ -2578,7 +2578,11 @@ describe("codex command", () => {
       return { ok: true as const, value: { threadId: "thread-race" } };
     });
     const deps = createDeps({
-      bindingStore: { ...testCodexAppServerBindingStore, read: readBinding },
+      bindingStore: {
+        ...testCodexAppServerBindingStore,
+        read: readBinding,
+        readAsync: async () => readBinding(),
+      },
       safeCodexControlRequest,
     });
 

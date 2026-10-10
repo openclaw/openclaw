@@ -369,7 +369,7 @@ async function writeThreadBindingFromResponse(
 }
 
 async function bindThread(params: CodexThreadBindingParams, threadId?: string): Promise<void> {
-  const current = params.bindingStore.read(params.identity);
+  const current = await params.bindingStore.readAsync(params.identity);
   assertCodexBindingMayBeReplaced(current, "binding a conversation-bound Codex thread");
   const resolved = await resolveThreadBindingRuntime(params);
   const clientLease: CodexAppServerClientLease = {
@@ -460,10 +460,10 @@ export async function prepareCodexConversationBinding(
   options: { forceNew?: boolean } = {},
 ): Promise<void> {
   const identity = { kind: "conversation" as const, bindingId: params.data.bindingId };
-  const snapshot = params.bindingStore.read(identity);
+  const snapshot = await params.bindingStore.readAsync(identity);
   const run = () =>
     params.bindingStore.withLease(identity, async () => {
-      const current = params.bindingStore.read(identity);
+      const current = await params.bindingStore.readAsync(identity);
       if (current?.threadId !== snapshot?.threadId || current?.clientId !== snapshot?.clientId) {
         throw new Error("Codex conversation binding changed before preparation.");
       }
@@ -482,7 +482,9 @@ export async function prepareCodexConversationBinding(
             config: params.config,
           })
         : undefined;
-      const sourceBinding = sourceIdentity ? params.bindingStore.read(sourceIdentity) : undefined;
+      const sourceBinding = sourceIdentity
+        ? await params.bindingStore.readAsync(sourceIdentity)
+        : undefined;
       assertCodexBindingMayBeReplaced(current, "initializing a conversation-bound Codex thread");
       assertCodexBindingMayBeReplaced(
         sourceBinding,
@@ -515,13 +517,13 @@ export async function prepareCodexConversationBinding(
       // policy. Transfer bounded visible history into a fresh bound-only thread.
       const threadId = requested?.threadId;
       await bindThread(bindingParams, options.forceNew ? undefined : threadId);
-      const stored = params.bindingStore.read(identity);
+      const stored = await params.bindingStore.readAsync(identity);
       if (!stored) {
         throw new Error("Codex conversation binding disappeared while initializing its thread.");
       }
       if (sourceIdentity && params.data.source && !current?.conversationSourceTransferComplete) {
         await params.bindingStore.withLease(sourceIdentity, async () => {
-          const source = params.bindingStore.read(sourceIdentity);
+          const source = await params.bindingStore.readAsync(sourceIdentity);
           if (source && source.threadId === params.data.source?.threadId) {
             const sourceSessionKey =
               sourceIdentity.sessionKey ??

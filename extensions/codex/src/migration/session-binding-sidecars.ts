@@ -474,17 +474,26 @@ async function migrateSource(
         if (parsed.lease && parsed.lease.expiresAt > Date.now()) {
           return `canonical plugin state is leased at ${key}`;
         }
-        const update = store.update;
-        if (!update) {
+        const { observe, compareAndApply } = store;
+        if (!observe || !compareAndApply) {
           return `canonical plugin state could not be normalized at ${key}`;
         }
-        await update(key, (candidate) => {
-          const candidateParsed = readStoredCodexAppServerBinding(candidate);
+        let observation = await observe(key);
+        for (;;) {
+          const candidateParsed = readStoredCodexAppServerBinding(observation.value);
           if (!candidateParsed || !isDeepStrictEqual(candidateParsed, parsed)) {
-            return undefined;
+            break;
           }
-          return normalized;
-        });
+          const result = await compareAndApply(key, observation.comparison, {
+            operation: "update",
+            action: "set",
+            value: normalized,
+          });
+          if (result.status !== "conflict") {
+            break;
+          }
+          observation = result.current;
+        }
         const persisted = readStoredCodexAppServerBinding(await store.lookup(key));
         if (!persisted || !isDeepStrictEqual(persisted, normalized)) {
           return `canonical plugin state changed at ${key}`;
@@ -557,26 +566,35 @@ async function migrateSource(
               : undefined;
         if (ownershipWarning) {
           if (sessionEntry?.value.state === "active") {
-            const update = store.update;
-            if (!update) {
+            const { observe, compareAndApply } = store;
+            if (!observe || !compareAndApply) {
               return retain(`${ownershipWarning}; its stale session binding could not be retired`);
             }
-            await update(sessionEntry.key, (current) => {
-              const parsed = readStoredCodexAppServerBinding(current);
+            let observation = await observe(sessionEntry.key);
+            for (;;) {
+              const parsed = readStoredCodexAppServerBinding(observation.value);
               if (parsed?.lease && parsed.lease.expiresAt > Date.now()) {
-                return undefined;
+                break;
               }
-              if (!hasExpected(current, sessionEntry.value)) {
-                // Atomic no-op: a concurrent runtime owner replaced or removed this row.
-                return undefined;
+              if (!hasExpected(observation.value, sessionEntry.value)) {
+                // A concurrent runtime owner replaced or removed this row.
+                break;
               }
-              return {
-                version: 1,
-                state: "cleared",
-                sessionId: owner.sessionId,
-                retired: true,
-              };
-            });
+              const result = await compareAndApply(sessionEntry.key, observation.comparison, {
+                operation: "update",
+                action: "set",
+                value: {
+                  version: 1,
+                  state: "cleared",
+                  sessionId: owner.sessionId,
+                  retired: true,
+                },
+              });
+              if (result.status !== "conflict") {
+                break;
+              }
+              observation = result.current;
+            }
             if (hasExpected(await store.lookup(sessionEntry.key), sessionEntry.value)) {
               return retain(`${ownershipWarning}; its stale session binding could not be retired`);
             }
