@@ -73,7 +73,8 @@ function configureDiscussionStore(runtime: PluginRuntime): void {
   }) as unknown as PluginRuntime["state"]["openSyncKeyedStore"];
   runtime.state.openKeyedStoreV2 = <T>(
     options: Parameters<PluginRuntime["state"]["openKeyedStoreV2"]>[0],
-  ) => asyncDiscussionTestStore<T>(runtime.state.openSyncKeyedStore, options);
+    authority?: Parameters<PluginRuntime["state"]["openKeyedStoreV2"]>[1],
+  ) => asyncDiscussionTestStore<T>(runtime.state.openSyncKeyedStore, options, authority);
 }
 
 export function createInboundMessage(
