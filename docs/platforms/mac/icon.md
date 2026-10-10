@@ -55,8 +55,8 @@ A tool-activity badge (SF Symbol puck, e.g. `chevron.left.slash.chevron.right` f
 
 ## Voice wake ears
 
-- Trigger: `AppStateStore.shared.triggerVoiceEars(ttl: nil)`, called from the voice-wake capture pipeline (`VoiceWakeRuntime`) and from voice-wake debug/test tooling (`VoiceWakeTester`, `VoiceWakeOverlayController`).
-- Stop: `stopVoiceEars()`, called when capture finalizes.
+- Trigger: the voice capture and overlay owners set `AppState.earBoostActive` when capture or overlay presentation begins.
+- Stop: those owners clear it when capture finalizes or the overlay closes.
 - Silence window before finalizing: `2.0s` normally, `5.0s` if only the trigger word was heard and no further speech followed (`VoiceWakeRuntime.silenceWindow` / `triggerOnlySilenceWindow`).
 - While boosted, idle blink/wiggle/leg/ear timers are suspended (`earBoostActive` gates the animation task in `CritterStatusLabel+Behavior`).
 
@@ -69,8 +69,7 @@ A tool-activity badge (SF Symbol puck, e.g. `chevron.left.slash.chevron.right` f
 
 ## Behavioral notes
 
-- No external CLI/broker toggle for ears or working state; both are driven internally by app signals (`AppState.setWorking`, `AppState.triggerVoiceEars`) to avoid accidental flapping.
-- Keep any new TTL short (well under 10s) so the icon returns to baseline quickly if a job hangs.
+- App-owned activity, capture, and overlay lifecycles drive the ears and working state.
 
 ## Related
 

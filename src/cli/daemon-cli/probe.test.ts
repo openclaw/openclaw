@@ -1,4 +1,5 @@
 // Daemon probe tests cover gateway probe command behavior and output.
+import "../../test-utils/prepare-compiled-subprocesses.js";
 import { assert, describe, expect, it, vi } from "vitest";
 import { gatewayProbeResultSawGateway } from "../../commands/gateway-health-auth-diagnostic.js";
 import { probeGatewayStatus } from "./probe.js";

@@ -49,6 +49,7 @@ export type HumanMentionWebPush = {
   agentId: string;
   senderLabel?: string;
   sessionTitle?: string;
+  prepare: () => Promise<void>;
   isCurrent: () => boolean;
 };
 
@@ -140,7 +141,7 @@ export function createEventWebPushDelivery(params: {
       );
       const sessionKeys = opts?.sessionKeys ?? [];
       const groupedResults = await withCurrentWebPushAuthority(
-        { ...params, sessionKeys, agentId },
+        { ...params, sessionKeys, agentId, preparePublication: mention?.prepare },
         (authority) => {
           const { cfg } = authority;
           const recipientProfileId =

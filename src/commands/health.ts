@@ -6,11 +6,7 @@ import { listReadOnlyChannelPluginsForConfig } from "../channels/plugins/read-on
 import { probeGatewayStatus } from "../cli/daemon-cli/probe.js";
 import { DEFAULT_RESTART_HEALTH_TIMEOUT_MS } from "../cli/daemon-cli/restart-health.constants.js";
 import { withProgress } from "../cli/progress.js";
-import {
-  createConfigReadError,
-  formatInvalidConfigDetails,
-  isConfigReadFailure,
-} from "../config/io.invalid-config.js";
+import { createConfigReadError, isConfigReadFailure } from "../config/io.invalid-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   buildGatewayConnectionDetails,
@@ -41,22 +37,17 @@ import {
   gatewayProbeResultSawGateway,
   gatewayProbeResultWasRateLimited,
 } from "./gateway-health-auth-diagnostic.js";
-import { formatDeliveryQueueHealthLine, formatHealthChannelLines } from "./health-format.js";
+import {
+  formatConfigReloadHealthLine,
+  formatContextEngineHealthLine,
+  formatDeliveryQueueHealthLine,
+  formatHealthChannelLines,
+} from "./health-format.js";
 import { logGatewayConnectionDetails } from "./status.gateway-connection.js";
 export { formatHealthChannelLines } from "./health-format.js";
 export type { HealthSummary } from "../gateway/health/types.js";
 
 const healthLog = createSubsystemLogger("health");
-
-const debugHealth = (
-  cfg: OpenClawConfig | undefined,
-  message: string,
-  meta?: Record<string, unknown>,
-) => {
-  if (isDiagnosticFlagEnabled("health", cfg)) {
-    healthLog.info(message, meta);
-  }
-};
 
 function isGatewayHealthAuthUnavailableError(error: unknown): boolean {
   return isGatewayCredentialsRequiredError(error) || isGatewaySecretRefUnavailableError(error);
@@ -79,13 +70,7 @@ export async function emitReachableGatewayAuthDiagnostic(params: {
   }
   let rateLimited = directRateLimit;
   if (!directRateLimit) {
-    const details = await buildGatewayProbeConnectionDetails({
-      config: params.config,
-      token: params.token,
-      password: params.password,
-      ignoreEnvUrlOverride: params.ignoreEnvUrlOverride,
-      localPortOverride: params.localPortOverride,
-    });
+    const details = await buildGatewayProbeConnectionDetails(params);
     const probe = await probeGatewayStatus({
       url: details.url,
       token: params.token,
@@ -132,22 +117,6 @@ function formatEventLoopHealthLine(summary: HealthSummary): string | null {
   }`;
 }
 
-export function formatContextEngineHealthLine(summary: HealthSummary): string | null {
-  const quarantined = summary.contextEngines?.quarantined ?? [];
-  if (quarantined.length === 0) {
-    return null;
-  }
-  const engines = quarantined.map((entry) => entry.engineId).join(", ");
-  return `Context engine: warning (${quarantined.length} quarantined; downgraded to legacy: ${engines})`;
-}
-
-export function formatConfigReloadHealthLine(summary: HealthSummary): string | null {
-  if (summary.configReload?.hotReloadStatus !== "disabled") {
-    return null;
-  }
-  return "Config hot reload: disabled (watcher retries exhausted; restart the gateway to restore it)";
-}
-
 export async function healthCommand(
   opts: {
     json?: boolean;
@@ -191,15 +160,10 @@ export async function healthCommand(
   } catch (error) {
     if (
       await emitReachableGatewayAuthDiagnostic({
+        ...opts,
         error,
         config: cfg,
         runtime,
-        timeoutMs: opts.timeoutMs,
-        token: opts.token,
-        password: opts.password,
-        ignoreEnvUrlOverride: opts.ignoreEnvUrlOverride,
-        localPortOverride: opts.localPortOverride,
-        json: opts.json,
       })
     ) {
       return;
@@ -286,7 +250,7 @@ export async function healthCommand(
         );
         runtime.log(`  ${channelId}: ${entries.join(" ")}`);
       }
-      runtime.log(info("[debug] gateway channel probes"));
+      runtime.log(info("[debug] gateway channel checks"));
       for (const [channelId, channelSummary] of Object.entries(summary.channels ?? {})) {
         const accounts = channelSummary.accounts ?? {};
         const probes = Object.entries(accounts).map(([accountId, accountSummary]) => {
@@ -334,10 +298,7 @@ export async function healthCommand(
     }
     for (const plugin of displayPlugins) {
       const channelSummary = summary.channels?.[plugin.id];
-      if (!channelSummary || channelSummary.linked !== true) {
-        continue;
-      }
-      if (!plugin.status?.logSelfId) {
+      if (channelSummary?.linked !== true || !plugin.status?.logSelfId) {
         continue;
       }
       const boundAccounts = defaultAgentId
@@ -350,7 +311,6 @@ export async function healthCommand(
         accountIds,
       });
       const accountId = resolvePreferredAccountId({
-        accountIds,
         defaultAccountId,
         boundAccounts,
       });
@@ -362,11 +322,9 @@ export async function healthCommand(
       if (
         accountContext.probeAccount === undefined ||
         !accountContext.enabled ||
-        accountContext.configured !== true
+        accountContext.configured !== true ||
+        accountContext.diagnostics.length > 0
       ) {
-        continue;
-      }
-      if (accountContext.diagnostics.length > 0) {
         continue;
       }
       try {
@@ -377,16 +335,19 @@ export async function healthCommand(
           includeChannelPrefix: true,
         });
       } catch (error) {
-        debugHealth(cfg, "logSelfId.failed", {
+        const details = {
           channel: plugin.id,
           accountId,
           error: formatErrorMessage(error),
-        });
+        };
+        if (isDiagnosticFlagEnabled("health", cfg)) {
+          healthLog.info("logSelfId.failed", details);
+        }
       }
     }
 
     if (Number.isFinite(summary.durationMs)) {
-      runtime.log(info(`Gateway probe duration: ${summary.durationMs}ms`));
+      runtime.log(info(`Gateway check duration: ${summary.durationMs}ms`));
     }
 
     if (resolvedAgents.length > 0) {
@@ -444,7 +405,7 @@ export async function readNonObservingHealthConfig(): Promise<OpenClawConfig> {
     pluginValidation: "core-only",
   });
   if (isConfigReadFailure(snapshot)) {
-    throw createConfigReadError(snapshot.path, formatInvalidConfigDetails(snapshot.issues));
+    throw createConfigReadError(snapshot);
   }
   return snapshot.runtimeConfig ?? snapshot.config;
 }

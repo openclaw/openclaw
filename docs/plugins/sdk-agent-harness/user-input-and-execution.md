@@ -24,7 +24,7 @@ are a separate case. They register a Gateway question and then wait, and the
 prompt that lets a person answer it is published by whatever runs the tool. A
 harness whose tools go through the embedded tool lifecycle gets that publication
 from its tool-start handler. A harness that dispatches tools itself passes
-`questionPrompt` to `createOpenClawCodingTools` instead, on every path where it
+`questionPrompt` to `hostCapabilities.createToolSurfaceAsync` instead, on every path where it
 builds a tool surface — a side thread is its own such path: `send` is the run's
 `onToolResult`, and `messageChannel` is the conversation the prompt would appear
 in. Leave it out and the question is registered but never shown, so the turn
@@ -167,6 +167,15 @@ media policy. Include its returned text and images in the native context budget;
 do not append them as an unbounded suffix. See the
 [runtime media contract](/plugins/sdk-runtime) for limits and older-host behavior.
 
+For transfer into a native environment, optional `resolveInputAttachmentMedia()`
+returns a frozen, detached copy of the current admitted input's original media
+facts, including images removed from `params.media` by inline projection. It
+resolves deferred transcript media under the captured attempt's live authority;
+it does not change transcript content or grant file-reading permission. Keep
+source validation and transfer with the harness's existing attachment owner.
+Older hosts without this capability provide only the current attempt's
+`params.media`; do not reconstruct missing sources from prompt text or history.
+
 When trajectory capture has a valid host-owned session target,
 `params.hostCapabilities.trajectory` provides closure-bound `recordEvent(...)`
 and `flush()` operations. The host adds session attribution, bounds and redacts
@@ -219,6 +228,15 @@ tool-search/code-mode control selection, local-model lean defaults,
 runtime-compatible schema filtering, hidden catalog execution, directory
 hydration, and catalog cleanup. Harnesses still own their SDK-specific tool
 conversion and native execution callback.
+
+Pass the host-supplied attempt's `trigger` to this factory. This optional field
+uses the existing run trigger (`cron`, `event`, `heartbeat`, `manual`, `memory`,
+`overflow`, or `user`); omitting it preserves ordinary tool presentation. A
+`memory` turn keeps the host-selected persistence tools directly available and
+disables Tool Search and Code Mode, including when prepared presentation facts
+are supplied. File-backed saving retains `read` and its restricted append-only
+writer; provider-backed saving retains `read` and the selected plugin's declared
+persistence and lookup tools. See [pre-compaction memory flush](/plugins/sdk-overview/memory-and-context#pre-compaction-memory-flush).
 
 Native tool adapters may use `runWithAsyncWorkResources(...)` from the same
 subpath to retain operation cleanup through host-owned admitted work without

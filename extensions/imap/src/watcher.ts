@@ -3,7 +3,8 @@ import { simpleParser } from "mailparser";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type {
   OpenClawPluginApi,
-  OpenClawPluginServiceContext,
+  OpenClawPluginServiceContextV2,
+  PluginServiceSchedulerV1,
 } from "openclaw/plugin-sdk/plugin-entry";
 import type { ImapAccountConfig } from "./config.js";
 import { renderImapPrompt } from "./prompt.js";
@@ -27,7 +28,7 @@ type ImapWatcherOptions = {
   account: ImapAccountConfig;
   runtime: OpenClawPluginApi["runtime"];
   state: ImapWatcherState;
-  context: OpenClawPluginServiceContext;
+  context: OpenClawPluginServiceContextV2;
   authenticator?: MailAuthenticator;
   reconnectBaseMs?: number;
 };
@@ -43,17 +44,19 @@ function messageDate(message: FetchMessageObject): Date {
 
 export class ImapAccountWatcher {
   private client: ImapFlow | undefined;
-  private pollTimer: ReturnType<typeof setInterval> | undefined;
-  private reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+  private readonly scheduler: PluginServiceSchedulerV1;
+  private pollJob: ReturnType<PluginServiceSchedulerV1["schedule"]> | undefined;
+  private reconnectJob: ReturnType<PluginServiceSchedulerV1["schedule"]> | undefined;
   private activeSweep: Promise<void> | undefined;
   private activeConnection: Promise<void> | undefined;
-  private stopping = false;
   private failures = 0;
   private authFailures = 0;
   private reconnectPending = false;
   private sweepPending = false;
 
-  constructor(private readonly options: ImapWatcherOptions) {}
+  constructor(private readonly options: ImapWatcherOptions) {
+    this.scheduler = options.context.scheduler.scope();
+  }
 
   start(): void {
     if (this.options.account.allowedSenders.length === 0) {
@@ -62,42 +65,35 @@ export class ImapAccountWatcher {
       );
       return;
     }
-    this.startConnection();
+    this.scheduler.schedule({ id: "connect", delayMs: 0, run: () => this.startConnection() });
   }
 
   async stop(): Promise<void> {
-    this.stopping = true;
-    if (this.pollTimer) {
-      clearInterval(this.pollTimer);
-      this.pollTimer = undefined;
-    }
-    if (this.reconnectTimer) {
-      clearTimeout(this.reconnectTimer);
-      this.reconnectTimer = undefined;
-    }
+    this.scheduler.beginClose();
     const client = this.client;
     this.client = undefined;
     client?.close();
-    await Promise.allSettled([this.activeConnection, this.activeSweep]);
+    await this.scheduler.stop();
   }
 
-  private startConnection(): void {
-    if (this.stopping || this.activeConnection) {
-      return;
+  private startConnection(): Promise<void> | undefined {
+    if (this.scheduler.signal.aborted || this.activeConnection) {
+      return undefined;
     }
     const pending = this.connect().catch((error: unknown) => this.handleConnectionFailure(error));
     this.activeConnection = pending.finally(() => {
       this.activeConnection = undefined;
-      if (this.reconnectPending && !this.stopping) {
+      if (this.reconnectPending && !this.scheduler.signal.aborted) {
         this.scheduleReconnect();
       }
     });
+    return this.activeConnection;
   }
 
   private async connect(): Promise<void> {
     // Finish the previous connection's admission before reinitializing its cursor.
     await this.activeSweep;
-    if (this.stopping) {
+    if (this.scheduler.signal.aborted) {
       return;
     }
     const { account } = this.options;
@@ -115,20 +111,20 @@ export class ImapAccountWatcher {
     });
     this.client = client;
     client.on("error", (error: Error) => {
-      if (!this.stopping && this.client === client) {
+      if (!this.scheduler.signal.aborted && this.client === client) {
         this.options.context.logger.warn(
           `imap: account=${this.options.accountId} connection error=${formatErrorMessage(error)}`,
         );
       }
     });
     client.once("close", () => {
-      if (!this.stopping && this.client === client) {
+      if (!this.scheduler.signal.aborted && this.client === client) {
         this.client = undefined;
         this.scheduleReconnect();
       }
     });
     await client.connect();
-    if (this.stopping || this.client !== client) {
+    if (this.scheduler.signal.aborted || this.client !== client) {
       client.close();
       return;
     }
@@ -139,7 +135,7 @@ export class ImapAccountWatcher {
       mailbox.uidValidity.toString(),
       mailbox.uidNext,
     );
-    if (this.stopping || this.client !== client) {
+    if (this.scheduler.signal.aborted || this.client !== client) {
       return;
     }
     if (initialized.kind !== "resume") {
@@ -167,8 +163,12 @@ export class ImapAccountWatcher {
     }
     // IDLE reports mailbox changes, not retry readiness. Reconcile on the same
     // cadence in both modes so a quiet inbox cannot strand a rejected admission.
-    this.pollTimer = setInterval(() => this.requestSweep(), account.watch.pollSeconds * 1_000);
-    this.pollTimer.unref();
+    this.pollJob = this.scheduler.schedule({
+      id: "poll",
+      delayMs: account.watch.pollSeconds * 1_000,
+      everyMs: account.watch.pollSeconds * 1_000,
+      run: () => this.requestSweep(),
+    });
     // Reconnect always sweeps persisted state, closing the notification gap during disconnect.
     if (initialized.kind === "resume") {
       this.requestSweep();
@@ -176,7 +176,7 @@ export class ImapAccountWatcher {
   }
 
   private handleConnectionFailure(error: unknown): void {
-    if (this.stopping) {
+    if (this.scheduler.signal.aborted) {
       return;
     }
     const authenticationFailed =
@@ -202,13 +202,11 @@ export class ImapAccountWatcher {
   }
 
   private scheduleReconnect(): void {
-    if (this.stopping || this.reconnectTimer || this.authFailures >= MAX_ATTEMPTS) {
+    if (this.scheduler.signal.aborted || this.reconnectJob || this.authFailures >= MAX_ATTEMPTS) {
       return;
     }
-    if (this.pollTimer) {
-      clearInterval(this.pollTimer);
-      this.pollTimer = undefined;
-    }
+    this.pollJob?.cancel();
+    this.pollJob = undefined;
     if (this.activeConnection) {
       this.reconnectPending = true;
       return;
@@ -217,45 +215,54 @@ export class ImapAccountWatcher {
     const base = this.options.reconnectBaseMs ?? 1_000;
     const delay = Math.min(base * 2 ** this.failures++, MAX_RECONNECT_DELAY_MS);
     const jitter = Math.floor(Math.random() * Math.max(1, delay / 4));
-    this.reconnectTimer = setTimeout(() => {
-      this.reconnectTimer = undefined;
-      this.startConnection();
-    }, delay + jitter);
-    this.reconnectTimer.unref();
+    this.reconnectJob = this.scheduler.schedule({
+      id: "reconnect",
+      delayMs: delay + jitter,
+      run: () => {
+        this.reconnectJob = undefined;
+        return this.startConnection();
+      },
+    });
   }
 
   private requestSweep(): void {
     const client = this.client;
-    if (this.stopping || !client) {
+    if (this.scheduler.signal.aborted || !client) {
       return;
     }
     if (this.activeSweep) {
-      // A wakeup during an active sweep must queue a follow-up sweep: the running
-      // sweep snapshotted its UID range, so dropping the wakeup would strand the
-      // new message until the next unrelated event or reconnect.
+      // The running sweep snapshotted its UID range; retain pushes for the next sweep.
       this.sweepPending = true;
       return;
     }
-    this.activeSweep = this.sweep(client)
-      .catch((error: unknown) => {
-        if (!this.stopping) {
-          this.options.context.logger.warn(
-            `imap: account=${this.options.accountId} sweep failed=${formatErrorMessage(error)}`,
-          );
-        }
-      })
-      .finally(() => {
-        this.activeSweep = undefined;
-        if (this.sweepPending && !this.stopping) {
-          this.sweepPending = false;
-          this.requestSweep();
-        }
-      });
+    this.scheduler.schedule({
+      id: "sweep",
+      delayMs: 0,
+      mode: "earliest",
+      run: () => {
+        this.activeSweep = this.sweep(client)
+          .catch((error: unknown) => {
+            if (!this.scheduler.signal.aborted) {
+              this.options.context.logger.warn(
+                `imap: account=${this.options.accountId} sweep failed=${formatErrorMessage(error)}`,
+              );
+            }
+          })
+          .finally(() => {
+            this.activeSweep = undefined;
+            if (this.sweepPending && !this.scheduler.signal.aborted) {
+              this.sweepPending = false;
+              this.requestSweep();
+            }
+          });
+        return this.activeSweep;
+      },
+    });
   }
 
   private async sweep(client: ImapFlow): Promise<void> {
     const cursor = await this.options.state.cursors.lookup(this.options.accountId);
-    if (!cursor || this.stopping || this.client !== client) {
+    if (!cursor || this.scheduler.signal.aborted || this.client !== client) {
       return;
     }
 
@@ -276,7 +283,7 @@ export class ImapAccountWatcher {
 
     let processed = 0;
     for (let offset = 0; offset < uids.length; offset += FETCH_BATCH_SIZE) {
-      if (this.stopping || this.client !== client) {
+      if (this.scheduler.signal.aborted || this.client !== client) {
         break;
       }
       const batchUids = uids.slice(offset, offset + FETCH_BATCH_SIZE);
@@ -293,7 +300,7 @@ export class ImapAccountWatcher {
       messages.sort((left, right) => left.uid - right.uid);
       for (const message of messages) {
         if (
-          this.stopping ||
+          this.scheduler.signal.aborted ||
           this.client !== client ||
           !(await this.processMessage(message, cursor.uidValidity))
         ) {
@@ -318,6 +325,8 @@ export class ImapAccountWatcher {
   private async processMessage(message: FetchMessageObject, uidValidity: string): Promise<boolean> {
     const { accountId, account, state } = this.options;
     const key = `${accountId}:${uidValidity}:${message.uid}`;
+    const claim = () =>
+      state.claims.registerIfAbsent(key, { accountId, uid: message.uid, recordedAt: Date.now() });
     if (!message.source) {
       await this.recordSkip(message.uid, undefined, "message-source-missing");
       return true;
@@ -341,11 +350,7 @@ export class ImapAccountWatcher {
         );
         return false;
       }
-      await state.claims.registerIfAbsent(key, {
-        accountId,
-        uid: message.uid,
-        recordedAt: Date.now(),
-      });
+      await claim();
       await this.recordSkip(message.uid, verdict.sender, verdict.reason);
       return true;
     }
@@ -354,13 +359,7 @@ export class ImapAccountWatcher {
       await this.recordSkip(message.uid, verdict.sender, "duplicate-message-id");
       return true;
     }
-    if (
-      !(await state.claims.registerIfAbsent(key, {
-        accountId,
-        uid: message.uid,
-        recordedAt: Date.now(),
-      }))
-    ) {
+    if (!(await claim())) {
       await this.recordSkip(message.uid, verdict.sender, "duplicate-uid");
       return true;
     }
@@ -403,11 +402,7 @@ export class ImapAccountWatcher {
       );
       return false;
     }
-    await state.claims.registerIfAbsent(key, {
-      accountId,
-      uid: message.uid,
-      recordedAt: Date.now(),
-    });
+    await claim();
     await this.recordSkip(message.uid, verdict.sender, "dispatch-rejected");
     return true;
   }

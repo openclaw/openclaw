@@ -140,6 +140,7 @@ suite.define(() => {
             excludeSubagents: true,
             excludeCron: true,
             excludeSystem: true,
+            excludeDock: true,
           },
         });
         expect(await results.locator(".cmd-palette__avatar").count()).toBe(3);

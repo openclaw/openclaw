@@ -1,6 +1,61 @@
+import { afterEach, beforeEach, vi } from "vitest";
+import { resetCommandQueueStateForTest } from "../../../process/command-queue.test-support.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
+import * as announceOutput from "./subagent-announce-output.js";
+import { setSubagentAnnounceDeliveryDepsForTest } from "./subagent-announce-overrides.test-support.js";
+import {
+  deliver,
+  registryRead,
+  startTurn,
+  readDescendantFacts,
+  loadRequester,
+} from "./subagent-announce.requester-settle-dispatch-mocks.test-support.js";
+import type { RequesterSettleWakeBatchCallbacks } from "./subagent-announce.requester-settle-state.js";
+
+export { deliver, registryRead, startTurn, readDescendantFacts, loadRequester };
+
+const readChildCompletionFindings = announceOutput.readChildCompletionFindings;
+
+export function useRequesterSettleDispatchFixture() {
+  beforeEach(() => {
+    vi.spyOn(announceOutput, "readChildCompletionFindings").mockImplementation((children) =>
+      readChildCompletionFindings(children, (runId) =>
+        registryRead.listSubagentRunsForRequester().find((entry) => entry.runId === runId),
+      ),
+    );
+    resetCommandQueueStateForTest();
+    startTurn.mockReset();
+    deliver.mockReset();
+    loadRequester.mockReset().mockReturnValue({
+      cfg: {},
+      canonicalKey: REQUESTER_KEY,
+      entry: { sessionId: "requester-session", updatedAt: 1 },
+    });
+    readDescendantFacts.mockReset().mockResolvedValue({ unsettled: false, active: 0 });
+    registryRead.getLatestLiveSubagentRunByChildSessionKey.mockReset().mockReturnValue(undefined);
+    registryRead.getLatestSubagentRunByChildSessionKey.mockReset().mockReturnValue(undefined);
+  });
+
+  afterEach(() => {
+    vi.mocked(announceOutput.readChildCompletionFindings).mockRestore();
+    resetCommandQueueStateForTest();
+    setSubagentAnnounceDeliveryDepsForTest();
+    vi.useRealTimers();
+  });
+}
 
 export const REQUESTER_KEY = "agent:main:main";
+
+export const publishWakeTransition: RequesterSettleWakeBatchCallbacks["transitionBatch"] = (
+  batch,
+  state,
+  onPublished,
+) => {
+  for (const entry of batch) {
+    entry.requesterSettleWake = state;
+  }
+  onPublished(batch);
+};
 
 export function settledChild(): SubagentRunRecord {
   return {

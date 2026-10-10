@@ -1,4 +1,10 @@
 export const SESSION_FIELD_LABELS: Record<string, string> = {
+  "agents.entries.*.subagents.delegateToolsTo": "Delegated Tool Targets",
+  "agents.entries.*.tools.agentToAgent": "Agent Outbound Messaging",
+  "agents.entries.*.tools.agentToAgent.send": "Agent Send Destination Allowlist",
+  "tools.agentToAgent": "Agent-to-Agent Tool Access",
+  "tools.agentToAgent.enabled": "Enable Agent-to-Agent Tool",
+  "tools.agentToAgent.allow": "Agent-to-Agent Target Allowlist",
   session: "Session",
   "session.scope": "Session Scope",
   "session.dmScope": "DM Session Scope",

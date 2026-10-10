@@ -22,6 +22,7 @@ import {
 import { createWindowsTaskAutoStartGuard } from "../cli/update-cli/update-command-service-maintenance.js";
 import { withUpdateCommandTerminalResult } from "../cli/update-cli/update-command-terminal.js";
 import { createWindowsTaskAutoStartRecovery } from "../cli/update-cli/update-command-windows-task.js";
+import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import { routeLogsToStderr } from "../logging/console.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { finalizeActiveDebugProxyCaptures } from "../proxy-capture/runtime-cleanup.js";
@@ -29,6 +30,7 @@ import { defaultRuntime } from "../runtime.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { resolveOpenClawPackageRootSync } from "./openclaw-root.js";
 import { resolveEnvironmentValue } from "./process-env.js";
 import { throwSqliteLifecycleErrors } from "./sqlite-lifecycle-errors.js";
@@ -50,13 +52,13 @@ import {
   POST_CORE_UPDATE_RESULT_PATH_ENV,
 } from "./update-post-core-context.js";
 import {
-  createManagedUpdateRequesterAuthority,
-  createManagedUpdateRequesterContinuationAuthority,
+  createDelegatedUpdateRequesterAuthority,
   UpdateRequesterRevokedError,
 } from "./update-requester-authority.js";
-import { adoptUpdateRun, getUpdateRun, recordUpdateRunStep } from "./update-run-ledger.js";
+import { adoptUpdateRun, getUpdateRun } from "./update-run-ledger.js";
 import type { UpdateRunRecord } from "./update-run-record.js";
 import type { UpdateRecoveryFence } from "./update-run-recovery.js";
+import { recordUpdateRunStepAsync } from "./update-run-write.async.js";
 import { isOmittedUpdateTimeout } from "./update-timeout-provenance.js";
 
 async function finalizeMigratedUpdate(): Promise<void> {
@@ -244,14 +246,9 @@ async function runDelegatedPostCore(input: UpdatePostCoreInput): Promise<void> {
       input.runId,
       input.root,
       async (fence) => {
-        const requesterAuthority = input.requester?.authorizationSource?.startsWith("profile:")
-          ? await createManagedUpdateRequesterContinuationAuthority(input.requester, {
-              runId: input.runId,
-              executor: fence,
-            })
-          : input.requester
-            ? await createManagedUpdateRequesterAuthority(input.requester)
-            : undefined;
+        const requesterAuthority = input.requester
+          ? await createDelegatedUpdateRequesterAuthority(input.requester, input.runId, fence)
+          : undefined;
         const { updateCommand } = await import("../cli/update-cli/update-command.js");
         fence.assertCurrent();
         if (requesterAuthority?.isCurrent() === false) {
@@ -287,15 +284,10 @@ async function runDelegatedDoctor(input: UpdateDoctorInput): Promise<void> {
     input.executor,
     input.runId,
     input.root,
-    async (fence) => {
-      const requester = input.requester?.authorizationSource?.startsWith("profile:")
-        ? await createManagedUpdateRequesterContinuationAuthority(input.requester, {
-            runId: input.runId,
-            executor: fence,
-          })
-        : input.requester
-          ? await createManagedUpdateRequesterAuthority(input.requester)
-          : undefined;
+    async (fence, commandAuthority) => {
+      const requester = input.requester
+        ? await createDelegatedUpdateRequesterAuthority(input.requester, input.runId, fence)
+        : undefined;
       const assertCurrent = () => {
         try {
           fence.assertCurrent();
@@ -355,6 +347,7 @@ async function runDelegatedDoctor(input: UpdateDoctorInput): Promise<void> {
         {
           inputHash: input.configInputHash,
           assertCurrent,
+          commandAuthority,
           originalRecoveryCapture: {
             runId: input.runId,
             installRoot: captureUpdateCommandExecutorAuthority(fence, input.runId).installKey,
@@ -379,8 +372,7 @@ async function finalizeInput(
   if (
     !transferredRun ||
     "executorFence" in transferredRun ||
-    (!input.recoveryHandoff &&
-      input.params.rollbackBlockedReason !== "state-migrated-no-rollback" &&
+    (input.params.rollbackBlockedReason !== "state-migrated-no-rollback" &&
       input.params.rollbackBlockedReason !== "rollback-state-unverified")
   ) {
     throw new Error("Update finalization requires its migrated update run.");
@@ -395,21 +387,30 @@ async function finalizeInput(
     executorFence,
     ...(descriptor
       ? {
-          requesterAuthority: descriptor.requester.authorizationSource?.startsWith("profile:")
-            ? await createManagedUpdateRequesterContinuationAuthority(
-                descriptor.requester,
-                { runId: runIdentity.runId, executor: executorFence },
-                runIdentity.env,
-              )
-            : await createManagedUpdateRequesterAuthority(descriptor.requester, runIdentity.env),
+          requesterAuthority: await createDelegatedUpdateRequesterAuthority(
+            descriptor.requester,
+            runIdentity.runId,
+            executorFence,
+            runIdentity.env,
+          ),
         }
       : {}),
   };
   executorFence.assertCurrent();
   registerRun(run);
-  for (const step of input.bufferedSteps) {
-    executorFence.assertCurrent();
-    recordUpdateRunStep(run.runId, step, { env: run.env });
+  if (input.bufferedSteps.length > 0) {
+    const env = cloneEnvWithPlatformSemantics(run.env ?? process.env);
+    const context = captureOpenClawStateWorkerContext({ env });
+    const requester = run.requesterAuthority;
+    const assertCurrent = () => {
+      executorFence.assertCurrent();
+      if (requester?.isCurrent() === false) {
+        throw new UpdateRequesterRevokedError();
+      }
+    };
+    for (const step of input.bufferedSteps) {
+      await recordUpdateRunStepAsync(run.runId, step, { env, context, assertCurrent });
+    }
   }
   const stopped = input.params.preManagedServiceStop;
   if (input.windowsTaskAutoStartSuspended && !stopped?.serviceEnv) {

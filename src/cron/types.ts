@@ -1,4 +1,6 @@
+import type { SchemaContract } from "../../packages/gateway-protocol/src/schema-contract.js";
 import type {
+  CronDeliveryPreview as CronDeliveryPreviewWire,
   CronJob as CronJobWire,
   CronRunLogEntry as CronRunLogWireEntry,
   CronUpdateParams as CronUpdateParamsWire,
@@ -40,7 +42,7 @@ export type CronSchedule = CronJobWire["schedule"];
 type CronSessionTarget = "main" | "isolated" | "current" | `session:${string}`;
 
 /** Wake policy for main-session jobs waiting on heartbeat/user activity. */
-type CronWakeMode = "next-heartbeat" | "now";
+type CronWakeMode = CronJobWire["wakeMode"];
 
 /** Messaging channel id accepted by cron delivery settings. */
 export type CronMessageChannel = ChannelId;
@@ -94,10 +96,10 @@ export type CronDeliveryPatch = Partial<Pick<CronDelivery, "mode" | "bestEffort"
 };
 
 /** Execution outcome, separate from delivery outcome. */
-export type CronRunStatus = "ok" | "error" | "skipped";
+export type CronRunStatus = NonNullable<CronRunLogWireEntry["status"]>;
 
 /** Delivery outcome for completion or failure-notification sends. */
-export type CronDeliveryStatus = "delivered" | "not-delivered" | "unknown" | "not-requested";
+export type CronDeliveryStatus = NonNullable<CronRunLogWireEntry["deliveryStatus"]>;
 
 /** Transport evidence for a primary webhook, including an unacknowledged request. */
 export type CronWebhookDeliveryOutcome = {
@@ -128,10 +130,7 @@ export type CronResolvedDeliveryState = CronFailureNotificationDelivery & {
 };
 
 /** Human-readable delivery target preview for list/detail surfaces. */
-export type CronDeliveryPreview = {
-  label: string;
-  detail: string;
-};
+export type CronDeliveryPreview = CronDeliveryPreviewWire;
 
 /** Model/provider/usage telemetry attached to cron run results and logs. */
 export type CronRunTelemetry = Pick<CronRunLogWireEntry, "model" | "provider" | "usage">;
@@ -151,7 +150,8 @@ export type CronRunDiagnostics = NonNullable<CronRunLogWireEntry["diagnostics"]>
 /** Explicit execution-error disposition used consistently by retry, history, and alerts. */
 export type CronRunErrorClassification =
   | { kind: "reason"; reason: FailoverReason }
-  | { kind: "permanent" };
+  /** `reportedByAgent`: the run's final answer reported AUTOMATION_FAILED; no runtime fault. */
+  | { kind: "permanent"; reportedByAgent?: true };
 
 /** Closed producer-authored facts allowed in operator-facing failure notifications. */
 export type CronFailureNotificationDetail =
@@ -194,6 +194,8 @@ export type CronAgentExecutionStarted = {
   agentId?: string;
   sessionId?: string;
   sessionKey?: string;
+  /** Invocation run id; every attempt registers its embedded handle under it. */
+  runId?: string;
   /** True when this runner belongs to a later candidate in the same fallback chain. */
   isFallback?: boolean;
   phase?: CronAgentExecutionPhase;
@@ -281,13 +283,14 @@ export type CronJobState = Omit<
   runningScheduleChangeId?: string;
   /**
    * Unresolved recovery scope and last notified signature, when an alert was requested.
-   * `repair` records the owner-conversation repair request that replaced this incident's
-   * first alert; the next alert of the incident names it and clears it.
+   * `repair` records the owner-conversation repair request that replaced the streak's first
+   * alert, and `alerted` that its fallback alert was sent. It lasts until the job succeeds,
+   * so a streak is repaired at most once.
    */
   failureAlertIncident?: {
     signature?: string;
     scope: "run" | "trigger";
-    repair?: { atMs: number };
+    repair?: { atMs: number; alerted?: true };
   };
   /** Fences notification settlement when multiple cycles share a timestamp. */
   lastFailureNotificationId?: string;
@@ -299,10 +302,7 @@ export type CronJobState = Omit<
   deliverySuppressionReason?: NormalizeReplySkipReason;
 };
 
-type CronTrigger = {
-  script: string;
-  once?: boolean;
-};
+type CronTrigger = SchemaContract<NonNullable<CronJobWire["trigger"]>>;
 
 /**
  * Closed failure taxonomy for trigger-script evaluation. Mirrors the code-mode
@@ -376,6 +376,12 @@ export type CronToolsAllowProvenance =
 
 /** Persisted row shape; public Gateway and wire contracts use CronJob. */
 export type CronStoredJob = CronJob & {
+  /** Creation-bound destination for isolated results when no external route exists. */
+  sourceConversation?: {
+    sessionKey: string;
+    sessionId: string;
+    lifecycleRevision?: string;
+  };
   /** Immutable revisions inherited from the authorized creator session, never human mutation authority. */
   skillLibrarySelections?: SessionEntry["skillLibrarySelections"];
   /** Immutable creator provenance stamped by the trusted cron creation seam. */

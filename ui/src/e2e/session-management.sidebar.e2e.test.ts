@@ -215,7 +215,10 @@ suite.define(() => {
       await page.getByRole("menuitem", { name: "Archive session" }).waitFor();
       await page.getByRole("menuitem", { name: "Delete…" }).waitFor();
       expect(await page.getByRole("menuitem", { name: "Pin session" }).count()).toBe(0);
-      expect(await page.getByRole("menuitem", { name: "Move to group" }).count()).toBe(0);
+      expect(await page.getByRole("menuitem", { name: "Move to group" }).isEnabled()).toBe(true);
+      expect(await page.getByRole("menuitem", { name: "Move to top level" }).isEnabled()).toBe(
+        true,
+      );
       await captureUiProof(suite, page, "child-session-menu.png");
       await page.keyboard.press("Escape");
       await childMenu.waitFor({ state: "detached" });

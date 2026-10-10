@@ -80,13 +80,10 @@ export function shouldBypassPluginOwnedBindingForCommand(
     return true;
   }
   const provider = normalizeOptionalString(ctx.Provider ?? ctx.Surface);
-  if (
+  return Boolean(
     commandTurn.commandName &&
     findCommandByNativeName(commandTurn.commandName, provider, {
       includeBundledChannelFallback: true,
-    })
-  ) {
-    return true;
-  }
-  return false;
+    }),
+  );
 }

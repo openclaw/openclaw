@@ -14,6 +14,10 @@ import type { ApplicationGateway } from "../app/context.ts";
 import { t } from "../i18n/index.ts";
 import { registerModelControlsEnglish } from "../i18n/locales/en-model-controls.ts";
 import {
+  isAgentDatabaseInspectionPendingError,
+  resolveGatewayReadRetryDelayMs,
+} from "./gateway-availability.ts";
+import {
   invalidateModelCatalogCache,
   invalidateModelCatalogEntry,
   isModelCatalogRetired,
@@ -53,18 +57,25 @@ export type ModelCatalogPresentation = ModelCatalogResult & {
 };
 
 /** Settings readers share the catalog's accepted display receipt and retirement boundary. */
-export function readAgentModelCatalog(
+export function readModelCatalog(
   client: ModelCatalogClient | null | undefined,
-  agentId: string | null | undefined,
+  scope: ModelCatalogReadScope | null | undefined,
 ): ModelCatalogPresentation {
   const catalog =
-    client && agentId ? peekModelCatalog(client, { agentId }, { allowStale: true }) : undefined;
+    client && scope ? peekModelCatalog(client, scope, { allowStale: true }) : undefined;
   return {
     ...catalog,
     models: catalog?.models ?? [],
     hasSnapshot: catalog !== undefined,
-    retired: client && agentId ? isModelCatalogRetired(client, { agentId }) : false,
+    retired: client && scope ? isModelCatalogRetired(client, scope) : false,
   };
+}
+
+export function readAgentModelCatalog(
+  client: ModelCatalogClient | null | undefined,
+  agentId: string | null | undefined,
+): ModelCatalogPresentation {
+  return readModelCatalog(client, agentId ? { agentId } : null);
 }
 
 export function subscribeModelCatalogCache(
@@ -75,8 +86,7 @@ export function subscribeModelCatalogCache(
   modelCatalogObservers.set(client, listeners);
   listeners.add(listener);
   return () => {
-    listeners.delete(listener);
-    if (listeners.size === 0) {
+    if (listeners.delete(listener) && listeners.size === 0) {
       modelCatalogObservers.delete(client);
     }
   };
@@ -166,27 +176,6 @@ export function settleModelCatalogRequests(
   return pending.length ? Promise.allSettled(pending).then(() => {}) : undefined;
 }
 
-/** Observe an eligible producer without joining its cancellation or publication ownership. */
-export function pendingModelCatalogResult(
-  client: ModelCatalogClient,
-  scope: ModelsListParams,
-  issuedBefore: ReadonlySet<ModelCatalogRead>,
-): Promise<ModelCatalogResult | undefined> | undefined {
-  const cache = modelCatalogCache.get(client);
-  const key = modelCatalogKey(modelCatalogParams(scope));
-  const pending = Array.from(cache?.requests.get(key)?.values() ?? []).find(
-    ({ active }) => active && cache?.reads.has(active.read) && !issuedBefore.has(active.read),
-  )?.active;
-  return pending?.promise.then(
-    () =>
-      modelCatalogCache.get(client) === cache &&
-      cache?.entries.get(key)?.publishedRead === pending.read.order
-        ? peekModelCatalog(client, scope)
-        : undefined,
-    () => undefined,
-  );
-}
-
 function createModelCatalogRequest(params: {
   client: ModelCatalogClient;
   scope: ModelsListParams;
@@ -204,7 +193,7 @@ function createModelCatalogRequest(params: {
     typeof timeout === "number" && Number.isFinite(timeout)
       ? resolveSafeTimeoutDelayMs(timeout, { minMs: 0 })
       : undefined;
-  const deadline = duration === undefined ? undefined : Date.now() + duration;
+  let deadline = duration === undefined ? undefined : Date.now() + duration;
   let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
   let started = false;
   let requestSent = false;
@@ -277,10 +266,17 @@ function createModelCatalogRequest(params: {
       const requestParams = { ...params.scope, ...(pending.refresh ? { refresh: true } : {}) };
       void (async () => {
         let retried = false;
+        let startupAttempt = 0;
+        let resumeAfterStartup = false;
         for (;;) {
+          if (resumeAfterStartup && duration !== undefined) {
+            deadline = Date.now() + duration;
+            deadlineTimer = setTimeout(() => rejectTimeout(duration), duration);
+          }
+          resumeAfterStartup = false;
           try {
             // Only a received rejection can retry; local timeout still owns its transport.
-            // The existing numeric deadline covers every attempt and wait in this lane.
+            // Confirmed agent startup suspends the overall budget, never a silent read's timeout.
             const result = await (timeout === undefined
               ? client.request<ModelCatalogResult>("models.list", requestParams)
               : client.request<ModelCatalogResult>("models.list", requestParams, {
@@ -297,8 +293,9 @@ function createModelCatalogRequest(params: {
             pending.resolve(result);
             return;
           } catch (error) {
+            const startupPending = isAgentDatabaseInspectionPendingError(error);
             if (
-              retried ||
+              (retried && !startupPending) ||
               !isGatewayProtocolResponseError(error) ||
               error.gatewayCode !== "UNAVAILABLE" ||
               !error.retryable ||
@@ -307,12 +304,20 @@ function createModelCatalogRequest(params: {
               pending.reject(error);
               return;
             }
-            // Retry one superseded snapshot without chasing an indefinitely busy Gateway.
-            retried = true;
+            if (startupPending) {
+              clearTimeout(deadlineTimer);
+              deadline = undefined;
+              resumeAfterStartup = true;
+            } else {
+              // Other unavailable responses retain their one replacement attempt.
+              retried = true;
+            }
             const wake = createDeferredCore();
             const timer = setTimeout(
               wake.resolve,
-              resolveSafeTimeoutDelayMs(error.retryAfterMs ?? 0, { minMs: 0 }),
+              startupPending
+                ? resolveGatewayReadRetryDelayMs(error, startupAttempt++)
+                : resolveSafeTimeoutDelayMs(error.retryAfterMs ?? 0, { minMs: 0 }),
             );
             const stopWatching = subscribeModelCatalogCache(client, () => {
               if (!canRetry()) {

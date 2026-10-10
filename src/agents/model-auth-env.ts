@@ -1,6 +1,3 @@
-/**
- * Resolves model provider API keys from explicit environment variables.
- */
 import { normalizeProviderIdForAuth } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getShellEnvAppliedKeys } from "../infra/shell-env.js";
@@ -45,6 +42,31 @@ export type EnvApiKeyLookupOptions = {
   skipSetupProviderFallback?: boolean;
 };
 
+function prepareEnvAuthLookupMaps(
+  env: NodeJS.ProcessEnv,
+  options: EnvApiKeyLookupOptions & Pick<ProviderEnvVarLookupParams, "metadataSnapshot">,
+  includeSetupProviderFallback = false,
+) {
+  const lookupMaps =
+    !options.aliasMap ||
+    !options.candidateMap ||
+    !options.authEvidenceMap ||
+    (includeSetupProviderFallback && !options.setupProviderFallbackRefs)
+      ? resolveProviderEnvAuthLookupMaps({
+          config: options.config,
+          workspaceDir: options.workspaceDir,
+          env,
+          ...(includeSetupProviderFallback ? { metadataSnapshot: options.metadataSnapshot } : {}),
+        })
+      : undefined;
+  return {
+    aliasMap: options.aliasMap ?? lookupMaps?.aliasMap ?? {},
+    candidateMap: options.candidateMap ?? lookupMaps?.envCandidateMap ?? {},
+    authEvidenceMap: options.authEvidenceMap ?? lookupMaps?.authEvidenceMap ?? {},
+    lookupMaps,
+  };
+}
+
 /** Reports env/local auth presence without returning or resolving credential material. */
 export function resolveProviderEnvAuthEvidence(
   provider: string,
@@ -52,18 +74,8 @@ export function resolveProviderEnvAuthEvidence(
   options: EnvApiKeyLookupOptions = {},
 ): ProviderEnvAuthEvidence | null {
   const providerId = normalizeProviderIdForAuth(provider);
-  const lookupMaps =
-    !options.aliasMap || !options.candidateMap || !options.authEvidenceMap
-      ? resolveProviderEnvAuthLookupMaps({
-          config: options.config,
-          workspaceDir: options.workspaceDir,
-          env,
-        })
-      : undefined;
-  const aliasMap = options.aliasMap ?? lookupMaps?.aliasMap ?? {};
+  const { aliasMap, candidateMap, authEvidenceMap } = prepareEnvAuthLookupMaps(env, options);
   const normalized = aliasMap[providerId] ?? providerId;
-  const candidateMap = options.candidateMap ?? lookupMaps?.envCandidateMap ?? {};
-  const authEvidenceMap = options.authEvidenceMap ?? lookupMaps?.authEvidenceMap ?? {};
   const applied = new Set(getShellEnvAppliedKeys());
 
   for (const envVar of candidateMap[normalized] ?? []) {
@@ -101,21 +113,11 @@ export function resolveProviderDirectAuthPlanningEvidence(
   env: NodeJS.ProcessEnv = process.env,
   options: EnvApiKeyLookupOptions & Pick<ProviderEnvVarLookupParams, "metadataSnapshot"> = {},
 ): ProviderDirectAuthPlanningEvidence | null {
-  const lookupMaps =
-    !options.aliasMap ||
-    !options.candidateMap ||
-    !options.authEvidenceMap ||
-    !options.setupProviderFallbackRefs
-      ? resolveProviderEnvAuthLookupMaps({
-          config: options.config,
-          workspaceDir: options.workspaceDir,
-          env,
-          metadataSnapshot: options.metadataSnapshot,
-        })
-      : undefined;
-  const aliasMap = options.aliasMap ?? lookupMaps?.aliasMap ?? {};
-  const candidateMap = options.candidateMap ?? lookupMaps?.envCandidateMap ?? {};
-  const authEvidenceMap = options.authEvidenceMap ?? lookupMaps?.authEvidenceMap ?? {};
+  const { aliasMap, candidateMap, authEvidenceMap, lookupMaps } = prepareEnvAuthLookupMaps(
+    env,
+    options,
+    true,
+  );
   const concrete = resolveProviderEnvAuthEvidence(provider, env, {
     aliasMap,
     candidateMap,
@@ -134,25 +136,14 @@ export function resolveProviderDirectAuthPlanningEvidence(
     : null;
 }
 
-/** Resolve an API key or auth-evidence marker for a provider from environment state. */
 export function resolveEnvApiKey(
   provider: string,
   env: NodeJS.ProcessEnv = process.env,
   options: EnvApiKeyLookupOptions = {},
 ): EnvApiKeyResult | null {
   const normalizedProvider = normalizeProviderIdForAuth(provider);
-  const lookupMaps =
-    !options.aliasMap || !options.candidateMap || !options.authEvidenceMap
-      ? resolveProviderEnvAuthLookupMaps({
-          config: options.config,
-          workspaceDir: options.workspaceDir,
-          env,
-        })
-      : undefined;
-  const aliasMap = options.aliasMap ?? lookupMaps?.aliasMap ?? {};
+  const { aliasMap, candidateMap, authEvidenceMap } = prepareEnvAuthLookupMaps(env, options);
   const normalized = aliasMap[normalizedProvider] ?? normalizedProvider;
-  const candidateMap = options.candidateMap ?? lookupMaps?.envCandidateMap ?? {};
-  const authEvidenceMap = options.authEvidenceMap ?? lookupMaps?.authEvidenceMap ?? {};
   const applied = new Set(getShellEnvAppliedKeys());
   const candidates = Object.hasOwn(candidateMap, normalized) ? candidateMap[normalized] : undefined;
   if (Array.isArray(candidates)) {

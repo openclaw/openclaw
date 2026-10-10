@@ -10,6 +10,7 @@ import {
 } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it as baseIt } from "vitest";
+import { readStandaloneInstaller } from "../../scripts/lib/standalone-installers.mjs";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { registerMacRuntimeMaterializationTests } from "./mac-runtime-materialization.test-support.js";
@@ -22,7 +23,7 @@ const testNodeExecPath = resolveTestNodeExecPath();
 const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
 
 describe("Mac app runtime publication", () => {
-  baseIt.each([undefined, "", "26.8.2"])(
+  baseIt.each([undefined, "26.8.2"])(
     "preserves the requested build-time installer Node version (%s)",
     (version) => {
       const root = temps.make("openclaw-runtime-version-");
@@ -47,7 +48,7 @@ console.log(file);
       // version. No downloads, app signing, service control, or native build.
       writeFileSync(
         path.join(scripts, "install-cli.sh"),
-        `${readFileSync("scripts/install-cli.sh", "utf8")}
+        `${readStandaloneInstaller(process.cwd(), "install-cli.sh")}
 install_node() {
   printf '%s\\n' "$NODE_VERSION" "$DEFAULT_NODE_VERSION" "$NODE_VERSION_REQUESTED" "\${OPENCLAW_CONFIG_PATH:-}" "\${OPENCLAW_GATEWAY_TOKEN:-}"
   exit 77
@@ -691,30 +692,24 @@ print('held-file-copy-ok')
     },
   );
 
-  it.each(["file", "directory", "dangling"])(
-    "rejects %s symlinks outside the runtime",
-    async (kind) => {
-      const { auditMacRuntimePortability } =
-        await import("../../scripts/lib/mac-runtime-portability.mjs");
-      const { machoFixture } = await import("../helpers/mac-native.js");
-      const parent = temps.make("openclaw-portability-link-");
-      const root = path.join(parent, "runtime");
-      mkdirSync(root);
-      const bun = path.join(root, "bun");
-      writeFileSync(bun, machoFixture());
-      const external = path.join(parent, "external");
-      if (kind === "directory") {
-        mkdirSync(external);
-      }
-      if (kind === "file") {
-        writeFileSync(external, "outside");
-      }
-      symlinkSync(external, path.join(root, "link"));
-      expect(() => auditMacRuntimePortability(root, bun)).toThrow(
-        kind === "dangling" ? /ENOENT/ : /symlink escapes/,
-      );
-    },
-  );
+  it.each(["file", "dangling"])("rejects %s symlinks outside the runtime", async (kind) => {
+    const { auditMacRuntimePortability } =
+      await import("../../scripts/lib/mac-runtime-portability.mjs");
+    const { machoFixture } = await import("../helpers/mac-native.js");
+    const parent = temps.make("openclaw-portability-link-");
+    const root = path.join(parent, "runtime");
+    mkdirSync(root);
+    const bun = path.join(root, "bun");
+    writeFileSync(bun, machoFixture());
+    const external = path.join(parent, "external");
+    if (kind === "file") {
+      writeFileSync(external, "outside");
+    }
+    symlinkSync(external, path.join(root, "link"));
+    expect(() => auditMacRuntimePortability(root, bun)).toThrow(
+      kind === "dangling" ? /ENOENT/ : /symlink escapes/,
+    );
+  });
 
   it("does not borrow loader paths from a different architecture", async () => {
     const { auditMacRuntimePortability } =

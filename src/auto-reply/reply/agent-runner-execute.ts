@@ -68,10 +68,9 @@ export function continueStalledReplyTurn({
     );
     return true;
   }
-  // Source-bound reply owners (Web UI chat.send, group threads) deliver only the
-  // follow-ups they queued themselves and would drop a recovery run's answer.
-  // Leave the notice with the stalled turn's still-live dispatch.
-  if (followupRun.queuedFollowupReplyDisposition) {
+  // Group-thread participants declare no queued reply owner, so a recovery's
+  // answer would be dropped; leave the notice with the stalled turn's dispatch.
+  if (followupRun.queuedFollowupReplyDisposition?.kind === "drop") {
     return false;
   }
   const enqueued = enqueueFollowupRun(
@@ -130,7 +129,6 @@ export async function executePreparedReplyAgentRun(
     activeSessionStore,
     admitUserTurn,
     beginBeforeAgentReply,
-    cfg,
     checkpointBeforeAgentReply,
     defaultModel,
     followupRun,
@@ -139,7 +137,6 @@ export async function executePreparedReplyAgentRun(
     replyOperation,
     replyThreadingOverride,
     returnWithQueuedFollowupDrain,
-    runtimePolicySessionKey,
     sendDirectCompactionNotice,
     sessionCtx,
     sessionKey,
@@ -182,6 +179,7 @@ export async function executePreparedReplyAgentRun(
   activeSessionEntry = await traceAgentPhase("reply.preflight_compaction", () =>
     runSessionCompactionIfNeeded({
       ...context,
+      replyOperation,
       pendingUserEntryId: preflightAdmission?.entryId,
       promptForEstimate: followupRun.prompt,
       sessionEntry: activeSessionEntry,
@@ -219,8 +217,7 @@ export async function executePreparedReplyAgentRun(
     return returnWithQueuedFollowupDrain(undefined);
   }
   // Adoption marks run start and must never be spool-replayed (would re-run tools).
-  // Suppressed delivery persists only the user transcript; crashed suppressed runs die
-  // silently. Deliverable turns atomically persist transcript plus recovery ownership.
+  // New input and its recovery claim share admission; otherwise lifecycle start owns the claim.
   await turnAdoptionLifecycle?.onAdopted();
   const runOutcome = await withBeforeAgentReplyObserver(
     {
@@ -243,12 +240,9 @@ export async function executePreparedReplyAgentRun(
         };
         if (sessionKey && storePath && normalizedHookReplies.length > 0) {
           const sourceReplyPolicy = resolveSourceReplyPolicy({
-            cfg,
-            sessionCtx,
-            sessionEntry: activeSessionEntry,
+            ...context,
             sessionKey,
-            runtimePolicySessionKey,
-            opts,
+            sessionEntry: activeSessionEntry,
           });
           if (!sourceReplyPolicy.suppressDelivery) {
             const pendingFinalDeliveryIntentId = crypto.randomUUID();
@@ -273,12 +267,9 @@ export async function executePreparedReplyAgentRun(
                 intentId: pendingFinalDeliveryIntentId,
                 deliveries: [{ id: pendingFinalDeliveryDeliveryId, state: "prepared" }],
                 context: resolveReplyRunDeliveryContext({
-                  cfg,
-                  sessionCtx,
-                  sessionEntry: activeSessionEntry,
+                  ...context,
                   sessionKey,
-                  runtimePolicySessionKey,
-                  opts,
+                  sessionEntry: activeSessionEntry,
                 }),
               },
             };
@@ -395,8 +386,11 @@ export function createReplyAgentRestartRecoveryController(
     normalizeOptionalString(sessionCtx.MessageSidFull);
   const recovery = createReplyRestartRecoveryClaimController({
     agentId: followupRun.run.agentId,
+    operatorAuthority: followupRun.operatorAuthority,
+    inputProvenance: followupRun.run.inputProvenance,
     lifecycleGeneration: replyOperation.lifecycleGeneration,
     admissionRunId,
+    executionRunId: opts?.runId,
     getEntry: () =>
       sessionKey
         ? (activeSessionStore?.[sessionKey] ?? getActiveSessionEntry())

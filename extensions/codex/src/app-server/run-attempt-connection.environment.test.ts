@@ -1,5 +1,5 @@
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { codexAppServerStartOptionsKey } from "./config-options.js";
 import { prepareCodexAttemptConnection } from "./run-attempt-connection.js";
 import {
@@ -22,9 +22,13 @@ import {
 setupRunAttemptTestHooks();
 
 describe("Codex local tool environment placement", () => {
-  it.each([undefined, "/request/bin"])(
-    "preserves native shell policy below request PATH %s",
-    async (requestPath) => {
+  it.each([
+    { requestPath: undefined, gitOnly: false },
+    { requestPath: "/request/bin", gitOnly: false },
+    { requestPath: undefined, gitOnly: true },
+  ])(
+    "preserves native shell policy with request PATH $requestPath and gitOnly=$gitOnly",
+    async ({ requestPath, gitOnly }) => {
       const workspaceDir = path.join(tempDir, "workspace");
       const fixture = await createLeasedCodexLifecycleHarness({
         agentDir: path.join(tempDir, "agent"),
@@ -34,7 +38,11 @@ describe("Codex local tool environment placement", () => {
               config: {
                 shell_environment_policy: {
                   inherit: "none",
-                  set: { PATH: "/native/bin", KEEP: "yes" },
+                  set: {
+                    PATH: "/native/bin",
+                    KEEP: "yes",
+                    ...(gitOnly ? { GIT_CONFIG_PARAMETERS: "'user.name=Native'" } : {}),
+                  },
                 },
               },
               origins: {},
@@ -61,11 +69,16 @@ describe("Codex local tool environment placement", () => {
         appServer: {
           ...createAppServerOptions(),
           connectionClass: "local-loopback",
-          remoteAppsSubstrate: "preconfigured",
         },
-        shellEnvironment: { PATH: "/tools:/gateway/bin" },
-        shellPathPrepend: ["/tools"],
-        disableLoginShell: true,
+        ...(gitOnly
+          ? {
+              shellGitConfigParameters: "'maintenance.auto=false' 'gc.auto=0'",
+            }
+          : {
+              shellEnvironment: { PATH: "/tools:/gateway/bin" },
+              shellPathPrepend: ["/tools"],
+              disableLoginShell: true,
+            }),
         config:
           requestPath === undefined
             ? undefined
@@ -75,12 +88,20 @@ describe("Codex local tool environment placement", () => {
         fixture.request.mock.calls.find(([method]) => method === "thread/start")?.[1],
       ).toMatchObject({
         config: {
-          allow_login_shell: false,
+          ...(!gitOnly ? { allow_login_shell: false } : {}),
           shell_environment_policy: {
             inherit: "none",
             set: {
-              PATH: ["/tools", requestPath ?? "/native/bin"].join(path.delimiter),
+              PATH: gitOnly
+                ? "/native/bin"
+                : ["/tools", requestPath ?? "/native/bin"].join(path.delimiter),
               KEEP: "yes",
+              ...(gitOnly
+                ? {
+                    GIT_CONFIG_PARAMETERS:
+                      "'user.name=Native' 'maintenance.auto=false' 'gc.auto=0'",
+                  }
+                : {}),
             },
           },
         },
@@ -92,8 +113,9 @@ describe("Codex local tool environment placement", () => {
   );
 
   it.each(["local", "unconfigured-local", "unix", "proxy", "remote-root", "sandbox"])(
-    "applies the prepared tool PATH only to owned local execution: %s",
+    "places the prepared environment only on owned local execution: %s",
     async (placement) => {
+      vi.stubEnv("GIT_CONFIG_PARAMETERS", "'user.name=Ambient'");
       const params = createParams(
         path.join(tempDir, `path-${placement}.jsonl`),
         path.join(tempDir, `path-${placement}`),
@@ -105,6 +127,7 @@ describe("Codex local tool environment placement", () => {
           credentialScrubEnv: {},
           localIdentityEnv: {},
           managedLocalIdentity: false,
+          localGitConfigParameters: "'maintenance.auto=false' 'gc.auto=0'",
           ...(placement === "unconfigured-local"
             ? {}
             : { localToolEnv, localToolPathPrepend: ["/fixture/tools"] }),
@@ -137,13 +160,19 @@ describe("Codex local tool environment placement", () => {
         const expected = placement === "local" ? localToolEnv : undefined;
         expect(connection.shellEnvironment).toEqual(expected);
         expect(connection.shellPathPrepend).toEqual(expected ? ["/fixture/tools"] : undefined);
+        const ownedLocal = placement === "local" || placement === "unconfigured-local";
+        const parameters = "'maintenance.auto=false' 'gc.auto=0'";
+        expect(connection.shellGitConfigParameters).toBe(ownedLocal ? parameters : undefined);
         expect(connection.appServer.start.env?.PATH).toBe(expected?.PATH);
+        const expectedParameters = ownedLocal ? `'user.name=Ambient' ${parameters}` : undefined;
+        expect(connection.appServer.start.env?.GIT_CONFIG_PARAMETERS).toBe(expectedParameters);
         expect(connection.disableLoginShell).toBe(false);
         const refreshed = await connection.resolveRuntimeOptionsForCurrentBinding({
           modelProvider: "openai",
           model: params.modelId,
         });
         expect(refreshed.start.env?.PATH).toBe(expected?.PATH);
+        expect(refreshed.start.env?.GIT_CONFIG_PARAMETERS).toBe(expectedParameters);
         if (expected) {
           expect(codexAppServerStartOptionsKey(refreshed.start)).not.toBe(
             codexAppServerStartOptionsKey({

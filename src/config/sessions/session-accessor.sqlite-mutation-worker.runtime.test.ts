@@ -72,8 +72,12 @@ vi.mock("./session-accessor.sqlite-worker-coordination.js", () => ({
     run: (options: ReclamationDatabaseOptions) => Promise<T>,
   ) => run(options),
 }));
+// mock-isolation: Exercise worker settlement without opening a reclamation database.
 vi.mock("./session-accessor.sqlite-reclamation.js", () => ({
-  reclaimSqliteSessionInTransaction: () => ({ kind: "maintenance-statistics", value: true }),
+  reclaimSqliteSessionInTransaction: () => ({
+    kind: "maintenance-finalize",
+    value: { archivedTranscripts: [], committedEntryIndices: [] },
+  }),
 }));
 
 it("keeps idle collection after buffered admission replies and cancels it for the next request", async () => {
@@ -105,7 +109,13 @@ it("keeps idle collection after buffered admission replies and cancels it for th
         type: "reclaim",
         operationId: ++operationId,
         commitGate: new SharedArrayBuffer(4),
-        plan: { kind: "maintenance-statistics", databaseOptions, materializedPlans: [] },
+        plan: {
+          kind: "maintenance-finalize",
+          agentId: databaseOptions.agentId,
+          databaseOptions,
+          entries: [],
+          materializedPlans: [],
+        },
         coordination,
       } satisfies SqliteReclamationWorkerRequest,
       [],

@@ -51,7 +51,7 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const closers: Array<() => Promise<void> | void> = [];
 const execFileAsync = promisify(execFile);
 
-// The undici copy @slack/socket-mode itself loads (bare import, as the SDK does).
+// Resolve the installed SDK dependency without Bun's bare-undici builtin alias.
 type SocketModeUndici = typeof import("undici");
 function loadSocketModeUndici(): SocketModeUndici {
   const requireFromTest = createRequire(import.meta.url);
@@ -59,7 +59,7 @@ function loadSocketModeUndici(): SocketModeUndici {
   const requireFromSocketMode = createRequire(
     requireFromBolt.resolve("@slack/socket-mode/package.json"),
   );
-  return requireFromSocketMode("undici") as SocketModeUndici;
+  return requireFromSocketMode("undici/index.js") as SocketModeUndici;
 }
 
 function clearProxyEnv() {
@@ -168,6 +168,7 @@ async function startEchoWebSocketServer(options: { tls?: boolean } = {}): Promis
 
 async function echoThroughTrustedChildProcess(options: {
   proxyUrl: string;
+  signal: AbortSignal;
   targetCaFile: string;
   targetUrl: string;
 }): Promise<{ ok: true; echoed: string }> {
@@ -179,7 +180,7 @@ async function echoThroughTrustedChildProcess(options: {
     );
     const requireFromBolt = createRequire(requireFromTest.resolve("@slack/bolt/package.json"));
     const requireFromSocketMode = createRequire(requireFromBolt.resolve("@slack/socket-mode/package.json"));
-    const { WebSocket } = requireFromSocketMode("undici");
+    const { WebSocket } = requireFromSocketMode("undici/index.js");
     const dispatchers = resolveSlackMonitorDispatchers("socket");
     const dispatcher = dispatchers.socketMode;
     const result = await new Promise((resolve, reject) => {
@@ -195,7 +196,7 @@ async function echoThroughTrustedChildProcess(options: {
     await dispatchers.close();
     process.stdout.write(JSON.stringify(result), () => process.exit(0));
   `;
-  const { stdout } = await execFileAsync(
+  const completed = execFileAsync(
     process.execPath,
     ["--import", "./scripts/tsx.mjs", "--input-type=module", "--eval", script],
     {
@@ -206,9 +207,15 @@ async function echoThroughTrustedChildProcess(options: {
         NODE_EXTRA_CA_CERTS: options.targetCaFile,
         TEST_WEBSOCKET_URL: options.targetUrl,
       },
-      timeout: 10_000,
+      signal: options.signal,
     },
   );
+  // An abort rejects execFile before the child closes; join it before fixture teardown.
+  const closed = new Promise<void>((resolve) => {
+    completed.child.once("close", () => resolve());
+  });
+  closers.push(() => closed);
+  const { stdout } = await completed;
   return JSON.parse(stdout) as { ok: true; echoed: string };
 }
 
@@ -249,37 +256,19 @@ describe("slack socket mode dispatcher", () => {
     restoreProxyEnv();
   });
 
-  it("keeps Socket Mode's default connection when no proxy env is set", async () => {
-    const dispatchers = resolveSlackMonitorDispatchers("socket");
-    expect(dispatchers.socketMode).toBeUndefined();
-    await dispatchers.close();
-  });
-
-  it("builds the dispatcher from the undici copy Socket Mode uses", async () => {
-    process.env.HTTPS_PROXY = "http://proxy.example.com:3128";
-    const dispatchers = resolveSlackMonitorDispatchers("socket");
-    try {
-      expect(dispatchers.socketMode).toBeInstanceOf(loadSocketModeUndici().EnvHttpProxyAgent);
-      // A shared undici copy can reuse the runtime's custom proxy routing; a
-      // separate copy needs its own dispatcher for the WebSocket handshake.
-      if (dispatchers.webApi instanceof loadSocketModeUndici().EnvHttpProxyAgent) {
-        expect(dispatchers.socketMode).toBe(dispatchers.webApi);
-      } else {
-        expect(dispatchers.socketMode).not.toBe(dispatchers.webApi);
+  it.each([undefined, "://invalid-proxy"])(
+    "preserves direct connections for proxy %s",
+    async (proxy) => {
+      if (proxy !== undefined) {
+        process.env.HTTPS_PROXY = proxy;
       }
-    } finally {
+      const dispatchers = resolveSlackMonitorDispatchers("socket");
+      expect(dispatchers.socketMode).toBeUndefined();
       await dispatchers.close();
-    }
-  });
+    },
+  );
 
-  it("preserves the direct fallback for a malformed proxy URL", async () => {
-    process.env.HTTPS_PROXY = "://invalid-proxy";
-    const dispatchers = resolveSlackMonitorDispatchers("socket");
-    expect(dispatchers.socketMode).toBeUndefined();
-    await dispatchers.close();
-  });
-
-  it("opens a trusted wss target through HTTPS_PROXY", async () => {
+  it("opens a trusted wss target through HTTPS_PROXY", async ({ signal }) => {
     const proxy = await startConnectProxy();
     const target = await startEchoWebSocketServer({ tls: true });
     const dir = tempDirs.make("openclaw-slack-target-ca-");
@@ -288,7 +277,12 @@ describe("slack socket mode dispatcher", () => {
     process.env.HTTPS_PROXY = proxy.url;
 
     await expect(
-      echoThroughTrustedChildProcess({ proxyUrl: proxy.url, targetCaFile, targetUrl: target }),
+      echoThroughTrustedChildProcess({
+        proxyUrl: proxy.url,
+        signal,
+        targetCaFile,
+        targetUrl: target,
+      }),
     ).resolves.toEqual({ ok: true, echoed: "hello" });
     expect(proxy.targets).toContain(target.replace("wss://", ""));
   });
@@ -335,6 +329,12 @@ describe("slack socket mode dispatcher", () => {
 
     const dispatchers = resolveSlackMonitorDispatchers("socket");
     try {
+      expect(dispatchers.socketMode).toBeInstanceOf(loadSocketModeUndici().EnvHttpProxyAgent);
+      if (dispatchers.webApi instanceof loadSocketModeUndici().EnvHttpProxyAgent) {
+        expect(dispatchers.socketMode).toBe(dispatchers.webApi);
+      } else {
+        expect(dispatchers.socketMode).not.toBe(dispatchers.webApi);
+      }
       await expect(echoThroughSocketModeWebSocket(target, dispatchers.socketMode)).resolves.toEqual(
         {
           ok: true,

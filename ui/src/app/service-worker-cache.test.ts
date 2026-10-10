@@ -1,93 +1,116 @@
 // Control UI tests cover service worker cache behavior.
+import { createHash, webcrypto } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import vm from "node:vm";
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const serviceWorkerPath = path.join(here, "../../public/sw.js");
 
 describe("Control UI service worker HTTP recovery", () => {
-  it("never stores or replays a no-store liveness probe", async () => {
-    const worker = createFetchServiceWorker("https://control.example/");
-    const request = { url: `${worker.scope}healthz`, cache: "no-store" as const };
-    worker.cache.set(request.url, Response.json({ ok: true, status: "live" }));
-    worker.fetch.mockResolvedValueOnce(Response.json({ ok: true, status: "live" }));
-
-    expect(await (await worker.dispatch(request))?.json()).toEqual({ ok: true, status: "live" });
-    expect(worker.cachePut).not.toHaveBeenCalled();
-    worker.fetch.mockRejectedValueOnce(new TypeError("Offline"));
-    expect((await worker.dispatch(request))?.type).toBe("error");
-    expect(worker.cacheMatch).not.toHaveBeenCalled();
+  it("never stores or replays private, unversioned, or no-store HTTP reads", async () => {
+    const reads: Array<{
+      scope?: string;
+      route: string;
+      cache?: RequestCache;
+      headers?: Headers;
+      liveProbe?: boolean;
+    }> = [
+      { scope: "https://control.example/", route: "healthz", cache: "no-store", liveProbe: true },
+      ...["/", "/openclaw/"].flatMap((basePath) =>
+        [
+          "__openclaw__/assistant-media",
+          "api/chat/media/outgoing/image",
+          "rpc",
+          "plugins/example/data",
+          "avatar/main",
+        ].map((route) => ({
+          scope: `https://control.example${basePath}`,
+          route: `${route}?mediaTicket=synthetic-ticket`,
+        })),
+      ),
+      ...[
+        "",
+        "chat",
+        "custom-theme.css",
+        "fonts/custom.woff2",
+        "assets/app-AbCd1234.js?token=synthetic",
+        "fonts/custom.woff2?v=other-build&token=synthetic",
+        "fonts/custom.woff2?v=previous-build",
+      ].map((route) => ({ route })),
+      {
+        route: "assets/app-AbCd1234.js",
+        headers: new Headers({ Authorization: "Bearer synthetic" }),
+      },
+    ];
+    for (const { scope, route, cache, headers, liveProbe } of reads) {
+      const worker = createFetchServiceWorker(scope);
+      const request = { url: `${worker.scope}${route}`, cache, headers };
+      const payload = { ok: true, status: "live" };
+      worker.cache.set(
+        request.url,
+        liveProbe ? Response.json(payload) : new Response("cached private response"),
+      );
+      worker.fetch.mockResolvedValueOnce(
+        liveProbe ? Response.json(payload) : new Response("fresh private response"),
+      );
+      const fresh = await worker.dispatch(request);
+      if (liveProbe) {
+        expect(await fresh?.json()).toEqual(payload);
+      } else {
+        expect(await fresh?.text()).toBe("fresh private response");
+      }
+      expect(worker.cacheMatch).not.toHaveBeenCalled();
+      expect(worker.cachePut).not.toHaveBeenCalled();
+      worker.fetch.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+      expect((await worker.dispatch(request))?.type).toBe("error");
+      expect(worker.cacheMatch).not.toHaveBeenCalled();
+      expect(worker.windowClients[0].postMessage).toHaveBeenCalledExactlyOnceWith(
+        { type: "openclaw-http-request-failed" },
+        [],
+      );
+      expect(worker.windowClients[1].postMessage).not.toHaveBeenCalled();
+    }
   });
 
-  it.each(["/", "/openclaw/"])(
-    "keeps dynamic responses out of the cache beneath %s",
-    async (basePath) => {
-      for (const route of [
-        "__openclaw__/assistant-media",
-        "api/chat/media/outgoing/image",
-        "rpc",
-        "plugins/example/data",
-        "avatar/main",
-      ]) {
-        const worker = createFetchServiceWorker(`https://control.example${basePath}`);
-        const url = `${worker.scope}${route}?mediaTicket=synthetic-ticket`;
-        worker.cache.set(url, new Response("cached private response"));
-        worker.fetch.mockResolvedValueOnce(new Response("fresh private response"));
-
-        const fresh = await worker.dispatch({ url });
-
-        expect(await fresh?.text()).toBe("fresh private response");
-        expect(worker.cacheMatch).not.toHaveBeenCalled();
-        expect(worker.cachePut).not.toHaveBeenCalled();
-
-        worker.fetch.mockRejectedValueOnce(new TypeError("Failed to fetch"));
-        const failed = await worker.dispatch({ url });
-
-        expect(failed?.type).toBe("error");
-        expect(worker.cacheMatch).not.toHaveBeenCalled();
+  it.each([
+    { status: 401, route: "custom-theme.css?token=synthetic-secret", redirected: false },
+    { status: 404, route: "missing.css", redirected: false },
+    { status: 200, route: "assets/app-AbCd1234.js", redirected: true },
+  ])(
+    "returns $status/redirected=$redirected without caching or disclosing the URL",
+    async ({ status, route, redirected }) => {
+      const worker = createFetchServiceWorker();
+      const response = new Response(status === 404 ? "Not found" : "Sign in", { status });
+      if (redirected) {
+        Object.defineProperty(response, "redirected", { value: true });
+      }
+      worker.fetch.mockResolvedValueOnce(response);
+      expect(await worker.dispatch({ url: worker.scope + route })).toBe(response);
+      expect(worker.cachePut).not.toHaveBeenCalled();
+      if (status === 401) {
         expect(worker.windowClients[0].postMessage).toHaveBeenCalledExactlyOnceWith(
           { type: "openclaw-http-request-failed" },
           [],
         );
-        expect(worker.windowClients[1].postMessage).not.toHaveBeenCalled();
+      } else {
+        expect(worker.windowClients[0].postMessage).not.toHaveBeenCalled();
       }
+      expect(worker.windowClients[1].postMessage).not.toHaveBeenCalled();
     },
   );
 
-  it("reports an unauthorized response without exposing the request URL", async () => {
-    const worker = createFetchServiceWorker();
-    const response = new Response("Sign in", { status: 401 });
-    worker.fetch.mockResolvedValueOnce(response);
-
-    const result = await worker.dispatch({
-      url: `${worker.scope}custom-theme.css?token=synthetic-secret`,
-    });
-
-    expect(result).toBe(response);
-    expect(worker.cachePut).not.toHaveBeenCalled();
-    expect(worker.windowClients[0].postMessage).toHaveBeenCalledExactlyOnceWith(
-      { type: "openclaw-http-request-failed" },
-      [],
-    );
-    expect(worker.windowClients[1].postMessage).not.toHaveBeenCalled();
-  });
-
-  it("does not cache a redirected response as an application resource", async () => {
-    const worker = createFetchServiceWorker();
-    const response = new Response("Sign in");
-    Object.defineProperty(response, "redirected", { value: true });
-    worker.fetch.mockResolvedValueOnce(response);
-
-    expect(await worker.dispatch({ url: `${worker.scope}custom-theme.css` })).toBe(response);
-    expect(worker.cachePut).not.toHaveBeenCalled();
-    expect(worker.windowClients[0].postMessage).not.toHaveBeenCalled();
-  });
-
-  it.each(["assets/app-hash.js", "fonts/custom.woff2"])(
-    "preserves cached %s and returns a network error when no offline copy exists",
+  it.each([
+    "assets/app-AbCd1234.js",
+    "assets/background-AbCd1234.webp",
+    "fonts/custom.woff2?v=public-fixture",
+    "themes/custom.css?v=public-fixture",
+    "manifest.webmanifest?v=public-fixture",
+  ])(
+    "serves %s without a second network request and fails offline without a copy",
     async (route) => {
       const worker = createFetchServiceWorker();
       const url = `${worker.scope}${route}`;
@@ -97,32 +120,62 @@ describe("Control UI service worker HTTP recovery", () => {
 
       expect(await (await worker.dispatch({ url }))?.text()).toBe("offline asset");
       expect(await (await worker.dispatch({ url }))?.text()).toBe("offline asset");
+      expect(worker.windowClients[0].postMessage).not.toHaveBeenCalled();
+      expect(worker.fetch).toHaveBeenCalledOnce();
 
       worker.cache.clear();
       expect((await worker.dispatch({ url }))?.type).toBe("error");
     },
   );
 
-  it("preserves ordinary HTTP errors for their request owner without requesting sign-in", async () => {
-    const worker = createFetchServiceWorker();
-    const response = new Response("Not found", { status: 404 });
-    worker.fetch.mockResolvedValueOnce(response);
-
-    expect(await worker.dispatch({ url: `${worker.scope}missing.css` })).toBe(response);
-    expect(worker.windowClients[0].postMessage).not.toHaveBeenCalled();
-    expect(worker.cachePut).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    { method: "HEAD" },
-    { method: "POST" },
-    { mode: "navigate" as const },
-    { url: "https://outside.example/openclaw/image.png" },
-    { url: "https://control.example/openclaw-other/image.png" },
-  ])("leaves out-of-contract requests to the browser: %j", async (request) => {
-    const worker = createFetchServiceWorker();
-
-    expect(await worker.dispatch(request)).toBeUndefined();
+  it.each<{ name: string; online: boolean; requests: Partial<ServiceWorkerFetchRequest>[] }>([
+    {
+      name: "foreign scopes and out-of-contract request types",
+      online: true,
+      requests: [
+        { method: "HEAD" },
+        { method: "POST" },
+        { mode: "navigate" },
+        { url: "https://outside.example/openclaw/image.png" },
+        { url: "https://control.example/openclaw-other/image.png" },
+      ],
+    },
+    {
+      name: "online navigation including native authentication",
+      online: true,
+      requests: ["", "chat", "new", "login"].map((route) => ({
+        url: `https://control.example/openclaw/${route}`,
+        mode: "navigate",
+      })),
+    },
+    {
+      name: "offline navigation outside app routes",
+      online: false,
+      requests: [
+        "api/chat",
+        "__openclaw__/assistant-media",
+        "plugins/example/chat",
+        "assets/app-AbCd1234.js",
+        "avatar/main",
+        "rpc",
+        "login",
+        "settings",
+        "new/other",
+        "chatty",
+      ].map((route) => ({ url: `https://control.example/openclaw/${route}`, mode: "navigate" })),
+    },
+  ])("leaves $name to the browser", async ({ online, requests }) => {
+    const worker = createFetchServiceWorker(undefined, { online });
+    worker.cache.set(worker.scope + "__offline_shell__", new Response("shell"));
+    worker.fetch.mockResolvedValue(
+      new Response("Sign in", {
+        status: 401,
+        headers: { "WWW-Authenticate": 'Basic realm="synthetic"' },
+      }),
+    );
+    for (const request of requests) {
+      expect(await worker.dispatch(request)).toBeUndefined();
+    }
     expect(worker.fetch).not.toHaveBeenCalled();
     expect(worker.cacheMatch).not.toHaveBeenCalled();
     expect(worker.getClient).not.toHaveBeenCalled();
@@ -144,26 +197,308 @@ describe("Control UI service worker HTTP recovery", () => {
   });
 });
 
-type ServiceWorkerFetchRequest = Pick<Request, "url" | "method" | "mode" | "cache">;
+describe("Control UI offline app shell", () => {
+  it("bounds stalled preparation, preserves completed assets, and resumes on a later probe", async () => {
+    vi.useFakeTimers();
+    try {
+      const worker = createFetchServiceWorker();
+      worker.fetch
+        .mockImplementationOnce(
+          (_url, options) =>
+            new Promise((_resolve, reject) => {
+              options?.signal?.addEventListener(
+                "abort",
+                () => reject(new DOMException("Preparation timed out", "AbortError")),
+                { once: true },
+              );
+            }),
+        )
+        .mockResolvedValueOnce(new Response("build asset"));
+      let installed = false;
+      const install = worker.install().then(() => {
+        installed = true;
+      });
+      await vi.advanceTimersByTimeAsync(59_999);
+      expect(installed).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(installed).toBe(true);
+      await install;
+      expect(worker.skipWaiting).toHaveBeenCalledOnce();
+      expect(worker.cache.has(worker.scope + "__offline_shell__")).toBe(false);
+      expect(worker.cache.has(worker.scope + offlineBootFixture.assets[1].path)).toBe(true);
+      worker.fetch.mockResolvedValue(new Response("build asset"));
+      await worker.probe();
+      expect(worker.cache.has(worker.scope + "__offline_shell__")).toBe(true);
+      expect(worker.fetch).toHaveBeenCalledTimes(3);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+  it("finishes a partial install on coalesced online probes without redownloading completed assets", async () => {
+    const worker = createFetchServiceWorker();
+    const shellUrl = worker.scope + "__offline_shell__";
+    worker.fetch
+      .mockResolvedValueOnce(new Response("build asset"))
+      .mockRejectedValueOnce(new TypeError("packet loss"));
+    await worker.install();
+    expect(worker.cache.has(shellUrl)).toBe(false);
+    expect(worker.cache.has(worker.scope + offlineBootFixture.assets[0].path)).toBe(true);
+    expect(worker.skipWaiting).toHaveBeenCalledOnce();
+
+    worker.setOnline(false);
+    await worker.probe();
+    expect(worker.fetch).toHaveBeenCalledTimes(2);
+    expect(worker.cache.has(shellUrl)).toBe(false);
+
+    const started = createDeferred();
+    const resumed = createDeferred<Response>();
+    worker.fetch.mockImplementationOnce(() => {
+      started.resolve();
+      return resumed.promise;
+    });
+    worker.setOnline(true);
+    const firstProbe = worker.probe();
+    const secondProbe = worker.probe();
+    expect(worker.probeReply).toHaveBeenCalledTimes(3);
+    expect(worker.probeReply).toHaveBeenLastCalledWith({ type: "sw-updated", version: "dev" });
+    // A pre-fix worker never starts the request: fail at its missing event
+    // lifetime instead of leaving the regression waiting on a real timeout.
+    expect(worker.waitUntil).toHaveBeenCalledTimes(4);
+    expect(worker.waitUntil.mock.calls[2]?.[0]).toBe(worker.waitUntil.mock.calls[3]?.[0]);
+    await started.promise;
+    expect(worker.fetch.mock.calls.slice(2)).toEqual([
+      [
+        worker.scope + offlineBootFixture.assets[1].path,
+        {
+          credentials: "same-origin",
+          redirect: "error",
+          integrity: offlineBootFixture.assets[1].integrity,
+          signal: expect.any(AbortSignal),
+        },
+      ],
+    ]);
+    expect(worker.cache.has(shellUrl)).toBe(false);
+    resumed.resolve(new Response("build asset"));
+    await Promise.all([firstProbe, secondProbe]);
+    expect(worker.cache.has(shellUrl)).toBe(true);
+
+    const writes = worker.cachePut.mock.calls.length;
+    await worker.probe();
+    expect(worker.fetch).toHaveBeenCalledTimes(3);
+    expect(worker.cachePut).toHaveBeenCalledTimes(writes);
+    worker.setOnline(false);
+    expect(
+      await (await worker.dispatch({ url: worker.scope + "chat", mode: "navigate" }))?.text(),
+    ).toContain("generic shell");
+  });
+
+  it("does not begin installation preparation while explicitly offline, then prepares on an online probe", async () => {
+    const worker = createFetchServiceWorker(undefined, { online: false });
+    await worker.install();
+    await worker.probe();
+    expect(worker.fetch).not.toHaveBeenCalled();
+    expect(worker.cacheMatch).not.toHaveBeenCalled();
+    expect(worker.cachePut).not.toHaveBeenCalled();
+    expect(worker.skipWaiting).toHaveBeenCalledOnce();
+    worker.setOnline(true);
+    worker.fetch.mockImplementation(async () => new Response("build asset"));
+    await worker.probe();
+    expect(worker.cache.has(worker.scope + "__offline_shell__")).toBe(true);
+  });
+
+  it.each(["wrong bytes", "private response"])(
+    "refetches %s from the current cache instead of trusting an old build",
+    async (invalid) => {
+      const worker = createFetchServiceWorker();
+      const url = worker.scope + offlineBootFixture.assets[0].path;
+      worker.cache.set(
+        url,
+        new Response(invalid === "wrong bytes" ? "corrupt" : "build asset", {
+          headers: invalid === "private response" ? { "Cache-Control": "private" } : {},
+        }),
+      );
+      worker.priorCache.set(url, new Response("build asset"));
+      worker.priorCache.set(worker.scope + "__offline_shell__", new Response("old shell"));
+      worker.fetch.mockImplementation(async () => new Response("build asset"));
+      await worker.probe();
+      expect(worker.fetch).toHaveBeenCalledTimes(offlineBootFixture.assets.length);
+      for (const asset of offlineBootFixture.assets) {
+        expect(worker.fetch).toHaveBeenCalledWith(worker.scope + asset.path, {
+          credentials: "same-origin",
+          redirect: "error",
+          integrity: asset.integrity,
+          signal: expect.any(AbortSignal),
+        });
+      }
+      expect(await worker.cache.get(worker.scope + "__offline_shell__")?.text()).toContain(
+        "generic shell",
+      );
+    },
+  );
+
+  it.each([
+    "https://control.example/",
+    "https://control.example/openclaw/",
+    "https://control.example/openclaw",
+  ])("warms build assets before control and serves generic routes beneath %s", async (scope) => {
+    const worker = createFetchServiceWorker(scope);
+    worker.fetch.mockImplementation(async (_url, options) =>
+      options?.credentials === "same-origin"
+        ? new Response("build asset", { headers: { "Content-Type": "application/javascript" } })
+        : new Response("Sign in", {
+            status: 401,
+            headers: { "WWW-Authenticate": "Basic realm=Control" },
+          }),
+    );
+    await worker.install();
+    worker.setOnline(false);
+    const base = scope.endsWith("/") ? scope : scope + "/";
+    expect(worker.fetch.mock.calls).toEqual(
+      offlineBootFixture.assets.map((asset) => [
+        base + asset.path,
+        {
+          credentials: "same-origin",
+          redirect: "error",
+          integrity: asset.integrity,
+          signal: expect.any(AbortSignal),
+        },
+      ]),
+    );
+    expect(worker.waitUntil).toHaveBeenCalledOnce();
+    expect(worker.cachePut).toHaveBeenCalledBefore(worker.skipWaiting);
+    for (const route of ["", "chat", "chat/main/session?token=synthetic", "new", "new/"]) {
+      const response = await worker.dispatch({ url: base + route, mode: "navigate" });
+      expect(response?.headers.get("Content-Type")).toBe("text/html; charset=utf-8");
+      const html = await response?.text();
+      expect(html).toContain(`src="${new URL(base).pathname}assets/app-AbCd1234.js"`);
+      expect(html).toContain("generic shell");
+      expect(response?.headers.get("Content-Security-Policy")).toBe(offlineBootFixture.csp);
+    }
+    expect(worker.fetch).toHaveBeenCalledTimes(offlineBootFixture.assets.length);
+    expect([...worker.cache.keys()]).toEqual([
+      ...offlineBootFixture.assets.map((asset) => base + asset.path),
+      base + "__offline_shell__",
+    ]);
+  });
+
+  it("does not substitute a prior build's shell or hashed assets", async () => {
+    const worker = createFetchServiceWorker(undefined, { online: false });
+    worker.priorCache.set(worker.scope + "__offline_shell__", new Response("old shell"));
+    worker.priorCache.set(worker.scope + "assets/old-AbCd1234.js", new Response("old asset"));
+    worker.fetch.mockRejectedValue(new TypeError("Offline"));
+    expect((await worker.dispatch({ url: worker.scope + "chat", mode: "navigate" }))?.type).toBe(
+      "error",
+    );
+    expect((await worker.dispatch({ url: worker.scope + "assets/old-AbCd1234.js" }))?.type).toBe(
+      "error",
+    );
+    expect(worker.fetch).toHaveBeenCalledOnce();
+  });
+
+  it.each<ResponseInit>([
+    { status: 401 },
+    { status: 200, headers: { "Content-Type": "text/html" } },
+    { status: 200, headers: { "Cache-Control": "private, max-age=100" } },
+    { status: 200, headers: { "Cache-Control": "public, no-store" } },
+    { status: 200, headers: { Vary: "Origin, Cookie" } },
+    { status: 200, headers: { "WWW-Authenticate": 'Basic realm="synthetic"' } },
+  ])("does not publish an incomplete or login-contaminated shell: %j", async (init) => {
+    const worker = createFetchServiceWorker();
+    worker.fetch
+      .mockResolvedValueOnce(new Response("rejected asset", init))
+      .mockResolvedValueOnce(new Response("valid asset"));
+    await worker.install();
+    expect(worker.cache.has(worker.scope + "__offline_shell__")).toBe(false);
+    expect(worker.cache.has(worker.scope + offlineBootFixture.assets[0].path)).toBe(false);
+    expect(worker.cache.has(worker.scope + offlineBootFixture.assets[1].path)).toBe(true);
+    expect(worker.skipWaiting).toHaveBeenCalledOnce();
+  });
+
+  it("uses the same public URL key for install fetches and module requests with Origin", async () => {
+    const worker = createFetchServiceWorker();
+    worker.fetch.mockImplementation(
+      async () => new Response("asset", { headers: { Vary: "Origin" } }),
+    );
+    await worker.install();
+    const url = worker.scope + "assets/app-AbCd1234.js";
+    const response = await worker.dispatch({
+      url,
+      headers: new Headers({ Origin: "https://control.example" }),
+    });
+    expect(await response?.text()).toBe("asset");
+    expect(worker.cacheMatch).toHaveBeenCalledWith(url, {
+      cacheName: "openclaw-control-dev-fixture",
+    });
+    expect(worker.fetch).toHaveBeenCalledTimes(offlineBootFixture.assets.length);
+  });
+
+  it.each(["cacheMatch", "cachePut"] as const)(
+    "preserves delivery and the fetch lifetime when %s fails",
+    async (operation) => {
+      const worker = createFetchServiceWorker();
+      worker.fetch.mockResolvedValueOnce(new Response("asset"));
+      worker[operation].mockRejectedValueOnce(new Error("storage denied"));
+      expect(
+        await (await worker.dispatch({ url: worker.scope + "assets/app-AbCd1234.js" }))?.text(),
+      ).toBe("asset");
+      expect(worker.fetch).toHaveBeenCalledOnce();
+      expect(worker.waitUntil).toHaveBeenCalledOnce();
+    },
+  );
+});
+
+type ServiceWorkerFetchRequest = Pick<Request, "url" | "method" | "mode" | "cache" | "headers">;
+type CacheRequest = string | ServiceWorkerFetchRequest;
+const offlineBootFixture = {
+  id: "fixture",
+  html: '<!doctype html><html><head><script src="./assets/app-AbCd1234.js"></script></head><body>generic shell</body></html>',
+  csp: "default-src 'self'; base-uri 'none'",
+  assets: [
+    {
+      path: "assets/app-AbCd1234.js",
+      integrity: "sha256-" + createHash("sha256").update("build asset").digest("base64"),
+    },
+    {
+      path: "assets/chat-AbCd1234.css",
+      integrity: "sha256-" + createHash("sha256").update("build asset").digest("base64"),
+    },
+  ] as const,
+  publicAssetVersion: "public-fixture",
+  publicAssets: ["fonts/custom.woff2", "themes/custom.css", "manifest.webmanifest"],
+};
 type ServiceWorkerFetchEventStub = {
   request: ServiceWorkerFetchRequest;
   clientId: string;
   respondWith(promise: Promise<Response | undefined>): void;
+  waitUntil(promise: Promise<unknown>): void;
+  data?: { type: string };
+  ports?: Array<{ postMessage(message: unknown): void }>;
 };
 
 function createFetchServiceWorker(
   scope = "https://control.example/openclaw/",
-  options: { clientUrl?: string; clientType?: string } = {},
+  options: { clientUrl?: string; clientType?: string; online?: boolean } = {},
 ) {
   const listeners = new Map<string, (event: ServiceWorkerFetchEventStub) => void>();
   const cache = new Map<string, Response>();
-  const cacheMatch = vi.fn(async (request: ServiceWorkerFetchRequest) =>
-    cache.get(request.url)?.clone(),
+  const priorCache = new Map<string, Response>();
+  const cacheMatch = vi.fn(async (request: CacheRequest, matchOptions?: { cacheName: string }) =>
+    (matchOptions?.cacheName === "openclaw-control-old" ? priorCache : cache)
+      .get(typeof request === "string" ? request : request.url)
+      ?.clone(),
   );
-  const cachePut = vi.fn(async (request: ServiceWorkerFetchRequest, response: Response) => {
-    cache.set(request.url, response);
+  const cachePut = vi.fn(async (request: CacheRequest, response: Response) => {
+    cache.set(typeof request === "string" ? request : request.url, response);
   });
-  const fetch = vi.fn<(request: ServiceWorkerFetchRequest) => Promise<Response>>();
+  const fetch = vi.fn<(request: CacheRequest, options?: RequestInit) => Promise<Response>>();
+  const skipWaiting = vi.fn(async () => undefined);
+  const navigator = { onLine: options.online ?? true };
+  const probeReply = vi.fn();
+  const pendingWrites: Promise<unknown>[] = [];
+  const waitUntil = vi.fn((pending: Promise<unknown>) => {
+    pendingWrites.push(pending);
+  });
   const windowClients = [
     {
       id: "requesting-window",
@@ -174,29 +509,86 @@ function createFetchServiceWorker(
     { id: "another-window", type: "window", url: `${scope}chat/other`, postMessage: vi.fn() },
   ] as const;
   const getClient = vi.fn(async (id: string) => windowClients.find((client) => client.id === id));
-  new vm.Script(fs.readFileSync(serviceWorkerPath, "utf8"), {
+  const source = fs
+    .readFileSync(serviceWorkerPath, "utf8")
+    .replace(
+      "const OFFLINE_BOOT = null;",
+      () => `const OFFLINE_BOOT = ${JSON.stringify(offlineBootFixture)};`,
+    );
+  new vm.Script(source, {
     filename: "ui/public/sw.js",
   }).runInNewContext({
     URL,
     Response,
-    caches: { match: cacheMatch, open: async () => ({ put: cachePut }) },
+    crypto: webcrypto,
+    btoa,
+    AbortController,
+    setTimeout,
+    clearTimeout,
+    caches: {
+      match: cacheMatch,
+      open: async () => ({ put: cachePut }),
+      keys: async () => ["openclaw-control-old", "openclaw-control-dev-fixture"],
+    },
     fetch,
     self: {
       addEventListener: (type: string, listener: (event: ServiceWorkerFetchEventStub) => void) =>
         listeners.set(type, listener),
       location: new URL("sw.js", scope),
       registration: { scope },
+      navigator,
+      skipWaiting,
       clients: { get: getClient },
     },
   });
   return {
     scope,
     cache,
+    priorCache,
     cacheMatch,
     cachePut,
     fetch,
     windowClients,
     getClient,
+    skipWaiting,
+    waitUntil,
+    probeReply,
+    setOnline(online: boolean) {
+      navigator.onLine = online;
+    },
+    probe() {
+      const start = pendingWrites.length;
+      listeners.get("message")?.({
+        data: { type: "sw-version-probe" },
+        ports: [{ postMessage: probeReply }],
+        request: {
+          url: scope,
+          method: "GET",
+          mode: "cors",
+          cache: "default",
+          headers: new Headers(),
+        },
+        clientId: "requesting-window",
+        respondWith: vi.fn(),
+        waitUntil,
+      });
+      return Promise.all(pendingWrites.slice(start));
+    },
+    async install() {
+      listeners.get("install")?.({
+        waitUntil,
+        request: {
+          url: scope,
+          method: "GET",
+          mode: "cors",
+          cache: "default",
+          headers: new Headers(),
+        },
+        clientId: "",
+        respondWith: vi.fn(),
+      });
+      await Promise.all(pendingWrites);
+    },
     async dispatch(
       requestOptions: Partial<ServiceWorkerFetchRequest> & { clientId?: string } = {},
     ) {
@@ -209,572 +601,17 @@ function createFetchServiceWorker(
           method: requestOptions.method ?? "GET",
           mode: requestOptions.mode ?? "cors",
           cache: requestOptions.cache ?? "default",
+          headers: requestOptions.headers ?? new Headers(),
         },
         clientId: requestOptions.clientId ?? "requesting-window",
         respondWith(pending) {
           completion = pending;
         },
+        waitUntil,
       });
-      return completion;
-    },
-  };
-}
-
-describe("Control UI service worker cache versioning", () => {
-  it("announces only to legacy root/chat clients without reloading older settings tabs", async () => {
-    const client = (url: string) => ({ url, postMessage: vi.fn(), navigate: vi.fn() });
-    const included = [
-      client("https://control.example/openclaw/"),
-      client("https://control.example/openclaw/chat/main/session?mode=compact#latest"),
-    ];
-    const excluded = [
-      client("https://control.example/openclaw/settings/appearance"),
-      client("https://control.example/openclaw/config?raw=1#editor"),
-      client("https://control.example/openclaw-other/chat"),
-      client("https://other.example/openclaw/chat/main/session"),
-    ];
-    const listeners = new Map<string, (event: ActivateEventStub) => void>();
-    const cacheDelete = vi.fn(async () => true);
-    const clients = {
-      claim: vi.fn(async () => undefined),
-      matchAll: vi.fn(async () => [...included, ...excluded]),
-    };
-    const context = vm.createContext({
-      URL,
-      caches: {
-        delete: cacheDelete,
-        keys: async () => [
-          "openclaw-control-oldest",
-          "openclaw-control-older",
-          "openclaw-control-previous",
-          "openclaw-control-new-build",
-          "other-cache",
-        ],
-      },
-      self: {
-        addEventListener: (type: string, listener: (event: ActivateEventStub) => void) =>
-          listeners.set(type, listener),
-        clients,
-        location: { href: "https://control.example/openclaw/sw.js?v=new-build" },
-        registration: { scope: "https://control.example/openclaw/" },
-      },
-    });
-    new vm.Script(fs.readFileSync(serviceWorkerPath, "utf8")).runInContext(context);
-    let activation: Promise<unknown> | undefined;
-    listeners.get("activate")?.({
-      waitUntil: (pending) => {
-        activation = pending;
-      },
-    });
-    await expect(activation).resolves.toBeUndefined();
-    expect(clients.claim).toHaveBeenCalledBefore(clients.matchAll);
-    expect(cacheDelete).toHaveBeenCalledExactlyOnceWith("openclaw-control-oldest");
-    for (const page of included) {
-      expect(page.postMessage).toHaveBeenCalledExactlyOnceWith(
-        { type: "sw-updated", version: "new-build" },
-        [],
-      );
-      expect(page.navigate).not.toHaveBeenCalled();
-    }
-    for (const page of excluded) {
-      expect(page.postMessage).not.toHaveBeenCalled();
-      expect(page.navigate).not.toHaveBeenCalled();
-    }
-  });
-
-  it("answers a resumed document from embedded build identity, not the registering URL", () => {
-    const listeners = new Map<string, (event: { data: unknown; ports: unknown[] }) => void>();
-    const reply = vi.fn();
-    const source = fs
-      .readFileSync(serviceWorkerPath, "utf8")
-      .replace(
-        'const EMBEDDED_CACHE_VERSION = "__OPENCLAW_CONTROL_UI_BUILD_ID__";',
-        'const EMBEDDED_CACHE_VERSION = "new-build";',
-      );
-    new vm.Script(source).runInNewContext({
-      URL,
-      self: {
-        addEventListener: (
-          type: string,
-          listener: (event: { data: unknown; ports: unknown[] }) => void,
-        ) => listeners.set(type, listener),
-        location: { href: "https://control.example/sw.js?v=old-build" },
-        registration: { scope: "https://control.example/" },
-      },
-    });
-    listeners.get("message")?.({
-      data: { type: "sw-version-probe" },
-      ports: [{ postMessage: reply }],
-    });
-    expect(reply).toHaveBeenCalledExactlyOnceWith({ type: "sw-updated", version: "new-build" });
-  });
-});
-
-describe("Control UI service worker notification scope", () => {
-  const rootScope = "https://control.example/";
-  const nestedScope = "https://control.example/openclaw/";
-  const nestedScopeWithoutSlash = "https://control.example/openclaw";
-
-  function notificationScenario(
-    name: string,
-    scope: string,
-    clientUrls: string[],
-    options: {
-      target?: string | null;
-      focusedClientIndex?: number;
-      navigatedUrl?: string;
-      openedUrl?: string | null;
-    } = {},
-  ): NotificationClickScenario {
-    return {
-      name,
-      scope,
-      target: options.target ?? null,
-      clientUrls,
-      focusedClientIndex: options.focusedClientIndex ?? (clientUrls.length > 0 ? 0 : -1),
-      ...(options.navigatedUrl === undefined ? {} : { navigatedUrl: options.navigatedUrl }),
-      openedUrl:
-        options.openedUrl === undefined
-          ? clientUrls.length > 0
-            ? null
-            : scope
-          : options.openedUrl,
-    };
-  }
-
-  const scenarios: NotificationClickScenario[] = [
-    notificationScenario(
-      "preserves a root window's query and fragment for a title/body-only notification",
-      rootScope,
-      [`${rootScope}?session=42#current-session`],
-    ),
-    notificationScenario(
-      "reuses a nested-scoped child route for a title/body-only notification",
-      nestedScope,
-      [`${nestedScope}chat?session=42#current-session`],
-    ),
-    notificationScenario(
-      "preserves a slashless nested window's query for a title/body-only notification",
-      nestedScopeWithoutSlash,
-      [`${nestedScopeWithoutSlash}?session=42#current-session`],
-    ),
-    notificationScenario(
-      "reuses a child route beneath a slashless nested scope",
-      nestedScopeWithoutSlash,
-      [`${nestedScopeWithoutSlash}/chat?session=42#current-session`],
-    ),
-    notificationScenario(
-      "focuses the nested window instead of a competing same-origin root window",
-      nestedScope,
-      [rootScope, nestedScope],
-      { focusedClientIndex: 1 },
-    ),
-    notificationScenario(
-      "opens a scope-relative approval route with its Gateway handoff fragment",
-      nestedScope,
-      [],
-      {
-        target: "approve/exec%3A1#gatewayUrl=wss%3A%2F%2Fgateway.example",
-        openedUrl:
-          "https://control.example/openclaw/approve/exec%3A1#gatewayUrl=wss%3A%2F%2Fgateway.example",
-      },
-    ),
-    notificationScenario(
-      "prefers a later exact explicit route over an unrelated nested app tab",
-      nestedScope,
-      [`${nestedScope}settings`, `${nestedScope}chat?session=42#latest`],
-      {
-        target: "chat?session=42#latest",
-        focusedClientIndex: 1,
-        navigatedUrl: `${nestedScope}chat?session=42#latest`,
-      },
-    ),
-    notificationScenario(
-      "prefers a later exact route over a matching path and query with a stale fragment",
-      nestedScope,
-      [`${nestedScope}chat?session=42#previous`, `${nestedScope}chat?session=42#latest`],
-      {
-        target: "chat?session=42#latest",
-        focusedClientIndex: 1,
-        navigatedUrl: `${nestedScope}chat?session=42#latest`,
-      },
-    ),
-    notificationScenario(
-      "prefers a matching path and query over an unrelated nested app tab",
-      nestedScope,
-      [`${nestedScope}settings`, `${nestedScope}chat?session=42`],
-      {
-        target: "chat?session=42#latest",
-        focusedClientIndex: 1,
-        navigatedUrl: `${nestedScope}chat?session=42#latest`,
-      },
-    ),
-    notificationScenario(
-      "prefers a matching route over an unrelated nested app tab when its query is stale",
-      nestedScope,
-      [`${nestedScope}settings`, `${nestedScope}chat?session=7`],
-      {
-        target: "chat?session=42#latest",
-        focusedClientIndex: 1,
-        navigatedUrl: `${nestedScope}chat?session=42#latest`,
-      },
-    ),
-    notificationScenario(
-      "opens the relative target beneath a slashless nested scope",
-      nestedScopeWithoutSlash,
-      [],
-      {
-        target: "chat?session=42#latest",
-        openedUrl: `${nestedScopeWithoutSlash}/chat?session=42#latest`,
-      },
-    ),
-    notificationScenario(
-      "navigates an explicit route instead of trusting stale SPA fragments",
-      nestedScope,
-      [`${nestedScope}chat?session=42#current-session`],
-      { target: "chat?session=42", navigatedUrl: `${nestedScope}chat?session=42` },
-    ),
-    notificationScenario(
-      "opens the exact slashless nested scope when no window exists",
-      nestedScopeWithoutSlash,
-      [],
-    ),
-    notificationScenario(
-      "never focuses a cross-origin window with the same nested pathname",
-      nestedScope,
-      ["https://outside.example/openclaw/"],
-      { focusedClientIndex: -1, openedUrl: nestedScope },
-    ),
-    notificationScenario(
-      "falls back to the registered scope for an explicit cross-origin target",
-      nestedScope,
-      [],
-      { target: "https://outside.example/openclaw/chat" },
-    ),
-    notificationScenario(
-      "rejects a sibling-prefix target and never focuses its window",
-      nestedScope,
-      ["https://control.example/openclaw-other/chat"],
-      { target: "/openclaw-other/chat", focusedClientIndex: -1, openedUrl: nestedScope },
-    ),
-    notificationScenario(
-      "rejects a sibling-prefix target for a slashless nested scope",
-      nestedScopeWithoutSlash,
-      ["https://control.example/openclaw-other/chat"],
-      {
-        target: "/openclaw-other/chat",
-        focusedClientIndex: -1,
-        openedUrl: nestedScopeWithoutSlash,
-      },
-    ),
-    notificationScenario(
-      "rejects ancestor traversal from a slashless nested scope",
-      nestedScopeWithoutSlash,
-      [rootScope],
-      { target: "../", focusedClientIndex: -1, openedUrl: nestedScopeWithoutSlash },
-    ),
-    notificationScenario(
-      "never focuses a sibling-prefix window for the default nested target",
-      nestedScope,
-      ["https://control.example/openclaw-other/"],
-      { focusedClientIndex: -1, openedUrl: nestedScope },
-    ),
-    notificationScenario(
-      "falls back to the registered scope for a malformed explicit target",
-      nestedScope,
-      [],
-      { target: "https://[invalid" },
-    ),
-  ];
-
-  it.each(scenarios)(
-    "$name",
-    async ({ scope, target, clientUrls, focusedClientIndex, navigatedUrl, openedUrl }) => {
-      const worker = createNotificationServiceWorker(scope, clientUrls);
-      const payload: ServiceWorkerPushPayload = {
-        title: "OpenClaw",
-        body: "Scoped notification",
-      };
-      if (target !== null) {
-        payload.url = target;
-      }
-
-      const notification = await worker.dispatchPush(payload);
-
-      expect(notification.title).toBe(payload.title);
-      expect(notification.options.body).toBe(payload.body);
-      expect(notification.options.data.url).toBe(target ?? scope);
-      expect(notification.options.data.explicitUrl).toBe(target !== null);
-
-      const close = await worker.dispatchNotificationClick(notification.options.data);
-
-      expect(close).toHaveBeenCalledOnce();
-      expect(worker.clients.matchAll).toHaveBeenCalledWith({
-        type: "window",
-        includeUncontrolled: true,
-      });
-
-      for (const [index, client] of worker.windowClients.entries()) {
-        if (index === focusedClientIndex) {
-          expect(client.focus).toHaveBeenCalledOnce();
-        } else {
-          expect(client.focus).not.toHaveBeenCalled();
-        }
-        if (index === focusedClientIndex && navigatedUrl) {
-          expect(client.navigate).toHaveBeenCalledExactlyOnceWith(navigatedUrl);
-        } else {
-          expect(client.navigate).not.toHaveBeenCalled();
-        }
-      }
-
-      if (openedUrl === null) {
-        expect(worker.clients.openWindow).not.toHaveBeenCalled();
-      } else {
-        expect(worker.clients.openWindow).toHaveBeenCalledExactlyOnceWith(openedUrl);
-      }
-    },
-  );
-
-  it("preserves a quiet shared tag for approval terminal replacements", async () => {
-    const worker = createNotificationServiceWorker(nestedScope, []);
-    const tag = "openclaw-approval-exec:replacement";
-
-    const requested = await worker.dispatchPush({
-      title: "OpenClaw approval requested",
-      body: "Open OpenClaw to review this request.",
-      tag,
-      renotify: false,
-    });
-    const terminal = await worker.dispatchPush({
-      title: "OpenClaw approval updated",
-      body: "This approval is no longer pending.",
-      tag,
-      renotify: false,
-    });
-
-    expect(requested.options).toMatchObject({ tag, renotify: false });
-    expect(terminal.options).toMatchObject({ tag, renotify: false });
-  });
-
-  it.each([
-    {
-      name: "root",
-      scope: rootScope,
-      clientUrl: `${rootScope}?session=42#current-session`,
-    },
-    {
-      name: "slashless nested child route",
-      scope: nestedScopeWithoutSlash,
-      clientUrl: `${nestedScopeWithoutSlash}/chat?session=42#current-session`,
-    },
-  ])(
-    "preserves a $name query-state tab for a previous worker's default notification",
-    async ({ scope, clientUrl }) => {
-      const worker = createNotificationServiceWorker(scope, [clientUrl]);
-
-      const close = await worker.dispatchNotificationClick({ url: "./" });
-
-      expect(close).toHaveBeenCalledOnce();
-      expect(worker.clients.matchAll).toHaveBeenCalledWith({
-        type: "window",
-        includeUncontrolled: true,
-      });
-      expect(worker.windowClients[0]?.focus).toHaveBeenCalledOnce();
-      expect(worker.windowClients[0]?.navigate).not.toHaveBeenCalled();
-      expect(worker.clients.openWindow).not.toHaveBeenCalled();
-    },
-  );
-
-  it("navigates a previous worker's explicit notification to its exact target", async () => {
-    const worker = createNotificationServiceWorker(nestedScope, [`${nestedScope}chat?session=7`]);
-
-    const close = await worker.dispatchNotificationClick({ url: "chat?session=42" });
-
-    expect(close).toHaveBeenCalledOnce();
-    expect(worker.windowClients[0]?.focus).toHaveBeenCalledOnce();
-    expect(worker.windowClients[0]?.navigate).toHaveBeenCalledExactlyOnceWith(
-      `${nestedScope}chat?session=42`,
-    );
-    expect(worker.clients.openWindow).not.toHaveBeenCalled();
-  });
-
-  it("prefers the matching tab for a previous worker's explicit notification", async () => {
-    const target = `${nestedScope}chat?session=42`;
-    const worker = createNotificationServiceWorker(nestedScope, [`${nestedScope}settings`, target]);
-
-    const close = await worker.dispatchNotificationClick({ url: "chat?session=42" });
-
-    expect(close).toHaveBeenCalledOnce();
-    expect(worker.windowClients[0]?.navigate).not.toHaveBeenCalled();
-    expect(worker.windowClients[0]?.focus).not.toHaveBeenCalled();
-    expect(worker.windowClients[1]?.navigate).toHaveBeenCalledExactlyOnceWith(target);
-    expect(worker.windowClients[1]?.focus).toHaveBeenCalledOnce();
-    expect(worker.clients.openWindow).not.toHaveBeenCalled();
-  });
-
-  it("opens the exact target when a previous worker rejects client navigation", async () => {
-    const worker = createNotificationServiceWorker(nestedScope, [`${nestedScope}chat?session=7`], {
-      rejectNavigation: true,
-    });
-
-    const close = await worker.dispatchNotificationClick({ url: "chat?session=42#latest" });
-
-    expect(close).toHaveBeenCalledOnce();
-    expect(worker.windowClients[0]?.navigate).toHaveBeenCalledExactlyOnceWith(
-      `${nestedScope}chat?session=42#latest`,
-    );
-    expect(worker.windowClients[0]?.focus).not.toHaveBeenCalled();
-    expect(worker.clients.openWindow).toHaveBeenCalledExactlyOnceWith(
-      `${nestedScope}chat?session=42#latest`,
-    );
-  });
-});
-
-type ActivateEventStub = {
-  waitUntil(promise: Promise<unknown>): void;
-};
-
-type NotificationClickScenario = {
-  name: string;
-  scope: string;
-  target: string | null;
-  clientUrls: string[];
-  focusedClientIndex: number;
-  navigatedUrl?: string;
-  openedUrl: string | null;
-};
-
-type ServiceWorkerPushPayload = {
-  title: string;
-  body: string;
-  renotify?: boolean;
-  tag?: string;
-  url?: string;
-};
-
-type ServiceWorkerNotificationOptions = {
-  body: string;
-  icon: string;
-  badge: string;
-  tag: string;
-  renotify: boolean;
-  data: { url: string; explicitUrl: boolean };
-};
-
-type ServiceWorkerNotificationEventStub = {
-  data?: {
-    json(): ServiceWorkerPushPayload;
-    text(): string;
-  };
-  notification?: {
-    close(): void;
-    data: { url: string; explicitUrl?: boolean };
-  };
-  waitUntil(promise: Promise<unknown>): void;
-};
-
-function createNotificationServiceWorker(
-  scope: string,
-  clientUrls: string[],
-  options: { rejectNavigation?: boolean } = {},
-) {
-  const listeners = new Map<string, (event: ServiceWorkerNotificationEventStub) => void>();
-  const windowClients = clientUrls.map((url) => {
-    const focus = vi.fn(async () => undefined);
-    return {
-      url,
-      focus,
-      navigate: vi.fn(async (_url: string) => {
-        if (options.rejectNavigation) {
-          throw new Error("Window is controlled by a previous service worker");
-        }
-        return { focus };
-      }),
-    };
-  });
-  const clients = {
-    matchAll: vi.fn(async () => windowClients),
-    openWindow: vi.fn(async (_url: string) => null),
-  };
-  const showNotification = vi.fn(
-    async (_title: string, _options: ServiceWorkerNotificationOptions) => undefined,
-  );
-  const scopeUrl = new URL(scope);
-  const serviceWorkerGlobal = {
-    addEventListener(type: string, listener: (event: ServiceWorkerNotificationEventStub) => void) {
-      listeners.set(type, listener);
-    },
-    clients,
-    location: {
-      href: new URL("sw.js?v=notification-scope", scopeUrl).href,
-      origin: scopeUrl.origin,
-    },
-    registration: { scope, showNotification },
-    skipWaiting: vi.fn(),
-  };
-  const context = vm.createContext({
-    URL,
-    caches: {},
-    fetch: vi.fn(),
-    self: serviceWorkerGlobal,
-  });
-
-  new vm.Script(fs.readFileSync(serviceWorkerPath, "utf8"), {
-    filename: "ui/public/sw.js",
-  }).runInContext(context);
-
-  return {
-    clients,
-    windowClients,
-    async dispatchPush(payload: ServiceWorkerPushPayload) {
-      const listener = listeners.get("push");
-      if (!listener) {
-        throw new Error("Service worker did not register a push handler");
-      }
-
-      let completion: Promise<unknown> | undefined;
-      listener({
-        data: {
-          json: () => payload,
-          text: () => payload.body,
-        },
-        waitUntil(promise) {
-          completion = promise;
-        },
-      });
-
-      if (!completion) {
-        throw new Error("Service worker push did not register a completion promise");
-      }
-      await completion;
-
-      const notification = showNotification.mock.calls.at(-1);
-      if (!notification) {
-        throw new Error("Service worker push did not show a notification");
-      }
-
-      return { title: notification[0], options: notification[1] };
-    },
-    async dispatchNotificationClick(data: { url: string; explicitUrl?: boolean }) {
-      const listener = listeners.get("notificationclick");
-      if (!listener) {
-        throw new Error("Service worker did not register a notification-click handler");
-      }
-
-      const close = vi.fn();
-      let completion: Promise<unknown> | undefined;
-      listener({
-        notification: { close, data },
-        waitUntil(promise) {
-          completion = promise;
-        },
-      });
-
-      if (!completion) {
-        throw new Error("Notification click did not register a completion promise");
-      }
-      await completion;
-      return close;
+      const result = await completion;
+      await Promise.all(pendingWrites);
+      return result;
     },
   };
 }

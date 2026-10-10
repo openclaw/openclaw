@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import { ChildProcess } from "node:child_process";
+import { channel } from "node:diagnostics_channel";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import * as ts from "typescript/unstable/ast";
@@ -7,70 +9,162 @@ import {
   collectStronglyConnectedComponents,
 } from "./lib/import-cycle-graph.ts";
 import { formatNativeTypeScriptDiagnostics } from "./lib/native-typescript-diagnostics.mts";
-import { createNativeTypeScriptProject } from "./lib/native-typescript.mts";
-import { visitModuleSpecifiers } from "./lib/ts-guard-utils.mts";
+import {
+  createNativeTypeScriptProject,
+  resolveInstalledNativeTypeScriptCompiler,
+  type NativeTypeScriptProject,
+} from "./lib/native-typescript.mts";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const scanRoots = ["src", "extensions", "ui"] as const;
-const sourceExtensions = [".ts"] as const;
+const sourceExtensions = [".ts", ".tsx"] as const;
 const ignoredPathPartPattern =
   /(^|\/)(node_modules|dist|build|coverage|\.artifacts|\.git|assets)(\/|$)/;
 
 function collectStaticModuleSpecifiers(sourceFile: ts.SourceFile): ts.StringLiteral[] {
-  const specifiers: ts.StringLiteral[] = [];
-  visitModuleSpecifiers(sourceFile, ({ kind, specifierNode }) => {
-    if ((kind === "import" || kind === "export") && ts.isStringLiteral(specifierNode)) {
-      specifiers.push(specifierNode);
+  return sourceFile.imports.filter((specifier): specifier is ts.StringLiteral => {
+    // Compiler-injected helpers are not source imports.
+    if (!ts.isStringLiteral(specifier) || specifier.pos < 0) {
+      return false;
     }
+    const parent = specifier.parent;
+    return (
+      (ts.isImportDeclaration(parent) || ts.isExportDeclaration(parent)) &&
+      parent.moduleSpecifier === specifier
+    );
   });
-  return specifiers;
 }
 
-function createImportGraph(files: readonly string[]): Map<string, string[]> {
-  const configFileName = path.join(repoRoot, "tsconfig.madge-import-cycles.json");
+async function createImportGraph(files: readonly string[]): Promise<Map<string, string[]>> {
+  const configFileName = path
+    .join(repoRoot, "tsconfig.madge-import-cycles.json")
+    .split(path.sep)
+    .join("/");
   const absoluteToRepoPath = new Map(
     files.map((file): [string, string] => [path.resolve(repoRoot, file), file]),
   );
-  const session = createNativeTypeScriptProject({
-    cwd: repoRoot,
-    configFileName,
-    files: {
-      [configFileName]: JSON.stringify({
-        extends: "./tsconfig.json",
-        files: [...absoluteToRepoPath.keys()],
-        include: [],
-        exclude: [],
-      }),
-    },
-  });
-  try {
-    const { project } = session;
-    const diagnostics = project.program.getConfigFileParsingDiagnostics();
-    if (diagnostics.length) {
-      throw new Error(formatNativeTypeScriptDiagnostics(diagnostics));
+  // Keep one compiler, but release each batch's source trees before loading the next.
+  const batchSize = 256;
+  let batchFiles = files.slice(0, batchSize);
+  const readConfig = () =>
+    JSON.stringify({
+      extends: "./tsconfig.json",
+      // Resolve edges without adding their transitive source trees to the batch.
+      compilerOptions: { noResolve: true },
+      files: batchFiles.map((file) => path.resolve(repoRoot, file)),
+      include: [],
+      exclude: [],
+    });
+  const executable = resolveInstalledNativeTypeScriptCompiler().executable;
+  const observed: ChildProcess[] = [];
+  const compilers: { child: ChildProcess; closed: Promise<void> }[] = [];
+  const children = channel("child_process");
+  const observeCompiler = (message: unknown) => {
+    if (
+      message &&
+      typeof message === "object" &&
+      "process" in message &&
+      message.process instanceof ChildProcess
+    ) {
+      observed.push(message.process);
     }
-    const repoPaths = new Map<ts.Path, string>();
-    const importedPaths = new Map<string, ts.Path[]>();
-    for (const file of files) {
-      const absoluteFile = path.resolve(repoRoot, file);
-      const sourceFile = project.program.getSourceFile(absoluteFile);
-      if (!sourceFile) {
-        throw new Error(`Native TypeScript did not load import-cycle input ${file}`);
-      }
-      const repoPath = absoluteToRepoPath.get(path.resolve(sourceFile.fileName));
-      if (repoPath) {
-        repoPaths.set(sourceFile.path, repoPath);
-      }
-      const specifiers = collectStaticModuleSpecifiers(sourceFile);
-      const imports = project.checker.getSymbolAtLocation(specifiers).flatMap((symbol) => {
-        const declaration = symbol?.declarations.find(
-          (candidate) => candidate.kind === ts.SyntaxKind.SourceFile,
-        );
-        return declaration ? [declaration.path] : [];
+  };
+  let session: NativeTypeScriptProject | undefined;
+  try {
+    children.subscribe(observeCompiler);
+    try {
+      session = createNativeTypeScriptProject({
+        cwd: repoRoot,
+        configFileName,
+        fs: {
+          readFile: (file) => (file === configFileName ? readConfig() : undefined),
+          fileExists: (file) => (file === configFileName ? true : undefined),
+        },
       });
-      importedPaths.set(file, imports);
-      // Keep graph edges across files, not every decoded importer and target AST.
-      session.api.clearSourceFileCache();
+    } finally {
+      children.unsubscribe(observeCompiler);
+      // Creation is synchronous: identify the spawned compiler before any event callback runs.
+      for (const child of observed.filter((candidate) => candidate.spawnfile === executable)) {
+        const closed = new Promise<void>((resolve, reject) => {
+          let failure: Error | undefined;
+          const onError = (error: Error) => {
+            failure ??= error;
+          };
+          child.on("error", onError);
+          child.once("close", () => {
+            child.off("error", onError);
+            if (failure && child.pid !== undefined) {
+              reject(failure);
+            } else {
+              resolve();
+            }
+          });
+        });
+        compilers.push({ child, closed });
+        // The synchronous transport unrefs its child; retain it until the real close event.
+        if (child.pid !== undefined) {
+          child.ref();
+        }
+      }
+    }
+    if (compilers.length !== 1 || compilers[0]?.child.pid === undefined) {
+      throw new Error("Native TypeScript did not expose exactly one compiler process");
+    }
+    let snapshot = session.snapshot;
+    const repoPaths = new Map<string, string>();
+    const importedPaths = new Map<string, string[]>();
+    // Empty inventories still validate the project configuration.
+    for (let offset = 0; offset === 0 || offset < files.length; offset += batchSize) {
+      if (offset > 0) {
+        batchFiles = files.slice(offset, offset + batchSize);
+        const previous = snapshot;
+        // A config notification reloads the root list; invalidating files alone does not.
+        snapshot = previous.update({
+          fileNotifications: { changed: [configFileName] },
+          ensurePrograms: true,
+        });
+        previous.dispose();
+        session.api.clearSourceFileCache();
+      }
+      const project = snapshot.getConfiguredProject(configFileName);
+      if (!project) {
+        throw new Error("Native TypeScript did not open the import-cycle batch");
+      }
+      const diagnostics = project.program.getConfigFileParsingDiagnostics();
+      if (diagnostics.length) {
+        throw new Error(formatNativeTypeScriptDiagnostics(diagnostics));
+      }
+      for (const file of batchFiles) {
+        const sourceFile = project.program.getSourceFile(path.resolve(repoRoot, file));
+        if (!sourceFile) {
+          throw new Error(`Native TypeScript did not load import-cycle input ${file}`);
+        }
+        const repoPath = absoluteToRepoPath.get(path.resolve(sourceFile.fileName));
+        if (repoPath) {
+          repoPaths.set(sourceFile.path, repoPath);
+        }
+        const resolved = session.api.batch(
+          ...collectStaticModuleSpecifiers(sourceFile).map((specifier) =>
+            project.program.getResolvedModuleFromModuleSpecifier.gen(
+              specifier,
+              sourceFile.fileName,
+            ),
+          ),
+        );
+        importedPaths.set(
+          file,
+          resolved.flatMap((module) =>
+            module
+              ? [
+                  project.program.getCanonicalFileName(
+                    path.resolve(module.resolvedFileName).split(path.sep).join("/"),
+                  ),
+                ]
+              : [],
+          ),
+        );
+        session.api.clearSourceFileCache();
+      }
     }
     return new Map(
       [...importedPaths].map(([file, imports]) => [
@@ -84,11 +178,18 @@ function createImportGraph(files: readonly string[]): Map<string, string[]> {
       ]),
     );
   } finally {
-    session.close();
+    try {
+      session?.close();
+    } finally {
+      // A synchronous spawn rejection has no OS child and may never emit close.
+      await Promise.all(
+        compilers.filter(({ child }) => child.pid !== undefined).map(({ closed }) => closed),
+      );
+    }
   }
 }
 
-function main(): number {
+async function main(): Promise<number> {
   const files = scanRoots.flatMap((root) =>
     collectSourceFiles(path.join(repoRoot, root), {
       repoRoot,
@@ -96,7 +197,7 @@ function main(): number {
       shouldSkipRepoPath: (repoPath) => ignoredPathPartPattern.test(repoPath),
     }),
   );
-  const graph = createImportGraph(files);
+  const graph = await createImportGraph(files);
   const cycles = collectStronglyConnectedComponents(graph);
 
   console.log(`Madge import cycle check: ${cycles.length} cycle(s).`);
@@ -115,4 +216,4 @@ function main(): number {
   return 1;
 }
 
-process.exitCode = main();
+process.exitCode = await main();

@@ -69,16 +69,29 @@ describe("createOpenClawAgentHarness", () => {
 
     await createOpenClawAgentHarness().runAttempt(params);
 
-    expect(runEmbeddedAttempt).toHaveBeenCalledWith(params);
+    expect(runEmbeddedAttempt).toHaveBeenCalledWith({
+      thinkLevel: "ultra",
+      supportsTurnScopedToolRestrictions: true,
+    });
+  });
+
+  it("carries only explicit live harness support", async () => {
+    const harness = createOpenClawAgentHarness();
+    harness.supportsTurnScopedToolRestrictions = false;
+    await harness.runAttempt({ supportsTurnScopedToolRestrictions: true } as never);
+    expect(runEmbeddedAttempt).toHaveBeenCalledWith({ supportsTurnScopedToolRestrictions: false });
   });
 
   it("enforces tool-free finalization while forwarding execution and lifecycle notifications", async () => {
+    const sessionManager = { owner: "host" };
     const prepareAssistantTranscriptMessage = vi.fn();
     const onAttemptDeadlineChanged = vi.fn();
     const onAttemptTimeoutArmed = vi.fn();
     const onAgentEvent = vi.fn<NonNullable<EmbeddedRunAttemptParams["onAgentEvent"]>>();
     const attempt = {
       prompt: "finalize",
+      sessionManager,
+      sessionPersistence: "detached",
       disableTools: false,
       extraSystemPrompt: "ambient system context",
       skillsSnapshot: { prompt: "ambient skills" },
@@ -108,6 +121,8 @@ describe("createOpenClawAgentHarness", () => {
     expect(runEmbeddedAttempt).toHaveBeenCalledWith(
       expect.objectContaining({
         prompt: "finalize",
+        sessionManager,
+        sessionPersistence: "detached",
         disableTools: true,
         disableTrajectory: true,
         skipPreparedUserTurnMessage: true,
@@ -124,24 +139,6 @@ describe("createOpenClawAgentHarness", () => {
     expect(finalizationAttempt).not.toHaveProperty("internalEvents");
     expect(finalizationAttempt).not.toHaveProperty("trigger");
     expect(finalizationAttempt).not.toHaveProperty("onPartialReply");
-  });
-
-  it("keeps the host-owned transcript for detached finalization", async () => {
-    const sessionManager = { owner: "host" };
-    const attempt = {
-      prompt: "finalize",
-      sessionManager,
-      sessionPersistence: "detached",
-    } as never;
-
-    await createOpenClawAgentHarness().finalizeSettledTurn?.({
-      attempt,
-      settledAttempt: {} as never,
-    });
-
-    expect(runEmbeddedAttempt).toHaveBeenCalledWith(
-      expect.objectContaining({ sessionManager, sessionPersistence: "detached" }),
-    );
   });
 
   it("runs isolated completion through the prepared zero-tool transport", async () => {

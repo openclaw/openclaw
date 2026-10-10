@@ -20,15 +20,7 @@ import { normalizeTelegramChatId, resolveTelegramTargetChatType } from "./target
 
 function normalizeTelegramDirectApproverId(value: string | number): string | undefined {
   const chatId = normalizeTelegramChatId(String(value));
-  if (!chatId || chatId.startsWith("-")) {
-    return undefined;
-  }
-  return chatId;
-}
-
-function resolveTelegramOwnerApprovers(cfg: OpenClawConfig): Array<string | number> {
-  const ownerAllowFrom = cfg.commands?.ownerAllowFrom;
-  return Array.isArray(ownerAllowFrom) ? ownerAllowFrom : [];
+  return chatId && !chatId.startsWith("-") ? chatId : undefined;
 }
 
 export function resolveTelegramExecApprovalConfig(params: {
@@ -51,7 +43,9 @@ export function getTelegramExecApprovalApprovers(params: {
 }): string[] {
   return resolveApprovalApprovers({
     explicit: resolveTelegramExecApprovalConfig(params)?.approvers,
-    allowFrom: resolveTelegramOwnerApprovers(params.cfg),
+    allowFrom: Array.isArray(params.cfg.commands?.ownerAllowFrom)
+      ? params.cfg.commands.ownerAllowFrom
+      : [],
     normalizeApprover: normalizeTelegramDirectApproverId,
   });
 }
@@ -65,11 +59,8 @@ export function isTelegramExecApprovalTargetRecipient(params: {
     ...params,
     channel: "telegram",
     matchTarget: ({ target, normalizedSenderId }) => {
-      const to = target.to ? normalizeTelegramChatId(target.to) : undefined;
-      if (!to || to.startsWith("-")) {
-        return false;
-      }
-      return to === normalizedSenderId;
+      const to = target.to ? normalizeTelegramDirectApproverId(target.to) : undefined;
+      return to !== undefined && to === normalizedSenderId;
     },
   });
 }
@@ -142,13 +133,11 @@ export function shouldInjectTelegramExecApprovalButtons(params: {
   }
   const target = resolveTelegramExecApprovalTarget(params);
   const chatType = resolveTelegramTargetChatType(params.to);
-  if (chatType === "direct") {
-    return target === "dm" || target === "both";
-  }
-  if (chatType === "group") {
-    return target === "channel" || target === "both";
-  }
-  return target === "both";
+  return (
+    target === "both" ||
+    (chatType === "direct" && target === "dm") ||
+    (chatType === "group" && target === "channel")
+  );
 }
 
 export const shouldSuppressLocalTelegramExecApprovalPrompt =

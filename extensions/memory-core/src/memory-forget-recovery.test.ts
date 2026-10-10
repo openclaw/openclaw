@@ -21,11 +21,7 @@ import {
   readMemoryCoreWorkspaceEntries,
   writeMemoryCoreWorkspaceEntries,
 } from "./dreaming-state.js";
-import {
-  listMemoryEntryOrigins,
-  listMemorySessionTombstones,
-  recordMemoryEntryOrigins,
-} from "./memory-entry-origins.js";
+import { listMemoryEntryOrigins, recordMemoryEntryOrigins } from "./memory-entry-origins.js";
 import { observeMemoryForgetWorker } from "./memory-forget-fault.test-support.js";
 import { forgetMemoryEntries } from "./memory-forget.js";
 import {
@@ -34,6 +30,7 @@ import {
 } from "./memory-forget.test-helpers.js";
 import { observePublishedSql } from "./memory/manager-publication-observer.test-support.js";
 import { readPhaseSignalStore, writePhaseSignalStore } from "./short-term-promotion-store.js";
+import { readMemoryForgetTombstonesForTest } from "./test-helpers.js";
 
 describe("memory forget", () => {
   let fixture: Awaited<ReturnType<typeof createMemoryForgetFixture>>;
@@ -381,7 +378,7 @@ describe("memory forget", () => {
             restore();
           }
         }
-        expect(await listMemorySessionTombstones({ agentId: "main" })).toMatchObject([
+        expect(readMemoryForgetTombstonesForTest({ agentId: "main" })).toMatchObject([
           { sessionId: "target", reason: "forgotten" },
         ]);
       }
@@ -396,6 +393,10 @@ describe("memory forget", () => {
       const suppliedCalls: ReturnType<ReturnType<typeof observePublishedSql>["calls"]> = [];
       const isLineageRead = (sql: string) =>
         /\bSELECT\b[\s\S]*?\bFROM\s+["`]?memory_entry_origins\b/i.test(sql);
+      const isPlanningRead = (sql: string) =>
+        /\bSELECT\b[\s\S]*?\bFROM\s+["`]?memory_(?:index_(?:chunks|sources)|embedding_cache)\b/i.test(
+          sql,
+        );
       const isMutation = (sql: string) =>
         /\b(?:INSERT(?:\s+OR\s+\w+)?\s+INTO|UPDATE|DELETE\s+FROM)\s+["`]?memory_(?:entry_origins|session_tombstones|index_(?:state|chunks(?:_vec)?|sources)|embedding_cache)\b/i.test(
           sql,
@@ -411,10 +412,12 @@ describe("memory forget", () => {
               .changes,
           ).toBe(0);
           expect(db.prepare("DELETE FROM memory_embedding_cache WHERE 0").run().changes).toBe(0);
+          expect(db.prepare("SELECT id FROM memory_index_chunks WHERE 0").all()).toEqual([]);
           expect({
             lineage: observed.calls().filter(({ sql }) => isLineageRead(sql)).length,
+            planning: observed.calls().filter(({ sql }) => isPlanningRead(sql)).length,
             mutations: observed.calls().filter(({ sql }) => isMutation(sql)).length,
-          }).toEqual({ lineage: 1, mutations: 2 });
+          }).toEqual({ lineage: 1, planning: 1, mutations: 2 });
           observed.clear();
         }
         report = await forgetMemoryEntries({ cfg, agentId: "main", hookSources: ["gmail"] });
@@ -506,7 +509,7 @@ describe("memory forget", () => {
       expect(
         (await listMemoryEntryOrigins({ agentId: "main" })).map((origin) => origin.entryKey),
       ).toEqual(["clean-entry"]);
-      const tombstones = await listMemorySessionTombstones({ agentId: "main" });
+      const tombstones = readMemoryForgetTombstonesForTest({ agentId: "main" });
       expect(tombstones).toEqual([
         {
           agentId: "main",
@@ -519,12 +522,13 @@ describe("memory forget", () => {
       const repeated = await forgetMemoryEntries({ cfg, agentId: "main", hookSources: ["gmail"] });
       expect(repeated.sessionIds).toEqual(["target"]);
       expect(Object.values(repeated.artifacts).every((count) => count === 0)).toBe(true);
-      expect(await listMemorySessionTombstones({ agentId: "main" })).toEqual(tombstones);
+      expect(readMemoryForgetTombstonesForTest({ agentId: "main" })).toEqual(tombstones);
       if (observed) {
         expect({
           lineage: suppliedCalls.filter(({ sql }) => isLineageRead(sql)),
+          planning: suppliedCalls.filter(({ sql }) => isPlanningRead(sql)),
           mutations: suppliedCalls.filter(({ sql }) => isMutation(sql)),
-        }).toEqual({ lineage: [], mutations: [] });
+        }).toEqual({ lineage: [], planning: [], mutations: [] });
       }
     },
   );

@@ -2,8 +2,8 @@ import { createHash } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { resolveGlobalMap } from "openclaw/plugin-sdk/global-singleton";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
-import type { MattermostConfig } from "../types.js";
 import type { ResolvedMattermostAccount } from "./accounts.js";
+import { collectMattermostCallbackPaths } from "./callback-host.js";
 import {
   createWebhookInFlightLimiter,
   isRequestBodyLimitError,
@@ -14,7 +14,6 @@ import {
 import {
   normalizeSlashCommandTrigger,
   parseSlashCommandPayload,
-  resolveSlashCommandConfig,
   type MattermostRegisteredCommand,
 } from "./slash-commands.js";
 import {
@@ -49,7 +48,6 @@ type SlashCommandAccountState = {
   commandTokens: Set<string>;
   /** Registered command IDs for cleanup on shutdown. */
   registeredCommands: MattermostRegisteredCommand[];
-  /** Current HTTP handler for this account. */
   handler: SlashHandler | null;
 };
 
@@ -198,43 +196,6 @@ export function deactivateSlashCommands(accountId?: string) {
  * rotated Mattermost token.
  */
 export function registerSlashCommandRoute(api: OpenClawPluginApi) {
-  const mmConfig = api.config.channels?.mattermost as MattermostConfig | undefined;
-
-  // Collect callback paths from both top-level and per-account config.
-  // Command registration uses account.config.commands, so the HTTP route
-  // registration must include any account-specific callbackPath overrides.
-  // Also extract the pathname from an explicit callbackUrl when it differs
-  // from callbackPath, so that Mattermost callbacks hit a registered route.
-  const callbackPaths = new Set<string>();
-
-  const addCallbackPaths = (
-    raw: Partial<import("./slash-commands.js").MattermostSlashCommandConfig> | undefined,
-  ) => {
-    const resolved = resolveSlashCommandConfig(raw);
-    callbackPaths.add(resolved.callbackPath);
-    if (resolved.callbackUrl) {
-      try {
-        const urlPath = new URL(resolved.callbackUrl).pathname;
-        if (urlPath && urlPath !== resolved.callbackPath) {
-          callbackPaths.add(urlPath);
-        }
-      } catch {
-        // Invalid URL — ignore, will be caught during registration
-      }
-    }
-  };
-
-  const commandsRaw = mmConfig?.commands as
-    | Partial<import("./slash-commands.js").MattermostSlashCommandConfig>
-    | undefined;
-  addCallbackPaths(commandsRaw);
-
-  const accountsRaw = mmConfig?.accounts ?? {};
-  for (const accountId of Object.keys(accountsRaw)) {
-    const accountCommandsRaw = accountsRaw[accountId]?.commands;
-    addCallbackPaths(accountCommandsRaw);
-  }
-
   const dispatchRoute = async (
     req: IncomingMessage,
     res: ServerResponse,
@@ -361,7 +322,7 @@ export function registerSlashCommandRoute(api: OpenClawPluginApi) {
     }
   };
 
-  for (const callbackPath of callbackPaths) {
+  for (const callbackPath of collectMattermostCallbackPaths(api.config.channels?.mattermost)) {
     api.registerHttpRoute({
       path: callbackPath,
       auth: "plugin",

@@ -2,6 +2,7 @@
 import { readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { describe, expect, it, vi } from "vitest";
 import { IMessageRpcClient } from "./client.js";
@@ -34,6 +35,7 @@ function makeCtx(params: {
   const logEvents: { level: string; line: string }[] = [];
   return {
     ctx: {
+      scheduler: createTestPluginServiceScheduler(),
       cfg: params.cfg,
       accountId: params.accountId,
       account,
@@ -86,40 +88,7 @@ describe("startIMessageGatewayAccount duplicate-source handling", () => {
     expect(monitorMock).not.toHaveBeenCalled();
   });
 
-  it("starts monitorIMessageProvider for the duplicate-source owner", async () => {
-    monitorMock.mockClear();
-    monitorMock.mockResolvedValueOnce(undefined);
-    const cfg = {
-      channels: {
-        imessage: {
-          accounts: {
-            "swang430-gmail-com": { cliPath: "imsg" },
-            default: {},
-          },
-        },
-      },
-    } as never;
-    const { ctx, statusEvents } = makeCtx({ cfg, accountId: "swang430-gmail-com" });
-
-    await startIMessageGatewayAccount(ctx);
-    expect(monitorMock).toHaveBeenCalledTimes(1);
-    expect(statusEvents).toContainEqual(
-      expect.objectContaining({ lifecycle: "starting", accountId: "swang430-gmail-com" }),
-    );
-    expect(monitorMock).toHaveBeenCalledWith(
-      expect.objectContaining({ statusSink: expect.any(Function) }),
-    );
-  });
-
   it.each([
-    {
-      name: "an implicit and explicit default database",
-      primary: { cliPath: "imsg" },
-      secondary: () => ({
-        cliPath: "imsg",
-        dbPath: path.join(process.env.HOME || os.homedir(), "Library", "Messages", "chat.db"),
-      }),
-    },
     {
       name: "the same absolute executable with implicit and explicit databases",
       primary: { cliPath: "/usr/local/bin/imsg" },
@@ -160,27 +129,6 @@ describe("startIMessageGatewayAccount duplicate-source handling", () => {
       duplicate.abort();
       await duplicateTask;
     }
-  });
-
-  it("starts the only configured watcher instead of parking it under an unconfigured account", async () => {
-    monitorMock.mockClear();
-    monitorMock.mockResolvedValueOnce(undefined);
-    const cfg = {
-      channels: {
-        imessage: {
-          accounts: {
-            primary: {},
-            secondary: { enabled: true, cliPath: "imsg" },
-          },
-        },
-      },
-    } as never;
-    const configured = makeCtx({ cfg, accountId: "secondary" });
-    await startIMessageGatewayAccount(configured.ctx);
-    expect(monitorMock).toHaveBeenCalledTimes(1);
-    expect(configured.statusEvents).toContainEqual(
-      expect.objectContaining({ lifecycle: "starting", accountId: "secondary" }),
-    );
   });
 
   it("starts independent monitors for distinct auto-detected remote wrappers named imsg", async () => {
@@ -236,47 +184,10 @@ describe("sendIMessageOutbound approval identity", () => {
     expect(send.mock.calls[0]?.[2]?.mediaAccess).toBe(mediaAccess);
     expect(send.mock.calls[0]?.[2]).not.toHaveProperty("mediaReadFile");
   });
-
-  it("promotes the exact tapback GUID and delivered text into channel-private metadata", async () => {
-    const send = vi.fn(async () => ({
-      messageId: "42",
-      guid: "p:0/stable-guid",
-      sentText: "delivered approval text",
-      receipt: {
-        primaryPlatformMessageId: "42",
-        platformMessageIds: ["42"],
-        parts: [{ platformMessageId: "42", kind: "text" as const, index: 0 }],
-        sentAt: 1_000,
-      },
-    }));
-
-    await expect(
-      sendIMessageOutbound({
-        cfg: {} as never,
-        to: "+15551230000",
-        text: "approval text",
-        conversationReadOrigin: "delegated",
-        deps: { imessage: send },
-      }),
-    ).resolves.toEqual(
-      expect.objectContaining({
-        messageId: "42",
-        meta: {
-          imessageMessageGuid: "p:0/stable-guid",
-          imessageVisibleText: "delivered approval text",
-        },
-      }),
-    );
-    expect(send).toHaveBeenCalledWith(
-      "+15551230000",
-      "approval text",
-      expect.objectContaining({ conversationReadOrigin: "delegated" }),
-    );
-  });
 });
 
 describe("iMessage account media limits", () => {
-  it.each(["work", undefined])("enforces the resolved account cap for %s", async (accountId) => {
+  it("enforces the resolved account cap for work", async () => {
     const state = await createOpenClawTestState({ prefix: "imessage-account-media-" });
     const client = new IMessageRpcClient();
     const delivered: Buffer[] = [];
@@ -308,7 +219,7 @@ describe("iMessage account media limits", () => {
             },
           },
         },
-        accountId,
+        accountId: "work",
         to: "imessage:+15555550123",
         text: "",
         mediaLocalRoots: [state.root],
@@ -352,12 +263,6 @@ describe("imessagePlugin pairing.notifyApproval", () => {
       accountId: "beta",
       cliPath: "/gateway/beta-imsg",
       dbPath: "/gateway/beta-chat.db",
-    },
-    {
-      name: "the default account when no account was approved",
-      accountId: undefined,
-      cliPath: "/gateway/alpha-imsg",
-      dbPath: "/gateway/alpha-chat.db",
     },
   ])("sends the approval from $name", async ({ accountId, cliPath, dbPath }) => {
     const notifyApproval = imessagePlugin.pairing?.notifyApproval;

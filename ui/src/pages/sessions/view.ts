@@ -121,29 +121,6 @@ function getAgentIdentity(
   return Object.hasOwn(agentIdentityById, agentId) ? (agentIdentityById[agentId] ?? null) : null;
 }
 
-function resolveThinkLevelOptions(
-  row: GatewaySessionRow,
-  defaults?: SessionsListResult["defaults"],
-): readonly { value: string; label: string }[] {
-  const state = resolveChatThinkingSelectState({
-    catalog: [],
-    session: row,
-    defaults,
-    sessionKey: row.key,
-    sessionsResult: null,
-  });
-  return [{ value: "", label: state.inherited.displayLabel }, ...state.options];
-}
-
-function withCurrentLabeledOption(
-  options: readonly { value: string; label: string }[],
-  current: string,
-): Array<{ value: string; label: string }> {
-  return !current || options.some((option) => option.value === current)
-    ? [...options]
-    : [...options, { value: current, label: formatThinkingOverrideLabel(current) }];
-}
-
 function buildSessionLevelOptions(
   values: readonly string[],
   explicitOff = false,
@@ -205,20 +182,12 @@ function renderTokensCell(row: GatewaySessionRow) {
       : percent >= CONTEXT_METER_WARN_PERCENT
         ? "warn"
         : "ok";
-  const title = t(
-    limit.fromLastPrompt
-      ? fresh
-        ? "sessionsView.promptBudgetUsage"
-        : "sessionsView.promptBudgetUsageApprox"
-      : fresh
-        ? "sessionsView.contextUsage"
-        : "sessionsView.contextUsageApprox",
-    {
-      percent: String(percent),
-      used: total.toLocaleString(),
-      context: context.toLocaleString(),
-    },
-  );
+  const titleKey = limit.fromLastPrompt ? "promptBudgetUsage" : "contextUsage";
+  const title = t(`sessionsView.${titleKey}${fresh ? "" : "Approx"}`, {
+    percent: String(percent),
+    used: total.toLocaleString(),
+    context: context.toLocaleString(),
+  });
   return html`
     <openclaw-tooltip .content=${title}>
       <div class="session-tokens">
@@ -293,14 +262,6 @@ function renderSkeletonRows(columnCount: number) {
   );
 }
 
-function hasActiveFilters(props: SessionsProps): boolean {
-  return (
-    normalizeLowercaseStringOrEmpty(props.searchQuery).length > 0 ||
-    parseStrictPositiveInteger(props.activeMinutes) !== undefined ||
-    !props.includeGlobal
-  );
-}
-
 function formatRuntimeMs(runtimeMs: number | undefined): string | null {
   if (typeof runtimeMs !== "number" || !Number.isFinite(runtimeMs) || runtimeMs < 0) {
     return null;
@@ -308,7 +269,6 @@ function formatRuntimeMs(runtimeMs: number | undefined): string | null {
   return formatDurationCompact(runtimeMs) ?? "0ms";
 }
 
-// Goal state is a dot + summary; the tooltip carries the objective detail.
 function renderSessionGoalStatus(goal: GatewaySessionRow["goal"]) {
   if (!goal) {
     return nothing;
@@ -350,8 +310,6 @@ function sessionDetailItems(
   add(t("sessionsView.goalNote"), row.goal?.lastStatusNote);
   add(t("sessionsView.model"), row.model);
   add(t("sessionsView.provider"), row.modelProvider);
-  // The roster dropped its Runtime column; the drawer is where agent runtime
-  // and run duration live now.
   add(t("sessionsView.runtime"), formatAgentRuntimeLabel(row.agentRuntime));
   add(t("sessionsView.runDuration"), formatRuntimeMs(row.runtimeMs));
   add(t("sessionsView.surface"), row.surface);
@@ -455,10 +413,10 @@ function categoryDropHandlers(props: SessionsProps, category: string | null) {
 
 function renderGroupHeaderRow(group: SessionRowGroup, props: SessionsProps) {
   const label = sessionGroupLabel(group, props);
-  const count =
-    group.rows.length === 1
-      ? t("sessionsView.groupRowCountOne", { count: "1" })
-      : t("sessionsView.groupRowCount", { count: String(group.rows.length) });
+  const count = t(
+    group.rows.length === 1 ? "sessionsView.groupRowCountOne" : "sessionsView.groupRowCount",
+    { count: String(group.rows.length) },
+  );
   const drop = categoryDropHandlers(props, group.id === UNGROUPED_ID ? null : group.id);
   return html`
     <tr
@@ -483,34 +441,6 @@ function isRowControlTarget(target: EventTarget | null): boolean {
     target instanceof Element &&
     Boolean(target.closest("a, button, input, label, select, textarea"))
   );
-}
-
-function renderOverrideSelect(params: {
-  label: string;
-  disabled: boolean;
-  disabledReason?: string;
-  options: readonly { value: string; label: string }[];
-  current: string;
-  onChange: (value: string) => void;
-}) {
-  return html`
-    <label class="session-override-field">
-      <span class="session-override-field__label">${params.label}</span>
-      <select
-        class="settings-select"
-        ?disabled=${params.disabled}
-        title=${params.disabledReason ?? nothing}
-        @change=${(e: Event) => params.onChange((e.target as HTMLSelectElement).value)}
-      >
-        ${params.options.map(
-          (option) =>
-            html`<option value=${option.value} ?selected=${params.current === option.value}>
-              ${option.label}
-            </option>`,
-        )}
-      </select>
-    </label>
-  `;
 }
 
 export function renderSessions(props: SessionsProps) {
@@ -605,13 +535,20 @@ function renderSessionsTable(props: SessionsProps) {
       : null;
   const displayRows = groups ? groups.flatMap((group) => group.rows) : sorted;
   const paginated = displayRows.slice(page * props.pageSize, (page + 1) * props.pageSize);
-  const emptyBecauseFiltered = rawRows.length === 0 && hasActiveFilters(props);
-  const emptyMessage =
-    props.statusFilter === "archived"
-      ? t("sessionsView.noArchivedSessions")
-      : props.statusFilter === "active"
-        ? t("sessionsView.noActiveSessions")
-        : t("sessionsView.noSessions");
+  const emptyBecauseFiltered =
+    rawRows.length === 0 &&
+    (normalizeLowercaseStringOrEmpty(props.searchQuery).length > 0 ||
+      parseStrictPositiveInteger(props.activeMinutes) !== undefined ||
+      !props.includeGlobal);
+  const emptyStateMessage = t(
+    emptyBecauseFiltered
+      ? "sessionsView.noSessionsMatchFilters"
+      : props.statusFilter === "archived"
+        ? "sessionsView.noArchivedSessions"
+        : props.statusFilter === "active"
+          ? "sessionsView.noActiveSessions"
+          : "sessionsView.noSessions",
+  );
 
   const sortHeader = (
     col: "key" | "kind" | "updated" | "tokens",
@@ -619,14 +556,14 @@ function renderSessionsTable(props: SessionsProps) {
     extraClass = "",
   ) => {
     const isActive = props.sortColumn === col;
-    const nextDir = isActive && props.sortDir === "asc" ? ("desc" as const) : ("asc" as const);
+    const nextDir = !isActive || props.sortDir === "asc" ? "desc" : "asc";
     return html`
       <th
         class=${extraClass}
         data-sortable
         data-sort-dir=${isActive ? props.sortDir : ""}
         aria-sort=${isActive ? (props.sortDir === "asc" ? "ascending" : "descending") : nothing}
-        @click=${() => props.onSortChange(col, isActive ? nextDir : "desc")}
+        @click=${() => props.onSortChange(col, nextDir)}
       >
         <button class="data-table-sort-button" type="button">
           ${label}
@@ -636,9 +573,6 @@ function renderSessionsTable(props: SessionsProps) {
     `;
   };
 
-  const emptyStateMessage = emptyBecauseFiltered
-    ? t("sessionsView.noSessionsMatchFilters")
-    : emptyMessage;
   const paginatedKeys = groups ? new Set(paginated.map((row) => row.key)) : null;
   return html`
     <div
@@ -704,21 +638,16 @@ function renderSessionsTable(props: SessionsProps) {
                 paginated.length > 0
                   ? html`<input
                       type="checkbox"
-                      .checked=${
-                        paginated.length > 0 &&
-                        paginated.every((r) => props.selectedKeys.has(r.key))
-                      }
+                      .checked=${paginated.every((r) => props.selectedKeys.has(r.key))}
                       .indeterminate=${
                         paginated.some((r) => props.selectedKeys.has(r.key)) &&
                         !paginated.every((r) => props.selectedKeys.has(r.key))
                       }
                       @change=${() => {
-                        const allSelected = paginated.every((r) => props.selectedKeys.has(r.key));
-                        if (allSelected) {
-                          props.onDeselectPage(paginated.map((r) => r.key));
-                        } else {
-                          props.onSelectPage(paginated.map((r) => r.key));
-                        }
+                        const update = paginated.every((r) => props.selectedKeys.has(r.key))
+                          ? props.onDeselectPage
+                          : props.onSelectPage;
+                        update(paginated.map((r) => r.key));
                       }}
                       aria-label=${t("sessionsView.selectAllOnPage")}
                     />`
@@ -922,10 +851,7 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
       }}
       @keydown=${(e: KeyboardEvent) => {
         openMenuFromEvent(e);
-        if (e.defaultPrevented) {
-          return;
-        }
-        if (isRowControlTarget(e.target)) {
+        if (e.defaultPrevented || isRowControlTarget(e.target)) {
           return;
         }
         if (e.key === "Enter" || e.key === " ") {
@@ -966,10 +892,8 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
                           if (!shouldHandleNavigationClick(e)) {
                             return;
                           }
-                          if (props.onNavigateToChat) {
-                            e.preventDefault();
-                            props.onNavigateToChat(row.key);
-                          }
+                          e.preventDefault();
+                          props.onNavigateToChat(row.key);
                         }}
                         >${friendlyKeyLabel ?? row.key}</a
                       >`
@@ -1051,20 +975,28 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
     const rawThinking = row.thinkingLevel ?? "";
     const thinking = rawThinking ? normalizeThinkingOptionValue(rawThinking) : "";
     const fastMode = row.fastMode === undefined ? "" : formatFastModeValue(row.fastMode);
-    const overrides: Array<
-      Omit<Parameters<typeof renderOverrideSelect>[0], "disabled" | "disabledReason">
-    > = [
+    const thinkingState = resolveChatThinkingSelectState({
+      catalog: [],
+      session: row,
+      defaults: props.result?.defaults,
+      sessionKey: row.key,
+      sessionsResult: null,
+    });
+    const overrides = [
       {
         label: t("sessionsView.thinking"),
         current: thinking,
-        options: resolveThinkLevelOptions(row, props.result?.defaults),
-        onChange: (value) => props.onPatch(row.key, { thinkingLevel: value || null }),
+        options: [
+          { value: "", label: thinkingState.inherited.displayLabel },
+          ...thinkingState.options,
+        ],
+        onChange: (value: string) => props.onPatch(row.key, { thinkingLevel: value || null }),
       },
       {
         label: t("sessionsView.fast"),
         current: fastMode,
         options: buildSessionLevelOptions(FAST_LEVEL_VALUES),
-        onChange: (value) =>
+        onChange: (value: string) =>
           props.onPatch(row.key, {
             fastMode: normalizeFastMode(value) ?? null,
           }),
@@ -1073,13 +1005,13 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
         label: t("sessionsView.verbose"),
         current: row.verboseLevel ?? "",
         options: buildSessionLevelOptions(VERBOSE_LEVEL_VALUES, true),
-        onChange: (value) => props.onPatch(row.key, { verboseLevel: value || null }),
+        onChange: (value: string) => props.onPatch(row.key, { verboseLevel: value || null }),
       },
       {
         label: t("sessionsView.reasoning"),
         current: row.reasoningLevel ?? "",
         options: buildSessionLevelOptions(REASONING_LEVELS),
-        onChange: (value) => props.onPatch(row.key, { reasoningLevel: value || null }),
+        onChange: (value: string) => props.onPatch(row.key, { reasoningLevel: value || null }),
       },
     ];
 
@@ -1120,14 +1052,31 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
                   }}
                 />
               </label>
-              ${overrides.map((override) =>
-                renderOverrideSelect({
-                  ...override,
-                  options: withCurrentLabeledOption(override.options, override.current),
-                  disabled: props.loading || Boolean(props.patchAdminDisabledReason),
-                  disabledReason: props.patchAdminDisabledReason,
-                }),
-              )}
+              ${overrides.map(({ label, current, options, onChange }) => {
+                const choices =
+                  !current || options.some((option) => option.value === current)
+                    ? options
+                    : [...options, { value: current, label: formatThinkingOverrideLabel(current) }];
+                return html`
+                  <label class="session-override-field">
+                    <span class="session-override-field__label">${label}</span>
+                    <select
+                      class="settings-select"
+                      ?disabled=${props.loading || Boolean(props.patchAdminDisabledReason)}
+                      title=${props.patchAdminDisabledReason ?? nothing}
+                      @change=${(event: Event) => onChange((event.target as HTMLSelectElement).value)}
+                    >
+                      ${choices.map(
+                        (option) => html`
+                          <option value=${option.value} ?selected=${current === option.value}>
+                            ${option.label}
+                          </option>
+                        `,
+                      )}
+                    </select>
+                  </label>
+                `;
+              })}
             </div>
           </div>
 

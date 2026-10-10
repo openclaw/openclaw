@@ -1,6 +1,7 @@
 import { resolveCronTriggerMinIntervalMs } from "../../config/cron-limits.js";
 import type { CronActiveJobMarker } from "../active-jobs.js";
 import { resolveAdmittedCronCompletionStatus } from "../completion-status.js";
+import { resolveCronDeliveryPlan } from "../delivery-plan.js";
 import { resolvePacedNextRunAtMs } from "../pacing.js";
 import { normalizeCronRunDiagnostics, summarizeCronRunDiagnostics } from "../run-diagnostics.js";
 import { resolveCronRunErrorReason } from "../run-error-reason.js";
@@ -20,6 +21,7 @@ import {
   errorBackoffMs,
   isJobEnabled,
   recordScheduleComputeError,
+  resolveNextRunAtMsOrDisable,
 } from "./jobs-scheduling.js";
 import { resolveManualOneShotOccurrenceAtMs } from "./one-shot-schedule.js";
 import { recordQuietCronEvaluation } from "./run-history.js";
@@ -37,7 +39,7 @@ import {
   resolveCronNextRunWithLowerBound,
   resolveDeliveryState,
   resolveDisabledHeartbeatOneShotRetryDecision,
-  resolveNextRunAtMsOrDisable,
+  holdsFailureNotificationForRetry,
   resolveTransientCronRetryDecision,
   shouldRetryDisabledHeartbeatOneShot,
 } from "./timer-trigger.js";
@@ -185,6 +187,14 @@ export function applyJobResult(
     }
   };
   const alertConfig = resolveFailureAlert(state, job);
+  // A silent job's agent-reported blocked outcome stays in history, status, and backoff, but no
+  // notification owner exists for it, so it never auto-disables the job or posts that notice.
+  const silentReportedFailure =
+    result.status === "error" &&
+    result.errorClassification?.kind === "permanent" &&
+    result.errorClassification.reportedByAgent === true &&
+    alertConfig === null &&
+    resolveCronDeliveryPlan(job).mode === "none";
   if (result.status === "error") {
     job.state.consecutiveErrors = (job.state.consecutiveErrors ?? 0) + 1;
     job.state.consecutiveSkipped = 0;
@@ -227,6 +237,9 @@ export function applyJobResult(
     job.deleteAfterRun === true &&
     completionStatus === "succeeded";
   let autoDisableNotificationOwnsFailure = false;
+  // Set when a quick transient re-run is scheduled for a provider outage; finalize holds
+  // the failure alert/repair until that retry ladder resolves.
+  let pendingTransientRetry = false;
   const applyReplaySchedule = () => {
     const nextRunAtMs = job.state.autoDisabled ? undefined : opts.replaySchedule?.nextRunAtMs;
     job.state.nextRunAtMs = nextRunAtMs === undefined ? undefined : scheduleNextRun(nextRunAtMs);
@@ -244,6 +257,7 @@ export function applyJobResult(
       result,
       completionStatus,
       autoDisableNotificationOwnsFailure,
+      pendingTransientRetry,
       replay: opts.replay,
       deferredNotifications: opts.deferredNotifications,
     });
@@ -311,6 +325,11 @@ export function applyJobResult(
         if (retryDecision.retryable && retryDecision.backoffMs !== undefined) {
           // Schedule retry with backoff (#24355).
           if (scheduleNextRun(result.endedAt + retryDecision.backoffMs) !== undefined) {
+            pendingTransientRetry = holdsFailureNotificationForRetry(
+              job,
+              result,
+              retryDecision.retryCategory,
+            );
             state.deps.log.info(
               {
                 jobId: job.id,
@@ -352,6 +371,7 @@ export function applyJobResult(
     } else if (
       result.status === "error" &&
       isJobEnabled(job) &&
+      !silentReportedFailure &&
       maybeAutoDisableCronJobAfterRunFailure({
         job,
         atMs: result.endedAt,
@@ -378,6 +398,12 @@ export function applyJobResult(
         executionStarted: result.executionStarted,
         consecutiveErrors: job.state.consecutiveErrors,
       });
+      // Within the quick-retry budget the next run is at most minutes away, whether it is the
+      // retry itself or an earlier natural slot, so a provider outage holds notifications.
+      const holdsForRetry =
+        retryDecision.retryable &&
+        retryDecision.backoffMs !== undefined &&
+        holdsFailureNotificationForRetry(job, result, retryDecision.retryCategory);
       let normalNext: number | undefined;
       let normalNextComputed = false;
       const computeNormalNext = () => {
@@ -398,6 +424,7 @@ export function applyJobResult(
             return finish();
           }
           if (retryNextRunAtMs < normalNext) {
+            pendingTransientRetry = holdsForRetry;
             state.deps.log.info(
               {
                 jobId: job.id,
@@ -441,6 +468,7 @@ export function applyJobResult(
           : normalNext !== undefined
             ? Math.max(normalNext, backoffNext)
             : backoffNext;
+      pendingTransientRetry = holdsForRetry && job.state.nextRunAtMs !== undefined;
       state.deps.log.info(
         {
           jobId: job.id,

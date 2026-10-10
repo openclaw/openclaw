@@ -6,7 +6,7 @@ import {
   pluginSdkEntrypoints,
   publicPluginSdkEntrypoints,
 } from "../../scripts/lib/plugin-sdk-entries.mts";
-import { materializeNativeCompiler } from "./native-boundary-fixture.js";
+import { requireNodeTool } from "../helpers/node-toolchain.js";
 import {
   createDeclarationFixture as createFixture,
   createDeclarationTest,
@@ -53,7 +53,7 @@ describe("write-plugin-sdk-entry-dts", { timeout: WRITER_TEST_TIMEOUT_MS }, () =
         fs
           .readdirSync(path.join(root, ".artifacts"))
           .filter((name) => name.startsWith("plugin-sdk-staging-")),
-      ).toHaveLength(3);
+      ).toHaveLength(2);
       expect(fs.existsSync(path.join(root, ".artifacts/dist-artifacts.lock/unjoined"))).toBe(true);
     }));
 
@@ -79,8 +79,8 @@ describe("write-plugin-sdk-entry-dts", { timeout: WRITER_TEST_TIMEOUT_MS }, () =
       ]);
       expect(direct.status, direct.stdout + direct.stderr).toBe(0);
       expect(
-        (direct.stdout + direct.stderr).match(/\[tsdown-build\] invocation \d\/2 finished/gu),
-      ).toHaveLength(2);
+        (direct.stdout + direct.stderr).match(/\[tsdown-build\] invocation \d\/1 finished/gu),
+      ).toHaveLength(1);
       expect(treeHashes(path.join(root, "compiler-inputs"))).toEqual(before);
       expectOutputs(root, production, Object.keys(treeHashes(path.join(root, "dist"))));
       expectStagingClean(root);
@@ -139,12 +139,11 @@ describe("write-plugin-sdk-entry-dts", { timeout: WRITER_TEST_TIMEOUT_MS }, () =
       }),
   );
 
-  it.concurrent("publishes fresh canonical partitions with stable bytes and public nominal identity", ({
+  it.concurrent("publishes the canonical SDK graph with stable bytes and public nominal identity", ({
     command,
   }) =>
     command.lifetime.run(async () => {
       const { root, write, writeDeclarations, production, qa } = createFixture(command);
-      materializeNativeCompiler(root);
       expect(production.toSorted()).toEqual(
         publicPluginSdkEntrypoints.map((entry) => `plugin-sdk/${entry}`).toSorted(),
       );
@@ -169,13 +168,13 @@ describe("write-plugin-sdk-entry-dts", { timeout: WRITER_TEST_TIMEOUT_MS }, () =
       const initial = await runWriter(command, root);
       expect(initial.status, initial.stdout + initial.stderr).toBe(0);
       expect(
-        (initial.stdout + initial.stderr).match(/\[tsdown-build\] invocation \d\/2 finished/gu),
-      ).toHaveLength(2);
+        (initial.stdout + initial.stderr).match(/\[tsdown-build\] invocation \d\/1 finished/gu),
+      ).toHaveLength(1);
       const before = treeHashes(path.join(root, "dist"));
       expectOutputs(root, production, Object.keys(before));
       expectStagingClean(root);
       const records = declarationCacheRecords(root);
-      expect(records).toHaveLength(2);
+      expect(records).toHaveLength(1);
       const inputs = records.flatMap((record) => record.inputs ?? []);
       expect(inputs).toEqual(
         expect.arrayContaining([
@@ -196,8 +195,8 @@ describe("write-plugin-sdk-entry-dts", { timeout: WRITER_TEST_TIMEOUT_MS }, () =
       const privateQa = await runWriter(command, root, true);
       expect(privateQa.status, privateQa.stdout + privateQa.stderr).toBe(0);
       expect(
-        (privateQa.stdout + privateQa.stderr).match(/\[tsdown-build\] invocation \d\/2 finished/gu),
-      ).toHaveLength(2);
+        (privateQa.stdout + privateQa.stderr).match(/\[tsdown-build\] invocation \d\/1 finished/gu),
+      ).toHaveLength(1);
       const priorOutputs = treeHashes(path.join(root, "dist"));
       expectOutputs(root, qa, Object.keys(priorOutputs));
       expectStagingClean(root);
@@ -208,8 +207,8 @@ describe("write-plugin-sdk-entry-dts", { timeout: WRITER_TEST_TIMEOUT_MS }, () =
       const changed = await runWriter(command, root, true);
       expect(changed.status, changed.stdout + changed.stderr).toBe(0);
       expect(
-        (changed.stdout + changed.stderr).match(/\[tsdown-build\] invocation \d\/2 finished/gu),
-      ).toHaveLength(2);
+        (changed.stdout + changed.stderr).match(/\[tsdown-build\] invocation \d\/1 finished/gu),
+      ).toHaveLength(1);
       const first = treeHashes(path.join(root, "dist"));
       const cachedDistFiles = new Set(
         declarationCacheRecords(root).flatMap((record) =>
@@ -236,7 +235,6 @@ describe("write-plugin-sdk-entry-dts", { timeout: WRITER_TEST_TIMEOUT_MS }, () =
         write: writeRelocated,
         writeDeclarations: writeRelocatedDeclarations,
       } = createFixture(command);
-      materializeNativeCompiler(relocated);
       writeRelocatedDeclarations("after");
       fs.rmSync(path.join(relocated, "contracts/before.ts"));
       writeRelocated("test/unrelated.test.ts", "export const test = 2;\n");
@@ -302,7 +300,7 @@ describe("write-plugin-sdk-entry-dts", { timeout: WRITER_TEST_TIMEOUT_MS }, () =
         }),
       );
       const consumer = spawnSync(
-        process.execPath,
+        requireNodeTool("node"),
         [compiler, "-p", path.join(root, "consumer.json"), "--noEmit"],
         { cwd: root, encoding: "utf8" },
       );

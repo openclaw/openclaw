@@ -1,7 +1,7 @@
 ---
-summary: "Gateway RPC families for system status, models, channels, plugins, messaging, and the operator terminal"
+summary: "Gateway RPC families for system status, memory, models, channels, plugins, messaging, and the operator terminal"
 read_when:
-  - Looking up a system, model, channel, or plugin RPC
+  - Looking up a system, memory, model, channel, or plugin RPC
   - Wiring operator terminal or messaging methods
   - Checking the scope a gateway method requires
 title: "Gateway protocol system and channel methods"
@@ -13,7 +13,7 @@ RPC method families for gateway status and identity, models and usage, channels 
 
 ## System and identity
 
-- `health` returns the cached or freshly probed gateway health snapshot.
+- `health` returns the cached or freshly checked gateway health snapshot.
 - `diagnostics.stability` returns the recent bounded diagnostic stability recorder: event names, counts, byte sizes, memory readings, queue/session state, channel/plugin names, session ids. No chat text, webhook bodies, tool outputs, raw request/response bodies, tokens, cookies, or secrets. Requires `operator.read`.
 - `status` returns the `/status`-style gateway summary; sensitive fields only for admin-scoped operator clients.
 - `gateway.identity.get` returns the gateway device identity used by relay and pairing flows.
@@ -29,13 +29,23 @@ RPC method families for gateway status and identity, models and usage, channels 
 - `models.list` returns the runtime-allowed model catalog. See [`models.list` views](/gateway/protocol/operator-methods#models-list-views).
 - `usage.status` returns provider usage windows/remaining quota summaries. Clients advertising `usage-refreshing` receive an immediate `refreshing: true` placeholder on a cold cache and must refetch on a bounded schedule; other callers block for the cold provider read.
 - `usage.cost` returns aggregated cost usage summaries for a date range. Pass `agentId` for one agent, or `agentScope: "all"` to aggregate configured agents.
-- `doctor.memory.status` returns vector-memory / cached embedding readiness for the active default agent workspace. Pass `{ "probe": true }` or `{ "deep": true }` only for an explicit live embedding provider ping. Pass `{ "agentId": "agent-id" }` to scope Dreaming store stats to one agent workspace; omitting it aggregates configured Dreaming workspaces.
+- `doctor.memory.status` returns provider health for a native memory provider, or vector-memory / cached embedding readiness for a legacy provider. Pass `{ "probe": true }` or `{ "deep": true }` only for an explicit legacy embedding provider ping. Pass `{ "agentId": "agent-id" }` to scope Dreaming store stats to one agent workspace; omitting it aggregates configured Dreaming workspaces.
 - `doctor.memory.dreamDiary`, `doctor.memory.backfillDreamDiary`, `doctor.memory.resetDreamDiary`, `doctor.memory.resetGroundedShortTerm`, `doctor.memory.repairDreamingArtifacts`, and `doctor.memory.dedupeDreamDiary` accept optional `{ "agentId": "agent-id" }`; omitted, they operate on the configured default agent workspace.
 - `sessions.usage` returns per-session usage summaries. Pass `agentId` for one agent, or `agentScope: "all"` to list configured agents together.
   Both usage methods accept `mode: "specific"` with an IANA `timeZone` for DST-aware calendar-day boundaries and buckets. `utcOffset` remains supported for older clients and as a fallback when the Gateway runtime does not recognize the requested zone.
 - `sessions.usage.timeseries` returns timeseries usage for one session.
 - `sessions.usage.logs` returns usage log entries for one session.
   Both detail methods accept the selected row's `key` and optional `agentId`. Preserve both fields when opening details for an unqualified key such as `global`.
+
+## Memory
+
+- `memory.search` with `version: 2` searches the selected provider and returns provider-scoped references. Omitting `version`, or sending `version: 1`, uses the legacy file-shaped contract only for legacy providers. A native provider returns an error naming the plugin; retry with `version: 2`.
+- `memory.get` resolves a provider-scoped reference through the selected provider.
+- `memory.status` reports selected-provider health.
+
+These methods require authenticated operator read authority. `memory.get` and
+`memory.status` use the provider-runtime contract directly; `memory.search`
+selects that contract when `version: 2` is present.
 
 ## Channels and login helpers
 
@@ -49,12 +59,44 @@ RPC method families for gateway status and identity, models and usage, channels 
 - `voicewake.get` returns the stored wake-word triggers.
 - `voicewake.set` updates wake-word triggers and broadcasts the change.
 
+### Channel DM pairing
+
+`channels.pairing.list`, `channels.pairing.approve`, and
+`channels.pairing.dismiss` manage channel DM access requests. They are separate
+from [device bootstrap](/gateway/protocol/rpc-devices-nodes-and-approvals#device-pairing-and-device-tokens).
+
+The existing list request accepts optional `channel` and `accountId` and returns
+`accounts`, `requests`, `commandOwnerConfigured`, and `limits`. Public request
+rows contain a `requestId` and sender/account metadata, never the pairing code.
+Existing approval and dismissal use `channel`, `accountId`, and `requestId`;
+approval also accepts `notify` and `bootstrapCommandOwner`. Approval returns
+`requestId`, `senderId`, `notification`, and `commandOwnerBootstrap`; dismissal
+returns `requestId` and `senderId`. These contracts remain unchanged.
+
+The local CLI uses two explicit, `operator.admin`-protected branches after
+negotiating the corresponding
+[owner capability](/gateway/protocol/versioning#local-state-owner-routing):
+
+| Method                     | Request                                                             | Result                                                                                              |
+| -------------------------- | ------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| `channels.pairing.list`    | `format: "cli"`, `channel`, `expectedOwnerId`; optional `accountId` | Raw request array containing `id`, `code`, `createdAt`, `lastSeenAt`, and optional `meta`.          |
+| `channels.pairing.approve` | `channel`, `code`, `expectedOwnerId`; optional `accountId`          | `{ id, entry }`, where `entry` is the raw approved request, or `null` when no pending code matches. |
+
+The code selector and existing request-ID selector are mutually exclusive.
+Omitting `accountId` in the CLI branch preserves cross-account listing and code
+lookup; an explicit account restricts both. The owner resolves and mutates the
+matching request. CLI output remains unchanged, and first-command-owner config
+bootstrap and optional notification remain client-side after acknowledgement.
+Neither runs after a refusal or unknown outcome. Listing is mutation-capable
+because it prunes expired or excess pending requests.
+
 ## Plugin management
 
 - `plugins.list` (`operator.read`) returns the installed plugin inventory plus locally curated official picks, diagnostics, and whether the current install mode allows mutations. It includes the current runtime `generation` and each plugin's runtime state separately from configured enablement.
-- `plugins.inspect` (`operator.read`) inspects one plugin with `{ pluginId }`, including declared capabilities, grants, trust details, and a `reviewToken` for capability consent.
+- `plugins.inspect` (`operator.read`) accepts `{ pluginId }` for installed, staged, or official candidates; `{ source: "clawhub", packageName, version? }` for arbitrary ClawHub plugins; or `{ catalogId, version? }` using a discovery identity. Installed and staged inspections include a `reviewToken` for capability consent. Remote inspections expose the selected catalog detail, applicable grants, and release trust. Their `declaredSurfaceStatus` is `partial` or `unavailable`: registry summaries omit some capability groups and package siblings, so they cannot issue a consent token. Empty unsupported groups do not mean the package declares no such capabilities.
 - `plugins.search` (`operator.read`) searches installable ClawHub code-plugin and bundle-plugin families. Pass non-empty `query` and optional `limit` from 1 to 100.
 - `plugins.catalog.browse` (`operator.read`) returns ClawHub discovery results with Gateway-local installed and bundled state. The Control UI adds `searchSource: "openclaw-control-ui"` only after manual input of at least two characters settles for 250 ms. Initial browsing, refreshes, filter changes, and generic API searches omit it. The Gateway honors `CLAWHUB_DISABLE_TELEMETRY` and does not replay attributed HTTP searches after transient failures. ClawHub records the normalized query, source, and remote result counts; those counts exclude local-only matches added by the Gateway. Installed inventory and operator, device, and session identities are not included in the observation.
+- `plugins.catalog.get` (`operator.read`) accepts `{ id, version? }` using the unchanged discovery ID from `plugins.catalog.browse`. Detail includes publisher metadata, README, topics, package tags, selected-release notes, capabilities, configuration, verification, and security when supplied by ClawHub. `detail.selectedRelease` names the actual release independently of `plugin.catalog.latestVersion`; null means no release was selected. `detail.metadata` explicitly reports available or missing README, manifest, and security data. An installed counterpart can supply local detail during registry outages; `remoteError` explains the failure, and remote selected-release facts remain unknown. Local-only identities do not support remote version selection.
 - `plugins.install` (`operator.admin`) accepts these source-specific request fields:
 
   | `source`      | Fields                                                                     |
@@ -77,6 +119,33 @@ RPC method families for gateway status and identity, models and usage, channels 
 - `plugins.refresh` (`operator.admin`) refreshes plugin metadata and applies the resulting registry with `{}`.
 - `plugins.uninstall` (`operator.admin`) removes one externally installed plugin with `{ pluginId, keepFiles? }`: config references, the install record, and managed files. Bundled plugins cannot be uninstalled, only disabled. The response lists the removal actions.
 
+### Catalog detail and client confirmation
+
+`detail.downloadability` has one of these shapes:
+
+| Status                                         | Meaning                                                                |
+| ---------------------------------------------- | ---------------------------------------------------------------------- |
+| `{ "status": "downloadable" }`                 | The source has confirmed selected-release artifact availability.       |
+| `{ "status": "unavailable", "reason": "..." }` | A missing release or source download policy prevents download.         |
+| `{ "status": "unknown", "reason": "..." }`     | The source cannot establish availability, or the registry read failed. |
+
+ClawHub currently exposes a selected plugin release's download-policy block, but
+its read-only detail and artifact resolver do not check stored artifact bytes.
+A permitted security verdict, download URL, listing, or local install action
+therefore produces `unknown`, never `downloadable`. A side-effect-free per-release
+availability fact requires a ClawHub contract extension. Gateway inspection does
+not download packages to check them; registry download routes record telemetry.
+
+A native client can fetch `plugins.catalog.get`, inspect the same `catalogId`,
+display the returned facts, and collect confirmation itself. After approval,
+call `plugins.install` with `source: "clawhub"`, the exact returned `packageName`,
+and `selectedRelease.version` when present. Preserve scope and publisher spelling;
+do not rebuild the package name from a runtime plugin ID. If installation requires
+capability consent or install-policy acknowledgment, display that owner-issued
+review and retry the same intent with its acknowledgment. Catalog inspection does
+not grant consent or bypass install policy, integrity, trust, or authorization.
+Cancel sends no installation RPC. The Gateway does not manage confirmation dialogs.
+
 Runtime-only refresh works with read-only, Nix-managed, and root `$include` configurations without rewriting them.
 Plugin lifecycle and Claw package removal requests return retryable `UNAVAILABLE` with `retryAfterMs` when another plugin or config operation is already applying. This busy response occurs before the requested mutation starts; retry after the current operation completes. Failures after a mutation starts retain their application details and are not automatically retryable.
 
@@ -91,6 +160,118 @@ Install, enable, and reload may require capability consent. After reviewing the 
 Reload preconditions are optional. `installHash` is the lowercase SHA-256 of the canonical saved install record and requires a tracked package. `sourceDigests` maps resolved runtime plugin IDs to lowercase SHA-256 source digests. Tracked targets resolve their entire package; a bundled or configured source without an install record resolves its discovered runtime ID. Ambiguous, missing, or conflicting managed ownership still rejects the request. The Gateway checks target ownership and expected records before and after consent, then validates source expectations against the captured code it loads. Consent can update the saved install record: if that changes a supplied `installHash`, reload fails visibly without publishing runtime. The caller must refresh its expected state before retrying; the Gateway never rewrites the supplied hash. An acknowledgment covers its reviewed declared surface, and a different required surface stops the operation before runtime publication. Reload does not rebuild compiled bundled code or grant file-mutation authority.
 
 `sourceDigests` requires a captured-source plugin instance and Node's synchronous module hooks. Runtimes without those hooks, including Bun 1.4.2, omit these digests and reject requests that supply them. Ordinary Bun reloads capture fresh source for the replacement while retaining the old instance for admitted consumers; see [runtime instance and source lifetime](/plugins/architecture#runtime-instance-and-source-lifetime).
+
+## ClawHub catalog discovery
+
+`catalog.browse` and `catalog.searchKeywords` require `operator.read`. Clients
+check `hello-ok.features.methods` before using them; older Gateways continue to
+expose the existing plugin and skill RPCs. All registry requests run on the
+Gateway, including when it runs remotely or inside WSL.
+
+### Browse and search
+
+Call `catalog.browse` with these fields:
+
+| Field          | Contract                                                                                                                            |
+| -------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `kind`         | Required: `plugin` or `skill`. Results stay within that kind.                                                                       |
+| `query`        | Optional text, at most 200 characters. Whitespace-only text means browse.                                                           |
+| `feed`         | `catalog` (default) or `trending`. Search cannot select `trending`.                                                                 |
+| `officialOnly` | Optional boolean, default `false`. The Gateway excludes any listing without an explicit official flag.                              |
+| `pageSize`     | Integer from 1 to 100, default 20.                                                                                                  |
+| `cursor`       | Opaque continuation from the same kind, feed, and filter request. Search does not accept a cursor.                                  |
+| `agentId`      | Selects the skill workspace. Omit only when the Gateway can select an agent unambiguously. Plugin discovery does not need an agent. |
+
+For example:
+
+```json
+{
+  "kind": "skill",
+  "officialOnly": true,
+  "pageSize": 20,
+  "agentId": "main"
+}
+```
+
+The response contains `items` and `mode` (`catalog`, `trending`, or `search`).
+Catalog and trending pages can return `nextCursor`. Filtering can produce an
+empty page with a continuation; continue while that cursor exists. Full catalog
+browsing uses the registry's paginated plugin and native skill catalogs. Trending
+is a bounded ranking feed, not the complete catalog. The existing initial
+`plugins.catalog.browse` overview retains its bounded behavior.
+
+Text search returns at most `searchLimit` upstream candidates, equal to the
+requested page size. Official filtering can reduce that count. Upstream search
+has no continuation, so it cannot promise every possible matching listing.
+A successful empty response means no qualifying listings were returned.
+`remoteError` means registry discovery failed; any returned cursor repeats the
+input cursor so the client can retry the same page. Installation-status failure
+returns `UNAVAILABLE` instead of claiming that listings are uninstalled.
+
+Each item has `kind`, `registry`, `id`, `catalog` metadata, and `local` facts.
+Treat `(kind, registry, id)` as its canonical identity. Plugin IDs preserve the
+existing `ch_...` discovery identity, so `plugins.catalog.get` can open details;
+`catalog.packageName` supplies the existing plugin installation locator. Skill
+IDs equal `installRef`: native `@publisher/slug` or a source-qualified external
+reference. Pass `installRef` unchanged as `slug` to existing skill lifecycle
+RPCs. Respect `installOnly`; those entries have no ordinary skill detail card.
+The companion listing detail workstream does not change these identities.
+
+Skill local facts include the resolved `agentId`, `installed`, `enabled`,
+`eligible`, and, when installed, `skillKey`. They come from the selected
+workspace's existing status reader and valid tracked registry/source/publisher
+identity. A matching display name or bare slug does not establish installation.
+Plugin local facts reuse the existing managed inventory and mutation policy.
+Neither operation installs anything or changes approval requirements.
+
+### Bulk keyword discovery
+
+Call `catalog.searchKeywords` with `keywords` (1–100 nonblank strings, each at
+most 200 characters), optional `kinds` (`plugin`, `skill`, or both; default both),
+`agentId`, `pageSize` (1–100, default 20), and an optional returned `cursor`.
+The Gateway trims and collapses whitespace, lowercases and deduplicates terms,
+and searches each individual term for each selected kind. It always returns
+only official listings, deduplicated by canonical identity, in deterministic
+identity order. It never concatenates the terms or interprets application
+inventories. Clients own application detection and keyword generation.
+
+The response contains the normalized `keywords`, `items`, `searchLimit: 100`,
+`errors` (each with `kind`, `query`, and `message`), and optional `nextCursor`.
+The cursor pages the complete union of those bounded searches; no matches within
+that union are silently dropped. The upstream 100-candidate limit still applies
+to each term and kind, so this is not an exhaustive registry search. An empty
+union with no errors differs from an empty or partial union with failed queries.
+Retry a request with errors to recover failed terms.
+
+Bulk continuation re-reads the same bounded searches with at most four searches
+in flight, without retaining a second inventory. Cursors bind the normalized
+terms, kinds, registry, selected workspace, and result identities. If the matches
+change, the Gateway returns `INVALID_REQUEST` with a restart instruction rather
+than silently skipping results. Large keyword sets and subsequent pages perform
+more registry reads than ordinary searches; clients should allow a longer RPC
+request timeout and retain the original request for retries.
+
+### Upstream contracts and gaps
+
+Native skill catalog browsing and search use ClawHub's existing
+`/api/v1/packages?family=skill` and `/api/v1/packages/search?family=skill`
+contracts. These project the native skill catalog and expose the listing's
+`isOfficial` flag. `/api/v1/skills` currently omits that flag. Canonical skill
+search and trending can combine publisher and listing official status; the new
+catalog does not use publisher official status as a substitute. Native trending
+entries therefore read their listing flag from package metadata in bounded
+batches. The package-detail route can resolve a same-named package first; its
+metadata qualifies only when family, slug, and publisher match the exact skill.
+Mismatched metadata leaves official status unknown. Missing flags never qualify; featured status, verification tiers,
+publisher handles, and bundled provenance cannot qualify a listing either.
+
+The package skill catalog currently covers native ClawHub skills. External
+sources can appear in the canonical trending feed with their original
+install-only identities, but currently expose no separate listing-level official
+flag and cannot qualify for official suggestions. Existing `skills.search`
+retains its canonical cross-source search and omitted-query trending behavior;
+its public result contract also declares the existing optional `official` field.
+No cross-kind category taxonomy or global relevance ranking is introduced.
 
 ## Messaging and logs
 

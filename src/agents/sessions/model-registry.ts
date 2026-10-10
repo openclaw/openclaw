@@ -13,6 +13,7 @@ import { normalizeOptionalSecretInput } from "../../utils/normalize-secret-input
 import { getAgentDir } from "../config.js";
 import { sanitizeModelHeaders } from "../embedded-agent-runner/model.inline-provider.js";
 import { hasUsableCustomProviderApiKey } from "../model-auth-provider-config.js";
+import { resolveManagedSecretRefRuntimeProviderAuth } from "../model-auth-runtime-config.js";
 import { parseModelCatalogJson } from "../model-catalog-json.js";
 import { modelTransportRoutesMatch } from "../model-compat-catalog.js";
 import { resolveModelPluginMetadataSnapshot } from "../model-discovery-context.js";
@@ -54,7 +55,6 @@ import {
 
 const log = createSubsystemLogger("agents/model-registry");
 
-type MaxTokensSource = "configured" | "discovered";
 type RegistryProviderSources = Record<
   string,
   ProviderModelCatalog &
@@ -63,21 +63,30 @@ type RegistryProviderSources = Record<
     }
 >;
 
-function captureInventoryProvider(
-  provider: ProviderModelCatalog,
-  source: "static" | "composed",
+function captureProviderSource(
+  ...[provider, source]:
+    | [provider: RegistryProviderSources[string], source: "authored"]
+    | [provider: ProviderModelCatalog, source: "static" | "composed"]
 ): RegistryProviderSources[string] {
   return {
-    api: provider.api,
-    baseUrl: provider.baseUrl,
-    compat: provider.compat,
-    models: provider.models?.map(({ headers: _headers, ...model }) => ({
-      ...model,
-      api: model.api ?? provider.api,
-      baseUrl: model.baseUrl ?? provider.baseUrl,
-      maxTokensSource: source === "static" ? "discovered" : model.maxTokensSource,
-      compat: source === "static" ? mergeCompat(provider.compat, model.compat) : model.compat,
-    })),
+    ...(source === "authored"
+      ? provider
+      : { api: provider.api, baseUrl: provider.baseUrl, compat: provider.compat }),
+    models: provider.models?.map((model) => {
+      const { headers: _headers, ...inventory } = model;
+      const maxTokensSource: typeof model.maxTokensSource =
+        source === "composed"
+          ? model.maxTokensSource
+          : source === "static"
+            ? "discovered"
+            : "configured";
+      return Object.assign(source === "authored" ? model : inventory, {
+        api: model.api ?? provider.api,
+        baseUrl: model.baseUrl ?? provider.baseUrl,
+        maxTokensSource,
+        compat: source === "composed" ? model.compat : mergeCompat(provider.compat, model.compat),
+      });
+    }),
   };
 }
 
@@ -100,7 +109,6 @@ export type ResolvedRequestAuth =
       error: string;
     };
 
-/** Result of loading custom models from models.json */
 interface CustomModelsResult {
   providers: RegistryProviderSources;
   error: string | undefined;
@@ -130,6 +138,10 @@ type ModelRegistryCatalogSnapshot = {
   oauthProviders: OAuthProviderInterface[];
 };
 
+function cloneMapValues<T extends object>(source: ReadonlyMap<string, T>): Map<string, T> {
+  return new Map([...source].map(([key, value]) => [key, { ...value }]));
+}
+
 function mergeCompat(
   baseCompat: Model["compat"],
   overrideCompat: Model["compat"],
@@ -140,31 +152,15 @@ function mergeCompat(
 
   const baseCompletions = baseCompat as OpenAICompletionsCompat | undefined;
   const overrideCompletions = overrideCompat as OpenAICompletionsCompat;
-  return {
-    ...baseCompat,
-    ...overrideCompat,
-    ...(baseCompletions?.openRouterRouting || overrideCompletions.openRouterRouting
-      ? {
-          openRouterRouting: {
-            ...baseCompletions?.openRouterRouting,
-            ...overrideCompletions.openRouterRouting,
-          },
-        }
-      : {}),
-    ...(baseCompletions?.vercelGatewayRouting || overrideCompletions.vercelGatewayRouting
-      ? {
-          vercelGatewayRouting: {
-            ...baseCompletions?.vercelGatewayRouting,
-            ...overrideCompletions.vercelGatewayRouting,
-          },
-        }
-      : {}),
-  };
+  const merged = { ...baseCompat, ...overrideCompletions };
+  for (const routing of ["openRouterRouting", "vercelGatewayRouting"] as const) {
+    if (baseCompletions?.[routing] || overrideCompletions[routing]) {
+      merged[routing] = { ...baseCompletions?.[routing], ...overrideCompletions[routing] };
+    }
+  }
+  return merged;
 }
 
-/**
- * Model registry - loads and manages models, resolves API keys via AuthStorage.
- */
 export class ModelRegistry {
   private models: Model[] = [];
   private config: OpenClawConfig | undefined;
@@ -207,9 +203,7 @@ export class ModelRegistry {
       this.sourceSnapshot = sourceSnapshot;
       this.baseCatalogSnapshot = sourceSnapshot;
       this.restoreSourceCatalog(sourceSnapshot);
-      this.registeredProviders = new Map(
-        [...source.registeredProviders].map(([provider, config]) => [provider, { ...config }]),
-      );
+      this.registeredProviders = cloneMapValues(source.registeredProviders);
       getAuthStorageOAuthProviderRegistry(authStorage).reset();
       for (const oauthProvider of sourceSnapshot.oauthProviders) {
         getAuthStorageOAuthProviderRegistry(authStorage).register(oauthProvider);
@@ -230,7 +224,6 @@ export class ModelRegistry {
         : {}),
       ...(options.workspaceDir ? { workspaceDir: options.workspaceDir } : {}),
       allowWorkspaceScopedCurrent: true,
-      useRuntimeConfig: true,
     });
     this.loadModels();
     this.baseCatalogSnapshot = this.captureCatalogSnapshot();
@@ -239,12 +232,8 @@ export class ModelRegistry {
   private captureCatalogSnapshot(): ModelRegistryCatalogSnapshot {
     return {
       models: structuredClone(this.models),
-      providerRequestConfigs: new Map(
-        [...this.providerRequestConfigs].map(([provider, config]) => [provider, { ...config }]),
-      ),
-      modelRequestHeaders: new Map(
-        [...this.modelRequestHeaders].map(([key, headers]) => [key, { ...headers }]),
-      ),
+      providerRequestConfigs: cloneMapValues(this.providerRequestConfigs),
+      modelRequestHeaders: cloneMapValues(this.modelRequestHeaders),
       loadError: this.loadError,
       pluginMetadataSnapshot: this.pluginMetadataSnapshot,
       oauthProviders: [...this.authStorage.getOAuthProviders()],
@@ -253,12 +242,8 @@ export class ModelRegistry {
 
   private restoreSourceCatalog(source: ModelRegistryCatalogSnapshot): void {
     this.models = structuredClone(source.models);
-    this.providerRequestConfigs = new Map(
-      [...source.providerRequestConfigs].map(([provider, config]) => [provider, { ...config }]),
-    );
-    this.modelRequestHeaders = new Map(
-      [...source.modelRequestHeaders].map(([key, headers]) => [key, { ...headers }]),
-    );
+    this.providerRequestConfigs = cloneMapValues(source.providerRequestConfigs);
+    this.modelRequestHeaders = cloneMapValues(source.modelRequestHeaders);
     this.loadError = source.loadError;
     this.pluginMetadataSnapshot = source.pluginMetadataSnapshot;
   }
@@ -283,9 +268,6 @@ export class ModelRegistry {
     return new ModelRegistry(authStorage, undefined, { sourceSnapshot: this }, publishedModels);
   }
 
-  /**
-   * Reload models from disk (models.json).
-   */
   refresh(): void {
     this.providerRequestConfigs.clear();
     this.modelRequestHeaders.clear();
@@ -376,7 +358,7 @@ export class ModelRegistry {
         : Object.fromEntries(
             Object.entries(this.staticProviderConfigs ?? {}).map(([provider, config]) => [
               provider,
-              captureInventoryProvider(config, "static"),
+              captureProviderSource(config, "static"),
             ]),
           ),
       capturedPluginResult.providers,
@@ -405,11 +387,11 @@ export class ModelRegistry {
           api: model.api ?? accepted.get(model.id)?.api ?? configured.api,
           baseUrl: model.baseUrl ?? accepted.get(model.id)?.baseUrl ?? configured.baseUrl,
           maxTokensSource: "configured",
-          headers: sanitizeModelHeaders(model.headers, { stripSecretRefMarkers: true }),
+          headers: sanitizeModelHeaders(model.headers),
         })),
       };
       providers[providerId] = inherited
-        ? mergeProviderModels(captureInventoryProvider(inherited, "composed"), current, {
+        ? mergeProviderModels(captureProviderSource(inherited, "composed"), current, {
             providerId,
             modelIdMatching: "exact",
             sourceModelFields: sourceFields,
@@ -422,7 +404,7 @@ export class ModelRegistry {
         apiKey: normalizeOptionalSecretInput(configured.apiKey),
         auth: configured.auth,
         authHeader: configured.authHeader,
-        headers: sanitizeModelHeaders(configured.headers, { stripSecretRefMarkers: true }),
+        headers: sanitizeModelHeaders(configured.headers),
       });
     }
     let combined = this.parseModels(providers);
@@ -511,7 +493,6 @@ export class ModelRegistry {
         );
       }
 
-      const config = parsed;
       const providers =
         options.requireGeneratedCatalog === true
           ? filterGeneratedPluginModelCatalogProviders({
@@ -519,47 +500,35 @@ export class ModelRegistry {
               config: this.config,
               isProviderAvailable: (providerId) =>
                 this.authStorage.hasAuth(normalizeProviderId(providerId)) ||
-                hasUsableCustomProviderApiKey(this.config, providerId),
+                hasUsableCustomProviderApiKey(this.config, providerId) ||
+                resolveManagedSecretRefRuntimeProviderAuth({
+                  cfg: this.config,
+                  provider: providerId,
+                }) !== undefined,
               parsedCatalog: parsed,
               pluginMetadataSnapshot: this.pluginMetadataSnapshot,
-              providers: config.providers,
+              providers: parsed.providers,
             })
-          : config.providers;
-      const configForUse = { ...config, providers };
+          : parsed.providers;
       if (options.requireGeneratedCatalog === true && Object.keys(providers).length === 0) {
         return emptyCustomModelsResult();
       }
 
-      this.validateConfig(configForUse);
+      for (const [providerName, providerConfig] of Object.entries(providers)) {
+        this.validateProviderModels(providerName, providerConfig, "catalog");
+      }
 
       const generated = options.requireGeneratedCatalog === true;
-      const maxTokensSource: MaxTokensSource = generated ? "discovered" : "configured";
       let sourceProviders: RegistryProviderSources = {};
-      for (const [providerName, providerConfig] of Object.entries(configForUse.providers)) {
+      for (const [providerName, providerConfig] of Object.entries(providers)) {
         if (!generated && (providerConfig.models ?? []).length > 0) {
           this.storeProviderRequestConfig(providerName, providerConfig);
         }
         // Generated catalogs supply inventory, never request authority. Record the
         // source before merging so their headers cannot replace an authored row's.
-        sourceProviders[providerName] = {
-          ...(generated
-            ? {
-                api: providerConfig.api,
-                baseUrl: providerConfig.baseUrl,
-                compat: providerConfig.compat,
-              }
-            : providerConfig),
-          models: providerConfig.models?.map((model) => {
-            const { headers: _headers, ...inventory } = model;
-            // Capture route and effective compatibility before provider defaults merge.
-            return Object.assign(generated ? inventory : model, {
-              maxTokensSource,
-              api: model.api ?? providerConfig.api,
-              baseUrl: model.baseUrl ?? providerConfig.baseUrl,
-              compat: mergeCompat(providerConfig.compat, model.compat),
-            });
-          }),
-        };
+        sourceProviders[providerName] = generated
+          ? captureProviderSource(providerConfig, "static")
+          : captureProviderSource(providerConfig, "authored");
       }
 
       const pluginCatalogErrors: string[] = [];
@@ -599,36 +568,28 @@ export class ModelRegistry {
     }
   }
 
-  private validateConfig(config: ModelsConfig): void {
-    for (const [providerName, providerConfig] of Object.entries(config.providers)) {
-      const hasProviderApi = Boolean(providerConfig.api);
-      const models = providerConfig.models ?? [];
-
-      if (models.length === 0) {
-        continue;
-      }
-
-      // Provider-owned/custom catalogs must be self-contained.
-      if (!providerConfig.baseUrl) {
+  private validateProviderModels(
+    providerName: string,
+    config: ProviderModelCatalog,
+    source: "catalog" | "registration",
+  ): void {
+    const models = config.models ?? [];
+    if (models.length > 0 && !config.baseUrl) {
+      const subject = source === "catalog" ? "custom models" : "models";
+      throw new Error(`Provider ${providerName}: "baseUrl" is required when defining ${subject}.`);
+    }
+    for (const model of models) {
+      if (!model.api && !config.api) {
+        const guidance = source === "catalog" ? " Set at provider or model level." : "";
         throw new Error(
-          `Provider ${providerName}: "baseUrl" is required when defining custom models.`,
+          `Provider ${providerName}, model ${model.id}: no "api" specified.${guidance}`,
         );
       }
-      for (const modelDef of models) {
-        const hasModelApi = Boolean(modelDef.api);
-
-        if (!hasProviderApi && !hasModelApi) {
-          throw new Error(
-            `Provider ${providerName}, model ${modelDef.id}: no "api" specified. Set at provider or model level.`,
-          );
-        }
-
-        // Validate contextWindow/maxTokens only if provided (they have defaults)
-        if (modelDef.contextWindow !== undefined && modelDef.contextWindow <= 0) {
-          throw new Error(`Provider ${providerName}, model ${modelDef.id}: invalid contextWindow`);
-        }
-        if (modelDef.maxTokens !== undefined && modelDef.maxTokens <= 0) {
-          throw new Error(`Provider ${providerName}, model ${modelDef.id}: invalid maxTokens`);
+      if (source === "catalog") {
+        for (const field of ["contextWindow", "maxTokens"] as const) {
+          if (model[field] !== undefined && model[field] <= 0) {
+            throw new Error(`Provider ${providerName}, model ${model.id}: invalid ${field}`);
+          }
         }
       }
     }
@@ -638,12 +599,7 @@ export class ModelRegistry {
     const models: Model[] = [];
 
     for (const [providerName, providerConfig] of Object.entries(providers)) {
-      const modelDefs = providerConfig.models ?? [];
-      if (modelDefs.length === 0) {
-        continue;
-      }
-
-      for (const modelDef of modelDefs) {
+      for (const modelDef of providerConfig.models ?? []) {
         const api = modelDef.api ?? providerConfig.api;
         if (!api) {
           continue;
@@ -664,32 +620,47 @@ export class ModelRegistry {
         }
 
         this.storeModelHeaders(providerName, modelDef.id, modelDef.headers);
-        models.push({
-          id: modelDef.id,
-          name: modelDef.name ?? modelDef.id,
-          api: api as Api,
-          provider: providerName,
-          baseUrl,
-          reasoning: modelDef.reasoning ?? false,
-          thinkingLevelMap: modelDef.thinkingLevelMap,
-          input: runtimeInput,
-          cost: normalizeResolvedPricing(modelDef.cost ?? {}),
-          contextWindow: modelDef.contextWindow ?? 128000,
-          contextTokens: modelDef.contextTokens,
-          contextWindows: modelDef.contextWindows,
-          contextWindowDefault: modelDef.contextWindowDefault,
-          maxTokens: modelDef.maxTokens ?? 16384,
-          ...(modelDef.maxTokens !== undefined
-            ? { maxTokensSource: modelDef.maxTokensSource }
-            : {}),
-          params: modelDef.params,
-          headers: undefined,
-          compat: modelDef.compat,
-        } as Model);
+        models.push(
+          this.createRuntimeModel(providerName, providerConfig, modelDef, api, {
+            baseUrl,
+            input: runtimeInput,
+          }),
+        );
       }
     }
 
     return models;
+  }
+
+  private createRuntimeModel(
+    provider: string,
+    config: ProviderModelCatalog,
+    model: NonNullable<ProviderModelCatalog["models"]>[number],
+    api: string | undefined,
+    catalog?: { baseUrl: string; input: Model["input"] },
+  ): Model {
+    return {
+      id: model.id,
+      name: catalog ? (model.name ?? model.id) : model.name,
+      api: api as Api,
+      provider,
+      baseUrl: catalog ? catalog.baseUrl : (model.baseUrl ?? config.baseUrl!),
+      reasoning: catalog ? (model.reasoning ?? false) : model.reasoning,
+      thinkingLevelMap: model.thinkingLevelMap,
+      input: catalog ? catalog.input : model.input,
+      cost: catalog ? normalizeResolvedPricing(model.cost ?? {}) : model.cost,
+      contextWindow: catalog ? (model.contextWindow ?? 128000) : model.contextWindow,
+      contextTokens: model.contextTokens,
+      contextWindows: model.contextWindows,
+      contextWindowDefault: model.contextWindowDefault,
+      maxTokens: catalog ? (model.maxTokens ?? 16384) : model.maxTokens,
+      ...(catalog && model.maxTokens !== undefined
+        ? { maxTokensSource: model.maxTokensSource }
+        : {}),
+      params: model.params,
+      headers: undefined,
+      compat: model.compat,
+    } as Model;
   }
 
   getAll(): Model[] {
@@ -882,9 +853,6 @@ export class ModelRegistry {
     return providerApiKey ? resolveConfigValueUncached(providerApiKey) : undefined;
   }
 
-  /**
-   * Check if a model is using OAuth credentials (subscription).
-   */
   isUsingOAuth(model: Model): boolean {
     const cred = this.authStorage.get(model.provider);
     return cred?.type === "oauth";
@@ -899,9 +867,22 @@ export class ModelRegistry {
    * If provider has oauth: registers OAuth provider for /login support.
    */
   registerProvider(providerName: string, config: ProviderConfigInput): void {
-    this.validateProviderConfig(providerName, config);
+    if (config.streamSimple && !config.api) {
+      throw new Error(`Provider ${providerName}: "api" is required when registering streamSimple.`);
+    }
+    this.validateProviderModels(providerName, config, "registration");
     this.applyProviderConfig(providerName, config);
-    this.upsertRegisteredProvider(providerName, config);
+    const existing = this.registeredProviders.get(providerName);
+    if (!existing) {
+      this.registeredProviders.set(providerName, config);
+      return;
+    }
+    // Undefined registration fields preserve the stored provider configuration.
+    for (const k of Object.keys(config) as (keyof ProviderConfigInput)[]) {
+      if (config[k] !== undefined) {
+        (existing as Record<string, unknown>)[k] = config[k];
+      }
+    }
   }
 
   /**
@@ -920,48 +901,8 @@ export class ModelRegistry {
     this.refresh();
   }
 
-  /**
-   * Upsert a provider config into registeredProviders.
-   * If the provider is already registered, defined values in the incoming config
-   * override existing ones; undefined values are preserved from the stored config.
-   * If the provider is not registered, the incoming config is stored as-is.
-   */
-  private upsertRegisteredProvider(providerName: string, config: ProviderConfigInput): void {
-    const existing = this.registeredProviders.get(providerName);
-    if (!existing) {
-      this.registeredProviders.set(providerName, config);
-      return;
-    }
-    for (const k of Object.keys(config) as (keyof ProviderConfigInput)[]) {
-      if (config[k] !== undefined) {
-        (existing as Record<string, unknown>)[k] = config[k];
-      }
-    }
-  }
-
-  private validateProviderConfig(providerName: string, config: ProviderConfigInput): void {
-    if (config.streamSimple && !config.api) {
-      throw new Error(`Provider ${providerName}: "api" is required when registering streamSimple.`);
-    }
-
-    if (!config.models || config.models.length === 0) {
-      return;
-    }
-
-    if (!config.baseUrl) {
-      throw new Error(`Provider ${providerName}: "baseUrl" is required when defining models.`);
-    }
-    for (const modelDef of config.models) {
-      const api = modelDef.api || config.api;
-      if (!api) {
-        throw new Error(`Provider ${providerName}, model ${modelDef.id}: no "api" specified.`);
-      }
-    }
-  }
-
   private applyProviderConfig(providerName: string, config: ProviderConfigInput): void {
     if (config.oauth) {
-      // Ensure the OAuth provider ID matches the provider name
       const oauthProvider: OAuthProviderInterface = {
         ...config.oauth,
         id: providerName,
@@ -985,32 +926,13 @@ export class ModelRegistry {
     this.storeProviderRequestConfig(providerName, config);
 
     if (config.models && config.models.length > 0) {
-      // Full replacement: remove existing models for this provider
       this.models = this.models.filter((m) => m.provider !== providerName);
 
       for (const modelDef of config.models) {
         const api = modelDef.api || config.api;
         this.storeModelHeaders(providerName, modelDef.id, modelDef.headers);
 
-        this.models.push({
-          id: modelDef.id,
-          name: modelDef.name,
-          api: api as Api,
-          provider: providerName,
-          baseUrl: modelDef.baseUrl ?? config.baseUrl!,
-          reasoning: modelDef.reasoning,
-          thinkingLevelMap: modelDef.thinkingLevelMap,
-          input: modelDef.input,
-          cost: modelDef.cost,
-          contextWindow: modelDef.contextWindow,
-          contextTokens: modelDef.contextTokens,
-          contextWindows: modelDef.contextWindows,
-          contextWindowDefault: modelDef.contextWindowDefault,
-          maxTokens: modelDef.maxTokens,
-          params: modelDef.params,
-          headers: undefined,
-          compat: modelDef.compat,
-        } as Model);
+        this.models.push(this.createRuntimeModel(providerName, config, modelDef, api));
       }
 
       if (config.oauth?.modifyModels) {
@@ -1023,9 +945,6 @@ export class ModelRegistry {
   }
 }
 
-/**
- * Input type for registerProvider API.
- */
 export interface ProviderConfigInput extends ProviderConfigBase {
   auth?: ProviderAuthMode;
   /** OAuth provider for /login support */

@@ -90,7 +90,7 @@ describe("ACP accepted cancellation ownership", () => {
           ]),
         );
         expect(
-          listSessionStateEventsSince(state.target.sessionKey, "codex", 0, 200).events,
+          (await listSessionStateEventsSince(state.target.sessionKey, "codex", 0, 200)).events,
         ).toMatchObject([
           { kind: "run_failed", runId: "snapshot-0", payload: { outcome: "cancelled" } },
           { kind: "run_failed", runId: "snapshot-1", payload: { outcome: "cancelled" } },
@@ -136,7 +136,7 @@ describe("ACP accepted cancellation ownership", () => {
         expect(activeSignal?.aborted).toBe(false);
         expect(state.cancel).not.toHaveBeenCalled();
         expect(
-          listSessionStateEventsSince(state.target.sessionKey, "codex", 0, 200).events,
+          (await listSessionStateEventsSince(state.target.sessionKey, "codex", 0, 200)).events,
         ).toEqual([]);
       } finally {
         release.resolve();
@@ -144,7 +144,7 @@ describe("ACP accepted cancellation ownership", () => {
       }
       expect(state.runTurn).toHaveBeenCalledOnce();
       expect(
-        listSessionStateEventsSince(state.target.sessionKey, "codex", 0, 200).events,
+        (await listSessionStateEventsSince(state.target.sessionKey, "codex", 0, 200)).events,
       ).toMatchObject([{ kind: "run_completed", runId: "same-id" }]);
     });
   });
@@ -200,23 +200,15 @@ describe("ACP accepted cancellation ownership", () => {
     expect(state.runTurn.mock.calls[0]?.[0].text).toBe("beta");
   });
 
-  it.each(["caller", "disposed"] as const)(
-    "settles %s cancellation before actor admission without setup",
-    async (reason) => {
-      const state = fixture();
-      const controller = new AbortController();
-      if (reason === "caller") {
-        controller.abort();
-      } else {
-        await disposeAcpSessionManagerInstance(state.manager, "shutdown");
-      }
-      const { turn, events } = state.startTurn(reason, { signal: controller.signal });
-      await turn;
-      expect(state.ensureSession).not.toHaveBeenCalled();
-      expect(state.runTurn).not.toHaveBeenCalled();
-      expect(events).toEqual([{ type: "done", status: "cancelled", stopReason: "cancel" }]);
-    },
-  );
+  it("settles cancellation after disposal before actor admission without setup", async () => {
+    const state = fixture();
+    await disposeAcpSessionManagerInstance(state.manager, "shutdown");
+    const { turn, events } = state.startTurn("disposed");
+    await turn;
+    expect(state.ensureSession).not.toHaveBeenCalled();
+    expect(state.runTurn).not.toHaveBeenCalled();
+    expect(events).toEqual([{ type: "done", status: "cancelled", stopReason: "cancel" }]);
+  });
 
   it("preserves late runtime cancellation failure instead of claiming a cancelled terminal", async () => {
     const state = fixture();

@@ -32,10 +32,7 @@ const IMMUTABLE_ASSET_CACHE_CONTROL = "public, max-age=31536000, immutable";
 export function createDiffsHttpHandler(params: {
   store: DiffArtifactStore;
   logger?: PluginLogger;
-  allowRemoteViewer?: boolean;
-  trustedProxies?: readonly string[];
-  allowRealIpFallback?: boolean;
-  resolveAccessConfig?: () => {
+  resolveAccessConfig: () => {
     allowRemoteViewer?: boolean;
     trustedProxies?: readonly string[];
     allowRealIpFallback?: boolean;
@@ -51,7 +48,7 @@ export function createDiffsHttpHandler(params: {
   });
 
   return async (req: IncomingMessage, res: ServerResponse): Promise<boolean> => {
-    const parsed = parseRequestUrl(req.url);
+    const parsed = req.url ? URL.parse(req.url, "http://127.0.0.1") : null;
     if (!parsed) {
       return false;
     }
@@ -64,11 +61,7 @@ export function createDiffsHttpHandler(params: {
       return false;
     }
 
-    const accessConfig = params.resolveAccessConfig?.() ?? {
-      allowRemoteViewer: params.allowRemoteViewer,
-      trustedProxies: params.trustedProxies,
-      allowRealIpFallback: params.allowRealIpFallback,
-    };
+    const accessConfig = params.resolveAccessConfig();
     const access = resolveViewerAccess(req, {
       trustedProxies: accessConfig.trustedProxies,
       allowRealIpFallback: accessConfig.allowRealIpFallback,
@@ -133,17 +126,6 @@ export function createDiffsHttpHandler(params: {
       return true;
     }
   };
-}
-
-function parseRequestUrl(rawUrl?: string): URL | null {
-  if (!rawUrl) {
-    return null;
-  }
-  try {
-    return new URL(rawUrl, "http://127.0.0.1");
-  } catch {
-    return null;
-  }
 }
 
 async function serveAsset(

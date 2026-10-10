@@ -40,7 +40,7 @@ import { reviewPrivateComposerDraft } from "./components/private-composer-recove
 import {
   ChatComposerPersistence,
   CHAT_COMPOSER_DRAFT_STORAGE_ERROR,
-  loadChatComposerSnapshot,
+  loadChatComposerState,
   storedChatOutboxScopeKey,
 } from "./composer-persistence.ts";
 import {
@@ -119,6 +119,7 @@ describe("cross-region Home composer ownership", () => {
     const handoff = new ChatPaneComposerHandoff(context, {
       state: () => current,
       owner: () => view.owner,
+      presentationOwner: () => persistence.presentationOwner,
       region: () => region,
       presented: () => view.presented,
       pause: () => persistence.stop(),
@@ -527,7 +528,10 @@ describe("cross-region Home composer ownership", () => {
     "moves edited draft and file back to the already-retained Home (%s, client rotation=%s)",
     (sessionKey, rotateClient) => {
       const context = {} as ApplicationContext;
-      const owner = { recoveryScope: "profile-a" } as GatewayBrowserClient;
+      const owner = {
+        recoveryScope: "profile-a",
+        offlineRecoveryScope: "profile-a",
+      } as GatewayBrowserClient;
       const page = presentation(context, owner, "page", sessionKey);
       page.edit("Home page draft");
       page.view.presented = false;
@@ -554,7 +558,9 @@ describe("cross-region Home composer ownership", () => {
       // persistence must never overwrite the current presentation's newer edit.
       page.current.chatMessage = "stale retained draft";
       page.current.requestUpdate();
-      expect(loadChatComposerSnapshot(dock.current, sessionKey)?.draft).toBe("Edited in the dock");
+      expect(loadChatComposerState(dock.current, sessionKey).snapshot?.draft).toBe(
+        "Edited in the dock",
+      );
       page.view.presented = true;
       page.handoff.claim();
       dock.handoff.dispose();
@@ -563,7 +569,9 @@ describe("cross-region Home composer ownership", () => {
       expect(page.current.chatAttachments).toEqual([file]);
       expect(getChatAttachmentDataUrl(file)).not.toBeNull();
       expect(dock.current.chatAttachments).toEqual([]);
-      expect(loadChatComposerSnapshot(page.current, sessionKey)?.draft).toBe("Edited in the dock");
+      expect(loadChatComposerState(page.current, sessionKey).snapshot?.draft).toBe(
+        "Edited in the dock",
+      );
       expect(activeQueuedMessageEdit(page.current)?.draftText).toBe("unfinished queue correction");
       expect(dock.current.chatQueuedEdit).toBeNull();
       expect(isQueuedMessageBeingEdited(dock.current, queued.id)).toBe(true);
@@ -595,7 +603,10 @@ describe("cross-region Home composer ownership", () => {
     }
     const nextOwner =
       difference === "client" || difference === "unverified-rotation"
-        ? ({ recoveryScope: "profile-a" } as GatewayBrowserClient)
+        ? ({
+            recoveryScope: "profile-a",
+            offlineRecoveryScope: "profile-a",
+          } as GatewayBrowserClient)
         : owner;
     if (difference === "unverified-rotation") {
       page.view.owner = nextOwner;

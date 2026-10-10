@@ -168,6 +168,7 @@ export type DoctorConfigCapture = {
 export type UpdateDoctorWriteAuthority = {
   inputHash: string;
   assertCurrent: () => void;
+  commandAuthority?: import("./update-managed-command-custody.js").ManagedCommandProcessAuthority;
   postCoreSchemaRepair?: { runId: string; assertCurrent: () => void };
   databaseGenerations?: UpdateDatabaseGenerations;
   originalRecoveryCapture?: {
@@ -238,9 +239,13 @@ export function createUpdateDoctorDatabaseWriteCapture(
     },
     async settle() {
       const generations = await read();
-      if (generations) {
+      if (generations && expectedGenerations) {
+        // Maintenance excludes Gateway writers, not independent SQLite writers.
+        // Without transaction attribution, even Doctor-time changes are unknown.
+        unchanged &&= Object.entries(expectedGenerations).every(
+          ([pathname, generation]) => generations[pathname] === generation,
+        );
         receipt = { unchanged, fromGenerations, generations };
-        expectedGenerations = generations;
       }
     },
   };

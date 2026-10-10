@@ -1,21 +1,12 @@
 import {
   buildChannelOutboundSessionRoute,
+  stripChannelTargetPrefix,
   type ChannelOutboundSessionRouteParams,
 } from "openclaw/plugin-sdk/core";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
-
-function stripZalouserTargetPrefix(raw: string): string {
-  return raw
-    .trim()
-    .replace(/^(zalouser|zlu):/i, "")
-    .trim();
-}
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export function normalizeZalouserTarget(raw: string): string | undefined {
-  const trimmed = stripZalouserTargetPrefix(raw);
+  const trimmed = stripChannelTargetPrefix(raw, "zalouser", "zlu");
   if (!trimmed) {
     return undefined;
   }
@@ -51,13 +42,12 @@ export function parseZalouserOutboundTarget(raw: string): {
   if (!normalized) {
     throw new Error("Zalouser target is required");
   }
-  const lowered = normalizeLowercaseStringOrEmpty(normalized);
-  if (lowered.startsWith("group:")) {
-    const threadId = normalized.slice("group:".length).trim();
+  if (normalized.startsWith("group:")) {
+    const threadId = normalized.slice("group:".length);
     return { threadId, isGroup: true };
   }
-  if (lowered.startsWith("user:")) {
-    const threadId = normalized.slice("user:".length).trim();
+  if (normalized.startsWith("user:")) {
+    const threadId = normalized.slice("user:".length);
     return { threadId, isGroup: false };
   }
   // Backward-compatible fallback for bare IDs.
@@ -70,11 +60,10 @@ export function parseZalouserDirectoryGroupId(raw: string): string {
   if (!normalized) {
     throw new Error("Zalouser group target is required");
   }
-  const lowered = normalizeLowercaseStringOrEmpty(normalized);
-  if (lowered.startsWith("group:")) {
-    return normalized.slice("group:".length).trim();
+  if (normalized.startsWith("group:")) {
+    return normalized.slice("group:".length);
   }
-  if (lowered.startsWith("user:")) {
+  if (normalized.startsWith("user:")) {
     throw new Error("Zalouser group members lookup requires a group target (group:<id>)");
   }
   return normalized;
@@ -85,8 +74,8 @@ export function resolveZalouserOutboundSessionRoute(params: ChannelOutboundSessi
   if (!normalized) {
     return null;
   }
-  const isGroup = (normalizeOptionalLowercaseString(normalized) ?? "").startsWith("group:");
-  const peerId = normalized.replace(/^(group|user):/i, "").trim();
+  const isGroup = normalized.startsWith("group:");
+  const peerId = normalized.replace(/^(group|user):/i, "");
   return buildChannelOutboundSessionRoute({
     cfg: params.cfg,
     agentId: params.agentId,

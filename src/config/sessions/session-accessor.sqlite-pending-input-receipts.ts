@@ -11,6 +11,7 @@ import {
   resolveSqliteTranscriptScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
+import type { SessionPendingInputReceipt } from "./session-history-read.types.js";
 
 type PendingInputScope = SessionAccessScope & { agentId: string; sessionId: string };
 const receiptSchemas = new WeakMap<SqliteSchemaFacts, boolean>();
@@ -19,10 +20,7 @@ const receiptSchemas = new WeakMap<SqliteSchemaFacts, boolean>();
 export function listSessionPendingInputReceipts(
   scope: PendingInputScope,
   options: { runIds: readonly string[] },
-): Array<
-  | { runId: string; state: "pending"; cancelled?: true }
-  | { runId: string; state: "consumed"; consumedByEventId: string }
-> {
+): SessionPendingInputReceipt[] {
   if (options.runIds.length > 50) {
     throw new Error("Pending input receipt lookup accepts at most 50 run IDs");
   }

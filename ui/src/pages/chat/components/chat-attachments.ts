@@ -14,10 +14,10 @@ import {
   generateAttachmentId,
   getChatAttachmentPreviewUrl,
   registerChatAttachmentPayload,
-  releaseChatAttachmentPayload,
 } from "../attachment-payload-store.ts";
 import { admitAttachmentFiles, chatAttachmentBatchBytes } from "./chat-attachment-admission.ts";
 import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.types.ts";
+import { currentAttachments, removeDraftAttachment } from "./chat-attachment-draft.ts";
 import { renderAttachmentFileIcon } from "./chat-attachment-file-icon.ts";
 import { renderCompactAttachmentFile } from "./chat-attachment-file.ts";
 import { dataImageClipboardFile } from "./chat-attachment-image.ts";
@@ -32,8 +32,6 @@ import { isPastedTextAttachment } from "./chat-pasted-text.ts";
 import { renderChatSelectionAnnotations } from "./chat-selection-annotations.ts";
 
 const LARGE_PASTE_TEXT_THRESHOLD = 1000;
-const LARGE_PASTE_TEXT_MIME_TYPE = "text/plain";
-const LARGE_PASTE_TEXT_FILE_PREFIX = "pasted-text-";
 
 function isFileDrag(dataTransfer: DataTransfer | null): boolean {
   return Array.from(dataTransfer?.types ?? []).includes("Files");
@@ -68,10 +66,6 @@ function isEditableDropTarget(event: DragEvent): boolean {
   return editable instanceof HTMLElement && editable.isContentEditable;
 }
 
-function currentAttachments(props: ChatAttachmentControlsProps): ChatAttachment[] {
-  return props.getAttachments?.() ?? props.attachments ?? [];
-}
-
 /** Decoded bytes already committed to the next send: ready attachments plus in-flight reads. */
 export function stagedAttachmentBytes(
   props: ChatAttachmentControlsProps,
@@ -98,44 +92,6 @@ function chatAttachmentFromFile(
   return registerChatAttachmentPayload({ attachment, dataUrl, file });
 }
 
-function handleLargeTextPaste(e: ClipboardEvent, props: ChatAttachmentControlsProps): boolean {
-  if (!props.onAttachmentsChange || !uploadsEnabled(props.uploadConfig)) {
-    // Large text remains ordinary native paste instead of becoming a file.
-    return false;
-  }
-  const text = e.clipboardData?.getData("text/plain");
-  if (!text || text.length <= LARGE_PASTE_TEXT_THRESHOLD) {
-    return false;
-  }
-  e.preventDefault();
-  const file = new File([text], `${LARGE_PASTE_TEXT_FILE_PREFIX}${Date.now()}.txt`, {
-    type: LARGE_PASTE_TEXT_MIME_TYPE,
-  });
-  const stagedBytes = stagedAttachmentBytes(props);
-  if (admitAttachmentFiles([file], props.attachmentLimits, stagedBytes).length === 0) {
-    // The rejection toast named the file; the clipboard still holds the text.
-    return true;
-  }
-  const attachment = chatAttachmentFromFile(file, encodeTextAsDataUrl(text), "paste");
-  props.onAttachmentsChange([...currentAttachments(props), attachment]);
-  return true;
-}
-
-/** Normalize clipboard images for the loaded composers. */
-function readChatClipboardImages(clipboard: DataTransfer | null): {
-  files: File[];
-  inline?: { file: File; dataUrl: string };
-} {
-  const files = Array.from(clipboard?.items ?? [])
-    .filter((item) => item.type.startsWith("image/"))
-    .map((item) => item.getAsFile())
-    .filter((file): file is File => file !== null);
-  const text = files.length === 0 ? clipboard?.getData("text/plain") : undefined;
-  const inline = text ? dataImageClipboardFile(text) : null;
-  return inline ? { files: [inline.file], inline } : { files };
-}
-
-/** Builds a registered chat attachment from a base64 image data URL. */
 export function chatAttachmentFromDataUrl(
   dataUrl: string,
   fileName: string,
@@ -210,13 +166,31 @@ export function handleChatAttachmentPaste(
       e.preventDefault();
       showToast({ message: uploadsDisabledMessage() });
     }
+    // Large text remains ordinary native paste instead of becoming a file.
     return;
   }
-  const { files: imageFiles, inline: pasted } = readChatClipboardImages(e.clipboardData);
+  const imageFiles = Array.from(e.clipboardData.items ?? [])
+    .filter((item) => item.type.startsWith("image/"))
+    .map((item) => item.getAsFile())
+    .filter((file): file is File => file !== null);
+  const text = imageFiles.length === 0 ? e.clipboardData.getData("text/plain") : undefined;
+  const pasted = text ? dataImageClipboardFile(text) : null;
+  if (pasted) {
+    imageFiles.push(pasted.file);
+  }
   if (imageFiles.length === 0) {
-    if (!options.imagesOnly) {
-      handleLargeTextPaste(e, props);
+    if (options.imagesOnly || !text || text.length <= LARGE_PASTE_TEXT_THRESHOLD) {
+      return;
     }
+    e.preventDefault();
+    const file = new File([text], `pasted-text-${Date.now()}.txt`, { type: "text/plain" });
+    const stagedBytes = stagedAttachmentBytes(props);
+    if (admitAttachmentFiles([file], props.attachmentLimits, stagedBytes).length === 0) {
+      // The rejection toast named the file; the clipboard still holds the text.
+      return;
+    }
+    const attachment = chatAttachmentFromFile(file, encodeTextAsDataUrl(text), "paste");
+    props.onAttachmentsChange([...currentAttachments(props), attachment]);
     return;
   }
   e.preventDefault();
@@ -246,6 +220,9 @@ type ChatAttachmentDropProps = ChatAttachmentControlsProps & {
 export function createChatAttachmentDropHandlers(props: ChatAttachmentDropProps) {
   let depth = 0;
   const setActive = (event: DragEvent, active: boolean) => {
+    if (isFileDrag(event.dataTransfer)) {
+      event.stopPropagation();
+    }
     const target = event.currentTarget;
     if (!(target instanceof HTMLElement)) {
       return;
@@ -272,18 +249,8 @@ export function createChatAttachmentDropHandlers(props: ChatAttachmentDropProps)
     }
   };
   return {
-    onDragenter: (event: DragEvent) => {
-      if (isFileDrag(event.dataTransfer)) {
-        event.stopPropagation();
-      }
-      setActive(event, true);
-    },
-    onDragleave: (event: DragEvent) => {
-      if (isFileDrag(event.dataTransfer)) {
-        event.stopPropagation();
-      }
-      setActive(event, false);
-    },
+    onDragenter: (event: DragEvent) => setActive(event, true),
+    onDragleave: (event: DragEvent) => setActive(event, false),
     onDragover: (event: DragEvent) => {
       if (!isFileDrag(event.dataTransfer)) {
         if (!isEditableDropTarget(event)) {
@@ -316,19 +283,6 @@ export function createChatAttachmentDropHandlers(props: ChatAttachmentDropProps)
       }
     },
   };
-}
-
-function removeBrowserAnnotationAttachment(
-  attachment: ChatAttachment,
-  props: ChatAttachmentControlsProps,
-): void {
-  if (props.onRemoveAttachment) {
-    props.onRemoveAttachment(attachment);
-    return;
-  }
-  const next = currentAttachments(props).filter((candidate) => candidate.id !== attachment.id);
-  releaseChatAttachmentPayload(attachment.id);
-  props.onAttachmentsChange?.(next);
 }
 
 function renderAttachmentImage(
@@ -406,7 +360,10 @@ function renderBrowserAnnotationAttachment(
           type="button"
           aria-label=${removeLabel}
           ?disabled=${props.disabled}
-          @click=${() => removeBrowserAnnotationAttachment(attachment, props)}
+          @click=${() =>
+            props.onRemoveAttachment
+              ? props.onRemoveAttachment(attachment)
+              : removeDraftAttachment(attachment, props)}
         >
           ${icons.x}
         </button>
@@ -516,9 +473,7 @@ export function renderAttachmentPreview(props: ChatAttachmentControlsProps) {
                         ?disabled=${props.disabled}
                         @click=${() => {
                           props.attachmentReads?.remove(entry);
-                          const next = currentAttachments(props).filter((a) => a.id !== att.id);
-                          releaseChatAttachmentPayload(att.id);
-                          props.onAttachmentsChange?.(next);
+                          removeDraftAttachment(att, props);
                         }}
                       >
                         ${icons.x}

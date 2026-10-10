@@ -171,7 +171,7 @@ describe("cli json stdout contract", () => {
         expect(human.stdout).not.toContain(migrationDiagnostic);
         expect(human.stderr).toContain(migrationDiagnostic);
         expect(human.stdout).toContain(
-          "A running Gateway applies the updated catalog after its next restart.",
+          "A running Gateway applies the update on its next catalog check, without restarting.",
         );
 
         const updated = runRefresh(["refresh", "--json"], "updated");

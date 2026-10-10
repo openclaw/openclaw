@@ -7,7 +7,7 @@ import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import * as leaseAcquisition from "../state/openclaw-state-lease-acquisition.js";
 import {
   refreshPersistedInstalledPluginIndex,
-  writePersistedInstalledPluginIndexWithLeaseSync,
+  writePersistedInstalledPluginIndex,
 } from "./installed-plugin-index-store-write.js";
 import { readPersistedInstalledPluginIndexSync } from "./installed-plugin-index-store.js";
 import {
@@ -62,10 +62,10 @@ it.each(["manual", "committed-config", "committed-config-default"] as const)(
     const warn = vi.fn();
     let refreshing: Promise<unknown> | undefined;
     try {
-      await withPluginLifecycleLease({ env }, async (lease) => {
-        writePersistedInstalledPluginIndexWithLeaseSync(
+      await withPluginLifecycleLease({ env }, async () => {
+        await writePersistedInstalledPluginIndex(
           createInstalledPluginIndex({ installRecords: {}, plugins: [] }),
-          { env, lease },
+          { env },
         );
         refreshing = runOutsidePluginLifecycleLease(async () =>
           entry === "manual"
@@ -85,9 +85,9 @@ it.each(["manual", "committed-config", "committed-config-default"] as const)(
             refreshing.then(() => "committed"),
           ]),
         ).toBe("held");
-        writePersistedInstalledPluginIndexWithLeaseSync(
+        await writePersistedInstalledPluginIndex(
           createInstalledPluginIndex({ installRecords: latestRecords, plugins: [] }),
-          { env, lease },
+          { env },
         );
       });
       await refreshing;

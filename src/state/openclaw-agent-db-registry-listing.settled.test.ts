@@ -1,7 +1,12 @@
+import fs from "node:fs";
 import path from "node:path";
-import type { DatabaseSync } from "node:sqlite";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
+import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
+import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
 import { prepareOpenClawAgentDatabaseRegistrySnapshotRead } from "./openclaw-agent-db-registry-listing.js";
 import { readRegisteredAgentDatabaseRows } from "./openclaw-agent-db-registry.read.js";
@@ -10,6 +15,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "./openclaw-state-db.js";
+import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
@@ -30,6 +36,95 @@ function createRegistry(malformed: boolean) {
   closeOpenClawStateDatabaseForTest();
   return options;
 }
+
+it("reuses migration admission across registry writes and refuses a changed legacy schema", () => {
+  const options = createRegistry(false);
+  const { db } = openOpenClawStateDatabase(options);
+  const read = (artifactPreserving = false) =>
+    runSqliteReadOperationSync(db, () =>
+      readRegisteredAgentDatabaseRows(db, options.path, artifactPreserving),
+    );
+  const probes = trackSqliteStatementExecutions(db, ["legacyWatches", "auditSchema"], (sql) =>
+    sql.includes('from "session_watch_cursors"')
+      ? "legacyWatches"
+      : /\bPRAGMA\s+(?:table_info|index_list|index_info)\([^)]*audit_/iu.test(sql)
+        ? "auditSchema"
+        : null,
+  );
+  try {
+    expect(read()).toEqual([]);
+    expect(probes.counts.legacyWatches).toBe(1);
+    expect(probes.counts.auditSchema).toBe(0);
+    db.exec(`INSERT INTO agent_databases (agent_id, path, schema_version, last_seen_at, size_bytes)
+      VALUES ('worker', 'agents/worker/openclaw-agent.sqlite', 1, 10, NULL)`);
+    expect(read()).toEqual([
+      {
+        agentId: "worker",
+        path: path.join(options.env.OPENCLAW_STATE_DIR, "agents/worker/openclaw-agent.sqlite"),
+        schemaVersion: 1,
+        lastSeenAt: 10,
+        sizeBytes: null,
+      },
+    ]);
+    expect(probes.counts.legacyWatches).toBe(1);
+
+    db.exec("ALTER TABLE session_watch_cursors DROP COLUMN provenance");
+    expect(() => read()).toThrow("legacy agent database registry schema");
+    expect(read(true)).toHaveLength(1);
+    db.exec(`DROP TABLE agent_databases;
+      CREATE TABLE agent_databases (agent_id TEXT PRIMARY KEY, path TEXT, schema_version INTEGER,
+        last_seen_at INTEGER, size_bytes INTEGER)`);
+    expect(() => read(true)).toThrow("unsupported agent database registry schema");
+  } finally {
+    probes.restore();
+  }
+});
+
+it.each(["native", "replacement"] as const)(
+  "refuses audit contract drift after %s schema changes and accepts repaired facts",
+  (source) => {
+    const options = createRegistry(false);
+    let db = openNodeSqliteDatabase(options.path);
+    const changeSchema = (sql: string) => {
+      if (source === "native") {
+        db.exec(sql);
+        return;
+      }
+      db.close();
+      const replacementPath = `${options.path}.replacement`;
+      fs.copyFileSync(options.path, replacementPath);
+      const replacement = new DatabaseSync(replacementPath);
+      try {
+        replacement.exec(sql);
+      } finally {
+        replacement.close();
+      }
+      fs.renameSync(replacementPath, options.path);
+      db = openNodeSqliteDatabase(options.path);
+    };
+    const read = () =>
+      runSqliteReadOperationSync(db, () =>
+        readRegisteredAgentDatabaseRows(db, options.path, false),
+      );
+    try {
+      expect(read()).toEqual([]);
+      for (const [table, constraint, replacement] of [
+        ["audit_events", "source_id TEXT NOT NULL UNIQUE", "source_id TEXT NOT NULL"],
+        ["audit_identity_keys", "CHECK (id = 1)", "CHECK (id >= 1)"],
+      ] as const) {
+        const canonical = extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, table);
+        const malformed = canonical.replace(constraint, replacement);
+        expect(malformed).not.toBe(canonical);
+        changeSchema(`DROP TABLE ${table}; ${malformed}`);
+        expect(() => read()).toThrow("legacy agent database registry schema");
+        changeSchema(`DROP TABLE ${table}; ${canonical}`);
+        expect(read()).toEqual([]);
+      }
+    } finally {
+      db.close();
+    }
+  },
+);
 
 it("returns registry unavailability only after the fixed native read and worker settle", async () => {
   const options = createRegistry(true);

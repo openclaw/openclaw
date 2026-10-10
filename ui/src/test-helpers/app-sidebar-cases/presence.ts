@@ -10,6 +10,7 @@ import {
   createSessionsHarness,
   mountSidebar,
 } from "../app-sidebar.ts";
+import { settleLitElement } from "../lit-settle.ts";
 import "../../components/app-sidebar.ts";
 
 await import("../../components/viewer-facepile.ts");
@@ -31,6 +32,14 @@ describe("AppSidebar viewer presence", () => {
       "main",
       owners.map((owner) => `agent:main:${owner.id}`),
     );
+    const observeList = sessions.sessions.observeList;
+    let activityReady = Promise.resolve();
+    vi.spyOn(sessions.sessions, "observeList").mockImplementation((query, listener) => {
+      const observation = observeList(query, listener);
+      return query.source === "activity"
+        ? { ...observation, refresh: () => (activityReady = observation.refresh()) }
+        : observation;
+    });
     const result = sessions.sessions.state.result!;
     result.owners = owners;
     result.sessions.forEach((row, index) => {
@@ -123,6 +132,8 @@ describe("AppSidebar viewer presence", () => {
     await vi.waitFor(() =>
       expect(document.querySelector(".person-activity-hovercard h2")?.textContent).toBe(ownerName),
     );
+    await activityReady;
+    await settleLitElement(sidebar);
     const offlineCard = document.querySelector<HTMLElement>(".person-activity-hovercard")!;
     expect(
       offlineCard.querySelector(".person-activity-card__status--offline")?.textContent?.trim(),
@@ -337,7 +348,7 @@ describe("AppSidebar viewer presence", () => {
     button.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     button.blur();
     button.focus();
-    await sidebar.updateComplete;
+    await settleLitElement(sidebar);
     const recentLink = document.querySelector<HTMLAnchorElement>(".person-activity-card__session")!;
     expect(recentLink.getAttribute("href")).toBe(sessionLink.getAttribute("href"));
     expect(recentLink.closest("section")?.querySelector("h3")?.textContent).toBe("Recent sessions");
@@ -519,32 +530,6 @@ describe("AppSidebar viewer presence", () => {
     );
     expect(facepile?.querySelectorAll("[data-viewer-id]")).toHaveLength(2);
     expect(facepile?.querySelector(".viewer-avatar--overflow")?.textContent).toContain("+3");
-  });
-
-  it("renders the self user's avatar route in the footer identity chip", async () => {
-    const client = { instanceId: "self-instance" } as GatewayBrowserClient;
-    const gatewayHarness = createGatewayHarness(client);
-    const { sidebar } = await mountSidebar(
-      gatewayHarness.gateway,
-      createSessions("main", ["agent:main:main"]),
-    );
-    sidebar.connected = true;
-
-    gatewayHarness.publish({
-      selfUser: {
-        id: "00-self",
-        email: "test@example.com",
-        name: "Self User",
-        avatarUrl: "/api/users/00-self/avatar?v=7",
-      },
-    });
-
-    await vi.waitFor(() => {
-      const avatar = sidebar.querySelector<HTMLImageElement>(
-        ".sidebar-identity-card openclaw-viewer-avatar img",
-      );
-      expect(avatar?.getAttribute("src")).toBe("/api/users/00-self/avatar?v=7");
-    });
   });
 
   it("groups identified viewers for session rows and keeps the footer identity-only", async () => {

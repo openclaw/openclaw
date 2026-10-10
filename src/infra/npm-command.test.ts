@@ -17,26 +17,16 @@ afterEach(() => {
 });
 
 describe("npm invocation", () => {
-  it("preserves PATH npm and its arguments under Node", () => {
-    Object.defineProperty(process, "versions", { value: { ...originalVersions, bun: undefined } });
+  it.each([
+    { bun: undefined, args: ["view", "@openclaw/irc", "version"], command: ["npm"] },
+    { bun: "1.4.2", args: ["install", "--ignore-scripts"], command: [process.execPath, cliPath] },
+  ])("preserves npm arguments with Bun version $bun", ({ bun, args, command }) => {
+    Object.defineProperty(process, "versions", { value: { ...originalVersions, bun } });
     const stat = vi.spyOn(fs, "statSync");
-    expect(resolveNpmCommand(["view", "@openclaw/irc", "version"])).toEqual([
-      "npm",
-      "view",
-      "@openclaw/irc",
-      "version",
-    ]);
-    expect(stat).not.toHaveBeenCalled();
-  });
-
-  it("runs the bundled CLI with the current Bun executable", () => {
-    Object.defineProperty(process, "versions", { value: { ...originalVersions, bun: "1.4.2" } });
-    expect(resolveNpmCommand(["install", "--ignore-scripts"])).toEqual([
-      process.execPath,
-      cliPath,
-      "install",
-      "--ignore-scripts",
-    ]);
+    expect(resolveNpmCommand(args)).toEqual([...command, ...args]);
+    if (!bun) {
+      expect(stat).not.toHaveBeenCalled();
+    }
   });
 
   it("fails with a typed missing-file error instead of falling back to PATH npm", () => {

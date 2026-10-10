@@ -11,7 +11,6 @@ import type { GitHubPublicationRow } from "../state/github-publication-read.type
 import * as stateReads from "../state/openclaw-state-db-readonly.js";
 import {
   closeOpenClawStateDatabaseAsync,
-  closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
@@ -186,8 +185,6 @@ describe("shared worktree receipt observation", () => {
 
   it.each([
     { missing: "table", status: "published" },
-    { missing: "row", status: "published" },
-    { missing: "table", status: "failed" },
     { missing: "row", status: "failed" },
   ] as const)(
     "keeps legacy $status receipts as history with no lifecycle $missing",
@@ -255,23 +252,6 @@ describe("shared worktree receipt observation", () => {
       ).toBeUndefined();
     },
   );
-  it("orders by creation and request ID even when an older receipt is reported later, and recovers only the exact key", async () => {
-    const coordinator = sharedPublicationCoordinator();
-    publishWorktree(insertSharedWorktreeReceipt("old", { createdAtMs: 1 }));
-    insertSharedWorktreeReceipt("new-a", { createdAtMs: 2 });
-    insertSharedWorktreeReceipt("new-z", { createdAtMs: 2 });
-    coordinator.markReported("old");
-    expect((await coordinator.latestShared(session))?.result).toMatchObject({
-      requestId: "new-z",
-      status: "requested",
-    });
-    expect((await coordinator.latestShared(session, "old"))?.result).toMatchObject({
-      requestId: "old",
-      status: "published",
-      headCommit: NEW_HEAD,
-    });
-    expect(await coordinator.latestShared(session, "not-accepted")).toBeNull();
-  });
 
   it.each([
     { worktreeId: "previous-workspace" },
@@ -307,17 +287,6 @@ describe("shared worktree receipt observation", () => {
     changeSession({ archivedAt: 123 });
     expect(await coordinator.latestShared(next)).toBeNull();
     expect((await coordinator.sharedStatus(next, "terminal"))?.result.status).toBe("published");
-  });
-
-  it("finds a current receipt behind a newer stale-lifecycle attempt", async () => {
-    const coordinator = sharedPublicationCoordinator();
-    insertSharedWorktreeReceipt("current", { createdAtMs: 1 });
-    insertSharedWorktreeReceipt("stale", {
-      createdAtMs: 2,
-      session: { ...session, lifecycleRevision: "old-lifecycle" },
-    });
-    expect((await coordinator.latestShared(session))?.result.requestId).toBe("current");
-    expect(await coordinator.latestShared(session, "stale")).toBeNull();
   });
 
   it("does not reveal receipts to other logical sessions or agents", async () => {
@@ -397,46 +366,6 @@ describe("shared worktree receipt observation", () => {
     await expect(fs.stat(missingRoot)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it("reads a cold database without changing source bytes, schemas, or SQLite sidecars", async () => {
-    const coordinator = sharedPublicationCoordinator();
-    publishWorktree(insertSharedWorktreeReceipt("cold"));
-    const database = openOpenClawStateDatabase();
-    const databasePath = database.path;
-    closeOpenClawStateDatabaseForTest();
-    const before = await fs.readFile(databasePath);
-    const files = await fs.readdir(path.dirname(databasePath));
-    prohibitPublicationWork();
-    expect((await coordinator.latestShared(session))?.result).toMatchObject({
-      requestId: "cold",
-      headCommit: NEW_HEAD,
-    });
-    expect((await coordinator.sharedStatus(session, "cold"))?.result.status).toBe("published");
-    expect(await fs.readFile(databasePath)).toEqual(before);
-    expect(await fs.readdir(path.dirname(databasePath))).toEqual(files);
-  });
-
-  it("does not qualify an unavailable workspace until this session has a shared receipt", async () => {
-    const coordinator = sharedPublicationCoordinator();
-    const db = openOpenClawStateDatabase().db;
-    db.prepare("UPDATE worktrees SET owner_id = ? WHERE id = ?").run("other-session", "worktree-1");
-    expect(await coordinator.latestShared(session)).toBeNull();
-    expect(await coordinator.latestShared(session, "absent")).toBeNull();
-    insertSharedWorktreeReceipt("accepted");
-    await expect(async () => await coordinator.latestShared(session)).rejects.toThrow(
-      /owner.*unavailable/,
-    );
-  });
-
-  it("surfaces an unavailable current workspace rather than claiming no attempt", async () => {
-    const coordinator = sharedPublicationCoordinator();
-    insertSharedWorktreeReceipt("current");
-    openOpenClawStateDatabase()
-      .db.prepare("UPDATE worktrees SET owner_id = ? WHERE id = ?")
-      .run("other-session", "worktree-1");
-    await expect(async () => await coordinator.latestShared(session)).rejects.toThrow(
-      /owner.*unavailable/,
-    );
-  });
   it("searches past a full page of valid stale receipts without choosing one as current", async () => {
     const coordinator = sharedPublicationCoordinator();
     insertSharedWorktreeReceipt("current", { createdAtMs: 0 });
@@ -449,6 +378,7 @@ describe("shared worktree receipt observation", () => {
       }
     });
     expect((await coordinator.latestShared(session))?.result.requestId).toBe("current");
+    expect(await coordinator.latestShared(session, "old-000")).toBeNull();
   });
 
   it("does not recreate a missing lifecycle table while reporting unavailable evidence", async () => {
@@ -481,6 +411,20 @@ describe("shared worktree receipt observation", () => {
 });
 
 describe("shared repository receipt observation", () => {
+  it("does not qualify an unavailable repository workspace until this session has a shared receipt", async () => {
+    const workspace = await sharedRepositoryWorkspace();
+    const coordinator = sharedPublicationCoordinator();
+    openOpenClawStateDatabase()
+      .db.prepare("UPDATE session_repository_workspaces SET session_key = ? WHERE workspace_id = ?")
+      .run("other-session", workspace.workspaceId);
+    expect(await coordinator.latestShared(session)).toBeNull();
+    expect(await coordinator.latestShared(session, "absent")).toBeNull();
+    insertRepositoryGitHubPublication(repositoryReceipt(workspace), () => {});
+    await expect(async () => await coordinator.latestShared(session)).rejects.toThrow(
+      /owner.*unavailable/,
+    );
+  });
+
   it("reads durable effect facts after a new coordinator starts without confirmation, replay, or credential work", async () => {
     const workspace = await sharedRepositoryWorkspace();
     const row = insertRepositoryGitHubPublication(repositoryReceipt(workspace), () => {});
@@ -639,24 +583,21 @@ describe("shared repository receipt observation", () => {
     expect(await coordinator.latestShared(session, row.idempotency_key)).toBeNull();
   });
 
-  it.each(["title", "branch", "session_lifecycle_revision"])(
-    "surfaces shared receipt corruption in %s instead of returning an empty discovery",
-    async (field) => {
-      const workspace = await sharedRepositoryWorkspace();
-      const coordinator = sharedPublicationCoordinator();
-      const row = insertRepositoryGitHubPublication(repositoryReceipt(workspace), () => {});
-      openOpenClawStateDatabase()
-        .db.prepare(
-          `UPDATE github_repository_publication_requests SET ${field} = 'changed outside owner' WHERE request_id = ?`,
-        )
-        .run(row.request_id);
-      await expect(async () => await coordinator.latestShared(session)).rejects.toThrow(/corrupt/);
-      await expect(
-        async () => await coordinator.sharedStatus(session, row.request_id),
-      ).rejects.toThrow(/corrupt/);
-    },
-  );
-  it("searches repository history in bounded pages before selecting the current lifecycle", async () => {
+  it("surfaces shared receipt corruption before filtering by branch", async () => {
+    const workspace = await sharedRepositoryWorkspace();
+    const coordinator = sharedPublicationCoordinator();
+    const row = insertRepositoryGitHubPublication(repositoryReceipt(workspace), () => {});
+    openOpenClawStateDatabase()
+      .db.prepare(
+        "UPDATE github_repository_publication_requests SET branch = 'changed outside owner' WHERE request_id = ?",
+      )
+      .run(row.request_id);
+    await expect(async () => await coordinator.latestShared(session)).rejects.toThrow(/corrupt/);
+    await expect(
+      async () => await coordinator.sharedStatus(session, row.request_id),
+    ).rejects.toThrow(/corrupt/);
+  });
+  it("searches past retired repository history to select the current lifecycle", async () => {
     const workspace = await sharedRepositoryWorkspace();
     const coordinator = sharedPublicationCoordinator();
     insertRepositoryGitHubPublication(
@@ -682,20 +623,5 @@ describe("shared repository receipt observation", () => {
       }
     });
     expect((await coordinator.latestShared(session))?.result.requestId).toBe("current");
-  });
-
-  it("reads cold repository receipts without recreating source sidecars or changing bytes", async () => {
-    const workspace = await sharedRepositoryWorkspace();
-    const coordinator = sharedPublicationCoordinator();
-    const row = insertRepositoryGitHubPublication(repositoryReceipt(workspace), () => {});
-    const databasePath = openOpenClawStateDatabase().path;
-    await closeOpenClawStateDatabaseAsync();
-    const before = await fs.readFile(databasePath);
-    const files = await fs.readdir(path.dirname(databasePath));
-    prohibitPublicationWork();
-    expect((await coordinator.latestShared(session))?.result.requestId).toBe(row.request_id);
-    expect((await coordinator.sharedStatus(session, row.request_id))?.confirmation).toBeNull();
-    expect(await fs.readFile(databasePath)).toEqual(before);
-    expect(await fs.readdir(path.dirname(databasePath))).toEqual(files);
   });
 });

@@ -1,7 +1,8 @@
 // Covers compaction sanitization for toolResult details and runtime context.
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import type { AssistantMessage, ToolResultMessage } from "openclaw/plugin-sdk/llm";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { estimateMessagesTokens, summarizeCompactionHistory } from "./compaction.js";
 import { makeAgentAssistantMessage } from "./test-helpers/agent-message-fixtures.js";
 
 const agentSessionMocks = vi.hoisted(() => ({
@@ -16,9 +17,6 @@ vi.mock("./sessions/index.js", async () => {
   };
 });
 
-let estimateMessagesTokens: typeof import("./compaction.js").estimateMessagesTokens;
-let summarizeInStages: typeof import("./compaction.js").summarizeInStages;
-
 function makeAssistantToolCall(timestamp: number): AssistantMessage {
   return makeAgentAssistantMessage({
     content: [{ type: "toolCall", id: "call_1", name: "browser", arguments: { action: "tabs" } }],
@@ -30,7 +28,7 @@ function makeAssistantToolCall(timestamp: number): AssistantMessage {
 
 function makeToolResultWithDetails(timestamp: number): ToolResultMessage<{ raw: string }> {
   // The raw detail intentionally looks prompt-like; it must never reach summary
-  // generation or token oversize checks.
+  // generation or token estimation.
   return {
     role: "toolResult",
     toolCallId: "call_1",
@@ -43,10 +41,6 @@ function makeToolResultWithDetails(timestamp: number): ToolResultMessage<{ raw: 
 }
 
 describe("compaction toolResult details stripping", () => {
-  beforeAll(async () => {
-    ({ estimateMessagesTokens, summarizeInStages } = await import("./compaction.js"));
-  });
-
   beforeEach(() => {
     agentSessionMocks.generateSummary.mockReset();
     agentSessionMocks.generateSummary.mockResolvedValue("summary");
@@ -56,16 +50,13 @@ describe("compaction toolResult details stripping", () => {
     const assistant = makeAssistantToolCall(1);
     const messages: AgentMessage[] = [structuredClone(assistant), makeToolResultWithDetails(2)];
 
-    const summary = await summarizeInStages({
-      parts: 1,
+    const summary = await summarizeCompactionHistory({
       messages,
       // Minimal shape; compaction won't use these fields in our mocked generateSummary.
       model: { id: "mock", name: "mock", contextWindow: 10000, maxTokens: 1000 } as never,
       apiKey: "test", // pragma: allowlist secret
       signal: new AbortController().signal,
       reserveTokens: 100,
-      maxChunkTokens: 5000,
-      contextWindow: 10000,
     });
 
     expect(summary).toBe("summary");
@@ -110,15 +101,12 @@ describe("compaction toolResult details stripping", () => {
       assistant,
     ];
 
-    await summarizeInStages({
-      parts: 1,
+    await summarizeCompactionHistory({
       messages,
       model: { id: "mock", name: "mock", contextWindow: 10000, maxTokens: 1000 } as never,
       apiKey: "test", // pragma: allowlist secret
       signal: new AbortController().signal,
       reserveTokens: 100,
-      maxChunkTokens: 5000,
-      contextWindow: 10000,
     });
 
     expect(agentSessionMocks.generateSummary).toHaveBeenCalledTimes(1);
@@ -135,7 +123,7 @@ describe("compaction toolResult details stripping", () => {
     expect(serialized).not.toContain("secret runtime context");
   });
 
-  it("ignores toolResult.details when estimating compaction tokens", () => {
+  it("ignores toolResult.details and runtime context when estimating compaction tokens", () => {
     const toolResult: ToolResultMessage<{ raw: string }> = {
       role: "toolResult",
       toolCallId: "call_1",
@@ -145,9 +133,16 @@ describe("compaction toolResult details stripping", () => {
       details: { raw: "x".repeat(100_000) },
       timestamp: 2,
     };
+    const runtimeContext: AgentMessage = {
+      role: "custom",
+      customType: "openclaw.runtime-context",
+      content: "x".repeat(100_000),
+      display: false,
+      timestamp: 3,
+    };
 
-    // Sanitization strips details before estimation; the raw payload must
-    // never inflate compaction token pressure.
-    expect(estimateMessagesTokens([toolResult])).toBeLessThan(1_000);
+    // Sanitization strips both before estimation; neither payload may inflate
+    // compaction token pressure.
+    expect(estimateMessagesTokens([toolResult, runtimeContext])).toBeLessThan(1_000);
   });
 });

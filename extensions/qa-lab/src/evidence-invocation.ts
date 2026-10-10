@@ -256,6 +256,13 @@ export function createQaEvidenceInvocation(params: {
     const nextAnchors = structuredClone(anchors);
     const nextObservations = structuredClone(observations);
     const nextEntries = structuredClone(entries);
+    const setEffective = (id: string, effective: boolean) => {
+      for (const entry of nextEntries) {
+        if (entry.binding.occurrenceId === id) {
+          entry.effective = effective;
+        }
+      }
+    };
     const anchor = nextAnchors[index]!;
     const pending = pendingChildren.get(index);
     if (pending) {
@@ -264,11 +271,7 @@ export function createQaEvidenceInvocation(params: {
         nextObservations[offset] = structuredClone(completion);
       }
       for (const update of pending.updates) {
-        for (const entry of nextEntries) {
-          if (entry.binding.occurrenceId === update.occurrenceId) {
-            entry.effective = update.effective;
-          }
-        }
+        setEffective(update.occurrenceId, update.effective);
       }
       nextObservations.splice(pending.observationOffset, 0, ...structuredClone(pending.additions));
       nextEntries.splice(pending.entryOffset, 0, ...structuredClone(pending.rows));
@@ -303,11 +306,7 @@ export function createQaEvidenceInvocation(params: {
     // Retrying changes whole-attempt selection, never individual assertion rows.
     let priorId = selected?.retryOf ?? null;
     while (priorId !== null) {
-      for (const entry of nextEntries) {
-        if (entry.binding.occurrenceId === priorId) {
-          entry.effective = false;
-        }
-      }
+      setEffective(priorId, false);
       priorId = byId.get(priorId)!.retryOf;
     }
     for (const occurrence of nextObservations) {
@@ -316,11 +315,7 @@ export function createQaEvidenceInvocation(params: {
         ancestor = byId.get(ancestor)!.retryOf;
       }
       if (selectedId !== null && ancestor === selectedId && occurrence.terminalStatus !== "pass") {
-        for (const entry of nextEntries) {
-          if (entry.binding.occurrenceId === occurrence.id) {
-            entry.effective = false;
-          }
-        }
+        setEffective(occurrence.id, false);
       }
     }
     // Validate the full proposed selection before changing authoritative state

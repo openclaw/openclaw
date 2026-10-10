@@ -3,15 +3,12 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import { runOutsidePluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
-import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import type {
   MemoryImportProviderOutcome,
   SetupMemoryImportOutcome,
 } from "../wizard/setup.memory-import.js";
 import { appendSystemAgentAuditEntry } from "./audit.js";
-
-const loadSetupShared = createLazyRuntimeModule(() => import("../wizard/setup.shared.js"));
 
 export const GATEWAY_WRITE_POLICY = {
   mode: "none",
@@ -58,7 +55,8 @@ export async function runHostedSetup(params: {
   await using cache = createPluginCache();
   return await runOutsidePluginRuntimeGenerationScope(() =>
     withPluginCache(cache, async (): Promise<HostedSetupCompletion> => {
-      const { readSetupConfigFileSnapshot, writeWizardConfigFile } = await loadSetupShared();
+      const { readSetupConfigFileSnapshot, writeWizardConfigFile } =
+        await import("../wizard/setup.shared.js");
       const snapshot = await readSetupConfigFileSnapshot();
       if (!snapshot.exists || !snapshot.valid || !snapshot.hash) {
         throw new Error(
@@ -184,30 +182,23 @@ export async function runHostedGatewaySetup(
   beforePersistentApply: (runtime: RuntimeEnv) => Promise<void>,
   runtime?: RuntimeEnv,
 ): Promise<HostedSetupCompletion> {
-  const [
-    { resolveGatewayPort },
-    { configureGatewayForSetup },
-    { resolveQuickstartGatewayDefaults },
-  ] = await Promise.all([
-    import("../config/config.js"),
+  const [{ configureGatewayForSetup }, { resolveQuickstartGatewayDefaults }] = await Promise.all([
     import("../wizard/setup.gateway-config.js"),
-    loadSetupShared(),
+    import("../wizard/setup.shared.js"),
   ]);
   return await runHostedSetup({
     label: "Gateway setup",
     runtime,
     beforePersistentApply,
     afterWrite: GATEWAY_WRITE_POLICY,
-    run: async ({ baseConfig, runtime: setupRuntime }) => {
+    run: async ({ baseConfig }) => {
       requireLocalGateway(baseConfig);
       const result = await configureGatewayForSetup({
         flow: "advanced",
         baseConfig,
         nextConfig: baseConfig,
-        localPort: resolveGatewayPort(baseConfig),
         quickstartGateway: resolveQuickstartGatewayDefaults(baseConfig),
         prompter,
-        runtime: setupRuntime,
       });
       return { nextConfig: result.nextConfig };
     },
@@ -220,7 +211,10 @@ export async function runHostedMemoryImport(
   onProviderOutcome: (outcome: MemoryImportProviderOutcome) => void,
 ): Promise<HostedMemoryImportOutcome> {
   const [{ readSetupConfigFileSnapshot }, { resolveSystemAgentOnboardingTarget }] =
-    await Promise.all([loadSetupShared(), import("../commands/onboard-agent-target.js")]);
+    await Promise.all([
+      import("../wizard/setup.shared.js"),
+      import("../commands/onboard-agent-target.js"),
+    ]);
   const snapshot = await readSetupConfigFileSnapshot();
   if (!snapshot.exists || !snapshot.valid || !snapshot.hash) {
     throw new Error(

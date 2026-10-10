@@ -5,13 +5,15 @@ import {
   loadDeliveryQueueEntryInDatabase,
   upsertBoundDeliveryQueueEntryInDatabase,
 } from "../../../infra/delivery-queue-sqlite-bound.js";
-import { getDeliveryQueueEntryOwnersInDatabase } from "../../../infra/delivery-queue-sqlite.kernel.js";
+import {
+  getDeliveryQueueEntryOwnersInDatabase,
+  type DeliveryQueueStoredStatus,
+} from "../../../infra/delivery-queue-sqlite.kernel.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../../infra/kysely-sync.js";
 import {
   SESSION_DELIVERY_QUEUE_NAME,
   type QueuedSessionDelivery,
 } from "../../../infra/session-delivery-queue.records.js";
-import type { SessionDeliveryWorkerOperations } from "../../../infra/session-delivery-queue.worker-contract.js";
 import {
   deferSqliteWorkerCommitReceipt,
   requestSqliteWorkerOperationAdmission,
@@ -26,20 +28,70 @@ import {
   bindSubagentRunRecord,
   rowToSubagentRunRecord,
 } from "../registry/subagent-registry.store.codec.js";
-import { upsertSubagentRunRowInDatabase } from "../registry/subagent-registry.store.kernel.js";
+import {
+  conflictingSubagentRunVersions,
+  writeSubagentRunValuesInDatabase,
+  type SubagentRegistryWrite,
+} from "../registry/subagent-registry.store.kernel.js";
 import { readSubagentRunRow } from "../registry/subagent-registry.store.sqlite.js";
+import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import { compareSubagentRunGeneration } from "../registry/subagent-run-generation.js";
-import { mutateSubagentCompletionInDatabase } from "./subagent-completion-mutation.kernel.js";
+import {
+  decodeSubagentCompletionRecord,
+  mutateSubagentCompletionInDatabase,
+} from "./subagent-completion-mutation.kernel.js";
+import type {
+  SubagentCompletionMutation,
+  SubagentCompletionMutationResult,
+  SubagentCompletionRecord,
+} from "./subagent-completion-mutation.types.js";
 
-type Operation = SessionDeliveryWorkerOperations["sessionDelivery.admitSubagentCompletion"];
+type SubagentCompletionVersionConflict = { writeId: string; conflictRunIds: string[] };
 const query = (db: DatabaseSync) => getNodeSqliteKysely<Pick<DB, "subagent_runs">>(db);
+
+function commitCompletionWrite<T extends object>(
+  input: Pick<SubagentRegistryWrite, "writeId" | "versions">,
+  database: OpenClawStateDatabase,
+  operationLabel: string,
+  mutate: () => T,
+): (T & { writeId: string }) | SubagentCompletionVersionConflict {
+  const { writeId, versions } = input;
+  return runOpenClawStateWriteTransaction(
+    () => {
+      requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: writeId });
+      const conflictRunIds = conflictingSubagentRunVersions(database, versions);
+      if (conflictRunIds.length > 0) {
+        return { writeId, conflictRunIds };
+      }
+      const receipt = { writeId, ...mutate() };
+      requestSqliteWorkerOperationAdmission({ stage: "commit", facts: writeId });
+      deferSqliteWorkerCommitReceipt(database.db, receipt);
+      return receipt;
+    },
+    { database, path: database.path, env: getSqliteWorkerStateContext().environment },
+    { operationLabel },
+  );
+}
 
 /** The shared-state worker owns queue insertion and its exact native completion owner. */
 export function admitSubagentCompletionInWorker(
-  input: Operation["input"],
+  input: {
+    writeId: string;
+    versions: SubagentRegistryWrite["versions"];
+    queueEntry: QueuedSessionDelivery;
+    expected: SubagentRunRecord;
+    subagent: SubagentRunRecord;
+  },
   database: OpenClawStateDatabase,
-): Operation["output"] {
-  const { expected, subagent, queueEntry, writeId } = input;
+):
+  | SubagentCompletionVersionConflict
+  | {
+      writeId: string;
+      claimed: boolean;
+      status: DeliveryQueueStoredStatus;
+      record: SubagentCompletionRecord;
+    } {
+  const { expected, subagent, queueEntry } = input;
   const owner = queueEntry.kind === "agentTurn" ? queueEntry.owner : undefined;
   const delivery = subagent.delivery;
   if (
@@ -58,109 +110,86 @@ export function admitSubagentCompletionInWorker(
     entry: queueEntry,
     insertOnly: true,
   });
-  const expectedPayload = bindSubagentRunRecord(expected).payload_json;
   const boundSubagent = bindSubagentRunRecord(subagent);
-  return runOpenClawStateWriteTransaction(
-    () => {
-      requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: writeId });
-      const originalRow = readSubagentRunRow(database, expected.runId);
-      const current = originalRow && rowToSubagentRunRecord(originalRow);
+  return commitCompletionWrite(input, database, "subagent completion delivery admission", () => {
+    const originalRow = readSubagentRunRow(database, expected.runId);
+    const current = originalRow && rowToSubagentRunRecord(originalRow);
+    if (
+      !current ||
+      compareSubagentRunGeneration(current, expected) !== 0 ||
+      current.childSessionKey !== expected.childSessionKey ||
+      current.requesterSessionKey !== expected.requesterSessionKey ||
+      current.requesterStorePath !== expected.requesterStorePath
+    ) {
+      throw new Error("subagent completion owner changed before admission");
+    }
+    const siblings = executeSqliteQuerySync(
+      database.db,
+      query(database.db)
+        .selectFrom("subagent_runs")
+        .selectAll()
+        .where("child_session_key", "=", expected.childSessionKey),
+    ).rows;
+    for (const row of siblings) {
+      const candidate = rowToSubagentRunRecord(row);
+      if (!candidate || compareSubagentRunGeneration(candidate, expected) > 0) {
+        throw new Error("subagent completion owner was replaced before admission");
+      }
+    }
+    const claimed = upsertBoundDeliveryQueueEntryInDatabase(boundQueue, database);
+    const status =
+      getDeliveryQueueEntryOwnersInDatabase(
+        database,
+        [SESSION_DELIVERY_QUEUE_NAME],
+        queueEntry.id,
+      ).get(SESSION_DELIVERY_QUEUE_NAME)?.status ?? "pending";
+    if (claimed) {
+      writeSubagentRunValuesInDatabase(database, [boundSubagent], []);
+    } else {
+      // The namespace owns this payload; a duplicate may acknowledge only its original generation.
+      const existing = loadDeliveryQueueEntryInDatabase(
+        database,
+        SESSION_DELIVERY_QUEUE_NAME,
+        queueEntry.id,
+        // SAFETY: The exact session queue namespace is written only with its typed delivery payload.
+      ) as QueuedSessionDelivery | null;
+      const existingOwner = existing?.kind === "agentTurn" ? existing.owner : undefined;
       if (
-        !current ||
-        compareSubagentRunGeneration(current, expected) !== 0 ||
-        current.childSessionKey !== expected.childSessionKey ||
-        current.requesterSessionKey !== expected.requesterSessionKey ||
-        current.requesterStorePath !== expected.requesterStorePath
+        !existingOwner ||
+        existingOwner.kind !== owner.kind ||
+        existingOwner.runId !== owner.runId ||
+        existingOwner.taskId !== owner.taskId ||
+        existingOwner.generation !== owner.generation ||
+        existingOwner.deadlineAt !== owner.deadlineAt ||
+        existing?.sessionKey !== queueEntry.sessionKey ||
+        (existing.kind === "agentTurn" &&
+          queueEntry.kind === "agentTurn" &&
+          !isDeepStrictEqual(existing.requesterBinding, queueEntry.requesterBinding)) ||
+        (current.delivery?.generation ?? 1) !== owner.generation ||
+        (status === "pending" &&
+          (current.delivery?.queueId !== queueEntry.id ||
+            current.delivery.deadlineAt !== owner.deadlineAt))
       ) {
-        throw new Error("subagent completion owner changed before admission");
+        throw new Error(`session delivery queue conflict for ${queueEntry.id}`);
       }
-      const siblings = executeSqliteQuerySync(
-        database.db,
-        query(database.db)
-          .selectFrom("subagent_runs")
-          .selectAll()
-          .where("child_session_key", "=", expected.childSessionKey),
-      ).rows;
-      for (const row of siblings) {
-        const candidate = rowToSubagentRunRecord(row);
-        if (!candidate || compareSubagentRunGeneration(candidate, expected) > 0) {
-          throw new Error("subagent completion owner was replaced before admission");
-        }
-      }
-      const claimed = upsertBoundDeliveryQueueEntryInDatabase(boundQueue, database);
-      const status =
-        getDeliveryQueueEntryOwnersInDatabase(
-          database,
-          [SESSION_DELIVERY_QUEUE_NAME],
-          queueEntry.id,
-        ).get(SESSION_DELIVERY_QUEUE_NAME)?.status ?? "pending";
-      if (claimed) {
-        if (bindSubagentRunRecord(current).payload_json !== expectedPayload) {
-          throw new Error("subagent completion state changed before admission");
-        }
-        upsertSubagentRunRowInDatabase(database, boundSubagent);
-      } else {
-        // The namespace owns this payload; a duplicate may acknowledge only its original generation.
-        const existing = loadDeliveryQueueEntryInDatabase(
-          database,
-          SESSION_DELIVERY_QUEUE_NAME,
-          queueEntry.id,
-          // SAFETY: The exact session queue namespace is written only with its typed delivery payload.
-        ) as QueuedSessionDelivery | null;
-        const existingOwner = existing?.kind === "agentTurn" ? existing.owner : undefined;
-        if (
-          !existingOwner ||
-          existingOwner.kind !== owner.kind ||
-          existingOwner.runId !== owner.runId ||
-          existingOwner.taskId !== owner.taskId ||
-          existingOwner.generation !== owner.generation ||
-          existingOwner.deadlineAt !== owner.deadlineAt ||
-          existing?.sessionKey !== queueEntry.sessionKey ||
-          (existing.kind === "agentTurn" &&
-            queueEntry.kind === "agentTurn" &&
-            !isDeepStrictEqual(existing.requesterBinding, queueEntry.requesterBinding)) ||
-          (current.delivery?.generation ?? 1) !== owner.generation ||
-          (status === "pending" &&
-            (current.delivery?.queueId !== queueEntry.id ||
-              current.delivery.deadlineAt !== owner.deadlineAt))
-        ) {
-          throw new Error(`session delivery queue conflict for ${queueEntry.id}`);
-        }
-      }
-      const row = readSubagentRunRow(database, expected.runId);
-      if (!row) {
-        throw new Error("subagent completion owner disappeared during admission");
-      }
-      const receipt = { writeId, claimed, status, row };
-      requestSqliteWorkerOperationAdmission({ stage: "commit", facts: writeId });
-      deferSqliteWorkerCommitReceipt(database.db, receipt);
-      return receipt;
-    },
-    { database, path: database.path, env: getSqliteWorkerStateContext().environment },
-    {
-      operationLabel: "subagent completion delivery admission",
-    },
-  );
+    }
+    const row = readSubagentRunRow(database, expected.runId);
+    if (!row) {
+      throw new Error("subagent completion owner disappeared during admission");
+    }
+    return { claimed, status, record: decodeSubagentCompletionRecord(row) };
+  });
 }
 
 export function mutateSubagentCompletionInWorker(
-  input: SessionDeliveryWorkerOperations["sessionDelivery.mutateSubagentCompletion"]["input"],
+  input: {
+    writeId: string;
+    mutation: SubagentCompletionMutation;
+    versions: SubagentRegistryWrite["versions"];
+  },
   database: OpenClawStateDatabase,
-): SessionDeliveryWorkerOperations["sessionDelivery.mutateSubagentCompletion"]["output"] {
-  return runOpenClawStateWriteTransaction(
-    () => {
-      requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: input.writeId });
-      const receipt = {
-        writeId: input.writeId,
-        ...mutateSubagentCompletionInDatabase(database, input.mutation),
-      };
-      requestSqliteWorkerOperationAdmission({ stage: "commit", facts: input.writeId });
-      deferSqliteWorkerCommitReceipt(database.db, receipt);
-      return receipt;
-    },
-    { database, path: database.path, env: getSqliteWorkerStateContext().environment },
-    {
-      operationLabel: "subagent completion " + input.mutation.kind,
-    },
+): (SubagentCompletionMutationResult & { writeId: string }) | SubagentCompletionVersionConflict {
+  return commitCompletionWrite(input, database, "subagent completion " + input.mutation.kind, () =>
+    mutateSubagentCompletionInDatabase(database, input.mutation),
   );
 }

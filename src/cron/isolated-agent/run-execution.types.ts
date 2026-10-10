@@ -19,7 +19,6 @@ export type CronRunExecutionParams = Pick<
   | "usesDetachedRunSession"
   | "workspaceDir"
   | "cwd"
-  | "executionRoot"
   | "timeoutMs"
   | "runTimeoutOverrideMs"
   | "suppressExecNotifyOnExit"
@@ -41,7 +40,13 @@ export type CronRunExecutionParams = Pick<
 > &
   Pick<
     RunCronAgentTurnParams,
-    "cfg" | "job" | "lane" | "onLaneWait" | "executionIdentity" | "admissionSource"
+    | "cfg"
+    | "job"
+    | "lane"
+    | "onLaneWait"
+    | "executionIdentity"
+    | "admissionSource"
+    | "deliveryAttemptFence"
   > & {
     runId: string;
     agentVerboseDefault: AgentDefaultsConfig["verboseDefault"];
@@ -58,6 +63,7 @@ export type CronRunExecutionParams = Pick<
     abortReason: () => string;
     isAborted: () => boolean;
     lifecycle: Omit<AgentLifecycleTerminalBackstop, "emit">;
+    onPromptAdmission: (admission: { close: () => void; finish: () => Promise<void> }) => void;
     onExecutionStarted?: (info?: CronRunnerStartedInfo) => void;
     onExecutionPhase?: (
       info: Pick<CronAgentExecutionPhaseUpdate, "phase"> &

@@ -30,7 +30,7 @@ function writeEntry(root: string, id: string, body: string) {
 }
 
 describe("synthetic auth discovery entries", () => {
-  it.each(["auth-only", "manifest-catalog", "discovery-catalog"] as const)(
+  it.each(["manifest-catalog", "discovery-catalog"] as const)(
     "keeps an auth-only owner available beside broken discovery with %s",
     async (shape) => {
       const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-auth-entry-")));

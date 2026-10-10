@@ -1,6 +1,6 @@
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { setWorkboardCards } from "./card-state.ts";
+import { normalizeWorkboardChange } from "./change-payload.ts";
 import { formatError } from "./normalization-utils.ts";
 import { normalizeCardsPayload } from "./normalization.ts";
 import {
@@ -9,15 +9,12 @@ import {
   isCurrentWorkboardLoadGeneration,
   nextWorkboardLoadGeneration,
   workboardHasActiveWrites,
-  type WorkboardHost,
+  type WorkboardClientContext,
   type WorkboardLoadToken,
 } from "./runtime.ts";
 import type { WorkboardRefreshSource, WorkboardUiState } from "./types.ts";
 
-type LoadWorkboardParams = {
-  host: WorkboardHost;
-  client: GatewayBrowserClient | null;
-  requestUpdate?: () => void;
+type LoadWorkboardParams = WorkboardClientContext & {
   force?: boolean;
   refreshDiagnostics?: boolean;
   preserveError?: boolean;
@@ -27,9 +24,7 @@ export async function loadWorkboard(params: LoadWorkboardParams): Promise<boolea
   return await loadWorkboardInternal(params);
 }
 
-export async function loadWorkboardCatalog(
-  params: Pick<LoadWorkboardParams, "host" | "client" | "requestUpdate">,
-): Promise<boolean> {
+export async function loadWorkboardCatalog(params: WorkboardClientContext): Promise<boolean> {
   return await loadWorkboardInternal({ ...params, force: true }, undefined, true);
 }
 
@@ -97,34 +92,37 @@ async function loadWorkboardInternal(
           }
         }
       }
-      const payload = await client.request("workboard.cards.list", {});
+      const payload = await client.request(
+        "workboard.cards.list",
+        runtime.cardsRevision ? { sinceRevision: runtime.cardsRevision } : {},
+      );
+      if (!isCurrentWorkboardLoadGeneration(params.host, generation)) {
+        return false;
+      }
+      const unchanged = isRecord(payload) && payload.unchanged === true;
       if (
         catalogOnly &&
+        !unchanged &&
         (!isRecord(payload) || !Array.isArray(payload.cards) || !Array.isArray(payload.boards))
       ) {
         return false;
       }
-      const normalized = normalizeCardsPayload(payload);
-      if (!isCurrentWorkboardLoadGeneration(params.host, generation)) {
-        return false;
-      }
+      const normalized = unchanged ? state : normalizeCardsPayload(payload);
       if (catalogOnly) {
         state.boards = normalized.boards;
-        // Keep navigation current without replacing cards beneath an unfinished draft.
-        if (shouldDeferWorkboardLiveRefresh(state)) {
-          return true;
-        }
-        // Catalog hydration never establishes task freshness or authorizes stale edits.
-        setWorkboardCards(state, normalized.cards);
-        state.statuses = normalized.statuses;
-        return true;
       }
-      if (params.preserveError && shouldDeferWorkboardLiveRefresh(state)) {
-        return false;
+      // Keep navigation current without replacing cards beneath an unfinished draft.
+      if ((catalogOnly || params.preserveError) && shouldDeferWorkboardLiveRefresh(state)) {
+        return catalogOnly;
       }
+      runtime.cardsRevision = normalizeWorkboardChange(isRecord(payload) ? payload.revision : null);
       setWorkboardCards(state, normalized.cards);
       state.boards = normalized.boards;
       state.statuses = normalized.statuses;
+      // Catalog hydration never authorizes stale edits.
+      if (catalogOnly) {
+        return true;
+      }
       const recoveredLoadError = runtime.loadError;
       if (recoveredLoadError !== undefined && state.error === recoveredLoadError) {
         state.error = null;
@@ -166,13 +164,12 @@ async function loadWorkboardInternal(
   return await loadPromise;
 }
 
-export async function refreshWorkboard(params: {
-  host: WorkboardHost;
-  client: GatewayBrowserClient | null;
-  requestUpdate?: () => void;
-  source: WorkboardRefreshSource;
-  refreshDiagnostics?: boolean;
-}): Promise<boolean> {
+export async function refreshWorkboard(
+  params: WorkboardClientContext & {
+    source: WorkboardRefreshSource;
+    refreshDiagnostics?: boolean;
+  },
+): Promise<boolean> {
   const state = getWorkboardState(params.host);
   const passive = params.source === "live";
   if (state.dispatching || workboardHasActiveWrites(state)) {

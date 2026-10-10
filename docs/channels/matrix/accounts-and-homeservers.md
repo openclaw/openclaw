@@ -80,7 +80,7 @@ Mapping updates read the existing account data before writing. If that read fail
 
 **Default account selection:**
 
-- Set `defaultAccount` to pick the named account that implicit routing, probing, and CLI commands prefer.
+- Set `defaultAccount` to pick the named account that implicit routing, checking, and CLI commands prefer.
 - If you have multiple accounts and one is literally named `default`, OpenClaw uses it implicitly even when `defaultAccount` is unset.
 - With multiple named accounts and no default selected, CLI commands refuse to guess - set `defaultAccount` or pass `--account <id>`.
 - The top-level `channels.matrix.*` block is only treated as the implicit `default` account when its auth is complete (`homeserver` + `accessToken`, or `homeserver` + `userId` + `password`). Named accounts remain discoverable from `homeserver` + `userId` once cached credentials cover auth.
@@ -139,7 +139,7 @@ If your Matrix deployment needs an explicit outbound HTTP(S) proxy, set `channel
 }
 ```
 
-Named accounts can override the top-level default with `channels.matrix.accounts.<id>.proxy`. OpenClaw uses the same proxy setting for runtime Matrix traffic and account status probes.
+Named accounts can override the top-level default with `channels.matrix.accounts.<id>.proxy`. OpenClaw uses the same proxy setting for runtime Matrix traffic and account status checks.
 
 ## Target resolution
 

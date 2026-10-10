@@ -1,7 +1,6 @@
 import { onSessionIdentityMutation } from "../../config/sessions/session-accessor.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { withTimeout } from "../../infra/fs-safe.js";
-import type { GatewayScheduledJob } from "../../infra/gateway-scheduler.js";
 import { isSqliteLockError } from "../../infra/sqlite-error-diagnostics.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import type { WorkerExecutionMode } from "../../plugins/types.js";
@@ -14,9 +13,13 @@ import type { WorkerInstallationArtifact } from "./bundle.js";
 import { createWorkerCredentialBroker } from "./credential-broker.js";
 import {
   createWorkerEnvironmentAccess,
+  createWorkerEnvironmentProcessObservation,
   createWorkerEnvironmentTransportLifecycle,
 } from "./environment-access.js";
-import { createWorkerEnvironmentErrorRecorder } from "./environment-errors.js";
+import {
+  createWorkerEnvironmentErrorRecorder,
+  workerEnvironmentServiceError as serviceError,
+} from "./environment-errors.js";
 import {
   joinInferenceOperations,
   registerWorkerInferenceSessionControl,
@@ -31,7 +34,6 @@ import type { WorkerEnvironmentAbandonment } from "./provider-lifecycle.types.js
 import type { WorkerEnvironmentServiceContract } from "./service-contract.js";
 import type {
   WorkerEnvironmentCreateRequest,
-  WorkerEnvironmentServiceErrorCode,
   WorkerEnvironmentServiceOptions,
   WorkerEnvironmentReconcileGuard,
 } from "./service.types.js";
@@ -44,20 +46,9 @@ import type {
 import { joinWorkerTunnelStops } from "./tunnel-contract.js";
 import { createWorkerTurnRpc } from "./worker-turn-rpc.js";
 
-class WorkerEnvironmentServiceError extends Error {
-  constructor(
-    readonly code: WorkerEnvironmentServiceErrorCode,
-    message: string,
-  ) {
-    super(message);
-  }
-}
-
-const serviceError = (code: WorkerEnvironmentServiceErrorCode, message: string) =>
-  new WorkerEnvironmentServiceError(code, message);
-
 export function createWorkerEnvironmentService(options: WorkerEnvironmentServiceOptions) {
   const { store, scheduler } = options;
+  const scope = scheduler.scope();
   const warn = (message: string) => options.logger?.warn(message);
   const operations = new KeyedAsyncQueue();
   const providerOperations = new KeyedAsyncQueue();
@@ -79,7 +70,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     ...(options.inferenceStore ? { store: options.inferenceStore } : {}),
   });
   let reconcileInFlight: Promise<void> | undefined;
-  let reconciliationJob: GatewayScheduledJob | undefined;
+  let serviceStarted = false;
   let unsubscribeSessionIdentityMutation: (() => void) | undefined;
   let unsubscribeTurnClaimClosed = options.placementStore?.registerTurnClaimClosedHandler(
     (claim) => {
@@ -92,11 +83,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
   // losing recovery pass attach or sync after the winner advances the placement.
   const guardedReconcileInFlight = new Map<string, Promise<void>>();
   let stopping = false;
-  const maintenanceAbort = new AbortController();
   let maintenanceInFlight: Promise<void> | undefined;
-
-  const inState = (record: WorkerEnvironmentRecord, ...states: WorkerEnvironmentState[]) =>
-    states.includes(record.state);
 
   const trackOperation = <T>(operation: Promise<T>) => {
     activeOperations.add(operation);
@@ -198,9 +185,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     now,
     isStopping: () => stopping,
     cancelInferenceEnvironment: (environmentId) => inference.cancelEnvironment(environmentId),
-    inState,
     move,
-    serviceError,
     withLock,
   });
 
@@ -214,13 +199,9 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     warn,
     callBootstrap,
     callProvider,
-    inState,
-    isServiceError: (error, code) =>
-      error instanceof WorkerEnvironmentServiceError && error.code === code,
     isStopping: () => stopping,
     move,
     saveError,
-    serviceError,
     withLock,
   });
 
@@ -231,10 +212,8 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     prepareCurrentBundle: async () => await prepareInstallation("bundle"),
     now,
     identityResolverFor: providerLifecycle.identityResolverFor,
-    inState,
     isStopping: () => stopping,
     providerFor: providerLifecycle.providerFor,
-    serviceError,
     withLock,
   });
 
@@ -260,8 +239,10 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       await providerLifecycle.resumePrepared(record, signal, beforeReconcile);
     },
     now,
-    signal: maintenanceAbort.signal,
+    signal: scope.signal,
     warn,
+    resolveHumanPresenceDemand: options.resolveHumanPresenceDemand,
+    presenceDemandStore: options.presenceDemandStore,
   });
   const schedulePreparedRefill = (environmentId?: string) =>
     void trackOperation(preparedPool.maintain(environmentId));
@@ -287,7 +268,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     await withLock(environmentId, async () => {
       await store.ready();
       const current = store.get(environmentId);
-      if (!current || inState(current, "destroyed", "failed", "orphaned")) {
+      if (!current || ["destroyed", "failed", "orphaned"].includes(current.state)) {
         return;
       }
       // Conversation cleanup has one retry owner, including its backoff and parked budget.
@@ -402,11 +383,11 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       maintenanceInFlight = trackOperation(
         Promise.resolve()
           .then(() => {
-            maintenanceAbort.signal.throwIfAborted();
-            return options.maintainProviders!(maintenanceAbort.signal);
+            scope.signal.throwIfAborted();
+            return options.maintainProviders!(scope.signal);
           })
           .catch(() => {
-            if (!stopping) {
+            if (!scope.signal.aborted) {
               warn("Worker provider maintenance sweep failed; cleanup will retry");
             }
           })
@@ -421,7 +402,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
   };
 
   const start = () => {
-    if (reconciliationJob || stopping) {
+    if (serviceStarted || stopping) {
       return;
     }
     unsubscribeSessionIdentityMutation = onSessionIdentityMutation((mutation) => {
@@ -435,9 +416,9 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       providerLifecycle.warmMachineShape(profileId);
     }
     const everyMs = options.reconcileIntervalMs ?? 60_000;
-    reconciliationJob = scheduler.schedule({
+    scope.schedule({
       id: "worker-environments:reconcile",
-      atMs: scheduler.now() + everyMs,
+      atMs: scope.now() + everyMs,
       everyMs,
       run: () => {
         // The service joins its work; slow inspection must not hold the other maintenance duties.
@@ -446,6 +427,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
         });
       },
     });
+    serviceStarted = true;
     void reconcileOnce().catch(() => warn("Worker environment startup reconcile failed"));
   };
 
@@ -455,13 +437,13 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     providerLifecycle.clearDedicatedNodeLeases();
     sessionAttachments.cancelSessionAttachmentCreations();
     providerLifecycle.clearMachineShapeListeners();
-    maintenanceAbort.abort();
+    scope.beginClose();
     options.stopNodeEnrollmentWaits?.();
-    reconciliationJob?.cancel();
     unsubscribeSessionIdentityMutation?.();
     unsubscribeSessionIdentityMutation = undefined;
     unsubscribeTurnClaimClosed?.();
     unsubscribeTurnClaimClosed = undefined;
+    await scope.stop();
     // Shutdown owns the guard handoff: stop new admission and drain admitted recovery before
     // inference or tunnel teardown can invalidate its closure-bound placement authority.
     await closeReconcileEnvironmentGuard();
@@ -549,9 +531,8 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     resolveProvider: options.resolveProvider,
     projectNamespace: options.projectNamespace,
     providerLifecycle,
-    signal: maintenanceAbort.signal,
+    signal: scope.signal,
     now,
-    serviceError,
     configuredProfileProviderId,
     requireProviderExecutionMode,
     schedulePreparedRefill,
@@ -562,18 +543,13 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     idempotencyKey,
     inheritedProfile,
     admittedIntent,
-    machineClass,
-    executionMode,
-    projectPath,
-    signal,
-    os,
-    runSetupScript,
+    ...selection
   }: WorkerEnvironmentCreateRequest) => {
     providerLifecycle.warmMachineShape(profileId);
-    if (executionMode) {
+    if (selection.executionMode) {
       requireProviderExecutionMode(
         inheritedProfile ? inheritedProfile.providerId : configuredProfileProviderId(profileId),
-        executionMode,
+        selection.executionMode,
       );
     }
     return environmentAccess.project(
@@ -581,20 +557,8 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
         profileId,
         idempotencyKey,
         {
-          ...(inheritedProfile
-            ? {
-                inherited: {
-                  providerId: inheritedProfile.providerId,
-                  profileSnapshot: inheritedProfile.profileSnapshot,
-                },
-              }
-            : {}),
-          machineClass,
-          os,
-          executionMode,
-          projectPath,
-          runSetupScript,
-          signal,
+          ...selection,
+          ...(inheritedProfile ? { inherited: { ...inheritedProfile } } : {}),
         },
         admittedIntent,
       ),
@@ -630,6 +594,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     getPreparedCandidates: (intent: WorkerProviderPreparedIntent) =>
       preparedPool.candidates(intent).map(environmentAccess.project),
     schedulePreparedRefill,
+    setHumanPresence: preparedPool.setHumanPresence,
     inventoryVersion: store.inventoryVersion,
     machineShapeVersion: providerLifecycle.machineShapeVersion,
     subscribeMachineShapeChanged: providerLifecycle.subscribeMachineShapeChanged,
@@ -694,13 +659,18 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     prepareComputer: options.prepareComputer,
     startInference: turnRpc.startInference,
     cancelInference: turnRpc.cancelInference,
-    cancelInferenceForSession: turnRpc.cancelInferenceForSession,
-    hasInferenceForSession: turnRpc.hasInferenceForSession,
     resolveSshIdentity: environmentAccess.resolveSshIdentity,
     attachSession: credentialBroker.attachSession,
     takeMintedCredential: credentialBroker.takeMintedCredential,
     acquireTurnCredential: credentialBroker.acquireTurnCredential,
     acknowledgeCredentialDelivery: credentialBroker.acknowledgeCredentialDelivery,
+    observeProcesses: createWorkerEnvironmentProcessObservation({
+      store,
+      prepareCurrentBundle: () => prepareInstallation("bundle"),
+      isStopping: () => stopping,
+      getNodeTunnel: () => options.nodeTunnelManager,
+      trackOperation,
+    }),
     startTunnel: environmentAccess.startTunnel,
     stopTunnel: async (environmentId: string, ownerEpoch?: number) => {
       await Promise.all([
@@ -722,11 +692,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     start,
     stop,
   };
-  registerWorkerInferenceSessionControl(service, {
-    reserveDrain: inference.reserveSessionDrain,
-    captureCancel: inference.captureSessionCancellation,
-    resolveTarget: inference.resolveSessionTargetForRunId,
-  });
+  registerWorkerInferenceSessionControl(service, inference);
   return service;
 }
 

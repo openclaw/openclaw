@@ -1,12 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
 import { sha256Hex } from "./crypto-digest.js";
-// Binds system-run approval requests to stable command identities.
+import type { ExecCommandSegment } from "./exec-approvals-analysis.js";
 import type {
-  ExecCommandSegment,
   SystemRunApprovalBinding,
   SystemRunApprovalFileOperand,
-} from "./exec-approvals.js";
+} from "./exec-approvals-core.js";
 import { planShellAuthorization } from "./exec-authorization-plan.js";
 import {
   type ExecutableResolution,
@@ -41,7 +40,7 @@ function normalizeSystemRunEnvEntries(env: unknown): NormalizedSystemRunEnvEntry
     return [];
   }
   const entries: NormalizedSystemRunEnvEntry[] = [];
-  for (const [rawKey, rawValue] of Object.entries(env as Record<string, unknown>)) {
+  for (const [rawKey, rawValue] of Object.entries(env)) {
     if (typeof rawValue !== "string") {
       continue;
     }
@@ -120,39 +119,6 @@ function requestMismatch(details?: Record<string, unknown>): SystemRunApprovalMa
   };
 }
 
-function matchSystemRunApprovalEnvHash(params: {
-  expectedEnvHash: string | null;
-  actualEnvHash: string | null;
-  actualEnvKeys: string[];
-}): SystemRunApprovalMatchResult {
-  // Fail closed if callers provide inconsistent hash/key state. This guards against
-  // normalization drift between approval and execution paths.
-  if (!params.expectedEnvHash) {
-    if (params.actualEnvHash || params.actualEnvKeys.length > 0) {
-      return {
-        ok: false,
-        code: "APPROVAL_ENV_BINDING_MISSING",
-        message: "approval id missing env binding for requested env overrides",
-        details: { envKeys: params.actualEnvKeys },
-      };
-    }
-    return { ok: true };
-  }
-  if (params.expectedEnvHash !== params.actualEnvHash) {
-    return {
-      ok: false,
-      code: "APPROVAL_ENV_MISMATCH",
-      message: "approval id env binding mismatch",
-      details: {
-        envKeys: params.actualEnvKeys,
-        expectedEnvHash: params.expectedEnvHash,
-        actualEnvHash: params.actualEnvHash,
-      },
-    };
-  }
-  return { ok: true };
-}
-
 export function matchSystemRunApprovalBinding(params: {
   expected: SystemRunApprovalBinding;
   actual: SystemRunApprovalBinding;
@@ -166,11 +132,32 @@ export function matchSystemRunApprovalBinding(params: {
   ) {
     return requestMismatch();
   }
-  return matchSystemRunApprovalEnvHash({
-    expectedEnvHash: params.expected.envHash,
-    actualEnvHash: params.actual.envHash,
-    actualEnvKeys: params.actualEnvKeys,
-  });
+  // Fail closed if callers provide inconsistent hash/key state. This guards against
+  // normalization drift between approval and execution paths.
+  if (!params.expected.envHash) {
+    if (params.actual.envHash || params.actualEnvKeys.length > 0) {
+      return {
+        ok: false,
+        code: "APPROVAL_ENV_BINDING_MISSING",
+        message: "approval id missing env binding for requested env overrides",
+        details: { envKeys: params.actualEnvKeys },
+      };
+    }
+    return { ok: true };
+  }
+  if (params.expected.envHash !== params.actual.envHash) {
+    return {
+      ok: false,
+      code: "APPROVAL_ENV_MISMATCH",
+      message: "approval id env binding mismatch",
+      details: {
+        envKeys: params.actualEnvKeys,
+        expectedEnvHash: params.expected.envHash,
+        actualEnvHash: params.actual.envHash,
+      },
+    };
+  }
+  return { ok: true };
 }
 
 export function missingSystemRunApprovalBinding(params: {
@@ -185,17 +172,10 @@ export function toSystemRunApprovalMismatchError(params: {
   runId: string;
   match: SystemRunApprovalMismatch;
 }): { ok: false; message: string; details: Record<string, unknown> } {
-  const details: Record<string, unknown> = {
-    code: params.match.code,
-    runId: params.runId,
-  };
-  if (params.match.details) {
-    Object.assign(details, params.match.details);
-  }
   return {
     ok: false,
     message: params.match.message,
-    details,
+    details: Object.assign({ code: params.match.code, runId: params.runId }, params.match.details),
   };
 }
 

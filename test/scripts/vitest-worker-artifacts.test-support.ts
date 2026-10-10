@@ -12,6 +12,10 @@ import {
 import { resolveVitestSpawnParams, spawnWatchedVitestProcess } from "../../scripts/run-vitest.mts";
 import { createVitestProcessCompletion } from "../../scripts/vitest-process-group.mts";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
+import {
+  fixtureReceiptClientSource,
+  type FixtureReceiptChannel,
+} from "../helpers/fixture-receipts.js";
 import { runNodeScript } from "../helpers/run-node-script.js";
 import { fixturePreloadEnv } from "./fixtures/ci-fixture-runtime.cjs";
 
@@ -63,7 +67,7 @@ function createWorkerArtifactFixtures(
       return joined;
     }
 
-    function node(args: string[], cwd = root, env = process.env) {
+    function node(args: Parameters<typeof runNodeScript>[0], cwd = root, env = process.env) {
       const completion = fixtureLifetime.track(
         runNodeScript(args, compilerEnv(env, "node"), undefined, {
           cwd,
@@ -240,6 +244,35 @@ export function writeFixture(directory: string, name: string, source: string) {
   return filename;
 }
 
+// Fixture records precede receipts and child completion; separate pipes can deliver them out of order.
+export function fixtureFileBeforeSettlement(
+  receipts: FixtureReceiptChannel,
+  filename: string,
+  completion: PromiseLike<unknown>,
+  expected?: string,
+): Promise<void> {
+  const matches = () => {
+    if (!fs.existsSync(filename)) {
+      return false;
+    }
+    const text = fs.readFileSync(filename, "utf8");
+    return text.length > 0 && (expected === undefined || text === expected);
+  };
+  const settled = Promise.resolve(completion).then(
+    () => {
+      if (!matches()) {
+        throw new Error(`Child exited before writing ${filename}`);
+      }
+    },
+    (error: unknown) => {
+      if (!matches()) {
+        throw new Error(`Child failed before writing ${filename}`, { cause: error });
+      }
+    },
+  );
+  return Promise.race([receipts.waitFor(filename, expected ?? "written"), settled]);
+}
+
 export function workerBorrowingProbe(directory: string) {
   const value = writeFixture(directory, "value.ts", 'export const value: string = "first";');
   const test = writeFixture(
@@ -281,12 +314,14 @@ export function workerProbe(
   directory: string,
   holdSecond = false,
   mode: "compiled" | "source" = "compiled",
+  receiptEndpoint?: string,
 ) {
   const value = writeFixture(directory, "value.ts", 'export const value: string = "first";');
   const test = writeFixture(
     directory,
     "child.test.ts",
     `
+    ${receiptEndpoint ? fixtureReceiptClientSource(receiptEndpoint) : ""}
     import * as cp from 'node:child_process';
     import fs from 'node:fs';
     import path from 'node:path';
@@ -302,6 +337,7 @@ export function workerProbe(
     import { tuiPtyRuntimeEntrypoints } from ${JSON.stringify(path.join(root, "src/tui/tui-pty-runtime-test-support.ts"))};
     import { cliCompactionBackendEntrypoints } from ${JSON.stringify(path.join(root, "src/agents/command/cli-compaction-runtime.test-support.ts"))};
     import { pluginRuntimeRetentionEntrypoint } from ${JSON.stringify(path.join(root, "src/plugins/runtime-retention-entrypoint.test-support.ts"))};
+    import { resolveForwardedExitCompilerArgs } from ${JSON.stringify(path.join(root, "src/bootstrap/node-exit-safe-compilers.ts"))};
     import { resolveRuntimeWorkerUrl } from ${JSON.stringify(path.join(root, "src/infra/runtime-worker-url.ts"))};
     import { prepareSqliteReadOnlyLocation } from ${JSON.stringify(path.join(root, "src/infra/sqlite-snapshot-source.ts"))};
     import { openNodeSqliteDatabase } from ${JSON.stringify(path.join(root, "src/infra/node-sqlite.ts"))};
@@ -365,10 +401,14 @@ export function workerProbe(
           }
           const sourceLoader = sourceMode && !process.versions.bun;
           expect(args.includes('--import')).toBe(sourceLoader);
-          if (sourceLoader) expect(args[1].startsWith('file:')).toBe(true);
-          expect(args[sourceLoader ? 2 : 0]).toMatch(sourceMode ? /\\.ts$/ : /\\.js$/);
+          const forwardedCompilerArgs = resolveForwardedExitCompilerArgs();
+          if (sourceLoader) expect(args[forwardedCompilerArgs.length + 1].startsWith('file:')).toBe(true);
+          const runtimeArgs = [...forwardedCompilerArgs, ...(sourceLoader ? ['--import', expect.stringMatching(/^file:/)] : process.versions.bun ? ['--no-install'] : [])];
+          expect(args.slice(0, runtimeArgs.length + 1)).toEqual([...runtimeArgs, fileURLToPath(generation)]);
+          expect(args[runtimeArgs.length]).toMatch(sourceMode ? /\\.ts$/ : /\\.js$/);
           fs.appendFileSync(${JSON.stringify(path.join(directory, "observations.jsonl"))}, JSON.stringify({args, tuiUrls, setupUrls, retentionUrl, value, configValue:inject('configValue'), knn:resolveRuntimeWorkerUrl(vectorKnnProcessEntrypoint).href})+'\\n');
           fs.appendFileSync(${JSON.stringify(path.join(directory, "generations.jsonl"))}, JSON.stringify(generation)+'\\n');
+          ${receiptEndpoint ? `sendReceipt(${JSON.stringify(path.join(directory, "generations.jsonl"))}, 'written');` : ""}
           const release = inject('releaseFile');
           if (release) await new Promise(resolve => {
             const check = () => {if(fs.existsSync(release)){clearInterval(poll);resolve();}};

@@ -6,6 +6,7 @@ import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-work
 import { deliveryContextFromSession } from "../../utils/delivery-context.read.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type { CronActiveJobMarker } from "../active-jobs.js";
+import type { CronCompletionDeliveryFence } from "../delivery-attempt-fence.js";
 import type { CronRunReceiptSettlementDisposition } from "../store/run-receipt-store.js";
 import type { CronRunReceiptHandle } from "../store/run-receipt.types.js";
 import type { StartupDeferredJob } from "../store/runtime-worker.types.js";
@@ -22,8 +23,6 @@ import type {
 import type { CronRunDeliveryResult, CronServiceState } from "./state.js";
 
 export const MAX_CRON_TIMER_DELAY_MS = 60_000;
-
-export const HEARTBEAT_SKIP_DISABLED = "disabled";
 
 /**
  * Minimum gap between consecutive fires of the same cron job.  This is a
@@ -61,6 +60,13 @@ export type TimedCronRunOutcome = CronJobExecutionResult & {
   runReceipt?: CronRunReceiptHandle;
   runReceiptContext?: OpenClawStateWorkerContext;
   receiptSettlementDisposition?: CronRunReceiptSettlementDisposition;
+  request?: {
+    executionJob: CronJob;
+    preserveCadence: boolean;
+    scheduleOwnershipAtMs: number;
+    runId?: string;
+    terminalTracker?: { emitted: boolean };
+  };
   startedAt: number;
   endedAt: number;
 };
@@ -111,6 +117,7 @@ export type StartupCatchupExecution =
   | { ok: false; outcomes: TimedCronRunOutcome[]; error: unknown };
 
 export type ExecuteJobCoreOptions = {
+  deliveryAttemptFence?: CronCompletionDeliveryFence;
   activeJobMarker?: CronActiveJobMarker;
   owningCronLaneTaskMarker?: CommandLaneTaskMarker;
   onPayloadExecutionStarted?: () => void;
@@ -125,7 +132,7 @@ export type ExecuteJobCoreOptions = {
     | undefined;
   executionIdentity?: import("./state.js").CronExecutionIdentityAdmission;
   /** Revalidates the durable run fence after awaited planning and before effects. */
-  assertRunCurrent?: () => void;
+  assertRunCurrent?: () => Promise<void>;
   streamBatch?: string;
   // Source definition and logical identity are an inseparable admission claim.
   // The key catches edits; the identity catches disable→re-enable and A→B→A.

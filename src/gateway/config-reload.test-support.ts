@@ -11,7 +11,10 @@ import { hashConfigRaw } from "../config/io.read-helpers.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import * as backoff from "../infra/backoff.js";
 import * as pluginLifecycleLease from "../plugins/plugin-lifecycle-lease.js";
-import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
 import {
   startGatewayConfigReloader as startGatewayConfigReloaderImpl,
   type GatewayConfigReloadTransactionOwnership,
@@ -24,6 +27,13 @@ let currentTest: { timeout: number; signal: AbortSignal } | undefined;
 
 export function prepareConfigReloadTest({ task, signal }: TestContext) {
   currentTest = { timeout: task.timeout, signal };
+}
+
+export function createConfigReloadTestClock() {
+  const clock = createGatewaySchedulerClock(Date.now());
+  const scheduler = createTestGatewayScheduler(clock.clock);
+  onTestFinished(() => scheduler.stop());
+  return { clock, scheduler };
 }
 
 export function createPluginLifecycleLeaseTestClock() {
@@ -47,16 +57,22 @@ export function createPluginLifecycleLeaseTestClock() {
     return completion;
   });
   const withLease = pluginLifecycleLease.withPluginLifecycleLease;
-  let firstCompletion: ReturnType<typeof withLease> | undefined;
+  const withCleanupLease = pluginLifecycleLease.withPluginArtifactCleanupLease;
+  let firstCompletion: Promise<unknown> | undefined;
+  const trackLease = <T>(start: () => Promise<T>): Promise<T> => {
+    const completion = leaseScope.run(true, start);
+    firstCompletion ??= completion;
+    return completion;
+  };
   const leaseSpy = vi
     .spyOn(pluginLifecycleLease, "withPluginLifecycleLease")
-    .mockImplementation((options, run) => {
-      const completion = leaseScope.run(true, () => withLease(options, run));
-      firstCompletion ??= completion;
-      return completion;
-    });
+    .mockImplementation((options, run) => trackLease(() => withLease(options, run)));
+  const cleanupLeaseSpy = vi
+    .spyOn(pluginLifecycleLease, "withPluginArtifactCleanupLease")
+    .mockImplementation((options, run) => trackLease(() => withCleanupLease(options, run)));
   onTestFinished(() => {
     leaseSpy.mockRestore();
+    cleanupLeaseSpy.mockRestore();
     sleepSpy.mockRestore();
   });
   const waitFor = async <T>(completion: Promise<T>): Promise<T> => {
@@ -222,6 +238,20 @@ export function makeZeroDebounceHookWrite(persistedHash: string): ConfigWriteNot
     fingerprint: `runtime-${persistedHash}`,
     sourceFingerprint: `source-${persistedHash}`,
     writtenAtMs: Date.now(),
+  };
+}
+
+export function makeWrite(
+  config: OpenClawConfig,
+  hash: string,
+  overrides: Partial<ConfigWriteNotification> = {},
+): ConfigWriteNotification {
+  return {
+    ...makeZeroDebounceHookWrite(hash),
+    sourceConfig: config,
+    runtimeConfig: config,
+    snapshot: makeSnapshot({ config, hash }),
+    ...overrides,
   };
 }
 

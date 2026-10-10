@@ -1,6 +1,5 @@
-import type { ChannelPluginCatalogEntry } from "../../channels/plugins/catalog.js";
 import { getLoadedChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
-import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
+import type { AnyChannelPlugin as ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { ChannelId } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { RuntimeEnv } from "../../runtime.js";
@@ -16,16 +15,6 @@ import {
   resolveTrustedChannelCatalogInput,
 } from "./trusted-catalog.js";
 
-type ResolveInstallableChannelPluginResult = {
-  cfg: OpenClawConfig;
-  channelId?: ChannelId;
-  plugin?: ChannelPlugin;
-  catalogEntry?: ChannelPluginCatalogEntry;
-  configChanged: boolean;
-  pluginInstalled: boolean;
-  supportsRequestedCapability?: boolean;
-};
-
 /** Resolve an existing channel plugin, scoped setup plugin, or installable catalog entry. */
 export async function resolveInstallableChannelPlugin(params: {
   cfg: OpenClawConfig;
@@ -37,7 +26,7 @@ export async function resolveInstallableChannelPlugin(params: {
   preferRegisteredPlugin?: boolean;
   prompter?: WizardPrompter;
   supports?: (plugin: ChannelPlugin) => boolean;
-}): Promise<ResolveInstallableChannelPluginResult> {
+}) {
   const supports = params.supports ?? (() => true);
   let nextCfg = params.cfg;
   const directChannelId = params.channelId ?? normalizeChannelId(params.rawChannel);
@@ -52,7 +41,6 @@ export async function resolveInstallableChannelPlugin(params: {
       plugin: registeredPlugin,
       configChanged: false,
       pluginInstalled: false,
-      supportsRequestedCapability: supports(registeredPlugin),
     };
   }
 
@@ -133,6 +121,5 @@ export async function resolveInstallableChannelPlugin(params: {
     catalogEntry,
     configChanged: nextCfg !== params.cfg,
     pluginInstalled,
-    supportsRequestedCapability: plugin ? supports(plugin) : undefined,
   };
 }

@@ -1,4 +1,5 @@
 import { setTimeout as delay } from "node:timers/promises";
+import { raceWithTimeout } from "../../packages/retry/src/index.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { NodeWorkerCapacity } from "./node-worker-capacity.js";
@@ -87,23 +88,14 @@ export function createNodeWorkerLaunchRecovery(
     if (awaitCleanup) {
       return await recovery.done;
     }
-    let timer: NodeJS.Timeout | undefined;
-    try {
-      const observed = await Promise.race([
-        recovery.done,
-        new Promise<null>((resolve) => {
-          timer = setTimeout(() => resolve(null), NODE_WORKER_STOP_GRACE_MS);
-          timer.unref?.();
-        }),
-      ]);
-      if (observed !== null) {
-        return observed;
-      }
-      recovery.params.notifyCapacity = true;
-      return (await context.store.get(receipt.launchId)) ?? receipt;
-    } finally {
-      clearTimeout(timer);
+    const observed = await raceWithTimeout(recovery.done, NODE_WORKER_STOP_GRACE_MS, () => null, {
+      ref: false,
+    });
+    if (observed !== null) {
+      return observed;
     }
+    recovery.params.notifyCapacity = true;
+    return (await context.store.get(receipt.launchId)) ?? receipt;
   };
 }
 
@@ -156,19 +148,15 @@ async function recoverNodeWorkerLaunch(params: {
     if (!(await stillOwned())) {
       return latest();
     }
-    if (containerState === "unknown") {
+    if (containerState === "unknown" || containerState === "reused") {
       if (params.state === "cancelled") {
         return latest();
       }
       throw new Error(
-        `node worker container ${receipt.container.containerId} could not be inspected; restore its ${receipt.container.engine} engine before enabling worker hosting`,
+        containerState === "unknown"
+          ? `node worker container ${receipt.container.containerId} could not be inspected; restore its ${receipt.container.engine} engine before enabling worker hosting`
+          : `node worker launch ${receipt.launchId} lost its container ownership`,
       );
-    }
-    if (containerState === "reused") {
-      if (params.state === "cancelled") {
-        return latest();
-      }
-      throw new Error(`node worker launch ${receipt.launchId} lost its container ownership`);
     }
     await params.containerLifecycle.remove(receipt.container, receipt);
   } else if (receipt.worker && receipt.workerCleanupMode === "linux-subreaper") {

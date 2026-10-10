@@ -3,11 +3,12 @@ import { html, nothing, type ReactiveControllerHost, type TemplateResult } from 
 import { normalizeSessionIconValue } from "../../../packages/gateway-protocol/src/session-agent-status.js";
 import { applicationContext } from "../app/context.ts";
 import { t } from "../i18n/index.ts";
+import { registerSessionOrganizationEnglish } from "../i18n/locales/en-session-organization.ts";
 import { EDITOR_IDS, type EditorId } from "../lib/editor-links.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import { icons } from "./icons.ts";
 import { menuShortcutHint } from "./menu-shortcuts.ts";
-import { handleAppearanceGridKeydown, renderAppearancePicker } from "./session-icon-picker.ts";
+import { renderAppearancePicker } from "./session-icon-picker.ts";
 import {
   renderCompactSessionMenuFrame,
   renderCompactSessionMenuNavigationItem,
@@ -18,18 +19,23 @@ import {
   renderSessionGroupOptions,
   sessionArchiveShortcut,
 } from "./session-menu-options.ts";
+import { SessionMenuSnooze, type SessionSnoozeMenuAction } from "./session-menu-snooze.ts";
 import type { SessionCreatedActor, SessionOwnerOption } from "./session-owner-chip.ts";
 import { SessionOwnerMenu } from "./session-owner-menu.ts";
 import "../styles/sidebar-menus.css";
+
+registerSessionOrganizationEnglish();
 
 export type SessionMenuData = {
   label: string;
   sessionId: string | null;
   isChild?: boolean;
+  hasChildren?: boolean;
   pinnable?: boolean;
   pinned: boolean;
   unread: boolean;
   archived: boolean;
+  snoozedUntil: number | null;
   hiddenFromInvolvingMe?: boolean;
   archiving?: boolean;
   category: string | null;
@@ -55,6 +61,8 @@ const SIMPLE_SESSION_ACTIONS = [
   "fork",
   "new-group",
   "toggle-archived",
+  "archive-tree",
+  "move-to-top-level",
   "delete",
 ] as const;
 
@@ -66,7 +74,8 @@ export type SessionManagementAction =
   | { kind: "set-icon"; icon: string | null }
   | { kind: "set-color"; color: string | null }
   | { kind: "assign-owner"; owner: Pick<SessionOwnerOption, "type" | "id"> }
-  | { kind: "move-to-group"; category: string | null };
+  | { kind: "move-to-group"; category: string | null }
+  | SessionSnoozeMenuAction;
 
 export type SessionManagementActionKind = SessionManagementAction["kind"];
 
@@ -76,6 +85,7 @@ export const EMPTY_SESSION_MENU_DATA: SessionMenuData = {
   pinned: false,
   unread: false,
   archived: false,
+  snoozedUntil: null,
   category: null,
   icon: null,
   color: null,
@@ -94,6 +104,7 @@ type SessionMenuActionsState = {
   forkDisabled: boolean;
   forkFromLastCompleted: boolean;
   archiveAllowed: boolean;
+  snoozeAllowed?: boolean;
   archiveShortcut?: boolean;
   deleteAllowed: boolean;
   groups: readonly string[];
@@ -111,6 +122,15 @@ export class SessionMenuActions {
   private readonly ownerMenu: SessionOwnerMenu;
   private iconPickerMode: "grid" | "custom" = "grid";
   private customIconValue = "";
+  private readonly snoozeMenu = new SessionMenuSnooze({
+    readWakeTime: () => this.readState().session.snoozedUntil,
+    eligible: () => !this.actionExtraDisabled("snooze"),
+    disabled: (kind) => this.actionDisabled(kind, this.actionExtraDisabled(kind)),
+    disabledReason: (kind) => this.readState().actionDisabledReasons[kind],
+    renderItem: (...args) => this.renderItem(...args),
+    renderSubmenu: (...args) => this.renderSubmenu(...args),
+    runAction: (action) => this.runAction(action),
+  });
 
   constructor(
     private readonly host: SessionMenuActionsHost,
@@ -164,6 +184,11 @@ export class SessionMenuActions {
         return batch || !session.sessionId;
       case "toggle-pin":
         return batch || session.pinnable === false || session.isChild === true || session.archived;
+      case "snooze":
+      case "wake":
+        return (
+          !state.snoozeAllowed || this.actionExtraDisabled("toggle-pin") || !state.archiveAllowed
+        );
       case "toggle-involving-me":
         return (
           !this.involvementAvailable ||
@@ -180,7 +205,17 @@ export class SessionMenuActions {
         return batch || state.forkDisabled;
       case "move-to-group":
       case "new-group":
-        return session.isChild === true;
+        return false;
+      case "move-to-top-level":
+        return batch || !session.isChild;
+      case "archive-tree":
+        return (
+          batch ||
+          !session.hasChildren ||
+          session.archived ||
+          session.archiving === true ||
+          !state.archiveAllowed
+        );
       case "toggle-archived":
         return session.archiving === true || (!batch && !session.archived && !state.archiveAllowed);
       case "delete":
@@ -215,6 +250,9 @@ export class SessionMenuActions {
     const kind = SIMPLE_SESSION_ACTIONS.find((candidate) => candidate === value);
     if (kind) {
       this.runAction({ kind });
+      return true;
+    }
+    if (this.snoozeMenu.handleSelect(value)) {
       return true;
     }
     if (value.startsWith("open-in:")) {
@@ -406,6 +444,8 @@ export class SessionMenuActions {
             )
           : nothing
       }
+      ${!batch && session.isChild ? this.renderItem("move-to-top-level", t("sessionsView.moveToTopLevel"), icons.arrowUpRight) : nothing}
+      ${this.snoozeMenu.renderAction()}
       ${this.renderItem(
         "toggle-archived",
         t(
@@ -423,6 +463,7 @@ export class SessionMenuActions {
         session.archived ? icons.archiveRestore : icons.archive,
         { shortcut: "a" },
       )}
+      ${!batch && session.hasChildren && !session.archived ? this.renderItem("archive-tree", t("sessionsView.archiveSessionTree"), icons.archive) : nothing}
     `;
   }
 
@@ -478,9 +519,6 @@ export class SessionMenuActions {
     const state = this.readState();
     const batch = state.selectionCount > 1;
     const count = String(state.selectionCount);
-    if (state.session.isChild === true) {
-      return nothing;
-    }
     const label = batch
       ? t("sessionsView.moveToGroupMenuCount", { count })
       : t("sessionsView.moveToGroupMenu");
@@ -511,6 +549,8 @@ export class SessionMenuActions {
   private renderSubmenuBody(view: Exclude<CompactSessionMenuView, "root">, inline = false) {
     const state = this.readState();
     switch (view) {
+      case "snooze":
+        return this.snoozeMenu.renderSubmenu(inline);
       case "copy":
         return this.renderCopySubmenu(inline);
       case "open-in":
@@ -628,7 +668,6 @@ export class SessionMenuActions {
       onBack: this.showIconGrid,
       onInput: this.updateCustomIconValue,
       onApply: this.applyCustomIcon,
-      onGridKeydown: handleAppearanceGridKeydown,
     });
   }
 

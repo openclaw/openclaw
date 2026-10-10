@@ -1,4 +1,3 @@
-// Memory destination shell and its merged Settings surface.
 import { html, nothing, type TemplateResult } from "lit";
 import { shellLayoutTraits } from "../../app/shell-layout-traits.ts";
 import { renderHubTabs } from "../../components/hub-tabs.ts";
@@ -178,11 +177,8 @@ type MemoryViewProps = {
   pluginsHref: string;
   memoryImportHref: string;
   canImportMemory: boolean;
-  /** New status-led landing view. */
   overview: TemplateResult;
-  /** Search and read the selected agent's indexed memory. */
   memories: TemplateResult;
-  /** Agent-scoped dream diary and scene. */
   dreams: TemplateResult;
   /** One embedded editor for every `memory.*` schema field. */
   editor: TemplateResult;
@@ -198,7 +194,7 @@ const MEMORY_ENGINE_OFF = "";
 
 function engineHintKey(selection: MemoryEngineSelection): string {
   switch (selection.kind) {
-    case "auto":
+    case "default":
       return "memoryPage.engine.autoHint";
     case "off":
       return "memoryPage.engine.offHint";
@@ -217,21 +213,9 @@ function renderEngineSection(props: MemoryViewProps) {
     t("memoryPage.engine.openClawMemory");
   const defaultDescription = renderSettingsDefaultDescription(
     defaultEngine,
-    props.engineSelection.kind !== "auto",
+    props.engineSelection.kind !== "default",
   );
-  if (props.engineOptions.length === 0) {
-    return renderSettingsSection(
-      { title: t("memoryPage.engine.title"), description: t("memoryPage.engine.description") },
-      renderSettingsRow({
-        title: t("memoryPage.engine.rowTitle"),
-        description: html`
-          ${t("memoryPage.engine.catalogUnavailable")} ${t(engineHintKey(props.engineSelection))}
-          ${defaultDescription}
-        `,
-        control: renderSettingsValue(engineId ?? t("memoryPage.engine.off"), { mono: true }),
-      }),
-    );
-  }
+  const available = props.engineOptions.length > 0;
   const options = [
     ...props.engineOptions.map((option) => ({
       value: option.id,
@@ -246,19 +230,24 @@ function renderEngineSection(props: MemoryViewProps) {
     html`
       ${renderSettingsRow({
         title: t("memoryPage.engine.rowTitle"),
-        description: html`${t(engineHintKey(props.engineSelection))} ${defaultDescription}`,
-        stacked: true,
-        control: renderSettingsSegmented({
-          value: engineId ?? MEMORY_ENGINE_OFF,
-          options,
-          disabled: props.engineBusy,
-          ariaLabel: t("memoryPage.engine.rowTitle"),
-          onChange: (value) => props.onEngineChange(value || null),
-        }),
+        description: available
+          ? html`${t(engineHintKey(props.engineSelection))} ${defaultDescription}`
+          : html`${t("memoryPage.engine.catalogUnavailable")}
+            ${t(engineHintKey(props.engineSelection))} ${defaultDescription}`,
+        stacked: available,
+        control: available
+          ? renderSettingsSegmented({
+              value: engineId ?? MEMORY_ENGINE_OFF,
+              options,
+              disabled: props.engineBusy,
+              ariaLabel: t("memoryPage.engine.rowTitle"),
+              onChange: (value) => props.onEngineChange(value || null),
+            })
+          : renderSettingsValue(engineId ?? t("memoryPage.engine.off"), { mono: true }),
       })}
-      ${renderDisabledEngineRow(props, engineId)}
+      ${available ? renderDisabledEngineRow(props, engineId) : nothing}
       ${
-        props.engineOutcome === null
+        !available || props.engineOutcome === null
           ? nothing
           : renderSettingsRow({
               title: t(

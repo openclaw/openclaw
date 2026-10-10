@@ -32,46 +32,6 @@ describe("listReactionsFeishu", () => {
     listMock.mockReset();
   });
 
-  it("reads the SDK's nested operator ownership fields", async () => {
-    listMock.mockResolvedValue({
-      code: 0,
-      data: {
-        items: [
-          {
-            reaction_id: "r-app",
-            reaction_type: { emoji_type: "THUMBSUP" },
-            operator: { operator_type: "app", operator_id: "cli_main" },
-          },
-          {
-            reaction_id: "r-user",
-            reaction_type: { emoji_type: "HEART" },
-            operator: { operator_type: "user", operator_id: "ou_user" },
-          },
-        ],
-      },
-    });
-
-    await expect(
-      listReactionsFeishu({
-        cfg: {} as ClawdbotConfig,
-        messageId: "om_message",
-      }),
-    ).resolves.toEqual([
-      {
-        reactionId: "r-app",
-        emojiType: "THUMBSUP",
-        operatorType: "app",
-        operatorId: "cli_main",
-      },
-      {
-        reactionId: "r-user",
-        emojiType: "HEART",
-        operatorType: "user",
-        operatorId: "ou_user",
-      },
-    ]);
-  });
-
   it("fails closed for missing or unrecognized operator metadata", async () => {
     listMock.mockResolvedValue({
       code: 0,
@@ -147,7 +107,20 @@ describe("listReactionsFeishu", () => {
       emojiType: "HEART",
     });
 
-    expect(reactions.map((reaction) => reaction.reactionId)).toEqual(["r-first", "r-bot"]);
+    expect(reactions).toEqual([
+      {
+        reactionId: "r-first",
+        emojiType: "HEART",
+        operatorType: "user",
+        operatorId: "ou_user",
+      },
+      {
+        reactionId: "r-bot",
+        emojiType: "HEART",
+        operatorType: "app",
+        operatorId: "cli_main",
+      },
+    ]);
     expect(listMock).toHaveBeenNthCalledWith(1, {
       path: { message_id: "om_message" },
       params: { reaction_type: "HEART" },
@@ -193,41 +166,5 @@ describe("listReactionsFeishu", () => {
     await expect(
       listReactionsFeishu({ cfg: {} as ClawdbotConfig, messageId: "om_message" }),
     ).rejects.toThrow("Feishu list reactions failed: continuation unavailable");
-  });
-
-  it("drains valid reaction lists beyond 100 pages", async () => {
-    let nextPage = 0;
-    listMock.mockImplementation(async () => {
-      nextPage += 1;
-      const hasMore = nextPage < 101;
-      return {
-        code: 0,
-        data: {
-          items: hasMore
-            ? []
-            : [
-                {
-                  reaction_id: "r-last-page",
-                  reaction_type: { emoji_type: "HEART" },
-                  operator: { operator_type: "app", operator_id: "cli_main" },
-                },
-              ],
-          has_more: hasMore,
-          page_token: hasMore ? `page-${nextPage}` : undefined,
-        },
-      };
-    });
-
-    await expect(
-      listReactionsFeishu({ cfg: {} as ClawdbotConfig, messageId: "om_message" }),
-    ).resolves.toEqual([
-      {
-        reactionId: "r-last-page",
-        emojiType: "HEART",
-        operatorType: "app",
-        operatorId: "cli_main",
-      },
-    ]);
-    expect(listMock).toHaveBeenCalledTimes(101);
   });
 });

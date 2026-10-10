@@ -83,21 +83,10 @@ function jsonLength(
   }
 }
 
-function utf8JsonByteLength(value: unknown): number | undefined {
-  return jsonLength(value, true);
-}
-
-function jsonCharLength(
-  value: unknown,
-  promptStringLengths?: PromptStringLengthPass,
-): number | undefined {
-  return jsonLength(value, false, promptStringLengths);
-}
-
 function responseStreamChunkByteLength(chunk: unknown): number | undefined {
   try {
     if (!isRecord(chunk)) {
-      return utf8JsonByteLength(chunk);
+      return jsonLength(chunk, true);
     }
     const type = chunk.type;
     if (
@@ -107,12 +96,12 @@ function responseStreamChunkByteLength(chunk: unknown): number | undefined {
       return Buffer.byteLength(chunk.delta, "utf8");
     }
     if (!("partial" in chunk)) {
-      return utf8JsonByteLength(chunk);
+      return jsonLength(chunk, true);
     }
     // Plain stream deltas can carry an accumulated partial snapshot. Byte metrics
     // count the new stream payload, not the answer-so-far replay.
     const { partial: _partial, ...snapshotlessChunk } = chunk;
-    return utf8JsonByteLength(snapshotlessChunk);
+    return jsonLength(snapshotlessChunk, true);
   } catch {
     return undefined;
   }
@@ -163,8 +152,10 @@ function streamContextModelPromptStats(
   const tools = Array.isArray(streamContext.tools) ? streamContext.tools : undefined;
   const systemPrompt =
     typeof streamContext.systemPrompt === "string" ? streamContext.systemPrompt : undefined;
-  const inputMessagesChars = messages ? jsonCharLength(messages, promptStringLengths) : undefined;
-  const toolDefinitionsChars = tools ? jsonCharLength(tools, promptStringLengths) : undefined;
+  const inputMessagesChars = messages
+    ? jsonLength(messages, false, promptStringLengths)
+    : undefined;
+  const toolDefinitionsChars = tools ? jsonLength(tools, false, promptStringLengths) : undefined;
   const systemPromptChars = systemPrompt?.length;
   if (messages === undefined && tools === undefined && systemPrompt === undefined) {
     return undefined;
@@ -178,21 +169,6 @@ function streamContextModelPromptStats(
     ...(tools ? { toolDefinitionsCount: tools.length } : {}),
     ...(toolDefinitionsChars !== undefined ? { toolDefinitionsChars } : {}),
     totalChars,
-  };
-}
-
-function normalizedModelCallUsage(rawUsage: unknown): ModelCallUsage | undefined {
-  if (!isRecord(rawUsage)) {
-    return undefined;
-  }
-  const usage = normalizeUsage(rawUsage as UsageLike);
-  if (!usage) {
-    return undefined;
-  }
-  const promptTokens = derivePromptTokens(usage);
-  return {
-    ...usage,
-    ...(promptTokens !== undefined ? { promptTokens } : {}),
   };
 }
 
@@ -224,9 +200,10 @@ function observeModelCallTerminalMessage(state: ModelCallObservationState, value
   } catch {
     return;
   }
-  const usage = normalizedModelCallUsage(rawUsage);
+  const usage = isRecord(rawUsage) ? normalizeUsage(rawUsage as UsageLike) : undefined;
   if (usage) {
-    state.usage = usage;
+    const promptTokens = derivePromptTokens(usage);
+    state.usage = { ...usage, ...(promptTokens !== undefined ? { promptTokens } : {}) };
   }
 }
 
@@ -234,10 +211,9 @@ function observeOutputMessageContent(state: ModelCallObservationState, chunk: un
   if (!isRecord(chunk)) {
     return;
   }
-  let type: unknown;
   let message: unknown;
   try {
-    type = chunk.type;
+    const type = chunk.type;
     message = type === "done" ? chunk.message : type === "error" ? chunk.error : undefined;
   } catch {
     return;
@@ -254,26 +230,31 @@ function observeOutputMessageContent(state: ModelCallObservationState, chunk: un
   }
 }
 
-function observeResultMessageContent(
+function observeModelResponse(
   state: ModelCallObservationState,
   startedAt: number,
-  result: unknown,
+  value: unknown,
+  kind: "chunk" | "result",
 ): void {
   // A result decorator can settle long after the terminal stream chunk. Do not
   // label that bookkeeping delay as new provider activity. Result-only adapters
   // still have an observed response when their result first arrives.
-  if (!state.terminalEventEmitted && state.terminalReason === undefined) {
+  if (!state.terminalEventEmitted && (kind === "chunk" || state.terminalReason === undefined)) {
     state.lastProviderActivityAtMs = Date.now();
   }
   state.timeToFirstByteMs ??= Math.max(0, Date.now() - startedAt);
-  observeModelCallTerminalMessage(state, result);
-  if (state.contentCapture?.outputMessages && state.outputMessages === undefined) {
-    state.outputMessages = [cloneDiagnosticContentValue(result)];
+  if (kind === "chunk") {
+    observeOutputMessageContent(state, value);
+  } else {
+    observeModelCallTerminalMessage(state, value);
+    if (state.contentCapture?.outputMessages && state.outputMessages === undefined) {
+      state.outputMessages = [cloneDiagnosticContentValue(value)];
+    }
   }
-  if (state.responseStreamBytes === 0) {
-    const bytes = utf8JsonByteLength(result);
+  if (kind === "chunk" || state.responseStreamBytes === 0) {
+    const bytes = kind === "chunk" ? responseStreamChunkByteLength(value) : jsonLength(value, true);
     if (bytes !== undefined) {
-      state.responseStreamBytes = bytes;
+      state.responseStreamBytes += bytes;
     }
   }
 }
@@ -319,39 +300,6 @@ function isSemanticModelCallResult(result: unknown): boolean {
   }
 }
 
-function maybeEmitModelCallSemanticProgress(
-  eventBase: ModelCallEventBase,
-  state: ModelCallObservationState,
-  result: unknown,
-): void {
-  if (state.semanticProgressEmitted || !isSemanticModelCallResult(result)) {
-    return;
-  }
-  state.semanticProgressEmitted = true;
-  emitCoreSemanticRunProgressDiagnosticEvent({
-    runId: eventBase.runId,
-    ...(eventBase.sessionKey ? { sessionKey: eventBase.sessionKey } : {}),
-    ...(eventBase.sessionId ? { sessionId: eventBase.sessionId } : {}),
-    reason: MODEL_CALL_SEMANTIC_PROGRESS_REASON,
-  });
-}
-
-function observeResponseChunk(
-  state: ModelCallObservationState,
-  startedAt: number,
-  chunk: unknown,
-): void {
-  if (!state.terminalEventEmitted) {
-    state.lastProviderActivityAtMs = Date.now();
-  }
-  state.timeToFirstByteMs ??= Math.max(0, Date.now() - startedAt);
-  observeOutputMessageContent(state, chunk);
-  const bytes = responseStreamChunkByteLength(chunk);
-  if (bytes !== undefined) {
-    state.responseStreamBytes += bytes;
-  }
-}
-
 export function createModelObserver(params: {
   config?: OpenClawConfig;
   streamContext: unknown;
@@ -376,19 +324,27 @@ export function createModelObserver(params: {
     promptStats,
     modelContent,
     assignRequestPayloadBytes(payload: unknown) {
-      const bytes = utf8JsonByteLength(payload);
+      const bytes = jsonLength(payload, true);
       if (bytes !== undefined) {
         state.requestPayloadBytes = bytes;
       }
     },
     observeResponseChunk(startedAt: number, chunk: unknown) {
-      observeResponseChunk(state, startedAt, chunk);
+      observeModelResponse(state, startedAt, chunk, "chunk");
     },
     observeFinalResult(eventBase: ModelCallEventBase, startedAt: number, result: unknown) {
-      observeResultMessageContent(state, startedAt, result);
+      observeModelResponse(state, startedAt, result, "result");
       // Queue semantic progress beside model lifecycle events so request starts,
       // progress, and the next request retain their authoritative FIFO ordering.
-      maybeEmitModelCallSemanticProgress(eventBase, state, result);
+      if (!state.semanticProgressEmitted && isSemanticModelCallResult(result)) {
+        state.semanticProgressEmitted = true;
+        emitCoreSemanticRunProgressDiagnosticEvent({
+          runId: eventBase.runId,
+          ...(eventBase.sessionKey ? { sessionKey: eventBase.sessionKey } : {}),
+          ...(eventBase.sessionId ? { sessionId: eventBase.sessionId } : {}),
+          reason: MODEL_CALL_SEMANTIC_PROGRESS_REASON,
+        });
+      }
     },
     maybeEmitStreamProgress(eventBase: ModelCallEventBase) {
       reportStreamProgress({
