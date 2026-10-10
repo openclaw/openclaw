@@ -1,6 +1,6 @@
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import type { ResolvedXAccount } from "./accounts.js";
-import { normalizeXUserId, readPublishedXAllowlist } from "./allowlist.js";
+import { normalizeXUserId, readPublishedXAllowlist, type XGitHubEntry } from "./allowlist.js";
 import type { XUser } from "./api.js";
 import { X_GUEST_TOOLS } from "./guest-tools.js";
 import { getXRuntime } from "./runtime.js";
@@ -28,7 +28,7 @@ export function resolveXSenderTier(
   const id = senderId && normalizeXUserId(senderId);
   const allowed = [
     ...(account.config.allowFrom ?? []),
-    ...readPublishedXAllowlist(getXRuntime(), account.accountId),
+    ...readPublishedXAllowlist(getXRuntime(), account.accountId, account.config.verifiedFromGitHub),
   ];
   return id && allowed.some((entry) => normalizeXUserId(entry) === id) ? "maintainer" : "guest";
 }
@@ -47,13 +47,21 @@ export function resolveXGuestToolPolicy(account: ResolvedXAccount) {
     : { deny: ["*"] };
 }
 
-export function formatXSenderLine(tier: XSenderTier, authorId: string, user?: XUser): string {
+export function formatXSenderLine(
+  tier: XSenderTier,
+  authorId: string,
+  user?: XUser,
+  github?: { repo: string; entry: XGitHubEntry },
+): string {
   const inline = (text: string) => text.replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, " ").trim();
   const username = user?.username ? `@${inline(user.username)}` : "";
   const displayName = user?.name ? `(${inline(user.name)})` : "";
   const label = [username, displayName].filter(Boolean).join(" ");
   const sender = `${label ? `${label}, ` : ""}X user id ${authorId}`;
   if (tier === "maintainer") {
+    if (github) {
+      return `This is from a verified user: ${sender}, GitHub @${inline(github.entry.githubLogin)} with write access to ${inline(github.repo)}.`;
+    }
     return `This is from a verified user: ${sender}, on the maintainer allowlist.`;
   }
   const helperGuidance = supportsXGuestHelpers()

@@ -3962,7 +3962,6 @@
 ["src/auto-reply/reply/get-reply-directives.target-session.test.ts","./get-reply-exec-overrides.js","e715b278ec5ed6c02543dddfdb5164b1622b779621a2b750b2fca1b3e0e1bf2b",1]
 ["src/auto-reply/reply/get-reply-directives.target-session.test.ts","./get-reply-fast-path.js","1b419415bb7106580fdfaae9a30b960b8b2177c736edd6269ac83c58e24b4d2a",1]
 ["src/auto-reply/reply/get-reply-directives.target-session.test.ts","./groups.js","9395e0a17313e5618e425a4870612e167eece4502c94584d7781603770315ede",1]
-["src/auto-reply/reply/get-reply-directives.target-session.test.ts","./model-selection.js","e262c05c69c9736bb64226f859c467c212f12be0563a9fddbb1efc8ba4fa7854",1]
 ["src/auto-reply/reply/get-reply-directives.target-session.test.ts","./reply-elevated.js","c6af380e6369d6b06fd23590912230bbda621e3857f77e285aa06c45156f5f90",1]
 ["src/auto-reply/reply/get-reply-directives.target-session.test.ts","./runtime-policy-session-key.js","d02a56e8c8334a8e3199d73e44ebe80ff0df09850ac91fbbebb9f486823c59ff",1]
 ["src/auto-reply/reply/get-reply-inline-actions.skip-when-config-empty.test.ts","../../channels/plugins/index.js","60981ed2d206754e6bfec0329eda9327c6c81a59cb02a31596d0769e088dd5c2",1]

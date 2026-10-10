@@ -1,5 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
-import { SessionMaintenancePreservationConflictError } from "../../../config/sessions/session-mutation-conflict-error.js";
+import { SqliteSessionMutationConflictError } from "../../../config/sessions/session-mutation-conflict-error.js";
 import { getAsyncWorkSignal } from "../../../shared/async-work-scope.js";
 import {
   executeExistingOpenClawStateRead,
@@ -488,9 +488,7 @@ export async function prepareSubagentMaintenanceReadSnapshot(
       capture() {
         assertCurrent();
         if (invalidated) {
-          throw new SessionMaintenancePreservationConflictError(
-            "Subagent maintenance facts changed during preparation",
-          );
+          throw new SqliteSessionMutationConflictError("session maintenance");
         }
         return capture(persisted);
       },

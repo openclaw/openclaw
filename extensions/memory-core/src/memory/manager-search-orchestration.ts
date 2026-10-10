@@ -323,24 +323,21 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
       ) {
         repairedIndexIdentity = refreshSearchIdentity();
       }
-      // A pending OpenClaw chunking upgrade keeps the stored keyword rows
-      // readable: the resolver only marks chunkingVersionOnly when every
-      // corpus constraint still matches, so source or scope changes
-      // still fail closed here.
-      const chunkingUpgradePendingKeywordOnly = (state: MemoryIndexIdentityState): boolean =>
+      // Format upgrades retain keyword rows only when the identity owner confirms
+      // that every corpus constraint still matches; source/scope changes fail closed.
+      const formatUpgradePendingKeywordOnly = (state: MemoryIndexIdentityState): boolean =>
         state.status === "mismatched" &&
         state.owner === "openclaw" &&
-        state.code === "chunking_version" &&
         state.versionOrder === "older" &&
-        state.chunkingVersionOnly === true &&
+        (state.chunkingVersionOnly === true || state.lexicalCompatible === true) &&
         this.fts.enabled &&
         this.fts.available;
       if (repairedIndexIdentity.status !== "valid") {
-        if (!chunkingUpgradePendingKeywordOnly(repairedIndexIdentity)) {
+        if (!formatUpgradePendingKeywordOnly(repairedIndexIdentity)) {
           return [];
         }
         log.warn(
-          "memory search: chunking upgrade rebuild is pending; serving the existing keyword index",
+          "memory search: format upgrade rebuild is pending; serving the existing keyword index",
         );
       }
       // No watcher can observe later edits after kernel capacity exhaustion.
@@ -355,7 +352,7 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
       if (
         searchSyncEnabled &&
         !capacitySyncInFlight &&
-        !chunkingUpgradePendingKeywordOnly(repairedIndexIdentity) &&
+        !formatUpgradePendingKeywordOnly(repairedIndexIdentity) &&
         (this.dirty || this.sessionsDirty)
       ) {
         const trackedSearchSync = this.syncPublishedIndexInBackground({ reason: "search" })
@@ -376,10 +373,7 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
         }
         const leasedIdentity = refreshSearchIdentity();
         effectiveIdentity = leasedIdentity;
-        if (
-          leasedIdentity.status === "valid" ||
-          chunkingUpgradePendingKeywordOnly(leasedIdentity)
-        ) {
+        if (leasedIdentity.status === "valid" || formatUpgradePendingKeywordOnly(leasedIdentity)) {
           break;
         }
         await releaseReadGeneration();
@@ -406,10 +400,10 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
 
       const keywordOnly =
         embeddingBootstrapKeywordOnly ||
-        chunkingUpgradePendingKeywordOnly(effectiveIdentity) ||
+        formatUpgradePendingKeywordOnly(effectiveIdentity) ||
         !this.provider ||
         opts?.lexicalOnly;
-      if (chunkingUpgradePendingKeywordOnly(effectiveIdentity)) {
+      if (formatUpgradePendingKeywordOnly(effectiveIdentity)) {
         opts?.onDebug?.({ backend: "builtin", effectiveMode: "keyword-only" });
       }
       const handleRetrievalError = (kind: "FTS keyword" | "vector", error: unknown): [] => {
