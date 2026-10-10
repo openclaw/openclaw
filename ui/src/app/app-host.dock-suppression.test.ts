@@ -72,6 +72,20 @@ describe("OpenClaw shell dock suppression", () => {
         },
       },
       agentSelection: { state: { selectedId: "research" } },
+      agentIdentity: {
+        get: () => null,
+        entries: () => [],
+        ensure: vi.fn(async () => undefined),
+        invalidate: vi.fn(),
+        subscribe: () => () => undefined,
+      },
+      settingsAgentSelection: {
+        state: { selectedId: "main", scopeId: "main" },
+        intentRevision: 0,
+        set: vi.fn(),
+        setScope: vi.fn(),
+        subscribe: () => () => undefined,
+      },
       plugins: { selectedReplacement: () => null },
       config: {
         current: { terminalEnabled: true, serverVersion: null, devGitBranch: null },

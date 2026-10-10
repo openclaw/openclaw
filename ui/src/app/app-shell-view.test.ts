@@ -103,7 +103,7 @@ it("delegates the live shell to a workspace plugin and restores it after deselec
     },
   };
   const selected = vi.spyOn(runtime.context.plugins, "selectedReplacement");
-  selected.mockReturnValue(replacement);
+  selected.mockImplementation((surface) => (surface === "workspace" ? replacement : undefined));
   owner.invalidate();
   flush();
   const plugin = view.container.querySelector<ReactiveElement>("openclaw-plugin-view");

@@ -31,9 +31,9 @@ export function DevicePairSetup(props: {
     };
   });
   createEffect(
-    () => ({ open: props.props.open, ...state() }),
-    (current) => {
-      if (current.open && !current.renderer && !current.failed) {
+    () => props.props.open && !state().renderer && !state().failed,
+    (shouldLoad) => {
+      if (shouldLoad) {
         props.loader.load();
       }
     },

@@ -107,6 +107,20 @@ function createPairingShell(params: {
     },
     agents: { state: { agentsList: null } },
     agentSelection: { state: { selectedId: "main", scopeId: "main" } },
+    agentIdentity: {
+      get: () => null,
+      entries: () => [],
+      ensure: vi.fn(async () => undefined),
+      invalidate: vi.fn(),
+      subscribe: () => () => undefined,
+    },
+    settingsAgentSelection: {
+      state: { selectedId: "main", scopeId: "main" },
+      intentRevision: 0,
+      set: vi.fn(),
+      setScope: vi.fn(),
+      subscribe: () => () => undefined,
+    },
     sessions: { state: { result: null } },
     theme: { mode: "system", settings: loadSettings(), branding: resolveThemeBranding({}) },
   } as unknown as ApplicationContext;
@@ -135,6 +149,8 @@ function createPairingShell(params: {
     if (!mounted) {
       mountShellView(shell);
       mounted = true;
+      flush();
+      return;
     }
     refreshShellView(shell);
   };
