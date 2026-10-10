@@ -2,9 +2,10 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 import { crc32 } from "node:zlib";
 import * as tar from "tar";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createClawHubParentAuthorization,
   readPackedClawHubTransaction,
@@ -16,13 +17,17 @@ import {
   resolvePreparedClawHubMatrix,
   restorePreparedClawHubPackage,
 } from "../../scripts/clawhub-prepared-artifact.mjs";
+import { waitForClawHubPublicVersion } from "../../scripts/lib/clawhub-publication-state.mjs";
 import { verifyPublishedClawHubPackage } from "../../scripts/verify-clawhub-published-artifact.mjs";
 
 function requestUrl(input: Parameters<typeof fetch>[0]) {
   return typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
 }
 
+vi.mock("node:timers/promises", () => ({ setTimeout: vi.fn(async () => {}) }));
+
 const directories: string[] = [];
+afterEach(() => vi.clearAllMocks());
 afterEach(() =>
   directories.splice(0).forEach((directory) => rmSync(directory, { recursive: true, force: true })),
 );
@@ -162,6 +167,19 @@ function fixture(
     Buffer.from(JSON.stringify(transactions)),
   );
   const packageArtifact = artifact(3, `package-${packageId}`, 20, `${packageId}.tgz`, tarball);
+  const recoveryManifest = {
+    schemaVersion: 1,
+    kind: "openclaw-clawhub-recovery-manifest",
+    identity,
+    packages: [{ ...entry, publicationStatus: "pending", attemptId: "attempt-1" }],
+  };
+  const recoveryArtifact = artifact(
+    6,
+    "openclaw-clawhub-recovery-manifest-20-1",
+    20,
+    "recovery-manifest.json",
+    Buffer.from(JSON.stringify(recoveryManifest)),
+  );
   const dispatch = {
     schemaVersion: 1,
     repository,
@@ -192,7 +210,7 @@ function fixture(
     ],
     [
       "actions/runs/20/artifacts?per_page=100&page=1",
-      { total_count: 2, artifacts: [transactionsArtifact, packageArtifact] },
+      { total_count: 3, artifacts: [transactionsArtifact, packageArtifact, recoveryArtifact] },
     ],
     [
       "actions/runs/20/artifacts?name=openclaw-clawhub-transactions-20-1&per_page=100",
@@ -201,8 +219,23 @@ function fixture(
     [
       "actions/runs/20/attempts/1/jobs?per_page=100&page=1",
       {
-        total_count: 2,
+        total_count: 3,
         jobs: [
+          {
+            name: "Seal exact ClawHub recovery manifest",
+            run_id: 20,
+            run_attempt: 1,
+            head_sha: sha,
+            status: "completed",
+            conclusion: "success",
+            steps: [
+              {
+                name: "Upload sealed recovery manifest",
+                status: "completed",
+                conclusion: "success",
+              },
+            ],
+          },
           {
             name: "Seal ClawHub package transactions",
             run_id: 20,
@@ -234,9 +267,13 @@ function fixture(
     [`compare/${sha}...main`, { status: "identical" }],
     [`compare/${sha}...${verifierSha}`, { status: "identical" }],
     [`compare/${sha}...${verifierSha}?per_page=1&page=2`, { status: "identical" }],
-    ...[receiptArtifact, transactionsArtifact, packageArtifact, dispatchArtifact].map(
-      (item): [string, unknown] => [`actions/artifacts/${item.id}`, item],
-    ),
+    ...[
+      receiptArtifact,
+      transactionsArtifact,
+      packageArtifact,
+      dispatchArtifact,
+      recoveryArtifact,
+    ].map((item): [string, unknown] => [`actions/artifacts/${item.id}`, item]),
   ]);
   const githubReads: string[] = [];
   const registryReads: string[] = [];
@@ -264,6 +301,9 @@ function fixture(
     }
     expect(new Headers(init?.headers).has("authorization")).toBe(false);
     registryReads.push(url.pathname);
+    if (url.pathname.endsWith("/publication")) {
+      return Response.json({ name: entry.name, version: entry.version, state: "published" });
+    }
     if (url.pathname.endsWith("/trusted-publisher")) {
       return Response.json({
         trustedPublisher: {
@@ -696,7 +736,6 @@ describe("ClawHub prepared publication", () => {
       ).rejects.toThrow(/Plugin ClawHub New owner before preparing again/u);
       expect(registryRequests).toEqual([
         `https://clawhub.ai/api/v1/packages/${encodeURIComponent(f.entry.name)}/versions/${f.entry.version}/publication`,
-        `https://clawhub.ai/api/v1/packages/${encodeURIComponent(f.entry.name)}/versions/${f.entry.version}`,
         `https://clawhub.ai/api/v1/packages/${encodeURIComponent(f.entry.name)}/trusted-publisher`,
       ]);
     },
@@ -1069,7 +1108,115 @@ describe("ClawHub detached postpublish verification", () => {
     });
     expect(result.complete).toBe(true);
     expect(result.packages).toHaveLength(1);
+    f.metadata.set("actions/runs/20/artifacts?per_page=100&page=1", {
+      total_count: 2,
+      artifacts: [f.metadata.get("actions/artifacts/2"), f.packageArtifact],
+    });
+    await expect(
+      verifyClawHubPostpublish({
+        ...f.options,
+        parent,
+        parentStatePolicy: parentState.parentStatePolicy,
+      }),
+    ).rejects.toThrow(/sealed ClawHub original attempt roster/u);
   });
+
+  it("verifies historical successful publishers without recovery manifests", async () => {
+    const f = fixture();
+    f.metadata.set("actions/runs/20/artifacts?per_page=100&page=1", {
+      total_count: 2,
+      artifacts: [f.metadata.get("actions/artifacts/2"), f.packageArtifact],
+    });
+    expect(await verifyClawHubPostpublish(f.options)).toMatchObject({
+      complete: true,
+      packages: [expect.objectContaining({ inventoryDigest: f.entry.inventoryDigest })],
+    });
+    expect(f.registryReads.length).toBeGreaterThan(0);
+    expect(f.registryReads.some((url) => url.endsWith("/publication"))).toBe(false);
+    await expect(
+      verifyClawHubPostpublish({ ...f.options, verifyPublication: false }),
+    ).rejects.toThrow(/sealed ClawHub original attempt roster/u);
+  });
+
+  it.each(["published", "failed", "replacement"])(
+    "waits on the sealed original attempt before public readback: %s",
+    async (outcome) => {
+      const f = fixture();
+      let publicationReads = 0;
+      const fetchImpl: typeof fetch = async (input, init) => {
+        if (requestUrl(input).endsWith("/publication")) {
+          publicationReads += 1;
+          const state =
+            publicationReads === 1
+              ? { state: "pending", stage: "finalization", attemptId: "attempt-1" }
+              : outcome === "published"
+                ? { state: "published" }
+                : outcome === "failed"
+                  ? { state: "failed", recoverable: false, attemptId: "attempt-1" }
+                  : { state: "pending", stage: "checks", attemptId: "replacement" };
+          return Response.json({ name: f.entry.name, version: f.entry.version, ...state });
+        }
+        if (
+          requestUrl(input).endsWith(encodeURIComponent(f.entry.name)) &&
+          !(publicationReads === 2 && outcome === "published")
+        ) {
+          return Response.json({ package: { tags: { latest: "2026.8.1" } } });
+        }
+        return f.options.fetchImpl(input, init);
+      };
+      const options = { ...f.options, fetchImpl };
+      if (outcome === "published") {
+        expect((await verifyClawHubPostpublish(options)).complete).toBe(true);
+        expect(f.registryReads.length).toBeGreaterThan(0);
+      } else {
+        await expect(verifyClawHubPostpublish(options)).rejects.toThrow(
+          outcome === "failed" ? /publication failed/u : /sealed attempt/u,
+        );
+        expect(f.registryReads).toEqual([]);
+        expect(
+          JSON.parse(readFileSync(join(options.outputDir, "evidence.json"), "utf8")),
+        ).toMatchObject({
+          complete: false,
+        });
+      }
+      expect(publicationReads).toBe(2);
+      expect(sleep).toHaveBeenCalledExactlyOnceWith(10_000);
+    },
+  );
+
+  it.each(["published", "pending"])(
+    "reads authoritative completion after an earlier batch exhausts the wait budget: %s",
+    async (state) => {
+      const entry = { name: "@openclaw/example", version: "2026.8.2", attemptId: "attempt-1" };
+      const publication =
+        state === "published"
+          ? { state }
+          : { state, stage: "finalization", attemptId: entry.attemptId };
+      const fetchImpl = vi.fn(async () =>
+        Response.json({
+          name: entry.name,
+          version: entry.version,
+          ...publication,
+        }),
+      );
+      const onState = vi.fn();
+      const observation = waitForClawHubPublicVersion(entry, {
+        deadline: Date.now() - 1,
+        fetchImpl,
+        onState,
+      });
+      if (state === "published") {
+        await expect(observation).resolves.toBeUndefined();
+      } else {
+        await expect(observation).rejects.toThrow(
+          /attempt attempt-1.*Retry postpublish verification/u,
+        );
+      }
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+      expect(onState).toHaveBeenCalledWith(publication);
+      expect(sleep).not.toHaveBeenCalled();
+    },
+  );
 
   it("finds exact package producers beyond the first job page", async () => {
     const f = fixture();
@@ -1119,11 +1266,11 @@ describe("ClawHub detached postpublish verification", () => {
       jobs: unknown[];
     };
     f.metadata.set("actions/runs/20/attempts/1/jobs?per_page=100&page=1", {
-      total_count: 102,
+      total_count: 103,
       jobs: firstPage,
     });
     f.metadata.set("actions/runs/20/attempts/1/jobs?per_page=100&page=2", {
-      total_count: 102,
+      total_count: 103,
       jobs: original.jobs,
     });
     const result = await verifyClawHubPostpublish({
@@ -1193,7 +1340,7 @@ describe("ClawHub detached postpublish verification", () => {
       const tarballPath = join(options.outputDir, "3", "example.tgz");
       expect(readFileSync(tarballPath)).toEqual(f.tarball);
       const firstDownloads = [...archiveRequests];
-      expect(firstDownloads).toHaveLength(4);
+      expect(firstDownloads).toHaveLength(5);
       authorityRequests.length = 0;
       f.registryReads.length = 0;
       publicReadbackAvailable = true;

@@ -11,6 +11,7 @@ import type {
   CliStreamingDelta,
   CliThinkingDelta,
   CliThinkingProgress,
+  CliToolInputDelta,
   CliToolResultDelta,
   CliToolUseStartDelta,
 } from "../cli-output-contracts.js";
@@ -435,8 +436,14 @@ export function createCliEventHandlers(params: {
     emitLiveEvent("thinking", () => ({ progressTokens }));
   };
 
+  const emitCliToolInputDelta = (progress: CliToolInputDelta) => {
+    observedCliActivity = true;
+    emitLiveEvent("tool", () => ({ phase: "input_delta", ...progress }));
+  };
+
   return {
     emitLiveEvents,
+    emitCliToolInputDelta,
     // Display-only native events never enter host-tool correlation or delivery accounting.
     emitCliDisplayToolUseStart: (event: CliToolUseStartDelta) => emitToolUseStart(event, false),
     emitCliDisplayToolResult: (event: CliToolResultDelta) => emitToolResult(event, false),

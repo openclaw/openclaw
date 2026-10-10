@@ -290,6 +290,8 @@ export function bindSqliteWorkerBackend(
                   projectionNeedsReconcile = true;
                 },
               },
+              undefined,
+              database,
             );
             admit("commit");
             return { ok: true, value: { snapshot, projectionNeedsReconcile } };
@@ -390,12 +392,21 @@ export function bindSqliteWorkerBackend(
                     },
                     prepared,
                     projection,
+                    undefined,
+                    database,
                   )
-                : appendTranscriptEventSnapshotSync(scope, event, command.input.options, {
-                    ...projection,
-                    eventJson:
-                      typeof command.input.event === "string" ? command.input.event : undefined,
-                  });
+                : appendTranscriptEventSnapshotSync(
+                    scope,
+                    event,
+                    command.input.options,
+                    {
+                      ...projection,
+                      eventJson:
+                        typeof command.input.event === "string" ? command.input.event : undefined,
+                    },
+                    undefined,
+                    database,
+                  );
             admit("commit");
             return { ok: true, value: { snapshot, projectionNeedsReconcile } };
           },

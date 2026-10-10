@@ -8,7 +8,6 @@ const operations = [
   "database.domain.bind",
   "database.domain.close",
   "database.domain.publish",
-  "database.generationMatches",
   "database.inspectIdle",
   "database.prepareWrite",
   "database.walMaintenance",
