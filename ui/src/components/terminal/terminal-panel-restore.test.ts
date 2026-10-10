@@ -6,6 +6,7 @@ import { i18n } from "../../i18n/index.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import type { TerminalGatewayClient } from "./terminal-connection.ts";
+import type { TerminalPanelSessionController } from "./terminal-panel-session-controller.ts";
 import {
   createTerminalController,
   defineTestTerminalPanelElement,
@@ -93,6 +94,8 @@ function mountPanel(
   panel.client = client;
   panel.available = true;
   panel.page = panel.fullscreen = panel.embedded = options.page === true;
+  // Initialize the bridge before observing restore writes made during mount.
+  panel.requestUpdate();
   const sessions = terminalSessionsForTest(panel);
   const mountedPanel = { panel, sessions };
   mounted.push(mountedPanel);

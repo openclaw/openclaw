@@ -687,6 +687,7 @@ describe("embedded desktop panel presentation", () => {
       const replacement = createDeferred<DesktopConnectionHandle>();
       const previous = createConnectionHandle();
       const next = createConnectionHandle();
+      const replacementCanvas = document.createElement("canvas");
       let pending: Parameters<DesktopClient["connect"]>[0] | undefined;
       const request = vi.fn(async (method: string, params?: { control?: boolean }) => {
         if (method === "environments.list") {
@@ -702,6 +703,7 @@ describe("embedded desktop panel presentation", () => {
       });
       const connect = vi.fn(async (options: Parameters<DesktopClient["connect"]>[0]) => {
         if (options.viewOnly !== !initialControl) {
+          options.target.append(replacementCanvas);
           pending = options;
           return replacement.promise;
         }
@@ -724,6 +726,7 @@ describe("embedded desktop panel presentation", () => {
       try {
         await waitForSolid(() => expect(connect).toHaveBeenCalledOnce());
         await panel.updateComplete;
+        const surface = connect.mock.calls[0]![0].target;
         if (initialControl) {
           selectSizing(panel, "match");
           await panel.updateComplete;
@@ -766,6 +769,7 @@ describe("embedded desktop panel presentation", () => {
           canResize: true,
         });
         await waitForSolid(() => expect(connect).toHaveBeenCalledTimes(2));
+        expect(connect.mock.calls[1]![0].target).toBe(surface);
         if (handleTiming === "before") {
           replacement.resolve(next);
           await connect.mock.results[1]!.value;
@@ -796,6 +800,8 @@ describe("embedded desktop panel presentation", () => {
         gateway.emit("presence", { presence: [] });
         await panel.updateComplete;
         expect(pending.isCurrent()).toBe(true);
+        expect(panel.renderRoot.querySelector(".desktop-surface")).toBe(surface);
+        expect(replacementCanvas.isConnected).toBe(true);
         expect(sizingMenu(panel).value).toBe("fit");
         expect(Boolean(sizingMenu(panel).querySelector('option[value="match"]'))).toBe(
           !initialControl,

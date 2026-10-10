@@ -161,6 +161,7 @@ async function capture(revision, cwd) {
       "runner",
       `${fixturePath}/panel-parity.e2e.test.ts`,
       "--maxWorkers=1",
+      "--bail=1",
     ],
     { cwd, env, log: path.join(privateLogs, `${revision}.log`) },
   );

@@ -11,8 +11,12 @@ export default defineConfig({
     name: "panel-parity",
     environment: "node",
     include: ["scripts/fixtures/control-ui-panel-proof/panel-parity.e2e.test.ts"],
+    exclude: (sharedVitestConfig.test?.exclude ?? []).filter(
+      (pattern) => pattern !== "**/*.e2e.test.ts",
+    ),
     pool: "forks",
     isolate: true,
+    runner: undefined,
     maxWorkers: 1,
     fileParallelism: false,
     setupFiles: [],
