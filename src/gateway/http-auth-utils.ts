@@ -363,6 +363,33 @@ export async function authorizeControlUiReadRequestOrReply(
     }
     return null;
   }
+  const requestAuth = bindHttpResponseAuthority(
+    { authMethod, operatorScopes, ...authenticatedProfile },
+    params.res,
+    hasCurrentClientAuthority,
+  );
+  if (authMethod === "device-token" && token) {
+    const verifyCurrentDeviceToken = () =>
+      verifyHttpOperatorDeviceToken(token, authGeneration, deviceOperatorScopes);
+    // Profile attribution can yield after the original credential verification.
+    if (!(await verifyCurrentDeviceToken()) || !requestAuth.hasCurrentClientAuthority()) {
+      if (params.replyOnFailure !== false) {
+        requestAuth.assertCurrent();
+        sendUnauthorized(params.res);
+      }
+      return null;
+    }
+    const assertCurrent = requestAuth.assertCurrent;
+    requestAuth.revalidate = async () => {
+      assertCurrent();
+      const scopes = await verifyCurrentDeviceToken();
+      assertCurrent();
+      if (!scopes) {
+        sendUnauthorized(params.res);
+        throw new GatewayHttpRequestAuthorityError("Unauthorized");
+      }
+    };
+  }
   params.onPluginFrameGrants?.(
     setControlUiPluginAuthCookieForRequest(
       params.req,
@@ -373,29 +400,6 @@ export async function authorizeControlUiReadRequestOrReply(
       authenticatedProfile.authenticatedUserProfile?.profileId,
     ),
   );
-  const requestAuth = bindHttpResponseAuthority(
-    { authMethod, operatorScopes, ...authenticatedProfile },
-    params.res,
-    hasCurrentClientAuthority,
-  );
-  if (authMethod === "device-token" && token) {
-    const assertCurrent = requestAuth.assertCurrent;
-    requestAuth.revalidate = async () => {
-      assertCurrent();
-      const scopes = await verifyHttpOperatorDeviceToken(
-        token,
-        authGeneration,
-        deviceOperatorScopes,
-      );
-      assertCurrent();
-      if (!scopes) {
-        sendUnauthorized(params.res);
-        throw new GatewayHttpRequestAuthorityError("Unauthorized");
-      }
-    };
-    // Profile attribution can yield after the original credential verification.
-    await requestAuth.revalidate();
-  }
   return requestAuth;
 }
 
