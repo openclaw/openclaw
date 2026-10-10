@@ -101,7 +101,7 @@ suite.define(() => {
     const cursor = draft.indexOf("series");
     await composer.fill(draft);
     await composer.evaluate(
-      (element, offset) => element.setSelectionRange(offset, offset),
+      (element: HTMLTextAreaElement, offset) => element.setSelectionRange(offset, offset),
       cursor + 1,
     );
     await composer.press("ArrowLeft");
