@@ -54,7 +54,7 @@ import { renderApplicationShell, type ShellViewHost } from "./app-shell-view.ts"
 import type { ApplicationRuntime } from "./bootstrap.ts";
 import type { ApplicationContext } from "./context.ts";
 import { syncControlUiSystemChrome } from "./control-ui-presentation.ts";
-import type { ControlUiReadiness, ControlUiCommittedPresentation } from "./control-ui-readiness.ts";
+import type { ControlUiReadiness } from "./control-ui-readiness.ts";
 import { createGatewayControlUiReloadOptions } from "./gateway-control-ui-reload.ts";
 import {
   APP_SIDEBAR_ELEMENT,
@@ -611,11 +611,6 @@ class OpenClawShell
 
   protected override willUpdate(): void {
     this.readiness?.invalidate();
-  }
-
-  async settleReadiness(): Promise<ControlUiCommittedPresentation> {
-    const { settleLitShellReadiness } = await import("./control-ui-readiness-lit.ts");
-    return settleLitShellReadiness(this);
   }
 
   override updated(changed: PropertyValues<this>) {

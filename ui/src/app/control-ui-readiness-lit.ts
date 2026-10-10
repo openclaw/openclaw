@@ -4,18 +4,19 @@ import {
   ControlUiReadiness,
   type ControlUiCommittedPresentation,
   type ControlUiReadinessOutlet,
-  type ControlUiReadinessShell,
 } from "./control-ui-readiness.ts";
 import { APP_SIDEBAR_ELEMENT } from "./lazy-custom-element.ts";
 
-export async function settleLitShellReadiness(
-  shell: LitElement & {
-    readonly activeSessionKey: string;
-    readonly navigationSidebar: HTMLElement & {
-      readonly navigationVisible?: boolean;
-      readonly updateComplete?: Promise<unknown>;
-    };
-  },
+type LitReadinessShell = LitElement & {
+  readonly activeSessionKey: string;
+  readonly navigationSidebar: HTMLElement & {
+    readonly navigationVisible?: boolean;
+    readonly updateComplete?: Promise<unknown>;
+  };
+};
+
+async function settleLitShellReadiness(
+  shell: LitReadinessShell,
 ): Promise<ControlUiCommittedPresentation> {
   await shell.updateComplete;
   if (!shell.querySelector(".shell")) {
@@ -49,9 +50,9 @@ export function createLitControlUiReadiness(root: LitElement, runtime: Applicati
     } else if (root.querySelector("openclaw-login-gate")) {
       presentation = { kind: "login", navigationVisible: false };
     } else {
-      const shell = root.querySelector<ControlUiReadinessShell>("openclaw-app-shell");
+      const shell = root.querySelector<LitReadinessShell>("openclaw-app-shell");
       presentation = shell
-        ? await shell.settleReadiness()
+        ? await settleLitShellReadiness(shell)
         : { kind: "loading", navigationVisible: false };
     }
     const terminal = root.querySelector<LitElement & { available?: boolean }>(
