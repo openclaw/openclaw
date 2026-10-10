@@ -763,6 +763,8 @@ export async function runGatewayLoop(params: {
         shutdownStep = "restart-signal-settlement";
         await signals.settle();
         shutdownStep = "gateway-server-close";
+        // Natural exit must retire native watchers, not detach them for a forced exit.
+        // This retains the synchronous macOS watcher-close cost until native retirement improves.
         await runWithProcessCleanupBudget(
           budget.cleanupBudget(shutdownDeadline, HARD_EXIT_WATCHDOG_GRACE_MS),
           () =>

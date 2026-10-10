@@ -26,6 +26,7 @@ export {
 // Validator names mirror schemas so callers can pair them with wire contracts.
 export const validateCommandsListParams = compile(S.CommandsListParamsSchema);
 export const validateBackupStatusParams = compile(S.BackupStatusParamsSchema);
+export const validateBackupRecordOutcomeParams = compile(S.BackupRecordOutcomeParamsSchema);
 export const validateStorageLocationsListParams = compile(S.StorageLocationsListParamsSchema);
 export const validateStorageLocationsProbeParams = compile(S.StorageLocationsProbeParamsSchema);
 export const validateComputerStatusParams = compile(S.ComputerStatusParamsSchema);
@@ -79,6 +80,9 @@ export const validateMentionsListParams = compile(S.MentionsListParamsSchema);
 export const validateMentionsDismissParams = compile(S.MentionsDismissParamsSchema);
 export const validateMentionsListResult = compile(S.MentionsListResultSchema);
 export const validateMentionsChangedEvent = compile(S.MentionsChangedEventSchema);
+export const validateUsersBackgroundGetParams = compile(S.UsersBackgroundGetParamsSchema);
+export const validateUsersBackgroundUploadParams = compile(S.UsersBackgroundUploadParamsSchema);
+export const validateUsersBackgroundRemoveParams = compile(S.UsersBackgroundRemoveParamsSchema);
 export const validateUsersPrefsGetParams = compile(S.UsersPrefsGetParamsSchema);
 export const validateUsersPrefsSetParams = compile(S.UsersPrefsSetParamsSchema);
 export const validateUsersPersonalFileGetParams = compile(S.UsersPersonalFileGetParamsSchema);
@@ -253,6 +257,10 @@ export const validateSecretsStoreListParams = compile(S.SecretsStoreListParamsSc
 export const validateSecretsStoreListResult = compile(S.SecretsStoreListResultSchema);
 export const validateSecretsStoreSetParams = compile(S.SecretsStoreSetParamsSchema);
 export const validateSecretsStoreDeleteParams = compile(S.SecretsStoreDeleteParamsSchema);
+export const validateSecretsStoreImportParams = compile(S.SecretsStoreImportParamsSchema);
+export const validateSecretsStoreAllowedHostsParams = compile(
+  S.SecretsStoreAllowedHostsParamsSchema,
+);
 export const validateSecretsStoreMutationResult = compile(S.SecretsStoreMutationResultSchema);
 // Runs before the schema: compare only numeric boundaries and leave type errors to the schema.
 function checkPulseBoundaries(data: unknown) {

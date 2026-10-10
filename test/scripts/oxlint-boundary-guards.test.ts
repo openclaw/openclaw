@@ -40,6 +40,28 @@ const cases = [
     violations: 5,
   },
   {
+    rule: "openclaw-boundaries/no-raw-window-open-call",
+    violation: `${FIXTURES}/boundary-calls.tsx`,
+    violations: 2,
+    lines: [3, 4],
+  },
+  {
+    rule: "openclaw-boundaries/no-register-http-handler-call",
+    violation: `${FIXTURES}/boundary-calls.tsx`,
+    violations: 1,
+    lines: [5],
+  },
+  {
+    rule: "openclaw-boundaries/no-raw-window-open-call",
+    violation: `${FIXTURES}/boundary-calls.test-harness.tsx`,
+    violations: 0,
+  },
+  {
+    rule: "openclaw-boundaries/no-register-http-handler-call",
+    violation: `${FIXTURES}/boundary-calls.test-harness.tsx`,
+    violations: 0,
+  },
+  {
     rule: "openclaw-boundaries/no-widen-then-assert",
     violation: `${FIXTURES}/widen-then-assert-violation.test.ts`,
     violations: 3,
@@ -117,7 +139,7 @@ describe("oxlint boundary guards", () => {
         "config/oxlint/boundary-guards.json",
         "--format",
         "json",
-        ...cases.map((testCase) => testCase.violation),
+        ...new Set(cases.map((testCase) => testCase.violation)),
       ],
       { encoding: "utf8" },
     );
@@ -127,7 +149,7 @@ describe("oxlint boundary guards", () => {
       diagnostics: typeof diagnostics;
       number_of_files: number;
     };
-    expect(report.number_of_files).toBe(cases.length);
+    expect(report.number_of_files).toBe(new Set(cases.map((testCase) => testCase.violation)).size);
     diagnostics = report.diagnostics;
   });
 

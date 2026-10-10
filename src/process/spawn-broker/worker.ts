@@ -6,6 +6,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { getProcessInstanceStartTime } from "../../shared/pid-alive.js";
 import { spawnWithInheritedOomScore } from "../linux-oom-score.js";
+import { waitForBrokerChildCompletion } from "./child-completion.js";
 import {
   drainCurrentBrokerProcessGroup,
   isBrokerChildGroupAlive,
@@ -277,9 +278,7 @@ async function launch(
       if (!child) {
         throw new Error("Spawn broker command did not start");
       }
-      spawnedClose = new Promise<void>((resolve) => {
-        child.once("close", () => resolve());
-      });
+      spawnedClose = waitForBrokerChildCompletion(child);
       if (detached && child.pid && process.platform !== "win32") {
         spawnedGroupIdentity = {
           pid: child.pid,
@@ -292,9 +291,7 @@ async function launch(
       if (!execa) {
         // EMFILE/ENFILE can return before stdio exists; Node still owns error and close.
         if (child.stdio === undefined) {
-          const closed = new Promise<void>((resolve) => {
-            child.once("close", () => resolve());
-          });
+          const closed = spawnedClose;
           const error = await new Promise<Error>((resolve) => {
             child.once("error", resolve);
           });
@@ -355,7 +352,7 @@ async function launch(
       );
       child.once("disconnect", () => event({ type: "disconnect", id: message.id }));
       child.once("exit", (code, signal) => event({ type: "exit", id: message.id, code, signal }));
-      child.once("close", () => {
+      void spawnedClose.then(() => {
         event({ type: "closed", id: message.id });
         current.exited = true;
         forget(message.id, current);

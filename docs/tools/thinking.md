@@ -188,6 +188,7 @@ check the per-agent setting if the model default still does not take effect.
 - Directive-only message toggles whether thinking blocks are shown in replies.
 - When enabled, reasoning is sent as a **separate message** prefixed with `Thinking`.
 - `stream`: streams reasoning while the reply is generating when the active channel supports reasoning previews, then sends the final answer without reasoning. Channel previews remove recognized internal runtime context before delivery; the original reasoning remains unchanged for model replay.
+- Control UI shows native-provider reasoning during generation for `on` and `stream`, with **View → Reasoning** enabled. In `on`, the preview hands off to the saved reasoning; in `stream`, it disappears when the run ends.
 - Control UI history shows saved reasoning only for `on`, with **View → Reasoning** enabled. `off` and `stream` keep it hidden, including after reload.
 - Visible Control UI reasoning preserves Markdown paragraphs and fenced code blocks, including blank lines inside code.
 - Alias: `/reason`.
@@ -210,7 +211,8 @@ Malformed local-model reasoning tags are handled conservatively. Closed `<think>
 ## Web chat UI
 
 - Model, thinking-level, and fast-mode overrides can be changed in an existing session with `operator.write`; administrator access is not required for these three controls. Read-only clients cannot change them.
-- These are session preferences for subsequent turns, not a promise to change an already-running model call. The composer disables the controls while a reply is running and while a model change is being applied.
+- Model and thinking controls remain available while a message is sending, preparing, or streaming. They display the chosen session preference; saving a change does not interrupt or change an already-executing turn. Ordinary queued messages that have not started use the latest saved preference, while explicit per-message overrides keep their existing precedence.
+- While a model change is being applied, model and effort controls remain disabled until the new model's supported settings arrive. Fast mode remains disabled during an active reply.
 - The web chat thinking selector shows the explicit session override, or the inherited configured/provider default when no override is stored.
 - Refreshing, reloading, or compacting a conversation keeps an inherited choice inherited; it does not store the resolved level as an override. While model metadata is loading, refreshes retain the known thinking profile for the same model and runtime.
 - Selecting a level on the effort slider writes an explicit session override immediately via `sessions.patch`; it does not wait for the next send and it is not a one-shot `thinkingOnce` override.

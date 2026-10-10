@@ -1358,10 +1358,7 @@ describe("modelsAuthLoginCommand", () => {
 
     await expect(
       modelsAuthPasteTokenCommand({ provider: "openai" }, runtime),
-    ).rejects.toMatchObject({
-      name: "ExitError",
-      code: 0,
-    });
+    ).rejects.toMatchObject({ name: "ExitError", code: 0 });
 
     expect(mocks.upsertAuthProfileWithLock).not.toHaveBeenCalled();
     expect(mocks.updateConfig).not.toHaveBeenCalled();

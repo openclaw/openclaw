@@ -1,4 +1,5 @@
 import { ChildProcess, type MessageOptions, type SendHandle } from "node:child_process";
+import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { createSpawnBrokerHost, type SpawnBrokerHost } from "./host.js";
@@ -57,6 +58,7 @@ afterEach(async () => {
 type SendFailure = { type: string; mode: "callback" | "throw" };
 function brokerFixture(bootstrapFailure?: SendFailure) {
   const worker = new ChildProcess();
+  const output = new PassThrough();
   const deliveries = new Map<string, ReturnType<typeof createDeferredCore<unknown>>>();
   const sent = (type: string) => {
     let delivery = deliveries.get(type);
@@ -78,6 +80,7 @@ function brokerFixture(bootstrapFailure?: SendFailure) {
   const kill = vi.fn(() => true);
   Object.defineProperties(worker, {
     pid: { value: 41001 },
+    stdio: { value: [null, output, null] },
     connected: { get: () => connected },
     exitCode: { get: () => (exited ? 0 : null) },
     disconnect: { value: disconnect },
@@ -127,7 +130,7 @@ function brokerFixture(bootstrapFailure?: SendFailure) {
     close: () => {
       if (!closed) {
         closed = true;
-        worker.emit("close", 0, null);
+        output.destroy();
       }
     },
   };

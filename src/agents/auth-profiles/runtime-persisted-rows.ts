@@ -1,8 +1,6 @@
-import fs from "node:fs";
+import { readSqliteDatabaseWriteTokenForPath } from "../../infra/sqlite-database-admission.js";
 import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
 import type { AuthProfileRowRead } from "./types.js";
-
-const IDENTITY_PROBE_INTERVAL_MS = 100;
 
 type RowsReader = {
   read: () => Promise<AuthProfileRowRead>;
@@ -16,19 +14,6 @@ export class AuthProfileRuntimeReadStaleError extends Error {
   }
 }
 
-// Include WAL and rollback-journal writes from other processes, without opening
-// SQLite (which could release a host writer's POSIX locks).
-function readIdentity(databasePath: string): string {
-  return ["", "-wal", "-journal"]
-    .map((suffix) => {
-      const stat = fs.statSync(databasePath + suffix, { bigint: true, throwIfNoEntry: false });
-      return stat
-        ? `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`
-        : "missing";
-    })
-    .join("/");
-}
-
 /** A derived rows cache; the runtime snapshot owner supplies publication generations. */
 export function createRuntimeAuthProfileRowsCache(
   revisionAtPath: (path: string) => {
@@ -39,7 +24,7 @@ export function createRuntimeAuthProfileRowsCache(
 ) {
   const entries = new Map<
     string,
-    { identity: string; checkedAt: number; revision: string; rows: AuthProfileRowRead }
+    { writeToken: string; revision: string; rows: AuthProfileRowRead }
   >();
   return {
     clear(databasePath?: string) {
@@ -74,19 +59,12 @@ export function createRuntimeAuthProfileRowsCache(
         async read() {
           assertCurrent();
           const entry = entries.get(databasePath);
-          const checkedAt = performance.now();
-          // Owner writes invalidate immediately; external writes are checked every 100 ms.
-          // Hits must not extend the interval, including while a cold read is pending.
+          const writeToken = readSqliteDatabaseWriteTokenForPath(databasePath);
           if (
+            writeToken !== undefined &&
             entry?.revision === revision.rows &&
-            checkedAt - entry.checkedAt < IDENTITY_PROBE_INTERVAL_MS
+            entry.writeToken === writeToken
           ) {
-            capturedRows = entry.rows;
-            return entry.rows;
-          }
-          const identity = readIdentity(databasePath);
-          if (entry?.identity === identity && entry.revision === revision.rows) {
-            entry.checkedAt = checkedAt;
             capturedRows = entry.rows;
             return entry.rows;
           }
@@ -100,10 +78,11 @@ export function createRuntimeAuthProfileRowsCache(
             rows.store.status !== "unreadable" &&
             rows.state.status !== "unreadable" &&
             revisionAtPath(databasePath).rows === revision.rows &&
-            readIdentity(databasePath) === identity
+            writeToken !== undefined &&
+            readSqliteDatabaseWriteTokenForPath(databasePath) === writeToken
           ) {
             freezeJsonSnapshot(rows);
-            entries.set(databasePath, { identity, checkedAt, revision: revision.rows, rows });
+            entries.set(databasePath, { writeToken, revision: revision.rows, rows });
             // Bound retained credential owners; eviction never changes read authority.
             while (entries.size > 64) {
               entries.delete(entries.keys().next().value!);

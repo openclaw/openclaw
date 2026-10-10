@@ -42,6 +42,7 @@ export interface FrvClient {
     runAttempt: number,
     options?: FrvReadOptions,
   ) => Promise<Record<string, unknown>>;
+  cancelRun?: (runId: string, force: boolean) => Promise<unknown>;
   rerunFailed?: (runId: string) => Promise<unknown>;
   rerunJob?: (jobId: number) => Promise<unknown>;
   rerunParent?: (runId: string) => Promise<unknown>;
@@ -67,7 +68,13 @@ export type FrvConcreteClient = FrvClient &
   Required<
     Pick<
       FrvClient,
-      "rerunFailed" | "rerunJob" | "rerunParent" | "listRuns" | "verify" | "verifySeal"
+      | "cancelRun"
+      | "rerunFailed"
+      | "rerunJob"
+      | "rerunParent"
+      | "listRuns"
+      | "verify"
+      | "verifySeal"
     >
   >;
 

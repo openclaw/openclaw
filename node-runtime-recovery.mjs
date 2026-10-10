@@ -170,6 +170,10 @@ export const runRespawnedChild = (command, args, env) => {
               ? 128 + signalCode
               : 1
           : (code ?? 1);
+      // Preserve the Unix supervisor contract, but only after child and stdio settlement.
+      if (!failed && signal && process.platform !== "win32") {
+        process.kill(process.pid, signal);
+      }
       resolve(true);
     });
   });

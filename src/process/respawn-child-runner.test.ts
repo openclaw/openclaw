@@ -136,6 +136,12 @@ describe("runRespawnChildWithSignalBridge", () => {
         process.platform === "win32" ? testCase.windowsCode : testCase.posixCode,
       );
       expect(run.detach).toHaveBeenCalledOnce();
+      if (process.platform === "win32") {
+        expect(killProcess).not.toHaveBeenCalled();
+      } else {
+        expect(killProcess).toHaveBeenCalledExactlyOnceWith(process.pid, testCase.signal);
+        expect(run.detach).toHaveBeenCalledBefore(killProcess);
+      }
     },
   );
 

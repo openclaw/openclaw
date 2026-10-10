@@ -16,6 +16,7 @@ import {
 } from "../../infra/runtime-worker-url.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import type { SpawnInitiation } from "../spawn-initiation.js";
+import { waitForBrokerChildCompletion } from "./child-completion.js";
 import { BrokerChild } from "./child.js";
 import { terminateBrokerProcessGroup, terminateLostBrokerChild } from "./cleanup.js";
 import type { BrokerExecaOptions, BrokerExecaResult } from "./execa-protocol.js";
@@ -390,9 +391,7 @@ export class SpawnBrokerHost {
       serialization: "advanced",
     });
     this.process = child;
-    this.brokerClosed = new Promise<void>((resolve) => {
-      child.once("close", () => resolve());
-    });
+    this.brokerClosed = waitForBrokerChildCompletion(child);
     const receiver = createBrokerReceiver();
     const brokerExited = createDeferredCore();
     let ended = false;

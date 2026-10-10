@@ -1204,8 +1204,8 @@ console.log(JSON.stringify({ parent: process.pid, bun: process.versions.bun, mar
           const childInfo = await waitForJsonFile<{ pid: number }>(childInfoPath, 5000);
           launcher.kill("SIGTERM");
           await expect(waitForProcessClose(launcher, "launcher", 5000)).resolves.toEqual({
-            code: mode === "cooperative" ? 0 : 137,
-            signal: null,
+            code: mode === "cooperative" ? 0 : null,
+            signal: mode === "cooperative" ? null : "SIGKILL",
           });
           if (mode === "cooperative") {
             await expect(fs.readFile(signalPath, "utf8")).resolves.toBe("SIGTERM\n");
@@ -1273,11 +1273,11 @@ console.log(JSON.stringify({ parent: process.pid, bun: process.versions.bun, mar
   );
 
   it.runIf(process.platform !== "win32").each([
-    { signal: "SIGINT" as const, target: "launcher", code: 130 },
-    { signal: "SIGTERM" as const, target: "launcher", code: 143 },
-    { signal: "SIGKILL" as const, target: "child", code: 137 },
+    { signal: "SIGINT" as const, target: "launcher" },
+    { signal: "SIGTERM" as const, target: "launcher" },
+    { signal: "SIGKILL" as const, target: "child" },
   ])(
-    "records $signal status after output closes when the respawn $target is signaled",
+    "propagates $signal after output closes when the respawn $target is signaled",
     async (testCase) =>
       fixtures.run(async () => {
         const fixtureRoot = await makeLauncherFixture(fixtures);
@@ -1323,8 +1323,8 @@ console.log(JSON.stringify({ parent: process.pid, bun: process.versions.bun, mar
           }
 
           await expect(waitForProcessClose(launcher, "launcher", 5000)).resolves.toEqual({
-            code: testCase.code,
-            signal: null,
+            code: null,
+            signal: testCase.signal,
           });
           expect(output).toBe(expectedOutput);
           expect(isProcessAlive(respawnChildPid)).toBe(false);

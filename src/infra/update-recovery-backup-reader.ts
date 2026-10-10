@@ -22,6 +22,7 @@ import { hasErrnoCode } from "./errno.js";
 import { sameFileMutationFingerprint } from "./file-descriptor.js";
 import { root as safeRoot } from "./fs-safe.js";
 import { resolveRequiredHomeDir } from "./home-dir.js";
+import { SQLITE_SIDECAR_SUFFIXES } from "./sqlite-files.js";
 import { resolveLegacyStateDirMigrationCandidates } from "./state-migrations.state-dir.js";
 import { resolveUpdateCaptureRoot } from "./update-capture-paths.js";
 import { UPDATE_CAPTURE_PRIVACY_MARKER } from "./update-capture-privacy-marker.js";
@@ -42,6 +43,55 @@ const updateRecoveryBackupRefSchema = z.strictObject({
 });
 
 type UpdateRecoveryBackupRef = z.infer<typeof updateRecoveryBackupRefSchema>;
+
+/** Inspection derives evidence from the sealed original, never from today's inventory. */
+export async function withVerifiedUpdateRecoveryBackup<T>(
+  ref: UpdateRecoveryBackupRef,
+  inspect: (manifest: UpdateRecoveryBackupManifest) => Promise<T>,
+): Promise<T> {
+  return withRecoveryMetadata(ref, async ({ manifest, pin }) => {
+    if (manifest.schemaVersion !== 2) {
+      throw new Error("Preservation inspection requires a versioned recovery inventory.");
+    }
+    // Bound the projection, not the amount of retained history streamed by its owners.
+    if (manifest.entries.length > 4096) {
+      throw new Error("Preservation inspection exceeds its 4096-resource bound.");
+    }
+    const verify = async () => {
+      for (const entry of manifest.entries) {
+        if (entry.kind !== "file") {
+          continue;
+        }
+        const pathname = path.join(ref.directory, entry.archivePath);
+        if (entry.sqlite) {
+          for (const suffix of SQLITE_SIDECAR_SUFFIXES) {
+            if (await statOrMissing(`${pathname}${suffix}`)) {
+              throw new Error(
+                `Preservation requires a consolidated SQLite payload: ${entry.sourcePath}`,
+              );
+            }
+          }
+        }
+        const actual = await fileDigest(pathname);
+        if (actual.sha256 !== entry.sha256 || actual.size !== entry.size) {
+          throw new Error(`Preservation payload does not match its manifest: ${entry.sourcePath}`);
+        }
+      }
+      await pin.assertCurrent();
+    };
+    await verify();
+    const result = await inspect(manifest);
+    await verify();
+    const source = await safeRoot(ref.directory, { symlinks: "reject", hardlinks: "reject" });
+    if (
+      sha256Hex(await source.readBytes("manifest.json", { maxBytes: MAX_MANIFEST_BYTES })) !==
+      ref.manifestSha256
+    ) {
+      throw new Error("Preservation manifest changed during inspection.");
+    }
+    return result;
+  });
+}
 
 const recordedOutcomeSchema = z.strictObject({
   status: z.enum(["restored", "committed"]),
@@ -83,7 +133,7 @@ async function fileDigest(pathname: string): Promise<{ size: number; sha256: str
 
 const MAX_MANIFEST_BYTES = 128 * 1024 * 1024;
 
-function captureScopes(env: NodeJS.ProcessEnv): Map<string, Set<string>> {
+export function captureScopes(env: NodeJS.ProcessEnv): Map<string, Set<string>> {
   const selectedStateDir = resolvePathViaExistingAncestorSync(resolveStateDir(env));
   const selectedConfigPath = canonicalEntryPath(resolveConfigPath(env));
   const scopes = new Map([[selectedStateDir, new Set([selectedConfigPath])]]);

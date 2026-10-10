@@ -1,6 +1,9 @@
 import { expect, it } from "vitest";
+import { openChatSidePanelType } from "../e2e/chat-side-panel.test-support.ts";
+import { controlUiE2eBuiltModuleRequest } from "../e2e/control-ui-built-module.test-support.ts";
 import { createControlUiE2eSuite } from "../e2e/control-ui-e2e-suite.test-support.ts";
-import { installMockGateway } from "./control-ui-e2e.ts";
+import { waitForControlUiGatewayReady } from "./control-ui-e2e-readiness.ts";
+import { defaultControlUiFeatureMethods, installMockGateway } from "./control-ui-e2e.ts";
 
 const suite = createControlUiE2eSuite({ name: "Initial roster navigation readiness" });
 
@@ -27,16 +30,84 @@ suite.define(() => {
         await loaded;
         await gateway.waitForRequest("sessions.list");
         await page.waitForLoadState("load");
+        await waitForControlUiGatewayReady(page);
         if (index === 0) {
           expect(await row.count()).toBe(0);
         }
         expect(navigated).toBe(false);
+        expect(await page.evaluate(() => window.openclawControlUi?.snapshot().rosterReady)).toBe(
+          false,
+        );
         await gateway.resolveDeferred("sessions.list");
         expect((await navigation)?.ok()).toBe(true);
         expect(await row.count()).toBe(1);
+        expect(
+          await page.evaluate(() => {
+            const snapshot = window.openclawControlUi?.snapshot();
+            return {
+              ready: snapshot?.ready,
+              routeReady: snapshot?.routeReady,
+              rosterReady: snapshot?.rosterReady,
+              published:
+                document.querySelector("openclaw-app")?.getAttribute("data-openclaw-ready") ===
+                String(snapshot?.generation),
+            };
+          }),
+        ).toEqual({ ready: true, routeReady: true, rosterReady: true, published: true });
       }
       expect(await page.goto("about:blank")).toBeNull();
       expect(await page.reload()).toBeNull();
     });
   });
+
+  it.each([false, true])(
+    "catches up after boot, navigation, and terminal activation before its first read (offline: %s)",
+    async (offline) => {
+      await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
+        const key = "agent:main:late-readiness";
+        const requests: string[] = [];
+        const readinessModule = controlUiE2eBuiltModuleRequest(
+          "ui/src/app/control-ui-readiness-lit.ts",
+        );
+        page.on("request", (request) => {
+          if (readinessModule.test(request.url())) {
+            requests.push(request.url());
+          }
+        });
+        const gateway = await installMockGateway(page, {
+          awaitInitialRoster: false,
+          sessionKey: key,
+          terminalEnabled: true,
+          featureMethods: [...defaultControlUiFeatureMethods, "terminal.open"],
+          sessions: [{ key, label: "Late readiness conversation", kind: "direct", updatedAt: 1 }],
+          historyMessages: [{ role: "assistant", content: "Ready before diagnostics." }],
+        });
+        await page.goto(`${suite.server.baseUrl}new`);
+        await page.locator(".agent-chat__composer-combobox textarea").waitFor();
+        await page.locator(`[data-session-key="${key}"] .sidebar-recent-session__link`).click();
+        await page.getByText("Ready before diagnostics.", { exact: true }).waitFor();
+        await openChatSidePanelType(page, "Terminal");
+        await page.locator("openclaw-terminal-panel .tp-host canvas").waitFor();
+        if (offline) {
+          await gateway.setOnline(false);
+          await page.locator(".gateway-status__label", { hasText: "Reconnecting…" }).waitFor();
+        }
+        expect(requests).toEqual([]);
+
+        await page.waitForFunction(() => window.openclawControlUi?.snapshot().ready === true);
+        const snapshot = await page.evaluate(() => window.openclawControlUi?.snapshot());
+        expect(snapshot).toMatchObject({
+          booted: true,
+          gatewayPhase: offline ? "reconnecting" : "connected",
+          sessionKey: key,
+          terminalActivationReady: !offline,
+          route: { matches: [{ routeId: "chat" }] },
+        });
+        if (!offline) {
+          expect(snapshot).toMatchObject({ routeReady: true, rosterReady: true });
+        }
+        expect(requests).toHaveLength(1);
+      });
+    },
+  );
 });

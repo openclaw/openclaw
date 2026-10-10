@@ -109,7 +109,6 @@ export function runRespawnChildWithSignalBridge(params: {
     child.once("close", (code, signal) => {
       childExited = true;
       clearSignalTimers();
-      bridge.detach();
       const signalCode = signal && os.constants.signals[signal];
       const forwardedSignalExitCode =
         !hardKillBackstopStarted && signal === firstForwardedSignal
@@ -128,7 +127,16 @@ export function runRespawnChildWithSignalBridge(params: {
               ? 128 + signalCode
               : 1
           : (code ?? 1);
-      void reporting.then(() => resolve(exitCode));
+      resolve(
+        reporting.then(() => {
+          bridge.detach();
+          // Supervisors distinguish Unix signal termination from explicit numeric failures.
+          if (!failed && signal && process.platform !== "win32") {
+            process.kill(process.pid, signal);
+          }
+          return exitCode;
+        }),
+      );
     });
   });
 }

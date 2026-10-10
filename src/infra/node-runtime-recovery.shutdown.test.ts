@@ -92,7 +92,11 @@ it.each([
     child.emit("close", null, childSignal);
     await expect(completion).resolves.toBe(true);
     expect(process.exitCode).toBe(platform === "win32" ? 1 : 137);
-    expect(processKill).not.toHaveBeenCalled();
+    if (platform === "win32") {
+      expect(processKill).not.toHaveBeenCalled();
+    } else {
+      expect(processKill).toHaveBeenCalledExactlyOnceWith(process.pid, childSignal);
+    }
     expect(process.listeners("SIGTERM")).toEqual([...previous]);
   },
 );
@@ -122,7 +126,11 @@ it.each([
     child.emit("close", null, childSignal);
     await expect(completion).resolves.toBe(true);
     expect(process.exitCode).toBe(expected);
-    expect(processKill).not.toHaveBeenCalled();
+    if (platform === "win32") {
+      expect(processKill).not.toHaveBeenCalled();
+    } else {
+      expect(processKill).toHaveBeenCalledExactlyOnceWith(process.pid, childSignal);
+    }
     expect(process.listeners("SIGTERM")).toEqual(previous);
   },
 );

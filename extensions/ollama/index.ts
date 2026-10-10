@@ -69,6 +69,7 @@ import {
   isOllamaCloudModel,
   queryOllamaModelShowInfo,
   resolveOllamaApiBase,
+  toDynamicOllamaModel,
 } from "./src/provider-models.js";
 import {
   findAvailableOllamaModelName,
@@ -266,10 +267,11 @@ async function discoverAppGuidedOllamaModel(
     }
     const definition =
       configuredCloudModel ??
-      buildOllamaModelDefinition(candidateId, contextWindow, showInfo.capabilities);
+      buildOllamaModelDefinition(candidateId, contextWindow, showInfo.capabilities, showInfo);
     model = capLocalOllamaModelContext(
       {
         ...definition,
+        thinkingLevelMap: definition.thinkingLevelMap ?? showInfo.thinkingLevelMap,
         contextWindow,
         compat: { ...definition.compat, supportsTools: true },
       },
@@ -304,33 +306,6 @@ function hasOllamaDiscoverySignal(providerConfig: ModelProviderConfig | undefine
     shouldUseSyntheticOllamaAuth(providerConfig) ||
     Boolean(providerConfig?.apiKey)
   );
-}
-
-function toDynamicOllamaModel(params: {
-  provider: string;
-  providerConfig: ModelProviderConfig;
-  model: ModelDefinitionConfig;
-}): ProviderRuntimeModel {
-  const input = (params.model.input ?? ["text"]).filter(
-    (value): value is "text" | "image" => value === "text" || value === "image",
-  );
-  return {
-    id: params.model.id,
-    name: params.model.name ?? params.model.id,
-    provider: params.provider,
-    api: params.providerConfig.api ?? "ollama",
-    baseUrl: readProviderBaseUrl(params.providerConfig) ?? "",
-    reasoning: params.model.reasoning ?? false,
-    input: input.length > 0 ? input : ["text"],
-    cost: params.model.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: params.model.contextWindow ?? 8192,
-    ...(params.model.contextTokens !== undefined
-      ? { contextTokens: params.model.contextTokens }
-      : {}),
-    maxTokens: params.model.maxTokens ?? 8192,
-    ...(params.model.compat ? { compat: params.model.compat as never } : {}),
-    ...(params.model.params ? { params: params.model.params } : {}),
-  };
 }
 
 function needsOllamaCatalogMetadata(entry: ProviderAugmentModelCatalogContext["entries"][number]) {
@@ -521,7 +496,11 @@ async function buildOllamaCloudProvider(apiKey?: string): Promise<ModelProviderC
     OLLAMA_GLM52_CLOUD_MODEL_ID,
     { apiKey },
   );
-  if (typeof showInfo.contextWindow !== "number" && (showInfo.capabilities?.length ?? 0) === 0) {
+  if (
+    typeof showInfo.contextWindow !== "number" &&
+    (showInfo.capabilities?.length ?? 0) === 0 &&
+    !showInfo.thinkingLevelMap
+  ) {
     return discovered;
   }
   const defaultModel = OLLAMA_CLOUD_DEFAULT_MODELS.find(
@@ -532,7 +511,15 @@ async function buildOllamaCloudProvider(apiKey?: string): Promise<ModelProviderC
   }
   return {
     ...discovered,
-    models: [...discovered.models, buildDefaultOllamaCloudModelDefinition(defaultModel)],
+    models: [
+      ...discovered.models,
+      buildOllamaModelDefinition(
+        defaultModel.id,
+        showInfo.contextWindow ?? defaultModel.contextWindow,
+        showInfo.capabilities ?? [...defaultModel.capabilities],
+        showInfo,
+      ),
+    ],
   };
 }
 
@@ -547,13 +534,18 @@ async function resolveRequestedDynamicOllamaModel(params: {
   const showInfo = params.showApiKey
     ? await queryOllamaModelShowInfo(showBaseUrl, params.modelId, { apiKey: params.showApiKey })
     : await queryOllamaModelShowInfo(showBaseUrl, params.modelId);
-  if (typeof showInfo.contextWindow !== "number" && (showInfo.capabilities?.length ?? 0) === 0) {
+  if (
+    typeof showInfo.contextWindow !== "number" &&
+    (showInfo.capabilities?.length ?? 0) === 0 &&
+    !showInfo.thinkingLevelMap
+  ) {
     return undefined;
   }
   const definition = buildOllamaModelDefinition(
     params.modelId,
     showInfo.contextWindow,
     showInfo.capabilities,
+    showInfo,
   );
   const model = params.capContextTokens
     ? capLocalOllamaModelContext(definition, showBaseUrl)
@@ -626,6 +618,7 @@ async function augmentConfiguredOllamaCatalogModels(params: {
               input: requested.input,
               contextWindow: requested.contextWindow,
               contextTokens: requested.contextTokens,
+              thinkingLevelMap: requested.thinkingLevelMap,
               compat: requested.compat,
             }
           : undefined;
