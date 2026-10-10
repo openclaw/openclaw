@@ -83,12 +83,25 @@ type MemoryEmbeddingRetryBudget = {
   retryAfterMs?: number;
 };
 
+function isInvalidEmbeddingResponse(error: unknown): boolean {
+  // Diagnostic counts and model names must not be mistaken for HTTP status or input limits.
+  return asOptionalRecord(error)?.code === "INVALID_EMBEDDING_RESPONSE";
+}
+
+function embeddingRetryMessage(error: unknown): string {
+  const message = asOptionalRecord(error)?.embeddingErrorMessage;
+  return typeof message === "string" ? message : formatErrorMessage(error);
+}
+
 function resolveMemoryEmbeddingRetryBudget(
   profile: (typeof MEMORY_EMBEDDING_RETRY_PROFILES)[MemoryEmbeddingRetryProfileName],
   error: unknown,
 ): MemoryEmbeddingRetryBudget | undefined {
+  if (isInvalidEmbeddingResponse(error)) {
+    return undefined;
+  }
   const fields = asOptionalRecord(error);
-  const message = formatErrorMessage(error);
+  const message = embeddingRetryMessage(error);
   const cooldown = fields?.retryAfterMs;
   const retryAfterMs =
     typeof cooldown === "number" && Number.isSafeInteger(cooldown) && cooldown >= 0
@@ -176,8 +189,12 @@ export async function runMemoryEmbeddingBatchRetryWithSplit<TInput, TOutput>(par
       waitForRetry: params.waitForRetry,
     });
   } catch (err) {
-    const message = formatErrorMessage(err);
-    if (params.items.length <= 1 || !SPLITTABLE_MEMORY_EMBEDDING_BATCH_ERROR_RE.test(message)) {
+    const message = embeddingRetryMessage(err);
+    if (
+      isInvalidEmbeddingResponse(err) ||
+      params.items.length <= 1 ||
+      !SPLITTABLE_MEMORY_EMBEDDING_BATCH_ERROR_RE.test(message)
+    ) {
       throw err;
     }
 

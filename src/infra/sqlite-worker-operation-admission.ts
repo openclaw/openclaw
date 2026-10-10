@@ -458,6 +458,8 @@ export type SqliteWorkerOperationContext = {
   refusal?: SqliteWorkerError;
   committed?: { facts: unknown };
   settled?: true;
+  sourceReservations?: true;
+  pendingReceipts?: Map<DatabaseSync, number>;
 };
 
 // Private wire identity follows the native operation across transformed module copies.
@@ -510,11 +512,26 @@ export function deferSqliteWorkerCommitReceipt(
   }
   const captured = structuredClone(facts);
   const operationId = nativeCommitReceipts.get(scope.owner)?.operationId ?? randomUUID();
+  const counts = scope.owner.sourceReservations
+    ? (scope.owner.pendingReceipts ??= new Map())
+    : undefined;
+  const pending = (delta: number) => {
+    if (!counts) {
+      return;
+    }
+    const count = (counts.get(database) ?? 0) + delta;
+    if (count === 0) {
+      counts.delete(database);
+    } else {
+      counts.set(database, count);
+    }
+  };
   if (
     !stageSqliteTransactionState(database, {
-      stage() {},
-      rollback() {},
+      stage: () => pending(1),
+      rollback: () => pending(-1),
       commit() {
+        pending(-1);
         const previous = nativeCommitReceipts.get(scope.owner);
         const receipt: NativeCommitReceipt = {
           version: 1,
@@ -531,6 +548,17 @@ export function deferSqliteWorkerCommitReceipt(
     })
   ) {
     throw new Error("SQLite worker receipt requires a transaction publication owner");
+  }
+}
+
+/** A typed fenced write cannot commit without its destination owner's settlement evidence. */
+export function assertSqliteWorkerCommitReceiptPending(database: DatabaseSync): void {
+  const scope = currentAdmission.getStore();
+  if (!scope?.active || !scope.owner.pendingReceipts?.get(database)) {
+    throw new SqliteWorkerError(
+      "SQLite source fence requires a destination commit receipt",
+      "closed",
+    );
   }
 }
 
@@ -562,6 +590,9 @@ export function requestSqliteWorkerOperationAdmission(
   if (!scope?.active) {
     throw new SqliteWorkerError("SQLite operation requires its retained admission", "unavailable");
   }
+  if (scope.owner.sourceReservations) {
+    throw new SqliteWorkerError("SQLite source reservations prohibit host admission", "closed");
+  }
   const decision = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
   const startedAt = Date.now();
   scope.port.postMessage({ ...request, decision: decision.buffer }, transferList);
@@ -579,6 +610,23 @@ export function requestSqliteWorkerOperationAdmission(
     const refusal = new SqliteWorkerError("SQLite transaction admission was refused", "closed");
     scope.owner.refusal = refusal;
     throw refusal;
+  }
+}
+
+/** A native waiter may block MAIN; this interval must complete without host messages. */
+export function withSqliteWorkerSourceReservations<T>(operation: () => T): T {
+  const scope = currentAdmission.getStore();
+  if (!scope?.active || scope.owner.sourceReservations) {
+    throw new SqliteWorkerError(
+      "SQLite source fence requires exclusive operation custody",
+      "closed",
+    );
+  }
+  scope.owner.sourceReservations = true;
+  try {
+    return operation();
+  } finally {
+    delete scope.owner.sourceReservations;
   }
 }
 

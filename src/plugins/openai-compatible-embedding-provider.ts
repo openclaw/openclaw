@@ -1,13 +1,19 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { readEmbeddingVectors } from "../../packages/memory-host-sdk/src/host/embedding-vectors.js";
+import {
+  addEmbeddingErrorContext,
+  debugEmbeddingsLog,
+  embeddingResponseLogMeta,
+} from "../../packages/memory-host-sdk/src/host/embeddings-debug.js";
 import { extractEmbeddingUsage } from "../../packages/memory-host-sdk/src/host/embeddings-remote-fetch.js";
 import { withRemoteHttpResponse } from "../../packages/memory-host-sdk/src/host/remote-http.js";
 import { MEMORY_SEARCH_DEADLINE_CONTROL } from "../../packages/memory-host-sdk/src/host/search-deadline-control.js";
 import {
   createProviderHttpError,
-  readProviderJsonObjectResponse,
+  readProviderJsonResponse,
 } from "../agents/provider-http-errors.js";
 import type {
   AcquireConfiguredProviderLocalService,
@@ -261,6 +267,7 @@ function embeddingInputToText(input: EmbeddingInput): string {
 async function createEmbeddingHttpError(
   response: Response,
   requestHeaders: HeadersInit,
+  errorPrefix: string,
 ): Promise<Error> {
   const prefix =
     response.body && !response.bodyUsed
@@ -279,7 +286,7 @@ async function createEmbeddingHttpError(
       statusText: response.statusText,
       headers: response.headers,
     }),
-    "openai-compatible embeddings failed",
+    errorPrefix,
     { requestHeaders },
   );
   let snippet = safeBody;
@@ -288,7 +295,7 @@ async function createEmbeddingHttpError(
   } else if (snippet && prefix?.truncated) {
     snippet = `${snippet}${EMBEDDING_ERROR_TRUNCATED_SUFFIX}`;
   }
-  error.message = `openai-compatible embeddings failed: HTTP ${response.status}${snippet ? `: ${snippet}` : ""}`;
+  error.message = `${errorPrefix}: HTTP ${response.status}${snippet ? `: ${snippet}` : ""}`;
   return error;
 }
 
@@ -309,6 +316,8 @@ async function postEmbeddingRequest(params: {
 }): Promise<number[][]> {
   const { client, input, callOptions } = params;
   const deadlineControl = callOptions?.[MEMORY_SEARCH_DEADLINE_CONTROL];
+  const errorPrefix = "openai-compatible embeddings failed";
+  const context = `${client.providerId} embeddings failed (model: ${client.model}, batch size: ${input.length})`;
   const inputType = resolveRequestInputType(client, callOptions?.inputType);
   const body = {
     model: client.model,
@@ -332,6 +341,10 @@ async function postEmbeddingRequest(params: {
         )
       : undefined;
   try {
+    debugEmbeddingsLog("memory embeddings: remote request", {
+      context,
+      inputCount: input.length,
+    });
     return await withRemoteHttpResponse({
       url: client.endpointUrl,
       init: {
@@ -344,20 +357,28 @@ async function postEmbeddingRequest(params: {
       ssrfPolicy: client.ssrfPolicy,
       auditContext: "embedding-provider:openai-compatible",
       onResponse: async (response) => {
-        if (!response.ok) {
-          throw await createEmbeddingHttpError(response, client.headers);
+        debugEmbeddingsLog("memory embeddings: remote response", {
+          context,
+          ...embeddingResponseLogMeta(response),
+        });
+        try {
+          if (!response.ok) {
+            throw await createEmbeddingHttpError(response, client.headers, errorPrefix);
+          }
+          const payload = await readProviderJsonResponse<unknown>(response, errorPrefix);
+          const vectors = readEmbeddingVectors(
+            asOptionalRecord(payload)?.data,
+            input.length,
+            context,
+          );
+          callOptions?.onUsage?.(extractEmbeddingUsage(payload));
+          return vectors;
+        } catch (error) {
+          if (callOptions?.signal?.aborted) {
+            throw error;
+          }
+          throw addEmbeddingErrorContext(error, errorPrefix, context);
         }
-        const payload = await readProviderJsonObjectResponse(
-          response,
-          "openai-compatible embeddings failed",
-        );
-        const vectors = readEmbeddingVectors(
-          payload.data,
-          input.length,
-          "openai-compatible embeddings failed",
-        );
-        callOptions?.onUsage?.(extractEmbeddingUsage(payload));
-        return vectors;
       },
     });
   } finally {
