@@ -50,12 +50,13 @@ For custom providers using `api: "openai-completions"`, a model marked
 default also applies to existing custom configurations after upgrading. If an
 endpoint rejects `reasoning_effort`, the request error points to that opt-out.
 
-Effort values still follow the model's supported ladder. Unknown models use
-`low`, `medium`, and `high`; higher requested efforts are clamped to `high`.
-Declare `compat.supportedReasoningEfforts` and `compat.reasoningEffortMap` when
-the endpoint uses a different contract. Sending a level does not guarantee that
-the server or model distinguishes it from other levels: some models offer only
-binary thinking, and some servers ignore the field.
+Advanced levels such as `xhigh` and `max` require a model declaration or mapping
+before the CLI accepts them. Use `compat.supportedReasoningEfforts` to declare the
+endpoint's accepted values, and `compat.reasoningEffortMap` or `thinkingLevelMap`
+to map thinking levels to those values. Requested enabled efforts are clamped to
+a declared ladder. Sending a level does not guarantee that the server or model
+distinguishes it from other levels: some models offer only binary thinking, and
+some servers ignore the field.
 
 `/think off` omits `reasoning_effort` by default on custom routes, because many
 servers accept only `low`, `medium`, and `high`. Omission leaves the server's own
