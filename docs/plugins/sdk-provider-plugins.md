@@ -53,6 +53,25 @@ Unavailable storage or an unusable matching OAuth profile continues to interacti
 sign-in. A matching account identity alone does not make expired credentials usable.
 A failed selected import stops the operation instead of silently starting a different login.
 
+## Loopback OAuth callbacks
+
+Bundled providers use `startProviderOAuthLoopbackCallbackServer` from
+`openclaw/plugin-sdk/provider-auth-runtime` to bind their callback before opening
+the browser. `waitForCallback()` returns either an OAuth error or a validated
+code/state pair with `parameters: URLSearchParams` for provider-specific fields.
+Repeated parameters remain available for the provider to validate.
+
+The default response acknowledges the callback and closes the listener. Set
+`deferResponse: true` to finish token exchange and identity checks before calling
+`complete({ status, body, contentType })`. Abort, optional `timeoutMs`, and browser
+disconnection still close a deferred response; a late `complete()` is a no-op.
+Always call `close()` in `finally`. The caller's signal and authority checks own
+token requests and persistence; the listener deadline does not cancel that work.
+
+By default, the listener binds every loopback address resolved for the redirect
+hostname. `bindHostname` adds a loopback host. Use `bindOnlyHostname` instead to
+preserve a provider's exact Node bind host (`localhost`, `127.0.0.1`, or `::1`).
+
 ## Handle model access after sign-in
 
 Existing consumers of `runModelsAuthLoginFlow` from
@@ -495,6 +514,11 @@ providers:
 | `profile` | After simple  | Providers gated on auth profiles                |
 | `paired`  | After profile | Synthesize multiple related entries             |
 | `late`    | Last pass     | Override existing providers (wins on collision) |
+
+Within each phase, OpenClaw runs up to four catalog hooks concurrently. It waits
+for the phase to settle, then merges model rows and provider outcomes in provider
+label order. Hooks retain their individual discovery deadlines; completion order
+does not change catalog precedence.
 
 ## Next steps
 

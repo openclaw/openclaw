@@ -59,6 +59,7 @@ export function buildProps(result: SessionsListResult): SessionsProps {
     onTranscriptSearchChange: () => undefined,
     onTranscriptSearch: () => undefined,
     onClearTranscriptSearch: () => undefined,
+    onNavigateToChat: () => undefined,
     onSortChange: () => undefined,
     onGroupByChange: () => undefined,
     onAssignCategory: () => undefined,

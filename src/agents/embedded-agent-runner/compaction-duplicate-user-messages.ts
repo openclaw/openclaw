@@ -1,10 +1,7 @@
-/**
- * Removes short-window duplicate user turns from compaction summaries.
- */
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { hasPersistedMedia } from "../../sessions/user-turn-media.js";
 
-const DEFAULT_DUPLICATE_USER_MESSAGE_WINDOW_MS = 60_000;
+const DUPLICATE_USER_MESSAGE_WINDOW_MS = 60_000;
 const MIN_DUPLICATE_USER_MESSAGE_CHARS = 24;
 
 type MessageLike = {
@@ -14,30 +11,21 @@ type MessageLike = {
   __openclaw?: unknown;
 };
 
-type DuplicateUserMessageOptions = {
-  windowMs?: number;
-};
-
-function normalizeUserMessageContent(content: unknown): string | undefined {
-  if (typeof content === "string") {
-    return content.replace(/\s+/g, " ").trim();
-  }
-  if (!Array.isArray(content)) {
-    return undefined;
-  }
-  const textParts: string[] = [];
-  for (const block of content) {
-    if (!isRecord(block)) {
-      return undefined;
+function normalizeUserMessageContent(rawContent: unknown): string | undefined {
+  let content = rawContent;
+  if (Array.isArray(content)) {
+    const textParts: string[] = [];
+    for (const block of content) {
+      if (!isRecord(block) || block.type === "image") {
+        return undefined;
+      }
+      if (block.type === "text" && typeof block.text === "string") {
+        textParts.push(block.text);
+      }
     }
-    if (block.type === "image") {
-      return undefined;
-    }
-    if (block.type === "text" && typeof block.text === "string") {
-      textParts.push(block.text);
-    }
+    content = textParts.join("\n");
   }
-  return textParts.join("\n").replace(/\s+/g, " ").trim();
+  return typeof content === "string" ? content.replace(/\s+/g, " ").trim() : undefined;
 }
 
 function duplicateSignature(message: unknown): { key: string; timestamp: number } | undefined {
@@ -62,9 +50,7 @@ function duplicateSignature(message: unknown): { key: string; timestamp: number 
 /** Drop later duplicate user messages while preserving the first prompt. */
 export function dedupeDuplicateUserMessagesForCompaction<T extends MessageLike>(
   messages: readonly T[],
-  options: DuplicateUserMessageOptions = {},
 ): T[] {
-  const windowMs = options.windowMs ?? DEFAULT_DUPLICATE_USER_MESSAGE_WINDOW_MS;
   const lastSeenAtByKey = new Map<string, number>();
   const result: T[] = [];
   for (const message of messages) {
@@ -83,7 +69,7 @@ export function dedupeDuplicateUserMessagesForCompaction<T extends MessageLike>(
     if (
       typeof lastSeenAt === "number" &&
       signature.timestamp >= lastSeenAt &&
-      signature.timestamp - lastSeenAt <= windowMs
+      signature.timestamp - lastSeenAt <= DUPLICATE_USER_MESSAGE_WINDOW_MS
     ) {
       // Keep the first prompt and drop only later repeats. The first copy anchors the summarized
       // branch while duplicate retries no longer inflate compaction context.

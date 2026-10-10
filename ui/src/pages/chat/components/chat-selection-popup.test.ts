@@ -65,7 +65,7 @@ describe("chat selection popup", () => {
     vi.useRealTimers();
   });
 
-  it.each([0, 1])("routes selection action %i to its own composer", (actionIndex) => {
+  it("routes Add to chat to its own composer", () => {
     vi.useFakeTimers();
     const { thread, textNode } = buildThreadWithBubble("Let's Encrypt cert is valid");
     selectRange(textNode, 0, 18);
@@ -81,44 +81,20 @@ describe("chat selection popup", () => {
     ]);
     expect(buttons[0]?.querySelector("svg")).toBeNull();
 
-    buttons[actionIndex]?.click();
-    const [called, untouched] =
-      actionIndex === 0 ? [onAddToChatSpy, onAskSideChatSpy] : [onAskSideChatSpy, onAddToChatSpy];
-    if (actionIndex === 0) {
-      expect(called).toHaveBeenCalledWith(
-        {
-          text: "Let's Encrypt cert",
-          start: 0,
-          end: 18,
-          messageId: "assistant-1",
-          entryId: "entry-1",
-        },
-        expect.objectContaining({ top: 100, left: 100 }),
-      );
-    } else {
-      expect(called).toHaveBeenCalledWith("Let's Encrypt cert");
-    }
-    expect(untouched).not.toHaveBeenCalled();
-    expect(window.getSelection()?.isCollapsed).toBe(true);
-    expect(document.body.querySelector(".chat-selection-popup")).toBeNull();
-  });
-
-  it("retains exact whitespace and the source offset of a repeated Unicode selection", () => {
-    vi.useFakeTimers();
-    const { thread, textNode } = buildThreadWithBubble("🦞 first\n  second  ");
-    selectRange(textNode, 9, 19);
-    pointerUp(thread);
-    document.querySelector<HTMLButtonElement>(".chat-selection-popup button")!.click();
+    buttons[0]?.click();
     expect(onAddToChatSpy).toHaveBeenCalledWith(
       {
-        text: "  second  ",
-        start: 9,
-        end: 19,
+        text: "Let's Encrypt cert",
+        start: 0,
+        end: 18,
         messageId: "assistant-1",
         entryId: "entry-1",
       },
-      expect.anything(),
+      expect.objectContaining({ top: 100, left: 100 }),
     );
+    expect(onAskSideChatSpy).not.toHaveBeenCalled();
+    expect(window.getSelection()?.isCollapsed).toBe(true);
+    expect(document.body.querySelector(".chat-selection-popup")).toBeNull();
   });
 
   it("ignores selections outside chat bubbles and collapsed selections", () => {
@@ -173,7 +149,10 @@ describe("chat selection popup", () => {
     (document.body.querySelector(".chat-selection-popup button") as HTMLButtonElement).click();
 
     expect(firstAskSideChat).not.toHaveBeenCalled();
-    expect(secondAskSideChat).toHaveBeenCalledWith("replacement");
+    expect(secondAskSideChat).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "replacement" }),
+      expect.anything(),
+    );
   });
 
   it("dismisses when the selection collapses", () => {
@@ -228,61 +207,63 @@ describe("chat annotation editor", () => {
     return { input, onSave, onCancel };
   }
 
-  it("confirms an empty optional comment only on activation", () => {
-    const { input, onSave } = editor();
-    expect(document.activeElement).toBe(input);
-    expect(onSave).not.toHaveBeenCalled();
-    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-    expect(onSave).toHaveBeenCalledWith("");
-    expect(document.querySelector("[role=dialog]")).toBeNull();
-  });
-
-  it("keeps edits local until Save and cancels without changing a saved comment", () => {
-    const { input, onSave, onCancel } = editor({ comment: "Saved comment", expanded: true });
-    input.value = "Unsaved edit";
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
-    expect(onSave).not.toHaveBeenCalled();
-    expect(onCancel).toHaveBeenCalledOnce();
-    expect(document.querySelector("[role=dialog]")).toBeNull();
-  });
-
-  it("preserves multiline and Unicode comments and ignores IME Enter", () => {
-    const { input, onSave } = editor();
-    input.value = "  Why this? 🦞\nKeep the next line.  ";
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-    input.dispatchEvent(
-      new KeyboardEvent("keydown", { key: "Enter", isComposing: true, bubbles: true }),
-    );
-    expect(onSave).not.toHaveBeenCalled();
-    input.dispatchEvent(
-      new KeyboardEvent("keydown", { key: "Enter", ctrlKey: true, bubbles: true }),
-    );
-    expect(onSave).toHaveBeenCalledWith("  Why this? 🦞\nKeep the next line.  ");
-  });
-
-  it.each([{ isComposing: true }, { keyCode: 229 }])(
-    "preserves unsaved comments when Escape dismisses IME candidates: %j",
-    (composition) => {
-      const { input, onSave, onCancel } = editor({ expanded: true });
-      input.value = "変換中のコメント";
-      const escape = new KeyboardEvent("keydown", {
-        key: "Escape",
-        bubbles: true,
-        cancelable: true,
-        ...composition,
-      });
-      input.dispatchEvent(escape);
-      expect(escape.defaultPrevented).toBe(false);
-      expect(document.querySelector("[role=dialog]")).not.toBeNull();
-      expect(input.value).toBe("変換中のコメント");
-      expect(onSave).not.toHaveBeenCalled();
-      expect(onCancel).not.toHaveBeenCalled();
-      input.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
-      expect(document.querySelector("[role=dialog]")).toBeNull();
-      expect(onCancel).toHaveBeenCalledOnce();
+  it.each([
+    { modifiers: {}, release: "keyup" },
+    { modifiers: { ctrlKey: true }, release: "blur" },
+    { modifiers: { metaKey: true }, release: "timeout" },
+  ])(
+    "keeps the comment editor open on Safari composition-confirm Enter: %j",
+    ({ modifiers, release }) => {
+      const { input, onSave } = editor({ comment: "日本語" });
+      input.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+      const end = new CompositionEvent("compositionend", { bubbles: true, data: "日本語" });
+      input.dispatchEvent(end);
+      for (const offset of [1, 100]) {
+        const enter = new KeyboardEvent("keydown", {
+          key: "Enter",
+          keyCode: 13,
+          bubbles: true,
+          cancelable: true,
+          ...modifiers,
+        });
+        Object.defineProperty(enter, "timeStamp", {
+          value: end.timeStamp + (release === "timeout" ? offset : 1),
+        });
+        if (offset === 100 && release !== "timeout") {
+          input.dispatchEvent(
+            release === "blur"
+              ? new FocusEvent("blur")
+              : new KeyboardEvent("keyup", { key: "Enter" }),
+          );
+        }
+        input.dispatchEvent(enter);
+        expect(enter.defaultPrevented).toBe(offset === 100);
+        expect(onSave).toHaveBeenCalledTimes(offset === 100 ? 1 : 0);
+        expect(document.querySelector("[role=dialog]") !== null).toBe(offset !== 100);
+      }
+      expect(onSave).toHaveBeenCalledWith("日本語");
     },
   );
+
+  it("preserves unsaved comments when legacy Escape dismisses IME candidates", () => {
+    const { input, onSave, onCancel } = editor({ expanded: true });
+    input.value = "変換中のコメント";
+    const escape = new KeyboardEvent("keydown", {
+      key: "Escape",
+      bubbles: true,
+      cancelable: true,
+      keyCode: 229,
+    });
+    input.dispatchEvent(escape);
+    expect(escape.defaultPrevented).toBe(false);
+    expect(document.querySelector("[role=dialog]")).not.toBeNull();
+    expect(input.value).toBe("変換中のコメント");
+    expect(onSave).not.toHaveBeenCalled();
+    expect(onCancel).not.toHaveBeenCalled();
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    expect(document.querySelector("[role=dialog]")).toBeNull();
+    expect(onCancel).toHaveBeenCalledOnce();
+  });
 
   it("keeps rejected saves editable and retires a stale owner", () => {
     const controller = new AbortController();

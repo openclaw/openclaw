@@ -2,6 +2,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { generateSecureUuid } from "../infra/secure-random.js";
 import { stageSqliteTransactionState } from "../infra/sqlite-post-commit.js";
+import { createSqliteSchemaEnsurer } from "../infra/sqlite-schema-ensure.js";
 import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
 import { ensureColumn, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
 import {
@@ -19,7 +20,8 @@ import type { UserProfilesDatabase, UserProfileOwnerErrorCode } from "./user-pro
 
 // Canonical additive schema for durable user profiles. Kept feature-local so
 // ordinary shared-state opens do not create identity tables until they are used.
-const USER_PROFILES_SCHEMA_SQL = `
+const ensureUserProfileTables = createSqliteSchemaEnsurer(
+  () => `
 CREATE TABLE IF NOT EXISTS user_profiles (
   id TEXT NOT NULL PRIMARY KEY,
   display_name TEXT,
@@ -44,7 +46,26 @@ CREATE INDEX IF NOT EXISTS idx_user_profile_emails_profile_id
   ON user_profile_emails(profile_id);
 
 ${extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, "user_profile_identities")}
-`;
+`,
+  {
+    tables: ["user_profiles", "user_profile_emails", "user_profile_identities"],
+    indexes: ["idx_user_profile_emails_profile_id"],
+  },
+);
+
+const ensureUserProfileIdentityIndexes = createSqliteSchemaEnsurer(
+  () =>
+    extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, "user_profile_identities", {
+      endMarker: "ON user_profile_identities(authorization_id);",
+    }),
+  {
+    tables: ["user_profile_identities"],
+    indexes: [
+      "idx_user_profile_identities_profile_id",
+      "idx_user_profile_identities_authorization",
+    ],
+  },
+);
 
 export class UserProfileNotFoundError extends Error {
   constructor(readonly profileId: string) {
@@ -107,16 +128,12 @@ export function ensureUserProfilesSchema(
   let hasRoleColumn = false;
   runUserProfileWriteTransaction(
     ({ db }) => {
-      db.exec(USER_PROFILES_SCHEMA_SQL); // sqlite-allow-raw -- Canonical feature-local additive DDL.
+      ensureUserProfileTables(db);
       ensureColumn(db, "user_profile_identities", "canonical_login TEXT");
       ensureColumn(db, "user_profile_identities", "authorization_id TEXT");
       ensureColumn(db, "user_profile_identities", "authorization_basis_json TEXT");
-      // sqlite-allow-raw -- Canonical first-use channel-link indexes after additive columns.
-      db.exec(
-        extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, "user_profile_identities", {
-          endMarker: "ON user_profile_identities(authorization_id);",
-        }),
-      );
+      // Legacy identity tables need the authorization column before its index.
+      ensureUserProfileIdentityIndexes(db);
       ensureColumn(db, "user_profiles", "primary_github_account_id INTEGER");
       ensureColumn(db, "user_profile_emails", "binding_id TEXT");
       const kysely = getNodeSqliteKysely<UserProfilesDatabase>(db);

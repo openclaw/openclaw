@@ -1,7 +1,15 @@
+import type { WorkboardChange } from "@openclaw/workboard-contract";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { normalizeWorkboardChange } from "./change-payload.ts";
 import { WORKBOARD_STATUSES, type WorkboardUiState } from "./types.ts";
 
 export type WorkboardHost = object;
+
+export type WorkboardClientContext = {
+  host: WorkboardHost;
+  client: GatewayBrowserClient | null;
+  requestUpdate?: () => void;
+};
 
 export type WorkboardLoadToken = {
   queuedAfterGeneration?: number;
@@ -11,10 +19,13 @@ export type WorkboardLoadToken = {
 type WorkboardLiveRefreshEntry = {
   client: GatewayBrowserClient | null;
   requestUpdate?: () => void;
+  refresh?: () => Promise<boolean>;
+  shouldDefer?: () => boolean;
 };
 
 type WorkboardRuntime = {
   state?: WorkboardUiState;
+  cardsRevision?: WorkboardChange | null;
   loadPromise?: Promise<boolean>;
   loadToken?: WorkboardLoadToken;
   loadError?: string;
@@ -54,6 +65,7 @@ export function invalidateWorkboardLoads(host: WorkboardHost) {
       }
     }
   }
+  delete runtime.cardsRevision;
   nextWorkboardLoadGeneration(host);
   delete runtime.loadPromise;
   delete runtime.loadToken;
@@ -93,9 +105,7 @@ export function resetWorkboardConnectionState(host: WorkboardHost) {
     state.loaded = false;
     state.loadAttempted = false;
   }
-  nextWorkboardLoadGeneration(host);
-  delete runtime.loadPromise;
-  delete runtime.loadToken;
+  invalidateWorkboardLoads(host);
 }
 
 function createDefaultState(): WorkboardUiState {
@@ -125,9 +135,7 @@ function createDefaultState(): WorkboardUiState {
     collapsedStatuses: new Set(),
     expandedEmptyStatuses: new Set(),
     lastRefreshAt: null,
-    lastRefreshStartedAt: null,
     lastRefreshError: null,
-    lastRefreshSource: null,
     draftOpen: false,
     draftDiscardOpen: false,
     draftSaving: false,
@@ -154,7 +162,6 @@ function createDefaultState(): WorkboardUiState {
     draggedCardId: null,
     dragOverStatus: null,
     dragBeforeCardId: null,
-    capturingSessionKeys: new Set(),
   };
 }
 
@@ -178,10 +185,13 @@ export function workboardMutationsReady(state: WorkboardUiState): boolean {
 }
 
 export function workboardHasActiveWrites(state: WorkboardUiState): boolean {
+  return Boolean(state.bulkSaving || state.draftSaving || state.busyCardIds.size);
+}
+
+export function hasCurrentWorkboardCards(host: WorkboardHost, payload: unknown): boolean {
+  const change = normalizeWorkboardChange(payload);
+  const held = getWorkboardRuntime(host).cardsRevision;
   return Boolean(
-    state.bulkSaving ||
-    state.draftSaving ||
-    state.busyCardIds.size ||
-    state.capturingSessionKeys.size,
+    change && held && change.epoch === held.epoch && change.cardsRevision === held.revision,
   );
 }

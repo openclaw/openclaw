@@ -1,5 +1,6 @@
 import { html, nothing } from "lit";
 import type { ApprovalPresentation } from "../../../../packages/gateway-protocol/src/approval-result-validators.js";
+import { summarizeApprovalScopeLabel } from "../../app/approval-presentation.ts";
 import { t } from "../../i18n/index.ts";
 
 function renderMetaRow(label: string, value?: string | null) {
@@ -12,8 +13,16 @@ function renderMetaRow(label: string, value?: string | null) {
 }
 
 export function renderApprovalPresentation(presentation: ApprovalPresentation) {
+  const scopeLabel =
+    presentation.kind !== "system-agent" && presentation.scope
+      ? summarizeApprovalScopeLabel(presentation.scope)
+      : null;
+  const scope = scopeLabel
+    ? html`<div class="approval-page__warning" role="note">${scopeLabel}</div>`
+    : nothing;
   if (presentation.kind === "exec") {
     return html`
+      ${scope}
       ${
         presentation.warningText
           ? html`<div class="approval-page__warning" role="note">${presentation.warningText}</div>`
@@ -39,6 +48,7 @@ export function renderApprovalPresentation(presentation: ApprovalPresentation) {
   }
   const previewClass = "approval-page__preview approval-page__preview--prose";
   return html`
+    ${scope}
     <div class="approval-page__preview-label">${t("approvalPage.requestLabel")}</div>
     <div class=${previewClass}>${presentation.description}</div>
     ${

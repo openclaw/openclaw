@@ -3,6 +3,7 @@
  * Verifies env precedence, manifest fallback, and non-secret error classifiers.
  */
 import { beforeAll, describe, expect, it, vi } from "vitest";
+import "../test-utils/prepare-compiled-subprocesses.js";
 
 vi.unmock("../secrets/provider-env-vars.js");
 

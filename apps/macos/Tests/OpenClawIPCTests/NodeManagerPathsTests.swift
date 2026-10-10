@@ -65,7 +65,7 @@ struct NodeManagerPathsTests {
             return
         }
         #expect(runtime.path == expectedNode.path)
-        #expect(runtime.version == RuntimeVersion(major: 24, minor: 16, patch: 0))
+        #expect(runtime.version == Semver(major: 24, minor: 16, patch: 0))
     }
 
     @Test func `ignores entries without node executable`() throws {

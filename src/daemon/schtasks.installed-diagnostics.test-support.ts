@@ -17,7 +17,14 @@ import {
   recordCapacityBoundary,
   requiredCellSpace,
 } from "./schtasks.installed-package.test-support.js";
-import { readRelatedProcessDiagnostics } from "./schtasks.integration-observation.test-support.js";
+import {
+  assertInteractiveLeastPrivilegeTask,
+  assertUnattendedLeastPrivilegeTask,
+  disableScheduledTaskXmlForFixture,
+  readRelatedProcessDiagnostics,
+  readTaskPrincipal,
+  readTaskXml,
+} from "./schtasks.integration-observation.test-support.js";
 
 export const doctorReportSchema = z.object({
   checksRun: z.number().int().positive(),
@@ -42,6 +49,20 @@ export type InstalledTask = {
   entry: string;
   env: NodeJS.ProcessEnv;
 };
+
+export async function assertInstalledTaskDefinition(
+  task: Pick<InstalledTask, "taskName" | "scriptPath">,
+  definition: "published" | "candidate",
+) {
+  const taskXml = await readTaskXml(task.taskName);
+  assert.ok(taskXml);
+  const principal = readTaskPrincipal(task.taskName);
+  if (definition === "published") {
+    assertInteractiveLeastPrivilegeTask({ taskXml, principal });
+  } else {
+    assertUnattendedLeastPrivilegeTask({ taskXml, principal, scriptPath: task.scriptPath });
+  }
+}
 
 export async function readInstalledUpdateProgress({
   env,
@@ -351,8 +372,6 @@ export async function inspectDisabledDiscoveryTasks(params: {
   const { buildTaskScript } = await import("./schtasks-layout.js");
   const { encodeWindowsLauncherScript } = await import("../infra/windows-launcher-encoding.js");
   const { probeScheduledTaskExists } = await import("./schtasks-state-probe.js");
-  const { disableScheduledTaskXmlForFixture, readTaskXml, readTaskPrincipal } =
-    await import("./schtasks.integration-observation.test-support.js");
   const { readGatewayServiceState, resolveGatewayService } = await import("./service.js");
   const selectedXml = await readTaskXml(selected.taskName);
   assert.ok(selectedXml);
@@ -622,6 +641,7 @@ export async function inspectDisabledDiscoveryTasks(params: {
 /** Native installed-peer build admission; no source-checkout compile or successful build claim. */
 export async function assertInstalledSiblingBuildRefusal(params: {
   toolingEntry: string;
+  startupEntry?: string;
   selected: InstalledTask;
   peer: InstalledTask;
   commands: CommandRecord[];
@@ -631,7 +651,7 @@ export async function assertInstalledSiblingBuildRefusal(params: {
 }) {
   const { toolingEntry, selected, peer, commands, signal, verifyContinuity, recordProgress } =
     params;
-  const phase = "task-sibling-refusal";
+  const phase = params.startupEntry ? "startup-alias-refusal" : "task-sibling-refusal";
   const buildRoot = await fs.realpath(packageRoot(peer.installRoot));
   const dist = path.join(buildRoot, "dist");
   assert.equal((await fs.lstat(dist)).isDirectory(), true);
@@ -649,7 +669,9 @@ export async function assertInstalledSiblingBuildRefusal(params: {
     {
       expectedStderr: [
         `Refusing to rebuild dist while a managed Gateway (profile ${peer.profile})`,
-        `openclaw gateway stop --profile ${peer.profile}`,
+        params.startupEntry
+          ? `stop the process launched by Startup entry ${JSON.stringify(params.startupEntry)}`
+          : `openclaw gateway stop --profile ${peer.profile}`,
       ],
     },
   );

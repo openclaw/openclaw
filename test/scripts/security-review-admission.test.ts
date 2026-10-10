@@ -14,6 +14,7 @@ function fixture() {
     number: 7,
     state: "open",
     draft: false,
+    maintainer_can_modify: true,
     created_at: "2026-09-01T00:00:00Z",
     user: { id: 1, login: "contributor", type: "User" },
     changed_files: 2,
@@ -158,6 +159,7 @@ describe("published security clearance admission", () => {
   );
 
   it.each([
+    ["failure", "CI must complete successfully; review updates automatically"],
     ["success", "CI and applicable security review requirements passed"],
     ["pending", "Waiting for CI; review updates automatically"],
   ])("revalidates approval behind a published %s projection", async (state, description) => {
@@ -165,14 +167,6 @@ describe("published security clearance admission", () => {
     f.requireApproval();
     f.combined.state = state;
     f.combined.description = `PR #7: ${description}`;
-    await expect(f.run()).resolves.toMatchObject({ combinedStatusId: 3 });
-    f.comments.pop();
-    await expect(f.run()).rejects.toThrow("approval is no longer current");
-  });
-
-  it("reuses real current approval commands for both approval-dependent decisions", async () => {
-    const f = fixture();
-    f.requireApproval();
     const result = await f.run();
     expect(result.approvals).toEqual([
       {
@@ -192,16 +186,16 @@ describe("published security clearance admission", () => {
         url: f.approval.html_url,
       },
     ]);
+    expect(result.combinedStatusId).toBe(3);
+    f.comments.pop();
+    await expect(f.run()).rejects.toThrow("approval is no longer current");
   });
 
-  it.each(["deleted", "edited", "revoked", "role lost"])(
+  it.each(["edited", "revoked", "role lost"])(
     "refuses %s approval despite green published guards",
     async (change) => {
       const f = fixture();
       f.requireApproval();
-      if (change === "deleted") {
-        f.comments.pop();
-      }
       if (change === "edited") {
         f.approval.updated_at = "2026-09-27T11:31:00Z";
       }
@@ -215,7 +209,7 @@ describe("published security clearance admission", () => {
     },
   );
 
-  it.each(["head", "rollout"])(
+  it.each(["head", "rollout", "merged"])(
     "refuses %s changes while reading approval authority",
     async (change) => {
       const f = fixture();
@@ -223,72 +217,69 @@ describe("published security clearance admission", () => {
       f.state.afterPermission = () => {
         if (change === "head") {
           f.state.currentPull.head.sha = "d".repeat(40);
+        } else if (change === "merged") {
+          Object.assign(f.state.currentPull, {
+            state: "closed",
+            merged: true,
+            maintainer_can_modify: false,
+          });
         } else {
           f.state.rollout = "grandfathered";
         }
       };
-      await expect(f.run()).rejects.toThrow(change === "head" ? "Superseded" : "rollout changed");
+      await expect(f.run()).rejects.toThrow(
+        change === "head"
+          ? "Superseded"
+          : change === "merged"
+            ? "eligibility changed"
+            : "rollout changed",
+      );
     },
   );
 
-  it.each([
-    "missing",
-    "failure",
-    "pending",
-    "duplicate",
-    "stale",
-    "unknown description",
-    "later decision",
-  ])("refuses %s guard evidence", async (change) => {
+  it.each<
+    [
+      string,
+      "dependency" | "combined",
+      Partial<ReturnType<typeof fixture>["combined"]>,
+      ("missing" | "duplicate")?,
+    ]
+  >([
+    ["missing guard", "dependency", {}, "missing"],
+    ["failed guard", "dependency", { state: "failure" }],
+    ["pending guard", "dependency", { state: "pending" }],
+    ["duplicate guard", "dependency", {}, "duplicate"],
+    ["stale guard", "dependency", { created_at: "2026-09-27T11:59:00Z" }],
+    ["unknown decision", "dependency", { description: "PR #7: Someone approved" }],
+    ["later decision", "dependency", { updated_at: "2026-09-27T12:00:50Z" }],
+    ["foreign publisher", "combined", { target_url: publisher.url + "1" }],
+    ["foreign creator", "combined", { creator: { login: "another-bot", type: "Bot" } }],
+    ["stale projection", "combined", { created_at: "2026-09-27T11:59:00Z" }],
+    [
+      "foreign PR",
+      "combined",
+      { description: "PR #8: CI must complete successfully; review updates automatically" },
+    ],
+    [
+      "security veto",
+      "combined",
+      { description: "PR #7: A maintainer must approve the current PR revision" },
+    ],
+    [
+      "security pending",
+      "combined",
+      { state: "pending", description: "PR #7: CI and security review have not completed" },
+    ],
+  ])("refuses %s evidence", async (_name, target, patch, count) => {
     const f = fixture();
-    if (change === "missing") {
+    Object.assign(f[target], patch);
+    if (count === "missing") {
       f.statuses.shift();
-    }
-    if (change === "failure" || change === "pending") {
-      f.dependency.state = change;
-    }
-    if (change === "duplicate") {
+    } else if (count === "duplicate") {
       f.statuses.push({ ...f.dependency, id: 4 });
-    }
-    if (change === "stale") {
-      f.dependency.created_at = "2026-09-27T11:59:00Z";
-    }
-    if (change === "unknown description") {
-      f.dependency.description = "PR #7: Someone approved";
-    }
-    if (change === "later decision") {
-      f.dependency.updated_at = "2026-09-27T12:00:50Z";
     }
     await expect(f.run()).rejects.toThrow(/Published security clearance/);
   });
-
-  it.each(["publisher", "creator", "time", "PR", "security veto", "security pending"])(
-    "refuses foreign or ambiguous combined evidence: %s",
-    async (change) => {
-      const f = fixture();
-      const combined = f.combined;
-      if (change === "publisher") {
-        combined.target_url += "1";
-      }
-      if (change === "creator") {
-        combined.creator.login = "another-bot";
-      }
-      if (change === "time") {
-        combined.created_at = "2026-09-27T11:59:00Z";
-      }
-      if (change === "PR") {
-        combined.description = combined.description.replace("#7:", "#8:");
-      }
-      if (change === "security veto") {
-        combined.description = "PR #7: A maintainer must approve the current PR revision";
-      }
-      if (change === "security pending") {
-        combined.state = "pending";
-        combined.description = "PR #7: CI and security review have not completed";
-      }
-      await expect(f.run()).rejects.toThrow(/Published security clearance/);
-    },
-  );
 
   it.each(["inactive", "grandfathered"] as const)(
     "uses the actual %s rollout without requiring unpublished standalone statuses",

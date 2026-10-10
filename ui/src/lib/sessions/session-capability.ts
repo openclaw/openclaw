@@ -5,10 +5,12 @@ import type {
   SessionsAssignOwnerParams,
   SessionsDeleteResult,
   SessionsDescribeParams,
+  SessionsListParams,
   SessionsPatchManyParams,
   SessionsPatchManyResult,
   SessionsRecoverResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
+import type { SchemaContract } from "../../../../packages/gateway-protocol/src/schema-contract.js";
 import type { SessionCatalogPullRequestSummary } from "../../../../packages/gateway-protocol/src/schema/sessions-catalog.js";
 import type { GatewayBrowserClient, GatewayEventFrame, GatewayHelloOk } from "../../api/gateway.ts";
 import type {
@@ -44,6 +46,7 @@ export type SessionState = {
   modelOverrides: Readonly<Record<string, string | null>>;
   loading: boolean;
   error: string | null;
+  startupPending?: boolean;
   deletedSessions: readonly SessionDeletionFact[];
   /** Gateway-owned custom group catalog in display order. */
   groups: readonly string[];
@@ -62,27 +65,30 @@ type SessionDeletionFact = {
 export type SessionGroupMutationResult = "completed" | "stale";
 export type SessionGroupDefaultsStatus = "idle" | "loading" | "ready" | "unavailable";
 
-export type SessionListOptions = {
-  agentId?: string;
-  spawnedBy?: string;
-  boardFace?: "chat" | "dashboard";
-  hasBoard?: boolean;
-  activeMinutes?: number;
-  search?: string;
-  ownerId?: string;
-  ownerFirst?: boolean;
-  involvingMe?: boolean;
-  offset?: number;
-  limit?: number;
-  includeGlobal?: boolean;
-  includeUnknown?: boolean;
-  configuredAgentsOnly?: boolean;
-  excludeSubagents?: boolean;
-  excludeCron?: boolean;
-  excludeSystem?: boolean;
-  includeDerivedTitles?: boolean;
-  includeLastMessage?: boolean;
-  includeOwnerSessionCounts?: boolean;
+export type SessionListOptions = SchemaContract<
+  Omit<
+    SessionsListParams,
+    | "source"
+    | "activityPulseBoundaries"
+    | "activeOnly"
+    | "requireLastInteraction"
+    | "sortBy"
+    | "includeActivitySummary"
+    | "label"
+    | "projectId"
+    | "workspaceDir"
+    | "group"
+    | "pinned"
+    | "creatorId"
+    | "profileRelation"
+    | "involvingProfileId"
+    | "includePeople"
+    | "archived"
+  >
+> & {
+  source?: SessionsListParams["source"];
+  /** Physical read size for a managed window that needs every page enriched. */
+  pageSize?: number;
   archivedFilter?: SessionArchivedFilter;
   append?: boolean;
 };
@@ -99,7 +105,17 @@ export type SessionRefreshOutcome =
 
 export type SessionListScope = Readonly<Omit<SessionListOptions, "offset" | "append">>;
 
-export type SessionListSnapshot = Pick<SessionState, "result" | "agentId" | "loading" | "error">;
+export type SessionListSnapshot = Pick<
+  SessionState,
+  "result" | "agentId" | "loading" | "error" | "startupPending"
+> & {
+  /** Outcome of the latest settled managed-list read, including suppressed availability errors. */
+  readSucceeded?: boolean;
+  /** Accepted server-window membership before local visibility and generation filters. */
+  pagination?: Pick<SessionsListResult, "totalCount" | "hasMore" | "nextOffset"> & {
+    count: number;
+  };
+};
 
 export type SessionRowTarget = Readonly<{ key: string; agentId: string }>;
 
@@ -207,16 +223,25 @@ export type SessionCapability = {
     ) => GitHubPublicationBinding | null;
   };
   readonly state: SessionState;
+  /** Broad observer outage, independent of query and operation errors; changes notify subscribers. */
+  readonly eventSubscriptionError: string | null;
+  /** Advances for every publication, including pending facts outside state. */
+  readonly revision: number;
   /** Memory-only roster presentation; never authority for mutations or live row observations. */
   readonly presentation: Pick<SessionState, "result" | "agentId" | "resultCached">;
   /** Advances only when a canonical sessions.list result is published. */
   readonly canonicalListRevision: number;
+  /** Initial routing hints only; cached agent discovery never grants live authority. */
+  readonly cachedRoutingDefaults?: {
+    readonly mainKey: string;
+    readonly scope: "per-sender" | "global";
+  };
   whenCachedRosterSettled: () => Promise<void>;
   /** Captures the current Gateway connection generation for read-only requests. */
   captureConnectionScope: () => SessionConnectionScope | null;
   /** Whether a captured read-only request still belongs to the active connection. */
   isConnectionScopeCurrent: (scope: SessionConnectionScope) => boolean;
-  /** Shares exact descriptor reads until the session changes; refresh supersedes earlier reads. */
+  /** Shares descriptor reads, including agent-implied scopes, until the session changes; refresh supersedes earlier reads. */
   describe: (
     params: SessionsDescribeParams,
     options?: { refresh?: boolean; timeoutMs?: number; client?: SessionRequestClient },
@@ -341,7 +366,7 @@ export type SessionCapability = {
   ) => Promise<SessionWorkspaceSetResult | null>;
   subscribeMessages: (
     key: string,
-    options?: { agentId?: string | null; includeApprovals?: boolean },
+    options?: { agentId?: string | null; includeApprovals?: boolean; mode?: "narration" },
   ) => Promise<SessionMessageSubscription>;
   unsubscribeMessages: (subscription: SessionMessageSubscription) => Promise<void>;
   rewind: (

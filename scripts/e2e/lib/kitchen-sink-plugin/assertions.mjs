@@ -1,4 +1,3 @@
-// Assertions for kitchen-sink plugin E2E scenarios.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -8,6 +7,7 @@ import {
   assertClawHubExternalInstallContract,
 } from "../clawhub-artifact-assertions.mjs";
 import { readPositiveIntEnvWithEmptyFallback } from "../env-limits.mjs";
+import { readJson } from "../fixtures/common.mjs";
 import { assertRealPathInside, resolveHomePath } from "../openclaw-state-paths.mjs";
 import { readPluginInstallRecords } from "../plugin-index-sqlite.mjs";
 import { hasExpectedPluginUninstallConfigState } from "../plugin-uninstall-assertions.mjs";
@@ -30,7 +30,6 @@ const EXPECT_FAILURE_OUTPUT_MAX_BYTES = readPositiveIntEnvWithEmptyFallback(
   1024 * 1024,
 );
 
-const readJson = (file) => JSON.parse(fs.readFileSync(file, "utf8"));
 const scratchFile = (name) => path.join(scratchRoot, name);
 const normalizedPath = (filePath) => filePath.replaceAll("\\", "/");
 
@@ -226,10 +225,7 @@ function scanLogs() {
       }
       return true;
     });
-    if (omittedFindings) {
-      return false;
-    }
-    return true;
+    return !omittedFindings;
   });
   if (scannedFiles === 0) {
     throw new Error(
@@ -347,27 +343,16 @@ function assertExpectedDiagnostics(surfaceMode, errorMessages) {
     "tool metadata registration missing toolName",
     "worker provider registration missing method: resolveAllocation",
   ]);
-  const optionalErrorMessages = new Set([
+  const allowedErrorMessages = new Set([
+    ...expectedErrorMessages,
     "agent event subscription registration requires id and handle",
   ]);
-  const frozenTargetErrorMessages = new Set();
-  if (process.env.OPENCLAW_FROZEN_PLUGIN_PRERELEASE_FIXTURE_DIALECT === "legacy") {
-    frozenTargetErrorMessages.add(
-      "plugin must own memory slot or declare contracts.memoryEmbeddingProviders for adapter: kitchen-sink-memory-embedding-provider",
-    );
-  }
-  const allowedErrorMessages = new Set([...expectedErrorMessages, ...optionalErrorMessages]);
   if (!INVALID_PROBE_DIAGNOSTIC_SURFACE_MODES.has(surfaceMode)) {
-    const unexpected = [...errorMessages].filter(
-      (message) => !frozenTargetErrorMessages.has(message),
-    );
+    const unexpected = [...errorMessages];
     if (unexpected.length > 0) {
       throw new Error(`unexpected kitchen-sink diagnostic errors: ${unexpected.join(", ")}`);
     }
     return;
-  }
-  for (const message of frozenTargetErrorMessages) {
-    allowedErrorMessages.add(message);
   }
   for (const message of errorMessages) {
     if (!allowedErrorMessages.has(message)) {

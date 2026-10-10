@@ -50,12 +50,7 @@ export type ModelContextTokenProjection = {
 const normalizePositiveContextTokens = (value: number | undefined) =>
   typeof value === "number" && value > 0 ? value : undefined;
 
-export const ANTHROPIC_CONTEXT_1M_TOKENS = 1_000_000;
-export const ANTHROPIC_VERTEX_CONTEXT_1M_TOKENS = 1_000_000;
-export const ANTHROPIC_FABLE_CONTEXT_TOKENS = 1_000_000;
-export const ANTHROPIC_MYTHOS_5_CONTEXT_TOKENS = 1_000_000;
-export const ANTHROPIC_OPUS_5_CONTEXT_TOKENS = 1_000_000;
-export const ANTHROPIC_SONNET_5_CONTEXT_TOKENS = 1_000_000;
+const ANTHROPIC_CONTEXT_1M_TOKENS = 1_000_000;
 
 function resolveProviderModelRef(params: {
   provider?: string;
@@ -144,23 +139,14 @@ export function resolveAnthropicFixedContextWindow(
   if (!isAnthropicProvider) {
     return undefined;
   }
-  if (/^claude-fable-5(?=$|[^a-z0-9])/.test(modelId)) {
-    return ANTHROPIC_FABLE_CONTEXT_TOKENS;
-  }
-  // Mythos 5 is direct-API only; Claude CLI must keep its discovered or fallback window.
+  // Native 1M models precede the older CLI opt-in gate; Mythos remains direct-API only.
   if (
-    (provider === "anthropic" || provider === "anthropic-vertex") &&
-    /^claude-mythos-5(?=$|[^a-z0-9])/.test(modelId)
+    /^claude-fable-5(?=$|[^a-z0-9])/.test(modelId) ||
+    (provider !== "claude-cli" && /^claude-mythos-5(?=$|[^a-z0-9])/.test(modelId)) ||
+    resolveClaudeOpus5ModelIdentity({ id: modelId }) ||
+    resolveClaudeSonnet5ModelIdentity({ id: modelId })
   ) {
-    return ANTHROPIC_MYTHOS_5_CONTEXT_TOKENS;
-  }
-  // Opus 5 is natively 1M on every runtime, including Claude CLI. Keep this
-  // ahead of the legacy CLI opt-in gate used by older 1M variants below.
-  if (resolveClaudeOpus5ModelIdentity({ id: modelId })) {
-    return ANTHROPIC_OPUS_5_CONTEXT_TOKENS;
-  }
-  if (resolveClaudeSonnet5ModelIdentity({ id: modelId })) {
-    return ANTHROPIC_SONNET_5_CONTEXT_TOKENS;
+    return ANTHROPIC_CONTEXT_1M_TOKENS;
   }
   if (!supportsClaude1MContext({ id: modelId })) {
     return undefined;
@@ -168,9 +154,7 @@ export function resolveAnthropicFixedContextWindow(
   if (provider === "claude-cli" && !modelId.endsWith("[1m]") && options?.claudeCli1M !== true) {
     return undefined;
   }
-  return provider === "anthropic-vertex"
-    ? ANTHROPIC_VERTEX_CONTEXT_1M_TOKENS
-    : ANTHROPIC_CONTEXT_1M_TOKENS;
+  return ANTHROPIC_CONTEXT_1M_TOKENS;
 }
 
 /** Resolves an authored cap without lowering it to discovered model metadata. */
@@ -315,9 +299,5 @@ export function resolveModelContextTokenProjectionFromCache(
   const bareResult = lookupContextTokens(params.model);
   const bareWindow = lookupContextWindow(params.model);
   const bareCap = minPositiveContextTokens(bareResult, bareWindow);
-  if (bareCap !== undefined) {
-    return { contextTokens: bareCap, authoredContextTokens };
-  }
-
-  return { contextTokens: params.fallbackContextTokens, authoredContextTokens };
+  return { contextTokens: bareCap ?? params.fallbackContextTokens, authoredContextTokens };
 }

@@ -48,6 +48,7 @@ export type MutationCoreResult =
   | { ok: false; error: ErrorShape }
   | {
       ok: true;
+      archivedSessionsCommitted: boolean;
       cfg: ReturnType<GatewayRequestContext["getRuntimeConfig"]>;
       outcomes: MutationOutcome[];
       preparedByIndex: Array<PreparedPatchTarget | undefined>;

@@ -22,12 +22,10 @@ import { getBrowserStateRuntime } from "../browser-runtime-state.js";
 import type { closeTrackedCdpTarget } from "./cdp.helpers.js";
 import { resolveBrowserConfig, type ResolvedBrowserConfig } from "./config.js";
 import { BROWSER_TAB_UNREACHABLE_RETIRE_MS } from "./constants.js";
+import { browserSessionTabNativeIdentity } from "./session-tab-identity.js";
 import { readColdNativeActivity } from "./session-tab-process-state.js";
 import { durableOwnership } from "./session-tab-registry.sqlite.test-helpers.js";
-import {
-  browserSessionTabNativeIdentity,
-  ensureBrowserSessionTabStoreReady,
-} from "./session-tab-store.js";
+import { ensureBrowserSessionTabStoreReady } from "./session-tab-store.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const cdpMocks = vi.hoisted(() => ({
@@ -71,6 +69,7 @@ function clearProcessLocalTabState(): void {
     "openclaw.browser.session-tabs.exact-interaction-storage-keys",
     "openclaw.browser.session-tabs.volatile-aliases",
     "openclaw.browser.session-tabs.exact-volatile-aliases",
+    "openclaw.browser.session-tabs.deferred-diagnostics",
   ]) {
     delete state[Symbol.for(name)];
   }
@@ -227,38 +226,6 @@ describe("durable extension session tab cleanup", () => {
     expect(readColdNativeActivity(closed.coldIdentity)).toBeUndefined();
   });
 
-  it("uses the live process-only extension credential for lifecycle cleanup", async () => {
-    expect(resolved.extensionRelayInternalTokens).toEqual({});
-    await trackSessionBrowserTab({
-      sessionKey: "agent:main:main",
-      targetId: "extension-tab",
-      profile: "chrome",
-      ownership: durableOwnership("NATIVE-EXTENSION"),
-      now: 1_000,
-    });
-    const internalToken = "process-only-test-credential";
-    const liveResolved: ResolvedBrowserConfig = {
-      ...resolved,
-      extensionRelayInternalTokens: { chrome: internalToken },
-    };
-    expect(JSON.stringify(openStore().entries())).not.toContain(internalToken);
-
-    await expect(
-      closeTrackedBrowserTabsForSessions({
-        sessionKeys: ["agent:main:main"],
-        getResolvedBrowserConfig: () => liveResolved,
-      }),
-    ).resolves.toBe(1);
-    expect(cdpMocks.closeTrackedCdpTarget).toHaveBeenCalledWith(
-      expect.objectContaining({
-        profileName: "chrome",
-        cdpUrl: `http://openclaw-internal:${internalToken}@127.0.0.1:18799`,
-        nativeTargetId: "NATIVE-EXTENSION",
-      }),
-    );
-    expect(openStore().entries()).toEqual([]);
-  });
-
   it("retains cleanup without a runtime and closes it after reconnect", async () => {
     await trackSessionBrowserTab({
       sessionKey: "agent:main:main",
@@ -300,7 +267,9 @@ describe("durable extension session tab cleanup", () => {
     ).resolves.toBe(1);
     expect(cdpMocks.closeTrackedCdpTarget).toHaveBeenCalledWith(
       expect.objectContaining({
+        profileName: "chrome",
         cdpUrl: `http://openclaw-internal:${internalToken}@127.0.0.1:18799`,
+        nativeTargetId: "NATIVE-EXTENSION",
       }),
     );
     expect(openStore().entries()).toEqual([]);

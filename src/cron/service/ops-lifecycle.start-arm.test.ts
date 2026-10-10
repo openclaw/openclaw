@@ -56,7 +56,9 @@ it.each([
     const clock = createGatewaySchedulerClock(now);
     const scheduler = createTestGatewayScheduler(clock.clock);
     if (failArm) {
-      vi.spyOn(scheduler, "schedule").mockImplementationOnce(() => {
+      const scope = scheduler.scope();
+      vi.spyOn(scheduler, "scope").mockReturnValueOnce(scope);
+      vi.spyOn(scope, "schedule").mockImplementationOnce(() => {
         throw new Error("secondary arm failure");
       });
     }

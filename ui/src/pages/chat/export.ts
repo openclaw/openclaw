@@ -1,4 +1,5 @@
 import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
+import { t } from "../../i18n/index.ts";
 import { extractTextCached } from "../../lib/chat/message-extract.ts";
 import {
   normalizeRoleForGrouping,
@@ -31,7 +32,7 @@ export function buildChatMarkdown(messages: unknown[], assistantName: string): s
     const role = normalizeRoleForGrouping(resolveMessageRole(msg));
     const speaker =
       role === "user"
-        ? (resolveMessageSenderLabel(msg) ?? "You")
+        ? (resolveMessageSenderLabel(msg) ?? t("chat.messages.unattributedSender"))
         : role === "assistant"
           ? (resolveMessageSenderLabel(msg) ?? assistantName)
           : "Tool";

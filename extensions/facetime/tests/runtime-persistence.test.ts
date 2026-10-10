@@ -60,43 +60,6 @@ describe("FaceTime runtime asynchronous persistence", () => {
     mocks.helper.findOutgoingCall.mockResolvedValue(pendingDialCarrierResult());
   });
 
-  it("waits for the initial durable pending record before dispatching the helper dial", async () => {
-    const state = emptyState();
-    const runtime = await createRuntime(state);
-    const hostSql = observeHostDataSql();
-    const write = suspendNextWrite(state);
-    mocks.helper.startCall.mockImplementationOnce(async (_request: unknown, dialID: string) => {
-      expect(await state.lookup("active")).toMatchObject({ dialID, delivery: "in-flight" });
-      return {
-        dial_id: dialID,
-        call_uuid: "outbound-call",
-        muted: true,
-        is_uplink_muted: true,
-        transport: incomingCall().data.transport,
-      };
-    });
-    const dialing = runtime.dial({ handle: "owner@example.com" });
-    try {
-      await write.entered;
-      expect(mocks.helper.startCall).not.toHaveBeenCalled();
-      expect(await state.lookup("active")).toBeUndefined();
-
-      write.release();
-      const result = await dialing;
-      expect(mocks.helper.startCall).toHaveBeenCalledOnce();
-      await mocks.helperParams?.onMessage(outgoingCall(result.dialID, 6));
-      expect(await state.lookup("active")).toBeUndefined();
-      for (const call of hostSql.calls) {
-        expect(call).not.toHaveBeenCalled();
-      }
-    } finally {
-      hostSql.restore();
-      write.release();
-      await dialing.catch(() => undefined);
-      await runtime.stop();
-    }
-  });
-
   it("never dispatches a helper dial when its initial persistence fails", async () => {
     const state = emptyState();
     const runtime = await createRuntime(state);
@@ -113,16 +76,21 @@ describe("FaceTime runtime asynchronous persistence", () => {
   });
 
   it.each([4, 1])(
-    "reserves outbound admission while an incoming status %s arrives during persistence",
+    "reserves outbound admission until durable publication while incoming status %s arrives",
     async (callStatus) => {
       const state = emptyState();
       const runtime = await createRuntime(state);
+      const hostSql = observeHostDataSql();
       mocks.startTalk.mockResolvedValue(createTalkDriver({}));
-      mocks.helper.startCall.mockResolvedValue({
-        call_uuid: "outbound-call",
-        muted: true,
-        is_uplink_muted: true,
-        transport: incomingCall().data.transport,
+      mocks.helper.startCall.mockImplementation(async (_request: unknown, dialID: string) => {
+        expect(await state.lookup("active")).toMatchObject({ dialID, delivery: "in-flight" });
+        return {
+          dial_id: dialID,
+          call_uuid: "outbound-call",
+          muted: true,
+          is_uplink_muted: true,
+          transport: incomingCall().data.transport,
+        };
       });
       const write = suspendNextWrite(state);
       const dialing = runtime.dial({ handle: "owner@example.com" });
@@ -132,6 +100,7 @@ describe("FaceTime runtime asynchronous persistence", () => {
       );
       try {
         await write.entered;
+        expect(await state.lookup("active")).toBeUndefined();
         await mocks.helperParams?.onMessage(incomingCall(callStatus));
         expect((await runtime.status()).calls).toEqual([]);
 
@@ -146,7 +115,11 @@ describe("FaceTime runtime asynchronous persistence", () => {
         const pending = (await runtime.status()).outboundCallPending!;
         await mocks.helperParams?.onMessage(outgoingCall(pending.dialID, 6));
         expect(await state.lookup("active")).toBeUndefined();
+        for (const call of hostSql.calls) {
+          expect(call).not.toHaveBeenCalled();
+        }
       } finally {
+        hostSql.restore();
         write.release();
         await outcome;
         await runtime.stop();

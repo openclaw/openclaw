@@ -48,13 +48,13 @@ suite.define(() => {
       await page.getByText("Earlier completed reply.").waitFor();
       const earlierAssistant = page.locator(".chat-group.assistant").first();
       const footerPresentation = (group: typeof earlierAssistant) =>
-        group.locator(".chat-group-footer").evaluate((element) => {
+        group.locator(":scope > .chat-group-footer").evaluate((element) => {
           const style = getComputedStyle(element);
           return { opacity: style.opacity, pointerEvents: style.pointerEvents };
         });
       const actionOpacities = (group: typeof earlierAssistant) =>
         group
-          .locator(".chat-group-footer-actions button")
+          .locator(":scope > .chat-group-footer .chat-group-footer-actions button")
           .evaluateAll((buttons) => buttons.map((button) => getComputedStyle(button).opacity));
       await page.mouse.move(0, 0);
       await expect
@@ -70,7 +70,7 @@ suite.define(() => {
       await expect
         .poll(() =>
           earlierAssistant
-            .locator(".chat-message-actions-row button")
+            .locator(".chat-message-actions-row button, .chat-message-footer button")
             .evaluateAll((buttons) => buttons.map((button) => getComputedStyle(button).opacity)),
         )
         .toEqual(["0", "0"]);
@@ -232,7 +232,9 @@ suite.define(() => {
           height,
         );
         await page.mouse.move(0, 0);
-        const actions = group.locator(".chat-group-footer-actions button");
+        const actions = group.locator(
+          ":scope > .chat-group-footer .chat-group-footer-actions button",
+        );
         const focusedActionOpacities = mobile ? ["1", "1"] : ["0.6", "0.6"];
         await actions.first().focus();
         await page.keyboard.press("Shift+Tab");
@@ -251,7 +253,7 @@ suite.define(() => {
           await expect
             .poll(() =>
               group
-                .locator(".chat-message-actions-row button")
+                .locator(".chat-message-actions-row button, .chat-message-footer button")
                 .evaluateAll((buttons) =>
                   buttons.map((button) => getComputedStyle(button).opacity),
                 ),
@@ -838,13 +840,16 @@ suite.define(() => {
     }
   });
 
-  it("keeps one live assistant message growing through tool activity", async () => {
+  it("keeps chat-only assistant text exact through tool activity and finalization", async () => {
     const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const gateway = await installMockGateway(page);
 
     try {
       await page.goto(`${suite.server.baseUrl}chat`);
+
+      const connect = await gateway.waitForRequest("connect");
+      expect(requireRecord(connect.params).caps).toContain("chat-only-assistant-text");
 
       const prompt = "stream before tool";
       await page.locator(".agent-chat__composer-combobox textarea").fill(prompt);
@@ -888,11 +893,6 @@ suite.define(() => {
       const nextStream = "\n\n```ts\nconst answer = 42;";
       await gateway.emitGatewayEvent("chat", {
         deltaText: nextStream,
-        message: {
-          content: [{ text: initialStream + nextStream, type: "text" }],
-          role: "assistant",
-          timestamp: Date.now(),
-        },
         runId,
         sessionKey: "main",
         state: "delta",
@@ -903,10 +903,31 @@ suite.define(() => {
 
       const stream = transcript.locator(".chat-bubble.streaming");
       expect(await stream.count()).toBe(1);
-      expect(await stream.textContent()).toContain("I will inspect the file.");
-      expect(await stream.textContent()).toContain("const answer = 42;");
+      expect((await stream.locator(".chat-text p").textContent())?.trim()).toBe(
+        initialStream.trim(),
+      );
+      expect((await stream.locator("code.language-ts").textContent())?.trim()).toBe(
+        "const answer = 42;",
+      );
       expect(await toolBubble.count()).toBe(1);
       expect(await transcript.getByText("I will inspect the file.").count()).toBe(1);
+
+      await gateway.emitChatFinal({
+        runId,
+        text: `${initialStream}${nextStream}\n\`\`\`\n\nDone.`,
+      });
+      const finalReply = transcript.locator(".chat-bubble", {
+        has: page.locator("code.language-ts"),
+      });
+      await finalReply.getByText("Done.", { exact: true }).waitFor();
+      expect(await stream.count()).toBe(0);
+      expect(await finalReply.count()).toBe(1);
+      expect(
+        (await finalReply.locator(".chat-text p").allTextContents()).map((text) => text.trim()),
+      ).toEqual([initialStream.trim(), "Done."]);
+      expect((await finalReply.locator("code.language-ts").textContent())?.trim()).toBe(
+        "const answer = 42;",
+      );
     } finally {
       await suite.closeBrowserContext(context);
     }

@@ -1,8 +1,8 @@
-// Defines user-facing config field help text for docs and UI surfaces.
 import { META_FIELD_HELP } from "./schema.meta.js";
 import { describeTalkSilenceTimeoutDefaults } from "./talk-defaults.js";
 import { CLOUD_WORKER_FIELD_HELP } from "./zod-schema.cloud-workers.js";
 import { DESKTOP_FIELD_HELP } from "./zod-schema.desktop.js";
+import { STORAGE_FIELD_HELP } from "./zod-schema.storage.js";
 import { TELEMETRY_FIELD_HELP } from "./zod-schema.telemetry.js";
 
 export const CORE_FIELD_HELP: Record<string, string> = {
@@ -10,12 +10,8 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     "Global directory for new managed worktrees. Use an absolute path or ~ for your home directory; defaults to <state-dir>/worktrees. Existing worktrees keep their recorded paths when this changes.",
   worktreeAcceleration:
     "Use filesystem acceleration for new managed worktrees when supported (default: true). Set false to use normal Git checkout and file copying. Applies only to new worktrees.",
-  "channels.discord.activities":
-    "Discord Activities configuration for presenting core show_widget documents inside Discord. Leave unset to keep Activity routes, presentation, and handlers disabled.",
-  "channels.discord.activities.clientSecret":
-    "OAuth2 client secret for the Discord application that hosts Activities. Keep this value secret; DISCORD_CLIENT_SECRET is used when this field is unset.",
-  "channels.discord.activities.applicationId":
-    "Optional Discord application ID for Activities. Defaults to the bot application ID learned from Discord at gateway startup.",
+  worktreeMaxCount:
+    "Maximum live managed worktrees across all agents and repositories (default: 4096). Evicts merged or squashed branches first, then oldest idle worktrees, including unsaved data. Live runs are protected; raise this value if they occupy the cap. Disk-space admission still applies.",
   ...META_FIELD_HELP,
   env: "Environment import and override settings used to supply runtime variables to the gateway process. Use this section to control shell-env loading and explicit variable injection behavior.",
   "env.shellEnv":
@@ -89,6 +85,7 @@ export const CORE_FIELD_HELP: Record<string, string> = {
   cloudWorkers:
     "Opt-in cloud worker profiles for disposable remote environments. When this section is omitted or has no profiles, cloud worker creation remains unavailable and existing gateway/node status behavior is unchanged.",
   ...CLOUD_WORKER_FIELD_HELP,
+  ...STORAGE_FIELD_HELP,
   ...DESKTOP_FIELD_HELP,
   gateway:
     "Gateway runtime surface for bind mode, auth, control UI, remote transport, and operational safety controls. Keep conservative defaults unless you intentionally expose the gateway beyond trusted local interfaces.",
@@ -139,7 +136,7 @@ export const CORE_FIELD_HELP: Record<string, string> = {
   "gateway.auth.trustedProxy.cloudflareAccessOidc.providerId":
     "Exact Access identity-provider ID for the trusted OIDC integration. A provider display name or a matching claim name alone does not establish trust.",
   "gateway.auth.trustedProxy.cloudflareAccessOidc.githubAccountIdClaim":
-    "Exact forwarded OIDC claim whose value is a verified positive decimal-string GitHub account ID. Configure Access to forward it in oidc_fields; never use an unverified user-editable claim.",
+    "Exact forwarded OIDC claim whose value is a verified positive decimal-string GitHub account ID. Configure Access to forward it, then inspect the authenticated Access identity response. OpenClaw reads oidc_fields, or custom when oidc_fields is absent. Never use an unverified user-editable claim.",
   "gateway.auth.trustedProxy.deviceAutoApprove":
     "Optional policy for automatically approving new browser and native UI operator devices and same-key scope upgrades after trusted-proxy authentication. Grants are capped by deviceAutoApprove.scopes and the proxy's x-openclaw-scopes header when present.",
   "gateway.auth.trustedProxy.deviceAutoApprove.enabled":
@@ -149,7 +146,13 @@ export const CORE_FIELD_HELP: Record<string, string> = {
   "gateway.roles":
     "Optional profile-bound operator roles for team Gateways. Each named role controls access to other people's sessions, sandbox isolation, session and run agents, and granted operator scopes; omitting this section preserves existing operator behavior.",
   "gateway.roles.default":
-    "Required role assigned to authenticated profiles without a valid explicit assignment whenever operator roles are configured. Its name must match a configured role definition.",
+    "Required role applied to authenticated profiles without a valid explicit assignment or matching GitHub login assignment whenever operator roles are configured. Its name must match a configured role definition.",
+  "gateway.roles.assignments":
+    "Optional declarative role assignments for authenticated profiles. A valid explicit assignment made with users.setRole takes precedence over these mappings, followed by the default role.",
+  "gateway.roles.assignments.byGithubLogin":
+    "Maps cached GitHub identity logins to configured role names, matching case-insensitively after trimming. Invalid logins, duplicate normalized logins, and unknown roles are rejected. Profiles without a cached GitHub identity use their explicit assignment or default role.",
+  "gateway.roles.assignments.byGithubLogin.*":
+    "Configured role name for this GitHub login. Applies when the profile has a matching cached GitHub identity and no valid explicit role assignment. Changes hot-apply when config reload is enabled.",
   "gateway.roles.definitions":
     "Nonempty administrator-named role definitions bundling the closed session-sharing, sandbox-isolation, agent-access, and operator-scope policies applied to authenticated user profiles.",
   "gateway.roles.definitions.*":
@@ -299,7 +302,7 @@ export const CORE_FIELD_HELP: Record<string, string> = {
   surfaces:
     "Per-surface message policy overrides keyed by the resolved delivery surface id. Use this only when one deployed surface needs stricter silent-reply handling than the agent default.",
   "surfaces.*.silentReply":
-    "Overrides silent-reply policy for one resolved delivery surface. Unset fields inherit agents.defaults.silentReply; use narrow surface ids so internal or group-specific behavior does not spill into other destinations.",
+    "Overrides group silent-reply policy for one resolved delivery surface. Unset fields inherit agents.defaults.silentReply. Direct chats and internal sessions always require a reply.",
   "agents.entries.*.skills":
     "Optional allowlist of skills for this agent. If omitted, the agent inherits agents.defaults.skills when set; otherwise skills stay unrestricted. Set [] for no skills. An explicit list fully replaces inherited defaults instead of merging with them.",
   agents:
@@ -349,9 +352,9 @@ export const CORE_FIELD_HELP: Record<string, string> = {
   "agents.entries.*.reasoningDefault":
     "Optional per-agent default reasoning visibility (on|off|stream). Applies when no per-message or session reasoning override is set.",
   "agents.entries.*.fastModeDefault":
-    'Optional per-agent default for fast mode ("auto", true, or false). Applies when no per-message or session fast-mode override is set.',
+    'Optional per-agent default for fast mode ("auto", "ultrafast", true, or false). Applies when no per-message or session fast-mode override is set.',
   "agents.defaults.fastModeDefault":
-    'Default fast-mode policy for the agent loop ("auto", true, or false). Individual agent entries override it.',
+    'Default fast-mode policy for the agent loop ("auto", "ultrafast", true, or false). Individual agent entries override it.',
   "agents.entries.*.runtime":
     "Optional runtime descriptor for this agent. Use embedded for default OpenClaw execution or acp for external ACP harness defaults.",
   "agents.entries.*.runtime.type":

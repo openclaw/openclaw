@@ -1,9 +1,12 @@
 // Persistence helpers for plugin installs plus related config mutation.
 import path from "node:path";
 import { theme } from "../../packages/terminal-core/src/theme.js";
+import { readConfigFileSnapshotForWrite } from "../config/config.js";
+import { ConfigMutationConflictError } from "../config/mutation-conflict.js";
 import { ensurePluginAllowlisted } from "../config/plugins-allowlist.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
+import { composeConfigWriteAssertions } from "../config/write-authority.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { resolveUserPath, shortenHomePath } from "../utils.js";
@@ -14,7 +17,10 @@ import {
 import { discoverOpenClawPlugins } from "./discovery.js";
 import { enablePluginInConfig, prepareConfigForDisabledInstall } from "./enable.js";
 import type { ConfigSnapshotForInstallPersist } from "./install-config-mutation.js";
-import { commitPluginInstallRecordsWithConfig } from "./install-record-commit.js";
+import {
+  commitPluginInstallRecordsWithConfig,
+  getRetainedPluginInstallPublication,
+} from "./install-record-commit.js";
 import type { PluginInstallRuntimeDeferral } from "./install-runtime-batch.js";
 import type { PluginInstallTransaction } from "./install-transaction.js";
 import type { PluginInstallLogger } from "./install-types.js";
@@ -37,6 +43,7 @@ import { safeRealpathSync } from "./path-safety.js";
 import { createPluginCache, withPluginCache } from "./plugin-cache.js";
 import { resolvePluginConfigEnablement } from "./plugin-config-enablement.js";
 import { inspectPluginGenerationSources } from "./plugin-generation-source-inspection.js";
+import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
 import { tracePluginLifecyclePhaseAsync } from "./plugin-lifecycle-trace.js";
 import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 import { refreshPluginRegistryAfterConfigMutation } from "./registry-refresh.js";
@@ -177,7 +184,7 @@ function resolveReplacedManagedInstallRemoval(params: {
   return plan.directoryRemoval;
 }
 
-export async function persistPluginInstall(params: {
+type PluginInstallPersistenceParams = {
   snapshot: ConfigSnapshotForInstallPersist;
   env?: NodeJS.ProcessEnv;
   pluginId: string;
@@ -193,8 +200,22 @@ export async function persistPluginInstall(params: {
   deferRuntime?: PluginInstallRuntimeDeferral;
   beforePersistentApply?: () => void;
   beforePersistentEffect?: () => void | Promise<void>;
-}): Promise<OpenClawConfig> {
+};
+
+export async function persistPluginInstall(
+  params: PluginInstallPersistenceParams,
+): Promise<OpenClawConfig> {
+  return await withPluginLifecycleLease({ env: params.env }, async (lease) =>
+    persistPluginInstallOwned(params, lease.assertOwned),
+  );
+}
+
+async function persistPluginInstallOwned(
+  params: PluginInstallPersistenceParams,
+  assertOwned: () => void,
+): Promise<OpenClawConfig> {
   let committed = false;
+  let retainPublishedPayload = false;
   try {
     const installRecords = await tracePluginLifecyclePhaseAsync(
       "install records load",
@@ -219,7 +240,7 @@ export async function persistPluginInstall(params: {
         pluginId: params.pluginId,
         ...params.install,
       });
-      const reconciledConfig = reconcileNpmPluginLoadPath({
+      let reconciledConfig = reconcileNpmPluginLoadPath({
         config: params.snapshot.config,
         previousInstall,
         nextInstall: params.install,
@@ -268,6 +289,32 @@ export async function persistPluginInstall(params: {
         );
       }
       const ownedPluginIds = manifests.map((plugin) => plugin.id).toSorted();
+      const prepareMigration = async () => {
+        const prepared = await readConfigFileSnapshotForWrite();
+        assertOwned();
+        params.beforePersistentApply?.();
+        if (
+          params.snapshot.baseHash !== undefined &&
+          prepared.snapshot.hash !== params.snapshot.baseHash
+        ) {
+          throw new ConfigMutationConflictError("config changed since last load");
+        }
+        const { preparePluginUpdateConfigMigration } =
+          await import("../commands/doctor/shared/plugin-update-config-migration.js");
+        return await preparePluginUpdateConfigMigration({
+          config: reconciledConfig,
+          snapshot: prepared.snapshot,
+          installRecords: nextInstallRecords,
+          installOwners: [params.pluginId],
+          assertCurrent: () => {
+            assertOwned();
+            params.beforePersistentApply?.();
+            params.snapshot.writeOptions.assertConfigPathForWrite?.();
+          },
+        });
+      };
+      await using migration = previousInstall ? await prepareMigration() : undefined;
+      reconciledConfig = migration?.config ?? reconciledConfig;
       const manifestByPluginId = new Map(manifests.map((plugin) => [plugin.id, plugin]));
       const enablementByPluginId = new Map(
         ownedPluginIds.map((pluginId) => [
@@ -312,7 +359,6 @@ export async function persistPluginInstall(params: {
           enabledPluginIds.push(pluginId);
         }
       }
-      const slotWarnings: string[] = [];
       // Select from this install's candidate before its record reaches the durable index.
       const slotMetadata = enabledPluginIds.length
         ? loadPluginMetadataSnapshot({
@@ -327,7 +373,7 @@ export async function persistPluginInstall(params: {
           })
         : undefined;
       for (const pluginId of enabledPluginIds) {
-        const slotResult = await tracePluginLifecyclePhaseAsync(
+        next = await tracePluginLifecyclePhaseAsync(
           "slot selection",
           async () => {
             // Legacy kind inspection executes plugin code; every entry follows an awaited boundary.
@@ -341,8 +387,6 @@ export async function persistPluginInstall(params: {
           },
           { command: "install", pluginId },
         );
-        next = slotResult.config;
-        slotWarnings.push(...slotResult.warnings);
       }
       next = withoutPluginInstallRecords(next);
       const enabled = new Set(enabledPluginIds);
@@ -357,56 +401,66 @@ export async function persistPluginInstall(params: {
               })),
           )
         : undefined;
-      const receipt = await tracePluginLifecyclePhaseAsync(
-        "config mutation",
-        () =>
-          commitPluginInstallRecordsWithConfig({
-            previousInstallRecords: installRecords,
-            nextInstallRecords,
-            nextConfig: next,
-            baseHash: params.snapshot.baseHash,
-            beforePersistentEffect: params.beforePersistentEffect,
-            writeOptions: {
-              ...params.snapshot.writeOptions,
-              afterWrite:
-                params.applyRuntime || params.deferRuntime
-                  ? { mode: "none", reason: "plugin lifecycle applies runtime" }
-                  : { mode: "restart", reason: "plugin source changed" },
-              ...(params.beforePersistentApply
-                ? {
-                    assertConfigPathForWrite: () => {
-                      params.snapshot.writeOptions.assertConfigPathForWrite?.();
-                      params.beforePersistentApply?.();
-                    },
-                  }
-                : {}),
-            },
-          }),
-        { command: "install" },
-      );
+      const commit = () =>
+        tracePluginLifecyclePhaseAsync(
+          "config mutation",
+          () =>
+            commitPluginInstallRecordsWithConfig({
+              previousInstallRecords: installRecords,
+              nextInstallRecords,
+              nextConfig: next,
+              baseHash: params.snapshot.baseHash,
+              beforePersistentEffect: params.beforePersistentEffect,
+              writeOptions: {
+                ...params.snapshot.writeOptions,
+                afterWrite:
+                  params.applyRuntime || params.deferRuntime || migration?.activationWarning
+                    ? { mode: "none", reason: "plugin lifecycle applies runtime" }
+                    : { mode: "restart", reason: "plugin source changed" },
+                ...(params.beforePersistentApply
+                  ? {
+                      assertConfigPathForWrite: composeConfigWriteAssertions(
+                        params.snapshot.writeOptions.assertConfigPathForWrite,
+                        params.beforePersistentApply,
+                      ),
+                    }
+                  : {}),
+              },
+            }),
+          { command: "install" },
+        );
+      const receipt = migration ? await migration.publish(next, commit) : await commit();
       // Publish the durable install before activation can fail; keep running metadata unchanged.
       committed = true;
-      params.deferRuntime?.record(
-        {
-          operation: "install",
-          pluginId: params.pluginId,
-          sourceDigests: source?.sourceDigests ?? {},
-          write: receipt,
-        },
-        source?.assertSourceCurrent,
-      );
-      refreshManagedPluginMetadata({ config: next });
-      // Publish and drain the previous generation before removing its source files.
-      await params.applyRuntime?.({
-        config: next,
-        write: receipt.configWrite,
-        pluginIds: ownedPluginIds,
-        reason: "install",
-        assertInvokerOwned: params.beforePersistentApply,
-      });
-      if (replacedInstallRemoval) {
+      const activationWarning = migration?.activationWarning;
+      if (activationWarning) {
+        warn(activationWarning, activationWarning);
+      } else {
+        params.deferRuntime?.record(
+          {
+            operation: "install",
+            pluginId: params.pluginId,
+            sourceDigests: source?.sourceDigests ?? {},
+            write: receipt,
+          },
+          source?.assertSourceCurrent,
+        );
+        await refreshManagedPluginMetadata({
+          config: next,
+          assertCurrent: params.beforePersistentApply,
+        });
+        // Publish and drain the previous generation before removing its source files.
+        await params.applyRuntime?.({
+          config: next,
+          write: receipt.configWrite,
+          pluginIds: ownedPluginIds,
+          reason: "install",
+          assertInvokerOwned: params.beforePersistentApply,
+        });
+      }
+      if (replacedInstallRemoval && !activationWarning) {
         const cleanup = async (
-          assertOwned?: () => void,
+          assertCleanupOwned?: () => void,
           reportWarning = (message: string) =>
             warn(
               message,
@@ -415,7 +469,7 @@ export async function persistPluginInstall(params: {
         ) => {
           const removalResult = await tracePluginLifecyclePhaseAsync(
             "replaced install cleanup",
-            () => applyPluginUninstallDirectoryRemoval(replacedInstallRemoval, assertOwned),
+            () => applyPluginUninstallDirectoryRemoval(replacedInstallRemoval, assertCleanupOwned),
             { command: "install", pluginId: params.pluginId },
           );
           for (const warning of removalResult.warnings) {
@@ -447,7 +501,7 @@ export async function persistPluginInstall(params: {
         configPath: receipt.configWrite.path,
         reason: "source-changed",
         installRecords: nextInstallRecords,
-        invalidateRuntimeCache: params.invalidateRuntimeCache,
+        invalidateRuntimeCache: activationWarning ? false : params.invalidateRuntimeCache,
         traceCommand: "install",
         logger: {
           warn: (message) =>
@@ -457,9 +511,6 @@ export async function persistPluginInstall(params: {
             ),
         },
       });
-      for (const warning of slotWarnings) {
-        warn(warning, warning);
-      }
       const configurationRequiredPluginIds = [...enablementByPluginId]
         .filter(([, state]) => state.mode === "missing")
         .map(([pluginId]) => pluginId);
@@ -494,6 +545,14 @@ export async function persistPluginInstall(params: {
     if (committed) {
       throw new PluginInstallPersistedError(params.pluginId, error);
     }
+    const retained = getRetainedPluginInstallPublication(error);
+    if (retained) {
+      retainPublishedPayload = true;
+      if (retained.current) {
+        throw new PluginInstallPersistedError(params.pluginId, error);
+      }
+      throw error;
+    }
     try {
       await params.transaction?.rollback();
     } catch (rollbackError) {
@@ -506,7 +565,7 @@ export async function persistPluginInstall(params: {
     }
     throw error;
   } finally {
-    if (committed) {
+    if (committed || retainPublishedPayload) {
       await params.transaction?.commit().catch(() => {
         const warning = "Plugin install committed, but backup cleanup failed.";
         params.persistenceLogger?.warn?.(warning);

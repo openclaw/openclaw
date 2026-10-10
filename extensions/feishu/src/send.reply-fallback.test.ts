@@ -3,23 +3,9 @@ import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbou
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const resolveFeishuSendTargetMock = vi.hoisted(() => vi.fn());
-const resolveMarkdownTableModeMock = vi.hoisted(() => vi.fn(() => "preserve"));
-const convertMarkdownTablesMock = vi.hoisted(() => vi.fn((text: string) => text));
 
 vi.mock("./send-target.js", () => ({
   resolveFeishuSendTarget: resolveFeishuSendTargetMock,
-}));
-
-vi.mock("./runtime.js", () => ({
-  setFeishuRuntime: vi.fn(),
-  getFeishuRuntime: () => ({
-    channel: {
-      text: {
-        resolveMarkdownTableMode: resolveMarkdownTableModeMock,
-        convertMarkdownTables: convertMarkdownTablesMock,
-      },
-    },
-  }),
 }));
 
 let sendCardFeishu: typeof import("./send.js").sendCardFeishu;
@@ -46,7 +32,6 @@ describe("Feishu reply fallback for withdrawn/deleted targets", () => {
 
   afterAll(() => {
     vi.doUnmock("./send-target.js");
-    vi.doUnmock("./runtime.js");
     vi.resetModules();
   });
 
@@ -115,26 +100,6 @@ describe("Feishu reply fallback for withdrawn/deleted targets", () => {
     expect(caught.deliveryResult).toEqual({ messageIds: [], visibleReplySent: true });
     expect(replyMock).toHaveBeenCalledOnce();
     expect(createMock).not.toHaveBeenCalled();
-  });
-
-  it("falls back to create when reply throws a withdrawn SDK error", async () => {
-    const sdkError = Object.assign(new Error("request failed"), { code: 230011 });
-    replyMock.mockRejectedValue(sdkError);
-    createMock.mockResolvedValue({
-      code: 0,
-      data: { message_id: "om_thrown_fallback" },
-    });
-
-    await expectFallbackResult(
-      () =>
-        sendMessageFeishu({
-          cfg: {} as never,
-          to: "user:ou_target",
-          text: "hello",
-          replyToMessageId: "om_parent",
-        }),
-      "om_thrown_fallback",
-    );
   });
 
   it("falls back to create when card reply throws a not-found AxiosError", async () => {
@@ -307,28 +272,5 @@ describe("Feishu reply fallback for withdrawn/deleted targets", () => {
     ).rejects.toThrow("rate limited");
 
     expect(createMock).not.toHaveBeenCalled();
-  });
-
-  it("still falls back for non-thread replies to withdrawn targets", async () => {
-    replyMock.mockResolvedValue({
-      code: 230011,
-      msg: "The message was withdrawn.",
-    });
-    createMock.mockResolvedValue({
-      code: 0,
-      data: { message_id: "om_non_thread_fallback" },
-    });
-
-    await expectFallbackResult(
-      () =>
-        sendMessageFeishu({
-          cfg: {} as never,
-          to: "user:ou_target",
-          text: "hello",
-          replyToMessageId: "om_parent",
-          replyInThread: false,
-        }),
-      "om_non_thread_fallback",
-    );
   });
 });

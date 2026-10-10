@@ -5,10 +5,8 @@ import { Type } from "typebox";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
 import type { AgentToolResult, AgentToolUpdateCallback } from "./runtime/index.js";
-import type { ToolDefinition } from "./sessions/index.js";
 import { resolveToolResultFailureKind } from "./tool-result-error.js";
 import {
-  addClientToolsToToolCatalog,
   applyToolCatalogCompaction,
   isDirectVisibleCatalogTool,
   resolveCatalog,
@@ -41,7 +39,7 @@ import {
   type ToolSearchMode,
   type ToolSearchToolContext,
 } from "./tool-search-types.js";
-import { textResult, type AnyAgentTool } from "./tools/common.js";
+import { textResult, ToolInputError, type AnyAgentTool } from "./tools/common.js";
 
 export {
   clearToolSearchCatalog,
@@ -199,10 +197,6 @@ function shouldExposeControlTool(name: string, mode: ToolSearchMode): boolean {
 export function applyToolSearchCatalog(params: {
   tools: AnyAgentTool[];
   config?: OpenClawConfig;
-  sessionId?: string;
-  sessionKey?: string;
-  agentId?: string;
-  runId?: string;
   catalogRef?: ToolSearchCatalogRef;
   toolHookContext?: HookContext;
   shouldCatalogTool?: (tool: AnyAgentTool) => boolean;
@@ -219,23 +213,6 @@ export function applyToolSearchCatalog(params: {
 }
 
 export { applyToolSchemaDirectoryCatalog };
-
-/** Move client-provided tools into an existing Tool Search catalog. */
-export function addClientToolsToToolSearchCatalog(params: {
-  tools: ToolDefinition[];
-  config?: OpenClawConfig;
-  sessionId?: string;
-  sessionKey?: string;
-  agentId?: string;
-  runId?: string;
-  catalogRef?: ToolSearchCatalogRef;
-}): { tools: ToolDefinition[]; compacted: boolean; catalogToolCount: number } {
-  const config = resolveToolSearchConfig(params.config);
-  if (config.mode === "directory") {
-    return { tools: params.tools, compacted: false, catalogToolCount: 0 };
-  }
-  return addClientToolsToToolCatalog({ ...params, enabled: config.enabled });
-}
 
 /** Create Tool Search control tools for the current run/session context. */
 export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[] {
@@ -345,21 +322,38 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
         signal?: AbortSignal,
         onUpdate?: AgentToolUpdateCallback,
       ): Promise<AgentToolResult<unknown>> => {
-        const call = readToolSearchCallArgs(args, resolveCatalog(ctx));
+        const catalog = resolveCatalog(ctx);
+        const call = readToolSearchCallArgs(args, catalog);
         try {
+          if (
+            ctx.catalogRef?.directOnlyToolNames?.has(call.id) &&
+            !catalog.entries.some((entry) => entry.id === call.id || entry.name === call.id)
+          ) {
+            throw new ToolInputError(
+              "This tool is already available directly, not through the tool catalog. Call it directly by its declared name with its declared parameters.",
+            );
+          }
           const callResult = await runtime.call(call.id, call.input, {
             parentToolCallId: toolCallId,
             signal,
             onUpdate,
           });
           const { id, name, source } = callResult.tool;
+          const images = callResult.result.content.filter((block) => block.type === "image");
+          const modelResult =
+            images.length > 0
+              ? {
+                  ...callResult.result,
+                  content: callResult.result.content.filter((block) => block.type !== "image"),
+                }
+              : callResult.result;
           // Invocation results need identity, not another copy of the discovery metadata.
-          // Keep full metadata in details for callers and the unchanged target result on both surfaces.
+          // Keep the full target result in details; forward its already-projected images as content.
           const wrappedResult = {
             ...formatToolSearchControlResult(
-              { tool: { id, name, source }, result: callResult.result },
+              { tool: { id, name, source }, result: modelResult },
               runtime,
-              { parentToolCallId: toolCallId },
+              { parentToolCallId: toolCallId, images },
             ),
             details: callResult,
           };

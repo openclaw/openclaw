@@ -14,35 +14,27 @@ import {
   GATEWAY_CLIENT_MODES,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import { SESSION_VIEWER_PRESENCE_MAX_KEYS } from "../../packages/gateway-protocol/src/schema/sessions-viewer-presence.js";
-import { SUBAGENT_ENDED_REASON_ERROR } from "../agents/subagents/registry/subagent-lifecycle-events.js";
-import { SubagentLifecycleController } from "../agents/subagents/registry/subagent-registry-lifecycle.js";
-import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import {
   loadTranscriptEvents,
   persistSessionTranscriptTurn,
 } from "../config/sessions/session-accessor.js";
 import { appendAssistantMessageToSessionTranscript } from "../config/sessions/transcript.js";
-import { resolveCronDeliveryPlan } from "../cron/delivery-plan.js";
-import { dispatchCronDelivery } from "../cron/isolated-agent/delivery-dispatch.js";
-import type { CronJob } from "../cron/types.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { claimAgentRunContext, clearAgentRunContext } from "../infra/agent-run-registry.js";
 import * as secureRandom from "../infra/secure-random.js";
 import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { persistUserTurnTranscript } from "../sessions/user-turn-transcript.test-support.js";
-import {
-  ensureProfileForEmail,
-  listProfiles,
-  setAvatar,
-  setDisplayName,
-} from "../state/user-profiles.js";
+import { setAvatar, setDisplayName } from "../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail, listProfiles } from "../state/user-profiles.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { resolveCurrentUserProfileDisplay } from "./current-user-profile-display.js";
+import { registerCronSessionCompletionEventTests } from "./session-message-cron.test-support.js";
+import { registerRecoveredSubagentSessionEventTest } from "./session-message-subagent.test-support.js";
 import { createWorkerFanoutFixture } from "./session-message-worker.test-support.js";
 import { seedCompletedSessionTranscript } from "./session-row-fixtures.test-support.js";
 import { removeSessionTestDirectories } from "./session-test-directories.test-support.js";
@@ -692,96 +684,11 @@ describe("session.message websocket events", () => {
     }
   });
 
-  test("broadcasts a recovered subagent terminal session to a subscribed gateway exactly once", async () => {
-    const storePath = await createSessionStoreFile();
-    const entry: SubagentRunRecord = {
-      runId: "run-recovered-subscriber",
-      childSessionKey: "agent:main:subagent:recovered-subscriber",
-      requesterSessionKey: "agent:main:parent",
-      requesterDisplayKey: "parent",
-      task: "finish recovered child work",
-      cleanup: "keep",
-      createdAt: 1_000,
-      execution: { status: "running", startedAt: 2_000 },
-    };
-    await writeSessionStore({
-      entries: {
-        [entry.childSessionKey]: {
-          sessionId: "sess-recovered-subscriber",
-          spawnedBy: entry.requesterSessionKey,
-          updatedAt: Date.now(),
-        },
-      },
-      storePath,
-    });
-
-    const emitSubagentProgressEndedForRun = vi.fn(async () => {});
-    const controller = new SubagentLifecycleController({
-      runs: new Map([[entry.runId, entry]]),
-      resumedRuns: new Set(),
-      subagentAnnounceTimeoutMs: 1_000,
-      getRuntimeConfig: () => ({}),
-      persist: vi.fn(),
-      persistOrThrow: vi.fn(),
-      clearPendingLifecycleError: vi.fn(),
-      countPendingDescendantRuns: () => 0,
-      getLatestRunForChildSession: () => null,
-      suppressAnnounceForSteerRestart: () => false,
-      shouldEmitEndedHookForRun: () => false,
-      emitSubagentEndedHookForRun: vi.fn(async () => {}),
-      emitSubagentProgressEndedForRun,
-      notifyContextEngineSubagentEnded: vi.fn(async () => {}),
-      retireSupersededRun: vi.fn(async () => {}),
-      resumeSubagentRun: vi.fn(),
-      callGateway: async <T = Record<string, unknown>>() => ({}) as T,
-      captureSubagentCompletionReply: vi.fn(async () => undefined),
-      runSubagentAnnounceFlow: vi.fn(async () => "retryable" as const),
-      maybeWakeRequesterAfterAllChildrenSettled: vi.fn(async () => false),
-      warn: vi.fn(),
-    });
-    const completion = {
-      runId: entry.runId,
-      endedAt: 4_000,
-      outcome: { status: "error" as const, error: "restart interrupted run" },
-      reason: SUBAGENT_ENDED_REASON_ERROR,
-      triggerCleanup: false,
-      recoverInterrupted: true,
-    } satisfies Parameters<typeof controller.completeSubagentRun>[0];
-
-    await withOperatorSessionSubscriber(async (ws) => {
-      const waitForRecoveredTerminal = (timeoutMs?: number) =>
-        onceMessage(
-          ws,
-          (message) =>
-            message.type === "event" &&
-            message.event === "sessions.changed" &&
-            (message.payload as { sessionKey?: string; reason?: string } | undefined)
-              ?.sessionKey === entry.childSessionKey &&
-            (message.payload as { reason?: string } | undefined)?.reason === "subagent-status",
-          timeoutMs,
-        );
-      const changedEvent = waitForRecoveredTerminal();
-
-      await controller.completeSubagentRun(completion);
-
-      const event = await changedEvent;
-      expectRecordFields(event.payload, {
-        sessionKey: entry.childSessionKey,
-        reason: "subagent-status",
-        status: "interrupted",
-        endedAt: completion.endedAt,
-        spawnedBy: entry.requesterSessionKey,
-      });
-      expect(emitSubagentProgressEndedForRun).toHaveBeenCalledExactlyOnceWith(entry);
-
-      // A resumed callback must not publish a second terminal event to an
-      // already-subscribed Control UI client for the same child generation.
-      await expectNoMessageWithin({
-        action: () => controller.completeSubagentRun(completion),
-        watch: waitForRecoveredTerminal,
-      });
-      expect(emitSubagentProgressEndedForRun).toHaveBeenCalledExactlyOnceWith(entry);
-    });
+  registerRecoveredSubagentSessionEventTest({
+    createSessionStoreFile,
+    withOperatorSessionSubscriber,
+    expectNoMessageWithin,
+    expectRecordFields,
   });
 
   test("includes spawned session ownership metadata on lifecycle sessions.changed events", async () => {
@@ -996,136 +903,11 @@ describe("session.message websocket events", () => {
     }
   });
 
-  test("publishes a background completion live and restores it from WebChat history", async () => {
-    const storePath = await createSessionStoreFile();
-    const sessionId = "sess-current-cron-completion";
-    const sessionKey = "agent:main:webchat:direct:cron-owner";
-    await writeSessionStore({
-      entries: {
-        "webchat:direct:cron-owner": {
-          sessionId,
-          lifecycleRevision: "current-cron-revision",
-          updatedAt: Date.now(),
-        },
-      },
-      storePath,
-    });
-
-    const webWs = await harness.openWs({ origin: `http://127.0.0.1:${harness.port}` });
-    let reconnectedWebWs: Awaited<ReturnType<typeof harness.openWs>> | undefined;
-    try {
-      await connectSessionClient(webWs, storePath, "current-cron-web-device.json", "web");
-      await rpcReq(webWs, "sessions.messages.subscribe", { key: sessionKey });
-
-      const job: CronJob = {
-        id: "job-webchat",
-        name: "Current WebChat completion",
-        sessionTarget: "current",
-        sessionKey,
-        wakeMode: "now",
-        enabled: true,
-        state: {},
-        createdAtMs: 1,
-        updatedAtMs: 1,
-        schedule: { kind: "at", at: "2030-01-01T00:00:00.000Z" },
-        payload: { kind: "agentTurn", message: "Finish later" },
-      };
-      const liveEventPromise = waitForSessionMessageEvent(webWs, sessionKey);
-      const dispatched = await dispatchCronDelivery({
-        cfgWithAgentDefaults: { session: { store: storePath } },
-        deps: {},
-        job,
-        agentId: "main",
-        agentSessionKey: "cron:job-webchat",
-        sourceSessionKey: sessionKey,
-        sourceSessionGeneration: {
-          sessionId,
-          lifecycleRevision: "current-cron-revision",
-        },
-        runSessionKey: "cron:job-webchat:run:3000",
-        sessionId: "detached-cron-session",
-        lifecycleRevision: "detached-cron-revision",
-        sessionUpdatedAt: 3_000,
-        runStartedAt: 3_000,
-        timeoutMs: 30_000,
-        resolvedDelivery: {
-          ok: false,
-          channel: "webchat",
-          mode: "implicit",
-          error: new Error("WebChat uses canonical session events"),
-        },
-        deliveryPlan: resolveCronDeliveryPlan(job),
-        deliveryRequested: true,
-        undeliveredRunStatus: "ok",
-        spawnOnlyHandoff: false,
-        sourceDeliveryOutcome: {
-          visibleDeliveries: [],
-          verifiedMessageToolDelivery: false,
-          satisfiesSourceDelivery: false,
-          unverifiedMessageToolDelivery: false,
-        },
-        deliveryBestEffort: false,
-        deliveryPayloadHasStructuredContent: false,
-        deliveryPayloads: [{ text: "The detached cron finished without another user message." }],
-        synthesizedText: "The detached cron finished without another user message.",
-        summary: "The detached cron finished without another user message.",
-        outputText: "The detached cron finished without another user message.",
-        isAborted: () => false,
-        abortReason: () => "aborted",
-      });
-      expect(dispatched).toMatchObject({ delivered: true, deliveryAttempted: true });
-
-      const liveEvent = await liveEventPromise;
-      const livePayload = requireRecord(liveEvent.payload, "background completion event");
-      expect(livePayload.message).toMatchObject({
-        __openclaw: {
-          idempotencyKey: "cron-current-completion:cron:job-webchat:3000",
-        },
-        content: [
-          { type: "text", text: "The detached cron finished without another user message." },
-        ],
-        openclawAutomation: {
-          kind: "cron",
-          jobId: "job-webchat",
-          runId: "cron:job-webchat:3000",
-        },
-        role: "assistant",
-      });
-
-      webWs.close();
-      reconnectedWebWs = await harness.openWs({ origin: `http://127.0.0.1:${harness.port}` });
-      await connectSessionClient(
-        reconnectedWebWs,
-        storePath,
-        "current-cron-web-device.json",
-        "web",
-      );
-      const history = await rpcReq<{ messages?: unknown[] }>(reconnectedWebWs, "chat.history", {
-        sessionKey,
-      });
-      expect(history.ok).toBe(true);
-      expect(history.payload?.messages).toContainEqual(
-        expect.objectContaining({
-          __openclaw: expect.objectContaining({
-            id: livePayload.messageId,
-            idempotencyKey: "cron-current-completion:cron:job-webchat:3000",
-            seq: 1,
-          }),
-          content: [
-            { type: "text", text: "The detached cron finished without another user message." },
-          ],
-          openclawAutomation: {
-            kind: "cron",
-            jobId: "job-webchat",
-            runId: "cron:job-webchat:3000",
-          },
-          role: "assistant",
-        }),
-      );
-    } finally {
-      webWs.close();
-      reconnectedWebWs?.close();
-    }
+  registerCronSessionCompletionEventTests({
+    getHarness: () => harness,
+    createSessionStoreFile,
+    connectSessionClient,
+    waitForSessionMessageEvent,
   });
 
   test("projects current revisioned sender avatars consistently across live events and RPC reads", async () => {
@@ -1583,7 +1365,7 @@ describe("session.message websocket events", () => {
               expect(payload).not.toHaveProperty(privateField);
             }
             expect(JSON.stringify(payload)).not.toContain(storePath);
-            expect(JSON.stringify(payload)).not.toContain(lifecycleRevision);
+            expect(payload).toHaveProperty("session.lifecycleRevision", lifecycleRevision);
           }
           await expect(Promise.all(unexpectedFrames)).resolves.toEqual([false, false, false]);
           expect(observedInvalidations.map((frames) => frames.length)).toEqual([1, 1, 1]);
@@ -1601,16 +1383,7 @@ describe("session.message websocket events", () => {
   });
 
   test("broadcasts appended transcript messages with the session key", async () => {
-    const storePath = await createSessionStoreFile();
-    await writeSessionStore({
-      entries: {
-        main: {
-          sessionId: "sess-main",
-          updatedAt: Date.now(),
-        },
-      },
-      storePath,
-    });
+    const storePath = await createMainSessionStore();
 
     const delivered = withOperatorSessionSubscriber((ws) =>
       waitForSessionMessageEvent(ws, "agent:main:main"),
@@ -1936,7 +1709,7 @@ describe("session.message websocket events", () => {
     const storePath = await createSessionStoreFile();
     testState.agentsConfig = {
       ownership: "explicit",
-      list: [{ id: "main" }, { id: "work" }],
+      entries: { main: {}, work: {} },
     };
     testState.agentConfig = { sessionStore: { agentId: "work" } };
     const transcriptPath = path.join(path.dirname(storePath), "global-work.jsonl");
@@ -2052,7 +1825,7 @@ describe("session.message websocket events", () => {
     const storePath = await createSessionStoreFile();
     testState.agentsConfig = {
       ownership: "explicit",
-      list: [{ id: "main" }, { id: "work" }],
+      entries: { main: {}, work: {} },
     };
     testState.agentConfig = { sessionStore: { agentId: "work" } };
     await writeSessionStore({

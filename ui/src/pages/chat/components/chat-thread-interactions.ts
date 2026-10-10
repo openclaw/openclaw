@@ -1,6 +1,7 @@
 // Pane-local search, context menus, selection actions, and presentation resets.
 import { html, nothing, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
+import type { MessageReactionSummary } from "../../../../../packages/gateway-protocol/src/index.js";
 import type { ChatPendingInputsPage } from "../../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { ThemeBranding } from "../../../../../packages/gateway-protocol/src/theme.ts";
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
@@ -14,13 +15,14 @@ import type { BrowserTabSelection } from "../../../components/browser/browser-ta
 import { copyMarkdownLabel, handleCopyButton } from "../../../components/copy-button.ts";
 import { icons } from "../../../components/icons.ts";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.types.ts";
+import type { MarkdownFileLinkTarget } from "../../../components/markdown-file-links.ts";
 import type { MarkdownRenderOptions } from "../../../components/markdown-render-options.ts";
 import type { SessionLinkTarget } from "../../../components/markdown-session-links.ts";
 import { releaseMarkdownTables } from "../../../components/markdown-tables.ts";
 import type { PersonActivityRouting } from "../../../components/person-activity-link.ts";
 import { t } from "../../../i18n/index.ts";
-import "../../../components/tooltip.ts";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
+import "../../../components/tooltip.ts";
 import type { BoardProvider } from "../../../lib/board/provider.ts";
 import type {
   ChatAttachment,
@@ -29,35 +31,35 @@ import type {
   ChatSelectionSource,
   ChatStreamSegment,
 } from "../../../lib/chat/chat-types.ts";
-import { buildCompanionQuestionPrefill } from "../../../lib/chat/companion-question.ts";
 import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
 import type { UiSessionDefaultsHost } from "../../../lib/sessions/session-key.ts";
+import type { PresentationValue } from "../../../lit/presentation-binding.ts";
 import type { TurnRecapWatch } from "../chat-progress.ts";
+import type { SubagentRoster } from "../chat-spawned-subagent.ts";
 import { resetChatThreadState } from "../chat-thread.ts";
 import type { PluginToolIcons } from "../chat-tool-icon-controller.ts";
 import type { ChatTypingActorView, ChatTypingOverflow } from "../chat-typing-presence.ts";
-import type { LinkFaviconFetcher } from "../link-favicon-loader.ts";
-import type { ChatRunUiStatus } from "../run-lifecycle.ts";
+import type { LinkFaviconFetcher } from "../link-favicon-cache.ts";
 import type { RealtimeTalkConversationEntry } from "../talk/conversation.ts";
 import type { CompactionStatus, RunOutputUsage } from "../tool-stream-contract.ts";
 import type { AsyncQuestionDraft, AsyncQuestionPresentation } from "./chat-async-question.types.ts";
 import { resolveChatContextCopy, usesNativeContextMenu } from "./chat-context-copy.ts";
 import type { ChatHistoryBoundaryProps } from "./chat-history-boundary.ts";
-import { isConfirmedActionPopoverFocused } from "./chat-message-confirmation.ts";
-import type { MessageActionDetails } from "./chat-message-markdown.ts";
-import type { ArtifactDownloadResolver } from "./chat-message-media.ts";
-import type { ChatSendStatusActions } from "./chat-message-send-status.ts";
 import {
   dismissConfirmedActionPopovers,
+  isConfirmedActionPopoverFocused,
   openChatRewindConfirmation,
-  type MessageReplyTarget,
-} from "./chat-message.ts";
+} from "./chat-message-confirmation.ts";
+import type { MessageActionDetails, MessageReplyTarget } from "./chat-message-markdown.ts";
+import type { ArtifactDownloadResolver } from "./chat-message-media.ts";
+import type { ChatSendStatusActions } from "./chat-message-send-status.ts";
+import type { ReplyMessageStatus } from "./chat-reply-preview.ts";
 import {
   handleChatSelectionPointerUp,
   isChatSelectionPopupFocused,
   removeChatSelectionPopup,
 } from "./chat-selection-popup.ts";
-import type { SidebarContent, SidebarFullMessageLoader } from "./chat-sidebar.ts";
+import type { SidebarContent, SidebarFullMessageLoader } from "./chat-sidebar-content-types.ts";
 
 registerChatMessageMetadataEnglish();
 
@@ -99,109 +101,117 @@ type ReplyMessageAccess = {
   revision: number;
   navigationId: string | null;
   read: (messageId: string) => unknown;
-  request: (messageId: string) => void;
+  /** How the Gateway answered a lookup without a message. */
+  status?: (messageId: string) => ReplyMessageStatus | undefined;
   open: (messageId: string) => void;
 };
 
-export type ChatThreadProps = ChatSendStatusActions & {
-  branding?: ThemeBranding;
-  compactionStatus?: CompactionStatus | null;
-  paneId: string;
-  /** Routing for peer sender names in a shared session. */
-  personActivity?: PersonActivityRouting;
-  sessionKey: string;
-  presented?: boolean;
-  /** Mounted transcript visibility, independent of which split pane owns input. */
-  transcriptVisible?: boolean;
-  gatewayClient?: GatewayBrowserClient | null;
-  selectedSession: GatewaySessionRow | undefined;
-  boardProvider?: BoardProvider;
-  announceTranscript?: boolean;
-  loading: boolean;
-  routeLoadingSkeleton?: boolean;
-  /** Older-history pagination: renders the auto-load sentinel plus the in-flow boundary row. */
-  historyPagination?: ChatHistoryBoundaryProps;
-  messages: unknown[];
-  toolMessages: unknown[];
-  latestBrowserTabs?: ReadonlyMap<string, BrowserTabSelection>;
-  guardianNotices?: ChatGuardianNotice[];
-  streamSegments: ChatStreamSegment[];
-  stream: string | null;
-  streamStartedAt: number | null;
-  /** Browser-local active run identity, retained across transient disconnects. */
-  runId?: string | null;
-  runUsageById?: ReadonlyMap<string, RunOutputUsage>;
-  runStatus?: ChatRunUiStatus | null;
-  queue: ChatQueueItem[];
-  initialTurnId?: string;
-  pendingInputs?: ChatPendingInputsPage["items"];
-  showThinking: boolean;
-  showToolCalls: boolean;
-  persistCommentary?: boolean;
-  runActive?: boolean;
-  runWorking?: boolean;
-  startupLabel?: string;
-  waitingApproval?: boolean;
-  questionPrompts?: readonly QuestionPrompt[];
-  asyncQuestions?: AsyncQuestionPresentation;
-  sessions: SessionsListResult | null;
-  /** Host context resolving global-alias session keys (scope=global fleets). */
-  sessionHost?: UiSessionDefaultsHost | null;
-  assistantName: string;
-  assistantAvatar: string | null;
-  senderAgentAvatars?: ReadonlyMap<string, string | null>;
-  agents?: AgentsListResult["agents"];
-  /** Configured main-session key; an agent's main source labels as the agent. */
-  mainKey?: string;
-  currentAgentId?: string;
-  assistantAvatarUrl?: string | null;
-  userId?: string | null;
-  userName?: string | null;
-  userAvatar?: string | null;
-  basePath?: string;
-  sessionPublicOrigin?: string;
-  resourceBasePath?: string;
-  fullMessageAgentId?: string;
-  loadFullAssistantMessage?: SidebarFullMessageLoader | null;
-  mediaPolicyEpoch?: number;
-  connectionEpoch?: number;
-  assistantAttachmentAuthToken?: string | null;
-  resolveArtifactDownload?: ArtifactDownloadResolver;
-  canvasPluginSurfaceUrl?: string | null;
-  embedSandboxMode?: EmbedSandboxMode;
-  allowExternalEmbedUrls?: boolean;
-  fetchLinkFavicon?: LinkFaviconFetcher;
-  pluginToolIcons?: PluginToolIcons;
-  githubRepo?: MarkdownRenderOptions["githubRepo"];
-  githubRepositories?: MarkdownRenderOptions["githubRepositories"];
-  autoExpandToolCalls?: boolean;
-  realtimeTalkConversation?: RealtimeTalkConversationEntry[];
-  typingActors?: readonly ChatTypingActorView[];
-  typingOverflow?: ChatTypingOverflow;
-  onOpenSidebar?: (content: SidebarContent) => void;
-  onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void;
-  onOpenSessionLink?: (target: SessionLinkTarget) => void;
-  onRequestOpenImage?: () => number;
-  onOpenImage?: (item: ImageLightboxItem, requestVersion?: number) => void;
-  onAssistantAttachmentLoaded?: () => void;
-  onRequestUpdate?: () => void;
-  onChatScroll?: (event: Event) => void;
-  onHistoryIntent?: (event: Event) => void;
-  onDraftChange: (next: string) => void;
-  onSend: () => void;
-  onSetReply?: (target: MessageReplyTarget) => void;
-  replyMessageAccess?: ReplyMessageAccess;
-  onRewindMessage?: (entryId: string) => Promise<boolean> | boolean;
-  onForkMessage?: (entryId: string) => Promise<void> | void;
-  onFocusComposer?: () => void;
-  commentAttachments?: readonly ChatAttachment[];
-  commentsDisabled?: boolean;
-  onAddToChat?: (selection: ChatSelectionSource, anchorRect: DOMRect) => void;
-  onCompanionPrefill?: (question: string) => void;
-  onOpenSession?: (sessionKey: string) => void;
-  modelSetupRequired?: boolean;
-  onModelSetup?: () => void;
-};
+export type ChatThreadProps = ChatSendStatusActions &
+  SubagentRoster & {
+    messageReactions?: ReadonlyMap<string, MessageReactionSummary[]>;
+    onReact?: (messageId: string, emoji: string, remove: boolean) => void;
+    branding?: ThemeBranding;
+    compactionStatus?: CompactionStatus | null;
+    paneId: string;
+    /** Routing for peer sender names in a shared session. */
+    personActivity?: PersonActivityRouting;
+    sessionKey: string;
+    presented?: PresentationValue;
+    /** Mounted transcript visibility, independent of which split pane owns input. */
+    transcriptVisible?: PresentationValue;
+    gatewayClient?: GatewayBrowserClient | null;
+    selectedSession: GatewaySessionRow | undefined;
+    boardProvider?: BoardProvider;
+    announceTranscript?: boolean;
+    loading: boolean;
+    routeLoadingSkeleton?: boolean;
+    /** Older-history pagination: renders the auto-load sentinel plus the in-flow boundary row. */
+    historyPagination?: ChatHistoryBoundaryProps;
+    messages: unknown[];
+    toolMessages: unknown[];
+    latestBrowserTabs?: ReadonlyMap<string, BrowserTabSelection>;
+    guardianNotices?: ChatGuardianNotice[];
+    streamSegments: ChatStreamSegment[];
+    stream: string | null;
+    streamStartedAt: number | null;
+    /** Browser-local active run identity, retained across transient disconnects. */
+    runId?: string | null;
+    runUsageById?: ReadonlyMap<string, RunOutputUsage>;
+    queue: ChatQueueItem[];
+    initialTurnId?: string;
+    pendingInputs?: ChatPendingInputsPage["items"];
+    showThinking: boolean;
+    showToolCalls: boolean;
+    persistCommentary?: boolean;
+    runActive?: boolean;
+    runWorking?: boolean;
+    startupLabel?: string;
+    waitingApproval?: boolean;
+    questionPrompts?: readonly QuestionPrompt[];
+    asyncQuestions?: AsyncQuestionPresentation;
+    sessions: SessionsListResult | null;
+    /** Host context resolving global-alias session keys (scope=global fleets). */
+    sessionHost?: UiSessionDefaultsHost | null;
+    assistantName: string;
+    assistantAvatar: string | null;
+    senderAgentAvatars?: ReadonlyMap<string, string | null>;
+    agents?: AgentsListResult["agents"];
+    /** Configured main-session key; an agent's main source labels as the agent. */
+    mainKey?: string;
+    currentAgentId?: string;
+    assistantAvatarUrl?: string | null;
+    userId?: string | null;
+    userName?: string | null;
+    userAvatar?: string | null;
+    basePath?: string;
+    sessionPublicOrigin?: string;
+    resourceBasePath?: string;
+    fullMessageAgentId?: string;
+    loadFullAssistantMessage?: SidebarFullMessageLoader | null;
+    mediaPolicyEpoch?: number;
+    connectionEpoch?: number;
+    assistantAttachmentAuthToken?: string | null;
+    resolveArtifactDownload?: ArtifactDownloadResolver;
+    canvasPluginSurfaceUrl?: string | null;
+    embedSandboxMode?: EmbedSandboxMode;
+    allowExternalEmbedUrls?: boolean;
+    fetchLinkFavicon?: LinkFaviconFetcher;
+    pluginToolIcons?: PluginToolIcons;
+    githubRepo?: MarkdownRenderOptions["githubRepo"];
+    githubRepositories?: MarkdownRenderOptions["githubRepositories"];
+    autoExpandToolCalls?: boolean;
+    realtimeTalkConversation?: RealtimeTalkConversationEntry[];
+    typingActors?: readonly ChatTypingActorView[];
+    typingOverflow?: ChatTypingOverflow;
+    onOpenSidebar?: (content: SidebarContent) => void;
+    onOpenWorkspaceFile?: (target: MarkdownFileLinkTarget) => void;
+    onOpenSessionLink?: (target: SessionLinkTarget) => void;
+    onNavigate?: (routeId: "cron", options: { search: string }) => void;
+    onRequestOpenImage?: () => number;
+    onOpenImage?: (item: ImageLightboxItem, requestVersion?: number) => void;
+    onAssistantAttachmentLoaded?: () => void;
+    onRequestUpdate?: () => void;
+    onChatScroll?: (event: Event) => void;
+    onHistoryIntent?: (event: Event) => void;
+    onDraftChange: (next: string) => void;
+    onSend: () => void;
+    onSetReply?: (target: MessageReplyTarget) => void;
+    replyMessageAccess?: ReplyMessageAccess;
+    onRewindMessage?: (entryId: string) => Promise<boolean> | boolean;
+    onForkMessage?: (entryId: string) => Promise<void> | void;
+    onFocusComposer?: () => void;
+    commentAttachments?: readonly ChatAttachment[];
+    commentsDisabled?: boolean;
+    onAddToChat?: (selection: ChatSelectionSource, anchorRect: DOMRect) => void;
+    onCompanionSelection?: (selection: ChatSelectionSource, anchorRect: DOMRect) => void;
+    onOpenSession?: (sessionKey: string) => void;
+    /** Shows one of the session's subagents. */
+    onOpenSubagent?: (sessionKey: string) => void;
+    /** Shows the session's subagents; absent where the pane has no list of them to show. */
+    onOpenSubagents?: () => void;
+    modelSetupRequired?: boolean;
+    onModelSetup?: () => void;
+  };
 
 type TranscriptInteractionProps = Pick<
   ChatThreadProps,
@@ -213,32 +223,31 @@ type TranscriptInteractionProps = Pick<
   | "onForkMessage"
   | "onFocusComposer"
   | "onAddToChat"
-  | "onCompanionPrefill"
+  | "onCompanionSelection"
 >;
 
-function createTranscriptState(): ChatThreadState {
-  return {
-    asyncQuestionDrafts: new Map(),
-    asyncQuestionRevision: 0,
-    turnRecapWatch: null,
-    searchOpen: false,
-    searchQuery: "",
-    searchFocusPending: false,
-    searchReturnFocusTarget: null,
-    searchReturnFocusOwner: null,
-    transcriptRenderDependencies: [],
-    transcriptRenderContext: {},
-  };
-}
-
 const transcriptStates = new Map<string, ChatThreadState>();
+const transcriptSearchDefaults = {
+  searchOpen: false,
+  searchQuery: "",
+  searchFocusPending: false,
+  searchReturnFocusTarget: null,
+  searchReturnFocusOwner: null,
+};
 
 export function getTranscriptState(paneId: string): ChatThreadState {
   const existing = transcriptStates.get(paneId);
   if (existing) {
     return existing;
   }
-  const state = createTranscriptState();
+  const state: ChatThreadState = {
+    asyncQuestionDrafts: new Map(),
+    asyncQuestionRevision: 0,
+    turnRecapWatch: null,
+    ...transcriptSearchDefaults,
+    transcriptRenderDependencies: [],
+    transcriptRenderContext: {},
+  };
   transcriptStates.set(paneId, state);
   return state;
 }
@@ -272,13 +281,10 @@ export function resetTranscriptSession(paneId: string, owner?: ParentNode): void
   const state = transcriptStates.get(paneId);
   if (state) {
     state.asyncQuestionDrafts = new Map();
-    // Search input belongs to the outgoing transcript. Other fields are pane
-    // preferences or dependency memos and invalidate themselves on new props.
-    state.searchOpen = false;
-    state.searchQuery = "";
-    state.searchFocusPending = false;
-    state.searchReturnFocusTarget = null;
-    state.searchReturnFocusOwner = null;
+    // Parked rows must commit fresh bindings on return even when visible props match.
+    state.transcriptRenderDependencies = [];
+    // Search input belongs to the outgoing transcript; pane preferences survive.
+    Object.assign(state, transcriptSearchDefaults);
   }
 }
 
@@ -295,11 +301,10 @@ export function resetThreadPresentation(paneId?: string, owner?: ParentNode) {
   }
   if (paneId) {
     transcriptStates.delete(paneId);
-    resetChatThreadState(paneId);
   } else {
     transcriptStates.clear();
-    resetChatThreadState();
   }
+  resetChatThreadState(paneId);
 }
 
 export function renderTranscriptSearch(
@@ -368,11 +373,7 @@ export function renderTranscriptSearch(
 export function closeTranscriptSearch(state: ChatThreadState, requestUpdate: () => void): void {
   const returnFocusTarget = state.searchReturnFocusTarget;
   const returnFocusOwner = state.searchReturnFocusOwner;
-  state.searchOpen = false;
-  state.searchQuery = "";
-  state.searchFocusPending = false;
-  state.searchReturnFocusTarget = null;
-  state.searchReturnFocusOwner = null;
+  Object.assign(state, transcriptSearchDefaults);
   requestUpdate();
   queueMicrotask(() => {
     const target = returnFocusTarget?.isConnected
@@ -400,14 +401,10 @@ export function toggleTranscriptSearch(
   state.searchFocusPending = true;
   const returnFocusTarget = triggerEvent?.target;
   const returnFocusOwner = triggerEvent?.currentTarget;
-  state.searchReturnFocusTarget =
-    returnFocusTarget instanceof HTMLElement && returnFocusTarget.isConnected
-      ? returnFocusTarget
-      : null;
-  state.searchReturnFocusOwner =
-    returnFocusOwner instanceof HTMLElement && returnFocusOwner.isConnected
-      ? returnFocusOwner
-      : null;
+  const connectedElement = (target: EventTarget | null | undefined) =>
+    target instanceof HTMLElement && target.isConnected ? target : null;
+  state.searchReturnFocusTarget = connectedElement(returnFocusTarget);
+  state.searchReturnFocusOwner = connectedElement(returnFocusOwner);
   requestUpdate();
 }
 
@@ -457,27 +454,40 @@ function toggleTouchMessageMeta(event: PointerEvent): void {
   if (selection && !selection.isCollapsed) {
     return;
   }
-  const reveal = !group.classList.contains("chat-group--meta-revealed");
+  // Resolve the message before clearing disclosure so a tap on a sibling moves
+  // the actions, while tapping the same message still toggles them off.
+  const bubble = group.classList.contains("chat-group--peer")
+    ? (target.closest(".chat-bubble") ??
+      // Tapping beside an image must reveal its actions without opening the image.
+      [...group.querySelectorAll(".chat-bubble")].find((candidate) => {
+        const bounds = candidate.getBoundingClientRect();
+        return event.clientY >= bounds.top && event.clientY <= bounds.bottom;
+      }))
+    : null;
+  const reveal = bubble
+    ? !bubble.classList.contains("chat-bubble--actions-revealed")
+    : !group.classList.contains("chat-group--meta-revealed");
   for (const revealed of transcript.querySelectorAll(".chat-group--meta-revealed")) {
     revealed.classList.remove("chat-group--meta-revealed");
   }
   group.classList.toggle("chat-group--meta-revealed", reveal);
+  for (const revealed of transcript.querySelectorAll(".chat-bubble--actions-revealed")) {
+    revealed.classList.remove("chat-bubble--actions-revealed");
+  }
+  if (reveal) {
+    bubble?.classList.add("chat-bubble--actions-revealed");
+  }
 }
 
 export function handleTranscriptPointerUp(event: PointerEvent, props: TranscriptInteractionProps) {
   toggleTouchMessageMeta(event);
-  if (event.button !== 0 || event.ctrlKey || typeof props.onCompanionPrefill !== "function") {
+  if (event.button !== 0 || event.ctrlKey || typeof props.onCompanionSelection !== "function") {
     return;
   }
   handleChatSelectionPointerUp(event, {
     paneId: props.paneId,
     onAddToChat: props.onAddToChat,
-    onAskSideChat: (selection) => {
-      const question = buildCompanionQuestionPrefill(selection);
-      if (question) {
-        props.onCompanionPrefill?.(question);
-      }
-    },
+    onAskSideChat: (selection, anchorRect) => props.onCompanionSelection?.(selection, anchorRect),
   });
 }
 

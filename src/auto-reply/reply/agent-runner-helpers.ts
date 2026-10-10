@@ -1,4 +1,3 @@
-/** Helper predicates and gates used while streaming agent-runner payloads. */
 import { isAudioFileName } from "@openclaw/media-core/mime";
 import {
   hasOutboundReplyContent,
@@ -9,7 +8,6 @@ import { normalizeVerboseLevel, type VerboseLevel } from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
 import type { TypingSignaler } from "./typing-mode.js";
 
-/** Returns true when a payload carries audio media. */
 export const isAudioPayload = (payload: ReplyPayload): boolean =>
   resolveSendableOutboundReplyParts(payload).mediaUrls.some(isAudioFileName);
 
@@ -36,51 +34,39 @@ function readCurrentVerboseLevel(params: VerboseGateParams): VerboseLevel | unde
       ? normalizeVerboseLevel(entry.verboseLevel)
       : undefined;
   } catch {
-    // ignore store read failures
     return undefined;
   }
-}
-
-function createCurrentVerboseLevelResolver(
-  params: VerboseGateParams,
-): () => VerboseLevel | undefined {
-  let cachedLevel: VerboseLevel | undefined;
-  let cachedAtMs = Number.NEGATIVE_INFINITY;
-  return () => {
-    if (!params.sessionKey || !params.storePath) {
-      return undefined;
-    }
-    const now = Date.now();
-    if (now - cachedAtMs < VERBOSE_GATE_SESSION_REFRESH_MS) {
-      return cachedLevel;
-    }
-    cachedLevel = readCurrentVerboseLevel(params);
-    cachedAtMs = now;
-    return cachedLevel;
-  };
 }
 
 function createVerboseGate(
   params: VerboseGateParams,
   shouldEmit: (level: VerboseLevel) => boolean,
 ): () => boolean {
-  const resolveCurrentVerboseLevel = createCurrentVerboseLevelResolver(params);
-  // Explicit turn hints stay fixed; only inherited settings follow live session changes.
-  return () =>
-    shouldEmit(
-      params.verboseLevelOverride ?? resolveCurrentVerboseLevel() ?? params.resolvedVerboseLevel,
-    );
+  let cachedLevel: VerboseLevel | undefined;
+  let cachedAtMs = Number.NEGATIVE_INFINITY;
+  return () => {
+    // Explicit turn hints stay fixed; only inherited settings follow live session changes.
+    if (params.verboseLevelOverride != null) {
+      return shouldEmit(params.verboseLevelOverride);
+    }
+    if (!params.sessionKey || !params.storePath) {
+      return shouldEmit(params.resolvedVerboseLevel);
+    }
+    const now = Date.now();
+    if (now - cachedAtMs >= VERBOSE_GATE_SESSION_REFRESH_MS) {
+      cachedLevel = readCurrentVerboseLevel(params);
+      cachedAtMs = now;
+    }
+    return shouldEmit(cachedLevel ?? params.resolvedVerboseLevel);
+  };
 }
 
-/** Creates the visibility gate for tool result summaries. */
 export const createShouldEmitToolResult = (params: VerboseGateParams): (() => boolean) =>
   createVerboseGate(params, (level) => level !== "off");
 
-/** Creates the visibility gate for command/tool output streams. */
 export const createShouldEmitToolOutput = (params: VerboseGateParams): (() => boolean) =>
   createVerboseGate(params, (level) => level === "full");
 
-/** Sends typing signals for visible text payloads when typing is enabled. */
 export const signalTypingIfNeeded = async (
   payloads: ReplyPayload[],
   typingSignals: TypingSignaler,

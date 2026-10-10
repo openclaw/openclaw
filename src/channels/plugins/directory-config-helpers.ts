@@ -7,9 +7,6 @@ import type { OpenClawConfig } from "../../config/types.js";
 import type { DirectoryConfigParams } from "./directory-types.js";
 import type { ChannelDirectoryEntry } from "./types.public.js";
 
-/**
- * Applies case-insensitive query filtering and a positive result limit to ids.
- */
 export function applyDirectoryQueryAndLimit(
   ids: string[],
   params: { query?: string | null; limit?: number | null },
@@ -29,9 +26,6 @@ export function applyDirectoryQueryAndLimit(
   return filtered;
 }
 
-/**
- * Converts normalized ids into channel directory entries of one kind.
- */
 export function toDirectoryEntries(kind: "user" | "group", ids: string[]): ChannelDirectoryEntry[] {
   return Array.from(ids, (id) => ({ kind, id }));
 }
@@ -56,9 +50,6 @@ function collectDirectoryIds(
   return ids;
 }
 
-/**
- * Collects unique normalized ids from multiple raw config sources.
- */
 export function collectNormalizedDirectoryIds(params: {
   sources: Iterable<unknown>[];
   normalizeId: (entry: string) => string | null | undefined;
@@ -71,13 +62,6 @@ export function collectNormalizedDirectoryIds(params: {
   );
 }
 
-/**
- * Lists directory entries from arbitrary config sources.
- *
- * Callers supply source iterables and an id normalizer so channel-specific
- * config shapes share the same wildcard filtering, dedupe, query, and limit
- * behavior.
- */
 export function listDirectoryEntriesFromSources(params: {
   kind: "user" | "group";
   sources: Iterable<unknown>[];
@@ -85,16 +69,10 @@ export function listDirectoryEntriesFromSources(params: {
   limit?: number | null;
   normalizeId: (entry: string) => string | null | undefined;
 }): ChannelDirectoryEntry[] {
-  const ids = collectNormalizedDirectoryIds({
-    sources: params.sources,
-    normalizeId: params.normalizeId,
-  });
+  const ids = collectNormalizedDirectoryIds(params);
   return toDirectoryEntries(params.kind, applyDirectoryQueryAndLimit(ids, params));
 }
 
-/**
- * Lists directory entries for channels that inspect optional configured accounts.
- */
 export function listInspectedDirectoryEntriesFromSources<InspectedAccount>(
   params: DirectoryConfigParams & {
     kind: "user" | "group";
@@ -121,9 +99,6 @@ export function listInspectedDirectoryEntriesFromSources<InspectedAccount>(
   });
 }
 
-/**
- * Builds an async lister around an inspected-account directory source.
- */
 export function createInspectedDirectoryEntriesLister<InspectedAccount>(
   params: Omit<
     Parameters<typeof listInspectedDirectoryEntriesFromSources<InspectedAccount>>[0],
@@ -137,9 +112,6 @@ export function createInspectedDirectoryEntriesLister<InspectedAccount>(
     });
 }
 
-/**
- * Lists directory entries for channels whose account resolver always returns a config object.
- */
 export function listResolvedDirectoryEntriesFromSources<ResolvedAccount>(
   params: DirectoryConfigParams & {
     kind: "user" | "group";
@@ -158,9 +130,6 @@ export function listResolvedDirectoryEntriesFromSources<ResolvedAccount>(
   });
 }
 
-/**
- * Builds an async lister around a required resolved-account directory source.
- */
 export function createResolvedDirectoryEntriesLister<ResolvedAccount>(
   params: Omit<
     Parameters<typeof listResolvedDirectoryEntriesFromSources<ResolvedAccount>>[0],
@@ -174,9 +143,6 @@ export function createResolvedDirectoryEntriesLister<ResolvedAccount>(
     });
 }
 
-/**
- * Lists user directory entries from an allowlist-style config array.
- */
 export function listDirectoryUserEntriesFromAllowFrom(params: {
   allowFrom?: readonly unknown[];
   query?: string | null;
@@ -187,9 +153,6 @@ export function listDirectoryUserEntriesFromAllowFrom(params: {
   return toDirectoryEntries("user", applyDirectoryQueryAndLimit(ids, params));
 }
 
-/**
- * Lists user entries from both direct allowlists and map-key config.
- */
 export function listDirectoryUserEntriesFromAllowFromAndMapKeys(params: {
   allowFrom?: readonly unknown[];
   map?: Record<string, unknown>;
@@ -205,9 +168,6 @@ export function listDirectoryUserEntriesFromAllowFromAndMapKeys(params: {
   return toDirectoryEntries("user", applyDirectoryQueryAndLimit(ids, params));
 }
 
-/**
- * Lists group directory entries from map-key config.
- */
 export function listDirectoryGroupEntriesFromMapKeys(params: {
   groups?: Record<string, unknown>;
   query?: string | null;
@@ -220,9 +180,6 @@ export function listDirectoryGroupEntriesFromMapKeys(params: {
   return toDirectoryEntries("group", applyDirectoryQueryAndLimit(ids, params));
 }
 
-/**
- * Lists group entries from both map-key config and allowlist values.
- */
 export function listDirectoryGroupEntriesFromMapKeysAndAllowFrom(params: {
   groups?: Record<string, unknown>;
   allowFrom?: readonly unknown[];
@@ -238,9 +195,6 @@ export function listDirectoryGroupEntriesFromMapKeysAndAllowFrom(params: {
   return toDirectoryEntries("group", applyDirectoryQueryAndLimit(ids, params));
 }
 
-/**
- * Lists resolved-account user entries from an allowlist selector.
- */
 export function listResolvedDirectoryUserEntriesFromAllowFrom<ResolvedAccount>(
   params: DirectoryConfigParams & {
     resolveAccount: (cfg: OpenClawConfig, accountId?: string | null) => ResolvedAccount;
@@ -257,9 +211,6 @@ export function listResolvedDirectoryUserEntriesFromAllowFrom<ResolvedAccount>(
   });
 }
 
-/**
- * Lists resolved-account group entries from a group-map selector.
- */
 export function listResolvedDirectoryGroupEntriesFromMapKeys<ResolvedAccount>(
   params: DirectoryConfigParams & {
     resolveAccount: (cfg: OpenClawConfig, accountId?: string | null) => ResolvedAccount;

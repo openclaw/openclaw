@@ -3,7 +3,7 @@ import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { readConversationBindingRouteFacts } from "../../channels/conversation-binding-route-facts.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
-import { createAbortError, isAbortError } from "../../infra/abort-signal.js";
+import { isAbortError } from "../../infra/abort-signal.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { ApplyMediaUnderstandingResult } from "../../media-understanding/apply.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
@@ -21,10 +21,7 @@ const linkUnderstandingApplyRuntimeLoader = createLazyImportLoader(
 
 export function hasLinkCandidate(ctx: MsgContext): boolean {
   const message = ctx.agentText;
-  if (!message) {
-    return false;
-  }
-  return /\bhttps?:\/\/\S+/i.test(message);
+  return Boolean(message && /\bhttps?:\/\/\S+/i.test(message));
 }
 
 export async function applyMediaUnderstandingIfNeeded(params: {
@@ -78,12 +75,6 @@ export async function applyLinkUnderstandingIfNeeded(params: {
       `link understanding failed, proceeding with raw content: ${formatErrorMessage(err)}`,
     );
     return false;
-  }
-}
-
-export function assertReplyPreprocessingActive(signal: AbortSignal | undefined): void {
-  if (signal?.aborted) {
-    throw createAbortError("Reply canceled during preprocessing", { cause: signal.reason });
   }
 }
 

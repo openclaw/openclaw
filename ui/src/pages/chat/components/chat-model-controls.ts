@@ -26,7 +26,11 @@ import {
   canonicalModelAuthProviderId,
   listEffectiveModelAuthProviders,
 } from "../../../lib/model-auth.ts";
-import { describeModelProviderAuth } from "../../../lib/model-provider-auth-label.ts";
+import type { ChatModelCatalogState } from "../../../lib/model-catalog-store.ts";
+import {
+  describeModelProviderAuth,
+  type ModelProviderAuthLabel,
+} from "../../../lib/model-provider-auth-label.ts";
 import {
   isSessionRuntimePinned,
   resolveModelRuntimeEntry,
@@ -39,15 +43,9 @@ import {
   type ChatModelPickerOption,
   type ChatModelPickerTargetGroup,
 } from "./chat-model-picker-options.ts";
-import {
-  renderChatModelPicker,
-  type ChatModelCatalogState,
-  type ChatModelProviderAuth,
-} from "./chat-model-picker.ts";
+import { renderChatModelPicker } from "./chat-model-picker.ts";
 
 registerModelControlsEnglish();
-
-export type { ChatModelCatalogState } from "./chat-model-picker.ts";
 
 type ChatContextWindowTarget = Pick<
   SessionsListResult["defaults"],
@@ -65,14 +63,13 @@ type ChatModelControlsProps = {
   gatewayAvailable: boolean;
   loading: boolean;
   modelCatalog: ModelCatalogEntry[];
-  modelCatalogState?: ChatModelCatalogState;
+  modelCatalogState: ChatModelCatalogState;
   modelOverrides?: Readonly<Record<string, string | null | undefined>>;
   modelSelectionLocked?: boolean;
   modelSelectionTarget?: SessionsListResult["defaults"]["modelSelectionTarget"];
   modelPickerTargetGroups?: readonly ChatModelPickerTargetGroup[];
   modelPickerOpen?: boolean;
   modelSwitching: boolean;
-  modelsLoading?: boolean;
   modelMutationDisabledReason?: string;
   effortMutationDisabledReason?: string;
   contextWindowMutationDisabledReason?: string;
@@ -180,11 +177,20 @@ function prepareChatModelCatalog(catalog: ModelCatalogEntry[]) {
 function resolveChatModelPickerLabel(
   entry: ModelCatalogEntry | undefined,
   fallbackLabel: string,
+  runtimeId: string | null | undefined = entry?.agentRuntime?.id,
 ): string {
-  if (entry && normalizeChatModelProviderId(entry.provider) === "openai") {
-    return entry.name.trim() || fallbackLabel;
+  const label =
+    entry && normalizeChatModelProviderId(entry.provider) === "openai"
+      ? entry.name.trim() || fallbackLabel
+      : fallbackLabel;
+  if (runtimeId !== "codex" || !entry) {
+    return label;
   }
-  return fallbackLabel;
+  const runtimeIds = new Set([
+    entry.agentRuntime?.id,
+    ...(entry.runtimeChoices ?? []).map((choice) => choice.agentRuntime.id),
+  ]);
+  return runtimeIds.has("openclaw") && runtimeIds.has("codex") ? `${label} codex` : label;
 }
 
 function formatPickerModelLabel(label: string): string {
@@ -192,20 +198,11 @@ function formatPickerModelLabel(label: string): string {
   return match?.[1] ?? label;
 }
 
-function resolveModelSelectionScopeDescription(
-  target: SessionsListResult["defaults"]["modelSelectionTarget"],
-): string | undefined {
-  switch (target) {
-    case "session":
-      return t("chat.modelControls.selectionScopeSession");
-    case "agent":
-      return t("chat.modelControls.selectionScopeAgent");
-    case "global":
-      return t("chat.modelControls.selectionScopeGlobal");
-    default:
-      return undefined;
-  }
-}
+const MODEL_SELECTION_SCOPE_LABELS = new Map([
+  ["session", "chat.modelControls.selectionScopeSession"],
+  ["agent", "chat.modelControls.selectionScopeAgent"],
+  ["global", "chat.modelControls.selectionScopeGlobal"],
+]);
 
 function resolveCatalogTriggerStatus(
   state: ChatModelCatalogState,
@@ -229,11 +226,15 @@ function resolveCatalogTriggerStatus(
 
 export function renderChatModelControls(props: ChatModelControlsProps) {
   const catalog = prepareChatModelCatalog(props.modelCatalog);
-  const policy = props.modelCatalogState?.modelSelectionPolicy;
-  const retired = props.modelCatalogState?.retired === true;
-  const uninitialized = props.modelCatalogState?.initialized === false;
+  const catalogState = props.modelCatalogState;
+  const policy = catalogState.modelSelectionPolicy;
+  const retired = catalogState.retired === true;
+  const uninitialized = catalogState.initialized === false;
   const catalogOwnsChoices = retired || uninitialized || policy?.restricted === true;
-  const providerAuth = new Map<string, ChatModelProviderAuth>();
+  const catalogModelValue = (value: string) =>
+    !catalogOwnsChoices || (!retired && catalog.entry(value)) ? value : "";
+  const selectionScopeLabel = MODEL_SELECTION_SCOPE_LABELS.get(props.modelSelectionTarget ?? "");
+  const providerAuth = new Map<string, ModelProviderAuthLabel>();
   const headingKey = (id: string) =>
     normalizeChatModelProviderGroupId(
       canonicalModelAuthProviderId(normalizeChatModelProviderId(id)),
@@ -269,12 +270,9 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
     sessionsResult: props.sessionsResult,
     modelSelectionPolicy: policy,
     catalogRetired: retired,
-    catalogInitialized: props.modelCatalogState?.initialized,
+    catalogInitialized: catalogState.initialized,
   });
-  const currentOverride =
-    !catalogOwnsChoices || (!retired && catalog.entry(rawCurrentOverride))
-      ? rawCurrentOverride
-      : "";
+  const currentOverride = catalogModelValue(rawCurrentOverride);
   const thinking = resolveChatThinkingSelectState({
     catalog: props.modelCatalog,
     defaults: props.thinkingDefaults,
@@ -368,6 +366,9 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
     if (typeof catalogEntry?.supportsTools === "boolean") {
       pickerOption.supportsTools = catalogEntry.supportsTools;
     }
+    if (catalogEntry?.recommended) {
+      pickerOption.recommended = true;
+    }
     if (option.disabled) {
       pickerOption.disabled = true;
       pickerOption.unavailableReason = option.unavailableReason;
@@ -381,7 +382,7 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
         value: option.value,
         commitValue: option.value,
         isDefault: false,
-        label: pickerOption.label,
+        label: resolveChatModelPickerLabel(catalogEntry, option.label, choice.agentRuntime.id),
         provider: pickerOption.provider,
         agentRuntime: choice.agentRuntime.id,
         runtimeOverride: choice.agentRuntime.id,
@@ -390,6 +391,7 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
         supportsTools: choice.supportsTools,
         disabled: choice.available === false,
         unavailableReason: choice.unavailableReason,
+        ...(pickerOption.recommended ? { recommended: true } : {}),
       });
     }
     return options;
@@ -438,7 +440,10 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
         : {}),
       isDefault: false,
       value: currentOverride,
-      label: currentCatalogEntry?.name.trim() || currentOverride,
+      label: resolveChatModelPickerLabel(
+        currentCatalogEntry,
+        currentCatalogEntry?.name.trim() || currentOverride,
+      ),
       provider: catalog.provider(currentOverride, currentProviderHint),
     });
   }
@@ -490,36 +495,38 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
   ) {
     activeModelOption.contextTokens = activeSession.contextTokens;
   }
+  // The preference label uses its selected runtime, not an executing fallback.
+  const triggerRuntime = selectedAgentRuntime ?? defaultRuntime;
   // A lock prevents model changes; the concrete selection still owns its label.
   // Without a selection, neither the runtime nor the agent default identifies it.
   const committedModelLabel =
     props.modelSelectionLocked === true && !triggerModelValue
       ? t("chat.selectors.lockedSessionModel")
-      : (modelOptions.find((entry) => entry.value === triggerModelValue)?.label ??
-        resolveChatModelPickerLabel(
-          catalog.entry(triggerModelValue),
-          triggerModelValue || pickerDefaultLabel,
-        ));
-  const managedCatalog = props.modelCatalogState ?? {
-    hasSnapshot: !props.modelsLoading,
-    status: props.modelsLoading ? ("loading" as const) : ("ready" as const),
-  };
+      : resolveChatModelPickerLabel(
+          catalog.entry(triggerModelValue || defaultModel),
+          formatPickerModelLabel(
+            selectOptions.find((entry) => entry.value === triggerModelValue)?.label ??
+              (catalog.entry(triggerModelValue)?.name.trim() || triggerModelValue || defaultLabel),
+          ),
+          triggerModelValue || defaultModel ? triggerRuntime : null,
+        );
   const catalogLoadingWithoutSnapshot =
-    !managedCatalog.hasSnapshot && ["idle", "loading"].includes(managedCatalog.status);
+    !catalogState.hasSnapshot && ["idle", "loading"].includes(catalogState.status);
   // The session owns the selected model; its account-scoped catalog only owns
   // picker availability. Refreshing that catalog must not hide a known selection.
   const selectionKnown = Boolean(currentOverride || (modelOverrideSource === null && defaultModel));
   const catalogTriggerStatus = retired
-    ? resolveCatalogTriggerStatus(managedCatalog, 0, false)
+    ? resolveCatalogTriggerStatus(catalogState, 0, false)
     : policy?.restricted && !currentOverride && !defaultModel
       ? t(
           modelOptions.length
             ? "chat.modelControls.selectionRequired"
             : "chat.modelControls.noPermittedModels",
         )
-      : resolveCatalogTriggerStatus(managedCatalog, modelOptions.length, selectionKnown);
+      : resolveCatalogTriggerStatus(catalogState, modelOptions.length, selectionKnown);
   const hasResolvableModel =
-    managedCatalog.status === "ready" &&
+    catalogState.hasSnapshot &&
+    (catalogState.status === "ready" || catalogState.status === "error") &&
     activeModelOption?.disabled !== true &&
     modelOptions.some((option) => !option.disabled);
   const busy = props.sending || Boolean(props.activeRunId) || props.stream !== null;
@@ -532,7 +539,7 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
   const thinkingDisabled =
     commonDisabled ||
     effortMutationDisabled ||
-    !managedCatalog.hasSnapshot ||
+    !catalogState.hasSnapshot ||
     (thinking.options.length === 0 && thinking.selection.source === "default");
   // One owner supplies the whole tuple: mixing an override session's fields with
   // the defaults row can render the default model's options for a session whose
@@ -573,12 +580,14 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
             : undefined,
         disabled: modelDisabled,
         disabledReason: props.modelMutationDisabledReason,
-        modelCatalogState: managedCatalog,
+        modelCatalogState: catalogState,
         open: props.modelPickerOpen,
         modelSelectionLocked: props.modelSelectionLocked === true,
         selectionScopeDescription: policy?.restricted
           ? t("chat.modelControls.restrictedModelsHelp")
-          : resolveModelSelectionScopeDescription(props.modelSelectionTarget),
+          : selectionScopeLabel
+            ? t(selectionScopeLabel)
+            : undefined,
         modelOptions,
         targetGroups: props.modelPickerTargetGroups,
         selectedModelValue: pickerValue,

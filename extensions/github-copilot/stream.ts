@@ -4,6 +4,7 @@ import {
   applyAnthropicEphemeralCacheControlMarkers,
   projectCopilotRequestFacts,
 } from "openclaw/plugin-sdk/provider-stream-shared";
+import { asOptionalObjectRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sanitizeCopilotReplayResponsePayload } from "./connection-bound-ids.js";
 import { stripCopilotAssistantThinkingMessages } from "./replay-policy.js";
 import { buildCopilotRuntimeHeaders } from "./runtime-identity.js";
@@ -32,18 +33,15 @@ type CopilotAnthropicToolBlock = {
 function normalizeCopilotAnthropicToolIds(messages: unknown[]): void {
   const blocks: CopilotAnthropicToolBlock[] = [];
   for (const message of messages) {
-    if (!message || typeof message !== "object") {
-      continue;
-    }
-    const content = (message as { content?: unknown }).content;
+    const content = asOptionalObjectRecord(message)?.content;
     if (!Array.isArray(content)) {
       continue;
     }
     for (const block of content) {
-      if (!block || typeof block !== "object") {
+      const record = asOptionalObjectRecord(block);
+      if (!record) {
         continue;
       }
-      const record = block as Record<string, unknown>;
       const idKey =
         record.type === "tool_use" ? "id" : record.type === "tool_result" ? "tool_use_id" : null;
       const rawId = idKey ? record[idKey] : undefined;
@@ -115,10 +113,10 @@ function normalizeCopilotAnthropicToolIds(messages: unknown[]): void {
 }
 
 function patchCopilotAnthropicPayload(payload: unknown): void {
-  if (!payload || typeof payload !== "object") {
+  const record = asOptionalObjectRecord(payload);
+  if (!record) {
     return;
   }
-  const record = payload as Record<string, unknown>;
   if (Array.isArray(record.messages)) {
     const messages = stripCopilotAssistantThinkingMessages(record.messages);
     record.messages = messages;

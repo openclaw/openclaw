@@ -6,7 +6,6 @@ import {
   TRANSCRIPTS_LEGACY_MAX_TEXT_LENGTH,
   TRANSCRIPTS_LEGACY_RESULT_MAX_BYTES,
   TRANSCRIPTS_RESULT_MAX_BYTES,
-  type TranscriptSessionSummary,
   type TranscriptsExportParams,
   type TranscriptsExportResult,
   type TranscriptsGetParams,
@@ -17,6 +16,7 @@ import {
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { isTranscriptArtifactText } from "../media-understanding/transcription-text.js";
 import { readTranscriptCaptureSnapshot } from "./capture.js";
+import { presentTranscriptSession } from "./read-live.js";
 import {
   projectTranscriptMarkdown,
   projectTranscriptNotes,
@@ -30,7 +30,6 @@ import {
   decodeCursor,
   encodeCursor,
   TranscriptLibraryError,
-  type TranscriptExportRead,
   type TranscriptReadOptions,
 } from "./store-read.js";
 import { safeTranscriptPathSegment, type TranscriptsStore } from "./store.js";
@@ -85,30 +84,17 @@ export async function listTranscriptLibrary(
     }
     after = { startedAt, sessionId };
   }
-  const page = store.iterateReadEntries({ ...filters, startedAfter, startedBefore, after });
+  const { entries, hasMore } = await store.listReadEntries({
+    ...filters,
+    startedAfter,
+    startedBefore,
+    after,
+    projection: "public",
+  });
   const captures = readTranscriptCaptureSnapshot();
-  const sessions: TranscriptSessionSummary[] = [];
-  let bytes = 0;
-  let hasMore = false;
-  try {
-    for (let step = await page.next(); ; step = await page.next()) {
-      if (step.done) {
-        hasMore = step.value;
-        break;
-      }
-      const entry = projectTranscriptSession(
-        step.value,
-        undefined,
-        providerName?.(step.value.session.source.providerId),
-        captures,
-      );
-      bytes += Buffer.byteLength(JSON.stringify(entry), "utf8");
-      assertTranscriptByteCount(bytes);
-      sessions.push(entry);
-    }
-  } finally {
-    await page.return(false);
-  }
+  const sessions = entries.map((entry) =>
+    presentTranscriptSession(entry, captures, providerName?.(entry.providerId)),
+  );
   const last = sessions.at(-1);
   const result = {
     sessions,
@@ -136,8 +122,8 @@ export async function getTranscriptLibrary(
   // Cursors advance through stored rows even when an entire page contains artifacts.
   const last = page?.utterances.at(-1);
   const result: TranscriptsGetResult = {
-    session: projectTranscriptSession(
-      entry,
+    session: presentTranscriptSession(
+      projectTranscriptSession(entry),
       undefined,
       providerName?.(entry.session.source.providerId),
     ),
@@ -156,37 +142,29 @@ export async function exportTranscriptLibrary(
   store: TranscriptsStore,
   params: TranscriptsExportParams,
 ): Promise<TranscriptsExportResult> {
-  const rows = store.iterateExport(params.selector, params.format === "markdown");
   const parts: string[] = [];
   let sizeBytes = 0;
-  let completed: TranscriptExportRead | undefined;
-  try {
-    for (let step = await rows.next(); ; step = await rows.next()) {
-      if (step.done) {
-        completed = step.value;
-        break;
+  const completed = await store.streamExport(
+    params.selector,
+    params.format === "markdown",
+    (rows) => {
+      for (const utterance of rows) {
+        if (isTranscriptArtifactText(utterance.text)) {
+          continue;
+        }
+        const text =
+          params.format === "jsonl"
+            ? `${JSON.stringify(projectTranscriptUtterance(utterance))}\n`
+            : sanitizeTerminalText(utterance.text).trim();
+        const speaker = sanitizeTerminalText(utterance.speakerLabel ?? "").trim();
+        const line = params.format === "markdown" && speaker ? `${speaker}: ${text}` : text;
+        // Include Markdown list/newline overhead while accumulating, before rendering the body.
+        sizeBytes += Buffer.byteLength(line, "utf8") + (params.format === "markdown" ? 3 : 0);
+        assertTranscriptByteCount(sizeBytes, TRANSCRIPTS_EXPORT_MAX_BYTES, true);
+        parts.push(line);
       }
-      const utterance = step.value;
-      if (isTranscriptArtifactText(utterance.text)) {
-        continue;
-      }
-      const text =
-        params.format === "jsonl"
-          ? `${JSON.stringify(projectTranscriptUtterance(utterance))}\n`
-          : sanitizeTerminalText(utterance.text).trim();
-      const speaker = sanitizeTerminalText(utterance.speakerLabel ?? "").trim();
-      const line = params.format === "markdown" && speaker ? `${speaker}: ${text}` : text;
-      // Include Markdown list/newline overhead while accumulating, before rendering the body.
-      sizeBytes += Buffer.byteLength(line, "utf8") + (params.format === "markdown" ? 3 : 0);
-      assertTranscriptByteCount(sizeBytes, TRANSCRIPTS_EXPORT_MAX_BYTES, true);
-      parts.push(line);
-    }
-  } finally {
-    await rows.return(undefined);
-  }
-  if (!completed) {
-    throw new Error("Transcript export ended before completion.");
-  }
+    },
+  );
   const { entry, notes } = completed;
   const summary = notes?.summary;
   const title = sanitizeTerminalText(entry.session.title ?? "").trim() || "Transcript";

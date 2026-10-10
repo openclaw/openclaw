@@ -1,5 +1,4 @@
 import { html, nothing, type ReactiveController } from "lit";
-import { selectApplicationSession } from "../../app/agent-selection.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import { t } from "../../i18n/index.ts";
@@ -7,10 +6,10 @@ import { registerCommandPaletteEnglish } from "../../i18n/locales/en-command-pal
 import type { HumanMention } from "../../lib/chat/chat-types.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import type { SessionCreateOutcome } from "../../lib/sessions/create.ts";
-import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
 import { showToast } from "../../lib/toast.ts";
 import type { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
+import { resolveChatAttachmentLimits } from "../chat/components/chat-attachment-admission.ts";
 import "../../components/web-awesome-popover.ts";
 import "../../styles/new-session.css";
 import "../../styles/chat/composer.css";
@@ -20,7 +19,7 @@ import {
   handleChatAttachmentPaste,
   renderAttachmentPreview,
 } from "../chat/components/chat-attachments.ts";
-import { ConnectMachineSetupState, renderConnectMachineDialog } from "./connect-machine-dialog.ts";
+import { ConnectMachineSetupState } from "./connect-machine-dialog.ts";
 import { NewSessionDraftController } from "./draft-controller.ts";
 import type { NewSessionRouteData } from "./location.ts";
 import { resolveNewSessionMentionDirectory } from "./mention-directory.ts";
@@ -28,7 +27,7 @@ import { closeSessionMenus } from "./new-session-runtime.ts";
 import { PaletteSessionPreferences } from "./palette-session-preferences.ts";
 import { PaletteSessionSettings } from "./palette-session-settings.ts";
 import type { PaletteSessionPreference } from "./preferences.ts";
-import { captureSessionNoticeOwner } from "./session-notice-owner.ts";
+import { captureSessionNoticeOwner, openSessionNoticeTarget } from "./session-notice-owner.ts";
 
 registerCommandPaletteEnglish();
 
@@ -70,18 +69,9 @@ export class PaletteSessionDraft implements ReactiveController {
       () => host.requestUpdate(),
     );
     this.subscriptions = new SubscriptionsController(host)
-      .watch(
-        () => this.draft && this.read().context?.agents,
-        (agents, notify) => agents.subscribe(notify),
-      )
-      .watch(
-        () => this.draft && this.read().context?.agentIdentity,
-        (identity, notify) => identity.subscribe(notify),
-      )
-      .watch(
-        () => this.draft && this.read().context?.sessions,
-        (sessions, notify) => sessions.subscribe(notify),
-      )
+      .watchStore(() => this.draft && this.read().context?.agents)
+      .watchStore(() => this.draft && this.read().context?.agentIdentity)
+      .watchStore(() => this.draft && this.read().context?.sessions)
       .watch(
         () => this.draft && this.read().context?.config,
         (config, notify) => config.subscribe(() => notify()),
@@ -153,16 +143,18 @@ export class PaletteSessionDraft implements ReactiveController {
     if (!attachmentDraft) {
       return undefined;
     }
-    const readSignal = attachmentDraft.readSignal;
+    const readSignal = attachmentDraft.reads.readSignal;
     return {
       uploadConfig: this.read().context?.config,
       attachments: attachmentDraft.attachments,
       attachmentReads: attachmentDraft.reads,
-      attachmentLimits: this.read().context?.gateway.snapshot.hello?.policy?.attachments,
+      attachmentLimits: resolveChatAttachmentLimits(
+        this.read().context?.gateway.snapshot.hello?.policy,
+      ),
       disabled: this.messageLocked,
       getAttachments: () => attachmentDraft.attachments,
       readSignal,
-      onPendingReadsChange: (delta) => attachmentDraft.updatePending(readSignal, delta),
+      onPendingReadsChange: (delta) => attachmentDraft.reads.updatePending(readSignal, delta),
       onAttachmentsChange: (attachments) => {
         if (
           readSignal.aborted ||
@@ -227,7 +219,6 @@ export class PaletteSessionDraft implements ReactiveController {
       agentId,
       requestedAgentId: agentId,
       catalogId: "",
-      model: "",
       catalogLabel: "",
       startTerminal: false,
     };
@@ -279,9 +270,9 @@ export class PaletteSessionDraft implements ReactiveController {
       !submission.submissionOutcomeUnknown &&
       !submission.error
     ) {
-      submission.attachmentDraft.reset({ release: true });
+      submission.attachmentDraft.reset();
     } else {
-      submission?.attachmentDraft.abortReads();
+      submission?.attachmentDraft.reads.abortReads();
     }
     this.settings.close();
     this.draft?.browser.close();
@@ -335,7 +326,7 @@ export class PaletteSessionDraft implements ReactiveController {
     const attachmentDraft = draft.submission.attachmentDraft;
     if (
       this.coldSubmitReadSignal &&
-      (this.coldSubmitReadSignal.aborted || attachmentDraft.pendingReads === 0)
+      (this.coldSubmitReadSignal.aborted || attachmentDraft.reads.pendingReads === 0)
     ) {
       const ready =
         !this.coldSubmitReadSignal.aborted &&
@@ -413,21 +404,13 @@ export class PaletteSessionDraft implements ReactiveController {
   }
 
   renderAuxiliary() {
-    return renderConnectMachineDialog({
-      open: this.connectMachine.open && this.read().open && (this.draft?.place.isAdmin() ?? false),
-      loading: this.connectMachine.loading,
-      error: this.connectMachine.error,
-      setup: this.connectMachine.setup,
-      onRefresh: () => void this.connectMachine.refresh(),
-      onClose: () => {
-        this.connectMachine.close();
-        this.host.requestUpdate();
-      },
-      onManageDevices: () => {
+    return this.connectMachine.render(
+      this.read().open && (this.draft?.place.isAdmin() ?? false),
+      () => {
         this.callbacks.onClose();
         this.read().context?.navigate("devices");
       },
-    });
+    );
   }
 
   private bindOwner(url: string, scope: string) {
@@ -450,7 +433,6 @@ export class PaletteSessionDraft implements ReactiveController {
     if (!context) {
       return;
     }
-    const { gateway } = context;
     const isCurrentOwner = captureSessionNoticeOwner(context);
     const row = context.sessions.state.result?.sessions.find(
       (candidate) => candidate.key === result.key,
@@ -467,21 +449,7 @@ export class PaletteSessionDraft implements ReactiveController {
       if (this.read().context !== context || !isCurrentOwner()) {
         return;
       }
-      selectApplicationSession({
-        selection: context.agentSelection,
-        gateway,
-        sessionKey: result.key,
-        agentId: result.agentId,
-      });
-      context.navigate(
-        "chat",
-        sessionNavigationTarget({
-          context,
-          face: "chat",
-          sessionKey: result.key,
-          agentId: result.agentId,
-        }).options,
-      );
+      openSessionNoticeTarget(context, result.key, result.agentId);
       if (result.initialRun.status === "rejected") {
         this.callbacks.onClose();
       }

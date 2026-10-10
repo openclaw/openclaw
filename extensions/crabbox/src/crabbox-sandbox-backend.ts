@@ -1,5 +1,6 @@
 // Crabbox owns provider admission and execution; the shared remote-shell backend
 // owns workspace seeding, skills, workdir validation, and file operations.
+import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { runCommandWithTimeout, type SpawnResult } from "openclaw/plugin-sdk/process-runtime";
 import {
   createRemoteShellSandboxBackend,
@@ -20,26 +21,14 @@ export const CRABBOX_SANDBOX_BACKEND_ID = "crabbox";
 const CRABBOX_SANDBOX_SLUG = "openclaw-sandbox";
 const READY_STATES = new Set(["started", "running", "ready"]);
 
-type CrabboxSandboxCommandRunner = (
-  argv: string[],
-  options: {
-    cwd?: string;
-    killProcessTree: boolean;
-    maxOutputBytes: number;
-    timeoutMs: number;
-  },
-) => Promise<SpawnResult>;
-
-export type CrabboxSandboxBackendDependencies = {
+type CrabboxSandboxBackendDependencies = {
   openclawRoot: string;
   pluginConfig: ResolvedCrabboxSandboxConfig;
-  runCommand?: CrabboxSandboxCommandRunner;
 };
 
 type CrabboxSandboxClient = {
   binary: string;
   pluginConfig: ResolvedCrabboxSandboxConfig;
-  runCommand: CrabboxSandboxCommandRunner;
   execSupport?: Promise<void>;
 };
 
@@ -54,7 +43,6 @@ function createClient(dependencies: CrabboxSandboxBackendDependencies): CrabboxS
       openclawRoot: dependencies.openclawRoot,
     }),
     pluginConfig: dependencies.pluginConfig,
-    runCommand: dependencies.runCommand ?? runCommandWithTimeout,
   };
 }
 
@@ -67,17 +55,16 @@ async function runCrabbox(
 ): Promise<SpawnResult> {
   let result: SpawnResult;
   try {
-    result = await client.runCommand([client.binary, ...args], {
+    result = await runCommandWithTimeout([client.binary, ...args], {
       ...(cwd ? { cwd } : {}),
       killProcessTree: true,
       maxOutputBytes: 64 * 1024,
       timeoutMs,
     });
   } catch (error) {
-    throw new Error(
-      `Crabbox sandbox ${action} could not start: ${error instanceof Error ? error.message : String(error)}`,
-      { cause: error },
-    );
+    throw new Error(`Crabbox sandbox ${action} could not start: ${coerceErrorMessage(error)}`, {
+      cause: error,
+    });
   }
   if (result.code !== 0) {
     // Warmup can print token-bearing SSH commands even when a later step fails.

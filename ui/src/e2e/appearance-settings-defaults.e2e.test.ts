@@ -691,7 +691,7 @@ suite.define(() => {
       await expect.poll(() => reasoning.getAttribute("aria-checked")).toBe("false");
 
       const sidebar = page.locator("openclaw-app-sidebar");
-      await sidebar.locator(".sidebar-nav__head-action").click();
+      await sidebar.getByRole("button", { name: "Edit pinned items", exact: true }).click();
       await sidebar
         .locator("wa-dropdown.sidebar-more-menu")
         .getByRole("menuitem", { name: "Edit pinned items" })
@@ -722,7 +722,7 @@ suite.define(() => {
         )
         .toBe("false");
 
-      await sidebar.locator(".sidebar-nav__head-action").click();
+      await sidebar.getByRole("button", { name: "Edit pinned items", exact: true }).click();
       await sidebar
         .locator("wa-dropdown.sidebar-more-menu")
         .getByRole("menuitem", { name: "Edit pinned items" })

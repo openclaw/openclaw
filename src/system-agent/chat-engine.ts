@@ -3,14 +3,13 @@ import type {
   SystemAgentWizardCancel,
   WizardAnswer,
 } from "../../packages/gateway-protocol/src/index.js";
+import { runOutsidePreparedModelRuntimePluginGenerationScope } from "../agents/prepared-model-runtime-generation-scope.js";
 import type { RuntimeEnv } from "../runtime.js";
 import {
   cleanupSystemAgentSession,
   createSystemAgentSession,
   type SystemAgentSession,
-  type SystemAgentTurnRunner,
 } from "./agent-turn.js";
-import type { SystemAgentApprovalClassifier } from "./approval-intent.js";
 import type { SystemAgentAssistantTurn } from "./assistant.js";
 import {
   ChatTurnRouter,
@@ -22,36 +21,22 @@ import {
   type ChatWizardHostDependencies,
   type SystemAgentChatReply,
 } from "./chat-wizard-host.js";
-import type {
-  SystemAgentGreetingFacts,
-  SystemAgentGreetingPlan,
-  SystemAgentGreetingPlanner,
-} from "./greeting.js";
+import type { SystemAgentGreetingPlanner } from "./greeting.js";
 import {
   SystemAgentInferenceUnavailableError,
   isSystemAgentInferenceUnavailableError,
 } from "./inference-error.js";
-import type { SystemAgentCommandDeps, SystemAgentOperation } from "./operations.js";
+import { requireSystemAgentInferenceRoute } from "./inference-guard.js";
+import type { SystemAgentOperation } from "./operations.js";
 import { loadSystemAgentOverview, type SystemAgentOverview } from "./overview.js";
 import { verifyConfigAfterSystemAgentWrite } from "./post-write-verification.js";
-import {
-  resolveSystemAgentVerifiedInferenceRoute,
-  type SystemAgentVerifiedInferenceBinding,
-} from "./verified-inference.js";
+import type { SystemAgentVerifiedInferenceBinding } from "./verified-inference.js";
 
 export { SystemAgentWizardAnswerError } from "./chat-wizard-host.js";
 
-export type SystemAgentChatEngineOptions = {
-  yes?: boolean;
-  deps?: SystemAgentCommandDeps;
+export type SystemAgentChatEngineOptions = ConstructorParameters<typeof ChatTurnRouter>[0] & {
   planGreeting?: SystemAgentGreetingPlanner;
-  runAgentTurn?: SystemAgentTurnRunner;
-  classifyApproval?: SystemAgentApprovalClassifier;
-  surface?: "cli" | "gateway";
   readonly verifiedInference: SystemAgentVerifiedInferenceBinding;
-  operatorApprovalOnly?: boolean;
-  /** Host-recorded origin for delegated create-agent proposals. */
-  requesterAgentId?: string;
 };
 
 type SystemAgentChatEngineInternals = {
@@ -226,21 +211,26 @@ export class SystemAgentChatEngine {
       : { ...overview, defaultModel: route.modelLabel };
   }
 
-  async planGreeting(params: {
-    overview: SystemAgentOverview;
-    facts: SystemAgentGreetingFacts;
-    timeoutMs: number;
-  }): Promise<SystemAgentGreetingPlan | null> {
-    const planner = this.options.planGreeting;
-    const plan = planner
-      ? await planner(params)
-      : await import("./assistant.js").then(({ planSystemAgentGreetingWithConfiguredModel }) =>
-          planSystemAgentGreetingWithConfiguredModel({
-            ...params,
-            verifiedInference: this.verifiedInference,
-            deps: this.options.deps,
-          }),
-        );
+  async planGreeting(
+    params: Parameters<SystemAgentGreetingPlanner>[0],
+  ): ReturnType<SystemAgentGreetingPlanner> {
+    const runPlanner = async () => {
+      const planner = this.options.planGreeting;
+      return planner
+        ? await planner(params)
+        : await import("./assistant.js").then(({ planSystemAgentGreetingWithConfiguredModel }) =>
+            planSystemAgentGreetingWithConfiguredModel({
+              ...params,
+              verifiedInference: this.verifiedInference,
+              deps: this.options.deps,
+            }),
+          );
+    };
+    const requesterAgentId = this.options.requesterAgentId?.trim();
+    const plan =
+      requesterAgentId && requesterAgentId !== this.verifiedInference.execution.agentId
+        ? await runOutsidePreparedModelRuntimePluginGenerationScope(runPlanner)
+        : await runPlanner();
     if (plan) {
       await this.requireVerifiedInference();
     }
@@ -252,15 +242,12 @@ export class SystemAgentChatEngine {
     if (this.agentSession.verifiedInference !== binding) {
       return this.throwInferenceUnavailable();
     }
-    try {
-      const route = await resolveSystemAgentVerifiedInferenceRoute(binding, this.options.deps);
-      if (route) {
-        return route;
-      }
-    } catch (error) {
-      return this.throwInferenceUnavailable([error]);
-    }
-    return this.throwInferenceUnavailable();
+    return await requireSystemAgentInferenceRoute(
+      binding,
+      this.options.deps,
+      "conversation",
+      (failures) => this.throwInferenceUnavailable(failures),
+    );
   }
 
   private async requirePersistentApplyInference(runtime: RuntimeEnv) {
@@ -303,7 +290,7 @@ export class SystemAgentChatEngine {
       this.wizard.dispose();
     }
     this.history.splice(0);
-    throw new SystemAgentInferenceUnavailableError("conversation", failures);
+    throw new SystemAgentInferenceUnavailableError("conversation", failures, "route-changed");
   }
 
   private async verifyConfigAfterWrite(): Promise<string | null> {

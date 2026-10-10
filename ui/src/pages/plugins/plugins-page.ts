@@ -10,8 +10,11 @@ import {
 } from "../../app-route-paths.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
+import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
+import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
+import { isComposingKeyboardEvent } from "../../lib/ime.ts";
 import {
   loadPluginDiscoveryDetail,
   uninstallPlugin,
@@ -32,7 +35,7 @@ import {
 } from "./detail-tabs.ts";
 import { PluginDiscoveryController } from "./plugin-discovery-controller.ts";
 import { PluginHelpController } from "./plugin-help-controller.ts";
-import { confirmPluginUninstall } from "./plugin-lifecycle-confirmation.ts";
+import { PluginMcpLoginController } from "./plugin-mcp-login-controller.ts";
 import { pluginRowKey, type PluginRowMessage } from "./plugin-row-message.ts";
 import { PluginSettingsController } from "./plugin-settings-controller.ts";
 import { pluginMutationWarnings, PluginsConsentController } from "./plugins-consent-controller.ts";
@@ -103,6 +106,12 @@ class PluginsPage extends OpenClawLightDomElement {
     onSnapshot: (change) => this.handleGatewaySnapshot(change),
   });
   private readonly skillPreview = new PluginPreviewController(this, this.gateway);
+  private readonly mcpLogin = new PluginMcpLoginController(this, this.gateway, {
+    getDetail: () => this.detail,
+    getName: (pluginId) => this.result?.plugins.find((plugin) => plugin.id === pluginId)?.name,
+    canSignIn: () => canCallGatewayMethod(this.gateway.snapshot, "mcp.authLogin", "operator.admin"),
+    refresh: (pluginId) => this.showDetails(pluginId),
+  });
   private readonly discovery = new PluginDiscoveryController(this, {
     getClient: () => this.gateway.client,
     isConnected: () => this.gateway.connected,
@@ -138,8 +147,7 @@ class PluginsPage extends OpenClawLightDomElement {
   });
   private readonly catalogTask = new Task(this, {
     autoRun: false,
-    args: () => [this.gateway.connected ? this.gateway.client : null] as const,
-    task: ([client], { signal }) =>
+    task: ([client]: readonly [GatewayPageController["client"]], { signal }) =>
       client ? client.request<PluginListResult>("plugins.list", {}, { signal }) : initialState,
     onComplete: (result) => {
       this.replaceResult(result);
@@ -174,6 +182,7 @@ class PluginsPage extends OpenClawLightDomElement {
       this.skillPreview.close();
       if (changed.get("routeData")?.location.pathname !== this.routeData?.location.pathname) {
         this.installRequestGeneration += 1;
+        this.mcpLogin.reset();
       }
       this.applyRouteData();
     }
@@ -195,6 +204,7 @@ class PluginsPage extends OpenClawLightDomElement {
   }
 
   override disconnectedCallback() {
+    this.mcpLogin.reset();
     document.removeEventListener("keydown", this.handleDocumentKeydown, true);
     this.skillPreview.close();
     this.discovery.disconnect();
@@ -208,8 +218,17 @@ class PluginsPage extends OpenClawLightDomElement {
     // owner close the menu and restore focus before this page handles Escape.
     if (
       event.key !== "Escape" ||
+      isComposingKeyboardEvent(event) ||
       document.querySelector(".shell-nav[aria-modal='true']") ||
       (event.target instanceof Element && event.target.closest("wa-dropdown[open]"))
+    ) {
+      return;
+    }
+    if (
+      event.target instanceof Node &&
+      event.target !== document &&
+      event.target !== document.body &&
+      !this.contains(event.target)
     ) {
       return;
     }
@@ -331,7 +350,8 @@ class PluginsPage extends OpenClawLightDomElement {
     this.ensureInitialData();
   }
 
-  private invalidateRequests(invalidateCatalog = true) {
+  private invalidateRequests(invalidateCatalog: boolean) {
+    this.mcpLogin.reset();
     if (invalidateCatalog) {
       void this.catalogTask.run([null]);
       this.discovery.invalidate();
@@ -360,9 +380,9 @@ class PluginsPage extends OpenClawLightDomElement {
     }
     // Route changes reuse artwork; a new Gateway plugin generation retires it.
     if (this.result?.generation === result?.generation) {
-      this.icons.reconcileInstalled(result);
+      this.icons.installed.reconcile(result);
     } else {
-      this.icons.resetInstalled();
+      this.icons.installed.reset();
     }
     this.messages = this.consentController.reconcileInstallMessages(result);
     this.result = result;
@@ -434,11 +454,7 @@ class PluginsPage extends OpenClawLightDomElement {
       return;
     }
     const catalogId = this.activeRoutePluginId;
-    if (catalogId) {
-      await this.showCatalogDetail(catalogId);
-    } else {
-      await this.discovery.refresh();
-    }
+    return catalogId ? this.showCatalogDetail(catalogId) : this.discovery.refresh();
   }
 
   private selectHubTab(tab: PluginsHubTab) {
@@ -499,11 +515,12 @@ class PluginsPage extends OpenClawLightDomElement {
   }
 
   private applyMutationResult(result: PluginMutationResult) {
-    this.icons.invalidateInstalled(result.plugin.id);
+    this.icons.installed.invalidate(result.plugin.id);
     this.replaceResult(mergePluginCatalogItem(this.result, result.plugin));
   }
 
   private showDetails(pluginId: string | null) {
+    this.mcpLogin.select(pluginId);
     return loadInstalledPluginDetail({
       pluginId,
       plugin: this.result?.plugins.find((entry) => entry.id === pluginId),
@@ -587,7 +604,7 @@ class PluginsPage extends OpenClawLightDomElement {
     await this.consentController.runMutation(
       rowKey,
       (client) => uninstallPlugin(client, pluginId),
-      async (result, refreshError, client, _isCurrent, isLatest) => {
+      async (result, refreshError, client, isLatest) => {
         if (this.detail?.pluginId === pluginId) {
           this.detail = null;
         }
@@ -603,13 +620,25 @@ class PluginsPage extends OpenClawLightDomElement {
         }
         await this.refreshCatalog(client);
       },
-      { action: "uninstall", confirm: () => confirmPluginUninstall(name) },
+      {
+        action: "uninstall",
+        confirm: () =>
+          showConfirmDialog({
+            title: t("pluginsPage.removeConfirmTitle", { name }),
+            message: t("pluginsPage.removeConfirmMessage"),
+            confirmLabel: t("pluginsPage.remove"),
+            danger: true,
+          }),
+      },
     );
   }
 
   override render() {
     const blockedReason = this.accessBlockedReason(this.result?.mutationAllowed);
     return renderPluginsPage({
+      mcpLogin: this.mcpLogin.render(),
+      mcpLoginBusy: this.mcpLogin.busy,
+      canMcpLogin: canCallGatewayMethod(this.gateway.snapshot, "mcp.authLogin", "operator.admin"),
       help: this.help,
       context: this.context,
       routeData: this.routeData,
@@ -626,8 +655,8 @@ class PluginsPage extends OpenClawLightDomElement {
       pageNotice: this.pageNotice,
       iconUrls: this.iconUrls,
       catalogIconUrls: this.catalogIconUrls,
-      iconLoading: this.icons.isInstalledLoading,
-      catalogIconLoading: this.icons.isCatalogLoading,
+      iconLoading: this.icons.installed.isLoading,
+      catalogIconLoading: this.icons.catalog.isLoading,
       catalogDetail: this.catalogDetail,
       installedDetailTab: this.installedDetailTab,
       canMutate: this.canMutate(),
@@ -638,6 +667,7 @@ class PluginsPage extends OpenClawLightDomElement {
       renderCredential: this.settings.render,
       skillPreview: this.skillPreview,
       actions: {
+        startMcpLogin: (serverName) => void this.mcpLogin.start(serverName),
         selectHubTab: (tab) => this.selectHubTab(tab),
         closeCatalogDetail: () => this.closeCatalogDetail(),
         retryCatalogDetail: () => void this.showCatalogDetail(this.catalogDetail?.id ?? null),
@@ -651,15 +681,15 @@ class PluginsPage extends OpenClawLightDomElement {
           this.query = query;
         },
         refreshCatalog: () => void this.refreshCatalog(),
-        openPluginSettings: (pluginId, fromDiscovery) => {
+        openPluginSettings: (pluginId) => {
           this.context.navigate("plugin-settings", {
             pathname: pluginId
               ? pathForPluginSettings(pluginId, this.context.basePath)
               : pathForRoute("plugin-settings", this.context.basePath),
-            search: fromDiscovery && pluginId ? "?from=plugins" : "",
+            search: "",
           });
         },
-        handlePluginIconError: (pluginId) => this.icons.handleInstalledError(pluginId),
+        handlePluginIconError: (pluginId) => this.icons.installed.handleError(pluginId),
         updateEnabled: (pluginId, enabled, rowKey) =>
           void this.consentController.mutateInstalledPlugin(
             pluginId,

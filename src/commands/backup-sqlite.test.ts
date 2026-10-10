@@ -4,9 +4,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createLocalSqliteSnapshotProvider } from "../snapshot/local-repository.js";
-import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db.js";
-import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
-import { OPENCLAW_AGENT_SCHEMA_SQL } from "../state/openclaw-agent-schema.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.js";
@@ -39,7 +36,7 @@ beforeEach(async () => {
     layout: "state-only",
   });
   configMocks.getRuntimeConfig.mockReset().mockReturnValue({
-    agents: { list: [{ id: "main" }, { id: "ops-team" }] },
+    agents: { entries: { main: {}, "ops-team": {} } },
   });
 });
 
@@ -93,39 +90,6 @@ function createGlobalDatabase(databasePath: string): void {
     database.prepare("INSERT INTO durable_entries (value) VALUES (?)").run("checkpointed");
     database.exec("PRAGMA wal_checkpoint(TRUNCATE);");
     database.prepare("INSERT INTO durable_entries (value) VALUES (?)").run("committed-in-wal");
-  } finally {
-    database.close();
-  }
-}
-
-function createAgentDatabase(databasePath: string, agentId: string): void {
-  const sqlite = requireNodeSqlite();
-  const database = new sqlite.DatabaseSync(databasePath);
-  try {
-    database.exec(`
-      ${OPENCLAW_AGENT_SCHEMA_SQL}
-      PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION};
-      CREATE TABLE durable_entries (
-        id INTEGER PRIMARY KEY,
-        value TEXT NOT NULL
-      );
-    `);
-    database
-      .prepare(
-        `
-          INSERT INTO schema_meta (
-            meta_key,
-            role,
-            schema_version,
-            agent_id,
-            app_version,
-            created_at,
-            updated_at
-          ) VALUES ('primary', 'agent', ?, ?, NULL, 1, 1)
-        `,
-      )
-      .run(OPENCLAW_AGENT_SCHEMA_VERSION, agentId);
-    database.prepare("INSERT INTO durable_entries (value) VALUES (?)").run("agent-state");
   } finally {
     database.close();
   }
@@ -228,43 +192,6 @@ describe("SQLite backup commands", () => {
       backupSqliteRestoreCommand(runtime, snapshotPath, { target: restorePath }),
     ).rejects.toThrow(missingSnapshotMessage);
   });
-
-  it.each([
-    { label: "default", customAgentDir: false },
-    { label: "configured external", customAgentDir: true },
-  ])(
-    "creates a snapshot for a normalized $label per-agent database",
-    async ({ customAgentDir }) => {
-      const tempDir = state.root;
-      const repositoryPath = path.join(tempDir, "snapshots");
-      const agentDir = customAgentDir ? path.join(tempDir, "external-agent") : undefined;
-      if (agentDir) {
-        configMocks.getRuntimeConfig.mockReturnValue({
-          agents: { entries: { "ops-team": { agentDir } } },
-        });
-      }
-      const databasePath = agentDir
-        ? path.join(agentDir, "openclaw-agent.sqlite")
-        : resolveOpenClawAgentSqlitePath({ agentId: "ops-team" });
-      await fs.mkdir(path.dirname(databasePath), { recursive: true });
-      createAgentDatabase(databasePath, "ops-team");
-      const runtime = createRuntimeCapture();
-
-      const created = await backupSqliteCreateCommand(runtime, {
-        agent: "Ops Team",
-        repository: repositoryPath,
-      });
-
-      expect(created.manifest.database).toEqual({
-        role: "agent",
-        agentId: "ops-team",
-        basename: "openclaw-agent.sqlite",
-        userVersion: OPENCLAW_AGENT_SCHEMA_VERSION,
-      });
-      expect(runtime.logs).toEqual([expect.stringContaining("Database: agent:ops-team")]);
-      expect(runtime.errors).toEqual([]);
-    },
-  );
 
   it("requires exactly one named OpenClaw database source", async () => {
     const runtime = createRuntimeCapture();

@@ -88,21 +88,12 @@ export function createWebOnMessageHandler(params: {
     },
   ) => {
     return processMessage({
+      ...params,
       cfg,
       msg,
       route,
       groupHistoryKey,
-      groupHistories: params.groupHistories,
-      groupHistoryLimit: params.groupHistoryLimit,
-      groupMemberNames: params.groupMemberNames,
-      connectionId: params.connectionId,
-      verbose: params.verbose,
-      maxMediaBytes: params.maxMediaBytes,
-      replyResolver: params.replyResolver,
-      replyLogger: params.replyLogger,
-      backgroundTasks: params.backgroundTasks,
       buildContext: params.buildContext,
-      dispatchReplyFromConfig: params.dispatchReplyFromConfig,
       ...opts,
     });
   };

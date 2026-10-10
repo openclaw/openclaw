@@ -5,7 +5,7 @@ import type { PluginManifestControlUi } from "./manifest-types.js";
 
 export const CONTROL_UI_PLUGIN_MAX_ASSET_BYTES = 4 * 1024 * 1024;
 export const CONTROL_UI_PLUGIN_MAX_BUILD_BYTES = 8 * 1024 * 1024;
-const MAX_CONTROL_UI_ASSETS = 128;
+export const CONTROL_UI_PLUGIN_MAX_ASSETS = 128;
 
 export type PluginControlUiAsset = { body: Buffer; contentType: string };
 
@@ -31,7 +31,7 @@ export async function readPluginControlUiAssets(
   for await (const entry of walkRootDirectory(pluginRoot.rootReal, directory, {
     symlinkPolicy: "skip",
     maxDepth: 8,
-    maxEntries: MAX_CONTROL_UI_ASSETS,
+    maxEntries: CONTROL_UI_PLUGIN_MAX_ASSETS,
     limitBehavior: "throw",
   })) {
     const relativePath = path.posix.relative(directory, entry.relativePath);

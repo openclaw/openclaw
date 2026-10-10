@@ -30,9 +30,10 @@ When you touch tests or want extra confidence:
 
 Oxlint's `max-lines` rule warns when files exceed the per-scope limits in
 `.oxlintrc.json`; these warnings remain visible in lint logs and do not fail CI.
-PR CI and `pnpm check:changed` separately reject new line-cap violations and
-growth in already over-cap files. The suppression baseline ratchet remains a
-required check. See [surface ratchets](/ci/local-proof#surface-ratchets) for
+Local `pnpm check:changed` rejects over-cap changed files and separately checks
+new violations and growth; untouched overages found by broad lint are warnings.
+PR CI reports numeric ratchet violations as warnings too. The suppression
+baseline ratchet remains strict locally. See [surface ratchets](/ci/local-proof#surface-ratchets) for
 comparison bases and shrink-only maintenance.
 
 ## Test suites (what runs where)
@@ -60,6 +61,11 @@ Think of the suites as "increasing realism" (and increasing flakiness/cost).
     `runtime-api.js` fallback behavior with generated tiny plugin fixtures,
     not real bundled plugin source APIs. Real plugin API loads belong in
     plugin-owned contract/integration suites.
+  - Native plugin resolver suites run in `plugins-native-loader` on Node and Bun,
+    without shared source-loader overrides. A global Bun `--tsconfig-override`
+    can resolve denied fixture aliases into checkout source and bypass the
+    ownership boundary the suite is testing. Bun's native workers also disable
+    automatic package installation so missing fixture dependencies stay missing.
 
 Native dependency policy:
 
@@ -78,6 +84,7 @@ Native dependency policy:
     - Untargeted `pnpm test` runs thirteen smaller shard configs (`core-unit-fast`, `core-unit-src`, `core-unit-security`, `core-unit-ui`, `core-unit-support`, `core-support-boundary`, `core-tooling`, `core-contracts`, `core-bundled`, `core-runtime`, `agentic`, `auto-reply`, `extensions`) instead of one giant native root-project process. This cuts peak RSS on loaded machines and avoids auto-reply/plugin work starving unrelated suites.
     - `pnpm test --watch` still uses the native root `vitest.config.ts` project graph, because a multi-shard watch loop is not practical.
     - `pnpm test`, `pnpm test:watch`, and `pnpm test:perf:imports` route explicit file/directory targets through scoped lanes first, so `pnpm test extensions/discord/src/monitor/message-handler.preflight.test.ts` avoids paying the full root project startup tax.
+    - Non-watch package and agent directory targets, such as `pnpm test packages/gateway-client` or `pnpm test src/agents/tools`, and quoted agent globs such as `pnpm test 'src/agents/failover/**/*.test.ts'`, discover regular `*.test.ts` files and route each to its owning lane. This preserves fast, isolated, harness, and database-worker ownership, shared exclusions, and inherited include limits; ordinary selections do not opt into live or E2E tests.
     - Non-watch root-project runs, such as `node scripts/run-vitest.mjs run src/config`, prepare any built runtime required by their selected tests before starting them.
     - `pnpm test:changed` expands changed git paths into cheap scoped lanes by default: direct test edits, sibling `*.test.ts` files, explicit source mappings, and local import-graph dependents. Config/setup/package edits do not broad-run tests unless you explicitly use `OPENCLAW_TEST_CHANGED_BROAD=1 pnpm test:changed`.
     - `pnpm check:changed` is the normal smart local check gate for narrow work. It classifies the diff into core, core tests, extensions, extension tests, apps, docs, release metadata, live Docker tooling, and tooling, then runs the matching typecheck, lint, and guard commands. Selected paths also schedule targeted Vitest owner tests via `pnpm test:serial`; use `pnpm test:changed` or explicit `pnpm test <target>` for additional test proof matching the touched contract. Release metadata-only version bumps run targeted version/config/root-dependency checks, with a guard that rejects package changes outside the top-level version field.
@@ -113,6 +120,10 @@ Native dependency policy:
       spawns can inherit another worker's temporary output pipe handles and
       prevent that worker's child cleanup from observing EOF. Worker counts
       and file parallelism remain unchanged.
+    - SQLite admission runs before test collection in each Vitest worker. Bun threads
+      inherit the config process's decision; OS forks initialize it locally.
+      Bun runs the existing native-close conformance probe before database pools
+      capture their policy; Node retains its runtime-provided capability.
     - The shared Vitest config fixes `isolate: false` and uses the
       non-isolated runner across the root projects, e2e, and live configs.
     - The root UI lane keeps its `jsdom` setup and optimizer, but runs on the
@@ -323,7 +334,7 @@ The adapter requires Linux, an existing rootless Podman installation with its na
 
 It runs Vitest, Chromium, the provider fixture, and the test Gateway in the same network-none namespace. Podman’s init owns PID 1 so detached test children are reaped after their launchers exit; the Node entrypoint still owns the test invocation and cleanup. Host proxy settings stay unchanged; host credentials, Gateway state, Git metadata, and private scratch are not exposed to the container. There are no published ports or external network access. Missing prerequisites fail with setup guidance instead of installing packages or weakening isolation.
 
-Use the ordinary local config, not the CI-only prebuilt config. For the canonical Control UI E2E config, the adapter runs the existing private-QA `ciArtifacts` build inside the container before admitting tests; backend readiness alone does not mean the dashboard assets are ready. The isolated source snapshot uses tracked working-tree files, including staged new files; stage a new test before selecting it. Keep source and dependencies unchanged during the invocation, and keep dependency installation separate. The initial interface supports exact tracked test files, a tracked config, and console reporters; it does not export files from the disposable snapshot. This route is not suitable for live-provider tests or tests that must contact services outside their own container.
+Use the ordinary local config, not the CI-only prebuilt config. The adapter uses the canonical test selection to prepare `qaRuntime` artifacts inside the container for tests that consume built runtime, including private-QA artifacts when required. Source-only selections do not pay for a runtime build and retain the 8 GiB container memory cap. Runs that prepare built artifacts use a bounded 16 GiB cap to accommodate the compiler heap and native build memory; CPU, network, filesystem, and process limits are unchanged. For the canonical Control UI E2E config, it retains the private-QA `ciArtifacts` build before admitting tests; backend readiness alone does not mean the dashboard assets are ready. The host’s live-Gateway artifact admission is unchanged. The isolated source snapshot uses tracked working-tree files, including staged new files; stage a new test before selecting it. Keep source and dependencies unchanged during the invocation, and keep dependency installation separate. The initial interface supports exact tracked test files, a tracked config, and console reporters; it does not export files from the disposable snapshot. This route is not suitable for live-provider tests or tests that must contact services outside their own container.
 
 ### E2E: OpenShell backend smoke
 
@@ -354,6 +365,7 @@ Use the ordinary local config, not the CI-only prebuilt config. For the canonica
 - Config: `test/vitest/vitest.live.config.ts`
 - Files: `src/**/*.live.test.ts`, `test/**/*.live.test.ts`, and bundled-plugin live tests under `extensions/`
 - Default: **enabled** by `pnpm test:live` (sets `OPENCLAW_LIVE_TEST=1`)
+- Runtime: Node by default; `OPENCLAW_VITEST_RUNTIME=bun pnpm test:live` selects the Bun executable on `PATH` for Vitest and its workers, using the same runtime selector as the CI test lanes. The live wrapper still runs on Node.
 - Scope:
   - "Does this provider/model actually work _today_ with real creds?"
   - Catch provider format changes, tool-calling quirks, auth issues, and rate limit behavior
@@ -370,7 +382,51 @@ Use the ordinary local config, not the CI-only prebuilt config. For the canonica
   - Live suites emit progress lines to stderr so long provider calls are visibly active even when Vitest console capture is quiet.
   - `test/vitest/vitest.live.config.ts` disables Vitest console interception so provider/gateway progress lines stream immediately during live runs.
   - Tune direct-model heartbeats with `OPENCLAW_LIVE_HEARTBEAT_MS`.
-  - Tune gateway/probe heartbeats with `OPENCLAW_LIVE_GATEWAY_HEARTBEAT_MS`.
+  - Tune gateway/check heartbeats with `OPENCLAW_LIVE_GATEWAY_HEARTBEAT_MS`.
+
+### Advisory Bun release checks
+
+Maintainers can dispatch `openclaw-live-and-e2e-checks-reusable.yml` on `main`
+with `test_runtime=bun`. The manual input offers `node` and `bun`; reusable
+callers accept the same values as a string. Node remains the default, including
+the existing Release Checks and Full Release Validation callers.
+Reusable Bun callers must use the same repository and revision as the called
+workflow so the pin comes from that exact workflow source. Direct dispatches meet
+this requirement automatically.
+
+For the normal stable release repo/live selection:
+
+```sh
+target_sha="$(gh api repos/openclaw/openclaw/commits/main --jq .sha)"
+gh workflow run openclaw-live-and-e2e-checks-reusable.yml --ref main \
+  -f ref="$target_sha" -f test_runtime=bun -f release_test_profile=stable \
+  -f include_repo_e2e=true -f include_live_suites=true \
+  -f include_release_path_suites=false -f include_openwebui=false \
+  -f gateway_repo_e2e_use_github_hosted_runners=false \
+  -f allow_unreleased_changelog=true
+```
+
+Bun jobs are labeled advisory and report failures normally in their separate
+run. They do not replace Node release evidence or add PR jobs. The trusted
+admission checkout includes `scripts/lib/openclaw-bun.json` and its staging
+helper from the workflow revision. The existing `setup-test-bun` action installs
+that pin once and shares its executable by artifact ID with the test jobs.
+Only test steps select Bun; dependency
+installation, build preparation, packaging, and workflow tooling keep their
+current toolchain.
+
+The selector covers native live shards, live cache checks, Gateway shards,
+agent-plugin Gateway, the complete UI E2E suite (including real-Gateway files),
+and the OpenShell Vitest host. Native media shards support the same selector
+when selected by the `full` profile. The separate required PR CI real-Gateway
+job remains governed by its existing runtime policy and is not this release lane.
+
+Docker live/model, packaged-product, upgrade, and OpenWebUI lanes retain Node:
+their images and launchers own the container runtime, so a host Vitest selector
+does not switch them. External provider CLIs and the OpenShell service also keep
+their own runtimes. These lanes still run when selected but are not Bun proof.
+Use a current target containing the runtime-aware live and E2E launchers; older
+frozen release targets may not support this advisory selector.
 
 ## Which suite should I run?
 

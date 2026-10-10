@@ -45,10 +45,7 @@ function normalizeAssistantAvatar(value: string | null | undefined): string | nu
   if (isRenderableAvatarImageDataUrl(trimmed) || SAME_ORIGIN_AVATAR_URL_RE.test(trimmed)) {
     return trimmed;
   }
-  if (URI_SCHEME_RE.test(trimmed)) {
-    return null;
-  }
-  if (/[\r\n]/.test(trimmed)) {
+  if (URI_SCHEME_RE.test(trimmed) || /[\r\n]/.test(trimmed)) {
     return null;
   }
   return trimmed.length <= MAX_ASSISTANT_TEXT_AVATAR ? trimmed : null;

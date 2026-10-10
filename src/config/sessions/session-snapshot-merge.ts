@@ -2,6 +2,11 @@ import { isDeepStrictEqual } from "node:util";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 type SessionEntryRecord = Partial<Record<keyof SessionEntry, unknown>>;
+type SessionSnapshotChanges = {
+  initial: SessionEntry;
+  next: SessionEntry;
+  current: SessionEntry;
+};
 
 export const SESSION_MODEL_OVERRIDE_TRANSACTION_FIELDS = [
   "providerOverride",
@@ -56,18 +61,24 @@ function anySessionFieldChanged(
   return fields.some((field) => !isDeepStrictEqual(before[field], after[field]));
 }
 
-function mainSessionRecoveryTransactionChanged(before: SessionEntry, after: SessionEntry): boolean {
+function mainSessionRecoveryCycleChanged(before: SessionEntry, after: SessionEntry): boolean {
   const beforeState = before.mainRestartRecovery;
   const afterState = after.mainRestartRecovery;
   return (
-    before.abortedLastRun !== after.abortedLastRun ||
-    !isDeepStrictEqual(before.restartRecoveryRuns, after.restartRecoveryRuns) ||
-    before.restartRecoveryForceSafeTools !== after.restartRecoveryForceSafeTools ||
     beforeState?.cycleId !== afterState?.cycleId ||
     beforeState?.chargedAttempts !== afterState?.chargedAttempts ||
     beforeState?.startedAttempt !== afterState?.startedAttempt ||
     !isDeepStrictEqual(beforeState?.reservation, afterState?.reservation) ||
     !isDeepStrictEqual(beforeState?.tombstone, afterState?.tombstone)
+  );
+}
+
+function mainSessionRecoveryTransactionChanged(before: SessionEntry, after: SessionEntry): boolean {
+  return (
+    before.abortedLastRun !== after.abortedLastRun ||
+    !isDeepStrictEqual(before.restartRecoveryRuns, after.restartRecoveryRuns) ||
+    before.restartRecoveryForceSafeTools !== after.restartRecoveryForceSafeTools ||
+    mainSessionRecoveryCycleChanged(before, after)
   );
 }
 
@@ -78,24 +89,6 @@ function mainSessionRecoveryOwnershipChanged(before: SessionEntry, after: Sessio
       before.mainRestartRecovery?.foregroundClaims,
       after.mainRestartRecovery?.foregroundClaims,
     )
-  );
-}
-
-function mainSessionRecoveryCycleStateUnchanged(
-  before: SessionEntry,
-  after: SessionEntry,
-): boolean {
-  const beforeState = before.mainRestartRecovery;
-  const afterState = after.mainRestartRecovery;
-  if (!beforeState || !afterState) {
-    return false;
-  }
-  return (
-    beforeState.cycleId === afterState.cycleId &&
-    beforeState.chargedAttempts === afterState.chargedAttempts &&
-    beforeState.startedAttempt === afterState.startedAttempt &&
-    isDeepStrictEqual(beforeState.reservation, afterState.reservation) &&
-    isDeepStrictEqual(beforeState.tombstone, afterState.tombstone)
   );
 }
 
@@ -118,13 +111,12 @@ function isCanonicalMainSessionRecoveryClear(entry: SessionEntry): boolean {
 }
 
 /** Projects run-local snapshot changes without restoring concurrently changed fields. */
-export function projectSessionSnapshotChanges(params: {
-  initial: SessionEntry;
-  next: SessionEntry;
-  current: SessionEntry;
-  reassertAbortedLastRun?: boolean;
-  reassertLiveModelSwitchPending?: boolean;
-}): Partial<SessionEntry> {
+export function projectSessionSnapshotChanges(
+  params: SessionSnapshotChanges & {
+    reassertAbortedLastRun?: boolean;
+    reassertLiveModelSwitchPending?: boolean;
+  },
+): Partial<SessionEntry> {
   if (params.current.sessionId !== params.initial.sessionId) {
     return {};
   }
@@ -223,7 +215,8 @@ export function projectSessionSnapshotChanges(params: {
   const currentOnlyConsumedLifecycleFences =
     isCanonicalMainSessionRecoveryClear(params.next) &&
     !mainRecoveryOwnershipChangedConcurrently &&
-    mainSessionRecoveryCycleStateUnchanged(params.initial, params.current) &&
+    Boolean(initial.mainRestartRecovery && current.mainRestartRecovery) &&
+    !mainSessionRecoveryCycleChanged(initial, current) &&
     params.initial.restartRecoveryForceSafeTools === params.current.restartRecoveryForceSafeTools &&
     restartRecoveryRunsOnlyConsumed(params.initial, params.current);
   if (
@@ -275,12 +268,11 @@ export function projectSessionSnapshotChanges(params: {
 }
 
 /** Reports whether every caller-owned snapshot delta is present in the current row. */
-export function sessionSnapshotChangesApplied(params: {
-  initial: SessionEntry;
-  next: SessionEntry;
-  current: SessionEntry;
-  touchedFields?: ReadonlyArray<keyof SessionEntry>;
-}): boolean {
+export function sessionSnapshotChangesApplied(
+  params: SessionSnapshotChanges & {
+    touchedFields?: ReadonlyArray<keyof SessionEntry>;
+  },
+): boolean {
   if (params.current.sessionId !== params.initial.sessionId) {
     return false;
   }
@@ -304,12 +296,11 @@ export function sessionSnapshotChangesApplied(params: {
 }
 
 /** Reports an explicit grouped-write conflict before any snapshot fields are committed. */
-export function sessionSnapshotTouchedFieldsConflict(params: {
-  initial: SessionEntry;
-  next: SessionEntry;
-  current: SessionEntry;
-  touchedFields?: ReadonlyArray<keyof SessionEntry>;
-}): boolean {
+export function sessionSnapshotTouchedFieldsConflict(
+  params: SessionSnapshotChanges & {
+    touchedFields?: ReadonlyArray<keyof SessionEntry>;
+  },
+): boolean {
   if (params.current.sessionId !== params.initial.sessionId) {
     return true;
   }
@@ -343,12 +334,11 @@ export function adoptPersistedSessionSnapshot(target: SessionEntry, current: Ses
 }
 
 /** Reports whether a model/auth selection transaction is the persisted winner. */
-export function sessionModelOverrideChangesApplied(params: {
-  initial: SessionEntry;
-  next: SessionEntry;
-  current: SessionEntry;
-  reassertLiveModelSwitchPending?: boolean;
-}): boolean {
+export function sessionModelOverrideChangesApplied(
+  params: SessionSnapshotChanges & {
+    reassertLiveModelSwitchPending?: boolean;
+  },
+): boolean {
   if (params.current.sessionId !== params.initial.sessionId) {
     return false;
   }
@@ -373,21 +363,15 @@ export function sessionModelOverrideChangesApplied(params: {
 }
 
 /** Merges run-local snapshot changes into the latest persisted session row. */
-export function mergeSessionSnapshotChanges(params: {
-  initial: SessionEntry;
-  next: SessionEntry;
-  current: SessionEntry;
-  reassertAbortedLastRun?: boolean;
-  reassertLiveModelSwitchPending?: boolean;
-}): SessionEntry {
-  const merged = { ...params.current };
-  const mergedRecord: SessionEntryRecord = merged;
+export function mergeSessionSnapshotChanges(
+  params: Parameters<typeof projectSessionSnapshotChanges>[0],
+): SessionEntry {
   const patch = projectSessionSnapshotChanges(params);
+  const merged = { ...params.current, ...patch };
+  const mergedRecord: SessionEntryRecord = merged;
   for (const field of Object.keys(patch) as Array<keyof SessionEntry>) {
     if (patch[field] === undefined) {
       delete mergedRecord[field];
-    } else {
-      mergedRecord[field] = patch[field];
     }
   }
   return merged;

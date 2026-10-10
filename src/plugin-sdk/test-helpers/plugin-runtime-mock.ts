@@ -18,7 +18,6 @@ import {
   resolveStableChannelIngressPolicy,
 } from "../../channels/message-access/runtime.js";
 import { createChannelReplyPipeline } from "../../channels/message/reply-pipeline.js";
-import { resolveSessionEntryResetFreshness } from "../../config/sessions/entry-freshness.js";
 import type { ConfigFileSnapshot } from "../../config/types.openclaw.js";
 import { createChannelRuntimeContextRegistry } from "../../plugins/runtime/channel-runtime-contexts.js";
 import { resolveAgentCatalogCreateTarget } from "../../plugins/runtime/runtime-agent-session-catalog.js";
@@ -27,11 +26,13 @@ import {
   implicitMentionKindWhen,
   resolveInboundMentionDecision,
 } from "../channel-mention-gating.js";
+import { createPluginGatewayRuntimeMock } from "./plugin-runtime-gateway-mock.js";
 import {
   mergePluginRuntimeMockOverrides,
   type PluginRuntimeMockOverrides,
 } from "./plugin-runtime-mock-overrides.js";
 import { createPluginModelRuntimeMock } from "./plugin-runtime-model-mock.js";
+import { createPluginSessionRuntimeMock } from "./plugin-runtime-session-mock.js";
 import { createPluginStateRuntimeMock } from "./plugin-runtime-state-mock.js";
 import { createPluginThreadBindingsRuntimeMock } from "./plugin-runtime-thread-bindings-mock.js";
 
@@ -452,19 +453,7 @@ export function createPluginRuntimeMock(overrides: PluginRuntimeMockOverrides = 
       ...structuredContextField,
     } as Awaited<BuildContextResult>;
   });
-  const sessionRuntime = {
-    resolveStorePath: vi.fn<PluginRuntime["channel"]["session"]["resolveStorePath"]>(
-      () => "/tmp/sessions.json",
-    ),
-    readSessionUpdatedAt: vi.fn<PluginRuntime["channel"]["session"]["readSessionUpdatedAt"]>(
-      () => undefined,
-    ),
-    recordSessionMetaFromInbound:
-      vi.fn<PluginRuntime["channel"]["session"]["recordSessionMetaFromInbound"]>(),
-    recordInboundSession: vi.fn<PluginRuntime["channel"]["session"]["recordInboundSession"]>(),
-    updateLastRoute: vi.fn<PluginRuntime["channel"]["session"]["updateLastRoute"]>(),
-    resolveEntryResetFreshness: vi.fn(resolveSessionEntryResetFreshness),
-  };
+  const sessionRuntime = createPluginSessionRuntimeMock();
   const inboundRuntime = {
     ingress: {
       createResolver: createChannelIngressPolicyResolver,
@@ -480,10 +469,7 @@ export function createPluginRuntimeMock(overrides: PluginRuntimeMockOverrides = 
   const base: PluginRuntime = {
     version: "1.0.0-test",
     ...createPluginModelRuntimeMock({ provider: DEFAULT_PROVIDER, model: DEFAULT_MODEL }),
-    gateway: {
-      isAvailable: vi.fn(async () => false),
-      request: vi.fn(),
-    },
+    gateway: createPluginGatewayRuntimeMock(),
     config: {
       current: vi.fn<PluginRuntime["config"]["current"]>(() => ({})),
       mutateConfigFile: createGenericMock<PluginRuntime["config"]["mutateConfigFile"]>(
@@ -615,9 +601,18 @@ export function createPluginRuntimeMock(overrides: PluginRuntimeMockOverrides = 
         getSessionEntry: vi.fn<PluginRuntime["agent"]["session"]["getSessionEntry"]>(
           () => undefined,
         ),
+        getSessionEntryAsync: vi
+          .fn<PluginRuntime["agent"]["session"]["getSessionEntryAsync"]>()
+          .mockResolvedValue(undefined),
+        getSessionEntryByIdAsync: vi
+          .fn<PluginRuntime["agent"]["session"]["getSessionEntryByIdAsync"]>()
+          .mockResolvedValue(undefined),
         listSessionEntries: vi.fn<PluginRuntime["agent"]["session"]["listSessionEntries"]>(
           () => [],
         ),
+        createSessionEntryListReader: vi
+          .fn<PluginRuntime["agent"]["session"]["createSessionEntryListReader"]>()
+          .mockResolvedValue(async () => ({ entries: [], assertCurrent: () => {} })),
         patchSessionEntry: vi
           .fn<PluginRuntime["agent"]["session"]["patchSessionEntry"]>()
           .mockResolvedValue(null),

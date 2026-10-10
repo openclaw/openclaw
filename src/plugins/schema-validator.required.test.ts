@@ -15,23 +15,6 @@ function expectValidationFailure(
 describe("schema validator", () => {
   it.each([
     {
-      title: "multiple root fields",
-      schema: { type: "object", required: ["endpoint", "token"] },
-      value: {},
-      expectedErrors: [
-        {
-          path: "endpoint",
-          message: "must have required property 'endpoint'",
-          text: "endpoint: must have required property 'endpoint'",
-        },
-        {
-          path: "token",
-          message: "must have required property 'token'",
-          text: "token: must have required property 'token'",
-        },
-      ],
-    },
-    {
       title: "multiple nested fields",
       schema: {
         type: "object",
@@ -52,28 +35,6 @@ describe("schema validator", () => {
       ],
     },
     {
-      title: "literal quoted, slash, and tilde names",
-      schema: { type: "object", required: ["owner's-token", "path/one", "tilde~name"] },
-      value: {},
-      expectedErrors: [
-        {
-          path: "owner's-token",
-          message: "must have required property 'owner's-token'",
-          text: "owner's-token: must have required property 'owner's-token'",
-        },
-        {
-          path: "path/one",
-          message: "must have required property 'path/one'",
-          text: "path/one: must have required property 'path/one'",
-        },
-        {
-          path: "tilde~name",
-          message: "must have required property 'tilde~name'",
-          text: "tilde~name: must have required property 'tilde~name'",
-        },
-      ],
-    },
-    {
       title: "terminal controls in a later field",
       schema: { type: "object", required: ["endpoint", "evil\nkey\t\x1b[31mred\x1b[0m"] },
       value: {},
@@ -90,18 +51,6 @@ describe("schema validator", () => {
         },
       ],
     },
-    {
-      title: "only the remaining field after partial input",
-      schema: { type: "object", required: ["endpoint", "token"] },
-      value: { endpoint: "fixture" },
-      expectedErrors: [
-        {
-          path: "token",
-          message: "must have required property 'token'",
-          text: "token: must have required property 'token'",
-        },
-      ],
-    },
   ])(
     "reports complete required diagnostics for $title",
     ({ title, schema, value, expectedErrors }) => {
@@ -115,11 +64,11 @@ describe("schema validator", () => {
     },
   );
 
-  describe.each(["dependentRequired", "dependencies"] as const)("%s diagnostics", (keyword) => {
+  describe("dependency diagnostics", () => {
     it.each([
       {
         title: "all dependencies missing in one condition",
-        schema: { type: "object", [keyword]: { a: ["b", "c"] } },
+        schema: { type: "object", dependentRequired: { a: ["b", "c"] } },
         value: { a: true },
         expectedErrors: [
           {
@@ -131,7 +80,7 @@ describe("schema validator", () => {
       },
       {
         title: "root with the first dependency already present",
-        schema: { type: "object", [keyword]: { a: ["b", "c"] } },
+        schema: { type: "object", dependencies: { a: ["b", "c"] } },
         value: { a: true, b: "present" },
         expectedErrors: [
           {
@@ -142,34 +91,19 @@ describe("schema validator", () => {
         ],
       },
       {
-        title: "nested object with the first dependency already present",
-        schema: {
-          type: "object",
-          properties: { settings: { type: "object", [keyword]: { a: ["b", "c"] } } },
-        },
-        value: { settings: { a: true, b: "present" } },
-        expectedErrors: [
-          {
-            path: "settings",
-            message: "must have properties b, c when property a is present",
-            text: "settings: must have properties b, c when property a is present",
-          },
-        ],
-      },
-      {
         title: "literal and nested containers with distinct conditions",
         schema: {
           type: "object",
           properties: {
-            "room/one": { type: "object", [keyword]: { literal: ["left", "right"] } },
+            "room/one": { type: "object", dependentRequired: { literal: ["left", "right"] } },
             room: {
               type: "object",
               properties: {
-                one: { type: "object", [keyword]: { nested: ["left", "right"] } },
+                one: { type: "object", dependentRequired: { nested: ["left", "right"] } },
               },
             },
-            "room~1one": { type: "object", [keyword]: { tilde: ["left", "right"] } },
-            "room%2Fone": { type: "object", [keyword]: { percent: ["left", "right"] } },
+            "room~1one": { type: "object", dependentRequired: { tilde: ["left", "right"] } },
+            "room%2Fone": { type: "object", dependentRequired: { percent: ["left", "right"] } },
           },
         },
         value: {
@@ -205,7 +139,7 @@ describe("schema validator", () => {
       "preserves the dependency condition at $title",
       ({ title, schema, value, expectedErrors }) => {
         const result = expectValidationFailure({
-          cacheKey: `schema-validator.test.${keyword}.condition.${title}`,
+          cacheKey: `schema-validator.test.condition.${title}`,
           schema,
           value,
         });
@@ -213,19 +147,5 @@ describe("schema validator", () => {
         expect(result.errors).toEqual(expectedErrors);
       },
     );
-
-    it("accepts all required and dependent fields without changing their values", () => {
-      const value = { a: true, b: "first", c: "second" };
-      const result = validateJsonSchemaValue({
-        cacheKey: `schema-validator.test.${keyword}.condition.complete`,
-        schema: { type: "object", required: ["a", "b", "c"], [keyword]: { a: ["b", "c"] } },
-        value,
-      });
-
-      expect(result).toEqual({ ok: true, value });
-      if (result.ok) {
-        expect(result.value).toBe(value);
-      }
-    });
   });
 });

@@ -7,7 +7,7 @@ import * as databaseContext from "./update-command-database-context.js";
 import type { inspectUpdateDatabaseContexts } from "./update-command-database-context.js";
 import { installFreshUpdateFixture } from "./update-command-fresh.test-support.js";
 import * as packageUpdate from "./update-command-package.js";
-import * as servicePlan from "./update-command-service-plan.js";
+import * as runtimePlan from "./update-command-runtime-preflight.js";
 import { updateCommand } from "./update-command.js";
 
 async function captureFreshManagedServiceAdmission(params: {
@@ -61,7 +61,7 @@ describe("update command admission with fresh state", () => {
         captureFreshManagedServiceAdmission({ root: fixture.root, owned, writable, restart }),
       );
       const runtimePreflight = vi
-        .spyOn(servicePlan, "resolvePackageRuntimePreflight")
+        .spyOn(runtimePlan, "resolvePackageRuntimePreflight")
         .mockResolvedValue({ ok: false, error: "fixture-stop" });
 
       await expect(
@@ -71,7 +71,7 @@ describe("update command admission with fresh state", () => {
       expect(runtimePreflight).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({
           nodeRunner: discovered ? "/service/node" : undefined,
-          fallbackNodeRunner: expectedFallback,
+          fallbackNodeRunner: process.versions.bun ? undefined : expectedFallback,
           runtimeRecovery: expectedRecovery ? expect.any(Object) : undefined,
         }),
       );

@@ -61,7 +61,7 @@ function recordToolOutcome(
   // state without running a wrapped tool.
   const toolCallId = `${toolName}-${diagnosticState.toolCallHistory?.length ?? 0}`;
   const scope = runId ? { runId } : undefined;
-  recordToolCall(diagnosticState, toolName, toolParams, toolCallId, undefined, scope);
+  recordToolCall(diagnosticState, toolName, toolParams, toolCallId, scope);
   const outcome: Parameters<typeof recordToolCallOutcome>[1] = {
     toolName,
     toolParams,
@@ -189,6 +189,10 @@ describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
       const { prepareSystemAgentRunAdmission } = await import("../admitted-run-context.js");
       const { createSubagentRunRecord } = await import("../subagent-test-fixtures.test-helpers.js");
       const { subagentRuns } = await import("../subagents/registry/subagent-registry-memory.js");
+      const { mutateSubagentRuns } =
+        await import("../subagents/registry/subagent-registry-persistence.js");
+      const { addSubagentRunForTests } =
+        await import("../subagents/registry/subagent-registry.test-helpers.js");
       const admission = prepareSystemAgentRunAdmission(
         {},
         baseParams.runId,
@@ -205,7 +209,6 @@ describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
         completion: { required: true },
         delivery: { status: "pending" },
       });
-      subagentRuns.set(child.runId, child);
       const overflowError = makeOverflowError();
       let attemptReturned = false;
       let attemptSignalAborted = false;
@@ -260,14 +263,23 @@ describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
       );
 
       try {
+        await addSubagentRunForTests(child);
         await expect(
           runEmbeddedAgent({ ...session.runParams, preparedRunAdmission: admission }),
         ).rejects.toBeInstanceOf(PostCompactionLoopPersistedError);
-        expect(child.requesterTurnRunId).toBe(revoked ? baseParams.runId : undefined);
-        expect(child.requesterSettleWake).toBeUndefined();
+        const current = subagentRuns.get(child.runId);
+        expect(current).toBeDefined();
+        expect(current?.requesterTurnRunId).toBe(revoked ? baseParams.runId : undefined);
+        expect(current?.requesterSettleWake).toBeUndefined();
       } finally {
-        subagentRuns.delete(child.runId);
-        admission.close();
+        try {
+          await mutateSubagentRuns([child.runId], () => ({
+            value: undefined,
+            postimages: new Map([[child.runId, null]]),
+          }));
+        } finally {
+          admission.close();
+        }
       }
 
       expect(mockedCompactDirect).toHaveBeenCalledTimes(1);

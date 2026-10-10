@@ -5,7 +5,7 @@ import { isRouteId, isSessionRouteId } from "../app-route-paths.ts";
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import type { NativeGateway, NativeGatewaysSnapshot } from "../app/native-gateways.runtime.ts";
 import { isHomePanelAvailable } from "../app/panel-availability.ts";
-import { controlUiPublicAssetPath } from "../app/public-assets.ts";
+import { currentThemeBranding } from "../app/theme-branding.ts";
 import { CONTROL_UI_BUILD_INFO } from "../build-info.ts";
 import { t } from "../i18n/index.ts";
 import { normalizeAgentLabel, resolveAgentTextAvatar } from "../lib/agents/display.ts";
@@ -44,13 +44,11 @@ import { renderSessionGlyph, renderSessionUnreadBadge } from "./session-glyph.ts
 import { renderSessionRowBadges } from "./session-row-badges.ts";
 import { formatSidebarBuildSubtitle } from "./sidebar-build-chip-format.ts";
 import { renderSidebarReorderMenu } from "./sidebar-reorder.ts";
+import { renderThemeBrandIcon } from "./theme-brand-icon.ts";
 
 export type AppSidebarRenderHost = AppSidebarSessionNavigationElement & {
-  activePluginTabId: string;
   teamOnlineExpanded: boolean;
-  onlineRunningOnly: boolean;
-  onlineSessionSort: "presence" | "open" | "running";
-  getRouteSessionKey(): string;
+  readonly people: import("./sidebar-people-controller.ts").SidebarPeopleController;
   renderPinnedSidebarSession(session: SidebarRecentSession): unknown;
   toggleSection(sectionId: string): void;
 };
@@ -74,11 +72,14 @@ function renderSidebarAgentCard(host: AppSidebarRenderHost) {
     agents: cardAgents,
     identity: cardIdentity,
   } = host.activeChipAgent();
+  if (!cardAgent) {
+    return renderSidebarWorkspaceHeader(host);
+  }
   const menuUnread = cardAgents.some((entry) => {
     const agentId = normalizeAgentId(entry.id);
     return agentId !== cardAgentId && host.agentUnreadCount(agentId) > 0;
   });
-  const cardName = normalizeAgentLabel(cardAgent ?? { id: cardAgentId }, cardIdentity);
+  const cardName = normalizeAgentLabel(cardAgent, cardIdentity);
   const gateway = host.sessionDataContext?.gateway;
   const avatarAuthReady = Boolean(
     gateway &&
@@ -90,11 +91,9 @@ function renderSidebarAgentCard(host: AppSidebarRenderHost) {
     <openclaw-sidebar-agent-card
       .agentName=${cardName}
       .agentId=${cardAgentId}
-      .avatarUrl=${
-        cardAgent ? resolveAgentAvatarUrl(cardAgent, cardIdentity) : cardIdentity?.avatar
-      }
+      .avatarUrl=${resolveAgentAvatarUrl(cardAgent, cardIdentity)}
       .avatarAuthReady=${avatarAuthReady}
-      .avatarText=${resolveAgentTextAvatar(cardAgent ?? { identity: {} }, cardIdentity)}
+      .avatarText=${resolveAgentTextAvatar(cardAgent, cardIdentity)}
       .environment=${host.sessionDataContext?.config?.current?.environment ?? null}
       .menuOpen=${host.sidebarMenus.agentMenuPosition !== null}
       .menuUnread=${menuUnread}
@@ -117,7 +116,8 @@ function renderSidebarAgentCard(host: AppSidebarRenderHost) {
 }
 
 function renderSidebarWorkspaceHeader(host: AppSidebarRenderHost) {
-  const name = readSidebarNativeGateway()?.name.trim() || "OpenClaw";
+  const branding = host.sessionDataContext?.theme.branding ?? currentThemeBranding();
+  const name = readSidebarNativeGateway()?.name.trim() || branding.brandName;
   const menuOpen = host.sidebarMenus.agentMenuPosition !== null;
   return html`
     <div class="sidebar-workspace-header">
@@ -148,18 +148,15 @@ function renderSidebarWorkspaceHeader(host: AppSidebarRenderHost) {
         }}
       >
         ${
-          host.sessionDataContext?.theme.branding.mascot === "none"
+          branding.brandIcon !== "claw"
             ? html`<span
                 class="sidebar-workspace-header__mark sidebar-workspace-header__mark--neutral"
                 aria-hidden="true"
-                >${icons.mark}</span
+                >${renderThemeBrandIcon(icons.lobster, branding)}</span
               >`
-            : html`<img
-                class="sidebar-workspace-header__mark"
-                src=${controlUiPublicAssetPath("favicon.svg", host.basePath)}
-                alt=""
-                aria-hidden="true"
-              />`
+            : html`<span class="sidebar-workspace-header__mark" aria-hidden="true"
+                >${icons.lobster}</span
+              >`
         }
         <span class="sidebar-agent-card__text">
           <span class="sidebar-agent-card__name">
@@ -255,11 +252,11 @@ export function renderAppSidebarHomeRow(host: AppSidebarRenderHost) {
   const session = mainRow ? host.projectHomeSession(mainRow, agentId) : null;
   const attention = session?.attention ?? host.resolveSessionAttention({ key: mainKey, agentId });
   const attentionLabel = sessionAttentionTooltipLabel(attention);
-  const outboxAttentionCount = host.outboxAttentionCountForSession(mainKey);
+  const outboxAttentionCount = host.storedOutboxes?.attentionCountForSession(mainKey) ?? 0;
   const active =
     isSessionRouteId(host.activeRouteId) &&
     areUiSessionKeysEquivalent(host.getRouteSessionKey(), mainKey);
-  const hasComposerDraft = host.hasSessionDraft(mainKey);
+  const hasComposerDraft = host.storedOutboxes?.hasSessionDraft(mainKey) ?? false;
   const ownRun = mainRow ? isSessionRunActive(mainRow) : false;
   const subagentsWorking = (session?.runningChildCount ?? 0) > 0;
   const running = ownRun || subagentsWorking;
@@ -283,7 +280,7 @@ export function renderAppSidebarHomeRow(host: AppSidebarRenderHost) {
     content:
       attention.kind === "none"
         ? html`<span class="nav-item__icon" aria-hidden="true">${icons.home}</span>`
-        : renderSessionAttentionIcon(attention, true),
+        : renderSessionAttentionIcon(attention),
     running,
     queued,
     runningLabel: activeRunLabel,
@@ -329,26 +326,28 @@ export function renderAppSidebarHomeRow(host: AppSidebarRenderHost) {
   `;
 }
 
-export function renderAppSidebarPagesHead(host: AppSidebarRenderHost) {
+export function renderAppSidebarPagesHead(host: AppSidebarRenderHost, row: unknown) {
   return html`
-    <div class="sidebar-nav__head">
+    <div class="sidebar-nav__lead">
+      ${row}
       <span class="sidebar-recent-sessions__label-text sr-only">${t("nav.pages")}</span>
-      <button
-        type="button"
-        class="sidebar-nav__head-action"
-        aria-haspopup="menu"
-        aria-expanded=${String(host.sidebarMenus.moreMenuPosition !== null)}
-        aria-label=${t("nav.customize")}
-        @click=${(event: MouseEvent) =>
-          host.sidebarMenus.toggleMoreMenu(event.currentTarget as HTMLElement)}
-      >
-        ${icons.penLine}
-      </button>
+      <span class="sidebar-nav__head-slot">
+        <button
+          type="button"
+          class="sidebar-nav__head-action"
+          aria-haspopup="menu"
+          aria-expanded=${String(host.sidebarMenus.moreMenuPosition !== null)}
+          aria-label=${t("nav.customize")}
+          @click=${(event: MouseEvent) =>
+            host.sidebarMenus.togglePositionedMenu("more", event.currentTarget as HTMLElement)}
+        >
+          ${icons.penLine}
+        </button>
+      </span>
     </div>
   `;
 }
 
-/** Zone 5: product chrome recedes to one slim footer bar. */
 export function renderAppSidebarFooterBar(host: AppSidebarRenderHost) {
   const connectionStatus = host.connectionStatus;
   const selfUser = host.sessionDataContext
@@ -393,16 +392,12 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost) {
                   lastError: host.lastError,
                   announce: false,
                 })
-              : html`
-                  ${
-                    gateway
-                      ? html`<span class="sidebar-identity-card__gateway" aria-hidden="true">
-                          <span class="sidebar-gateway-name">${gateway.name}</span>
-                          ${gatewayPrimaryTag ? html`<span class="sidebar-gateway-primary">${gatewayPrimaryTag}</span>` : nothing}
-                        </span>`
-                      : nothing
-                  }
-                `
+              : gateway
+                ? html`<span class="sidebar-identity-card__gateway" aria-hidden="true">
+                    <span class="sidebar-gateway-name">${gateway.name}</span>
+                    ${gatewayPrimaryTag ? html`<span class="sidebar-gateway-primary">${gatewayPrimaryTag}</span>` : nothing}
+                  </span>`
+                : nothing
           }
         </span>
       </button>
@@ -441,10 +436,8 @@ export function renderAppSidebarZoneEntry(
   entry: SidebarZoneEntry,
   sessionRows: ReadonlyMap<string, SidebarRecentSession>,
   pluginTabs: ReadonlyMap<string, GatewayControlUiPluginTab>,
+  lead: boolean,
 ) {
-  if (entry.type === "route" && !host.sidebarMenus.isRouteEnabled(entry.route)) {
-    return nothing;
-  }
   const serialized = serializeSidebarEntry(entry);
   const dropPosition =
     host.sessionOrganizer.sidebarZoneDropTarget?.entry === serialized
@@ -460,6 +453,7 @@ export function renderAppSidebarZoneEntry(
           ? html`<openclaw-plugin-contributions
               .kind=${"navigation"}
               .navigationKey=${entry.key}
+              .navigationMenus=${host.sidebarMenus}
             ></openclaw-plugin-contributions>`
           : sessionRows.has(entry.key)
             ? host.renderPinnedSidebarSession(sessionRows.get(entry.key)!)
@@ -494,7 +488,7 @@ export function renderAppSidebarZoneEntry(
         host.sessionOrganizer.handleSidebarZoneDragOver(event, serialized)}
       @drop=${(event: DragEvent) => host.sessionOrganizer.handleSidebarZoneDrop(event, serialized)}
     >
-      ${content}
+      ${lead ? renderAppSidebarPagesHead(host, content) : content}
       ${renderSidebarReorderMenu({
         label,
         kind: "entry",

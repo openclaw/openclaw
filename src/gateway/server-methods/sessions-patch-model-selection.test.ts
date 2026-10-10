@@ -2,6 +2,8 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
+import { handleDirectiveOnly } from "../../auto-reply/reply/directive-handling.impl.js";
+import { parseInlineSessionDirectives } from "../../auto-reply/reply/directive-handling.parse.js";
 import {
   admitFollowupTurn,
   type AdmittedFollowupTurn,
@@ -33,13 +35,16 @@ import type { GatewayRequestContext, RespondFn } from "./types.js";
 
 // Keep provider discovery and compaction out of this session/queue boundary test.
 // Patch validation, persistence, refresh, drain, and follow-up admission stay real.
+// mock-isolation: Provider discovery is outside this synthetic session/queue preference boundary.
 vi.mock("../../plugins/provider-thinking.js", () => ({
   resolveEffectiveThinkingProfile: () => undefined,
 }));
+// mock-isolation: Keep paid inference and compaction side effects outside admission preference proof.
 vi.mock("../../auto-reply/reply/agent-runner-memory.js", () => ({
   runSessionCompactionIfNeeded: async ({ sessionEntry }: { sessionEntry?: SessionEntry }) =>
     sessionEntry,
 }));
+// mock-isolation: Use the fixture config without ambient runtime or secret-Gateway state.
 vi.mock("../../auto-reply/reply/agent-runner-utils.js", () => ({
   resolveQueuedReplyExecutionConfig: async (config: OpenClawConfig) => config,
   resolveQueuedReplyRuntimeConfig: (config: OpenClawConfig) => config,
@@ -71,7 +76,7 @@ afterEach(() => {
   clearFollowupQueue(sessionKey);
 });
 
-async function seedSession(thinkingLevel = "low") {
+async function seedSession(thinkingLevel = "low", overrides: Partial<SessionEntry> = {}) {
   await upsertSessionEntryCore(
     { agentId: "main", sessionKey },
     {
@@ -81,6 +86,7 @@ async function seedSession(thinkingLevel = "low") {
       modelOverride: "x",
       modelOverrideSource: "user",
       thinkingLevel,
+      ...overrides,
     },
   );
 }
@@ -316,26 +322,131 @@ it.each([
 });
 
 it.each([
+  { command: "/think high", expected: "high", stored: "high" },
+  { command: "/think default", expected: "medium", stored: undefined },
+  { command: "/think invalid", expected: "low", stored: "low" },
+])(
+  "publishes $command to waiting turns without replacing their route or thinking intent",
+  async ({ command, expected, stored }) => {
+    await withState(async (state) => {
+      await seedSession();
+      const route = {
+        model: "y",
+        requestedRouteResolution: "resolved" as const,
+        modelOverrideSource: "auto" as const,
+        hasAutoFallbackProvenance: true,
+        authProfileId: "fixture:queued-account",
+        authProfileIdSource: "user" as const,
+        autoFallbackPrimaryProbe: {
+          provider: "fixture",
+          model: "y",
+          fallbackProvider: "fixture",
+          fallbackModel: "configured",
+        },
+      };
+      const ordinary = enqueue(state, "ordinary", route);
+      const explicit = enqueue(state, "explicit low", { ...route, thinkLevelOverride: "low" });
+      const defaults = enqueue(state, "explicit default", {
+        ...route,
+        thinkLevel: "medium",
+        thinkLevelOverride: "default",
+      });
+      const sessionEntry = expectDefined(
+        loadSessionEntry({ agentId: "main", sessionKey }),
+        "session entry",
+      );
+      const reply = await handleDirectiveOnly({
+        cfg,
+        agentId: "main",
+        sessionKey,
+        storePath: path.join(state.sessionsDir(), "sessions.json"),
+        sessionEntry,
+        sessionStore: { [sessionKey]: sessionEntry },
+        directives: parseInlineSessionDirectives(command),
+        elevatedEnabled: false,
+        elevatedAllowed: false,
+        defaultProvider: "fixture",
+        defaultModel: "configured",
+        provider: "fixture",
+        model: "x",
+        initialModelLabel: "fixture/x",
+        formatModelSwitchEvent: (label) => label,
+        aliasIndex: { byAlias: new Map(), byKey: new Map() },
+        allowedModelKeys: new Set(catalog.map(({ id }) => `fixture/${id}`)),
+        allowedModelCatalog: catalog,
+        resetModelOverride: false,
+        messageProvider: "telegram",
+        commandAuthorized: true,
+      });
+      expect(reply?.text).toContain(
+        command === "/think invalid" ? "Unrecognized thinking level" : "Thinking level",
+      );
+      expect(loadSessionEntry({ agentId: "main", sessionKey })?.thinkingLevel).toBe(stored);
+      expect(ordinary.run).toMatchObject({ ...route, thinkLevel: expected });
+      expect(explicit.run).toMatchObject({
+        ...route,
+        thinkLevel: "low",
+        thinkLevelOverride: "low",
+      });
+      expect(defaults.run).toMatchObject({
+        ...route,
+        thinkLevel: "medium",
+        thinkLevelOverride: "default",
+      });
+    });
+  },
+);
+
+it.each([
   {
     name: "effort",
     patch: { thinkingLevel: "high" },
     selected: { ...selectionX, thinkLevel: "high" },
     later: { thinkingLevel: "off" },
     next: { ...selectionX, thinkLevel: "off" },
+    probe: false,
   },
   {
-    name: "model",
+    name: "model with a queued primary probe",
     patch: { model: "fixture/y", thinkingLevel: "high" },
     selected: selectionY,
     later: { model: "fixture/z", thinkingLevel: "off" },
     next: selectionZ,
+    probe: true,
+  },
+  {
+    name: "effort with a queued primary probe",
+    patch: { thinkingLevel: "high" },
+    selected: { ...selectionX, thinkLevel: "high" },
+    later: { model: "fixture/z", thinkingLevel: "off" },
+    next: selectionZ,
+    probe: true,
   },
 ])(
   "binds $name at the writer-ordered queued admission, not before or after it",
-  async ({ patch, selected, later, next }) => {
+  async ({ patch, selected, later, next, probe }) => {
     await withState(async (state) => {
-      await seedSession();
-      const b = enqueue(state, "B waiting for settings");
+      await seedSession(
+        "low",
+        probe
+          ? {
+              modelOverride: "configured",
+              modelOverrideSource: "auto",
+              modelOverrideFallbackOriginProvider: "fixture",
+              modelOverrideFallbackOriginModel: "x",
+            }
+          : {},
+      );
+      const b = enqueue(state, "B waiting for settings", {
+        autoFallbackPrimaryProbe: probe
+          ? {
+              provider: "fixture",
+              model: "x",
+              fallbackProvider: "fixture",
+              fallbackModel: "configured",
+            }
+          : undefined,
+      });
       const c = enqueue(state, "C still waiting");
       const committed = createDeferredCore();
       const releaseRefresh = createDeferredCore();

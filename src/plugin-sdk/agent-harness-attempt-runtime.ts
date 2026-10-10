@@ -36,4 +36,5 @@ export {
 } from "../agents/harness/projection-tool-output.js";
 export { AgentHarnessProjectionSettlement } from "../agents/harness/projection-settlement.js";
 export { makeZeroUsageSnapshot } from "../agents/usage.js";
+export { resolveStoredSessionPermissionPolicy } from "../agents/tool-fs-policy.js";
 export { racePromiseWithAbortSignal } from "../infra/abort-signal.js";

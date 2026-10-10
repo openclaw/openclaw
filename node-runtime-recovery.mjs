@@ -6,9 +6,11 @@ import path from "node:path";
 import { consumeRootOptionToken as consumeLauncherRootOptionToken } from "./cli-root-options.mjs";
 import { isForegroundGatewayRunArgv } from "./gateway-run-argv.mjs";
 import {
-  GATEWAY_SERVICE_STOP_TIMEOUT_MS,
-  LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS,
+  RESPAWN_SIGNAL_FORCE_KILL_GRACE_MS,
+  RESPAWN_SIGNAL_HARD_EXIT_GRACE_MS,
+  resolveLauncherStopTimeoutMs,
 } from "./gateway-shutdown-budget.mjs";
+import { withNodeRuntimePath } from "./node-runtime-env.mjs";
 import {
   detectCurrentSqliteCapabilities,
   nodeRuntimeFailure,
@@ -39,22 +41,19 @@ const respawnSignals =
   process.platform === "win32"
     ? ["SIGTERM", "SIGINT", "SIGBREAK"]
     : ["SIGTERM", "SIGINT", "SIGHUP", "SIGQUIT"];
-const respawnSignalExitGraceMs = 1_000;
-const respawnSignalForceKillGraceMs = 1_000;
-const respawnSignalHardExitGraceMs = 1_000;
+const respawnSignalForceKillGraceMs = RESPAWN_SIGNAL_FORCE_KILL_GRACE_MS;
+const respawnSignalHardExitGraceMs = RESPAWN_SIGNAL_HARD_EXIT_GRACE_MS;
 
 export const runRespawnedChild = (command, args, env) => {
-  const launchdService = env.OPENCLAW_LAUNCHD_LABEL?.trim();
-  const serviceStopTimeoutMs =
-    process.platform === "darwin" && launchdService && env.XPC_SERVICE_NAME === launchdService
-      ? LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS * 1_000
-      : GATEWAY_SERVICE_STOP_TIMEOUT_MS;
   // The serving Gateway owns drain and cleanup. Reap a stuck child only in the
   // supervisor's exit margin, after that owner has had its full shutdown budget.
-  const signalExitGraceMs =
-    process.platform !== "win32" && isForegroundGatewayRunArgv(process.argv)
-      ? serviceStopTimeoutMs - respawnSignalForceKillGraceMs - respawnSignalHardExitGraceMs
-      : respawnSignalExitGraceMs;
+  // An already-running older macOS launcher can still enforce its shorter timer;
+  // the serving Gateway retains that cap until it can identify the parent version.
+  const launcherStopTimeoutMs = resolveLauncherStopTimeoutMs({
+    platform: process.platform,
+    foreground: isForegroundGatewayRunArgv(process.argv),
+  });
+  const signalExitGraceMs = launcherStopTimeoutMs - respawnSignalForceKillGraceMs;
   const stdioIsTerminal = process.stdin.isTTY || process.stdout.isTTY;
   const child = spawn(command, args, {
     stdio: "inherit",
@@ -62,7 +61,10 @@ export const runRespawnedChild = (command, args, env) => {
     windowsHide: !stdioIsTerminal,
   });
   const listeners = new Map();
-  // Keep signal forwarding and bounded shutdown in sync with src/entry.compile-cache.ts.
+  // Keep signal forwarding and bounded shutdown in sync with src/entry.compile-cache.ts,
+  // which drives src/process/respawn-child-runner.ts. That runner still holds its own
+  // copies of the escalation graces and reaps on a fixed short one, so only this
+  // launcher's deadline is the one the serving Gateway derives.
   let signalExitTimer = null;
   let signalForceKillTimer = null;
   let signalHardExitTimer = null;
@@ -743,7 +745,7 @@ export async function recoverNodeRuntime({
     `openclaw: Retrying with ${JSON.stringify(nodePath)} (${reason}; current Node failed runtime admission).\n`,
   );
   runRespawnedChild(nodePath, [...process.execArgv, process.argv[1], ...process.argv.slice(2)], {
-    ...env,
+    ...withNodeRuntimePath(env, nodePath),
     OPENCLAW_NODE_UPDATE_RESPAWNED: "1",
   });
   // The original CLI must not continue while the replacement owns the invocation.

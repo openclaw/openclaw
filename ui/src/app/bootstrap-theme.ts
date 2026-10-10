@@ -2,6 +2,7 @@ import {
   BUILTIN_THEMES,
   resolveThemeBranding,
 } from "../../../packages/gateway-protocol/src/theme.ts";
+import { registerListener } from "../../../src/shared/listeners.js";
 import type {
   ApplicationGateway,
   ApplicationTheme,
@@ -17,9 +18,8 @@ import {
   type UiPreferences,
   type UiSettings,
 } from "./settings.ts";
-import { setCurrentThemeBranding } from "./theme-branding.ts";
+import { currentThemeBranding, setCurrentThemeBranding } from "./theme-branding.ts";
 import type { CatalogTheme, createThemeCatalog, ThemeCatalogSnapshot } from "./theme-catalog.ts";
-import { startThemeTransition } from "./theme-transition.ts";
 import { resolveTheme, syncThemePaletteStylesheet, type ThemeMode } from "./theme.ts";
 import {
   applyChatFontSmoothing,
@@ -116,31 +116,26 @@ export function createApplicationTheme(
   let disposed = false;
   const publish = () => {
     const generation = ++presentationGeneration;
-    setCurrentThemeBranding(themeBranding(settings, catalog?.theme(settings.theme)));
+    let preferencesPublished = false;
+    const previousBranding = currentThemeBranding();
+    const branding = themeBranding(settings, catalog?.theme(settings.theme));
+    setCurrentThemeBranding(branding);
     syncThemePaletteStylesheet(settings.theme, () => {
       // A slower palette cannot overwrite a newer selection or a disposed app.
       if (generation !== presentationGeneration) {
         return;
       }
-      const previousMascot =
-        typeof document === "undefined" ? undefined : document.documentElement.dataset.themeMascot;
-      const previousHat =
-        typeof document === "undefined"
-          ? undefined
-          : document.documentElement.dataset.themeAvatarHat;
       applyThemePresentation(settings, catalog?.theme(settings.theme));
-      if (
-        typeof document !== "undefined" &&
-        (previousMascot !== document.documentElement.dataset.themeMascot ||
-          previousHat !== document.documentElement.dataset.themeAvatarHat)
-      ) {
+      // Computed-style consumers need the applied palette, not just the new
+      // preference. Synchronous application shares the publication below.
+      if (preferencesPublished) {
         for (const listener of listeners) {
           listener();
         }
       }
       if (
         typeof document !== "undefined" &&
-        (previousMascot === "none" || document.documentElement.dataset.themeMascot === "none")
+        (previousBranding.brandIcon !== "claw" || branding.brandIcon !== "claw")
       ) {
         void import("./control-ui-environment-presentation.runtime.ts").then(
           ({ invalidateControlUiFaviconPalette, syncControlUiFavicon }) => {
@@ -156,6 +151,7 @@ export function createApplicationTheme(
     });
     // Live preferences cannot wait for a palette download. Presentation keeps
     // its own generation fence; subscribers consume the new snapshot now.
+    preferencesPublished = true;
     for (const listener of listeners) {
       listener();
     }
@@ -273,24 +269,13 @@ export function createApplicationTheme(
       publish();
     },
     setMode(mode: ThemeMode) {
-      const currentTheme = resolveTheme(settings.theme, settings.themeMode);
-      const nextTheme = resolveTheme(settings.theme, mode);
-      startThemeTransition({
-        nextTheme,
-        currentTheme,
-        applyTheme: () => {
-          patchSettings({ themeMode: mode });
-        },
-      });
+      patchSettings({ themeMode: mode });
     },
     refresh,
     retryCatalog() {
       void (catalog?.refresh() ?? loadCatalog());
     },
-    subscribe(listener) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
+    subscribe: (listener) => registerListener(listeners, listener),
     dispose() {
       disposed = true;
       catalog?.dispose();

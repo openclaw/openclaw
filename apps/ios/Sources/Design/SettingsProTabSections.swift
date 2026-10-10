@@ -139,7 +139,10 @@ extension SettingsProTab {
             }
 
             self.gatewaySetupCard
-            self.pairedGatewaysCard
+            // Fixtures hide saved gateways, so an empty list would read as unpaired.
+            if !self.appModel.isLocalGatewayFixtureEnabled {
+                self.pairedGatewaysCard
+            }
 
             Section {
                 SettingsDetailRow("Address", value: .verbatim(self.gatewayAddress))
@@ -187,7 +190,10 @@ extension SettingsProTab {
 
             self.agentSelectionCard
             self.deviceIdentityCard
-            self.manualGatewayCard
+            // Fixtures never load the saved manual Gateway's route, so Connect Manual would target the wrong identity.
+            if !self.appModel.isLocalGatewayFixtureEnabled {
+                self.manualGatewayCard
+            }
             self.gatewayAdvancedCard
         }
         .font(OpenClawType.body)
@@ -203,12 +209,13 @@ extension SettingsProTab {
         if showScanHero {
             scanAction = { self.openGatewayQRScanner() }
         }
+        let gateway = self.gatewayStatusPresentation
         return self.detailStatusCard(
             icon: "antenna.radiowaves.left.and.right",
             title: "Gateway",
-            detail: .verbatim(self.gatewayStatusDetail),
-            value: .verbatim(self.gatewayStatusValue),
-            color: self.gatewayStatusColor,
+            detail: .verbatim(gateway.detail),
+            value: .verbatim(gateway.value),
+            color: gateway.color,
             actionTitle: showScanHero ? "Scan QR to Pair" : nil,
             actionSystemImage: "qrcode.viewfinder",
             action: scanAction)
@@ -916,15 +923,68 @@ extension SettingsProTab {
     var gatewayAdvancedCard: some View {
         Section {
             self.settingsToggle("Auto-connect on launch", isOn: self.$gatewayAutoConnect)
-            self.gatewaySecureField("Gateway Auth Token", text: self.gatewayTokenBinding)
-            self.gatewaySecureField("Gateway Password", text: self.gatewayPasswordBinding)
-            if let headersStableID = self.gatewayCustomHeadersTargetStableID {
-                NavigationLink {
-                    GatewayCustomHeadersSettingsView(gatewayStableID: headersStableID)
-                } label: {
-                    Text("Custom Headers")
-                        .font(OpenClawType.body)
+            // Fixtures never load the saved manual Gateway, so a credential edit would overwrite
+            // its pair with blank fields and headers would target the wrong identity.
+            if !self.appModel.isLocalGatewayFixtureEnabled {
+                self.gatewaySecureField("Gateway Auth Token", text: self.gatewayCredentialBinding(\.token))
+                self.gatewaySecureField("Gateway Password", text: self.gatewayCredentialBinding(\.password))
+                if let headersStableID = self.gatewayCustomHeadersTargetStableID {
+                    NavigationLink {
+                        GatewayCustomHeadersSettingsView(gatewayStableID: headersStableID)
+                    } label: {
+                        Text("Custom Headers")
+                            .font(OpenClawType.body)
+                    }
                 }
+            }
+            if !self.appModel.isLocalGatewayFixtureEnabled,
+               let attention = Self.gatewayAccessAttention(
+                   in: self.gatewayRegistry, ingress: self.gatewayController.ingress)
+            {
+                Text(attention.message)
+                    .font(OpenClawType.footnote)
+                    .foregroundStyle(.secondary)
+                if self.gatewayController.ingress.signingIn {
+                    Button {
+                        self.gatewayController.ingress.cancelSignIn()
+                    } label: {
+                        Text("Cancel sign-in").font(OpenClawType.body)
+                    }
+                } else if attention.canSignIn {
+                    Button {
+                        Task { await self.reconnectGateway(ingressAttention: attention) }
+                    } label: {
+                        Text("Sign in to Cloudflare Access").font(OpenClawType.body)
+                    }
+                    .disabled(self.isReconnectingGateway)
+                }
+            }
+            if !self.appModel.isLocalGatewayFixtureEnabled,
+               let target = Self.gatewayAccessSessionTarget(
+                   in: self.gatewayRegistry, ingress: self.gatewayController.ingress)
+            {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Access Host")
+                        .font(OpenClawType.body)
+                    Text(verbatim: target.origin.url.absoluteString)
+                        .font(OpenClawType.subhead)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(nil)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .textSelection(.enabled)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                Button {
+                    Task {
+                        await self.gatewayController.ingress.signOut(
+                            stableID: target.stableID, expectedOrigin: target.origin)
+                    }
+                } label: {
+                    Text("Sign out of Cloudflare Access").font(OpenClawType.body)
+                }
+                Text("Signs out gateways using this host’s Access session. Your browser may stay signed in.")
+                    .font(OpenClawType.footnote)
+                    .foregroundStyle(.secondary)
             }
             Button(role: .destructive) {
                 self.showResetOnboardingAlert = true

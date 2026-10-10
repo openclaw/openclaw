@@ -117,8 +117,7 @@ export function readLoggingConfig(): LoggingConfig | undefined {
           allowedRoots,
         });
       } catch {
-        const logging = resolvePartialDiagnosticLoggingConfig(directLogging);
-        return logging;
+        return resolvePartialDiagnosticLoggingConfig(directLogging);
       }
     }
     let resolvedConfig: unknown;
@@ -126,8 +125,7 @@ export function readLoggingConfig(): LoggingConfig | undefined {
       resolvedConfig = resolveConfigEnvVars(includedConfig);
     } catch {
       const includedLogging = isObjectRecord(includedConfig) ? includedConfig.logging : undefined;
-      const logging = resolvePartialDiagnosticLoggingConfig(includedLogging);
-      return logging;
+      return resolvePartialDiagnosticLoggingConfig(includedLogging);
     }
     const logging = isObjectRecord(resolvedConfig) ? resolvedConfig.logging : undefined;
     const resolvedLogging = isObjectRecord(logging) ? (logging as LoggingConfig) : undefined;
@@ -139,4 +137,31 @@ export function readLoggingConfig(): LoggingConfig | undefined {
   } catch {
     return undefined;
   }
+}
+
+/** Capture before dispatch; the returned guard never refreshes configuration or reads files. */
+export function captureLoggingRedactionPatternGuard(
+  explicitPatterns?: readonly string[],
+): () => boolean {
+  const captured = (explicitPatterns ?? readLoggingConfig()?.redactPatterns)?.slice();
+  return () => {
+    let current = explicitPatterns;
+    if (current === undefined) {
+      if (loggingState.appliedConfig !== APPLIED_LOGGING_CONFIG_UNOWNED) {
+        current = loggingState.appliedConfig?.redactPatterns;
+      } else {
+        if (
+          !cachedLoggingConfig ||
+          cachedLoggingConfig.selector !== resolveLoggingConfigSelector()
+        ) {
+          return false;
+        }
+        current = cachedLoggingConfig.logging?.redactPatterns;
+      }
+    }
+    return (
+      current?.length === captured?.length &&
+      !current?.some((pattern, index) => pattern !== captured?.[index])
+    );
+  };
 }

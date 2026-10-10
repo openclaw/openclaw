@@ -1,11 +1,14 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { resetAgentRunRegistryForTest } from "../../infra/agent-run-registry.js";
 import * as fsSafe from "../../infra/fs-safe.js";
-import { getMediaDir } from "../../media/store.js";
+import { getMediaDir, readMediaBuffer, saveMediaBuffer } from "../../media/store.js";
+import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
+import type { UserTurnInput } from "../../sessions/user-turn-transcript.types.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import {
@@ -14,6 +17,7 @@ import {
   type PreparedAgentRunAdmission,
 } from "../admitted-run-context.js";
 import { runEmbeddedAttemptWithBackend } from "../embedded-agent-runner/run/backend.js";
+import { prepareEmbeddedAttemptPromptExecution } from "../embedded-agent-runner/run/prompt-image-preparation.js";
 import { makeEmbeddedRunnerAttempt } from "../test-helpers/embedded-agent-runner-e2e-fixtures.js";
 import { attachToolAllowlistIntersection } from "../tool-policy.js";
 import { registerAgentWorkspaceAccess } from "../workspace-access.js";
@@ -51,38 +55,181 @@ afterEach(async () => {
 });
 
 describe("registered harness input attachment preparation", () => {
-  it.each(["before", "during"])(
-    "fences input preparation when host capability closes %s an await",
-    async (when) => {
+  it.each([
+    { operation: "prepare", when: "before" },
+    { operation: "prepare", when: "during" },
+    { operation: "resolve", when: "before" },
+    { operation: "resolve", when: "during" },
+  ])(
+    "fences input $operation when host capability closes $when an await",
+    async ({ operation, when }) => {
+      const resolvedInput = createDeferred<UserTurnInput>();
       const attempt = {
         ...createAttemptParams(),
         workspaceDir: "/fixture/workspace",
         timeoutMs: 1_000,
         media: [{ path: "media://inbound/input.csv", contentType: "text/csv" }],
+        userTurnTranscriptRecorder:
+          operation === "resolve"
+            ? createUserTurnTranscriptRecorder({
+                input: { text: "Inspect the attachment.", timestamp: 1 },
+                resolveInput: () => resolvedInput.promise,
+                target: () => undefined,
+              })
+            : undefined,
       };
       const host = createAgentHarnessHostCapabilities({ attempt, pluginId: "codex" });
       host.setInputAttachmentReadAllowed(true);
       const prepare = host.capabilities.prepareInputAttachments;
-      expect(prepare).toBeTypeOf("function");
+      const resolve = host.capabilities.resolveInputAttachmentMedia;
+      expect(operation === "resolve" ? resolve : prepare).toBeTypeOf("function");
       if (when === "before") {
         host.close();
       }
-      const pending = prepare?.({
-        placement: "local-host",
-        maxChars: 60_000,
-        assertCurrent: () => {},
-      });
+      const pending =
+        operation === "resolve"
+          ? resolve?.()
+          : prepare?.({
+              placement: "local-host",
+              maxChars: 60_000,
+              assertCurrent: () => {},
+            });
       if (when === "during") {
         host.close();
       }
+      resolvedInput.resolve({
+        text: "Inspect the attachment.",
+        media: attempt.media,
+        timestamp: 1,
+      });
       await expect(pending).rejects.toThrow("no longer active");
+    },
+  );
+
+  it.each(["captured originals", "deferred recorder"])(
+    "resolves original image bytes after projection on consecutive turns from %s",
+    async (source) => {
+      const root = trajectoryTempDirs.make("harness-original-images-");
+      vi.stubEnv("OPENCLAW_STATE_DIR", root);
+      const workspaceDir = path.join(root, "workspace");
+      await fs.mkdir(workspaceDir);
+      const images = [
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACXBIWXMAAAsTAAALEwEAmpwYAAAADUlEQVR4nGP4////KwAJ5gPoxLp9owAAAABJRU5ErkJggg==",
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGMQVDL+DwACFAFmBODefwAAAABJRU5ErkJggg==",
+      ];
+      const originals = await Promise.all(
+        images.map(async (image) => {
+          const bytes = Buffer.from(image, "base64");
+          const saved = await saveMediaBuffer(
+            bytes,
+            "image/png",
+            "inbound",
+            undefined,
+            "photo.png",
+          );
+          return {
+            bytes,
+            media: [{ path: saved.path, contentType: "image/png", fileName: "photo.png" }],
+          };
+        }),
+      );
+      let turnIndex = 0;
+      const runAttempt = vi.fn<AgentHarness["runAttempt"]>(async (received) => {
+        const original = originals[turnIndex]!;
+        expect(received.prompt).toBe(`Inspect image ${turnIndex + 1}.`);
+        expect(received.transcriptPrompt).toBe(received.prompt);
+        expect(received.media).toBeUndefined();
+        expect(received.images).toEqual([
+          { type: "image", data: images[turnIndex], mimeType: "image/png" },
+        ]);
+        const facts = await received.hostCapabilities?.resolveInputAttachmentMedia?.();
+        expect(facts).toMatchObject(original.media);
+        expect(Object.isFrozen(facts)).toBe(true);
+        expect(Object.isFrozen(facts?.[0])).toBe(true);
+        const resolved = await readMediaBuffer(path.basename(facts?.[0]?.path ?? ""));
+        expect(resolved.buffer).toEqual(original.bytes);
+        return makeEmbeddedRunnerAttempt({ agentHarnessId: "codex" });
+      });
+      registerAgentHarness(
+        {
+          id: "codex",
+          label: "Codex",
+          supports: () => ({ supported: true, priority: 100 }),
+          conversationToolPolicySupport: "exact",
+          runAttempt,
+        },
+        { ownerPluginId: "codex" },
+      );
+      for (const original of originals) {
+        const runId = `original-image-${turnIndex}`;
+        const turnAdmission = prepareAgentRunAdmission({
+          cfg: {},
+          facts: {
+            runId,
+            agentId: "main",
+            ingress: { kind: "system", boundary: "attachment-test", state: "present" },
+          },
+          operationalRunInstance: createOperationalRunInstanceRef(runId),
+        });
+        try {
+          const prompt = `Inspect image ${turnIndex + 1}.`;
+          const media =
+            source === "deferred recorder"
+              ? (originals[turnIndex - 1]?.media ?? [])
+              : original.media;
+          const recorder =
+            source === "deferred recorder"
+              ? createUserTurnTranscriptRecorder({
+                  input: { text: prompt, media, timestamp: turnIndex + 1 },
+                  resolveInput: async () => ({
+                    text: prompt,
+                    media: original.media,
+                    timestamp: turnIndex + 1,
+                  }),
+                  target: () => undefined,
+                })
+              : undefined;
+          const transcript = JSON.stringify(recorder?.message);
+          const context = await turnAdmission.admit("plugin-harness", "codex");
+          const attempt = {
+            ...createHarnessAttemptParams(context),
+            workspaceDir,
+            prompt,
+            transcriptPrompt: prompt,
+            media,
+            userTurnTranscriptRecorder: recorder,
+          };
+          const projected = await prepareEmbeddedAttemptPromptExecution({
+            attempt: { ...attempt, model: { input: ["text", "image"] } },
+            mediaOwnerAgentId: "main",
+            effectiveWorkspace: workspaceDir,
+            effectiveFsWorkspaceOnly: false,
+            prompt,
+            skipPromptSubmission: false,
+            pluginHarness: true,
+          });
+          await runEmbeddedAttemptWithBackend(
+            {
+              ...attempt,
+              images: projected.images,
+              imageOrder: projected.imageOrder,
+              media: projected.media,
+            },
+            undefined,
+            media,
+          );
+          expect(JSON.stringify(recorder?.message)).toBe(transcript);
+          turnIndex += 1;
+        } finally {
+          turnAdmission.close();
+        }
+      }
+      expect(runAttempt).toHaveBeenCalledTimes(2);
     },
   );
 
   it.each([
     "projected",
-    "bounded-inline",
-    "metadata-sigils",
     "steering-sigils",
     "no-tools",
     "read-denied",
@@ -121,7 +268,7 @@ describe("registered harness input attachment preparation", () => {
         ...(mode === "workspace-only" ? { fs: { workspaceOnly: true } } : {}),
         ...(mode === "read-denied" ? { deny: ["read"] } : {}),
       },
-      ...(mode === "bounded-inline"
+      ...(mode === "projected"
         ? { gateway: { http: { endpoints: { responses: { files: { maxChars: 1 } } } } } }
         : {}),
       ...(mode === "mime-denied"
@@ -178,7 +325,7 @@ describe("registered harness input attachment preparation", () => {
         ]);
         expect(metadata).not.toMatch(/[$@]/);
         expect(await fs.readFile(filePath, "utf8")).toBe(csv);
-      } else if (mode === "projected" || mode === "bounded-inline") {
+      } else if (mode === "projected") {
         expect(note).toContain(filePath);
         expect(await fs.readFile(filePath, "utf8")).toBe(csv);
       } else {

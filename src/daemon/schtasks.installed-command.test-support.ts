@@ -13,8 +13,8 @@ import { formatCommandOutput } from "../process/command-error.js";
 
 type ServiceObservation = "install" | "status";
 
-function captureServiceOutput(
-  kind: ServiceObservation,
+function captureCommandOutput(
+  kind: ServiceObservation | "published-update",
   stdout: string,
   truncated: boolean,
   diagnostic: (value: string) => string,
@@ -48,6 +48,38 @@ function captureServiceOutput(
       }),
     );
   };
+  if (kind === "published-update") {
+    return {
+      kind,
+      ...fields(value, ["status", "mode", "reason", "durationMs"]),
+      before: fields(value.before, ["version", "buildId", "sha"]),
+      after: fields(value.after, ["version", "buildId", "sha"]),
+      recovery: fields(value.recovery, [
+        "serviceRestartSafe",
+        "reason",
+        "version",
+        "buildId",
+        "packageRollbackVerified",
+      ]),
+      steps: Array.isArray(value.steps)
+        ? value.steps.slice(0, 40).map((entry: unknown) => {
+            const step = asOptionalRecord(entry);
+            return Object.assign(
+              fields(step, ["name", "exitCode", "durationMs", "signal", "killed", "termination"]),
+              step?.exitCode !== 0 ? fields(step, ["stdoutTail", "stderrTail"]) : {},
+              {
+                failureFacts: Array.isArray(step?.failureFacts)
+                  ? step.failureFacts
+                      .slice(0, 8)
+                      .map((fact: unknown) => fields(fact, ["check", "code", "message"]))
+                  : undefined,
+              },
+            );
+          })
+        : undefined,
+      stepsOmitted: Array.isArray(value.steps) ? Math.max(0, value.steps.length - 40) : 0,
+    };
+  }
   const service = asOptionalRecord(value.service);
   const common = { kind };
   if (kind === "install") {
@@ -115,7 +147,8 @@ export type CommandRecord = {
   elapsedMs: number;
   settlement?: CommandSettlement;
   failureOutput?: { stdout: string; stderr: string; captureTruncated: boolean };
-  serviceOutput?: ReturnType<typeof captureServiceOutput>;
+  serviceOutput?: ReturnType<typeof captureCommandOutput>;
+  publishedUpdate?: ReturnType<typeof captureCommandOutput>;
 };
 export async function run(
   args: string[],
@@ -264,7 +297,10 @@ export async function run(
     ...(settlement ? { settlement } : {}),
     ...(failureOutput ? { failureOutput } : {}),
     ...(observeService
-      ? { serviceOutput: captureServiceOutput(observeService, stdout, truncated, diagnostic) }
+      ? { serviceOutput: captureCommandOutput(observeService, stdout, truncated, diagnostic) }
+      : {}),
+    ...(options.commandBudget === "published-update"
+      ? { publishedUpdate: captureCommandOutput("published-update", stdout, truncated, diagnostic) }
       : {}),
   });
   if (child && afterCleanup !== "dead") {

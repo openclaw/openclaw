@@ -106,6 +106,7 @@ type AgentHarnessAttemptParamsBase = Omit<
   | "onContextEngineTurnCandidate"
   | "trajectoryRecorder"
   | "inputAttachmentMedia"
+  | "supportsTurnScopedToolRestrictions"
 >;
 /**
  * @deprecated Use AgentHarnessAttemptParamsV2. The optional capability keeps
@@ -118,6 +119,20 @@ export type AgentHarnessAttemptParams = AgentHarnessAttemptParamsBase & {
 export type AgentHarnessAttemptParamsV2 = AgentHarnessAttemptParamsBase & {
   hostCapabilities: AgentHarnessHostCapabilities;
 };
+/** Data and admitted authority needed to prepare a native session, without a model turn. */
+export type AgentHarnessSessionRuntimeParamsV1 = Omit<
+  AgentHarnessAttemptParamsV2,
+  "prompt" | "sessionFile" | "model" | "authStorage" | "modelRegistry" | "thinkLevel" | "timeoutMs"
+> & { model?: AgentHarnessAttemptParamsV2["model"] };
+
+/** A new operation, not an optional-authority path through the shipped attempt contract. */
+export type AgentHarnessSessionPreparationV1 = {
+  version: 1;
+  purpose: "mcp-app";
+  params: AgentHarnessSessionRuntimeParamsV1;
+  run: <T>(operation: () => Promise<T>) => Promise<T>;
+};
+
 export type AgentHarnessAttemptResult =
   | AgentHarnessCanonicalAttemptResult
   | AgentHarnessLegacyAttemptResult;
@@ -382,8 +397,61 @@ export type DevicePlacementRequirement = {
   consumesWorkerSlot: boolean;
 };
 
-type AgentHarnessRunCapability<
+export type AgentHarnessSessionDeletionParams = {
+  /** Present only during the exact host initializer's guarded rollback. */
+  initialization?: import("../../sessions/session-initialization.js").SessionInitialization;
+  agentId: string;
+  sessionKey: string;
+  sessionId: string;
+  lifecycleRevision?: string;
+  /** Revalidate the captured registry, harness, and operation before each side effect. */
+  assertCurrent: () => void;
+};
+
+export type AgentHarnessSessionDeletionMutation = {
+  /** Synchronously remove only the prepared owner's state at the session commit edge. */
+  commit: () => void;
+  /** Restore only that removal when the authoritative session transaction rolls back. */
+  rollback: () => void;
+};
+
+type AgentHarnessSessionContextResetParams = Omit<
+  AgentHarnessSessionDeletionParams,
+  "initialization"
+> & {
+  /** Exact recorded predecessor may still own native context after interrupted compaction. */
+  previousSessionId?: string;
+};
+
+type AgentHarnessMcpCatalogParams = {
+  config: OpenClawConfig;
+  agentId: string;
+  sessionId: string;
+  sessionKey: string;
+  workspaceDir: string;
+  /** OpenClaw-configured servers whose session policy this harness can enforce. */
+  mcpServerNames: readonly string[];
+  toolOverrides?: Pick<SessionToolOverrides, "mcpServers" | "mcpToolsDeny">;
+};
+
+export type AgentHarnessModelCatalogParams = {
+  config: OpenClawConfig;
+  agentId: string;
+  agentDir: string;
+  workspaceDir: string;
+  configuredModelRefs?: readonly ModelRef[];
+};
+
+export type AgentHarnessModelCatalogResult =
+  | readonly import("../model-catalog.types.js").ModelCatalogEntry[]
+  | {
+      entries: readonly import("../model-catalog.types.js").ModelCatalogEntry[];
+      outcomes?: readonly import("../../plugins/provider-catalog-outcome.js").ProviderCatalogOutcome[];
+    };
+
+type AgentHarnessContract<
   TAttemptParams extends AgentHarnessAttemptParams = AgentHarnessAttemptParams,
+  TSideQuestionParams extends AgentHarnessSideQuestionParams = AgentHarnessSideQuestionParams,
 > = {
   id: string;
   label: string;
@@ -434,6 +502,12 @@ type AgentHarnessRunCapability<
   }): AgentHarnessSessionRuntimeOwnership | undefined;
   /** Lets this harness resolve forwarded profiles or its own native credentials. */
   authBootstrap?: "harness";
+  /**
+   * Declares whether this harness supports turn-scoped restrictive tool policies
+   * (`toolsAllow: []`), such as OpenClaw's embedded agent runner. Harnesses that define
+   * tools only at connection/thread boundaries (like Codex app-server) omit this or set false.
+   */
+  supportsTurnScopedToolRestrictions?: boolean;
   runAttempt(params: TAttemptParams): Promise<AgentHarnessAttemptResult>;
   /**
    * Produces one final answer from a settled tool transcript without exposing
@@ -455,54 +529,21 @@ type AgentHarnessRunCapability<
   runIsolatedCompletionV2?(
     params: AgentHarnessIsolatedCompletionParamsV2,
   ): Promise<AgentHarnessIsolatedCompletionResult>;
-};
+  /** Side-effect-free engine selection, shared with this harness's isolated dispatch. */
+  resolveIsolatedCompletionRuntime?(params: {
+    authorizationOwner: AgentHarnessIsolatedCompletionAuthorization["owner"];
+  }): "openclaw" | "self";
 
-type AgentHarnessSideQuestionCapability<
-  TSideQuestionParams extends AgentHarnessSideQuestionParams = AgentHarnessSideQuestionParams,
-> = {
   runSideQuestion?(params: TSideQuestionParams): Promise<AgentHarnessSideQuestionResult>;
-};
 
-type AgentHarnessClassificationCapability<
-  TAttemptParams extends AgentHarnessAttemptParams = AgentHarnessAttemptParams,
-> = {
   classify?(
     result: AgentHarnessAttemptResult,
     ctx: TAttemptParams,
   ): AgentHarnessResultClassification | undefined;
-};
 
-type AgentHarnessCompactionCapability = {
   compact?(params: AgentHarnessCompactParams): Promise<AgentHarnessCompactResult | undefined>;
-};
 
-export type AgentHarnessSessionDeletionParams = {
-  /** Present only during the exact host initializer's guarded rollback. */
-  initialization?: import("../../sessions/session-initialization.js").SessionInitialization;
-  agentId: string;
-  sessionKey: string;
-  sessionId: string;
-  lifecycleRevision?: string;
-  /** Revalidate the captured registry, harness, and operation before each side effect. */
-  assertCurrent: () => void;
-};
-
-export type AgentHarnessSessionDeletionMutation = {
-  /** Synchronously remove only the prepared owner's state at the session commit edge. */
-  commit: () => void;
-  /** Restore only that removal when the authoritative session transaction rolls back. */
-  rollback: () => void;
-};
-
-type AgentHarnessSessionContextResetParams = Omit<
-  AgentHarnessSessionDeletionParams,
-  "initialization"
-> & {
-  /** Exact recorded predecessor may still own native context after interrupted compaction. */
-  previousSessionId?: string;
-};
-
-type AgentHarnessSessionLifecycleCapability = {
+  /** Throw AgentHarnessSessionCleanupError when required cleanup must block session replacement. */
   reset?(params: AgentHarnessResetParams): Promise<void> | void;
   /** Invalidate native context only when a same-key history cut commits; preserve compaction. */
   withSessionContextReset?<T>(
@@ -517,9 +558,7 @@ type AgentHarnessSessionLifecycleCapability = {
     run: (mutation: AgentHarnessSessionDeletionMutation) => Promise<T>,
   ): Promise<T>;
   dispose?(): Promise<void> | void;
-};
 
-type AgentHarnessSessionForkCapability = {
   /**
    * @deprecated Use sessionForkV2. This legacy fork contract remains
    * source-compatible through 2026-10-12.
@@ -534,23 +573,17 @@ type AgentHarnessSessionForkCapability = {
     upstreamKinds: readonly import("../../plugins/session-catalog.js").SessionUpstreamKind[];
     fork(params: AgentHarnessSessionForkParamsV2): Promise<AgentHarnessSessionForkResult>;
   };
-};
 
-type AgentHarnessRuntimeArtifactCapability = {
   /** Revalidate an artifact only at setup and persistent-operation boundaries. */
   runtimeArtifact?: {
     validate(binding: AgentHarnessRuntimeArtifactBinding): Promise<boolean>;
   };
-};
 
-type AgentHarnessAuthBindingCapability = {
   /** Recomputes the exact credential fingerprint at persistent trust boundaries. */
   authBinding?: {
     fingerprint(params: AgentHarnessAuthBindingFingerprintParams): Promise<string | undefined>;
   };
-};
 
-type AgentHarnessProviderUsageCapability = {
   /**
    * Contributes runtime-owned quota data without registering a text provider.
    * Provider usage hooks remain authoritative when both surfaces exist.
@@ -564,44 +597,35 @@ type AgentHarnessProviderUsageCapability = {
     | import("../../infra/provider-usage.types.js").ProviderUsageSnapshot
     | null
     | undefined;
-};
 
-type AgentHarnessMcpCatalogParams = {
-  config: OpenClawConfig;
-  agentId: string;
-  sessionId: string;
-  sessionKey: string;
-  workspaceDir: string;
-  /** OpenClaw-configured servers whose session policy this harness can enforce. */
-  mcpServerNames: readonly string[];
-  toolOverrides?: Pick<SessionToolOverrides, "mcpServers" | "mcpToolsDeny">;
-};
-
-type AgentHarnessMcpCatalogCapability = {
   /** Lists the MCP tools owned by this session's native runtime, if it is already bound. */
   loadMcpToolCatalog?(params: AgentHarnessMcpCatalogParams): Promise<McpToolCatalog | undefined>;
-};
 
-export type AgentHarnessModelCatalogParams = {
-  config: OpenClawConfig;
-  agentId: string;
-  agentDir: string;
-  workspaceDir: string;
-  configuredModelRefs?: readonly ModelRef[];
-};
+  /** Borrows the existing thread-owned MCP connection for explicit user App interactions. */
+  acquireMcpAppRuntime?(
+    params: AgentHarnessMcpCatalogParams & {
+      assertCurrent: () => void;
+      appRequester?: import("../agent-bundle-mcp-types.js").McpAppRequesterIdentity;
+      /** Lazy: warm sessions never acquire preparation authority. */
+      prepareSession?: () => Promise<AgentHarnessSessionPreparationV1>;
+    },
+  ): Promise<import("../agent-bundle-mcp-types.js").SessionMcpRuntimeLease | undefined>;
 
-export type AgentHarnessModelCatalogResult =
-  | readonly import("../model-catalog.types.js").ModelCatalogEntry[]
-  | {
-      entries: readonly import("../model-catalog.types.js").ModelCatalogEntry[];
-      outcomes?: readonly import("../../plugins/provider-catalog-outcome.js").ProviderCatalogOutcome[];
-    };
-
-type AgentHarnessModelCatalogCapability = {
   /** Lists account-scoped models owned by this native runtime. */
   loadModelCatalog?(
     params: AgentHarnessModelCatalogParams,
   ): Promise<AgentHarnessModelCatalogResult>;
+  /**
+   * Narrows resolved picker tiers for this runtime. Synchronous, no I/O or discovery;
+   * return a subset without mutating inputs. This does not grant execution authority.
+   */
+  filterModelServiceTiers?(params: {
+    config: OpenClawConfig;
+    agentId?: string;
+    provider: string;
+    modelId: string;
+    serviceTiers: readonly string[];
+  }): readonly string[];
   /**
    * Reads current, secret-free native account evidence for this exact catalog scope/model.
    * No I/O or discovery here. Missing/stale/disposed evidence returns undefined; this is
@@ -613,31 +637,27 @@ type AgentHarnessModelCatalogCapability = {
   ): { accountType: string; authMode?: string } | undefined;
 };
 
-type AgentHarnessSharedCapabilities = AgentHarnessCompactionCapability &
-  AgentHarnessRuntimeArtifactCapability &
-  AgentHarnessAuthBindingCapability &
-  AgentHarnessProviderUsageCapability &
-  AgentHarnessModelCatalogCapability &
-  AgentHarnessMcpCatalogCapability &
-  AgentHarnessSessionForkCapability &
-  AgentHarnessSessionLifecycleCapability;
-
 /**
  * @deprecated Implement AgentHarnessV2. This registration contract remains
  * source-compatible for existing plugins through 2026-10-12.
  */
-export type AgentHarness = AgentHarnessRunCapability &
-  AgentHarnessSideQuestionCapability &
-  AgentHarnessClassificationCapability &
-  AgentHarnessSharedCapabilities;
+export type AgentHarness = AgentHarnessContract;
 
 /** Current harness contract for hosts that always supply versioned capabilities. */
-export type AgentHarnessV2 = AgentHarnessRunCapability<AgentHarnessAttemptParamsV2> &
-  AgentHarnessSideQuestionCapability<AgentHarnessSideQuestionParamsV2> &
-  AgentHarnessClassificationCapability<AgentHarnessAttemptParamsV2> &
-  AgentHarnessSharedCapabilities;
+export type AgentHarnessV2 = AgentHarnessContract<
+  AgentHarnessAttemptParamsV2,
+  AgentHarnessSideQuestionParamsV2
+>;
 
 export type RegisteredAgentHarness = {
   harness: AgentHarness;
   ownerPluginId?: string;
 };
+
+/**
+ * Checks whether an agent harness explicitly declares support for turn-scoped
+ * tool restrictions (such as dynamic tool prefiltering).
+ */
+export function harnessSupportsTurnScopedToolRestrictions(harness?: AgentHarness | null): boolean {
+  return harness?.supportsTurnScopedToolRestrictions === true;
+}

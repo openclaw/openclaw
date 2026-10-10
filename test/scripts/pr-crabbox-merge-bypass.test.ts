@@ -19,6 +19,7 @@ const baseSha = "b".repeat(40);
 const headSha = "a".repeat(40);
 const workflowSha = "d".repeat(40);
 const mainSha = "e".repeat(40);
+const advancedMainSha = "f".repeat(40);
 const planDigest = "c".repeat(64);
 const runId = "run_abc123";
 const leaseId = "cbx_def456";
@@ -32,9 +33,19 @@ type WorkflowStep = {
   status: string;
 };
 
-function input() {
+function input(testedBaseSha = baseSha) {
   return {
     actor: { login: "maintainer" },
+    baseComparison: {
+      ahead_by: 4,
+      base_commit: { sha: testedBaseSha },
+      behind_by: 0,
+      merge_base_commit: { sha: testedBaseSha },
+      status: "ahead",
+    },
+    finalMainComparison: undefined,
+    mainAdvanceComparison: undefined,
+    pullMainComparison: undefined,
     checkRuns: {
       check_runs: [
         {
@@ -55,7 +66,7 @@ function input() {
           name: "openclaw/crabbox-gate",
           output: {
             summary: formatCrabboxGateCheckSummary({
-              baseSha,
+              baseSha: testedBaseSha,
               headSha,
               leaseId,
               planDigest,
@@ -68,6 +79,7 @@ function input() {
         },
       ],
     },
+    expectedBaseSha: testedBaseSha,
     expectedLeaseId: leaseId,
     expectedRunId: runId,
     headSha,
@@ -105,7 +117,7 @@ function input() {
     },
     mainRef: { object: { sha: mainSha }, ref: "refs/heads/main" },
     pullRequest: {
-      base: { ref: "main", repo: { full_name: "openclaw/openclaw" }, sha: baseSha },
+      base: { ref: "main", repo: { full_name: "openclaw/openclaw" }, sha: mainSha },
       draft: false,
       head: { repo: { full_name: "openclaw/openclaw" }, sha: headSha },
       number: 131091,
@@ -135,27 +147,6 @@ function input() {
 }
 
 describe("Crabbox admin merge bypass verifier", () => {
-  it("accepts exact trusted Crabbox proof with hosted infrastructure failure", () => {
-    expect(validateCrabboxMergeBypass(input())).toMatchObject({
-      actor: "maintainer",
-      crabboxCheckId: 21,
-      ciGateCheckId: 20,
-      ciRunId,
-      infrastructureJobs: [
-        {
-          backend: "blacksmith",
-          conclusion: "failure",
-          id: failedJobId,
-          name: "check",
-        },
-      ],
-      mainSha,
-      planDigest,
-      targetCount: 8,
-      workflowSha,
-    });
-  });
-
   it.each([
     [
       "missing Crabbox check",
@@ -201,11 +192,11 @@ describe("Crabbox admin merge bypass verifier", () => {
       /not bound to the current protected-main publisher workflow/u,
     ],
     [
-      "protected main drift",
+      "protected main drift without ancestry evidence",
       (value: ReturnType<typeof input>) => {
         value.finalMainRef.object.sha = "f".repeat(40);
       },
-      /protected main moved/u,
+      /final protected main advance is malformed/u,
     ],
     [
       "publisher workflow not ancestral to main",
@@ -240,22 +231,69 @@ describe("Crabbox admin merge bypass verifier", () => {
     expect(() => validateCrabboxMergeBypass(value)).toThrow(error);
   });
 
+  it.each([
+    { stage: "tested base to pull base", fault: "non-forward" },
+    { stage: "tested base to pull base", fault: "missing comparison" },
+    { stage: "tested base to pull base", fault: "strict mode" },
+    { stage: "pull base to first main", fault: "non-forward" },
+    { stage: "pull base to first main", fault: "missing comparison" },
+    { stage: "pull base to first main", fault: "strict mode" },
+  ])("rejects $stage with $fault", ({ stage, fault }) => {
+    const pullToMain = stage === "pull base to first main";
+    const value = input(pullToMain ? mainSha : baseSha);
+    const comparison = {
+      ahead_by: 1,
+      base_commit: { sha: pullToMain ? mainSha : baseSha },
+      behind_by: fault === "non-forward" ? 1 : 0,
+      merge_base_commit: {
+        sha: fault === "non-forward" ? headSha : pullToMain ? mainSha : baseSha,
+      },
+      status: fault === "non-forward" ? "diverged" : "ahead",
+    };
+    if (pullToMain) {
+      value.mainRef.object.sha = advancedMainSha;
+      value.finalMainRef.object.sha = advancedMainSha;
+    }
+    const evidence = {
+      ...value,
+      ...(pullToMain
+        ? { pullMainComparison: fault === "missing comparison" ? undefined : comparison }
+        : { baseComparison: fault === "missing comparison" ? undefined : comparison }),
+      strictDrift: fault === "strict mode",
+    };
+    const error =
+      fault === "strict mode"
+        ? pullToMain
+          ? "protected main moved during Crabbox merge validation"
+          : "protected main moved from the tested Crabbox base"
+        : `${pullToMain ? "protected main after pull request read" : "pull request base"} ${
+            fault === "missing comparison" ? "is malformed" : "is not identical or forward"
+          }`;
+    expect(() => validateCrabboxMergeBypass(evidence)).toThrow(error);
+  });
+
   it("accepts explicit protected-main workflow paths", () => {
     const value = input();
     value.publisherRun.path = ".github/workflows/pr-crabbox-gate-publisher.yml@refs/heads/main";
     value.workflowRun.path = ".github/workflows/ci.yml@refs/heads/main";
-    expect(validateCrabboxMergeBypass(value).planDigest).toBe(planDigest);
+    expect(validateCrabboxMergeBypass(value)).toMatchObject({
+      actor: "maintainer",
+      crabboxCheckId: 21,
+      ciGateCheckId: 20,
+      ciRunId,
+      infrastructureJobs: [
+        { backend: "blacksmith", conclusion: "failure", id: failedJobId, name: "check" },
+      ],
+      mainSha,
+      planDigest,
+      targetCount: 8,
+      workflowSha,
+    });
   });
 
-  it("rejects a tagged CI workflow path", () => {
+  it("rejects a gate summary with a different retained preparation base", () => {
     const value = input();
-    value.workflowRun.path = ".github/workflows/ci.yml@refs/tags/v1.0.0";
-    expect(() => validateCrabboxMergeBypass(value)).toThrow(/normal CI workflow identity/u);
-  });
-
-  it("rejects stale base or altered summary binding", () => {
-    const value = input();
-    value.pullRequest.base.sha = "d".repeat(40);
+    value.expectedBaseSha = "d".repeat(40);
     expect(() => validateCrabboxMergeBypass(value)).toThrow(/expected broker proof/u);
   });
 
@@ -322,6 +360,12 @@ function runProtectedShell(
     override = false,
     revoke = false,
     longPreview = false,
+    advanceMain = false,
+    nonForwardMain = false,
+    nonAncestralPublisher = false,
+    strictDrift = false,
+    requalification = "",
+    revokeDuringRequalification = false,
   } = {},
 ) {
   const root = mkdtempSync(join(tmpdir(), "pr-crabbox-protected-"));
@@ -335,13 +379,51 @@ function runProtectedShell(
   writeFileSync(join(root, ".local/review.json"), JSON.stringify(review));
   writeFileSync(join(root, "calls.jsonl"), "");
   const evidence = {
-    ...input(),
+    ...input(strictDrift ? mainSha : baseSha),
+    currentMainSha: mainSha,
+    materializedAdvance: requalification !== "materialization",
+    advancedBaseComparison: {
+      ahead_by: 5,
+      base_commit: { sha: baseSha },
+      behind_by: 0,
+      merge_base_commit: { sha: baseSha },
+      status: "ahead",
+    },
+    mainAdvanceComparison: {
+      ahead_by: 1,
+      base_commit: { sha: mainSha },
+      behind_by: nonForwardMain ? 1 : 0,
+      merge_base_commit: { sha: nonForwardMain ? baseSha : mainSha },
+      status: nonForwardMain ? "diverged" : "ahead",
+    },
+    finalMainComparison: {
+      ahead_by: 4,
+      base_commit: { sha: workflowSha },
+      behind_by: nonAncestralPublisher ? 1 : 0,
+      merge_base_commit: { sha: nonAncestralPublisher ? baseSha : workflowSha },
+      status: nonAncestralPublisher ? "diverged" : "ahead",
+    },
     // Exercise pipe backpressure during trailer parsing without changing authorization.
     mergePreview: "Reviewed fixture body".repeat(longPreview ? 16_384 : 1),
   };
   const reviewComments = validClawsweeperReviewCommentPages(131091, headSha);
   evidence.membership.role = role;
   evidence.membership.state = state;
+  evidence.pullRequest.base.sha = mainSha;
+  if (command.includes("finalize_remote_crabbox_aws_gate")) {
+    evidence.checkRuns.check_runs[1]!.output!.summary = formatCrabboxGateCheckSummary({
+      baseSha: mainSha,
+      headSha,
+      leaseId,
+      planDigest,
+      runId,
+      targetCount: 8,
+      workflowSha,
+    });
+  }
+  if (advanceMain) {
+    evidence.finalMainRef.object.sha = advancedMainSha;
+  }
   writeFileSync(join(root, "input.json"), JSON.stringify(evidence));
   const gh = join(bin, "gh");
   const protectedGh = `#!${process.execPath}
@@ -353,6 +435,24 @@ const value = JSON.parse(fs.readFileSync("input.json", "utf8"));
 const save = () => fs.writeFileSync("input.json", JSON.stringify(value));
 const fail = (message, code = 19) => { console.error(message); process.exit(code); };
 const out = (data) => console.log(typeof data === "string" ? data : JSON.stringify(data));
+if (args[0] === "fixture-git") {
+  if (args[1] === "fetch") {
+    value.materializedAdvance = true;
+    if (process.env.FAKE_REVOKE_DURING === "materialization") value.membership.role = "member";
+    save(); process.exit(0);
+  }
+  const batch = args.some(arg => arg.startsWith("--batch-check"));
+  const target = batch ? fs.readFileSync(0, "utf8").trim() : args.at(-1).replace(/\\^\\{commit\\}$/u, "");
+  const missing = target === "${advancedMainSha}" && !value.materializedAdvance;
+  if (batch) out(target + (missing ? " missing" : " commit"));
+  else if (missing) fail("fatal: Not a valid object name " + target, 1);
+  process.exit(0);
+}
+if (args[0] === "fixture-sleep") {
+  value.requalificationSettled = true;
+  if (process.env.FAKE_REVOKE_DURING === "settlement") value.membership.role = "member";
+  save(); process.exit(0);
+}
 const apiOut = (data) => out(args.includes("--jq")
   ? cp.execFileSync("jq", ["-r", args[args.indexOf("--jq") + 1]], {input:JSON.stringify(data),encoding:"utf8"}).trim()
   : data);
@@ -360,7 +460,7 @@ const repo = {id:123,nameWithOwner:"openclaw/openclaw",url:"https://github.com/o
 const repoNodeId = "fixture-repo";
 const reviewComments = ${JSON.stringify(reviewComments)};
 const pr = {id:"fixture-pr",number:131091,url:repo.url+"/pull/131091",state:"OPEN",isDraft:false,
-  headRefOid:value.headSha,headRefName:"topic",baseRefName:"main",baseRefOid:"${baseSha}",
+  headRefOid:value.headSha,headRefName:"topic",baseRefName:"main",baseRefOid:value.currentMainSha,
   headRepository:{name:"openclaw",nameWithOwner:repo.nameWithOwner,url:repo.url},headRepositoryOwner:{login:"openclaw"},
   isCrossRepository:false,mergeable:"MERGEABLE",mergeStateStatus:"BLOCKED",mergeCommit:null,
   autoMergeRequest:null,isInMergeQueue:false,isMergeQueueEnabled:false};
@@ -387,8 +487,12 @@ else if (endpoint === "graphql" && args.some(arg => arg.includes("viewerMergeBod
   out({data:{repository:{pullRequest:{...pr,viewerMergeHeadlineText:"Fixture merge headline",viewerMergeBodyText:value.mergePreview}}}});
 }
 else if (endpoint === "graphql" && args.some(arg => arg.includes("repository(owner:"))) {
+  if (process.env.FAKE_REQUALIFICATION === "settlement" && value.requalificationStarted && !value.requalificationSettled) {
+    pr.mergeable = "UNKNOWN";
+    pr.mergeStateStatus = "UNKNOWN";
+  }
   if (args.includes("--include")) process.stdout.write("HTTP/2.0 200 OK\\n\\n");
-  out({data:{repository:{...repo,id:repoNodeId,databaseId:repo.id,ref:{target:{oid:"${mainSha}"}},pullRequest:pr}}});
+  out({data:{repository:{...repo,id:repoNodeId,databaseId:repo.id,ref:{target:{oid:value.currentMainSha}},pullRequest:pr}}});
 } else if (endpoint === "user") {
   if (JSON.stringify(args) === JSON.stringify(["api", "user", "--include"])) out("HTTP/2.0 200 OK\\n\\n" + JSON.stringify(value.actor));
   else out(args[args.indexOf("--jq")+1] === ".login" ? "relay-reader" : {login:"relay-reader"});
@@ -427,8 +531,23 @@ else if (endpoint === "graphql" && args.some(arg => arg.includes("repository(own
     save(); out(value.membership);
   }
   else if (endpoint === "orgs/openclaw/memberships/relay-reader") out({role:"admin",state:"active",user:{login:"relay-reader"}});
-  else if (endpoint === prefix + "git/ref/heads/main") out(value.mainRef);
+  else if (endpoint === prefix + "git/ref/heads/main") {
+    value.mainReads = (value.mainReads || 0) + 1;
+    if (process.env.FAKE_REQUALIFICATION && value.mainReads === 3) {
+      value.requalificationStarted = true;
+      value.mainRef.object.sha = "${advancedMainSha}";
+      value.finalMainRef.object.sha = "${advancedMainSha}";
+    }
+    const ref = value.mainReads === 1 ? value.mainRef : value.finalMainRef;
+    value.currentMainSha = ref.object.sha;
+    value.pullRequest.base.sha = value.currentMainSha;
+    save(); out(ref);
+  }
+  else if (endpoint === prefix + "compare/${baseSha}...${mainSha}") out(value.baseComparison);
+  else if (endpoint === prefix + "compare/${baseSha}...${advancedMainSha}") out(value.advancedBaseComparison);
   else if (endpoint === prefix + "compare/${workflowSha}...${mainSha}") out(value.mainComparison);
+  else if (endpoint === prefix + "compare/${mainSha}...${advancedMainSha}") out(value.mainAdvanceComparison);
+  else if (endpoint === prefix + "compare/${workflowSha}...${advancedMainSha}") out(value.finalMainComparison);
   else if (endpoint === "repos/prepared/base/commits/${headSha}") out({parents:[{sha:"${mainSha}"}]});
   else fail("unexpected endpoint: " + endpoint);
 }
@@ -444,14 +563,20 @@ else if (endpoint === "graphql" && args.some(arg => arg.includes("repository(own
     node: `case "$1" in */watch-pr-ci.mjs) exit 0;; esac\nexec '${process.execPath}' "$@"`,
     git: `if [ "$1" = -C ]; then shift 2; fi
     case "$1" in --git-dir=*) shift;; esac
+    [ "$1" != --no-lazy-fetch ] || shift
     case "$1" in
-      fetch|cat-file|merge-base) exit 0;;
+      fetch|cat-file) case "$*" in
+        *'${advancedMainSha}'*|*--batch-check*) exec '${process.execPath}' '${selected}' fixture-git "$@";;
+        *) exit 0;;
+      esac;;
+      merge-base) exit 0;;
       config) [ "$*" = 'config --bool remote.origin.promisor' ] && exit 1; exit 19;;
       remote) [ "$2 $3" = 'get-url origin' ] || exit 19; echo 'https://github.com/openclaw/openclaw.git';;
       merge-tree) echo candidate-tree;;
       rev-parse) case "$2" in
         --absolute-git-dir) printf '%s/.git\\n' "$PWD";;
         --verify) [ "$3" = 'refs/heads/pr-131091^{commit}' ] || exit 19; echo '${headSha}';;
+        '${headSha}^1') echo '${mainSha}';;
         *) echo main-tree;;
       esac;;
       log) echo '${headSha}';;
@@ -480,6 +605,7 @@ else if (endpoint === "graphql" && args.some(arg => arg.includes("repository(own
           'source "$script_parent_dir/pr-lib/gates.sh"',
           'source "$script_parent_dir/pr-lib/merge.sh"',
           'source "$script_parent_dir/pr-lib/review.sh"',
+          'sleep() { command node "$FIXTURE_PROTECTED_GH" fixture-sleep "$@"; }',
           command,
         ].join("\n"),
       ],
@@ -491,15 +617,20 @@ else if (endpoint === "graphql" && args.some(arg => arg.includes("repository(own
           PATH: `${bin}${delimiter}${process.env.PATH ?? ""}`,
           GH_TOKEN: "synthetic-token",
           OPENCLAW_GH_BIN: override ? selected : "",
+          OPENCLAW_PR_STRICT_DRIFT: strictDrift ? "1" : "",
           FAKE_DENIED: denied,
           FAKE_DISPATCH: command.includes("finalize_remote_crabbox_aws_gate") ? "1" : "",
           FAKE_REVOKE: revoke ? "1" : "",
+          FAKE_REQUALIFICATION: requalification,
+          FAKE_REVOKE_DURING: revokeDuringRequalification ? requalification : "",
+          FIXTURE_PROTECTED_GH: selected,
           GATES_MODE: "remote_crabbox_aws",
           REMOTE_GATES_PROVIDER: "aws",
           FULL_GATES_HEAD_SHA: headSha,
           LAST_VERIFIED_HEAD_SHA: headSha,
           REMOTE_GATES_RUN_ID: runId,
           REMOTE_GATES_LEASE_ID: leaseId,
+          REMOTE_GATES_BASE_SHA: evidence.expectedBaseSha,
           MERGE_REPO_NAME: "prepared/base",
         },
       },
@@ -530,12 +661,55 @@ else if (endpoint === "graphql" && args.some(arg => arg.includes("repository(own
 }
 
 describe("Crabbox protected gh request producers", () => {
-  it("verifies fresh paginated proof using the authenticated writer and actual repository", () => {
-    const result = runProtectedShell(`verify_crabbox_admin_merge_bypass 131091 ${headSha}`);
+  it("accepts a forward final main advance with both ancestry proofs and preserves the first anchor", () => {
+    const result = runProtectedShell(`verify_crabbox_admin_merge_bypass 131091 ${headSha}`, {
+      advanceMain: true,
+    });
     expect(result.status, result.stdout + result.stderr).toBe(0);
-    expect(result.proof).toMatchObject({ actor: "maintainer", mainSha, workflowSha, ciRunId });
-    expect(result.calls.at(-1)).toContain("repos/openclaw/openclaw/git/ref/heads/main");
+    expect(result.proof).toMatchObject({
+      actor: "maintainer",
+      mainSha,
+      finalMainSha: advancedMainSha,
+      workflowSha,
+      ciRunId,
+    });
+    expect(result.calls.at(-1)).toContain("orgs/openclaw/memberships/maintainer");
     expect(result.calls.filter((args) => args.includes("--paginate"))).toHaveLength(2);
+    expect(
+      result.calls
+        .map((args) => args.find((arg) => arg.includes("/compare/")))
+        .filter(Boolean)
+        .slice(-2),
+    ).toEqual([
+      `repos/openclaw/openclaw/compare/${mainSha}...${advancedMainSha}`,
+      `repos/openclaw/openclaw/compare/${workflowSha}...${advancedMainSha}`,
+    ]);
+  });
+
+  it.each([
+    {
+      label: "rewritten main",
+      options: { nonForwardMain: true },
+      error: "final protected main advance is not identical or forward",
+    },
+    {
+      label: "publisher workflow no longer ancestral to final main",
+      options: { nonAncestralPublisher: true },
+      error: "final protected main is not identical or forward",
+    },
+    {
+      label: "main advancement in strict mode",
+      options: { strictDrift: true },
+      error: "protected main moved during final Crabbox merge validation",
+    },
+  ])("rejects $label", ({ options, error }) => {
+    const result = runProtectedShell(`verify_crabbox_admin_merge_bypass 131091 ${headSha}`, {
+      advanceMain: true,
+      ...options,
+    });
+    expect(result.status, result.stdout + result.stderr).toBe(1);
+    expect(result.stderr).toContain(error);
+    expect(result.proof).toBeUndefined();
   });
 
   it("checks the explicitly selected writer's live admin membership", () => {
@@ -546,14 +720,14 @@ describe("Crabbox protected gh request producers", () => {
     expect(result.stdout.trim()).toBe("maintainer");
   });
 
-  it.each([
-    { role: "member", state: "active" },
-    { role: "admin", state: "pending" },
-  ])("rejects writer membership $state/$role despite the relay's admin identity", (membership) => {
-    const result = runProtectedShell("require_active_org_admin_for_crabbox_gate", membership);
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain("requires an active openclaw organization admin");
-  });
+  it.each([{ role: "admin", state: "pending" }])(
+    "rejects writer membership $state/$role despite the relay's admin identity",
+    (membership) => {
+      const result = runProtectedShell("require_active_org_admin_for_crabbox_gate", membership);
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("requires an active openclaw organization admin");
+    },
+  );
 
   it("keeps protected refusal terminal without alternate identity or dispatch", () => {
     const result = runProtectedShell("require_active_org_admin_for_crabbox_gate", {
@@ -562,18 +736,6 @@ describe("Crabbox protected gh request producers", () => {
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("GitHub API preflight failed (HTTP unknown; exit=19)");
     expect(result.calls).toEqual([["api", "user", "--include"]]);
-  });
-
-  it("audits the immutable landed commit in the prepared repository", () => {
-    const result = runProtectedShell(`record_crabbox_landing_parent_audit ${headSha} ${mainSha}`);
-    expect(result.status, result.stdout + result.stderr).toBe(0);
-    expect(result.audit).toEqual({
-      status: "match",
-      landedSha: headSha,
-      expectedParentSha: mainSha,
-      actualParentSha: mainSha,
-    });
-    expect(result.calls).toHaveLength(1);
   });
 });
 
@@ -619,7 +781,7 @@ finalize_remote_crabbox_aws_gate 131091 ${headSha}`,
     expect(result.calls.filter((args) => args[0] === "pr" && args[1] === "merge")).toEqual([]);
     expect(dispatches).toHaveLength(role === "admin" ? 1 : 0);
     if (role === "admin") {
-      expect(result.gates).toContain(`REMOTE_GATES_BASE_SHA=${baseSha}`);
+      expect(result.gates).toContain(`REMOTE_GATES_BASE_SHA=${mainSha}`);
       expect(result.gates).toContain("REMOTE_GATES_ACTIONS_RUN_ATTEMPT=1");
       expect(result.calls.indexOf(dispatches[0]!)).toBeGreaterThan(membership);
       expect(dispatches[0]).toEqual([
@@ -633,7 +795,7 @@ finalize_remote_crabbox_aws_gate 131091 ${headSha}`,
         "-f",
         `head_sha=${headSha}`,
         "-f",
-        `base_sha=${baseSha}`,
+        `base_sha=${mainSha}`,
       ]);
     } else {
       expect(result.gates).toContain("GATES_MODE=remote_crabbox_aws_pending");
@@ -691,9 +853,59 @@ finalize_remote_crabbox_aws_gate 131091 ${headSha}`,
       }
       if (revoke) {
         expect(output).toContain("merge-verify passed for PR #131091");
+      }
+    },
+  );
+
+  it.each([
+    { requalification: "materialization", revokeDuringRequalification: false },
+    { requalification: "materialization", revokeDuringRequalification: true },
+    { requalification: "settlement", revokeDuringRequalification: false },
+    { requalification: "settlement", revokeDuringRequalification: true },
+  ])(
+    "rechecks live Crabbox authority after $requalification (revoked=$revokeDuringRequalification)",
+    ({ requalification, revokeDuringRequalification }) => {
+      const result = runProtectedShell(mergeAuthorizationCommand, {
+        requalification,
+        revokeDuringRequalification,
+      });
+      const output = result.stdout + result.stderr;
+      const boundary = result.calls.findIndex((args) =>
+        requalification === "materialization"
+          ? args[0] === "fixture-git" && args[1] === "fetch"
+          : args[0] === "fixture-sleep",
+      );
+      const finalMembership = result.calls.findLastIndex((args) =>
+        args.includes("orgs/openclaw/memberships/maintainer"),
+      );
+      const requests = result.calls.filter((args) => args[0] === "pr" && args[1] === "merge");
+      expect(boundary, output).toBeGreaterThan(-1);
+      expect(finalMembership, output).toBeGreaterThan(boundary);
+      expect(result.status, output).toBe(1);
+      if (revokeDuringRequalification) {
+        expect(requests, output).toHaveLength(0);
+        expect(result.intent).toBeUndefined();
+        expect(output).toContain("maintainer is not an active openclaw organization admin");
+      } else {
+        expect(requests, output).toHaveLength(1);
+        expect(requests[0]).toContain("--admin");
+        expect(result.calls.indexOf(requests[0]!)).toBeGreaterThan(finalMembership);
+        expect(result.intent).toMatchObject({
+          route: "admin",
+          head: headSha,
+          main: mainSha,
+          accepted: true,
+        });
+        expect(result.proof).toMatchObject({ finalMainSha: advancedMainSha });
+        expect(output).toContain("prior dispatch unresolved");
         expect(
-          result.calls.filter((args) => args.some((arg) => arg.includes("ref(qualifiedName:"))),
-        ).toHaveLength(2);
+          result.calls
+            .slice(finalMembership + 1)
+            .some(
+              (args) =>
+                args[0] === "fixture-sleep" || (args[0] === "fixture-git" && args[1] === "fetch"),
+            ),
+        ).toBe(false);
       }
     },
   );

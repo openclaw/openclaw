@@ -1,3 +1,4 @@
+import { LruCache } from "../infra/lru-cache.js";
 import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
 import { WorkerTaskError, WorkerTaskPool } from "../infra/worker-task-pool.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
@@ -14,8 +15,7 @@ type AvatarRuntime = {
   pool?: WorkerTaskPool<LocalAgentAvatarRead, LocalAgentAvatarSnapshot>;
   closing?: Promise<void>;
   pending: Map<string, Promise<LocalAgentAvatarResult>>;
-  cached: Map<string, LoadedAvatar>;
-  bytes: number;
+  cached: LruCache<LoadedAvatar>;
 };
 const MAX_AVATAR_CACHE_BYTES = 16 * 1024 * 1024;
 const MAX_AVATAR_CACHE_ENTRIES = 64;
@@ -25,14 +25,19 @@ export function prepareLocalAgentAvatar(
 ): Promise<LocalAgentAvatarResult> {
   const runtime = resolveGlobalSingleton<AvatarRuntime>(
     Symbol.for("openclaw.localAgentAvatars"),
-    () => ({ pending: new Map(), cached: new Map(), bytes: 0 }),
+    () => ({
+      pending: new Map(),
+      cached: new LruCache<LoadedAvatar>(MAX_AVATAR_CACHE_ENTRIES, {
+        maxBytes: MAX_AVATAR_CACHE_BYTES,
+        sizeOf: (entry) => entry.file.body?.byteLength ?? 0,
+      }),
+    }),
     (state) => {
       state.closing ??= (async () => {
         await state.pool?.close();
         await Promise.allSettled(state.pending.values());
         state.pool = undefined;
         state.cached.clear();
-        state.bytes = 0;
       })().finally(() => {
         state.closing = undefined;
       });
@@ -47,10 +52,10 @@ export function prepareLocalAgentAvatar(
     runtime.pending,
     key,
     async () => {
-      const previous = runtime.cached.get(key);
+      const previous = runtime.cached.peek(key);
       const pool = (runtime.pool ??= new WorkerTaskPool({
         workerUrl: resolveRuntimeProcessEntrypointUrl("localAgentAvatar"),
-        maxWorkers: 2,
+        workerClass: "file-reader",
         sharedCompute: true,
         maxPendingTasks: 256,
         maxPendingBytes: 1024 * 1024,
@@ -81,25 +86,10 @@ export function prepareLocalAgentAvatar(
       if (!prepared) {
         throw new Error("Avatar reader returned an unknown revision");
       }
-      const retained = runtime.cached.get(key);
-      if (retained) {
-        runtime.cached.delete(key);
-        runtime.bytes -= retained.file.body?.byteLength ?? 0;
-      }
       if (prepared.ok) {
         runtime.cached.set(key, prepared);
-        runtime.bytes += prepared.file.body?.byteLength ?? 0;
-        while (
-          runtime.bytes > MAX_AVATAR_CACHE_BYTES ||
-          runtime.cached.size > MAX_AVATAR_CACHE_ENTRIES
-        ) {
-          const oldest = runtime.cached.entries().next().value;
-          if (!oldest) {
-            break;
-          }
-          runtime.cached.delete(oldest[0]);
-          runtime.bytes -= oldest[1].file.body?.byteLength ?? 0;
-        }
+      } else {
+        runtime.cached.delete(key);
       }
       return prepared;
     },

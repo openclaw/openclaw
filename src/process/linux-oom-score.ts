@@ -1,6 +1,7 @@
-// Linux OOM score helpers adjust child process OOM priority when supported.
 import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
 import fs from "node:fs";
+import { readChildRuntimeViability } from "../infra/child-runtime-viability.js";
+import { parseBooleanValue } from "../utils/boolean.js";
 
 /**
  * On Linux, children spawned by a long-lived parent (e.g., the gateway) inherit
@@ -40,18 +41,6 @@ const OOM_SCORE_RESTORE_EXEC_ENV_SCRIPT = [
   'if [ "${OC_INTERNAL_OOM_EXEC_PS4+x}" = x ]; then PS4="$OC_INTERNAL_OOM_EXEC_PS4"; export PS4; fi; unset OC_INTERNAL_OOM_EXEC_PS4; exec "$0" "$@"',
 ].join("; ");
 
-function isDisabled(value: string | undefined): boolean {
-  switch (value?.trim().toLowerCase()) {
-    case "0":
-    case "false":
-    case "no":
-    case "off":
-      return true;
-    default:
-      return false;
-  }
-}
-
 let cachedShellAvailable: boolean | null = null;
 function defaultShellAvailable(): boolean {
   if (cachedShellAvailable !== null) {
@@ -86,7 +75,7 @@ function shouldWrapChildForOomScore(options: OomWrapOptions | undefined): boolea
     return false;
   }
   const env = options?.env ?? process.env;
-  if (isDisabled(env[CHILD_OOM_SCORE_ADJ_ENV_KEY])) {
+  if (parseBooleanValue(env[CHILD_OOM_SCORE_ADJ_ENV_KEY]) === false) {
     return false;
   }
   return (options?.shellAvailable ?? defaultShellAvailable)();
@@ -139,13 +128,6 @@ export function spawnWithInheritedOomScore(
   }
 }
 
-function canUseShellExecCommand(command: string): boolean {
-  // POSIX sh implementations such as dash do not support `exec --`. A command
-  // starting with "-" could be parsed as an exec option, so keep that rare
-  // shape on the original direct-spawn path instead of wrapping it.
-  return !command.startsWith("-");
-}
-
 function hardenShellEnv(baseEnv: NodeJS.ProcessEnv | undefined): NodeJS.ProcessEnv {
   const next: NodeJS.ProcessEnv = { ...(baseEnv ?? process.env) };
   for (const [key] of SHELL_INIT_ENV_CARRIERS) {
@@ -173,10 +155,13 @@ function prepareOomScoreAdjustedSpawnWithExecEnvPolicy(
     env: options?.env,
     wrapped: false,
   };
+  // POSIX sh lacks `exec --`; a leading dash would become an exec option.
   if (
     !command ||
-    !canUseShellExecCommand(command) ||
+    command.startsWith("-") ||
     !shouldWrapChildForOomScore(options) ||
+    // A shell would start successfully and hide the removed runtime's native ENOENT.
+    (command === process.execPath && !readChildRuntimeViability().available) ||
     (options?.argv0 !== undefined && options.argv0 !== command)
   ) {
     // POSIX sh cannot preserve an argv0 that differs from the exec pathname.

@@ -6,22 +6,10 @@ import {
 } from "./message-forwarded.js";
 import { resolveDiscordSenderIdentity } from "./sender-identity.js";
 
-type DiscordReplyContext = {
-  id: string;
-  channelId: string;
-  sender: string;
-  senderId?: string;
-  senderName?: string;
-  senderTag?: string;
-  memberRoleIds?: string[];
-  body?: string;
-  timestamp?: number;
-};
-
 export function resolveReplyContext(
   message: Message,
   resolveDiscordMessageText: (message: Message, options?: { includeForwarded?: boolean }) => string,
-): DiscordReplyContext | null {
+) {
   const id = resolveDiscordReferencedReplyMessageId(message);
   if (!id) {
     return null;
@@ -47,7 +35,7 @@ export function resolveReplyContext(
     senderTag: sender.tag ?? undefined,
     memberRoleIds: (() => {
       const roles = (referenced as { member?: { roles?: string[] } }).member?.roles;
-      return Array.isArray(roles) ? roles.map((roleId) => roleId) : undefined;
+      return Array.isArray(roles) ? roles.slice() : undefined;
     })(),
     ...(referencedText ? { body: referencedText } : {}),
     timestamp: resolveTimestampMs(referenced.timestamp),

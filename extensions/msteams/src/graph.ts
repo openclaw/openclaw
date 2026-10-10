@@ -61,7 +61,7 @@ export type GraphChannel = {
   displayName?: string;
 };
 
-export type GraphResponse<T> = { value?: T[] };
+export type GraphResponse<T> = { value?: T[]; "@odata.nextLink"?: string };
 
 export function normalizeQuery(value?: string | null): string {
   return value?.trim() ?? "";
@@ -171,11 +171,7 @@ export async function fetchGraphJson<T>(params: {
  * Fetch JSON from an absolute Graph API URL (for example @odata.nextLink
  * pagination URLs) without prepending GRAPH_ROOT.
  */
-export async function fetchGraphAbsoluteUrl<T>(params: {
-  token: string;
-  url: string;
-  headers?: Record<string, string>;
-}): Promise<T> {
+export async function fetchGraphAbsoluteUrl<T>(params: { token: string; url: string }): Promise<T> {
   const assertReadAuthority = captureChannelReadAuthority();
   const assertRequestCurrent = captureGraphRequestCurrentness(assertReadAuthority);
   assertRequestCurrent?.();
@@ -185,7 +181,6 @@ export async function fetchGraphAbsoluteUrl<T>(params: {
       headers: {
         "User-Agent": buildUserAgent(),
         Authorization: `Bearer ${params.token}`,
-        ...params.headers,
       },
     },
     auditContext: "msteams.graph.absolute",
@@ -207,23 +202,12 @@ export async function fetchGraphAbsoluteUrl<T>(params: {
   }
 }
 
-/** Graph collection response with optional pagination link. */
-type GraphPagedResponse<T> = {
-  value?: T[];
-  "@odata.nextLink"?: string;
-};
-
-/** Result of a paginated Graph API fetch. */
 export type PaginatedResult<T> = {
   items: T[];
   truncated: boolean;
   found?: T;
 };
 
-/**
- * Fetch all pages of a Graph API collection, following @odata.nextLink.
- * Optionally stop early when `findOne` matches an item.
- */
 export async function fetchAllGraphPages<T>(params: {
   token: string;
   path: string;
@@ -240,7 +224,7 @@ export async function fetchAllGraphPages<T>(params: {
   let nextPath: string | undefined = params.path;
 
   for (let page = 0; page < maxPages && nextPath; page++) {
-    const res: GraphPagedResponse<T> = await fetchGraphJson<GraphPagedResponse<T>>({
+    const res: GraphResponse<T> = await fetchGraphJson<GraphResponse<T>>({
       token: params.token,
       path: nextPath,
       headers: params.headers,
@@ -287,7 +271,6 @@ export async function resolveGraphToken(
     );
   }
 
-  // Try delegated token if requested and configured
   if (options?.preferDelegated && msteamsCfg?.delegatedAuth?.enabled && creds.type === "secret") {
     const delegated = await resolveDelegatedAccessToken({
       tenantId: creds.tenantId,
@@ -298,7 +281,6 @@ export async function resolveGraphToken(
     if (delegated) {
       return delegated;
     }
-    // Fall through to app-only token
   }
 
   const { app } = await loadMSTeamsSdkWithAuth(creds, resolveMSTeamsSdkCloudOptions(msteamsCfg));

@@ -27,7 +27,7 @@ import {
 } from "../agents/auth-profiles/sqlite.js";
 import { loadAuthProfileStoreWithoutExternalProfiles } from "../agents/auth-profiles/store-runtime.js";
 import { formatCliCommand } from "../cli/command-format.js";
-import { ExpectedCliError } from "../cli/failure-output.js";
+import { throwExpectedCliError } from "../cli/failure-output.js";
 import { isTerminalInteractive } from "../cli/terminal-interactivity.js";
 import { logConfigUpdated } from "../config/logging.js";
 import { createChannelSetupHooks, setupChannels } from "../flows/channel-setup.js";
@@ -43,7 +43,8 @@ import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../runtime.js
 import { resolveUserPath, shortenHomePath } from "../utils.js";
 import { createClackPrompter } from "../wizard/clack-prompter.js";
 import { WizardCancelledError } from "../wizard/prompts.js";
-import { applyAgentBindings, buildChannelBindings, describeBinding } from "./agents.bindings.js";
+import { describeBinding, describeBindingConflict } from "./agents.binding-format.js";
+import { applyAgentBindings, buildChannelBindings } from "./agents.bindings.js";
 import { applyAgentConfig, listAgentEntries } from "./agents.config.js";
 import { promptAuthChoiceGrouped } from "./auth-choice-prompt.js";
 import { prepareAuthChoice } from "./auth-choice.apply.js";
@@ -67,26 +68,12 @@ type AgentsAddOptions = {
   json?: boolean;
 };
 
-type AgentBindingResult = ReturnType<typeof applyAgentBindings>;
-
-function failAgentsAdd(message: string): never {
-  throw new ExpectedCliError({ message, humanOutput: message, machineOutput: message });
-}
-
-function emptyBindingResult(config: Parameters<typeof applyAgentBindings>[0]): AgentBindingResult {
-  return { config, added: [], updated: [], skipped: [], conflicts: [] };
-}
-
 function loadReadablePersistedAuthProfileStore(agentDir: string): AuthProfileStore | null {
   const store = loadPersistedAuthProfileStore(agentDir);
   if (!store && inspectPersistedAuthProfileStoreRaw(agentDir).status !== "missing") {
     throw new AuthProfileStoreUnreadableError(resolveAuthProfileDatabasePath(agentDir));
   }
   return store;
-}
-
-function hasOAuthProfiles(store: AuthProfileStore, profileIds: readonly string[]): boolean {
-  return profileIds.some((profileId) => store.profiles[profileId]?.type === "oauth");
 }
 
 function formatSkippedOAuthProfilesMessage(
@@ -107,14 +94,14 @@ export async function agentsAddCommand(
     try {
       await loadAgentRole(opts.role);
     } catch (error) {
-      failAgentsAdd(error instanceof Error ? error.message : String(error));
+      throwExpectedCliError(error instanceof Error ? error.message : String(error));
     }
   }
   const hasAutomationFlags = params?.hasAutomationFlags === true;
   const nonInteractive = opts.nonInteractive === true || hasAutomationFlags;
   const wizardOutput = opts.json ? process.stderr : process.stdout;
   if (!nonInteractive && !isTerminalInteractive(wizardOutput)) {
-    failAgentsAdd(
+    throwExpectedCliError(
       `Agent creation needs an interactive TTY. Use \`${formatCliCommand("openclaw agents add <id> --non-interactive --workspace <dir>")}\` for automation.`,
     );
   }
@@ -130,18 +117,18 @@ export async function agentsAddCommand(
 
   if (nonInteractive) {
     if (!workspaceFlag && !opts.role) {
-      failAgentsAdd(
+      throwExpectedCliError(
         `Non-interactive agent creation requires --workspace. Re-run ${formatCliCommand("openclaw agents add <id> --workspace <path>")} or omit flags to use the wizard.`,
       );
     }
     if (!nameInput) {
-      failAgentsAdd(
+      throwExpectedCliError(
         `Agent name is required in non-interactive mode. Run ${formatCliCommand("openclaw agents add <id> --workspace <path>")}.`,
       );
     }
     const validation = validateAgentIdInput(nameInput);
     if (!validation.ok) {
-      failAgentsAdd(
+      throwExpectedCliError(
         validation.reason === "reserved-id"
           ? `"${validation.agentId}" is reserved. Choose another name, or run ${formatCliCommand("openclaw agents list")} to inspect configured agents.`
           : validation.message,
@@ -164,7 +151,7 @@ export async function agentsAddCommand(
       });
     });
     if (created.status === "error") {
-      failAgentsAdd(
+      throwExpectedCliError(
         created.reason === "reserved-id"
           ? `"${created.agentId}" is reserved. Choose another name, or run ${formatCliCommand("openclaw agents list")} to inspect configured agents.`
           : created.reason === "already-exists"
@@ -173,7 +160,7 @@ export async function agentsAddCommand(
       );
     }
 
-    const bindingResult = created.bindingResult ?? emptyBindingResult(cfg);
+    const { added = [], updated = [], skipped = [], conflicts = [] } = created.bindingResult ?? {};
     if (!opts.json) {
       logConfigUpdated(runtime);
     }
@@ -185,12 +172,10 @@ export async function agentsAddCommand(
       agentDir: created.agentDir,
       model: created.model,
       bindings: {
-        added: bindingResult.added.map(describeBinding),
-        updated: bindingResult.updated.map(describeBinding),
-        skipped: bindingResult.skipped.map(describeBinding),
-        conflicts: bindingResult.conflicts.map(
-          (conflict) => `${describeBinding(conflict.binding)} (agent=${conflict.existingAgentId})`,
-        ),
+        added: added.map(describeBinding),
+        updated: updated.map(describeBinding),
+        skipped: skipped.map(describeBinding),
+        conflicts: conflicts.map(describeBindingConflict),
       },
     };
     if (opts.json) {
@@ -202,17 +187,17 @@ export async function agentsAddCommand(
       if (created.model) {
         runtime.log(`Model: ${created.model}`);
       }
-      if (bindingResult.conflicts.length > 0) {
+      if (conflicts.length > 0) {
         runtime.error(
           [
             "Skipped bindings already claimed by another agent:",
-            ...bindingResult.conflicts.map(
-              (conflict) =>
-                `- ${describeBinding(conflict.binding)} (agent=${conflict.existingAgentId})`,
-            ),
+            ...conflicts.map((conflict) => `- ${describeBindingConflict(conflict)}`),
           ].join("\n"),
         );
       }
+    }
+    if (conflicts.length > 0) {
+      runtime.exit(1);
     }
     return;
   }
@@ -261,7 +246,7 @@ export async function agentsAddCommand(
     );
     if (existingAgent) {
       if (opts.role) {
-        failAgentsAdd(
+        throwExpectedCliError(
           `Agent "${agentId}" already exists. Choose a new id to create an agent from a role.`,
         );
       }
@@ -336,7 +321,9 @@ export async function agentsAddCommand(
           : undefined;
         const skippedOAuthProfiles =
           sourceStore && portable
-            ? hasOAuthProfiles(sourceStore, portable.skippedProfileIds)
+            ? portable.skippedProfileIds.some(
+                (profileId) => sourceStore.profiles[profileId]?.type === "oauth",
+              )
             : false;
         if (
           sourceStore &&
@@ -474,10 +461,7 @@ export async function agentsAddCommand(
           await prompter.note(
             [
               "Skipped bindings already claimed by another agent:",
-              ...result.conflicts.map(
-                (conflict) =>
-                  `- ${describeBinding(conflict.binding)} (agent=${conflict.existingAgentId})`,
-              ),
+              ...result.conflicts.map((conflict) => `- ${describeBindingConflict(conflict)}`),
             ].join("\n"),
             "Routing bindings",
           );

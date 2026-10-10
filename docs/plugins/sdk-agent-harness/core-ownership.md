@@ -30,11 +30,18 @@ model discovery, auth preparation, or Responses parameters. An explicit
 observation, not a native ownership claim. Bound native sessions use the separate
 ownership contract below.
 
-Use `params.hostCapabilities.createToolSurface(options)` to construct OpenClaw
-tools. The host captures publication availability for the admitted attempt and
+Await `params.hostCapabilities.createToolSurfaceAsync(options)` to construct
+OpenClaw tools with fresh exec policy for each construction. Ordinary exec-approval
+read errors use conservative deny defaults. Migration errors or loss of the
+admitted host authority reject construction. The host captures
+publication availability for the admitted attempt and
 applies it when building the surface; harnesses do not need to forward that fact,
 and plugin-supplied options cannot replace it. Tool profiles still filter the
 catalog, and each executable remains bound to the host's live authority.
+
+### Prepared local execution environment
+
+`hostCapabilities.preparedEnvironment()` returns captured identity and execution facts for the admitted attempt. Its optional `localGitConfigParameters` is an append fragment, not a replacement for `GIT_CONFIG_PARAMETERS`. Apply it only to local child processes owned by the harness. Preserve unrelated inherited or explicitly configured Git parameters and the runtime's environment filters; an explicit native value, including an empty string, replaces its inherited base before the host fragment is appended. Keep inherited credentials in the child environment rather than copying them into tool request overrides or persisted native thread configuration. Remote, sandbox, and externally started peers retain their existing environment owners.
 
 ### Current input files for local execution
 
@@ -93,7 +100,7 @@ stale local copy.
 
 For automatic Memory context, the same read also returns `workspaceRelativePath`
 for files within the workspace mount. Memory Core classifies that source using
-its existing rules and Gateway provenance records, without probing Gateway-local
+its existing rules and Gateway provenance records, without checking Gateway-local
 files. Other Memory plugins must declare `supportsWorkspaceMemoryReadSources`
 and consume the classifier's `readSources` input; otherwise automatic remote
 Memory context is excluded. Missing source metadata cannot select a local copy.
@@ -127,11 +134,19 @@ preserves the existing 50 MiB staging allowance and higher configured limits.
 The host supplies `createBridge(assertCurrent, signal)` over its own backend;
 check that authority and signal before each transport command.
 
-A failed enabled transfer prevents dispatch. Bindings without this optional
-callback keep their existing input handling, including inline images; they do
-not gain automatic file transfer. Unconfigured local workspaces are unchanged. This interface does
-not provision a backend or acquire credentials. Each host adapter supplies its
-own authorized bridge.
+A failed enabled transfer prevents dispatch. Harnesses that require prepared
+files pass `requirePreparation: true` to `prepareAgentWorkspaceAttachments`.
+This resolves canonical attachment facts, including deferred transcript input,
+and requires a nonblank execution-path note for each file with a path or URL.
+Preparation runs one file at a time under the same workspace binding and total
+timeout. If any file cannot be prepared, dispatch fails even when other files
+were prepared successfully. Text-only input still needs no attachment provider.
+
+When `requirePreparation` is omitted, bindings without the optional callback
+keep their existing input handling, including inline images; they do not gain
+automatic file transfer. Unconfigured local workspaces are unchanged. This
+interface does not provision a backend or acquire credentials. Each host
+adapter supplies its own authorized bridge.
 
 ### Host-only execution
 
@@ -316,7 +331,7 @@ host finalizer's model does not overwrite the native session's selection.
 ### Verified setup runtime artifacts
 
 A local harness that can supply inference for first-run setup must attest the
-implementation that completed the probe. When
+implementation that completed the check. When
 `params.captureRuntimeArtifact` is true, return an opaque
 `result.runtimeArtifact` with a stable id and content fingerprint. Register a
 matching `runtimeArtifact.validate(...)` capability that rechecks that binding

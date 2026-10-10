@@ -30,6 +30,7 @@ function controls(overrides: Partial<Props>) {
       gatewayAvailable: true,
       loading: false,
       modelSwitching: false,
+      modelCatalogState: { hasSnapshot: true, status: "ready" },
       sending: false,
       stream: null,
       sessionKey: "main",
@@ -67,7 +68,7 @@ function controls(overrides: Partial<Props>) {
       "slider",
     ),
     speed: expectDefined(
-      container.querySelector<HTMLButtonElement>("[data-chat-speed-toggle]"),
+      container.querySelector<HTMLButtonElement>("[data-chat-speed-option=on]"),
       "speed",
     ),
   };

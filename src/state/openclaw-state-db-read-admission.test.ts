@@ -37,7 +37,10 @@ import { withOpenClawStateDatabaseReadOnly } from "./openclaw-state-db-readonly.
 import { withExistingOpenClawStateSchema } from "./openclaw-state-db-schema-policy.js";
 import { openOpenClawStateDatabase } from "./openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
-import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
+import {
+  captureOpenClawStateWorkerContext,
+  prepareOpenClawStateReadSource,
+} from "./openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
 import { getOpenClawStateWorkerOwner } from "./openclaw-state-worker-owner.js";
 import { runOpenClawStateWorkerOperation } from "./openclaw-state-worker-store.js";
@@ -47,7 +50,8 @@ const hostBirth: {
   paths: Set<string>;
   mode: "zero" | "changing" | "ctime" | undefined;
   relocated: boolean;
-} = { paths: new Set(), mode: undefined, relocated: false };
+  ctimeAdvanceNs: bigint;
+} = { paths: new Set(), mode: undefined, relocated: false, ctimeAdvanceNs: 0n };
 
 afterEach(async () => {
   try {
@@ -58,6 +62,7 @@ afterEach(async () => {
     hostBirth.paths.clear();
     hostBirth.mode = undefined;
     hostBirth.relocated = false;
+    hostBirth.ctimeAdvanceNs = 0n;
   }
 });
 
@@ -76,16 +81,15 @@ function observeHostBirthtime(mode: typeof hostBirth.mode, paths: string[]): voi
   vi.spyOn(fs, "statSync").mockImplementation((...args) => {
     const result = readStat(...args);
     if (result && args[1]?.bigint && hostBirth.paths.has(String(args[0]))) {
-      Object.defineProperty(result, "birthtimeNs", {
-        value:
-          mode === "ctime" && "ctimeNs" in result
-            ? result.ctimeNs
-            : mode === "zero"
-              ? 0n
-              : hostBirth.relocated
-                ? 2n
-                : 1n,
-      });
+      if (mode === "ctime" && "ctimeNs" in result) {
+        const ctimeNs = result.ctimeNs + hostBirth.ctimeAdvanceNs;
+        Object.defineProperty(result, "ctimeNs", { value: ctimeNs });
+        Object.defineProperty(result, "birthtimeNs", { value: ctimeNs });
+      } else {
+        Object.defineProperty(result, "birthtimeNs", {
+          value: mode === "zero" ? 0n : hostBirth.relocated ? 2n : 1n,
+        });
+      }
     }
     return result;
   });
@@ -93,31 +97,11 @@ function observeHostBirthtime(mode: typeof hostBirth.mode, paths: string[]): voi
   syncBuiltinESMExports();
 }
 
-it("keeps healthy same-file admissions when birthtime falls back to ctime", async () => {
-  await withOpenClawTestState({ label: "state-ctime-alias" }, async (state) => {
-    const lifecycle = createOpenClawStateDatabaseAsyncLifecycle();
-    const pathname = state.statePath("same-file.sqlite");
-    const alias = state.statePath("same-file-alias.sqlite");
-    const initial = new DatabaseSync(pathname);
-    initial.exec("PRAGMA user_version = 0");
-    initial.close();
-    observeHostBirthtime("ctime", [pathname, alias]);
-    const before = statSync(pathname, { bigint: true });
-    const admitted = lifecycle.capture(pathname);
-    expect(admitted.identity.birthtime).toBe(before.ctimeNs.toString());
-    const peer = new DatabaseSync(pathname);
-    peer.exec("PRAGMA user_version = 0");
-    peer.close();
-    linkSync(pathname, alias);
-    const after = statSync(pathname, { bigint: true });
-    expect(after.ino).toBe(before.ino);
-    expect(after.ctimeNs).not.toBe(before.ctimeNs);
-    const linked = lifecycle.capture(alias);
-    expect(linked.identity.key).toBe(admitted.identity.key);
-    expect(admitted.assertCurrent).not.toThrow();
-    expect(linked.assertCurrent).not.toThrow();
-  });
-});
+// Coarse-timestamp filesystems (ext4 before Linux 6.13, CI overlays) keep ctime across a
+// write or link within one clock tick; advance it explicitly so fallback birthtime moves.
+function advanceHostCtime(): void {
+  hostBirth.ctimeAdvanceNs += 1n;
+}
 
 it("permits a lazy native write after healthy peer changes when birthtime falls back to ctime", async () => {
   await withOpenClawTestState({ label: "state-ctime-lazy" }, async (state) => {
@@ -127,9 +111,10 @@ it("permits a lazy native write after healthy peer changes when birthtime falls 
     observeHostBirthtime("ctime", [pathname, alias]);
     const before = statSync(pathname, { bigint: true });
     const captured = captureOpenClawStateWorkerContext({ env: state.env });
-    expect(databaseIdentity.readDatabasePathIdentitySync(pathname).birthtime).toBe(
-      before.ctimeNs.toString(),
-    );
+    const preparedRead =
+      process.platform === "linux"
+        ? prepareOpenClawStateReadSource({ path: pathname, env: state.env })
+        : undefined;
     const backend = runWithSqliteWorkerStateContext(captured, () =>
       openExistingSqliteWorkerBackend(undefined, {
         databasePath: pathname,
@@ -143,11 +128,17 @@ it("permits a lazy native write after healthy peer changes when birthtime falls 
       peer.exec("PRAGMA wal_checkpoint(TRUNCATE)");
       peer.close();
       linkSync(pathname, alias);
+      advanceHostCtime();
       const after = statSync(pathname, { bigint: true });
       expect(after.ino).toBe(before.ino);
-      expect(after.ctimeNs).not.toBe(before.ctimeNs);
+      expect(after.birthtimeNs).not.toBe(before.birthtimeNs);
+      const linked = captureOpenClawStateDatabaseReadAdmission(alias);
+      expect(linked.identity.key).toBe(captured.admission.identity.key);
+      expect(captured.admission.assertCurrent).not.toThrow();
+      expect(linked.assertCurrent).not.toThrow();
       await withExistingOpenClawStateSchema({ path: pathname }, async () => {
-        const current = captureOpenClawStateWorkerContext({ env: state.env });
+        const current =
+          preparedRead?.workerContext() ?? captureOpenClawStateWorkerContext({ env: state.env });
         expect(
           runWithSqliteWorkerStateContext(current, () =>
             backend.execute({
@@ -161,6 +152,9 @@ it("permits a lazy native write after healthy peer changes when birthtime falls 
             }),
           ),
         ).toBe(true);
+        expect(captured.admission.identity.birthtime).toBe(
+          process.platform === "linux" ? "0" : before.ctimeNs.toString(),
+        );
         const database = openOpenClawStateDatabase({ env: state.env });
         expect(
           database.db

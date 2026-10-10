@@ -117,7 +117,8 @@ export function expectResponsiveTableGeometry(
     expect(geometry.controlsGap).toBe(4);
     expect(geometry.denseOverflow).toBeGreaterThan(0);
     if (width === 932) {
-      expect(geometry.width).toBeCloseTo(900, 0);
+      // 4px shell inset plus the shared 16px reading gutter on each side.
+      expect(geometry.width).toBeCloseTo(width - 2 * 20, 0);
     } else {
       expect(geometry.width).toBeLessThanOrEqual(geometry.prose + 1);
     }

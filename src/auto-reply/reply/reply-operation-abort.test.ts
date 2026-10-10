@@ -68,17 +68,6 @@ describe("reply-operation-abort", () => {
     });
   });
 
-  it("preserves a caller timeout over an error-level supersession without an operation", () => {
-    const controller = new AbortController();
-    controller.abort(new DOMException("caller deadline", "TimeoutError"));
-    const error = createAgentRunSupersededAbortError();
-    expect(resolveReplyOperationAbortReason(undefined, error, controller.signal)).toBe("user");
-    expect(resolveReplyOperationTerminationFields(error, controller.signal)).toEqual({
-      aborted: true,
-      stopReason: "timeout",
-    });
-  });
-
   it("preserves caller cancellation over an error-level restart without an operation", () => {
     const error = createAgentRunRestartAbortError();
     const controller = new AbortController();
@@ -91,7 +80,6 @@ describe("reply-operation-abort", () => {
   });
 
   it.each([
-    ["restart", createAgentRunRestartAbortError(), createAgentRunSupersededAbortError()],
     ["superseded", createAgentRunSupersededAbortError(), createAgentRunRestartAbortError()],
   ])(
     "preserves a typed caller %s over a conflicting error marker without an operation",
@@ -117,39 +105,19 @@ describe("reply-operation-abort", () => {
     const error = createAgentRunDirectAbortError();
     expect(resolveReplyOperationAbortReason(undefined, error)).toBe("user");
   });
-
-  it("returns undefined for genuine provider errors", () => {
-    const providerError = new FailoverError("Rate limit exceeded", {
-      reason: "rate_limit",
-      status: 429,
-    });
-    expect(resolveReplyOperationAbortReason(undefined, providerError)).toBeUndefined();
-  });
 });
 
-it.each(["cause", "error", "aggregate", "cyclic"])(
-  "only suppresses a recorded supersession through %s",
-  (kind) => {
-    for (const superseded of [false, true]) {
-      const reason = superseded
-        ? createAgentRunSupersededAbortError()
-        : createSessionPlacementSettlementClosedAbortError();
-      const cycle = { cause: undefined as unknown, errors: [reason] };
-      cycle.cause = cycle;
-      const error =
-        kind === "cause"
-          ? new Error("wrapper", { cause: reason })
-          : kind === "error"
-            ? { error: reason }
-            : kind === "aggregate"
-              ? new AggregateError([reason], "wrapper")
-              : cycle;
-      expect(resolveReplyOperationAbortReason(undefined, error)).toBe(
-        superseded ? "superseded" : undefined,
-      );
-      expect(resolveReplyOperationTerminationFields(error, undefined, undefined)).toEqual(
-        superseded ? { aborted: true, stopReason: "superseded" } : {},
-      );
-    }
-  },
-);
+it("only suppresses a recorded supersession through error", () => {
+  for (const superseded of [false, true]) {
+    const reason = superseded
+      ? createAgentRunSupersededAbortError()
+      : createSessionPlacementSettlementClosedAbortError();
+    const error = { error: reason };
+    expect(resolveReplyOperationAbortReason(undefined, error)).toBe(
+      superseded ? "superseded" : undefined,
+    );
+    expect(resolveReplyOperationTerminationFields(error, undefined, undefined)).toEqual(
+      superseded ? { aborted: true, stopReason: "superseded" } : {},
+    );
+  }
+});

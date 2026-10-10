@@ -3,6 +3,47 @@ import { en } from "./en.ts";
 
 // Settings copy loads with its lazy page or search, not the startup shell.
 const enSettings = {
+  talkPage: {
+    intro: "Configure realtime voice providers, models, and speaker voices.",
+    voiceSection: {
+      title: "Realtime voice",
+      description:
+        "Continuous speech conversations with your agent. The pickers below write talk.realtime settings; the full form further down covers everything else.",
+    },
+    status: {
+      title: "Status",
+      ready: "Ready",
+      notReady: "Not configured",
+      unavailable: "Unavailable",
+      unavailableHint: "Connect to the Gateway to check realtime voice readiness.",
+      activeProvider: "Active provider: {provider}",
+      noProvider: "No realtime voice provider is configured yet.",
+    },
+    provider: {
+      title: "Provider",
+      description: "Auto picks the first provider with working credentials.",
+      auto: "Auto",
+    },
+    model: {
+      title: "Model",
+      description: "Realtime voice model for browser Talk sessions.",
+      default: "Provider default",
+      defaultNamed: "Default ({model})",
+    },
+    voice: {
+      title: "Speaker voice",
+      description: "Voice used for spoken replies. GPT-Live locks the voice once a call starts.",
+      default: "Provider default",
+      unsupported: "unsupported",
+      unsupportedDefault:
+        "This saved voice is unavailable for the selected route. Provider default will be used.",
+    },
+    gptLive: {
+      title: "GPT-Live",
+      hint: "Released browser/Gateway-owned WebRTC tries OAuth first and falls back to a Platform API key. Direct backend sockets and unlisted or private routes require Platform API-key access. Delegated work can be steered while running and requires exact spoken confirmation for high-impact actions.",
+      ready: "Ready",
+    },
+  },
   configForm: {
     sections: {
       env: {
@@ -409,6 +450,9 @@ const enSettings = {
       creating: "Building: creating",
       uncertain: "Paused: uncertain",
       noImage: "No image",
+      coldOnly: "Cold only",
+      captureUnsupportedHint:
+        "Workers use an existing compatible snapshot when one is available and otherwise provision cold. Each eligible worker retries capture, so Crabbox configuration changes apply to the next dispatch. Set settings.warmImage: false on this profile to stop capture attempts.",
       pending: "Pending",
       created: "Created {age}",
       lastUsed: "Last used {age}",
@@ -965,6 +1009,10 @@ const enSettings = {
       launchAtLogin: "Launch at login",
       launchAtLoginUnavailable:
         "Launch at login requires a bundled app without an active app profile.",
+      keepGatewayRunning: "Keep OpenClaw running when the app is closed",
+      keepGatewayRunningHint:
+        "Runs the Gateway as a background service so channels and automations keep working after you quit OpenClaw.",
+      keepGatewayRunningFailed: "Could not change Gateway hosting.",
       quickChat: "Quick Chat enabled",
       quickChatHint:
         "Show a floating composer for quick messages, summoned with a global shortcut.",
@@ -1347,10 +1395,18 @@ const enSettings = {
       fonts: {
         ui: "Interface",
         chat: "Chat prose",
+        terminal: "Terminal font",
+        terminalDefault: "JetBrains Mono + Nerd Font symbols",
+        terminalHint:
+          "Bundled JetBrains Mono + Nerd Font symbols by default. To override, enter a monospace font installed on this computer. Missing fonts use the default; saved in this browser.",
+        terminalLigatures:
+          "The terminal currently renders characters individually; programming ligatures are not supported.",
+        terminalInvalid: "Enter one font family name, without quotes, commas, or CSS declarations.",
+        terminalReset: "Use default",
         themeDefault: "Theme default",
         themeFace: "{theme} · {face}",
         system: "System",
-        previewCaption: "OpenClaw · A little clarity goes a long way",
+        brandedPreviewCaption: "{brand} · A little clarity goes a long way",
         previewProse:
           "Good typography makes room for the conversation. Choose a face that feels comfortable to read.",
         previewCode: 'const greeting = "Hello, world!";',
@@ -1400,6 +1456,23 @@ const enSettings = {
       inlineHintBefore: "Click",
       inlineHintAfter:
         "to add one browser-local tweakcn theme. In tweakcn, use Share and paste the copied link here.",
+      tabIcon: {
+        title: "Browser tab icon",
+        source: "Source",
+        sourceLabel: "Browser tab icon source",
+        default: "Default",
+        agent: "Agent avatar",
+        shape: "Shape",
+        shapeLabel: "Agent avatar shape",
+        square: "Square",
+        rounded: "Rounded corners",
+        circle: "Circle",
+        lobsterdex: "Lobsterdex",
+        lobster: "Lobster",
+        empty: "No lobsters unlocked in this browser yet.",
+        localCollection: "Unlocked in this browser. Your collection is not synced.",
+        unavailable: "This lobster is not unlocked in this browser. Using Default until it is.",
+      },
       textSize: "Text size",
     },
     chatPrefs: {
@@ -1738,6 +1811,7 @@ const enSettings = {
 export const registerSettingsEnglish = Object.assign(
   () => {
     Object.assign(en.agentTools, enSettings.agentTools);
+    Object.assign(en.talkPage, enSettings.talkPage);
     Object.assign(en.configForm.sections, enSettings.configForm.sections);
     en.memoryPage = enSettings.memoryPage;
     en.modelProviders = enSettings.modelProviders;

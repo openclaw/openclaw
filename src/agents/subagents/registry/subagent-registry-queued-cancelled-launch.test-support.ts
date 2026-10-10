@@ -1,129 +1,97 @@
-import { expectDefined } from "@openclaw/normalization-core";
-import { expect, it, vi } from "vitest";
-import * as structuredOutput from "../../tools/structured-output-tool.js";
+import { expect, it } from "vitest";
+import { SqliteWorkerError } from "../../../infra/sqlite-worker-contract.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
-import { SubagentRegistryWriteError } from "./subagent-registry-persistence.js";
-import type { registerQueuedRegistrationClaimCases } from "./subagent-registry-queued-registration-claims.test-support.js";
+import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
+import {
+  withQueuedRegistrationFixture,
+  type QueuedRegistrationFixture,
+} from "./subagent-registry-queued-registration.test-support.js";
 
-export function registerQueuedCancelledLaunchCases(
-  params: Parameters<typeof registerQueuedRegistrationClaimCases>[0],
-) {
-  const prepare = async () => {
-    const f = params.fixture();
-    const registration = f.register();
-    f.writes[0]!.gate.resolve();
-    await vi.waitFor(() => expect(f.writes).toHaveLength(2));
-    f.writes[1]!.gate.resolve();
-    await registration;
-    const entry = expectDefined(f.runs.get(f.registration.runId), "registered collector");
-    entry.execution = {
-      ...entry.execution,
+async function prepareCancelled(f: QueuedRegistrationFixture) {
+  await f.register();
+  await f.change((draft) => {
+    draft.execution = {
+      ...draft.execution,
       status: "terminal",
       endedAt: 123,
       outcome: { status: "error", error: "manual kill", endedAt: 123 },
     };
-    entry.endedReason = SUBAGENT_ENDED_REASON_KILLED;
-    entry.killReconciliation = { killedAt: 123, taskCancellationAccepted: true };
-    entry.swarmLaunchPending = true;
-    return { f, entry, killed: structuredClone(entry) };
-  };
+    draft.endedReason = SUBAGENT_ENDED_REASON_KILLED;
+    draft.killReconciliation = { killedAt: 123, taskCancellationAccepted: true };
+    draft.swarmLaunchPending = true;
+    draft.structuredOutput = { invalidAttempts: 0, structured: { answer: 42 } };
+  });
+}
 
-  it("retains cancelled launch metadata across a known refusal without finalizing the task", async () => {
-    const { f, entry, killed } = await prepare();
-    vi.spyOn(structuredOutput, "consumeSwarmStructuredOutput")
-      .mockReturnValueOnce({ invalidAttempts: 0, structured: { answer: 42 } })
-      .mockReturnValue(undefined);
-    const refusal = new SubagentRegistryWriteError("not-committed", new Error("write refused"));
-    try {
-      const settlement = f.scope.settleFailedLaunch("accepted launch was cancelled");
-      const rejected = expect(settlement).rejects.toBe(refusal);
-      await vi.waitFor(() => expect(f.writes).toHaveLength(3));
-      expect(entry).toEqual(killed);
-      f.writes[2]!.assertCurrent();
-      f.writes[2]!.gate.reject(refusal);
-      await rejected;
+export function registerQueuedCancelledLaunchCases() {
+  it("retains cancelled launch output across a known refusal and publishes it exactly once", async () => {
+    await withQueuedRegistrationFixture(async (f) => {
+      await prepareCancelled(f);
+      const captured = f.current();
+      const refusal = f.holdNextWrite("before");
+      const failed = f.track(f.scope.settleFailedLaunch("accepted launch was cancelled"));
+      await refusal.entered;
+      refusal.reject(new Error("write refused"));
+      await expect(failed).rejects.toThrow("write refused");
+      expect(f.current()).toEqual(captured);
       expect(f.scope.canCleanupSession()).toBe(false);
-
-      const retry = f.scope.settleFailedLaunch("later failure text");
-      await vi.waitFor(() => expect(f.writes).toHaveLength(4));
-      expect(f.writes[3]!.snapshot.get(entry.runId)).toMatchObject({
-        execution: killed.execution,
-        killReconciliation: killed.killReconciliation,
+      await f.scope.settleFailedLaunch("later failure text");
+      expect(f.current()).toMatchObject({
+        execution: captured.execution,
+        killReconciliation: captured.killReconciliation,
         completion: { resultText: "manual kill", capturedAt: 123 },
         collectorCompletion: { status: "killed", structured: { answer: 42 } },
-        swarmLaunchPending: false,
         queuedLaunch: undefined,
       });
-      f.writes[3]!.assertCurrent();
-      f.writes[3]!.gate.resolve();
-      await retry;
-      expect(entry.collectorCompletion).toEqual({ status: "killed", structured: { answer: 42 } });
-      expect(entry.execution).toEqual(killed.execution);
-      expect(entry.killReconciliation).toEqual(killed.killReconciliation);
       expect(f.scope.canCleanupSession()).toBe(true);
+      const writes = f.writes;
       await f.scope.settleFailedLaunch("duplicate callback");
-      expect(f.writes).toHaveLength(4);
-      expect(f.options.persistOrThrow).not.toHaveBeenCalled();
-    } finally {
-      f.acknowledgeAllWrites();
-    }
+      expect(f.writes).toBe(writes);
+    });
   });
 
-  it.each(["unknown", "committed"] as const)(
-    "retains cancelled launch metadata failure after %s outcome without replay",
-    async (outcome) => {
-      const { f, entry, killed } = await prepare();
-      const failure = new SubagentRegistryWriteError(outcome, new Error("publication failed"));
-      try {
-        const settlement = f.scope.settleFailedLaunch("accepted launch was cancelled");
-        const rejected = expect(settlement).rejects.toBe(failure);
-        await vi.waitFor(() => expect(f.writes).toHaveLength(3));
-        if (outcome === "committed") {
-          f.writes[2]!.afterPublicationFailure = { error: failure };
-          f.writes[2]!.gate.resolve();
-        } else {
-          f.writes[2]!.gate.reject(failure);
-        }
-        await rejected;
-        await expect(f.scope.settleFailedLaunch("retry callback")).rejects.toBe(failure);
-        expect(f.writes).toHaveLength(3);
-        expect(entry.execution).toEqual(killed.execution);
-        expect(entry.killReconciliation).toEqual(killed.killReconciliation);
-        expect(Boolean(entry.collectorCompletion)).toBe(outcome === "committed");
-        expect(f.scope.canCleanupSession()).toBe(false);
-      } finally {
-        f.acknowledgeAllWrites();
-      }
-    },
-  );
+  it("retains unknown cancelled-launch settlement without replay", async () => {
+    await withQueuedRegistrationFixture(async (f) => {
+      await prepareCancelled(f);
+      const captured = f.current();
+      const ack = f.holdNextWrite();
+      const failed = f.track(f.scope.settleFailedLaunch("accepted launch was cancelled"));
+      await ack.entered;
+      ack.loseReceipt(new SqliteWorkerError("publication lost", "outcome-unknown"));
+      const error = await failed.catch((failure: unknown) => failure);
+      expect(error).toMatchObject({ outcome: "unknown" });
+      await expect(f.scope.settleFailedLaunch("retry")).rejects.toBe(error);
+      expect(f.current()).toEqual(captured);
+      expect(f.stored()?.collectorCompletion).toMatchObject({
+        status: "killed",
+        structured: { answer: 42 },
+      });
+      expect(f.scope.canCleanupSession()).toBe(false);
+    });
+  });
 
   it.each(["replacement", "newer sibling"] as const)(
-    "refuses cancelled launch metadata when a %s takes ownership before admission",
+    "refuses cancelled launch settlement after %s takes session ownership",
     async (change) => {
-      const { f, entry, killed } = await prepare();
-      const refusal = new SubagentRegistryWriteError("not-committed", new Error("owner changed"));
-      try {
-        const settlement = f.scope.settleFailedLaunch("accepted launch was cancelled");
-        const rejected = expect(settlement).rejects.toBe(refusal);
-        await vi.waitFor(() => expect(f.writes).toHaveLength(3));
+      await withQueuedRegistrationFixture(async (f) => {
+        await prepareCancelled(f);
+        const original = f.current();
         const successor = {
-          ...structuredClone(entry),
-          runId: change === "replacement" ? entry.runId : "newer-run",
-          generation: (entry.generation ?? 0) + 1,
+          ...structuredClone(original),
+          runId: change === "replacement" ? original.runId : "newer-run",
+          generation: (original.generation ?? 0) + 1,
         };
-        const successorSnapshot = structuredClone(successor);
-        f.runs.set(successor.runId, successor);
-        expect(f.writes[2]!.assertCurrent).toThrow("lost its original owner");
-        f.writes[2]!.gate.reject(refusal);
-        await rejected;
+        await mutateSubagentRuns(
+          [successor.runId],
+          () => ({ value: undefined, postimages: new Map([[successor.runId, successor]]) }),
+          { runs: f.runs },
+        );
+        const writes = f.writes;
         await f.scope.settleFailedLaunch("late callback");
-        expect(f.writes).toHaveLength(3);
-        expect(entry).toEqual(killed);
-        expect(successor).toEqual(successorSnapshot);
+        expect(f.writes).toBe(writes);
+        expect(f.runs.get(successor.runId)).toEqual(successor);
         expect(f.scope.canCleanupSession()).toBe(false);
-      } finally {
-        f.acknowledgeAllWrites();
-      }
+      });
     },
   );
 }

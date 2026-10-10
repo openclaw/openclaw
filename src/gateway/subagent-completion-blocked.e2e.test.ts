@@ -1,8 +1,9 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createSubagentRunRecord } from "../agents/subagent-test-fixtures.test-helpers.js";
-import { seedSubagentCompletionDelivery } from "../agents/subagents/completion/subagent-completion-admission.test-helpers.js";
 import { SUBAGENT_ENDED_REASON_COMPLETE } from "../agents/subagents/registry/subagent-lifecycle-events.js";
+import { observeRootWork } from "../agents/subagents/registry/subagent-registry.browser-cleanup.test-support.js";
 import {
   addSubagentRunForTests,
   getSubagentRunByRunId,
@@ -30,11 +31,16 @@ describe("subagent completion blocked Gateway E2E", () => {
   it("suspends native completion delivery after ordinary delivery exhaustion", async () => {
     process.env.OPENCLAW_TEST_MINIMAL_GATEWAY = "0";
     const stateDir = process.env.OPENCLAW_STATE_DIR;
-    if (!stateDir) {
-      throw new Error("OPENCLAW_STATE_DIR is required for Gateway E2E fixtures");
+    const configPath = process.env.OPENCLAW_CONFIG_PATH;
+    if (!stateDir || !configPath) {
+      throw new Error(
+        "OPENCLAW_STATE_DIR and OPENCLAW_CONFIG_PATH are required for Gateway E2E fixtures",
+      );
     }
     testState.sessionStorePath = path.join(stateDir, "sessions.sqlite");
     try {
+      // Keep unrelated reload roots out of the completion settlement barrier.
+      await fs.writeFile(configPath, JSON.stringify({ gateway: { reload: { mode: "off" } } }));
       await withGatewayServer(async () => {
         const now = Date.now();
         const endedAt = now - 31 * 60_000;
@@ -63,27 +69,35 @@ describe("subagent completion blocked Gateway E2E", () => {
 
         await writeSessionStore({
           entries: {
+            [subagent.requesterSessionKey]: {
+              sessionId: "requester-blocked-gateway-e2e",
+              updatedAt: now,
+            },
             [subagent.childSessionKey]: {
               sessionId: "session-blocked-gateway-e2e",
               updatedAt: now,
             },
           },
         });
-        seedSubagentCompletionDelivery({ subagent });
-        addSubagentRunForTests(subagent);
+        await addSubagentRunForTests(subagent);
 
-        resumeSubagentRun(subagent.runId);
+        // Native suspension completes in detached work. Join its owner before
+        // asserting or closing the Gateway, including cold worker startup.
+        const settleRootWork = observeRootWork();
+        try {
+          resumeSubagentRun(subagent.runId);
+        } finally {
+          await settleRootWork();
+        }
 
-        await vi.waitFor(() => {
-          expect(getSubagentRunByRunId(subagent.runId)?.delivery).toMatchObject({
-            status: "suspended",
-            disposition: "permanent_failure",
-            suspendedReason: "expiry",
-          });
+        expect(getSubagentRunByRunId(subagent.runId)?.delivery).toMatchObject({
+          status: "suspended",
+          disposition: "permanent_failure",
+          suspendedReason: "expiry",
         });
       });
     } finally {
-      resetSubagentRegistryForTests({ persist: false });
+      await resetSubagentRegistryForTests({ persist: false });
       process.env.OPENCLAW_TEST_MINIMAL_GATEWAY = "1";
     }
   });

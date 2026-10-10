@@ -40,37 +40,40 @@ describe("Control UI boot record", () => {
     vi.unstubAllGlobals();
   });
 
-  it("round-trips a debounced record within its gateway scope", async () => {
-    const saved = record();
-    persistBootRecord(saved);
-    expect(readBootRecord(scope, credential)).toBeNull();
-    await settleWrite();
-    expect(readBootRecord(scope, credential)).toEqual(saved);
-    expect(readBootRecord("https://another.example", credential)).toBeNull();
-  });
-
-  it.each(["pagehide", "hidden"])("flushes the latest pending record on %s", async (event) => {
-    persistBootRecord(record());
-    const saved = { ...record(), sectionOrder: ["ungrouped", "category:Work"] };
-    persistBootRecord(saved);
-    expect(readBootRecord(scope, credential)).toBeNull();
-
-    if (event === "pagehide") {
-      window.dispatchEvent(new Event("pagehide"));
-    } else {
-      const visibility = vi.spyOn(document, "visibilityState", "get");
-      visibility.mockReturnValue("visible");
-      document.dispatchEvent(new Event("visibilitychange"));
+  it.each(["debounce", "pagehide", "hidden"])(
+    "flushes the latest pending record on %s",
+    async (event) => {
+      persistBootRecord(record());
+      const saved = { ...record(), sectionOrder: ["ungrouped", "category:Work"] };
+      saved.agents.agents = [
+        { id: "main", identity: { name: "Main", avatar: "private", avatarUrl: "/avatar" } },
+      ];
+      persistBootRecord(saved);
       expect(readBootRecord(scope, credential)).toBeNull();
-      visibility.mockReturnValue("hidden");
-      document.dispatchEvent(new Event("visibilitychange"));
-    }
 
-    expect(readBootRecord(scope, credential)).toEqual(saved);
-    clearBootRecords();
-    await vi.advanceTimersByTimeAsync(500);
-    expect(readBootRecord(scope, credential)).toBeNull();
-  });
+      if (event === "debounce") {
+        await settleWrite();
+      } else if (event === "pagehide") {
+        window.dispatchEvent(new Event("pagehide"));
+      } else {
+        const visibility = vi.spyOn(document, "visibilityState", "get");
+        visibility.mockReturnValue("visible");
+        document.dispatchEvent(new Event("visibilitychange"));
+        expect(readBootRecord(scope, credential)).toBeNull();
+        visibility.mockReturnValue("hidden");
+        document.dispatchEvent(new Event("visibilitychange"));
+      }
+
+      expect(readBootRecord(scope, credential)).toEqual({
+        ...saved,
+        agents: { ...saved.agents, agents: [{ id: "main", identity: { name: "Main" } }] },
+      });
+      expect(readBootRecord("https://another.example", credential)).toBeNull();
+      clearBootRecords();
+      await vi.advanceTimersByTimeAsync(500);
+      expect(readBootRecord(scope, credential)).toBeNull();
+    },
+  );
 
   it.each([
     ["invalid JSON", "{"],
@@ -90,13 +93,14 @@ describe("Control UI boot record", () => {
     expect(localStorage.getItem(key)).toBeNull();
   });
 
-  it.each([undefined, "", "changed-token"])(
-    "removes a record when the current credential is %s",
+  it.each([undefined, null, "", "changed-token"])(
+    "rejects without deleting another document’s record when the credential is %s",
     async (current) => {
-      persistBootRecord(record());
+      const saved = record();
+      persistBootRecord(saved);
       await settleWrite();
       expect(readBootRecord(scope, () => current)).toBeNull();
-      expect(localStorage.getItem(BOOT_RECORD_PREFIX + scope)).toBeNull();
+      expect(readBootRecord(scope, credential)).toEqual(saved);
     },
   );
 
@@ -113,45 +117,59 @@ describe("Control UI boot record", () => {
     },
   );
 
-  it.each(["password", "trusted-proxy", "tailscale", "bootstrap-token", "none", undefined])(
-    "rejects %s identity even with both browser tokens present",
-    (method) => {
-      expect(resolveBootRecordAuth({ method, deviceToken: "test-token" }, "test-token")).toBeNull();
+  it("binds boot admission to the accepted reusable credential", () => {
+    const cases: Array<
+      [
+        method: string | undefined,
+        deviceToken: string | undefined,
+        token: string,
+        authMethod: string | null,
+      ]
+    > = [
+      ["password", "test-token", "test-token", null],
+      [undefined, "test-token", "test-token", null],
+      ["token", "other-token", " test-token ", "token"],
+      ["device-token", "test-token", "rejected-token", "device-token"],
+      ["token", "test-token", "", null],
+      ["device-token", undefined, "test-token", null],
+      ["bootstrap-token", "test-token", "bootstrap-secret", "device-token"],
+      ["bootstrap-token", undefined, "bootstrap-secret", null],
+    ];
+    for (const [method, deviceToken, token, authMethod] of cases) {
+      expect(resolveBootRecordAuth({ method, deviceToken }, token), method).toEqual(
+        authMethod ? { authMethod, credential: "9d17676d" } : null,
+      );
+    }
+  });
+
+  it.each([
+    { failure: "oversized", sameOwner: true },
+    { failure: "oversized", sameOwner: false },
+    { failure: "quota", sameOwner: false },
+  ])(
+    "evicts only the publishing owner after $failure failure (same owner: $sameOwner)",
+    async ({ failure, sameOwner }) => {
+      const peer = { ...record(), ...(sameOwner ? {} : { recoveryScope: "peer-account" }) };
+      persistBootRecord(peer);
+      await settleWrite();
+      const key = BOOT_RECORD_PREFIX + scope;
+      const bytes = localStorage.getItem(key);
+      expect(readBootRecord(scope, credential)).toEqual(peer);
+      if (failure === "quota") {
+        vi.spyOn(localStorage, "setItem").mockImplementation(() => {
+          throw new DOMException("quota exceeded", "QuotaExceededError");
+        });
+      }
+      persistBootRecord({
+        ...record(),
+        ...(sameOwner ? {} : { recoveryScope: "new-account" }),
+        ...(failure === "oversized" ? { sectionOrder: ["🦞".repeat((64 * 1024) / 3)] } : {}),
+      });
+      await settleWrite();
+      expect(localStorage.getItem(key)).toBe(sameOwner ? null : bytes);
+      expect(readBootRecord(scope, credential)).toEqual(sameOwner ? null : peer);
     },
   );
-
-  it("binds the accepted method and uses the newly issued device token after retry", () => {
-    expect(
-      resolveBootRecordAuth({ method: "token", deviceToken: "other-token" }, " test-token "),
-    ).toEqual({ authMethod: "token", credential: "9d17676d" });
-    expect(
-      resolveBootRecordAuth(
-        { method: "device-token", deviceToken: "test-token" },
-        "rejected-token",
-      ),
-    ).toEqual({ authMethod: "device-token", credential: "9d17676d" });
-    expect(resolveBootRecordAuth({ method: "token", deviceToken: "test-token" }, "")).toBeNull();
-    expect(resolveBootRecordAuth({ method: "device-token" }, "test-token")).toBeNull();
-  });
-
-  it("removes an existing record when a later write exceeds the byte cap", async () => {
-    persistBootRecord(record());
-    await settleWrite();
-    expect(readBootRecord(scope, credential)).not.toBeNull();
-    persistBootRecord({ ...record(), sectionOrder: ["🦞".repeat((64 * 1024) / 3)] });
-    await settleWrite();
-    expect(localStorage.getItem(BOOT_RECORD_PREFIX + scope)).toBeNull();
-  });
-
-  it("excludes avatars from the agent roster", async () => {
-    const saved = record();
-    saved.agents.agents = [
-      { id: "main", identity: { name: "Main", avatar: "private", avatarUrl: "/avatar" } },
-    ];
-    persistBootRecord(saved);
-    await settleWrite();
-    expect(readBootRecord(scope, credential)?.agents.agents[0]?.identity).toEqual({ name: "Main" });
-  });
 
   it("clears all scopes and fences pending writes even on pagehide", async () => {
     persistBootRecord(record());
@@ -173,5 +191,31 @@ describe("Control UI boot record", () => {
     await settleWrite();
     expect(readBootRecord(scope, credential)).toBeNull();
     expect(clearBootRecords).not.toThrow();
+  });
+  it.each(["trusted-proxy", "tailscale", "password"])(
+    "retains %s storage identity without a credential",
+    async (method) => {
+      const auth = resolveBootRecordAuth({ method, recoveryScope: "account-a" });
+      expect(auth).toEqual({ authMethod: method, credential: "" });
+      persistBootRecord({ ...record(), ...auth!, recoveryScope: "account-a" });
+      await settleWrite();
+      expect(readBootRecord(scope, () => "")?.recoveryScope).toBe("account-a");
+      clearBootRecords(scope);
+      window.dispatchEvent(new Event("pagehide"));
+      expect(readBootRecord(scope, () => "")).toBeNull();
+    },
+  );
+  it("retires an admitted legacy credential without deleting a replacement account", () => {
+    const saved = record();
+    const key = BOOT_RECORD_PREFIX + scope;
+    localStorage.setItem(key, JSON.stringify(saved));
+    const owner = { authMethod: saved.authMethod, credential: saved.credential };
+    clearBootRecords(scope, owner);
+    expect(localStorage.getItem(key)).toBeNull();
+    const replacement = { ...saved, recoveryScope: "replacement-account" };
+    localStorage.setItem(key, JSON.stringify(replacement));
+    clearBootRecords(scope, owner);
+    expect(JSON.parse(localStorage.getItem(key)!)).toEqual(replacement);
+    localStorage.removeItem(key);
   });
 });

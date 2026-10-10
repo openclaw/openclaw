@@ -1,10 +1,12 @@
 import type { DatabaseSync } from "node:sqlite";
 import {
+  createSqliteQueryCache,
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   prepareSqliteQuerySync,
 } from "../infra/kysely-sync.js";
 import { coerceRequiredSqliteNumber, normalizeSqliteNumber } from "../infra/sqlite-number.js";
+import { pluginStatePublication } from "./plugin-state-publication.js";
 import {
   bindPluginStateEntry,
   countLivePluginStateNamespaceEntries,
@@ -22,67 +24,35 @@ import {
 import type { PluginStateOverflowPolicy } from "./plugin-state-store.types.js";
 
 type PluginStateCountParams = { pluginId: string; now: number };
-const pluginStateCountQueries = new WeakMap<
-  DatabaseSync,
-  ReturnType<typeof prepareSqliteQuerySync<PluginStateCountParams, PluginStateCountRow>>
->();
+const pluginStateCountQuery = createSqliteQueryCache((db) =>
+  prepareSqliteQuerySync<PluginStateCountParams, PluginStateCountRow>(db, (parameter) =>
+    getPluginStateKysely(db)
+      .selectFrom("plugin_state_entries")
+      .select((eb) => eb.fn.countAll<number | bigint>().as("count"))
+      .where(
+        "plugin_id",
+        "=",
+        parameter((value) => value.pluginId),
+      )
+      .where((eb) =>
+        eb.or([
+          eb("expires_at", "is", null),
+          eb(
+            "expires_at",
+            ">",
+            parameter((value) => value.now),
+          ),
+        ]),
+      ),
+  ),
+);
 
 export function countLivePluginStateEntries(
   db: DatabaseSync,
   params: PluginStateCountParams,
 ): number {
-  let query = pluginStateCountQueries.get(db);
-  if (!query) {
-    query = prepareSqliteQuerySync<PluginStateCountParams, PluginStateCountRow>(db, (parameter) =>
-      getPluginStateKysely(db)
-        .selectFrom("plugin_state_entries")
-        .select((eb) => eb.fn.countAll<number | bigint>().as("count"))
-        .where(
-          "plugin_id",
-          "=",
-          parameter((value) => value.pluginId),
-        )
-        .where((eb) =>
-          eb.or([
-            eb("expires_at", "is", null),
-            eb(
-              "expires_at",
-              ">",
-              parameter((value) => value.now),
-            ),
-          ]),
-        ),
-    );
-    pluginStateCountQueries.set(db, query);
-  }
-  const row = query(params).rows[0];
+  const row = pluginStateCountQuery(db)(params).rows[0];
   return coerceRequiredSqliteNumber(row?.count ?? 0);
-}
-
-function deleteOldestPluginStateNamespaceEntries(
-  db: DatabaseSync,
-  params: { pluginId: string; namespace: string; protectedKey: string; now: number; limit: number },
-): number {
-  const kysely = getPluginStateKysely(db);
-  const keys = kysely
-    .selectFrom("plugin_state_entries")
-    .select("entry_key")
-    .where("plugin_id", "=", params.pluginId)
-    .where("namespace", "=", params.namespace)
-    .where("entry_key", "!=", params.protectedKey)
-    .where((eb) => eb.or([eb("expires_at", "is", null), eb("expires_at", ">", params.now)]))
-    .orderBy("created_at", "asc")
-    .orderBy("entry_key", "asc")
-    .limit(params.limit);
-  const result = executeSqliteQuerySync(
-    db,
-    kysely
-      .deleteFrom("plugin_state_entries")
-      .where("plugin_id", "=", params.pluginId)
-      .where("namespace", "=", params.namespace)
-      .where("entry_key", "in", keys),
-  );
-  return Number(result.numAffectedRows ?? 0);
 }
 
 type PluginStateRetention = {
@@ -149,13 +119,28 @@ export function enforcePostRegisterLimits(params: {
   if (namespaceCount <= params.maxEntries) {
     return;
   }
-  const deleted = deleteOldestPluginStateNamespaceEntries(params.store.db, {
-    pluginId: params.pluginId,
-    namespace: params.namespace,
-    protectedKey: params.protectedKey,
-    now: params.now,
-    limit: namespaceCount - params.maxEntries,
-  });
+  const kysely = getPluginStateKysely(params.store.db);
+  const keys = kysely
+    .selectFrom("plugin_state_entries")
+    .select("entry_key")
+    .where("plugin_id", "=", params.pluginId)
+    .where("namespace", "=", params.namespace)
+    .where("entry_key", "!=", params.protectedKey)
+    .where((eb) => eb.or([eb("expires_at", "is", null), eb("expires_at", ">", params.now)]))
+    .orderBy("created_at", "asc")
+    .orderBy("entry_key", "asc")
+    .limit(namespaceCount - params.maxEntries);
+  const result = executeSqliteQuerySync(
+    params.store.db,
+    kysely
+      .deleteFrom("plugin_state_entries")
+      .where("plugin_id", "=", params.pluginId)
+      .where("namespace", "=", params.namespace)
+      .where("entry_key", "in", keys)
+      .returning(["plugin_id", "namespace", "entry_key"]),
+  );
+  pluginStatePublication.stageDeletions(params.store.db, result.rows);
+  const deleted = result.rows.length;
   if (params.retention) {
     params.retention.namespaceCount -= deleted;
   }
@@ -241,20 +226,12 @@ export function registerPluginStateEntry(
   // Quotas and batch counts need existence, never the previous JSON payload.
   const existing =
     retention || params.overflowPolicy === "reject-new"
-      ? hasPluginStateEntry(store.db, {
-          pluginId: params.pluginId,
-          namespace: params.namespace,
-          key: params.key,
-          now,
-        })
+      ? hasPluginStateEntry(store.db, { ...params, now })
       : false;
   if (!existing) {
     assertCanInsertPluginStateEntry({
       store,
-      pluginId: params.pluginId,
-      namespace: params.namespace,
-      maxEntries: params.maxEntries,
-      overflowPolicy: params.overflowPolicy,
+      ...params,
       now,
       retention,
     });
@@ -262,10 +239,7 @@ export function registerPluginStateEntry(
   upsertPluginStateEntry(
     store.db,
     bindPluginStateEntry({
-      pluginId: params.pluginId,
-      namespace: params.namespace,
-      key: params.key,
-      valueJson: params.valueJson,
+      ...params,
       createdAt: params.createdAtMs ?? now,
       expiresAt,
     }),
@@ -279,10 +253,7 @@ export function registerPluginStateEntry(
   }
   enforcePostRegisterLimits({
     store,
-    pluginId: params.pluginId,
-    namespace: params.namespace,
-    maxEntries: params.maxEntries,
-    overflowPolicy: params.overflowPolicy,
+    ...params,
     now,
     protectedKey: params.key,
     retention,

@@ -1,8 +1,5 @@
 import { html, nothing } from "lit";
-import type {
-  SessionCatalog,
-  SessionsCatalogListResult,
-} from "../../../../packages/gateway-protocol/src/index.ts";
+import type { SessionsCatalogListResult } from "../../../../packages/gateway-protocol/src/index.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { icons } from "../../components/icons.ts";
@@ -184,16 +181,14 @@ export class GroupRouteRevalidation {
 }
 
 export function resolveAgentId(
-  data: Pick<NewSessionRouteData, "agentId" | "catalogId"> | undefined,
+  data: Pick<NewSessionRouteData, "agentId"> | undefined,
   availableAgents: readonly { id: string }[],
   fallback: string,
 ): string {
   const rawRequested = data?.agentId?.trim();
-  if (!rawRequested) {
-    return fallback && normalizeAgentId(fallback);
-  }
-  const requested = normalizeAgentId(rawRequested);
-  return availableAgents.some((candidate) => normalizeAgentId(candidate.id) === requested)
+  const requested = rawRequested ? normalizeAgentId(rawRequested) : undefined;
+  return requested &&
+    availableAgents.some((candidate) => normalizeAgentId(candidate.id) === requested)
     ? requested
     : fallback && normalizeAgentId(fallback);
 }
@@ -210,8 +205,7 @@ export async function resolveCreateTarget(
   catalogId: string,
   agentId?: string,
 ): Promise<
-  | Pick<NewSessionRouteData, "model" | "catalogLabel" | "startTerminal" | "terminalHosts">
-  | undefined
+  Pick<NewSessionRouteData, "catalogLabel" | "startTerminal" | "terminalHosts"> | undefined
 > {
   try {
     const result = await client.request<SessionsCatalogListResult>("sessions.catalog.list", {
@@ -223,7 +217,6 @@ export async function resolveCreateTarget(
     const terminal = catalog?.capabilities.startTerminal;
     return catalog && terminal === true
       ? {
-          model: "",
           catalogLabel: catalog.label,
           startTerminal: true,
           terminalHosts: catalog.hosts
@@ -236,7 +229,6 @@ export async function resolveCreateTarget(
   }
 }
 
-type CatalogCreateTarget = Pick<SessionCatalog, "id" | "label">;
 type CatalogTargetOwner = { agentId: string; client: GatewayBrowserClient };
 type CatalogTargetDiscoveryState =
   | { status: "idle" }
@@ -244,13 +236,11 @@ type CatalogTargetDiscoveryState =
       status: "loading";
       owner: CatalogTargetOwner;
       controller: AbortController;
-      requestId: number;
     }
-  | { status: "ready"; owner: CatalogTargetOwner; targets: CatalogCreateTarget[] }
+  | { status: "ready"; owner: CatalogTargetOwner; targets: ChatModelPickerTargetGroup["options"] }
   | { status: "error"; owner: CatalogTargetOwner };
 
 export class CatalogTargetDiscovery {
-  private requestId = 0;
   private state: CatalogTargetDiscoveryState = { status: "idle" };
 
   constructor(private readonly notify: () => void) {}
@@ -258,7 +248,6 @@ export class CatalogTargetDiscovery {
   clear() {
     const previous = this.state;
     this.state = { status: "idle" };
-    this.requestId += 1;
     if (previous.status === "loading") {
       previous.controller.abort();
     }
@@ -269,8 +258,8 @@ export class CatalogTargetDiscovery {
 
   private startRequest(owner: CatalogTargetOwner) {
     const controller = new AbortController();
-    const requestId = ++this.requestId;
-    this.state = { status: "loading", owner, controller, requestId };
+    const pending = { status: "loading", owner, controller } as const;
+    this.state = pending;
     this.notify();
     void owner.client
       .request<SessionsCatalogListResult>(
@@ -280,8 +269,7 @@ export class CatalogTargetDiscovery {
       )
       .then(
         (result) => {
-          const active = this.state;
-          if (active.status !== "loading" || active.requestId !== requestId) {
+          if (this.state !== pending) {
             return;
           }
           this.state = {
@@ -289,13 +277,12 @@ export class CatalogTargetDiscovery {
             owner,
             targets: result.catalogs
               .filter((catalog) => catalog.capabilities.startTerminal === true)
-              .map(({ id, label }) => ({ id, label })),
+              .map(({ id, label }) => ({ value: id, label })),
           };
           this.notify();
         },
         () => {
-          const active = this.state;
-          if (active.status !== "loading" || active.requestId !== requestId) {
+          if (this.state !== pending) {
             return;
           }
           this.state = { status: "error", owner };
@@ -356,10 +343,7 @@ export class CatalogTargetDiscovery {
         errorLabel: t("newSession.cliAgentsUnavailable"),
         id: "cliAgents",
         label: t("newSession.cliAgentsGroup"),
-        options:
-          discovery.status === "ready"
-            ? discovery.targets.map(({ id, label }) => ({ value: id, label }))
-            : [],
+        options: discovery.status === "ready" ? discovery.targets : [],
         status: discovery.status,
       },
     ];

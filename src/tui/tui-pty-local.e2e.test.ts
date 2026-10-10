@@ -1,19 +1,19 @@
 // Exercises slower TUI PTY paths against real local and Gateway backends.
 import { createHash, randomUUID } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { setTimeout as waitForProcessTick } from "node:timers/promises";
 import { afterAll, beforeAll, describe, expect, it, type TestFunction } from "vitest";
 import { writeOpenAiResponsesSse } from "../../test/helpers/openai-responses-sse.js";
 import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
 } from "../../test/helpers/openclaw-test-instance.js";
-import { isProcessAlive, waitForPidFile } from "../../test/helpers/process-wait.js";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { isProcessAlive } from "../../test/helpers/process-wait.js";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { reloadSharedAuthStoreOwnership } from "../agents/auth-profiles/path-resolve.js";
 import { loadAuthProfileStoreForRuntime } from "../agents/auth-profiles/store-runtime.js";
@@ -26,7 +26,7 @@ import {
   isSessionCostUsageRefreshRunning,
   prepareSessionCostUsageRefreshLock,
 } from "../infra/session-cost-usage-cache.sqlite.js";
-import { listUsageCountedTranscriptStats } from "../infra/session-cost-usage-collection.js";
+import { listUsageCountedTranscriptStats } from "../infra/session-cost-usage-collection.test-support.js";
 import { runExec } from "../process/exec.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { withEnv, withEnvAsync } from "../test-utils/env.js";
@@ -46,8 +46,11 @@ import {
   createChatTerminalObserver,
   createIdempotentCleanup,
   createFreshSession,
+  createLocalShellControlFloodPreload,
   lastOutputIndexAfter,
+  readLocalShellControlFloodPids,
   registerIdempotentCleanup,
+  startGatewayCaseControlClient,
   waitForOutputAfter,
 } from "./tui-pty-local-test-support.js";
 import { buildTuiProcessArgs } from "./tui-pty-process-test-support.js";
@@ -493,7 +496,6 @@ function buildLocalModeConfig(params: {
       },
       entries: {
         main: {
-          default: true,
           skills: [],
           model: { primary: "tui-pty-mock/gpt-5.5" },
         },
@@ -685,6 +687,7 @@ function buildGatewayModeConfig(params: { tempDir: string; providerBaseUrl: stri
   return {
     ...base,
     agents: {
+      ownership: "explicit",
       defaults: {
         workspace: path.join(params.tempDir, defaultScenario.agentId),
         model: { primary: defaultModelRef },
@@ -693,12 +696,14 @@ function buildGatewayModeConfig(params: { tempDir: string; providerBaseUrl: stri
         ),
         skills: [],
         skipBootstrap: true,
+        heartbeat: { agentId: defaultScenario.agentId },
+        systemAgent: { agentId: defaultScenario.agentId },
+        authInheritance: { agentId: defaultScenario.agentId },
       },
       entries: Object.fromEntries(
-        agentScenarios.map((scenario, index) => [
+        agentScenarios.map((scenario) => [
           scenario.agentId,
           {
-            ...(index === 0 ? { default: true } : {}),
             workspace: path.join(params.tempDir, scenario.agentId),
             skills: [],
             model: { primary: `tui-pty-mock/${scenario.modelId}` },
@@ -707,6 +712,7 @@ function buildGatewayModeConfig(params: { tempDir: string; providerBaseUrl: stri
         ]),
       ),
     },
+    talk: { agentId: defaultScenario.agentId },
     models: {
       mode: "replace",
       providers: {
@@ -879,29 +885,12 @@ async function startGatewayModeTui(
     url: shared.gateway.url,
     token: shared.gateway.gatewayToken,
   });
-  let controlClientConnected = false;
-  controlClient.onConnected = () => {
-    controlClientConnected = true;
-  };
-  // A timed-out RPC drops its pending response while leaving the socket open.
-  // Case-local ownership prevents that late work from crossing into the next test.
-  const cleanup = registerIdempotentCleanup(registerCleanup, async () => {
-    shared.mockModel.releaseFirstResponse(scenario.modelId);
-    try {
-      if (controlClientConnected) {
-        for (const key of sessionKeys) {
-          await controlClient.abortChat({ sessionKey: key });
-        }
-      }
-    } finally {
-      await controlClient.stop();
-    }
-  });
-  controlClient.start();
-  await waitFor({
+  const cleanup = await startGatewayCaseControlClient({
+    client: controlClient,
+    sessionKeys,
+    registerCleanup,
+    releaseResponse: () => shared.mockModel.releaseFirstResponse(scenario.modelId),
     timeoutMs: LOCAL_STARTUP_TIMEOUT_MS,
-    read: () => (controlClientConnected ? true : null),
-    onTimeout: () => new Error("Gateway case control client did not connect"),
   });
   await controlClient.createSession({ key: sessionKey, agentId: scenario.agentId });
   await controlClient.patchSession({
@@ -1561,7 +1550,9 @@ describe("TUI PTY real backends", () => {
         const descendantCommandOffset = fixture.run.visibleOutput().length;
         await fixture.run.write(`!node ${JSON.stringify(rootPath)}\r`);
         await waitForOutputAfter(fixture.run, "[local] exit 0", descendantCommandOffset);
-        descendantPid = await waitForPidFile(pidPath, LOCAL_OUTPUT_TIMEOUT_MS);
+        // The fixture writes its descendant PID synchronously before the completed command exits.
+        descendantPid = Number.parseInt(await readFile(pidPath, "utf8"), 10);
+        expect(Number.isSafeInteger(descendantPid) && descendantPid > 0).toBe(true);
         expect(isProcessAlive(descendantPid)).toBe(true);
 
         await fixture.run.write("/exit\r", { delay: false });
@@ -1577,46 +1568,14 @@ describe("TUI PTY real backends", () => {
 
   it.skipIf(process.platform === "win32")(
     "reports a flooded local-shell control pipe and reclaims its command group",
-    async ({ onTestFinished }) => {
+    async ({ onTestFinished, signal }) => {
       let rolePidPath = "";
       const trackedPids: number[] = [];
       const fixture = await startLocalModeTui(onTestFinished, {
         prepareEnv: async ({ env, tempDir }) => {
           const preloadPath = path.join(tempDir, "control-flood.cjs");
           rolePidPath = path.join(tempDir, "control-flood-pids.txt");
-          await writeFile(
-            preloadPath,
-            `
-              const fs = require("node:fs");
-              const { Socket } = require("node:net");
-              const role = /service-child-(relay|group-anchor)\\.[cm]?[jt]s$/.exec(process.argv[1] || "")?.[1];
-              if (role) {
-                fs.appendFileSync(process.env.OPENCLAW_CONTROL_PROBE_PATH, role + " " + process.pid + "\\n");
-              }
-              const originalWrite = Socket.prototype.write;
-              let flooded = false;
-              Socket.prototype.write = function (chunk, ...args) {
-                const text = String(chunk);
-                if (
-                  !flooded &&
-                  role === "group-anchor" &&
-                  text.includes('"type":"ready"')
-                ) {
-                  flooded = true;
-                  const ready = JSON.parse(text);
-                  fs.appendFileSync(
-                    process.env.OPENCLAW_CONTROL_PROBE_PATH,
-                    "root " + ready.commandPid + "\\n",
-                  );
-                  const accepted = originalWrite.call(this, chunk, ...args);
-                  setTimeout(() => originalWrite.call(this, "é".repeat(131_073) + "\\n"), 500);
-                  return accepted;
-                }
-                return originalWrite.call(this, chunk, ...args);
-              };
-            `,
-            "utf8",
-          );
+          await writeFile(preloadPath, createLocalShellControlFloodPreload(), "utf8");
           return {
             ...env,
             NODE_OPTIONS: `${env.NODE_OPTIONS ?? ""} --require=${preloadPath}`.trim(),
@@ -1632,13 +1591,17 @@ describe("TUI PTY real backends", () => {
           `
             const fs = require("node:fs");
             const { spawn } = require("node:child_process");
-            const descendant = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
-              stdio: "ignore",
+            const descendant = spawn(process.execPath, [
+              "-e", "setInterval(() => {}, 1000); process.send('ready');",
+            ], { stdio: ["ignore", "ignore", "ignore", "ipc"] });
+            descendant.once("message", (message) => {
+              if (message !== "ready") throw new Error("unexpected descendant readiness");
+              fs.writeFileSync(
+                ${JSON.stringify(commandPidPath)},
+                "command " + process.pid + "\\ndescendant " + descendant.pid + "\\n",
+              );
+              descendant.disconnect();
             });
-            fs.writeFileSync(
-              ${JSON.stringify(commandPidPath)},
-              "command " + process.pid + "\\ndescendant " + descendant.pid + "\\n",
-            );
             setInterval(() => {}, 1000);
           `,
           "utf8",
@@ -1652,33 +1615,27 @@ describe("TUI PTY real backends", () => {
         await fixture.run.waitForOutput("local shell: enabled for this session");
         const pidEntries = await waitFor({
           timeoutMs: LOCAL_EXIT_TIMEOUT_MS,
-          read: () => {
-            if (!existsSync(rolePidPath) || !existsSync(commandPidPath)) {
-              return null;
-            }
-            const entries = new Map<string, number>();
-            for (const line of `${readFileSync(rolePidPath, "utf8")}${readFileSync(commandPidPath, "utf8")}`
-              .trim()
-              .split("\n")) {
-              const match = /^(relay|group-anchor|root|command|descendant) (\d+)$/u.exec(line);
-              if (!match?.[1] || !match[2]) {
-                throw new Error(`unexpected control-flood PID line: ${JSON.stringify(line)}`);
-              }
-              entries.set(match[1], Number.parseInt(match[2], 10));
-            }
-            return entries.size === 5 ? entries : null;
-          },
+          read: () => readLocalShellControlFloodPids(rolePidPath, commandPidPath),
           onTimeout: () => new Error("local shell did not report its complete process group"),
         });
         trackedPids.push(...pidEntries.values());
+        expect(trackedPids.every(isProcessAlive)).toBe(true);
+        await writeFile(`${rolePidPath}.release`, "release", "utf8");
         await fixture.run.waitForOutput(
           "[local] error: service child cleanup identity lost: control pipe pending line exceeded cap",
           LOCAL_EXIT_TIMEOUT_MS,
         );
-        await waitFor({
-          timeoutMs: LOCAL_EXIT_TIMEOUT_MS,
-          read: () => (trackedPids.every((pid) => !isProcessAlive(pid)) ? true : null),
-          onTimeout: () => new Error("local shell control-pipe failure left its group alive"),
+        // The TUI owns these processes and reports the pipe failure before reclamation settles.
+        // No descendant handles cross the PTY boundary; only the test signal bounds observation.
+        await withinTest(
+          (async () => {
+            while (trackedPids.some(isProcessAlive)) {
+              await waitForProcessTick(10, undefined, { signal });
+            }
+          })(),
+          signal,
+        ).catch((cause: unknown) => {
+          throw new Error("local shell control-pipe failure left its group alive", { cause });
         });
 
         await fixture.run.write("/exit\r", { delay: false });

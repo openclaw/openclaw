@@ -24,14 +24,6 @@ type SkillScanSummary = Awaited<
 
 export type CodeSafetySummaryCache = Map<string, Promise<SkillScanSummary>>;
 
-const loadAgentScopeModule = createLazyRuntimeModule(() => import("../agents/agent-scope.js"));
-
-const loadAgentWorkspaceDirsModule = createLazyRuntimeModule(
-  () => import("../agents/workspace-dirs.js"),
-);
-
-const loadSkillSourceModule = createLazyRuntimeModule(() => import("../skills/loading/source.js"));
-
 const loadSkillScannerModule = createLazyRuntimeModule(
   () => import("../skills/security/scanner.js"),
 );
@@ -93,24 +85,14 @@ function formatCodeSafetyDetails(findings: SkillScanFinding[], rootDir: string):
     .join("\n");
 }
 
-function buildCodeSafetySummaryCacheKey(params: {
-  dirPath: string;
-  includeFiles?: string[];
-}): string {
-  const includeFiles = normalizeStringEntries(params.includeFiles);
-  const includeKey = includeFiles.length > 0 ? includeFiles.toSorted().join("\u0000") : "";
-  return `${params.dirPath}\u0000${includeKey}`;
-}
-
 async function getCodeSafetySummary(params: {
   dirPath: string;
   includeFiles?: string[];
   summaryCache?: CodeSafetySummaryCache;
 }): Promise<SkillScanSummary> {
-  const cacheKey = buildCodeSafetySummaryCacheKey({
-    dirPath: params.dirPath,
-    includeFiles: params.includeFiles,
-  });
+  const includeFiles = normalizeStringEntries(params.includeFiles);
+  const includeKey = includeFiles.length > 0 ? includeFiles.toSorted().join("\u0000") : "";
+  const cacheKey = `${params.dirPath}\u0000${includeKey}`;
   const scan = async () => {
     const skillScanner = await loadSkillScannerModule();
     return await skillScanner.scanDirectoryWithSummary(params.dirPath, {
@@ -255,28 +237,21 @@ export async function collectPluginsCodeSafetyFindings(params: {
       });
     }
 
-    if (summary.critical > 0) {
-      const criticalFindings = summary.findings.filter((f) => f.severity === "critical");
-      const details = formatCodeSafetyDetails(criticalFindings, pluginPath);
-
+    const severity = summary.critical > 0 ? "critical" : summary.warn > 0 ? "warn" : undefined;
+    if (severity) {
+      const details = formatCodeSafetyDetails(
+        summary.findings.filter((finding) => finding.severity === severity),
+        pluginPath,
+      );
+      const critical = severity === "critical";
       findings.push({
         checkId: "plugins.code_safety",
-        severity: "critical",
-        title: `Plugin "${pluginName}" contains dangerous code patterns`,
-        detail: `Found ${summary.critical} critical issue(s) in ${summary.scannedFiles} scanned file(s):\n${details}`,
-        remediation:
-          "Review the plugin source code carefully before use. If untrusted, remove the plugin from your OpenClaw extensions state directory.",
-      });
-    } else if (summary.warn > 0) {
-      const warnFindings = summary.findings.filter((f) => f.severity === "warn");
-      const details = formatCodeSafetyDetails(warnFindings, pluginPath);
-
-      findings.push({
-        checkId: "plugins.code_safety",
-        severity: "warn",
-        title: `Plugin "${pluginName}" contains suspicious code patterns`,
-        detail: `Found ${summary.warn} warning(s) in ${summary.scannedFiles} scanned file(s):\n${details}`,
-        remediation: `Review the flagged code to ensure it is intentional and safe.`,
+        severity,
+        title: `Plugin "${pluginName}" contains ${critical ? "dangerous" : "suspicious"} code patterns`,
+        detail: `Found ${summary[severity]} ${critical ? "critical issue(s)" : "warning(s)"} in ${summary.scannedFiles} scanned file(s):\n${details}`,
+        remediation: critical
+          ? "Review the plugin source code carefully before use. If untrusted, remove the plugin from your OpenClaw extensions state directory."
+          : "Review the flagged code to ensure it is intentional and safe.",
       });
     }
   }
@@ -294,7 +269,10 @@ export async function collectInstalledSkillsCodeSafetyFindings(params: {
   const pluginExtensionsDir = path.join(params.stateDir, "extensions");
   const scannedSkillDirs = new Set<string>();
   const [{ listAgentWorkspaceDirs, listExplicitAgentWorkspaceDirs }, { resolveSkillSource }] =
-    await Promise.all([loadAgentWorkspaceDirsModule(), loadSkillSourceModule()]);
+    await Promise.all([
+      import("../agents/workspace-dirs.js"),
+      import("../skills/loading/source.js"),
+    ]);
   const workspaceDirs = new Set(params.workspaceDir ? [params.workspaceDir] : []);
   try {
     for (const workspaceDir of listAgentWorkspaceDirs(params.cfg)) {
@@ -310,7 +288,7 @@ export async function collectInstalledSkillsCodeSafetyFindings(params: {
   const entries = [...workspaceDirs].flatMap((workspaceDir) =>
     loadWorkspaceSkills(workspaceDir, { config: params.cfg }),
   );
-  const { listAgentIds } = await loadAgentScopeModule();
+  const { listAgentIds } = await import("../agents/agent-scope.js");
   const env = { ...process.env, OPENCLAW_STATE_DIR: params.stateDir };
   const reportWorkshopScanFailure = (filePath: string, error: unknown) => {
     findings.push({
@@ -383,27 +361,21 @@ export async function collectInstalledSkillsCodeSafetyFindings(params: {
       });
     }
 
-    if (summary.critical > 0) {
-      const criticalFindings = summary.findings.filter(
-        (finding) => finding.severity === "critical",
+    const severity = summary.critical > 0 ? "critical" : summary.warn > 0 ? "warn" : undefined;
+    if (severity) {
+      const details = formatCodeSafetyDetails(
+        summary.findings.filter((finding) => finding.severity === severity),
+        skillDir,
       );
-      const details = formatCodeSafetyDetails(criticalFindings, skillDir);
+      const critical = severity === "critical";
       findings.push({
         checkId: "skills.code_safety",
-        severity: "critical",
-        title: `Skill "${skillName}" contains dangerous code patterns`,
-        detail: `Found ${summary.critical} critical issue(s) in ${summary.scannedFiles} scanned file(s) under ${skillDir}:\n${details}`,
-        remediation: `Review the skill source code before use. If untrusted, remove "${skillDir}".`,
-      });
-    } else if (summary.warn > 0) {
-      const warnFindings = summary.findings.filter((finding) => finding.severity === "warn");
-      const details = formatCodeSafetyDetails(warnFindings, skillDir);
-      findings.push({
-        checkId: "skills.code_safety",
-        severity: "warn",
-        title: `Skill "${skillName}" contains suspicious code patterns`,
-        detail: `Found ${summary.warn} warning(s) in ${summary.scannedFiles} scanned file(s) under ${skillDir}:\n${details}`,
-        remediation: "Review flagged lines to ensure the behavior is intentional and safe.",
+        severity,
+        title: `Skill "${skillName}" contains ${critical ? "dangerous" : "suspicious"} code patterns`,
+        detail: `Found ${summary[severity]} ${critical ? "critical issue(s)" : "warning(s)"} in ${summary.scannedFiles} scanned file(s) under ${skillDir}:\n${details}`,
+        remediation: critical
+          ? `Review the skill source code before use. If untrusted, remove "${skillDir}".`
+          : "Review flagged lines to ensure the behavior is intentional and safe.",
       });
     }
   }

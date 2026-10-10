@@ -7,7 +7,7 @@ import {
   getLoadedChannelPlugin,
   listChannelPlugins,
 } from "../../channels/plugins/index.js";
-import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
+import type { AnyChannelPlugin as ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { ChannelId } from "../../channels/plugins/types.public.js";
 import type { PluginRegistry } from "../../plugins/registry-types.js";
 import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
@@ -24,18 +24,15 @@ export function findChannelPluginInRegistry(
   if (!normalizedChannel) {
     return undefined;
   }
-  for (const entry of registry.channels) {
+  return registry.channels.find((entry) => {
     const plugin = entry?.plugin;
-    if (
+    return (
       normalizeOptionalLowercaseString(plugin?.id) === normalizedChannel ||
       plugin?.meta?.aliases?.some(
         (alias) => normalizeOptionalLowercaseString(alias) === normalizedChannel,
       )
-    ) {
-      return plugin;
-    }
-  }
-  return undefined;
+    );
+  })?.plugin;
 }
 
 // Message CLI actions run against a scoped registry handle without process-root
@@ -58,15 +55,13 @@ export function listRuntimeVisibleChannelPlugins(): ChannelPlugin[] {
   }
   // The request handle is the active operation-local view. Replace same-id
   // process-root entries while retaining unrelated root channels.
-  const scopedPluginIds = new Set<string>();
-  const scopedPlugins: ChannelPlugin[] = [];
+  const scopedPlugins = new Map<string, ChannelPlugin>();
   for (const entry of scopedRegistry.channels) {
     const plugin = entry?.plugin;
-    if (!plugin?.id || scopedPluginIds.has(plugin.id)) {
+    if (!plugin?.id || scopedPlugins.has(plugin.id)) {
       continue;
     }
-    scopedPluginIds.add(plugin.id);
-    scopedPlugins.push(plugin);
+    scopedPlugins.set(plugin.id, plugin);
   }
-  return [...plugins.filter((plugin) => !scopedPluginIds.has(plugin.id)), ...scopedPlugins];
+  return [...plugins.filter((plugin) => !scopedPlugins.has(plugin.id)), ...scopedPlugins.values()];
 }

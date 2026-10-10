@@ -1,3 +1,4 @@
+import { sleep } from "../utils/sleep.js";
 export type UpdateReportPreCreateGuardReason = "authority" | "reservation" | "stale" | "validation";
 
 export class UpdateReportPreCreateGuardError extends Error {
@@ -11,14 +12,17 @@ export class UpdateReportPreCreateGuardError extends Error {
   }
 }
 
-export function retryUpdateReportStateWrite(write: () => boolean): boolean {
+export async function retryUpdateReportStateWrite(
+  write: () => boolean | Promise<boolean>,
+): Promise<boolean> {
   for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
-      if (write()) {
+      if (await write()) {
         return true;
       }
     } catch {
-      // One retry covers a transient state-database failure without replaying transport.
+      // Unknown accepted writes must be reconciled, never repeated here.
+      return false;
     }
   }
   return false;
@@ -26,36 +30,41 @@ export function retryUpdateReportStateWrite(write: () => boolean): boolean {
 
 /** Gives a proven no-transport outcome time to outlive transient SQLite contention. */
 export async function retryUpdateReportStateWriteAfterNoStart(
-  write: () => boolean,
+  write: () => boolean | Promise<boolean>,
 ): Promise<boolean> {
   const retryDelaysMs = [0, 25, 100, 250, 500] as const;
   for (const delayMs of retryDelaysMs) {
     if (delayMs > 0) {
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, delayMs);
-      });
+      await sleep(delayMs);
     }
     try {
-      if (write()) {
+      if (await write()) {
         return true;
       }
     } catch {
-      // The report body remains private and no transport is replayed while state is unavailable.
+      // No transport started, but that alone cannot prove a state write did not commit.
+      return false;
     }
   }
   return false;
 }
 
-export async function assertUpdateReportPreCreateState(options: {
+export function assertUpdateReportSubmissionAuthority(options: {
   hasCurrentAuthority?: () => boolean;
-  validateCurrentAttempt?: () => boolean | Promise<boolean>;
-}): Promise<void> {
+}): void {
   if (options.hasCurrentAuthority && !options.hasCurrentAuthority()) {
     throw new UpdateReportPreCreateGuardError(
       "Update report submission requires a current authenticated client.",
       "authority",
     );
   }
+}
+
+export async function assertUpdateReportPreCreateState(options: {
+  hasCurrentAuthority?: () => boolean;
+  validateCurrentAttempt?: () => boolean | Promise<boolean>;
+}): Promise<void> {
+  assertUpdateReportSubmissionAuthority(options);
   if (options.validateCurrentAttempt) {
     let currentAttempt: boolean;
     try {
@@ -74,10 +83,5 @@ export async function assertUpdateReportPreCreateState(options: {
       );
     }
   }
-  if (options.hasCurrentAuthority && !options.hasCurrentAuthority()) {
-    throw new UpdateReportPreCreateGuardError(
-      "Update report submission requires a current authenticated client.",
-      "authority",
-    );
-  }
+  assertUpdateReportSubmissionAuthority(options);
 }

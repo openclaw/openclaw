@@ -22,11 +22,34 @@ accepted source revision and whether it came from a Gateway write or a file edit
 Later hot-reloadable writes do not erase a committed restart requirement while
 its application is pending.
 
+The `agents.create`, `agents.update`, and `agents.delete` Gateway methods wait
+for runtime application before reporting success. A successful response lets
+clients immediately create sessions or read the updated agent roster. If the
+config was saved but could not be applied, including when reload is `off`, the
+method returns `UNAVAILABLE` with recovery guidance instead of reporting the
+agent change as ready. Inspect `config.get` before retrying a saved mutation.
+
 If a busy state store temporarily refuses the reload's lifecycle lease, the
-Gateway keeps the change pending and retries automatically with a capped backoff.
-No additional config edit is needed. The previous runtime stays active until the
-change applies, and shutdown cancels pending retries. Other reload failures remain
-visible in the Gateway log.
+Gateway keeps the change pending and retries automatically with increasing backoff,
+up to one final attempt after the five-second backoff. The previous runtime stays
+active until the change applies. Exhausted retries or a non-retryable admission
+failure return `UNAVAILABLE` to waiting config mutations; a later config observation
+can retry the saved change. Shutdown cancels retries and settles waiting mutations.
+Reload failures remain visible in the Gateway log.
+
+If an automatic plugin reload cannot drain active work, the Gateway records the
+failure and keeps the last-good runtime. When the drain timed out on that
+plugin's admitted work, the Gateway retries the replacement automatically once
+the work finishes; no additional config edit is needed. Other drain failures
+wait for `openclaw plugins reload <id> --wait` or a revert of the pending plugin
+settings. Until then, later edits do not repeat the drain, and edits that still
+include the unapplied plugin settings stay pending; they cannot publish those
+settings through an unrelated hot update, and they apply together with the
+retry or recovery. While edits are pending, `config.get` reports an
+`appliedConfigHash` that differs from the saved revision, which the Control UI
+shows as unapplied config. `openclaw plugins reload <id> --wait` also lets you
+watch a timed-out replacement finish. A Gateway restart applies the saved config
+in full.
 
 Direct file edits are treated as untrusted until they validate. The source's file adapter waits
 for editor temp-write/rename churn to settle, reads the final file, and rejects
@@ -42,6 +65,12 @@ finalization, so it cannot discard a pending external change.
 Invalid edits leave the last good runtime active. Restart reads the same config
 files through the normal startup validation and recovery path; source revision
 numbers are local to the running Gateway.
+
+If an external edit leaves the config missing or invalid during a Gateway write's
+final reread, a `config.patch` or `config.apply` waiting for runtime application
+returns `UNAVAILABLE` with the committed config details. It does not wait for
+another file event. Repair the file, run `config.get`, then reapply the intended
+config. The Gateway does not overwrite the external edit.
 
 If you see `config reload skipped (invalid config)` or startup reports `Invalid
 config`, inspect the config, run `openclaw config validate`, then run `openclaw
@@ -99,6 +128,25 @@ Model runtime selection keeps your authored settings separate from catalog defau
 Hot reload and secrets reload preserve that distinction: catalog compatibility
 metadata does not become a custom request override that switches a native runtime
 back to OpenClaw.
+Changes to `agents.defaults.models`, agent model selection and fallbacks, and
+`models.providers` hot-apply without draining the Codex plugin. Changing Codex's
+own plugin settings still follows its plugin reload policy.
+
+Agent sandbox tool allow/deny lists under `agents.entries.<id>.tools.sandbox`
+hot-apply without restarting plugin services. Workboard reads live session facts;
+File Transfer reloads only for workspace inputs.
+
+If a service stop times out during config hot reload, that service remains owned
+and degraded while the Gateway keeps serving. Healthy services can finish their
+reloads. The warning names the plugin and service; plugin health includes its service
+failure. Once cleanup settles, retry `openclaw plugins reload <id>` to recover the
+affected plugin. A slow service cleanup does not schedule a Gateway restart.
+
+Channel transport edits, such as `channels.slack.streaming.mode`, retain prepared
+session rows and model catalogs. Agent rosters, session policy, store topology,
+configured model references, and channel activation still invalidate their affected
+facts. When model or provider authentication inputs change, catalog requests wait
+for the replacement publication instead of reporting that startup is incomplete.
 
 Changing `session.store` does not migrate conversations. Queued notifications
 bound to the previous physical store end with a recorded `store-replaced` outcome.
@@ -188,6 +236,8 @@ pick up the environment label, CLI agent picker, embed preferences, and favicon
 display preference; the Gateway process keeps running. `allowedOrigins` and
 `dangerouslyAllowHostHeaderOriginFallback` also hot-apply: pending handshakes
 recheck the new policy, and browser connections it no longer allows close.
+Removing an admitted browser origin also revokes its accepted runs and delegated
+work, even after the connection has closed; removing an unrelated origin does not.
 Disabling the Control UI stops serving dashboard pages and assets and cancels
 pending asset preparation. Existing Gateway connections and agent runs continue.
 Re-enabling prepares missing dashboard assets in the background; requests return
@@ -223,14 +273,18 @@ Title edits apply to future captures and preserve existing transcript titles.
 Disabling transcript storage stops capture writers without ending their meetings.
 
 Role definitions, proxy trust, identity scopes, Tailscale authentication, and
-trusted-proxy policies apply live. Connections and pending handshakes that retain
-old policy lose authority and reconnect. For WebSocket connections with a verified
-login identity, identity-scope edits only retire authority when that login’s
-resolved grants change. Editing another login or reordering the same scopes keeps
-the connection and its accepted runs active. Removing or changing the original
-grant still revokes retained and delegated work, even if it is restored afterward.
-Accepted policy writes can finish their response; other work must pass the current
-authority checks before writing.
+trusted-proxy policies apply live. Transport policy changes can require a new
+handshake without cancelling accepted runs. Proxy headers, OIDC mapping, device
+auto-approval, and proxy-address changes fence connections but preserve accepted
+work when the owner's grant is unchanged. This includes a requested initial turn
+after `sessions.create` commits its new session. Editing another login's identity scopes
+or reordering the same scopes keeps the connection and its accepted runs active.
+Changing the owner's identity-scope grant, removing that identity from the proxy
+allowlist, or disabling its authentication method revokes retained and delegated
+work, even if the grant is restored afterward. Shared-secret rotation also revokes
+work admitted with the old credential. Role restrictions remain enforced by each
+run's authority. Accepted policy writes can finish their response; subsequent
+requests must reauthenticate under the current transport policy.
 Changing authentication mode or listener topology still requires a Gateway restart.
 
 Node command policy updates connected nodes immediately. Disabling node-published
@@ -240,7 +294,7 @@ Revoking a command cancels its active invocations and rejects later input and
 results. Revoking desktop streaming also closes its observer transports. Browser
 node routing applies to subsequent operations. Node pairing policy
 (`gateway.nodes.pairing`) also hot-applies: pending automatic approvals recheck
-the current policy before granting access, including after SSH probes. Existing
+the current policy before granting access, including after SSH checks. Existing
 paired devices remain paired. Terminal shell changes apply to newly opened
 terminals; active terminals keep their original shell. Detached-session timeout
 changes recalculate deadlines from each terminal's original disconnect time.

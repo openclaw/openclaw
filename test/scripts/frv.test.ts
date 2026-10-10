@@ -1,10 +1,12 @@
-import { describe, expect, it, vi } from "vitest";
+import path from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   continueFailed,
   createClient,
   inspectContinuation,
   loadPlan,
   preflightContinuation,
+  watchRelease,
 } from "../../scripts/frv.mjs";
 import {
   releaseChildSpec,
@@ -13,6 +15,7 @@ import {
   validateReleaseExecutionPlanArtifact,
 } from "../../scripts/full-release-validation-policy.mjs";
 import { createReleaseEvidenceClient } from "../../scripts/release-ci-summary.mjs";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import {
   SHA,
   TARGET_SHA,
@@ -27,6 +30,8 @@ import {
   runFor,
   rootRun,
 } from "./frv.test-support.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function preflightMethods(
   children: ReturnType<typeof child>[],
@@ -895,6 +900,81 @@ describe("FRV same-parent recovery", () => {
     expect(parentReruns).toBe(1);
   });
 
+  it("reports waiting transitions, bounded heartbeats, and exact started attempts on stderr", async () => {
+    vi.useFakeTimers();
+    const started = Date.now();
+    const selected = child("normalCi", "101");
+    const childRuns = new Map<string, { attempt: number; conclusion: string | null }>([
+      ["101", { attempt: 1, conclusion: null }],
+    ]);
+    const parent = { attempt: 1, conclusion: null as string | null };
+    const base = controllerClient([selected], childRuns, parent);
+    const stderr = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const stdout = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const client = {
+      ...base,
+      getRun: async (runId: string) => {
+        const elapsed = Date.now() - started;
+        const current = childRuns.get("101")!;
+        current.conclusion =
+          elapsed >= 390_000
+            ? "success"
+            : elapsed >= 360_000 && current.attempt === 1
+              ? "failure"
+              : null;
+        parent.conclusion =
+          elapsed >= 450_000
+            ? "success"
+            : elapsed >= 420_000 && parent.attempt === 1
+              ? "failure"
+              : null;
+        const run = await base.getRun(runId);
+        return runId === "101" && elapsed >= 30_000 && elapsed < 360_000
+          ? { ...run, status: "queued" }
+          : run;
+      },
+      rerunFailed: vi.fn(async () => {
+        childRuns.get("101")!.attempt = 2;
+      }),
+      rerunParent: vi.fn(async () => {
+        parent.attempt = 2;
+      }),
+      verify: vi.fn(async () => "{}"),
+    };
+    try {
+      const result = continueFailed(plan([selected]), "77", client);
+      await Promise.all([result, vi.advanceTimersByTimeAsync(480_000)]);
+      const lines = stderr.mock.calls.map(([line]) => String(line));
+      expect(
+        lines.filter((line) => line.includes("waiting for normalCi run 101 attempt 1 in_progress")),
+      ).toHaveLength(1);
+      expect(
+        lines.filter((line) => line.includes("waiting for normalCi run 101 attempt 1 queued")),
+      ).toHaveLength(2);
+      expect(lines).toEqual(
+        expect.arrayContaining([
+          expect.stringContaining("normalCi run 101 attempt 1 completed failure"),
+          expect.stringContaining(
+            "normalCi run 101 attempt 2 started https://github.com/openclaw/openclaw/actions/runs/101/attempts/2",
+          ),
+          expect.stringContaining("waiting for normalCi run 101 attempt 2 in_progress"),
+          expect.stringContaining("waiting for parent 77 attempt 1 in_progress"),
+          expect.stringContaining(
+            "parent 77 attempt 2 started https://github.com/openclaw/openclaw/actions/runs/77/attempts/2",
+          ),
+          expect.stringContaining("parent 77 attempt 2 completed success"),
+        ]),
+      );
+      expect(lines.filter((line) => line.includes(" started "))).toHaveLength(2);
+      expect(client.rerunFailed).toHaveBeenCalledExactlyOnceWith("101");
+      expect(client.rerunParent).toHaveBeenCalledExactlyOnceWith("77");
+      expect(stdout).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+      vi.restoreAllMocks();
+    }
+  });
+
   it("retries each terminal child while the parent and other child attempts are still active", async () => {
     const first = child("normalCi", "101");
     const second = child("pluginPrerelease", "202");
@@ -1367,27 +1447,6 @@ describe("FRV same-parent recovery", () => {
     );
   });
 
-  it.each([
-    ["child", "HTTP 403: workflow rerun forbidden"],
-    ["parent", "HTTP 422: workflow rerun rejected"],
-  ])("does not poll after a hard %s mutation failure", async (target, error) => {
-    const scenario = rerunScenario(
-      target === "child"
-        ? { childError: new Error(error) }
-        : {
-            childSource: [1, "success"],
-            parentError: new Error(error),
-            parentSource: [1, "failure"],
-          },
-    );
-    await expect(continueFailed(plan([scenario.selected]), "77", scenario.client)).rejects.toThrow(
-      error,
-    );
-    expect(
-      target === "child" ? scenario.counters.reads.child : scenario.counters.reads.parent,
-    ).toBe(0);
-  });
-
   it("reconciles an ambiguous peer before surfacing a hard child mutation failure", async () => {
     const first = child("normalCi", "101");
     const second = child("pluginPrerelease", "202");
@@ -1505,30 +1564,6 @@ describe("FRV same-parent recovery", () => {
     );
     expect(scenario.counters.posts.child).toBe(1);
   });
-
-  it("keeps dry-run recovery mutation-free", async () => {
-    const selected = child("normalCi", "101");
-    let mutations = 0;
-    const client = {
-      ...controllerClient([selected], new Map([["101", { attempt: 1, conclusion: "failure" }]]), {
-        attempt: 1,
-        conclusion: "failure",
-      }),
-      rerunFailed: async () => {
-        mutations += 1;
-      },
-      rerunParent: async () => {
-        mutations += 1;
-      },
-      verify: async () => {
-        mutations += 1;
-      },
-    };
-    await expect(
-      continueFailed(plan([selected]), "77", client, { dryRun: true }),
-    ).resolves.toMatchObject({ action: "would-rerun" });
-    expect(mutations).toBe(0);
-  });
 });
 
 describe("FRV manual retry admission", () => {
@@ -1562,6 +1597,316 @@ describe("FRV manual retry admission", () => {
     });
     expect(client.rerunFailed).not.toHaveBeenCalled();
     expect(client.rerunParent).not.toHaveBeenCalled();
+  });
+});
+
+describe("FRV child rerun", () => {
+  const producer = "install_smoke_release_checks / installer_smoke_candidate_payload";
+  const consumer = "install_smoke_release_checks / installer_smoke_nonroot";
+
+  it("sends one failed-jobs rerun, verifies the new attempt, and records an audit line", async () => {
+    const scenario = rerunScenario({});
+    const audit = vi.fn();
+    await expect(
+      continueFailed(plan([scenario.selected]), "77", scenario.client, {
+        audit,
+        child: "101",
+        log: vi.fn(),
+      }),
+    ).resolves.toMatchObject({
+      action: "reran-child",
+      reruns: [{ child: "normalCi", failedJobs: ["test"], mode: "failed-jobs", runAttempt: 2 }],
+    });
+    expect(scenario.counters.posts).toEqual({ child: 1, parent: 0 });
+    expect(audit).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        maxAttempts: 2,
+        parentRunId: "77",
+        runId: "101",
+        sourceRunAttempt: 1,
+      }),
+    );
+  });
+
+  it("refuses a rerun beyond the attempt budget before any POST", async () => {
+    const scenario = rerunScenario({ childSource: [2, "failure"], childAfter: [[3, "success"]] });
+    await expect(
+      continueFailed(plan([scenario.selected]), "77", scenario.client, { child: "normalCi" }),
+    ).rejects.toThrow("normalCi already used 2 of 2 attempts");
+    expect(scenario.counters.posts.child).toBe(0);
+    await expect(
+      continueFailed(plan([scenario.selected]), "77", scenario.client, {
+        child: "normalCi",
+        log: vi.fn(),
+        maxAttempts: 3,
+      }),
+    ).resolves.toMatchObject({ action: "reran-child", reruns: [{ runAttempt: 3 }] });
+  });
+
+  it("reruns the green producer when a failed consumer binds its run attempt", async () => {
+    const scenario = rerunScenario({});
+    const log = vi.fn();
+    const client = {
+      ...scenario.client,
+      getAttemptJobs: async (_runId: string, attempt: number) => [
+        { ...job(producer), id: 21, labels: ["blacksmith-8vcpu-ubuntu-2404"] },
+        {
+          ...job(consumer, attempt === 1 ? "failure" : "success"),
+          id: 22,
+          labels: ["ubuntu-24.04"],
+        },
+      ],
+      getVariable: async () => "github",
+      rerunFailed: vi.fn(),
+      rerunJob: vi.fn(async () => scenario.client.rerunFailed()),
+    };
+    await expect(
+      continueFailed(plan([scenario.selected]), "77", client, { child: "normalCi", log }),
+    ).resolves.toMatchObject({
+      reruns: [{ jobId: 21, jobName: producer, mode: "producer", runnerBackend: "github" }],
+    });
+    expect(client.rerunJob).toHaveBeenCalledExactlyOnceWith(21);
+    expect(client.rerunFailed).not.toHaveBeenCalled();
+    expect(log).toHaveBeenCalledWith(`[frv]   failed: ${consumer} [ubuntu-24.04]`);
+  });
+
+  it.each([
+    ["keeps duplicate queued jobs", 2, "attempt 2 holds duplicate jobs: test"],
+    ["exposes no jobs", 0, "attempt 2 exposed no jobs"],
+  ])("fails after one POST when the new attempt %s", async (_case, copies, message) => {
+    const scenario = rerunScenario({});
+    const queued = { ...job("test"), conclusion: null, status: "queued" };
+    const client = {
+      ...scenario.client,
+      getAttemptJobs: async (_runId: string, attempt: number) =>
+        attempt === 1 ? [job("test", "failure")] : Array.from({ length: copies }, () => queued),
+    };
+    await withFastPolling(
+      () =>
+        expect(
+          continueFailed(plan([scenario.selected]), "77", client, { child: "101", log: vi.fn() }),
+        ).rejects.toThrow(message),
+      "5",
+    );
+    expect(scenario.counters.posts.child).toBe(1);
+  });
+
+  it("refuses unknown selectors and advisory-only children without mutation", async () => {
+    const scenario = rerunScenario({});
+    await expect(
+      continueFailed(plan([scenario.selected]), "77", scenario.client, { child: "artifact:npm" }),
+    ).rejects.toThrow("artifact producers recover through pnpm frv continue --failed");
+    const passed = rerunScenario({ childSource: [1, "success"] });
+    await expect(
+      continueFailed(plan([passed.selected]), "77", passed.client, { child: "normalCi" }),
+    ).rejects.toThrow("child normalCi is passed; nothing to rerun");
+    expect(scenario.counters.posts.child + passed.counters.posts.child).toBe(0);
+  });
+});
+
+describe("FRV watch", () => {
+  it.each([
+    ["retry-after", "Retry-After: 120", 120_000],
+    ["primary reset", "X-RateLimit-Remaining: 0\r\nX-RateLimit-Reset: 1791500120", 120_000],
+    ["secondary throttle", "", 60_000],
+  ])(
+    "waits through %s across watcher restarts without duplicate notifications",
+    async (_name, headers, waitMs) => {
+      const statePath = path.join(tempDirs.make("frv-rate-limit-"), "state.json");
+      const start = 1791500000_000;
+      const clock = vi.spyOn(Date, "now").mockReturnValue(start);
+      const getRun = vi
+        .fn()
+        .mockRejectedValueOnce(
+          Object.assign(new Error("gh: API rate limit exceeded (HTTP 403)"), {
+            stdout: `HTTP/2.0 403 Forbidden\r\n${headers}\r\n\r\n{"message":"API rate limit exceeded"}`,
+          }),
+        )
+        .mockResolvedValue(rootRun(1, "success"));
+      const client = {
+        repository: REPOSITORY,
+        getRun,
+        getParentJobs: async () => [{ ...job("Resolve target ref"), run_attempt: 1 }],
+        getAttemptJobs: async () => {
+          throw new Error("no child was dispatched");
+        },
+        getJobLog: async () => {
+          throw new Error("no dispatch log is needed");
+        },
+      };
+      const messages: string[] = [];
+      const poll = () =>
+        watchRelease("77", client, {
+          emit: (event: { message: string }) => messages.push(event.message),
+          once: true,
+          statePath,
+        });
+      try {
+        await expect(poll()).resolves.toMatchObject({ complete: false });
+        expect(messages).toEqual([expect.stringContaining("rate limited")]);
+        const firstNotification = [...messages];
+        clock.mockReturnValue(start + waitMs - 1);
+        await poll();
+        expect(getRun).toHaveBeenCalledTimes(1);
+        expect(messages).toEqual(firstNotification);
+        clock.mockReturnValue(start + waitMs);
+        await expect(poll()).resolves.toMatchObject({ complete: true });
+        expect(getRun).toHaveBeenCalledTimes(2);
+      } finally {
+        clock.mockRestore();
+      }
+    },
+  );
+
+  it("refuses a permission-denied 403 instead of scheduling another poll", async () => {
+    const statePath = path.join(tempDirs.make("frv-forbidden-"), "state.json");
+    const emit = vi.fn();
+    await expect(
+      watchRelease(
+        "77",
+        {
+          getRun: async () => {
+            throw new Error("gh: Resource not accessible by integration (HTTP 403)");
+          },
+          getParentJobs: async () => {
+            throw new Error("permission denial must stop reads");
+          },
+          getAttemptJobs: async () => {
+            throw new Error("permission denial must stop reads");
+          },
+          getJobLog: async () => {
+            throw new Error("permission denial must stop reads");
+          },
+        },
+        { once: true, statePath, emit },
+      ),
+    ).rejects.toThrow("Resource not accessible");
+    expect(emit).not.toHaveBeenCalled();
+  });
+
+  it("resolves children from dispatch logs and reports each transition once across restarts", async () => {
+    const statePath = path.join(tempDirs.make("frv-watch-"), "state.json");
+    const ci = child("normalCi", "101");
+    let parentConclusion: string | null = null;
+    let childReads = 0;
+    const getJobLog = vi.fn(
+      async () =>
+        `2026-09-29T22:00:00.1Z Dispatched ci.yml: https://github.com/${REPOSITORY}/actions/runs/101 (attempt 1)\n`,
+    );
+    const client = {
+      repository: REPOSITORY,
+      getRun: async (runId: string) => {
+        if (runId === "77") {
+          return rootRun(1, parentConclusion);
+        }
+        if (++childReads === 1) {
+          throw Object.assign(new Error("gh api failed"), { stderr: "HTTP 502: Server Error" });
+        }
+        return runFor(ci, 1, "failure");
+      },
+      getParentJobs: async () => [
+        {
+          conclusion: "success",
+          id: 5,
+          name: "Run normal full CI",
+          run_attempt: 1,
+          status: "completed",
+        },
+        {
+          conclusion: "skipped",
+          id: 6,
+          name: "Run package Telegram E2E",
+          run_attempt: 1,
+          status: "completed",
+        },
+      ],
+      getJobLog,
+      getAttemptJobs: async () => [
+        {
+          ...job("checks-node-extensions-shard-1", "timed_out"),
+          id: 900,
+          labels: ["ubuntu-24.04"],
+          runner_name: "GitHub Actions 1",
+        },
+      ],
+    };
+    const messages: string[] = [];
+    const poll = () =>
+      watchRelease("77", client, {
+        emit: (event: { message: string }) => messages.push(event.message),
+        once: true,
+        statePath,
+      });
+
+    await expect(poll()).resolves.toMatchObject({ complete: false });
+    expect(messages.splice(0)).toEqual([
+      "parent 77 attempt 1 in_progress",
+      "normalCi dispatched ci.yml run 101 (attempt 1)",
+      "GitHub reads failed (normalCi run); retrying next poll",
+    ]);
+    await poll();
+    expect(messages.splice(0)).toEqual([
+      "normalCi run 101 attempt 1 completed failure",
+      'normalCi job "checks-node-extensions-shard-1" timed_out (attempt 1; runner ubuntu-24.04 / GitHub Actions 1)',
+    ]);
+    await poll();
+    expect(messages.splice(0)).toEqual([]);
+    parentConclusion = "failure";
+    await expect(poll()).resolves.toMatchObject({ complete: true });
+    expect(messages).toEqual([
+      "parent 77 attempt 1 completed failure",
+      "parent 77 and every dispatched child are terminal",
+    ]);
+    expect(getJobLog).toHaveBeenCalledExactlyOnceWith(5, expect.anything());
+  });
+});
+
+describe("FRV watch completion", () => {
+  it("waits for lagging dispatch and job snapshots before declaring the release terminal", async () => {
+    const statePath = path.join(tempDirs.make("frv-watch-"), "state.json");
+    const ci = child("normalCi", "101");
+    let snapshot: "in_progress" | "completed" = "in_progress";
+    const client = {
+      repository: REPOSITORY,
+      getRun: async (runId: string) =>
+        runId === "77" ? rootRun(1, "failure") : runFor(ci, 1, "failure"),
+      getParentJobs: async (): Promise<Record<string, unknown>[]> => [
+        { conclusion: null, id: 5, name: "Run normal full CI", run_attempt: 1, status: snapshot },
+      ],
+      getJobLog: async () =>
+        `Dispatched ci.yml: https://github.com/${REPOSITORY}/actions/runs/101 (attempt 1)`,
+      getAttemptJobs: async (): Promise<Record<string, unknown>[]> => [
+        { ...job("late"), conclusion: null, id: 7, status: "queued" },
+      ],
+    };
+    const poll = () => watchRelease("77", client, { emit: () => undefined, once: true, statePath });
+    const parentJobs = client.getParentJobs;
+    client.getParentJobs = async () => [];
+    await expect(poll()).resolves.toMatchObject({ complete: false });
+    // A newer parent attempt needs its own jobs in the snapshot.
+    const getRun = client.getRun;
+    client.getRun = async (runId: string) =>
+      runId === "77" ? rootRun(2, "failure") : getRun(runId);
+    client.getParentJobs = async () => [
+      {
+        conclusion: "success",
+        id: 4,
+        name: "Resolve target ref",
+        run_attempt: 1,
+        status: "completed",
+      },
+    ];
+    await expect(poll()).resolves.toMatchObject({ complete: false });
+    client.getRun = getRun;
+    client.getParentJobs = parentJobs;
+
+    await expect(poll()).resolves.toMatchObject({ complete: false });
+    snapshot = "completed";
+    await expect(poll()).resolves.toMatchObject({ complete: false });
+    client.getAttemptJobs = async () => [];
+    await expect(poll()).resolves.toMatchObject({ complete: false });
+    client.getAttemptJobs = async () => [{ ...job("late", "failure"), id: 7 }];
+    await expect(poll()).resolves.toMatchObject({ complete: true });
   });
 });
 

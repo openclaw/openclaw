@@ -104,7 +104,7 @@ suite.define(() => {
       await effort.click();
       const slider = main.locator("[data-chat-thinking-slider]");
       await expect.poll(() => slider.isEnabled()).toBe(true);
-      expect(await main.locator("[data-chat-speed-toggle]").isDisabled()).toBe(true);
+      expect(await main.locator("[data-chat-speed-option=on]").isDisabled()).toBe(true);
       await slider.press("End");
       const thinking = await gateway.waitForRequest("sessions.patch", { after: 1 });
       expect(thinking.params).toMatchObject({ key, thinkingLevel: "high" });

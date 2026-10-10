@@ -1,7 +1,4 @@
-// The ledge's uninvited guests: pass-through visitors (strangers, the crab,
-// the snail, the duck, the jellyfish) and the message in a bottle. Both run
-// on their own seeded clocks, independent of the resident's visit schedule;
-// a ReactiveController keeps the pet element focused on the resident.
+// Passers and bottles have seeded clocks independent of the resident's visits.
 import { expectDefined } from "@openclaw/normalization-core";
 import type { ReactiveController, ReactiveControllerHost } from "lit";
 import {
@@ -10,7 +7,6 @@ import {
   planLobsterBottle,
   planLobsterPasser,
   prefersReducedMotion,
-  type LobsterBottlePlan,
   type LobsterPasserPlan,
   type LobsterPasserOptions,
 } from "./lobster-pet-plans.ts";
@@ -32,10 +28,8 @@ type LobsterBottleScene = { spotPct: number; opened: boolean; fortune: string };
 
 export class LobsterLedgeTraffic implements ReactiveController {
   passer: LobsterPasserPlan | null = null;
+  bottle: LobsterBottleScene | null = null;
   private connected = false;
-  private bottlePlan: LobsterBottlePlan | null = null;
-  private bottleVisible = false;
-  private bottleOpened = false;
   private passerTimer: number | null = null;
   private passerEndTimer: number | null = null;
   private passerWatchTimer: number | null = null;
@@ -60,19 +54,16 @@ export class LobsterLedgeTraffic implements ReactiveController {
     if (!this.hooks.visitsEnabled()) {
       this.clearTimers();
       this.passer = null;
-      this.bottleVisible = false;
+      this.bottle = null;
     }
   }
 
   hostDisconnected() {
     this.connected = false;
     this.clearTimers();
-    // The show ends with the host, mirroring the pet's own visit timers
-    // (which also die on disconnect and only re-arm on a seed change):
-    // clear visible guests so a reconnect never shows a frozen passer or an
-    // unebbing bottle. The update request flushes on reattach.
+    // Clear visible guests so a reconnect cannot show a stopped passer or bottle.
     this.passer = null;
-    this.bottleVisible = false;
+    this.bottle = null;
     this.host.requestUpdate();
   }
 
@@ -84,8 +75,7 @@ export class LobsterLedgeTraffic implements ReactiveController {
     }
     this.clearTimers();
     this.passer = null;
-    this.bottleVisible = false;
-    this.bottleOpened = false;
+    this.bottle = null;
     if (this.connected && this.hooks.visitsEnabled()) {
       this.schedulePasser(seed);
       this.scheduleBottle(seed);
@@ -121,26 +111,11 @@ export class LobsterLedgeTraffic implements ReactiveController {
     return this.passer ? this.crossingMs : 0;
   }
 
-  bottle(): LobsterBottleScene | null {
-    if (!this.bottleVisible || !this.bottlePlan) {
-      return null;
-    }
-    return {
-      spotPct: this.bottlePlan.spotPct,
-      opened: this.bottleOpened,
-      fortune: expectDefined(
-        LOBSTER_BOTTLE_FORTUNES[this.bottlePlan.fortuneIndex],
-        "lobster bottle fortune",
-      ),
-    };
-  }
-
   readonly openBottle = () => {
-    if (this.bottleOpened || !this.bottleVisible) {
+    if (!this.bottle || this.bottle.opened) {
       return;
     }
-    this.bottleOpened = true;
-    // Read, then reclaimed by the sea a couple of minutes later.
+    this.bottle = { ...this.bottle, opened: true };
     this.armBottleEbb(120_000);
     this.host.requestUpdate();
   };
@@ -199,8 +174,6 @@ export class LobsterLedgeTraffic implements ReactiveController {
       this.passerWatchTimer = window.setTimeout(() => {
         this.passerWatchTimer = null;
         this.hooks.onPasserFacing(plan.direction);
-        // Mid-crossing is when the passer is closest: friends wave at the
-        // traffic, shy pets duck for a peek, regulars just watch it pass.
         this.hooks.onPasserMidCross();
       }, crossMs / 2);
       this.passerEndTimer = window.setTimeout(() => {
@@ -212,11 +185,9 @@ export class LobsterLedgeTraffic implements ReactiveController {
     }, plan.atMs);
   }
 
-  // The bottle keeps its own clock: it washes up whether or not the pet is
-  // around, waits to be opened, and drifts back out with the tide.
   private scheduleBottle(seed: number) {
-    this.bottlePlan = planLobsterBottle(seed);
-    if (!this.bottlePlan) {
+    const plan = planLobsterBottle(seed);
+    if (!plan) {
       return;
     }
     this.bottleTimer = window.setTimeout(() => {
@@ -224,10 +195,17 @@ export class LobsterLedgeTraffic implements ReactiveController {
       if (!this.connected || !this.hooks.visitsEnabled()) {
         return;
       }
-      this.bottleVisible = true;
+      this.bottle = {
+        spotPct: plan.spotPct,
+        opened: false,
+        fortune: expectDefined(
+          LOBSTER_BOTTLE_FORTUNES[plan.fortuneIndex],
+          "lobster bottle fortune",
+        ),
+      };
       this.host.requestUpdate();
       this.armBottleEbb(300_000);
-    }, this.bottlePlan.atMs);
+    }, plan.atMs);
   }
 
   private armBottleEbb(delayMs: number) {
@@ -236,7 +214,7 @@ export class LobsterLedgeTraffic implements ReactiveController {
     }
     this.bottleEndTimer = window.setTimeout(() => {
       this.bottleEndTimer = null;
-      this.bottleVisible = false;
+      this.bottle = null;
       this.host.requestUpdate();
     }, delayMs);
   }

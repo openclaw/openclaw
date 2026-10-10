@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
-import type { SessionTranscriptWriteLockContext } from "openclaw/plugin-sdk/session-transcript-runtime";
+import type { SessionTranscriptWriteContext } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { withEnvAsync } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -99,9 +99,9 @@ vi.mock("openclaw/plugin-sdk/session-transcript-runtime", async (importOriginal)
     await importOriginal<typeof import("openclaw/plugin-sdk/session-transcript-runtime")>();
   return {
     ...actual,
-    withSessionTranscriptWriteLock: async (
+    withSessionTranscriptWrite: async (
       _params: unknown,
-      run: (context: Pick<SessionTranscriptWriteLockContext, "appendMessage">) => Promise<void>,
+      run: (context: Pick<SessionTranscriptWriteContext, "appendMessage">) => Promise<void>,
     ) => {
       await run({
         appendMessage: async ({ message, idempotencyLookup }) => {
@@ -426,17 +426,8 @@ if (args[0] === "--pure" && args[1] === "db" && args.includes("--format") && arg
   process.exitCode = 2;
 }
 `;
-  // Flush and close the executable before exec: a still-open write handle makes
-  // the immediately following spawn fail with ETXTBSY under parallel CI shards.
-  const executableHandle = await fs.open(executable, "w");
-  try {
-    await executableHandle.writeFile(script);
-    await executableHandle.sync();
-  } finally {
-    await executableHandle.close();
-  }
+  await fs.writeFile(`${executable}.js`, script);
   if (process.platform === "win32") {
-    await fs.writeFile(path.join(directory, "opencode.js"), script);
     // This exact direct-forwarder shape is parsed into a Node entrypoint;
     // the batch wrapper itself is never executed through cmd.exe.
     await fs.writeFile(
@@ -444,7 +435,9 @@ if (args[0] === "--pure" && args[1] === "db" && args.includes("--format") && arg
       '@echo off\r\n"%~dp0\\opencode.js" %*\r\n',
     );
   } else {
-    await fs.chmod(executable, 0o755);
+    // A concurrent fork can retain the generated payload's write FD after close.
+    // Execute an immutable inode and let Node read the payload as ordinary data.
+    await fs.symlink(new URL("./test-fixtures/opencode-command.sh", import.meta.url), executable);
   }
   process.env.PATH = `${directory}${path.delimiter}${originalPath ?? ""}`;
   process.env.CATALOG_UNRELATED_ENV = "present";

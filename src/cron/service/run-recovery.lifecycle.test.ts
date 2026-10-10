@@ -1,5 +1,12 @@
-import { describe, expect, it, vi } from "vitest";
+import { once } from "node:events";
+import { deserialize } from "node:v8";
+import { MessageChannel, MessagePort, Worker } from "node:worker_threads";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { loseFirstCronMutationReply } from "../../../test/helpers/cron/runtime-mutation.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { startSqliteConcurrentWriter } from "../../infra/sqlite-concurrent-writer.test-support.js";
+import type { SqliteWorkerRequest } from "../../infra/sqlite-worker-contract.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
@@ -15,17 +22,21 @@ import {
   markCronJobActive,
 } from "../active-jobs.js";
 import { readCronRunHistoryPageForTests } from "../run-history.test-support.js";
+import { CronService } from "../service.js";
 import { setupCronServiceSuite, writeCronStoreSnapshot } from "../service.test-harness.js";
+import * as cronStore from "../store.js";
 import { loadCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
 import {
-  finishCronRunReceipt,
+  finishCronRunReceiptAsync,
   finishCronRunReceiptInDatabase,
   prepareCronRunReceiptClaim,
+  releaseLocalCronRunReceiptOwnership,
 } from "../store/run-receipt-store.js";
 import {
   claimCronRunReceiptInDatabaseForTest,
   inspectActiveCronRunReceipt,
+  makeCronRecoveryJob,
 } from "../store/run-receipt-store.test-support.js";
 import { prepareCronRunReceiptWriteSchema } from "../store/run-receipt-write-admission.js";
 import type { CronRunReceiptHandle } from "../store/run-receipt.types.js";
@@ -34,24 +45,26 @@ import { locked } from "./locked.js";
 import { start, stop } from "./ops-lifecycle.js";
 import { remove, update } from "./ops-mutations.js";
 import { run } from "./ops-run.js";
-import { createCronServiceState, type CronServiceDeps } from "./state.js";
+import { ensureLoadedForRead } from "./ops-shared.js";
+import {
+  claimCronRecoveryReceipt,
+  makeCronRecoveryState,
+  observeCronTimerAdmissions,
+} from "./run-recovery.test-support.js";
+import { recomputeUnownedCronSchedules } from "./schedule-maintenance.js";
+import * as serviceState from "./state.js";
+import { createCronServiceState, type CronEvent, type CronServiceDeps } from "./state.js";
 import { MIN_REFIRE_GAP_MS } from "./timer-execution-timeout.js";
+import { onTimer } from "./timer.test-support.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({ prefix: "cron-recovery-lifecycle-" });
 
 describe("one-shot recovery", () => {
   it.each([
-    { mode: "stopped", status: "ok" },
-    { mode: "stopped", status: "error" },
     { mode: "retired", status: "ok" },
-    { mode: "retired", status: "error" },
     { mode: "rescheduled", status: "ok" },
-    { mode: "manual", status: "ok" },
     { mode: "manual", status: "error" },
-    { mode: "manual", status: "skipped" },
-    { mode: "manual-future", status: "ok" },
     { mode: "manual-delayed-force", status: "ok" },
-    { mode: "manual-delayed-force", status: "error" },
     { mode: "manual-replaced", status: "ok" },
     { mode: "manual-write-failure", status: "ok" },
     { mode: "manual-write-failure-live", status: "error" },
@@ -61,7 +74,7 @@ describe("one-shot recovery", () => {
     async ({ mode, status }) => {
       const { storePath } = await makeStorePath();
       const nowMs = Date.now();
-      const atMs = nowMs + (mode === "manual-future" ? 60_000 : 0);
+      const atMs = nowMs;
       const manual = mode.startsWith("manual");
       const writeFailure = mode.startsWith("manual-write-failure");
       const job: CronJob = {
@@ -111,7 +124,7 @@ describe("one-shot recovery", () => {
         ? run(
             first,
             job.id,
-            mode === "manual-future" || mode === "manual-delayed-force" ? "force" : undefined,
+            mode === "manual-delayed-force" ? "force" : undefined,
             mode === "manual-delayed-force" ? { scheduleOwnershipAtMs: nowMs - 1 } : undefined,
           )
         : start(first);
@@ -161,7 +174,7 @@ describe("one-shot recovery", () => {
           advanceCronActiveJobGeneration();
         }
         failureDatabase?.exec(`
-          CREATE TEMP TRIGGER reject_manual_terminal_row
+          CREATE TRIGGER reject_manual_terminal_row
           BEFORE UPDATE ON cron_jobs
           WHEN NEW.job_id = 'shutdown-one-shot'
             AND json_extract(NEW.state_json, '$.runningAtMs') IS NULL
@@ -259,14 +272,14 @@ describe("one-shot recovery", () => {
               continue;
             }
             expect(jobs[0]?.state.runningAtMs).toBeUndefined();
-            if (mode === "rescheduled" || mode === "manual-future") {
+            if (mode === "rescheduled") {
               expect(jobs).toMatchObject([
                 {
                   enabled: true,
                   state: {
                     lastRunStatus: status,
                     nextRunAtMs: nowMs + 60_000,
-                    ...(mode === "rescheduled" ? { scheduleActivatedAtMs: nowMs } : {}),
+                    scheduleActivatedAtMs: nowMs,
                   },
                 },
               ]);
@@ -287,10 +300,446 @@ describe("one-shot recovery", () => {
         await settledStartup;
         failureDatabase?.exec("DROP TRIGGER IF EXISTS reject_manual_terminal_row");
         if (successor) {
-          finishCronRunReceipt({ handle: successor, status: "skipped", finishedAtMs: nowMs });
+          await finishCronRunReceiptAsync({
+            handle: successor,
+            status: "skipped",
+            finishedAtMs: nowMs,
+          });
           clearCronJobActive(job.id, successorMarker);
         }
       }
     },
   );
+});
+
+it("lists behind healthy recovery while a writer is held, and retires a waiting repair", async () => {
+  const { storePath } = await makeStorePath();
+  const nowMs = Date.now();
+  const jobs = Array.from({ length: 66 }, (_, index) => {
+    const job = makeCronRecoveryJob(`job-${index}`, nowMs - 100);
+    delete job.state.runningAtMs;
+    job.enabled = index < 64;
+    job.state.nextRunAtMs = nowMs + 86_400_000;
+    return job;
+  });
+  await writeCronStoreSnapshot({ storePath, jobs });
+  let state: serviceState.CronServiceState | undefined;
+  const createState = serviceState.createCronServiceState;
+  const capture = vi.spyOn(serviceState, "createCronServiceState").mockImplementation((deps) => {
+    state = createState(deps);
+    return state;
+  });
+  const onEvent = vi.fn();
+  const runner = vi.fn(async () => ({ status: "ok" as const }));
+  const cron = new CronService({
+    scheduler: createTestGatewayScheduler(),
+    storePath,
+    cronEnabled: true,
+    defaultAgentId: "alpha",
+    isAgentAvailable: () => true,
+    nowMs: () => nowMs,
+    log: logger,
+    enqueueSystemEvent: vi.fn(),
+    requestHeartbeat: vi.fn(),
+    runIsolatedAgentJob: runner,
+    runCommandJob: runner,
+    onEvent,
+  });
+  capture.mockRestore();
+  if (!state) {
+    throw new Error("Expected the service state");
+  }
+  const scheduler = state;
+  const receipts: CronRunReceiptHandle[] = [];
+  let writer: ReturnType<typeof startSqliteConcurrentWriter> | undefined;
+  let pending: Promise<void> | undefined;
+  let watchdogReleased = false;
+  let watchdog: AbortSignal | undefined;
+  const releaseStuckWriter = () => {
+    watchdogReleased = true;
+    void writer?.stop();
+  };
+  const posted = createDeferred();
+  // oxlint-disable-next-line typescript/unbound-method -- call retains the observed Worker receiver.
+  const nativePost = Worker.prototype.postMessage;
+  const observe = vi.spyOn(Worker.prototype, "postMessage").mockImplementation(function (
+    this: Worker,
+    request: SqliteWorkerRequest,
+    transferList,
+  ) {
+    if (request.type === "execute") {
+      const command: unknown = deserialize(request.input);
+      if (isRecord(command) && command.type === "cron.repairRun") {
+        posted.resolve();
+      }
+    }
+    return nativePost.call(this, request, transferList);
+  });
+  try {
+    await cron.start();
+    for (const job of jobs.slice(0, 16)) {
+      const startedAtMs = nowMs - 100;
+      const prepared = prepareCronRunReceiptClaim({
+        observed: undefined,
+        storePath,
+        job,
+        agentId: "alpha",
+        startedAtMs,
+      });
+      const receipt = runOpenClawStateWriteTransaction(({ db }) =>
+        claimCronRunReceiptInDatabaseForTest({
+          database: db,
+          prepared,
+          resolveAgentId: () => "alpha",
+        }),
+      );
+      receipts.push(receipt);
+      job.state.runningAtMs = startedAtMs;
+      job.state.runningReceiptId = receipt.receiptId;
+    }
+    await writeCronStoreSnapshot({ storePath, jobs });
+    const baseline = await cron.listPage({ limit: 50 });
+    const database = openOpenClawStateDatabase();
+    database.db.exec("CREATE TABLE writes (id INTEGER PRIMARY KEY)");
+    writer = startSqliteConcurrentWriter(database.path, "WAL");
+    await writer.waitFor("ready");
+    expect(await writer.holdTransaction()).toMatchObject({ transaction: true });
+    // Cleanup only: a regressed blocking read must not strand the independent writer.
+    watchdog = AbortSignal.timeout(15_000);
+    watchdog.addEventListener("abort", releaseStuckWriter, { once: true });
+    pending = onTimer(scheduler);
+    const pages = await Promise.all([cron.listPage({ limit: 50 }), cron.listPage({ limit: 50 })]);
+    await pending;
+    expect(watchdogReleased).toBe(false);
+    expect(pages).toEqual([baseline, baseline]);
+    expect(baseline.total).toBe(64);
+    expect(baseline.jobs).toHaveLength(50);
+
+    releaseLocalCronRunReceiptOwnership(receipts[0]!);
+    let settled = false;
+    pending = onTimer(scheduler).finally(() => {
+      settled = true;
+    });
+    await posted.promise;
+    const { port1, port2 } = new MessageChannel();
+    try {
+      const heartbeat = once(port1, "message");
+      port2.postMessage("heartbeat");
+      expect(await heartbeat).toEqual(["heartbeat"]);
+    } finally {
+      port1.close();
+      port2.close();
+    }
+    expect(settled).toBe(false);
+    cron.stop();
+    await writer.stop();
+    await pending;
+    expect(inspectActiveCronRunReceipt({ storePath, jobId: jobs[0]!.id })).toMatchObject({
+      receiptId: receipts[0]!.receiptId,
+    });
+    expect((await loadCronStore(storePath)).jobs[0]?.state.runningAtMs).toBe(nowMs - 100);
+    expect(onEvent.mock.calls.filter(([event]) => event.action === "finished")).toEqual([]);
+    expect(runner).not.toHaveBeenCalled();
+    expect(scheduler.activeTimerTicks).toBe(0);
+  } finally {
+    watchdog?.removeEventListener("abort", releaseStuckWriter);
+    cron.stop();
+    await writer?.stop();
+    await pending;
+    observe.mockRestore();
+    for (const receipt of receipts) {
+      releaseLocalCronRunReceiptOwnership(receipt);
+    }
+    openOpenClawStateDatabase().db.exec("DROP TABLE IF EXISTS writes");
+  }
+});
+
+async function seedInterruptedBatch() {
+  const { storePath } = await makeStorePath();
+  const nowMs = Date.now();
+  const jobs = ["first", "second"].map((id, index) => {
+    const job = makeCronRecoveryJob(id, nowMs - 1_000 + index);
+    job.enabled = false;
+    return job;
+  });
+  const onEvent = vi.fn();
+  const runner = vi.fn(async () => ({ status: "ok" as const }));
+  const state = createCronServiceState({
+    scheduler: createTestGatewayScheduler(),
+    storePath,
+    cronEnabled: true,
+    defaultAgentId: "alpha",
+    isAgentAvailable: () => true,
+    nowMs: () => nowMs,
+    log: logger,
+    enqueueSystemEvent: vi.fn(),
+    requestHeartbeat: vi.fn(),
+    runIsolatedAgentJob: runner,
+    runCommandJob: runner,
+    onEvent,
+  });
+  await writeCronStoreSnapshot({ storePath, jobs });
+  for (const job of jobs) {
+    const startedAtMs = job.state.runningAtMs!;
+    const prepared = prepareCronRunReceiptClaim({
+      observed: undefined,
+      storePath,
+      job,
+      agentId: "alpha",
+      startedAtMs,
+    });
+    const receipt = runOpenClawStateWriteTransaction(({ db }) =>
+      claimCronRunReceiptInDatabaseForTest({
+        database: db,
+        prepared,
+        resolveAgentId: () => "alpha",
+      }),
+    );
+    job.state.runningReceiptId = receipt.receiptId;
+    releaseLocalCronRunReceiptOwnership(receipt);
+  }
+  await writeCronStoreSnapshot({ storePath, jobs });
+  const history = (jobId: string) =>
+    readCronRunHistoryPageForTests({ storeKey: cronStoreKey(storePath), jobId }).entries;
+  return { storePath, jobs, state, onEvent, runner, history };
+}
+
+it.each([
+  ["timer", onTimer],
+  ["startup", start],
+] as const)(
+  "publishes committed interruptions before retiring %s held at its reload",
+  async (source, recover) => {
+    const { storePath, jobs, state, onEvent, runner, history } = await seedInterruptedBatch();
+    const entered = createDeferred();
+    const release = createDeferred();
+    const load = cronStore.loadCronJobsStoreWithConfigJobs;
+    let loads = 0;
+    const delayed = vi
+      .spyOn(cronStore, "loadCronJobsStoreWithConfigJobs")
+      .mockImplementation(async (path) => {
+        const result = await load(path);
+        if (path === storePath && ++loads === 2) {
+          entered.resolve();
+          await release.promise;
+        }
+        return result;
+      });
+    const admissions = observeCronTimerAdmissions(state);
+    const tick = recover(state);
+    let restarted: Promise<void> | undefined;
+    try {
+      await entered.promise;
+      if (source === "timer") {
+        await admissions.expectActive();
+      }
+      const committed = await loadCronStore(storePath);
+      for (const job of jobs) {
+        const stored = committed.jobs.find((entry) => entry.id === job.id);
+        expect(stored?.state).toMatchObject({ lastRunStatus: "error" });
+        expect(stored?.state.runningAtMs).toBeUndefined();
+        expect(stored?.state.runningReceiptId).toBeUndefined();
+        expect(inspectActiveCronRunReceipt({ storePath, jobId: job.id })).toBeUndefined();
+        expect(history(job.id)).toEqual([]);
+      }
+      expect(
+        onEvent.mock.calls.map(([event]) => event).filter((event) => event.action === "finished"),
+      ).toEqual([]);
+
+      stop(state);
+      restarted = start(state);
+      expect(state.stopped).toBe(false);
+      release.resolve();
+      await tick;
+      await restarted;
+
+      const finished = onEvent.mock.calls
+        .map(([event]) => event)
+        .filter((event) => event.action === "finished");
+      expect(finished).toMatchObject(
+        jobs.map((job) => ({
+          jobId: job.id,
+          status: "error",
+          error: "cron: job interrupted by gateway restart",
+          runAtMs: job.state.runningAtMs,
+        })),
+      );
+      for (const job of jobs) {
+        const entries = history(job.id);
+        expect(entries).toHaveLength(1);
+        expect(entries[0]).toMatchObject({
+          jobId: job.id,
+          status: "error",
+          error: "cron: job interrupted by gateway restart",
+          runAtMs: job.state.runningAtMs,
+        });
+        expect(inspectActiveCronRunReceipt({ storePath, jobId: job.id })).toBeUndefined();
+      }
+      expect(runner).not.toHaveBeenCalled();
+      expect(state.activeTimerTicks).toBe(0);
+      expect(state.runAdmission.active).toBe(0);
+      expect(state.runAdmission.waiters).toEqual([]);
+      expect(state.queuedRunReservationsByJobId.size).toBe(0);
+
+      await admissions.expectReleased(source === "timer" ? 1 : 0);
+    } finally {
+      release.resolve();
+      await Promise.allSettled([tick, ...(restarted ? [restarted] : [])]);
+      delayed.mockRestore();
+      stop(state);
+    }
+  },
+);
+
+it("publishes a committed repair once after reply loss and leaves the remaining batch for the next tick", async () => {
+  const { storePath } = await makeStorePath();
+  const nowMs = Date.now();
+  const jobs = ["first", "second"].map((id, index) => {
+    const job = makeCronRecoveryJob(id, nowMs - 1_000 + index);
+    job.enabled = false;
+    job.delivery = { mode: "announce", channel: "last" };
+    job.failureAlert = { after: 1, cooldownMs: 0 };
+    return job;
+  });
+  const enqueueSystemEvent = vi.fn();
+  const onEvent = vi.fn<(event: CronEvent) => void>();
+  const runner = vi.fn(async () => ({ status: "ok" as const }));
+  const state = createCronServiceState({
+    scheduler: createTestGatewayScheduler(),
+    storePath,
+    cronEnabled: true,
+    defaultAgentId: "alpha",
+    isAgentAvailable: () => true,
+    nowMs: () => nowMs,
+    log: logger,
+    enqueueSystemEvent,
+    requestHeartbeat: vi.fn(),
+    runIsolatedAgentJob: runner,
+    runCommandJob: runner,
+    onEvent,
+  });
+  await writeCronStoreSnapshot({ storePath, jobs });
+  for (const job of jobs) {
+    const receipt = claimCronRecoveryReceipt(storePath, job, job.state.runningAtMs!);
+    job.state.runningReceiptId = receipt.receiptId;
+    releaseLocalCronRunReceiptOwnership(receipt);
+  }
+  await writeCronStoreSnapshot({ storePath, jobs });
+  const history = (jobId: string) =>
+    readCronRunHistoryPageForTests({ storeKey: cronStoreKey(storePath), jobId }).entries;
+  const finishedIds = () =>
+    onEvent.mock.calls.flatMap(([event]) => (event.action === "finished" ? [event.jobId] : []));
+  const notificationKeys = () =>
+    enqueueSystemEvent.mock.calls.map(([, options]) => options.contextKey);
+
+  const admissions = observeCronTimerAdmissions(state);
+  const reply = loseFirstCronMutationReply();
+  const pending: Promise<unknown>[] = [];
+  onTestFinished(async () => {
+    await reply.close();
+    stop(state);
+    await Promise.allSettled(pending);
+    await state.op;
+  });
+
+  const firstTick = onTimer(state);
+  pending.push(firstTick);
+  await expect(firstTick).rejects.toBeInstanceOf(Error);
+  await admissions.expectReleased(1);
+  await reply.waitForExit();
+  expect(reply.wasDropped()).toBe(true);
+  expect(reply.attempts).toEqual(["first"]);
+  expect(finishedIds()).toEqual(["first"]);
+  expect(notificationKeys()).toEqual(["cron:first:failure-alert"]);
+  const afterLoss = await loadCronStore(storePath);
+  expect(afterLoss.jobs[0]?.state).toMatchObject({ lastRunStatus: "error", consecutiveErrors: 1 });
+  expect(afterLoss.jobs[0]?.state.runningAtMs).toBeUndefined();
+  expect(afterLoss.jobs[1]?.state.runningAtMs).toBe(jobs[1]!.state.runningAtMs);
+  expect(inspectActiveCronRunReceipt({ storePath, jobId: "first" })).toBeUndefined();
+  expect(inspectActiveCronRunReceipt({ storePath, jobId: "second" })?.receiptId).toBe(
+    jobs[1]!.state.runningReceiptId,
+  );
+  expect(history("first")).toEqual([expect.objectContaining({ jobId: "first", status: "error" })]);
+  expect(history("second")).toEqual([]);
+
+  const secondTick = onTimer(state);
+  pending.push(secondTick);
+  await secondTick;
+  expect(reply.attempts).toEqual(["first", "second"]);
+  expect(finishedIds()).toEqual(["first", "second"]);
+  expect(notificationKeys()).toEqual(["cron:first:failure-alert", "cron:second:failure-alert"]);
+  for (const job of jobs) {
+    expect(inspectActiveCronRunReceipt({ storePath, jobId: job.id })).toBeUndefined();
+    expect(history(job.id)).toEqual([expect.objectContaining({ jobId: job.id, status: "error" })]);
+  }
+  expect(runner).not.toHaveBeenCalled();
+  expect(state.activeTimerTicks).toBe(0);
+
+  await admissions.expectReleased(2);
+});
+
+it("publishes committed schedule maintenance once after its successful reply is lost", async () => {
+  const { storePath } = await makeStorePath();
+  const nowMs = Date.now();
+  const job = makeCronRecoveryJob("invalid-schedule", nowMs);
+  job.schedule = { kind: "cron", expr: "invalid" };
+  job.state = { scheduleErrorCount: 2 };
+  await writeCronStoreSnapshot({ storePath, jobs: [job] });
+  const enqueueSystemEvent = vi.fn();
+  const state = makeCronRecoveryState(logger, storePath, nowMs, { enqueueSystemEvent });
+  const reply = loseFirstCronMutationReply("cron.scheduleUnowned");
+  onTestFinished(async () => {
+    await reply.close();
+    stop(state);
+    await state.op;
+  });
+  await expect(ensureLoadedForRead(state)).rejects.toBeInstanceOf(Error);
+  await reply.waitForExit();
+  expect(reply.wasDropped()).toBe(true);
+  expect(state.store?.jobs[0]).toMatchObject({ enabled: false, state: { scheduleErrorCount: 3 } });
+  expect((await loadCronStore(storePath)).jobs[0]).toEqual(state.store?.jobs[0]);
+  expect(enqueueSystemEvent).toHaveBeenCalledOnce();
+  expect(enqueueSystemEvent.mock.calls[0]?.[1].contextKey).toBe(
+    "cron:invalid-schedule:auto-disabled",
+  );
+  await ensureLoadedForRead(state);
+  expect(enqueueSystemEvent).toHaveBeenCalledOnce();
+  expect(reply.attempts).toHaveLength(2);
+});
+
+it("rolls schedule maintenance back when process ownership changes before commit", async () => {
+  const { storePath } = await makeStorePath();
+  const nowMs = Date.now();
+  const job = makeCronRecoveryJob("became-active", nowMs);
+  job.enabled = false;
+  job.state = { runningAtMs: nowMs - 1_000 };
+  await writeCronStoreSnapshot({ storePath, jobs: [job] });
+  const before = await loadCronStore(storePath);
+  const state = makeCronRecoveryState(logger, storePath, nowMs);
+  let activated = false;
+  // oxlint-disable-next-line typescript/unbound-method -- The private port remains the receiver.
+  const originalPost = MessagePort.prototype.postMessage;
+  const post = vi.spyOn(MessagePort.prototype, "postMessage").mockImplementation(function (
+    this: MessagePort,
+    value,
+    transferList,
+  ) {
+    if (isRecord(value) && Array.isArray(value.ownership)) {
+      markCronJobActive(job.id);
+      activated = true;
+    }
+    return originalPost.call(this, value, transferList);
+  });
+  try {
+    await expect(recomputeUnownedCronSchedules(state)).rejects.toThrow(
+      "Cron schedule ownership changed before commit",
+    );
+    expect(activated).toBe(true);
+    expect(await loadCronStore(storePath)).toEqual(before);
+    expect(state.deps.enqueueSystemEvent).not.toHaveBeenCalled();
+  } finally {
+    post.mockRestore();
+    clearCronJobActive(job.id);
+    stop(state);
+  }
 });

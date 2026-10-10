@@ -162,19 +162,19 @@ async function deleteSessionBackfillRewindBatches(
   workspaceDir: string,
   entries: Array<{ key: string }>,
 ): Promise<void> {
-  await Promise.all(
-    entries.map((entry) =>
-      deleteMemoryCoreWorkspaceEntry({
-        namespace: SESSION_BACKFILL_REWIND_NAMESPACE,
-        workspaceDir,
-        key: entry.key,
-      }),
-    ),
+  const deletions = entries.map((entry) =>
+    deleteMemoryCoreWorkspaceEntry({
+      namespace: SESSION_BACKFILL_REWIND_NAMESPACE,
+      workspaceDir,
+      key: entry.key,
+    }),
   );
-}
-
-function belongsToAgentFileState(key: string, agentId: string): boolean {
-  return key.startsWith(`${agentId}:`);
+  try {
+    await Promise.all(deletions);
+  } finally {
+    // A failed deletion cannot leave journal mutations running after rollback returns.
+    await Promise.allSettled(deletions);
+  }
 }
 
 function belongsToAgentSeenState(key: string, agentId: string): boolean {
@@ -197,7 +197,7 @@ export async function resetSessionBackfillIngestionState(params: {
   await writeSessionIngestionState(params.workspaceDir, {
     ...state,
     files: Object.fromEntries(
-      Object.entries(state.files).filter(([key]) => !belongsToAgentFileState(key, params.agentId)),
+      Object.entries(state.files).filter(([key]) => !key.startsWith(`${params.agentId}:`)),
     ),
     seenMessages: Object.fromEntries(
       Object.entries(state.seenMessages).filter(
@@ -250,19 +250,16 @@ function aggregateSessionBackfillBatches(
       });
     }
   }
+  const total = (
+    field: "candidateCount" | "stagedEntries" | "writtenDiaryEntries" | "replacedDiaryEntries",
+  ) => executions.reduce((sum, { result }) => sum + result[field], 0);
   return {
     ...first,
     days: [...days.values()].toSorted((a, b) => a.day.localeCompare(b.day)),
-    candidateCount: executions.reduce((sum, execution) => sum + execution.result.candidateCount, 0),
-    stagedEntries: executions.reduce((sum, execution) => sum + execution.result.stagedEntries, 0),
-    writtenDiaryEntries: executions.reduce(
-      (sum, execution) => sum + execution.result.writtenDiaryEntries,
-      0,
-    ),
-    replacedDiaryEntries: executions.reduce(
-      (sum, execution) => sum + execution.result.replacedDiaryEntries,
-      0,
-    ),
+    candidateCount: total("candidateCount"),
+    stagedEntries: total("stagedEntries"),
+    writtenDiaryEntries: total("writtenDiaryEntries"),
+    replacedDiaryEntries: total("replacedDiaryEntries"),
     batchCount: executions.length,
     batches: executions.map((execution, index) => ({
       batch: index + 1,

@@ -1,5 +1,5 @@
 ---
-summary: "Generate videos via video_generate from text, image, or video references across 15 provider backends"
+summary: "Generate videos via video_generate from text, image, or video references across 18 provider backends"
 read_when:
   - Generating videos via the agent
   - Configuring video-generation providers and models
@@ -9,9 +9,10 @@ sidebarTitle: "Video generation"
 ---
 
 OpenClaw agents generate videos from text prompts, reference images, or
-existing videos through `video_generate`. Fifteen provider backends are
+existing videos through `video_generate`. Eighteen provider backends are
 supported; the agent picks the right one automatically based on config and
-available API keys.
+available API keys. The 18 provider IDs span 17 plugins; MiniMax registers
+separate API-key (`minimax`) and OAuth (`minimax-portal`) backends.
 
 <Note>
 `video_generate` only appears when at least one video-generation provider is
@@ -68,9 +69,10 @@ Video generation is asynchronous:
    an idempotent direct fallback with the media.
 
 While a job is in flight, duplicate `video_generate` calls in the same
-session return the current task status instead of starting another
+chat return the current task status instead of starting another
 generation. Use `action: "status"` to check without triggering a new
-generation.
+generation. Direct chats keep separate tasks even when they share the main
+session transcript; completion returns to the requesting peer.
 
 Outside of session-backed agent runs (for example, direct tool invocations),
 the tool falls back to inline generation and returns the final media path
@@ -103,13 +105,17 @@ of failing the task if local persistence rejects an oversized file.
 | DeepInfra             | `Pixverse/Pixverse-T2V`         |  ✓   | -                                                    | -                                               | `DEEPINFRA_API_KEY`                      |
 | fal                   | `fal-ai/minimax/video-01-live`  |  ✓   | 1 image; up to 9 with Seedance reference-to-video    | Up to 3 videos with Seedance reference-to-video | `FAL_KEY`                                |
 | Google                | `veo-3.1-fast-generate-preview` |  ✓   | 1 image                                              | 1 video                                         | `GEMINI_API_KEY`                         |
+| Kie AI                | `kling-2.6/text-to-video`       |  ✓   | 1 local or remote image                              | -                                               | `KIE_API_KEY`                            |
 | MiniMax               | `MiniMax-Hailuo-2.3`            |  ✓   | 1 image                                              | -                                               | `MINIMAX_API_KEY` or MiniMax OAuth       |
+| Novita                | `wan2.6-t2v`                    |  ✓   | 1 image (URL or local file)                          | -                                               | `NOVITA_API_KEY`                         |
 | OpenRouter            | `google/veo-3.1-fast`           |  ✓   | Up to 4 images (first/last frame or references)      | -                                               | `OPENROUTER_API_KEY`                     |
+| PixVerse              | `v6`                            |  ✓   | 1 local or remote image                              | -                                               | `PIXVERSE_API_KEY`                       |
 | Qwen                  | `wan2.6-t2v`                    |  ✓   | Local or remote (i2v and Wan 2.7)                    | Yes (remote URL)                                | `QWEN_API_KEY`                           |
 | Runway                | `gen4.5`                        |  ✓   | 1 image                                              | 1 video                                         | `RUNWAYML_API_SECRET`                    |
 | Together              | `Wan-AI/Wan2.2-T2V-A14B`        |  ✓   | `Wan-AI/Wan2.2-I2V-A14B` only                        | -                                               | `TOGETHER_API_KEY`                       |
 | Vydra                 | `veo3`                          |  ✓   | 1 image (`kling`)                                    | -                                               | `VYDRA_API_KEY`                          |
 | xAI                   | `grok-imagine-video`            |  ✓   | Classic: 1 first frame or 7 references; 1.5: 1 frame | Classic: 1 video                                | `XAI_API_KEY`                            |
+| Z.AI                  | `cogvideox-3`                   |  ✓   | 1 image (URL or local file)                          | -                                               | `ZAI_API_KEY`                            |
 
 Some providers accept additional or alternate API key env vars. See
 individual [provider pages](#related) for details.
@@ -130,13 +136,17 @@ the shared live sweep:
 | DeepInfra  |     ✓      |       -        |       -        | `generate`; native DeepInfra video schemas are text-to-video in the plugin contract                                                     |
 | fal        |     ✓      |       ✓        |       ✓        | `generate`, `imageToVideo`; `videoToVideo` only when using Seedance reference-to-video                                                  |
 | Google     |     ✓      |       ✓        |       ✓        | `generate`, `imageToVideo`; shared `videoToVideo` skipped because the current buffer-backed Gemini/Veo sweep does not accept that input |
+| Kie AI     |     ✓      |       ✓        |       -        | `generate`, `imageToVideo`                                                                                                              |
 | MiniMax    |     ✓      |       ✓        |       -        | `generate`, `imageToVideo`                                                                                                              |
+| Novita     |     ✓      |       ✓        |       -        | `generate`, `imageToVideo`                                                                                                              |
 | OpenRouter |     ✓      |       ✓        |       -        | `generate`, `imageToVideo`                                                                                                              |
+| PixVerse   |     ✓      |       ✓        |       -        | `generate`, `imageToVideo`                                                                                                              |
 | Qwen       |     ✓      |       ✓        |       ✓        | `generate`, local `imageToVideo` (default routes to `wan2.6-i2v`); `videoToVideo` needs remote `http(s)` video URLs                     |
 | Runway     |     ✓      |       ✓        |       ✓        | `generate`, `imageToVideo`; `videoToVideo` runs only when the selected model is `runway/gen4_aleph`                                     |
 | Together   |     ✓      |       ✓        |       -        | `generate`, `imageToVideo`                                                                                                              |
 | Vydra      |     ✓      |       ✓        |       -        | `generate`; shared `imageToVideo` skipped because `veo3` is text-only and `kling` requires a remote image URL                           |
 | xAI        |     ✓      |       ✓        |       ✓        | Classic supports all modes; Video 1.5 is image-to-video only; remote MP4 input keeps `videoToVideo` out of the shared sweep             |
+| Z.AI       |     ✓      |       ✓        |       -        | `generate`, `imageToVideo`                                                                                                              |
 
 ## Tool parameters
 
@@ -211,6 +221,12 @@ dimensions). Providers that do not declare it surface the value via
 <ParamField path="model" type="string">Provider/model override (e.g. `runway/gen4.5`).</ParamField>
 <ParamField path="filename" type="string">Output filename hint.</ParamField>
 <ParamField path="timeoutMs" type="number">Optional provider operation timeout in milliseconds. When omitted, OpenClaw uses `agents.defaults.mediaModels.video.timeoutMs` if configured, otherwise the plugin-authored provider default when one exists.</ParamField>
+
+For Runway and Together, an explicit timeout covers submission, polling, and
+downloading together. Individual HTTP requests retain a 120-second limit.
+Without an explicit timeout, their 120-second polling budget starts after
+submission; request and download limits remain separate.
+
 <ParamField path="providerOptions" type="object">
   Provider-specific options as a JSON object (e.g. `{"seed": 42, "draft": true}`).
   Providers that declare a typed schema validate the keys and types; unknown
@@ -266,6 +282,8 @@ The first skip reason in a request logs at `warn` so operators see when
 their primary provider was passed over; subsequent skips log at `debug` to
 keep long fallback chains quiet. If every candidate is skipped, the
 aggregated error includes the skip reason for each.
+If a candidate fails during generation, its provider, model, and error log at
+`warn` before the next candidate is tried.
 
 ## Actions
 
@@ -385,10 +403,25 @@ OpenClaw does not append auto-detected providers.
     ignored with a warning on the Gemini API path because that API rejects
     the `generateAudio` parameter for current Veo video generation.
   </Accordion>
+  <Accordion title="Kie AI">
+    Uses Kie's market task API for Kling, Grok Imagine, Wan, Hailuo, and
+    Seedance. A single reference image automatically selects the family's
+    image-to-video variant. Local images are uploaded through Kie's
+    documented base64 upload API. Generation can take several minutes;
+    the provider waits up to ten minutes by default. See [Kie AI](/providers/kie)
+    for model-specific limits.
+  </Accordion>
   <Accordion title="MiniMax">
     Single image reference only. MiniMax accepts `768P` and `1080P`
     resolutions; requests such as `720P` are normalized to the closest
     supported value before submission.
+  </Accordion>
+  <Accordion title="Novita">
+    Uses native Wan 2.6 and Hailuo 2.3 asynchronous routes. One image with a
+    `-t2v` model selects that family's `-i2v` route. Both families accept
+    local images as data URIs. Wan defaults to silent output; set
+    `audio: true` for generated audio. Hailuo supports 1080P only at 6 seconds.
+    See [NovitaAI](/providers/novita) for model IDs and provider options.
   </Accordion>
   <Accordion title="OpenRouter">
     Uses OpenRouter's asynchronous `/videos` API. OpenClaw submits the
@@ -432,6 +465,13 @@ OpenClaw does not append auto-detected providers.
     and dated 1.5 identifiers receive the same validation and are forwarded
     unchanged.
 
+  </Accordion>
+  <Accordion title="Z.AI">
+    CogVideoX-3 supports text or one PNG/JPEG image, including local files up
+    to 5 MB sent as data URIs. Durations normalize to 5 or 10 seconds;
+    `audio: true` enables sound. Video uses the general API endpoint in the
+    configured global or China region, including when chat uses a Coding
+    Plan endpoint. See [Z.AI](/providers/zai) for sizes and provider options.
   </Accordion>
 </AccordionGroup>
 
@@ -547,13 +587,17 @@ openclaw config set agents.defaults.mediaModels.video.primary "qwen/wan2.6-t2v"
 - [Configuration reference](/gateway/config-agents#agent-defaults)
 - [fal](/providers/fal)
 - [Google (Gemini)](/providers/google)
+- [Kie AI](/providers/kie)
 - [MiniMax](/providers/minimax)
 - [Models](/concepts/models)
+- [NovitaAI](/providers/novita)
 - [OpenRouter](/providers/openrouter)
+- [PixVerse](/providers/pixverse)
 - [Qwen](/providers/qwen)
 - [Runway](/providers/runway)
 - [Together AI](/providers/together)
 - [Tools overview](/tools)
 - [Vydra](/providers/vydra)
 - [xAI](/providers/xai)
+- [Z.AI](/providers/zai)
 - [Media overview](/tools/media-overview) - how the media tools fit together

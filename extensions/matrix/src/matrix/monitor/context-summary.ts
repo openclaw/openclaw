@@ -7,7 +7,7 @@ import { formatMatrixMessageText, resolveMatrixReplacementContent } from "../med
 import {
   formatPollAsText,
   isPollStartType,
-  parsePollStartContent,
+  parsePollStart,
   type PollStartContent,
 } from "../poll-types.js";
 import type { MatrixRawEvent } from "./types.js";
@@ -23,7 +23,7 @@ export function truncateMatrixContextBody(value: string): string {
 
 export function summarizeMatrixMessageContextEvent(event: MatrixRawEvent): string | undefined {
   if (isPollStartType(event.type)) {
-    const pollSummary = parsePollStartContent(event.content as PollStartContent);
+    const pollSummary = parsePollStart(event.content as PollStartContent);
     if (pollSummary) {
       return formatPollAsText(pollSummary);
     }

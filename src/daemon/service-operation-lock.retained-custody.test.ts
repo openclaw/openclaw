@@ -393,12 +393,13 @@ it.each(["missing", "unknown-phase", "unknown-version", "relative-source"] as co
       rows = rowBytes();
     fixture.dead = true;
     const mutate = vi.fn(async () => undefined);
-    expect(store.read(installRoot)).toEqual({ kind: "unreadable" });
+    expect(store.read(installRoot)).toEqual({
+      kind: "unreadable",
+      error: expect.objectContaining({ message: expect.stringContaining("incompatible") }),
+    });
     await expect(withGatewayServiceOperationLock(env, mutate)).rejects.toThrow(/incompatible/);
     expect(mutate).not.toHaveBeenCalled();
-    expect(() => store.release(lease)).toThrow(
-      "existing managed handoff lease is incompatible; retain diagnostics and run openclaw triage manually",
-    );
+    expect(store.release(lease)).toBe(false);
     expect(sidecar()).toEqual(before);
     expect(rowBytes()).toBe(rows);
   },

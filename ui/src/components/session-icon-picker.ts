@@ -24,7 +24,7 @@ const SESSION_ICON_EMOJI_CHOICES = [
   "🎯",
 ] as const;
 
-function sessionEmojiPickerShortcut(): readonly string[] | null {
+export function sessionEmojiPickerShortcut(): readonly string[] | null {
   const platform = globalThis.navigator?.platform ?? "";
   if (/Mac|iPhone|iPad|iPod/u.test(platform)) {
     return ["⌃", "⌘", "Space"];
@@ -51,7 +51,6 @@ type AppearancePickerProps = {
   onBack: (event: Event) => void;
   onInput: (event: InputEvent) => void;
   onApply: (event: Event) => void;
-  onGridKeydown: (event: KeyboardEvent) => void;
 };
 
 function renderCustomSessionIconEntry(props: AppearancePickerProps) {
@@ -155,7 +154,7 @@ function renderSessionIconGrid(props: AppearancePickerProps) {
         ?inert=${props.mode !== "grid"}
         role="group"
         aria-label=${t("sessionsView.setIconMenu")}
-        @keydown=${props.onGridKeydown}
+        @keydown=${handleAppearanceGridKeydown}
       >
         <div class="session-menu__icon-section-label">${t("sessionsView.iconEmojiSection")}</div>
         <div class="session-menu__icon-grid">
@@ -212,7 +211,7 @@ export function renderAppearancePicker(props: AppearancePickerProps) {
   </div>`;
 }
 
-export function handleAppearanceGridKeydown(event: KeyboardEvent) {
+function handleAppearanceGridKeydown(event: KeyboardEvent) {
   const choice = event.target;
   if (!(choice instanceof HTMLButtonElement)) {
     return;
