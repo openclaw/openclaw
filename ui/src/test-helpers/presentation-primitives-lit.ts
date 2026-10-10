@@ -47,13 +47,17 @@ function card(label: string, content: unknown, kind = "") {
 }
 function settingsPage() {
   return settings.renderSettingsPage(
-    html`
-      ${settings.renderSettingsPageHeader({ title: "Presentation settings", subtitle: "Shared settings layout and controls.", actions: button("Save") })}
-      ${settings.renderSettingsSummary([
+    [
+      settings.renderSettingsPageHeader({
+        title: "Presentation settings",
+        subtitle: "Shared settings layout and controls.",
+        actions: button("Save"),
+      }),
+      settings.renderSettingsSummary([
         { label: "Enabled", value: 3 },
         { label: "Available", value: 12 },
-      ])}
-      ${settings.renderSettingsSection(
+      ]),
+      settings.renderSettingsSection(
         {
           title: "General",
           description: "A longer section description that wraps on narrow screens.",
@@ -61,17 +65,54 @@ function settingsPage() {
           actions: button("Add"),
           notice: html`<div class="callout info">Changes apply to this device.</div>`,
         },
-        html`
-          ${settings.renderSettingsRow({ title: "Workspace", description: "The active local workspace.", control: settings.renderSettingsValue("Personal", { mono: true }) })}
-          ${settings.renderSettingsNavRow({ title: "Advanced", description: "Open additional preferences.", onClick: () => recordAction("advanced") })}
-          ${settings.renderSettingsRow({ title: "Wrapping control", description: "This field moves below its description on a phone.", stackedOnNarrow: true, control: html`<input class="settings-input" aria-label="Workspace name" value="A long workspace name" />` })}
-        `,
-      )}
-      ${settings.renderSettingsSection({ title: "Service status", carapace: true }, html`${(["ok", "warn", "danger", "accent", "muted"] as const).map((kind) => settings.renderSettingsRow({ title: kind, carapace: true, control: settings.renderSettingsStatus({ kind, label: kind, carapace: true }) }))}`)}
-      ${settings.renderSettingsSection({ title: "Danger zone", danger: true }, settings.renderSettingsRow({ title: "Reset preferences", description: "Only this synthetic workspace is affected.", control: button("Reset") }))}
-      ${settings.renderSettingsEmpty("No additional settings")}
-      ${settings.renderSettingsLoadingSkeleton({ label: "Loading settings", rows: 2, carapace: true })}
-    `,
+        [
+          settings.renderSettingsRow({
+            title: "Workspace",
+            description: "The active local workspace.",
+            control: settings.renderSettingsValue("Personal", { mono: true }),
+          }),
+          settings.renderSettingsNavRow({
+            title: "Advanced",
+            description: "Open additional preferences.",
+            onClick: () => recordAction("advanced"),
+          }),
+          settings.renderSettingsRow({
+            title: "Wrapping control",
+            description: "This field moves below its description on a phone.",
+            stackedOnNarrow: true,
+            control: html`<input
+              class="settings-input"
+              aria-label="Workspace name"
+              value="A long workspace name"
+            />`,
+          }),
+        ],
+      ),
+      settings.renderSettingsSection(
+        { title: "Service status", carapace: true },
+        (["ok", "warn", "danger", "accent", "muted"] as const).map((kind) =>
+          settings.renderSettingsRow({
+            title: kind,
+            carapace: true,
+            control: settings.renderSettingsStatus({ kind, label: kind, carapace: true }),
+          }),
+        ),
+      ),
+      settings.renderSettingsSection(
+        { title: "Danger zone", danger: true },
+        settings.renderSettingsRow({
+          title: "Reset preferences",
+          description: "Only this synthetic workspace is affected.",
+          control: button("Reset"),
+        }),
+      ),
+      settings.renderSettingsEmpty("No additional settings"),
+      settings.renderSettingsLoadingSkeleton({
+        label: "Loading settings",
+        rows: 2,
+        carapace: true,
+      }),
+    ],
     { wide: true },
   );
 }
@@ -82,8 +123,8 @@ function controls() {
         title: "Controlled inputs",
         description: "Accepted, rejected, disabled, and keyboard-driven choices.",
       },
-      html`
-        ${settings.renderSettingsToggleRow({
+      [
+        settings.renderSettingsToggleRow({
           title: "Accept toggle",
           description: "A whole-row activation changes this setting.",
           checked,
@@ -92,8 +133,8 @@ function controls() {
             draw();
             recordAction(`toggle:${next}`);
           },
-        })}
-        ${settings.renderSettingsRow({
+        }),
+        settings.renderSettingsRow({
           title: "Rejected toggle",
           control: settings.renderSettingsToggle({
             ariaLabel: "Rejected toggle",
@@ -103,9 +144,14 @@ function controls() {
               return false;
             },
           }),
-        })}
-        ${settings.renderSettingsToggleRow({ title: "Disabled toggle", checked: true, disabled: true, onChange: () => recordAction("unexpected") })}
-        ${settings.renderSettingsRow({
+        }),
+        settings.renderSettingsToggleRow({
+          title: "Disabled toggle",
+          checked: true,
+          disabled: true,
+          onChange: () => recordAction("unexpected"),
+        }),
+        settings.renderSettingsRow({
           title: "Quality",
           stackedOnNarrow: true,
           control: settings.renderSettingsSegmented({
@@ -118,8 +164,8 @@ function controls() {
               recordAction(`quality:${next}`);
             },
           }),
-        })}
-        ${settings.renderSettingsRow({
+        }),
+        settings.renderSettingsRow({
           title: "Rejected quality",
           control: settings.renderSettingsSegmented({
             value: "balanced",
@@ -130,9 +176,18 @@ function controls() {
               return false;
             },
           }),
-        })}
-        ${settings.renderSettingsRow({ title: "Disabled quality", control: settings.renderSettingsSegmented({ value: "balanced", ariaLabel: "Disabled quality", options, disabled: true, onChange: () => recordAction("unexpected") }) })}
-        ${settings.renderSettingsRow({
+        }),
+        settings.renderSettingsRow({
+          title: "Disabled quality",
+          control: settings.renderSettingsSegmented({
+            value: "balanced",
+            ariaLabel: "Disabled quality",
+            options,
+            disabled: true,
+            onChange: () => recordAction("unexpected"),
+          }),
+        }),
+        settings.renderSettingsRow({
           title: "Button choices",
           control: settings.renderSettingsSegmented({
             value: segment,
@@ -145,8 +200,8 @@ function controls() {
               draw();
             },
           }),
-        })}
-        ${settings.renderSettingsRow({
+        }),
+        settings.renderSettingsRow({
           title: "Secret",
           control: settings.renderSettingsSecretInput({
             ariaLabel: "Secret",
@@ -163,21 +218,72 @@ function controls() {
               draw();
             },
           }),
-        })}
-      `,
+        }),
+      ],
     ),
   );
 }
 function feedback() {
-  return html`
-    ${card("Empty with action", renderPanelEmptyState({ icon: icons.folder, heading: "No files", description: "Add a file to begin working in this panel.", action: button("Add file", "add-file") }), "empty")}
-    ${card("Refresh stale", renderPanelRefreshStatus({ status: { error: null, hasLoaded: true, stale: true, awaitingGateway: false } }))}
-    ${card("Refresh failed", renderPanelRefreshStatus({ status: { error: "Synthetic refresh failure", hasLoaded: true, stale: true, awaitingGateway: false } }))}
-    ${card("Lazy error", renderLazyViewError({ error: new Error("Synthetic module failure"), subtitle: "Files could not open.", onRetry: () => recordAction("retry"), onClose: () => recordAction("close") }))}
-    ${card("Stale module", renderLazyViewError({ error: new Error("Synthetic stale module"), stale: true, onRetry: () => recordAction("reload") }))}
-    ${card("Inline error", renderLazyViewError({ error: "Synthetic inline error", render: () => html`<p>Existing panel content remains visible.</p>`, onRetry: () => recordAction("inline-retry") }))}
-    ${card("Actions and shortcuts", html`<div class="presentation-fixture__inline">${renderCopyButton("synthetic clipboard text", "Copy text")}${renderCopyButton("", "Copy unavailable text")}${renderPanelIconButton({ label: "Refresh panel", icon: icons.refresh, className: "btn btn--icon", onClick: () => recordAction("refresh") })}${renderPanelIconButton({ label: "Busy panel", icon: icons.refresh, className: "btn btn--icon", onClick: () => recordAction("unexpected"), disabled: true, busy: true })}${renderKbd(["⌘", "↵"])}${renderKeyboardShortcut({ key: "k", modifiers: ["mod"] }, { applePlatform: false })}</div>`)}
-  `;
+  return [
+    card(
+      "Empty with action",
+      renderPanelEmptyState({
+        icon: icons.folder,
+        heading: "No files",
+        description: "Add a file to begin working in this panel.",
+        action: button("Add file", "add-file"),
+      }),
+      "empty",
+    ),
+    card(
+      "Refresh stale",
+      renderPanelRefreshStatus({
+        status: { error: null, hasLoaded: true, stale: true, awaitingGateway: false },
+      }),
+    ),
+    card(
+      "Refresh failed",
+      renderPanelRefreshStatus({
+        status: {
+          error: "Synthetic refresh failure",
+          hasLoaded: true,
+          stale: true,
+          awaitingGateway: false,
+        },
+      }),
+    ),
+    card(
+      "Lazy error",
+      renderLazyViewError({
+        error: new Error("Synthetic module failure"),
+        subtitle: "Files could not open.",
+        onRetry: () => recordAction("retry"),
+        onClose: () => recordAction("close"),
+      }),
+    ),
+    card(
+      "Stale module",
+      renderLazyViewError({
+        error: new Error("Synthetic stale module"),
+        stale: true,
+        onRetry: () => recordAction("reload"),
+      }),
+    ),
+    card(
+      "Inline error",
+      renderLazyViewError({
+        error: "Synthetic inline error",
+        render: () => html`<p>Existing panel content remains visible.</p>`,
+        onRetry: () => recordAction("inline-retry"),
+      }),
+    ),
+    card(
+      "Actions and shortcuts",
+      html`<div class="presentation-fixture__inline">
+        ${renderCopyButton("synthetic clipboard text", "Copy text")}${renderCopyButton("", "Copy unavailable text")}${renderPanelIconButton({ label: "Refresh panel", icon: icons.refresh, className: "btn btn--icon", onClick: () => recordAction("refresh") })}${renderPanelIconButton({ label: "Busy panel", icon: icons.refresh, className: "btn btn--icon", onClick: () => recordAction("unexpected"), disabled: true, busy: true })}${renderKbd(["⌘", "↵"])}${renderKeyboardShortcut({ key: "k", modifiers: ["mod"] }, { applePlatform: false })}
+      </div>`,
+    ),
+  ];
 }
 function iconGallery() {
   const names = [
@@ -209,16 +315,22 @@ function skeletons() {
       : group === "skeleton-content"
         ? ["files", "file-list", "document", "review"]
         : ["chat", "discussion", "terminal"];
-  return html`${variants.map((variant) => card(variant, renderPanelLoadingSkeleton(variant, `Loading ${variant}`), "panel"))}${
+  return [
+    variants.map((variant) =>
+      card(variant, renderPanelLoadingSkeleton(variant, `Loading ${variant}`), "panel"),
+    ),
     group === "skeleton-conversation"
-      ? html`${card("compact", renderPanelLoadingSkeleton("terminal", "Loading compact terminal", true))}${card(
-          "overlay",
-          html`<p>Retained content</p>
-            ${renderPanelLoadingSkeleton("files", "Refreshing files", false, true)}`,
-          "panel",
-        )}`
-      : undefined
-  }`;
+      ? [
+          card("compact", renderPanelLoadingSkeleton("terminal", "Loading compact terminal", true)),
+          card(
+            "overlay",
+            html`<p>Retained content</p>
+              ${renderPanelLoadingSkeleton("files", "Refreshing files", false, true)}`,
+            "panel",
+          ),
+        ]
+      : undefined,
+  ];
 }
 function draw() {
   const content =
@@ -231,7 +343,11 @@ function draw() {
           : group === "icons"
             ? iconGallery()
             : group === "loading"
-              ? html`${card("Loading route", renderLoadingState(), "loading")}${card("Connecting", renderConnectingSplash("Connecting to Gateway"), "loading")}${card("Starting agent", renderAgentStartupState())}`
+              ? [
+                  card("Loading route", renderLoadingState(), "loading"),
+                  card("Connecting", renderConnectingSplash("Connecting to Gateway"), "loading"),
+                  card("Starting agent", renderAgentStartupState()),
+                ]
               : skeletons();
   render(
     html`<h1>${group}</h1>
