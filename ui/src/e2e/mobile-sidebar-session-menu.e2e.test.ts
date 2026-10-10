@@ -315,9 +315,7 @@ suite.define(() => {
       }
     },
   );
-});
 
-suite.define(() => {
   it.each([1280, 390])(
     "shows everyday actions and the advanced page at width %i",
     async (width) => {
