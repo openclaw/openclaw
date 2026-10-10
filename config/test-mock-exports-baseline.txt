@@ -8891,7 +8891,6 @@
 ["src/model-picker/apply-session-model-selection-placement.test.ts","../config/config.js","a0b32c6121d2f4f0a289191ea093a04a7be75180914c5fefc82958f222143046",1]
 ["src/model-picker/apply-session-model-selection-placement.test.ts","../gateway/session-patch-hooks.js","942c0d3166e1cea4521bbf07f86f5a493620191ba1ec74be217942f7d310ac29",1]
 ["src/model-picker/apply-session-model-selection-placement.test.ts","../gateway/session-worker-placement-context.js","749f4ee9c7db396861616cd506a1dbf01bdff0c35bc43f3023909d9ebb943a4d",1]
-["src/model-picker/apply-session-model-selection-placement.test.ts","../gateway/worker-environments/placement-session-runtime.js","86a496efc4aebde29faaea8a76f9aa5006e845917d4e8a753f6deabea6d9dd8d",1]
 ["src/model-picker/apply-session-model-selection-placement.test.ts","../infra/system-events.js","e319fcb5a651402a1a45c9d5bfd6adf4e72c8ae2518d4f018b2c0c975b32f470",1]
 ["src/model-picker/apply-session-model-selection-placement.test.ts","../logging/subsystem.js","d1b8485f4da2959feb396ccfedeff102e5fcbe1300a1b19ffca26d51569cf05d",1]
 ["src/model-picker/apply-session-model-selection.operator-context.test.ts","../agents/model-catalog.runtime.js","d9c87aa4a1f85c237ce9eb8af26e7146709a8e1cdf6b81219deaf0c622ebe900",1]

@@ -1,3 +1,4 @@
+import { getAgentRunLifecycleGeneration } from "../infra/agent-run-registry.js";
 import {
   matchesAgentWorkAdmission,
   type AgentWorkAdmissionIdentity,
@@ -6,8 +7,22 @@ import {
   collectSessionIdentityTargets,
   normalizeSessionIdentities,
 } from "./session-lifecycle-identity.js";
+import type { HandoffSessionWorkAdmission } from "./session-work-admission-handoff.js";
 
-type ReleasableSessionWorkAdmission = {
+export type SessionWorkRun = Readonly<{
+  runId: string;
+  sessionKey?: string;
+  sessionId?: string;
+  agentId?: string;
+  controlUiVisible?: boolean;
+}>;
+
+type ReleasableSessionWorkAdmission = Pick<
+  HandoffSessionWorkAdmission,
+  "interrupt" | "interrupted"
+> & {
+  lifecycleGeneration: string;
+  run?: SessionWorkRun;
   agent?: AgentWorkAdmissionIdentity;
   phase: "pending" | "acquired";
   owner?: symbol;
@@ -38,6 +53,42 @@ export function createSessionWorkAdmissionQueries<T extends ReleasableSessionWor
       }
     }
     return matching;
+  }
+
+  /** Capture exact run owners without interrupting unrelated or initiating admissions. */
+  function captureSessionWorkRunInterruptions(params: {
+    scope: string;
+    identities: Iterable<string | undefined>;
+    accept: (run: SessionWorkRun) => boolean;
+  }): Array<{ run: SessionWorkRun; interrupt: (reason: Error) => boolean }> {
+    const identities = normalizeSessionIdentities(params.scope, params.identities);
+    const current = currentAdmissions();
+    const isCurrent = (admission: T) =>
+      !admission.interrupted &&
+      admission.lifecycleGeneration === getAgentRunLifecycleGeneration() &&
+      identities.some((identity) => admissionsByIdentity.get(identity)?.has(admission));
+    const admissions = collectSessionWorkAdmissions(
+      identities,
+      (admission) => !current?.has(admission) && isCurrent(admission),
+    );
+    return Array.from(admissions).flatMap((admission) => {
+      const run = admission.run;
+      if (!run || !params.accept(run)) {
+        return [];
+      }
+      return [
+        {
+          run,
+          interrupt: (reason: Error) => {
+            // Awaited preparation cannot transfer Stop to a released or replaced owner.
+            if (!isCurrent(admission)) {
+              return false;
+            }
+            return admission.interrupt?.(reason)?.runId === run.runId;
+          },
+        },
+      ];
+    });
   }
 
   /** Active session identities grouped by their authoritative store/lifecycle scope. */
@@ -158,6 +209,7 @@ export function createSessionWorkAdmissionQueries<T extends ReleasableSessionWor
 
   return {
     collectSessionWorkAdmissions,
+    captureSessionWorkRunInterruptions,
     collectActiveSessionWorkAdmissions,
     getActiveSessionWorkAdmissionCount,
     isSessionWorkAdmissionActive,

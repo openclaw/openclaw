@@ -42,10 +42,14 @@ import {
   type SessionWorkAdmissionLease,
 } from "./session-work-admission-handoff.js";
 import {
+  sessionWorkAdmissionAbortError,
   waitForSessionWorkAdmissionRelease,
   type SessionWorkAdmissionInterrupt,
 } from "./session-work-admission-interruption.js";
-import { createSessionWorkAdmissionQueries } from "./session-work-admission-queries.js";
+import {
+  createSessionWorkAdmissionQueries,
+  type SessionWorkRun,
+} from "./session-work-admission-queries.js";
 
 export {
   cancelSessionWorkAdmissionHandoff,
@@ -58,13 +62,6 @@ export {
 } from "./session-work-admission-interruption.js";
 
 export const SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS = 15_000;
-type SessionWorkRun = Readonly<{
-  runId: string;
-  sessionKey?: string;
-  sessionId?: string;
-  agentId?: string;
-  controlUiVisible?: boolean;
-}>;
 type SessionWorkAdmission = HandoffSessionWorkAdmission & {
   agent?: AgentWorkAdmissionIdentity;
   lifecycleGeneration: string;
@@ -130,6 +127,7 @@ const {
 const {
   collectSessionWorkAdmissions,
   collectActiveSessionWorkAdmissions,
+  captureSessionWorkRunInterruptions,
   getActiveSessionWorkAdmissionCount,
   getSessionWorkAdmissionRelease,
   getSessionWorkAdmissionOwnerRelease,
@@ -142,6 +140,7 @@ const {
 );
 export {
   collectActiveSessionWorkAdmissions,
+  captureSessionWorkRunInterruptions,
   getActiveSessionWorkAdmissionCount,
   getSessionWorkAdmissionRelease,
   getSessionWorkAdmissionOwnerRelease,
@@ -193,12 +192,6 @@ function hasOnlyActiveSessionLifecycleMutationKind(
     }
   }
   return foundActiveMutation;
-}
-
-function sessionWorkAdmissionAbortError(signal: AbortSignal): Error {
-  return signal.reason instanceof Error
-    ? signal.reason
-    : new Error("session work admission aborted");
 }
 
 async function waitForNormalizedSessionLifecycleMutationIdle(
@@ -714,42 +707,6 @@ export function closeSessionWorkAdmissions(params: {
     params.assertCurrent,
     params.agent,
   );
-}
-
-/** Capture exact run owners without interrupting unrelated or initiating admissions. */
-export function captureSessionWorkRunInterruptions(params: {
-  scope: string;
-  identities: Iterable<string | undefined>;
-  accept: (run: SessionWorkRun) => boolean;
-}): Array<{ run: SessionWorkRun; interrupt: (reason: Error) => boolean }> {
-  const identities = normalizeSessionIdentities(params.scope, params.identities);
-  const currentAdmissions = CURRENT_SESSION_WORK_ADMISSIONS.getStore();
-  const isCurrent = (admission: SessionWorkAdmission) =>
-    !admission.interrupted &&
-    admission.lifecycleGeneration === getAgentRunLifecycleGeneration() &&
-    identities.some((identity) => ACTIVE_SESSION_WORK_ADMISSIONS.get(identity)?.has(admission));
-  const admissions = collectSessionWorkAdmissions(
-    identities,
-    (admission) => !currentAdmissions?.has(admission) && isCurrent(admission),
-  );
-  return Array.from(admissions).flatMap((admission) => {
-    const run = admission.run;
-    if (!run || !params.accept(run)) {
-      return [];
-    }
-    return [
-      {
-        run,
-        interrupt: (reason: Error) => {
-          // Awaited preparation cannot transfer Stop to a released or replaced owner.
-          if (!isCurrent(admission)) {
-            return false;
-          }
-          return admission.interrupt?.(reason)?.runId === run.runId;
-        },
-      },
-    ];
-  });
 }
 
 function startNormalizedSessionWorkAdmissionInterruption(params: {
