@@ -24,8 +24,10 @@ behavior is unchanged, and worker settings alone launch nothing.
 - OpenShell **v0.1.3 or newer**, configured for the OS user running OpenClaw.
 - Compatible OpenClaw Gateway and node builds supporting native worker inference,
   required profiles, and `connect --target-file`.
-- An OpenShell source image with Node, OpenClaw, and `sleep`. The image owns
-  these installations; the plugin does not download an unpinned node runtime.
+- An OpenShell source image with Node, OpenClaw, Git, `ps`, and `sleep` on
+  `PATH`. Git backs managed workspaces; process tooling verifies workspace
+  quiescence. The image owns these installations; the plugin does not download
+  an unpinned node runtime.
 - An imported OpenShell provider profile allowing the **actual Node executable**
   in your image, the intended provider endpoint, TLS inspection, and credential
   substitution. A curl- or Codex-only binary list is insufficient.
