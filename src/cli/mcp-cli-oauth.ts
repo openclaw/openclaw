@@ -22,19 +22,19 @@ export async function loginMcpServer(params: {
 }): Promise<void> {
   const { name, server, code, owner, fail } = params;
   if (asRecord(server.oauth)?.identity === "per-requester") {
-    fail(
+    return fail(
       `MCP server "${name}" uses per-requester OAuth. Senders connect from the channel via the MCP connect flow.`,
     );
   }
   if (server.auth !== "oauth") {
-    fail(`MCP server "${name}" is not configured with auth: "oauth".`);
+    return fail(`MCP server "${name}" is not configured with auth: "oauth".`);
   }
   if (typeof server.url !== "string" || server.url.trim().length === 0) {
-    fail(`MCP server "${name}" needs a URL for OAuth login.`);
+    return fail(`MCP server "${name}" needs a URL for OAuth login.`);
   }
   const resolved = resolveMcpTransportConfig(name, server);
   if (!resolved || resolved.kind !== "http") {
-    fail(`MCP server "${name}" needs a valid HTTP transport for OAuth login.`);
+    return fail(`MCP server "${name}" needs a valid HTTP transport for OAuth login.`);
   }
   const identity = operatorMcpOAuthIdentity(name, resolved.url);
   if (code) {
@@ -88,10 +88,10 @@ export async function loginMcpServer(params: {
     try {
       callback = await callbackServer.waitForCallback();
     } catch (error) {
-      fail(`${formatErrorMessage(error)}. Complete login manually with ${manualCommand}.`);
+      return fail(`${formatErrorMessage(error)}. Complete login manually with ${manualCommand}.`);
     }
     if (callback.type === "oauth_error") {
-      fail(`OAuth authorization did not complete. Retry login or use ${manualCommand}.`);
+      return fail(`OAuth authorization did not complete. Retry login or use ${manualCommand}.`);
     }
     owner.assertCurrent();
     await completeMcpOAuthAuthorization(identity, resolved, {

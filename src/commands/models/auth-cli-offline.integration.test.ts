@@ -1,15 +1,15 @@
-import "../commands/models/auth.js";
-import "../commands/models/auth-logout.js";
-import "../commands/models/auth-order.js";
+import "./auth.js";
+import "./auth-logout.js";
+import "./auth-order.js";
 import fs from "node:fs/promises";
 import { CANCEL_SYMBOL } from "@clack/prompts";
 import { Command } from "commander";
 import { afterEach, expect, it, vi } from "vitest";
-import { loadAuthProfileStoreWithoutExternalProfiles } from "../agents/auth-profiles/store-runtime.js";
-import { captureGatewayStateOwner } from "../infra/gateway-state-owner.js";
-import { defaultRuntime, ExitError } from "../runtime.js";
-import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { registerModelsCli } from "./models-cli.js";
+import { loadAuthProfileStoreWithoutExternalProfiles } from "../../agents/auth-profiles/store-runtime.js";
+import { registerModelsCli } from "../../cli/models-cli.js";
+import { captureGatewayStateOwner } from "../../infra/gateway-state-owner.js";
+import { defaultRuntime, ExitError } from "../../runtime.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 
 const mocks = vi.hoisted(() => ({ password: vi.fn() }));
 vi.mock("@clack/prompts", async (importOriginal) => ({
@@ -17,7 +17,7 @@ vi.mock("@clack/prompts", async (importOriginal) => ({
   password: mocks.password,
 }));
 // mock-isolation: An offline command must not contact an operator's running Gateway.
-vi.mock("../commands/models/auth-refresh.js", () => ({
+vi.mock("./auth-refresh.js", () => ({
   refreshRunningGatewayAuthState: async () => "unavailable",
 }));
 
