@@ -1,4 +1,3 @@
-import type { LitElement } from "lit";
 import type { ApplicationRuntime } from "./bootstrap.ts";
 import {
   ControlUiReadiness,
@@ -7,7 +6,12 @@ import {
 } from "./control-ui-readiness.ts";
 import { APP_SIDEBAR_ELEMENT } from "./lazy-custom-element.ts";
 
-type LitReadinessShell = LitElement & {
+type CommittedElement = HTMLElement & {
+  readonly updateComplete: Promise<unknown>;
+};
+
+type LitReadinessShell = CommittedElement & {
+  readiness: ControlUiReadiness | undefined;
   readonly activeSessionKey: string;
   readonly navigationSidebar: HTMLElement & {
     readonly navigationVisible?: boolean;
@@ -35,12 +39,15 @@ async function settleLitShellReadiness(
   if (!outlet || !(await outlet.settlePresentation())) {
     return { kind: "loading", navigationVisible };
   }
-  await shell.querySelector<LitElement>("openclaw-route-presentation")?.updateComplete;
-  await shell.querySelector<LitElement>("openclaw-chat-page")?.updateComplete;
+  await shell.querySelector<CommittedElement>("openclaw-route-presentation")?.updateComplete;
+  await shell.querySelector<CommittedElement>("openclaw-chat-page")?.updateComplete;
   return { kind: "shell", navigationVisible, sessionKey: shell.activeSessionKey };
 }
 
-export function createLitControlUiReadiness(root: LitElement, runtime: ApplicationRuntime) {
+export function createLitControlUiReadiness(
+  root: CommittedElement & { readonly hasUpdated: boolean; readonly isUpdatePending: boolean },
+  runtime: ApplicationRuntime,
+) {
   const readiness = new ControlUiReadiness(root);
   readiness.connect(runtime, async () => {
     await root.updateComplete;
@@ -55,7 +62,7 @@ export function createLitControlUiReadiness(root: LitElement, runtime: Applicati
         ? await settleLitShellReadiness(shell)
         : { kind: "loading", navigationVisible: false };
     }
-    const terminal = root.querySelector<LitElement & { available?: boolean }>(
+    const terminal = root.querySelector<CommittedElement & { available?: boolean }>(
       "openclaw-terminal-panel",
     );
     await terminal?.updateComplete;
@@ -65,5 +72,12 @@ export function createLitControlUiReadiness(root: LitElement, runtime: Applicati
       terminalActivationReady: terminal?.available === true,
     };
   });
+  const shell = root.querySelector<LitReadinessShell>("openclaw-app-shell");
+  if (shell) {
+    shell.readiness = readiness;
+  }
+  if (root.hasUpdated && !root.isUpdatePending) {
+    readiness.commitRoot();
+  }
   return readiness;
 }

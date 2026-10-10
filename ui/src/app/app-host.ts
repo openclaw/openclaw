@@ -98,7 +98,7 @@ class OpenClawShell
   implements ShellChromeHost, ShellGatewayHost, ShellNavigationHost, ShellViewHost
 {
   @property({ attribute: false }) runtime: ApplicationRuntime | undefined;
-  @property({ attribute: false }) readiness: ControlUiReadiness | undefined;
+  readiness: ControlUiReadiness | undefined;
   @property({ attribute: false }) onboarding = false;
 
   @state() navDrawerOpen = false;

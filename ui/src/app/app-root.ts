@@ -80,7 +80,6 @@ export class OpenClawApp extends OpenClawLightDomElement {
             return;
           }
           this.readiness = createLitControlUiReadiness(this, runtime);
-          this.requestUpdate();
         })
         .catch((error: unknown) => {
           if (this.runtime === runtime) {
