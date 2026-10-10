@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { FakeWebSocket } = await vi.hoisted(() => import("./realtime-voice-socket.test-support.js"));
 
+// mock-isolation: ws-runtime only exports the ws WebSocket client; tests swap in an in-memory fake so no network socket is ever opened.
 vi.mock("./ws-runtime.js", () => ({
   WebSocket: FakeWebSocket,
 }));
