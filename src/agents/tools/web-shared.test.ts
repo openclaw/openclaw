@@ -211,6 +211,35 @@ describe("readResponseText", () => {
     );
   });
 
+  it.each([
+    {
+      body: '<?xml version="1.0" encoding="utf-16"?><rss><title>café</title></rss>',
+      contentType: "application/rss+xml",
+    },
+    {
+      body: '<meta charset="UTF-16LE"><p>café</p>',
+      contentType: "text/html",
+    },
+    {
+      body: '<meta http-equiv="Content-Type" content="text/html; charset=utf-16"><p>café</p>',
+      contentType: "text/html",
+    },
+  ])(
+    "decodes ASCII-compatible documents that declare UTF-16 as UTF-8: $body",
+    async ({ body, contentType }) => {
+      const bytes = new TextEncoder().encode(body);
+      for (const options of [undefined, { maxBytes: bytes.byteLength }]) {
+        const response = new Response(bytes, { headers: { "content-type": contentType } });
+
+        await expect(readResponseText(response, options)).resolves.toEqual({
+          text: body,
+          truncated: false,
+          bytesRead: bytes.byteLength,
+        });
+      }
+    },
+  );
+
   it("drops incomplete UTF-16 characters after a byte-order-marked bounded read", async () => {
     const bytes = new Uint8Array([0xff, 0xfe, ...Buffer.from("abc", "utf16le")]);
     const response = new Response(bytes, {
