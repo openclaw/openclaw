@@ -352,18 +352,12 @@ export class HovercardOwner {
       return;
     }
     const anchor = anchorFromNavigationEvent(event);
-    if (anchor) {
-      this.activateFocusedAnchor(anchor);
-    }
-  };
-
-  private activateFocusedAnchor(anchor: HTMLAnchorElement): void {
-    const target = resolveHoverPreviewTarget(anchor, this);
-    if (!target) {
+    const target = anchor ? resolveHoverPreviewTarget(anchor, this) : null;
+    if (!anchor || !target) {
       return;
     }
     this.activateFromBootstrap(anchor, target, "pointer", LINK_READER_HOVERCARD_OPEN_DELAY_MS);
-  }
+  };
 
   private readonly handlePointerOut = (event: PointerEvent) => {
     const anchor = anchorFromNavigationEvent(event);
@@ -405,15 +399,21 @@ export class HovercardOwner {
       return;
     }
     const anchor = anchorFromNavigationEvent(event);
-    const target = anchor ? resolveHoverPreviewTarget(anchor, this) : null;
-    if (!anchor || !target) {
+    if (anchor) {
+      this.activateFocusedAnchor(anchor);
+    }
+  };
+
+  private activateFocusedAnchor(anchor: HTMLAnchorElement): void {
+    const target = resolveHoverPreviewTarget(anchor, this);
+    if (!target) {
       return;
     }
     if (!target.reader && !anchor.matches(":focus-visible")) {
       return;
     }
     this.activateFromBootstrap(anchor, target, "focus", 0);
-  };
+  }
 
   private readonly handleFocusOut = (event: FocusEvent) => {
     if (!this.activeAnchor) {

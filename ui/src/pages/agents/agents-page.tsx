@@ -43,7 +43,7 @@ function AgentsPageContent(props: { routeData?: AgentsRouteData }) {
   );
 }
 
-export const AgentsPage = defineSolidBridge<{ routeData: AgentsRouteData | undefined }>(
+defineSolidBridge<{ routeData: AgentsRouteData | undefined }>(
   "openclaw-agents-page",
   (props, host) => {
     const inherited = useContext(ShellLayoutProvider);

@@ -1,7 +1,10 @@
 import { statSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { expect, it } from "vitest";
+import { runNodeScript } from "../../test/helpers/run-node-script.js";
+import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { stateNativeProcessEntrypoints } from "./native-process-runtime.test-support.js";
 import {
   hasPersistedOpenClawAgentCanonicalValidation,
   recordOpenClawAgentCanonicalValidation,
@@ -93,4 +96,15 @@ it("requires admitted physical identity and write admission for persisted canoni
       raw.close();
     }
   });
+});
+
+it("shares admitted canonical proof with readers and publishes repair changes only after commit", async () => {
+  const result = await runNodeScript(
+    (workerArgv) =>
+      workerArgv(resolveRuntimeWorkerUrl(stateNativeProcessEntrypoints.canonicalReceipt)),
+    process.env,
+    undefined,
+  );
+  expect(result.error, result.stderr).toBeUndefined();
+  expect(result.status, result.stderr).toBe(0);
 });

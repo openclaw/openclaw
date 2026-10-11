@@ -38,14 +38,17 @@ export function observePluginStateEntry(
   store: PluginStateDatabase,
   params: Key,
   storeIdentity: string,
-): PluginStateObservation<unknown> {
+): PluginStateObservation<unknown> & { row?: PluginStateReadRow } {
   const row = selectPluginStateEntry(store.db, { ...params, now: Date.now() });
-  return createPluginStateObservation(
-    store.path,
-    pluginStateComparisonScope(storeIdentity, params),
+  return {
+    ...createPluginStateObservation(
+      store.path,
+      pluginStateComparisonScope(storeIdentity, params),
+      row,
+      "lookup",
+    ),
     row,
-    "lookup",
-  );
+  };
 }
 
 function validateComparisonScope(

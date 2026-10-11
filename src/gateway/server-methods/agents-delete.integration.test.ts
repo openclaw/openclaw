@@ -58,7 +58,7 @@ import {
 } from "../../test-utils/openclaw-test-state.js";
 import { acquireTestPortBlock } from "../../test-utils/port-claims.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
-import { resumeAgentDeletions } from "../server-agent-deletion-recovery.js";
+import * as deletionRecovery from "../server-agent-deletion-recovery.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { createGatewayMemoryCloseRegistryFactory } from "../server-close.memory.test-support.js";
 import { startGatewayServer } from "../server.js";
@@ -329,6 +329,15 @@ it.for(["active", "restart-draining", "legacy-retiring"] as const)(
             const hotReloadRecovery = vi.fn(() => {
               throw new Error("Synthetic Gateway hot reload unexpectedly required recovery");
             });
+            const startupRecovery = createDeferred();
+            const resumeDeletions = deletionRecovery.resumeAgentDeletions;
+            const recovery = vi
+              .spyOn(deletionRecovery, "resumeAgentDeletions")
+              .mockImplementation(async (...args) => {
+                const recovering = resumeDeletions(...args);
+                void recovering.then(startupRecovery.resolve, startupRecovery.reject);
+                await recovering;
+              });
             const server = await startGatewayServer(claim.port, {
               bind: "loopback",
               auth: { mode: "token", token: "agent-delete-test-token" },
@@ -337,6 +346,9 @@ it.for(["active", "restart-draining", "legacy-retiring"] as const)(
             });
             try {
               await server.startupSettled;
+              // Recovery starts after sidecar readiness; join it before creating a pending journal.
+              await withinTest(startupRecovery.promise, signal);
+              recovery.mockRestore();
               signal.throwIfAborted();
               const client = await connectGatewayClient({
                 url: `ws://127.0.0.1:${claim.port}`,
@@ -672,7 +684,7 @@ it.for(["active", "restart-draining", "legacy-retiring"] as const)(
           }
           resetConfigRuntimeState();
           if (scenario === "restart-draining") {
-            await resumeAgentDeletions(context, AbortSignal.abort());
+            await deletionRecovery.resumeAgentDeletions(context, AbortSignal.abort());
             const scope = { agentId, env: state.env, sessionKey };
             await expect(
               patchSessionEntryCore(scope, () => ({ label: "refused before recovery" })),
@@ -680,7 +692,7 @@ it.for(["active", "restart-draining", "legacy-retiring"] as const)(
             const inventory = vi
               .spyOn(sessionInventory, "readSessionEntrySummariesInWorker")
               .mockRejectedValueOnce(new Error("synthetic recovery failure"));
-            await resumeAgentDeletions(context);
+            await deletionRecovery.resumeAgentDeletions(context);
             inventory.mockRestore();
             expect(context.logGateway.warn).toHaveBeenCalledWith(
               expect.stringContaining("synthetic recovery failure"),
@@ -690,7 +702,7 @@ it.for(["active", "restart-draining", "legacy-retiring"] as const)(
               patchSessionEntryCore(scope, () => ({ label: "refused after recovery failure" })),
             ).rejects.toThrow("deletion cleanup is still pending");
           }
-          await resumeAgentDeletions(context);
+          await deletionRecovery.resumeAgentDeletions(context);
           expect(context.logGateway.warn).not.toHaveBeenCalled();
           expect(readAgentDeletionJournal(agentId)?.cleanupCompleted).toBe(true);
           for (const pathname of [

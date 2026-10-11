@@ -10,6 +10,7 @@ import type {
   PluginStatePreparedComparison,
 } from "./plugin-state-store.comparison.worker.js";
 import type { PluginStateSequencedJournalParams } from "./plugin-state-store.journal.js";
+import type { PluginStateReadRow } from "./plugin-state-store.kernel.js";
 import type { PluginStateMoveEntriesParams } from "./plugin-state-store.mutations.js";
 import type { PluginStateKeyRangeParams } from "./plugin-state-store.reads.js";
 import type { PluginStateRegisterEntryParams } from "./plugin-state-store.retention.js";
@@ -46,7 +47,7 @@ export type PluginStateWorkerRequests = {
   };
   "pluginState.observe": {
     input: Key;
-    output: PluginStateObservation<unknown>;
+    output: PluginStateObservation<unknown> & { row?: PluginStateReadRow };
   };
   "pluginState.compareUpdate": {
     input: PluginStatePreparedComparison & PluginStateComparisonLimits & { operation: "update" };

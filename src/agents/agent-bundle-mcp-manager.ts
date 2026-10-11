@@ -84,31 +84,22 @@ export function createSessionMcpRuntimeManager(opts: SessionMcpRuntimeManagerOpt
       }
       const priorDisposal = store.disposalInFlight;
       const priorSessionWork = store.runtimeWorkChains.get(params.sessionId);
-      const input: PreparedAcquisitionParams = { ...params, requester };
-      let publication = store.configReload;
+      const publication = store.configReload;
       let acquired: T | undefined;
       try {
-        // Reserve every possible partition before yielding, including requester
-        // keys a crossed publication may add. Teardown drains this entire admission.
         return await lifecycle.runExclusiveOnRuntimeKeys(runtimeKeys, async () => {
           await Promise.all([priorDisposal, priorSessionWork].filter((work) => work !== undefined));
-          for (;;) {
-            store.scheduler.signal.throwIfAborted();
-            const next = store.configReload;
-            // A publication can cross queued admission before a producer starts.
-            if (next && next !== publication) {
-              Object.assign(input, { cfg: next.cfg, manifestRegistry: next.manifestRegistry });
-            }
-            publication = next;
-            const previous = acquired;
-            acquired = await acquire(input);
-            // Keep one hidden lease until its successor owns unchanged transports.
-            previous?.releaseLease();
-            store.scheduler.signal.throwIfAborted();
-            if (!store.configReload || store.configReload === publication) {
-              return acquired;
-            }
-          }
+          store.scheduler.signal.throwIfAborted();
+          const reload = store.configReload;
+          acquired = await acquire({
+            ...params,
+            requester,
+            ...(reload && reload !== publication
+              ? { cfg: reload.cfg, manifestRegistry: reload.manifestRegistry }
+              : {}),
+          });
+          store.scheduler.signal.throwIfAborted();
+          return acquired;
         });
       } catch (error) {
         acquired?.releaseLease();
