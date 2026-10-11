@@ -1,3 +1,4 @@
+import type { SessionParticipantIdentity } from "../../../packages/gateway-protocol/src/schema/session-participant.js";
 import type { SessionEntry } from "./types.js";
 
 export type SessionMember = {
@@ -22,4 +23,11 @@ export type SessionMembershipFacts = {
   identity?: string;
   birthtime?: string;
   facts: SessionMembershipFact[];
+};
+
+export type SessionParticipantRecord = {
+  identity: SessionParticipantIdentity;
+  contributionCount: number;
+  firstPromptedAt: number | null;
+  lastPromptedAt: number | null;
 };

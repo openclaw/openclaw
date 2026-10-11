@@ -8,7 +8,7 @@ import {
 } from "../lib/native-typescript.mts";
 import { templateToJsx } from "./lit-template.mts";
 
-export type ConversionDiagnostic = { line: number; column: number; reason: string };
+type ConversionDiagnostic = { line: number; column: number; reason: string };
 type Edit = { start: number; end: number; text: string };
 type Context = {
   attribute?: boolean;
