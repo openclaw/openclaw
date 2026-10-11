@@ -1867,6 +1867,15 @@ CREATE TABLE IF NOT EXISTS projects (
   updated_at_ms INT NOT NULL
 ) STRICT;
 
+-- One explicitly retained, normalized private background per durable profile.
+CREATE TABLE IF NOT EXISTS user_background_images (
+  profile_id TEXT NOT NULL PRIMARY KEY REFERENCES user_profiles(id) ON DELETE CASCADE,
+  asset_id TEXT NOT NULL UNIQUE,
+  image BLOB NOT NULL CHECK (length(image) BETWEEN 1 AND 2097152),
+  width INTEGER NOT NULL CHECK (width BETWEEN 1 AND 2560),
+  height INTEGER NOT NULL CHECK (height BETWEEN 1 AND 2560)
+) STRICT;
+
 CREATE TABLE IF NOT EXISTS user_preferences (
   profile_id TEXT NOT NULL,
   pref_key TEXT NOT NULL,

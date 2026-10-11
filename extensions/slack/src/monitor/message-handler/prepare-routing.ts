@@ -1,13 +1,15 @@
-import { resolveAgentRoute, resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
+import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
+import { captureSessionEntryCurrentCheck } from "openclaw/plugin-sdk/session-binding-runtime";
 import {
   getConversationSession,
   resolveStorePath,
+  type SessionEntrySourceAuthority,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { resolveSlackReplyToMode } from "../../account-reply-mode.js";
 import type { ResolvedSlackAccount } from "../../accounts.js";
 import {
   normalizeSlackRouteBindingConfig,
-  resolveSlackConversationBindingRoute,
+  resolveSlackConversationBindingRouteAsync,
 } from "../../conversation-binding-route.js";
 import { resolveSlackThreadContext } from "../../threading.js";
 import type { SlackMessageEvent } from "../../types.js";
@@ -15,11 +17,11 @@ import { readSlackAssistantThreadContext } from "../assistant-thread-context.js"
 import type { SlackChannelConfigResolved } from "../channel-config.js";
 import type { SlackMonitorContext } from "../context.js";
 import type { SlackEventScope } from "../event-scope.js";
-import { captureSlackSessionTargetGuard, getSlackSessionRuns } from "../session-run-targets.js";
+import { getSlackSessionRuns } from "../session-run-targets.js";
 import {
   qualifySlackConversationId,
   qualifySlackRoutePeerId,
-  resolveSlackEnterpriseMainDmSessionKey,
+  resolveSlackAgentRoute,
 } from "../workspace-routing.js";
 
 type SlackRoutingContextDeps = Pick<
@@ -27,9 +29,9 @@ type SlackRoutingContextDeps = Pick<
   "cfg" | "teamId" | "threadInheritParent" | "threadHistoryScope"
 >;
 
-type SlackRoutingContext = ReturnType<typeof resolveSlackRoutingContext>;
+type SlackRoutingContext = Awaited<ReturnType<typeof resolveSlackRoutingContext>>;
 
-export function resolveSlackRoutingContext(params: {
+export async function resolveSlackRoutingContext(params: {
   ctx: SlackRoutingContextDeps;
   account: ResolvedSlackAccount;
   message: SlackMessageEvent;
@@ -85,37 +87,23 @@ export function resolveSlackRoutingContext(params: {
   );
   const runtimeBindingThreadId =
     routedThreadId ?? (isDirectMessage && isThreadReply ? threadTs : undefined);
-  const bindingRoute = resolveSlackConversationBindingRoute({
+  const bindingRoute = await resolveSlackConversationBindingRouteAsync({
     cfg: ctx.cfg,
-    resolveRoute: ({ boundAgentId, bindingOwnerAvailable }) => {
-      const route = resolveAgentRoute({
+    resolveRoute: ({ boundAgentId, bindingOwnerAvailable }) =>
+      resolveSlackAgentRoute({
         cfg:
           boundAgentId || !bindingOwnerAvailable
             ? { session: ctx.cfg.session }
             : normalizeSlackRouteBindingConfig(ctx.cfg),
         defaultAgentId: boundAgentId,
-        channel: "slack",
         accountId: account.accountId,
         teamId: eventScope?.teamId || ctx.teamId || undefined,
         peer: {
           kind: chatType,
-          id: qualifySlackRoutePeerId({
-            id: chatType === "direct" ? (message.user ?? "unknown") : message.channel,
-            kind: chatType === "direct" ? "user" : "channel",
-            eventScope,
-          }),
+          id: isDirectMessage ? (message.user ?? "unknown") : message.channel,
         },
-      });
-      if (!eventScope || chatType !== "direct" || route.dmScope !== "main") {
-        return route;
-      }
-      const sessionKey = resolveSlackEnterpriseMainDmSessionKey({
-        baseSessionKey: route.sessionKey,
-        accountId: account.accountId,
         eventScope,
-      });
-      return { ...route, sessionKey, mainSessionKey: sessionKey };
-    },
+      }),
     accountId: account.accountId,
     baseConversationId,
     runtimeBindingThreadId,
@@ -156,10 +144,15 @@ export async function resolveSlackSessionEventRoutingContext(
     Parameters<typeof resolveSlackRoutingContext>[0],
     "ctx" | "assistantThreadTs" | "agentViewThreadTs"
   > & { ctx: SlackMonitorContext; intent: "stop" | "title" },
-): Promise<SlackRoutingContext & { isCurrentSession: () => boolean }> {
+): Promise<
+  SlackRoutingContext & {
+    isCurrentSession: () => boolean;
+    assertCurrentSession: SessionEntrySourceAuthority;
+  }
+> {
   const { ctx, message, eventScope } = params;
   const threadTs = message.thread_ts;
-  const routing = resolveSlackRoutingContext(params);
+  const routing = await resolveSlackRoutingContext(params);
   const address = {
     agentId: routing.route.agentId,
     storePath: resolveStorePath(ctx.cfg.session?.store, { agentId: routing.route.agentId }),
@@ -232,16 +225,41 @@ export async function resolveSlackSessionEventRoutingContext(
     throw new Error("No recorded session owns this Slack conversation");
   }
   const { route } = owner;
-  const isCurrentIncarnation =
-    params.intent === "stop"
-      ? captureSlackSessionTargetGuard(ctx, route, owner.isActive)
-      : undefined;
+  const readLiveOwner = () => getSlackSessionRuns(ctx, liveAddress).at(-1);
+  const current = await captureSessionEntryCurrentCheck({
+    agentId: route.agentId,
+    sessionKey: route.sessionKey,
+    storePath: resolveStorePath(ctx.cfg.session?.store, { agentId: route.agentId }),
+    isActive: params.intent === "stop" ? owner.isActive : undefined,
+    matchGeneration: params.intent === "stop",
+    errorMessage:
+      params.intent === "title"
+        ? "Slack conversation owner changed before the title update"
+        : "The selected session changed before it could be stopped.",
+    alternatives: [
+      { conversations: [{ ...threadAddress, sessionKey: route.sessionKey }] },
+      {
+        conversations: [{ ...threadAddress, sessionKey: null }],
+        isActive: () => readLiveOwner()?.route.sessionKey === route.sessionKey,
+      },
+      ...(allowDirectParent
+        ? [
+            {
+              conversations: [
+                { ...threadAddress, sessionKey: null },
+                { ...address, sessionKey: route.sessionKey },
+              ],
+              isActive: () => !readLiveOwner(),
+            },
+          ]
+        : []),
+    ],
+  });
   return {
     ...routing,
     route,
     sessionKey: route.sessionKey,
-    // Re-read only prepared local facts after command admission or writer waits.
-    isCurrentSession: () =>
-      readOwner()?.route.sessionKey === route.sessionKey && isCurrentIncarnation?.() !== false,
+    isCurrentSession: current.isCurrent,
+    assertCurrentSession: current.assertCurrent,
   };
 }

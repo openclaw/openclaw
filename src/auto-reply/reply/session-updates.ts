@@ -1,5 +1,4 @@
 import crypto from "node:crypto";
-import type { EmbeddedAgentCompactResult } from "../../agents/embedded-agent-runner/types.js";
 import {
   type ExecPolicyOverrides,
   prepareExecDefaults,
@@ -10,8 +9,13 @@ import { withSandboxRuntimeStatusInWorker } from "../../agents/sandbox/runtime-s
 import type { SessionEntry } from "../../config/sessions.js";
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { applySessionEntryOperation } from "../../config/sessions/session-accessor.sqlite-entry.js";
+import type { projectCompactionAccountingPatch } from "../../config/sessions/session-entry-projection.js";
 import { readSessionEntryInWorker } from "../../config/sessions/session-entry-read-runtime.js";
-import type { SessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
+import type { SessionEntryCohortReader } from "../../config/sessions/session-entry-read-runtime.types.js";
+import {
+  sessionEntryCommitGuardOptions,
+  type SessionSourceAssertion,
+} from "../../config/sessions/session-source-authority.js";
 import { captureSessionTranscriptStorageEnvironment } from "../../config/sessions/transcript-target-binding.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -70,7 +74,7 @@ async function persistSkillSnapshot(params: {
         entry.lifecycleRevision === params.expectedSession?.lifecycleRevision;
       return updated ? updates : null;
     },
-    { workerGuard: { source: params.assertCurrent } },
+    sessionEntryCommitGuardOptions(params.assertCurrent),
   );
   params.assertCurrent?.();
   publishReplySessionEntry(params, persistedEntry ?? undefined);
@@ -87,6 +91,7 @@ function readSkillSnapshotState(entry: SessionEntry | undefined) {
 
 export async function ensureSkillSnapshot(params: {
   agentId: string;
+  reader?: SessionEntryCohortReader;
   sessionEntry?: SessionEntry;
   sessionEntryHandle?: ReplySessionEntryHandle;
   sessionStore?: Record<string, SessionEntry>;
@@ -129,7 +134,10 @@ export async function ensureSkillSnapshot(params: {
   } = params;
   const env = captureSessionTranscriptStorageEnvironment(process.env);
   const cwd = process.cwd();
-  const assertCurrent = params.assertCurrent ?? (() => {});
+  const assertCurrent = () => {
+    params.assertCurrent?.();
+    params.reader?.assertCurrent();
+  };
   assertCurrent();
 
   let nextEntry = sessionEntryHandle?.getCurrent() ?? sessionEntry;
@@ -146,35 +154,44 @@ export async function ensureSkillSnapshot(params: {
     execOverrides: params.execOverrides,
   };
   const existingSnapshot = nextEntry?.skillsSnapshot;
-  const resolveSnapshot = (snapshot: SessionEntry["skillsSnapshot"]) =>
-    withSandboxRuntimeStatusInWorker(execParams, { env, cwd, assertCurrent }, async (sandbox) => {
-      const execDefaults = await resolvePreparedExecDefaultsAsync(
-        prepareExecDefaults(execParams, sandbox),
-        () => loadExecApprovalsReadOnlyAsync({ env }),
-      );
-      assertCurrent();
-      const nodeSkillsEligibility = resolveNodeExecEligibility(execParams, execDefaults);
-      const result = await resolveReusableWorkspaceSkillSnapshot({
-        assertCurrent,
-        workspaceDir,
-        ...resolveSessionSkillExecutionWorkspace(
-          nextEntry?.worktree?.canonicalWorkspaceDir,
-          params.executionWorkspaceDir,
-        ),
-        config: cfg,
-        agentId,
-        skillFilter,
-        skillOverrides,
-        resolveEligibility: () => ({
-          nodeSkills: nodeSkillsEligibility,
-          remote: getRemoteSkillEligibility({ advertiseExecNode: nodeSkillsEligibility.canExec }),
-        }),
-        existingSnapshot: snapshot,
-        librarySelections: nextEntry?.skillLibrarySelections,
-      });
-      assertCurrent();
-      return result;
-    });
+  const resolveSnapshot = (
+    snapshot: SessionEntry["skillsSnapshot"],
+    prepareEntryConsumer?: (
+      prepared: Awaited<ReturnType<typeof resolveReusableWorkspaceSkillSnapshot>>,
+    ) => ((entry: SessionEntry | undefined) => void) | undefined,
+  ) =>
+    withSandboxRuntimeStatusInWorker(
+      execParams,
+      { env, cwd, assertCurrent, reader: params.reader, prepareEntryConsumer },
+      async (sandbox) => {
+        const execDefaults = await resolvePreparedExecDefaultsAsync(
+          prepareExecDefaults(execParams, sandbox),
+          () => loadExecApprovalsReadOnlyAsync({ env }),
+        );
+        assertCurrent();
+        const nodeSkillsEligibility = resolveNodeExecEligibility(execParams, execDefaults);
+        const result = await resolveReusableWorkspaceSkillSnapshot({
+          assertCurrent,
+          workspaceDir,
+          ...resolveSessionSkillExecutionWorkspace(
+            nextEntry?.worktree?.canonicalWorkspaceDir,
+            params.executionWorkspaceDir,
+          ),
+          config: cfg,
+          agentId,
+          skillFilter,
+          skillOverrides,
+          resolveEligibility: () => ({
+            nodeSkills: nodeSkillsEligibility,
+            remote: getRemoteSkillEligibility({ advertiseExecNode: nodeSkillsEligibility.canExec }),
+          }),
+          existingSnapshot: snapshot,
+          librarySelections: nextEntry?.skillLibrarySelections,
+        });
+        assertCurrent();
+        return result;
+      },
+    );
   const persistSnapshot = (
     key: string,
     currentEntry: SessionEntry,
@@ -191,7 +208,36 @@ export async function ensureSkillSnapshot(params: {
     sessionId: sessionId ?? crypto.randomUUID(),
     updatedAt: Date.now(),
   });
-  const initialSnapshotState = await resolveSnapshot(existingSnapshot);
+  let reusedSnapshot: ReturnType<typeof readSkillSnapshotState> | undefined;
+  const initialSnapshotState = await resolveSnapshot(
+    existingSnapshot,
+    !isFirstTurnInSession &&
+      existingSnapshot &&
+      sessionKey &&
+      storePath &&
+      (sessionEntryHandle || sessionStore)
+      ? (prepared) => {
+          if (prepared.shouldRefresh) {
+            return undefined;
+          }
+          return (entry) => {
+            assertCurrent();
+            publishReplySessionEntry(params, entry);
+            reusedSnapshot = readSkillSnapshotState(entry);
+            if (
+              entry?.sessionId === expectedSession?.sessionId &&
+              entry?.lifecycleRevision === expectedSession?.lifecycleRevision
+            ) {
+              reusedSnapshot.skillsSnapshot = prepared.snapshot;
+            }
+          };
+        }
+      : undefined,
+  );
+  if (reusedSnapshot) {
+    assertCurrent();
+    return reusedSnapshot;
+  }
   const shouldRefreshSnapshot = initialSnapshotState.shouldRefresh;
 
   if (isFirstTurnInSession && (sessionEntryHandle || sessionStore) && sessionKey) {
@@ -214,7 +260,8 @@ export async function ensureSkillSnapshot(params: {
 
   const skillsSnapshot =
     nextEntry?.skillsSnapshot &&
-    (nextEntry.skillsSnapshot !== existingSnapshot || !shouldRefreshSnapshot)
+    (nextEntry.skillsSnapshot !== existingSnapshot ||
+      (isFirstTurnInSession && !shouldRefreshSnapshot))
       ? (await resolveSnapshot(nextEntry.skillsSnapshot)).snapshot
       : initialSnapshotState.snapshot;
   if (
@@ -239,7 +286,13 @@ export async function ensureSkillSnapshot(params: {
     // Even a reusable snapshot crosses an await. Return the current row so the
     // reply caller cannot restore stale metadata or a retired session generation.
     const current = storePath
-      ? await readSessionEntryInWorker({ storePath, sessionKey, env }, assertCurrent)
+      ? await readSessionEntryInWorker(
+          { agentId, storePath, sessionKey, env },
+          assertCurrent,
+          undefined,
+          undefined,
+          params.reader,
+        )
       : sessionEntryHandle
         ? sessionEntryHandle.get(sessionKey)
         : sessionStore?.[sessionKey];
@@ -261,25 +314,20 @@ export async function ensureSkillSnapshot(params: {
 }
 
 /** Accounts completed compaction without creating or changing session ownership. */
-export async function incrementCompactionCount(params: {
-  agentId?: string;
-  sessionEntry?: SessionEntry;
-  sessionStore?: Record<string, SessionEntry>;
-  sessionKey?: string;
-  storePath: string;
-  now?: number;
-  amount?: number;
-  tokensAfter?: number;
-  compactionKind?: EmbeddedAgentCompactResult["compactionKind"];
-  expectedSession?: Pick<
-    InternalSessionEntry,
-    "sessionId" | "lifecycleRevision" | "activeWriterRunId"
-  >;
-  transcriptByteCompactionLatch?: NonNullable<
-    InternalSessionEntry["transcriptByteCompactionLatch"]
-  >;
-  authorize?: () => boolean;
-}): Promise<number | undefined> {
+export async function incrementCompactionCount(
+  params: Parameters<typeof projectCompactionAccountingPatch>[1] & {
+    agentId?: string;
+    sessionEntry?: SessionEntry;
+    sessionStore?: Record<string, SessionEntry>;
+    sessionKey?: string;
+    storePath: string;
+    expectedSession?: Pick<
+      InternalSessionEntry,
+      "sessionId" | "lifecycleRevision" | "activeWriterRunId"
+    >;
+    authorize?: () => boolean;
+  },
+): Promise<number | undefined> {
   const { sessionStore, sessionKey, storePath, authorize } = params;
   if (!sessionKey || !storePath) {
     return undefined;
@@ -296,9 +344,8 @@ export async function incrementCompactionCount(params: {
   };
   let committed = false;
   const authorityRevoked = new Error("compaction accounting authority revoked");
-  let persisted: InternalSessionEntry | null;
   try {
-    persisted = await applySessionEntryOperation(
+    const persisted = await applySessionEntryOperation(
       { agentId: params.agentId, storePath, sessionKey },
       {
         kind: "compaction-accounting",
@@ -330,14 +377,11 @@ export async function incrementCompactionCount(params: {
         },
       },
     );
+    return committed ? persisted?.compactionCount : undefined;
   } catch (error) {
     if (error === authorityRevoked) {
       return undefined;
     }
     throw error;
   }
-  if (!committed || !persisted) {
-    return undefined;
-  }
-  return persisted.compactionCount;
 }

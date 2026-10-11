@@ -7,7 +7,10 @@ import { captureSessionTranscriptStorageEnvironment } from "../config/sessions/t
 import type { OpenClawConfig } from "../config/types.js";
 import type { listGatewayAgentsBasic } from "../gateway/agent-list.js";
 import type { SessionRowProjection } from "../gateway/session-row-projection.js";
-import { readAgentDatabaseAdmissionRefusal } from "../state/agent-database-admission.js";
+import {
+  AgentDatabaseAdmissionError,
+  readAgentDatabaseAdmissionRefusal,
+} from "../state/agent-database-admission.js";
 
 export const STATUS_RECENT_SESSION_LIMIT = 10;
 const SESSION_STORE_READ_SLICE_MS = 8;
@@ -97,9 +100,9 @@ export function createStatusSessionStoreReader(
               const projection = options.projection;
               if (projection) {
                 do {
-                  await projection.ensureMaterialized();
+                  await projection.prepareSelection();
                   assertCurrent();
-                } while (projection.needsMaterialization);
+                } while (projection.needsSelectionPreparation());
               }
               summary = projection
                 ? summarizeProjectionRows(projection, database.path, agentIds, recentLimit)
@@ -110,6 +113,14 @@ export function createStatusSessionStoreReader(
                     continuation,
                   });
             } catch (error) {
+              if (
+                error instanceof AgentDatabaseAdmissionError &&
+                agentId === error.refusal.agentId &&
+                readAgentDatabaseAdmissionRefusal(agentId, { env })
+              ) {
+                assertCurrent();
+                return { path, count: 0, recent: [] };
+              }
               if (!options.recoverReadError) {
                 throw error;
               }

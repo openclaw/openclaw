@@ -11,7 +11,7 @@ import type {
   ProviderResolveNonInteractiveApiKeyParams,
 } from "../../../plugins/provider-authentication.types.js";
 import { resolveDeprecatedProviderInstallCatalogEntry } from "../../../plugins/provider-install-catalog.js";
-import type { RuntimeEnv } from "../../../runtime.js";
+import { ExitError, type RuntimeEnv } from "../../../runtime.js";
 import { resolveDefaultSecretProviderAlias } from "../../../secrets/ref-contract.js";
 import { resolveLegacyOnboardAuthChoice } from "../../auth-choice-legacy.js";
 import { formatAuthChoiceChoicesForCli } from "../../auth-choice-options.js";
@@ -108,11 +108,12 @@ export async function applyNonInteractiveAuthChoice(params: {
       ...(paramsLocal.metadata ? { metadata: paramsLocal.metadata } : {}),
     };
   };
-  const legacyChoice = resolveLegacyOnboardAuthChoice(authChoice, {
+  const providerLookup = {
     config: nextConfig,
     workspaceDir: params.target.workspaceDir,
     env: process.env,
-  });
+  };
+  const legacyChoice = resolveLegacyOnboardAuthChoice(authChoice, providerLookup);
   if (legacyChoice.deprecated) {
     // Only provider aliases normalize here; the onboarding entry point owns
     // the separate oauth spelling before local dispatch.
@@ -120,17 +121,11 @@ export async function applyNonInteractiveAuthChoice(params: {
     authChoice = legacyChoice.authChoice;
   }
 
-  const deprecatedChoice = resolveManifestDeprecatedProviderAuthChoice(authChoice, {
-    config: nextConfig,
-    workspaceDir: params.target.workspaceDir,
-    env: process.env,
-  });
+  const deprecatedChoice = resolveManifestDeprecatedProviderAuthChoice(authChoice, providerLookup);
   const deprecatedInstallChoice = deprecatedChoice
     ? undefined
     : resolveDeprecatedProviderInstallCatalogEntry(authChoice, {
-        config: nextConfig,
-        workspaceDir: params.target.workspaceDir,
-        env: process.env,
+        ...providerLookup,
         includeUntrustedWorkspacePlugins: false,
       });
   const replacementChoiceId = deprecatedChoice?.choiceId ?? deprecatedInstallChoice?.choiceId;
@@ -140,11 +135,7 @@ export async function applyNonInteractiveAuthChoice(params: {
     );
   }
 
-  const validAuthChoices = formatAuthChoiceChoicesForCli({
-    config: nextConfig,
-    workspaceDir: params.target.workspaceDir,
-    env: process.env,
-  }).split("|");
+  const validAuthChoices = formatAuthChoiceChoicesForCli(providerLookup).split("|");
   if (!validAuthChoices.includes(authChoice) && !authChoice.startsWith("provider-plugin:")) {
     return reject(
       `Unknown --auth-choice ${JSON.stringify(authChoice)}. Valid choices: ${validAuthChoices.join(", ")}.`,
@@ -260,6 +251,9 @@ export async function applyNonInteractiveAuthChoice(params: {
       }
       return result.config;
     } catch (err) {
+      if (err instanceof ExitError) {
+        throw err;
+      }
       const message =
         err instanceof CustomApiError &&
         (err.code === "missing_required" || err.code === "invalid_compatibility")

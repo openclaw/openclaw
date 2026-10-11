@@ -43,17 +43,14 @@ export function shouldHandleDiscordApprovalRequest(params: {
   configOverride?: DiscordExecApprovalConfig | null;
 }): boolean {
   const accountId = params.accountId ?? resolveDefaultDiscordAccountId(params.cfg);
-  if (
-    !doesApprovalRequestSelectChannelAccount({
+  return (
+    doesApprovalRequestSelectChannelAccount({
       ...params,
       channel: "discord",
       defaultAccountId: resolveDefaultDiscordAccountId(params.cfg),
       eligibleAccountIds: isDiscordApprovalAccountEligible({ ...params, accountId })
         ? [accountId]
         : [],
-    })
-  ) {
-    return false;
-  }
-  return isDiscordApprovalAccountEligible(params);
+    }) && isDiscordApprovalAccountEligible(params)
+  );
 }

@@ -43,8 +43,8 @@ import {
   loadSessionEntry,
   loadTranscriptEvents,
   replaceSessionEntry,
-  replaceTranscriptEvents,
 } from "../config/sessions/session-accessor.js";
+import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { addSessionMember, listSessionMembers } from "../config/sessions/session-sharing-store.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
@@ -762,11 +762,10 @@ describe("agentCommand", () => {
         runtime,
       );
       expect(prepared.workspaceDir).toBe(configuredWorkspace);
-      const implicitWorkspace = configuredWorkspace;
 
-      expect(fs.existsSync(implicitWorkspace)).toBe(true);
-      expect(fs.existsSync(path.join(implicitWorkspace, "AGENTS.md"))).toBe(false);
-      expect(fs.existsSync(path.join(implicitWorkspace, ".git"))).toBe(false);
+      expect(fs.existsSync(configuredWorkspace)).toBe(true);
+      expect(fs.existsSync(path.join(configuredWorkspace, "AGENTS.md"))).toBe(false);
+      expect(fs.existsSync(path.join(configuredWorkspace, ".git"))).toBe(false);
       expect(() => execFileSync("git", ["-C", repository, "add", "-A"])).not.toThrow();
     });
   });
@@ -792,6 +791,7 @@ describe("agentCommand", () => {
       mockConfig(home, store);
       const worktree = await managedWorktrees.create({
         repoRoot: canonicalWorkspace,
+        baseRef: "HEAD",
         name: "managed",
         ownerKind: "session",
         ownerId: sessionKey,

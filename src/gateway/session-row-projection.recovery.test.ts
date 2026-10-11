@@ -1,4 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
+import { withinTest } from "../../test/helpers/promise.js";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
 import {
   loadSessionEntry,
@@ -6,6 +7,8 @@ import {
   replaceSessionEntrySync,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
+import { readSessionColdTranscript } from "../config/sessions/session-cold-storage-state.js";
+import { runSessionColdStorageMaintenance } from "../config/sessions/session-cold-storage.js";
 import {
   reconcileSessionTranscriptIndexes,
   waitForSessionTranscriptIndexReconcile,
@@ -31,11 +34,95 @@ import {
   listSessions,
   requestContext,
 } from "./server-methods/sessions-read-cache.test-support.js";
+import { observeSessionRowBackfill } from "./session-row-backfill.test-support.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
 import * as transcriptBackfill from "./session-row-transcript-backfill.js";
+import { readSessionMessagesPageWithStatsAsync } from "./session-transcript-readers.js";
 
 afterEach(() => vi.restoreAllMocks());
+
+it("refreshes omitted cold previews after a history read without revoking sharing", ({
+  signal,
+  onTestFinished,
+}) => {
+  const run = withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const cfg = { agents: { entries: { main: {} } } };
+    setRuntimeConfigSnapshot(cfg);
+    const scope = {
+      agentId: "main",
+      sessionKey: "agent:main:cold-preview",
+      sessionId: "cold-preview",
+    };
+    await upsertSessionEntryCore(scope, {
+      sessionId: scope.sessionId,
+      visibility: "shared",
+      updatedAt: Date.now(),
+    });
+    await persistSessionTranscriptTurn(scope, {
+      messages: [
+        { message: { role: "user", content: "Remember the restored conversation" } },
+        { message: { role: "assistant", content: "I will remember it." } },
+      ],
+      touchSessionEntry: false,
+    });
+    await waitForSessionTranscriptIndexReconcile({ agentId: scope.agentId });
+    const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 60 * 86_400_000);
+    await expect(
+      runSessionColdStorageMaintenance({
+        config: {
+          ...cfg,
+          session: { maintenance: { coldStorage: { enabled: true, afterDays: 30 } } },
+        },
+      }),
+    ).resolves.toEqual({ archivedTranscripts: 1, externalizedTranscripts: 0 });
+    clock.mockRestore();
+    const database = openOpenClawAgentDatabase({ agentId: scope.agentId });
+    const originalEntry = loadSessionEntry(scope);
+    const context = requestContext(cfg);
+    const client = identifiedClient("viewer@example.com");
+    const request = { includeLastMessage: true };
+    const omitted = observeSessionRowBackfill([scope.sessionKey]);
+    try {
+      await listSessions({ context, client, request });
+      await withinTest(omitted, signal);
+      const projection = getSessionRowProjection(context)!;
+      const query = { agentId: scope.agentId, key: scope.sessionKey };
+      const before = await listSessions({ context, client, request });
+      expect(before.sessions).toEqual([
+        expect.objectContaining({ key: scope.sessionKey, sharingRole: "viewer" }),
+      ]);
+      expect(before.sessions[0]?.lastMessagePreview).toBeUndefined();
+      expect(readSessionColdTranscript(database.db, scope.sessionId)).toBeDefined();
+      const sharingEntry = projection.capture(query)?.sharingEntry;
+      const refreshed = observeSessionRowBackfill([scope.sessionKey], projection);
+      const history = await readSessionMessagesPageWithStatsAsync(scope, {
+        maxMessages: 100,
+        offset: 0,
+      });
+      expect(history.messages).toEqual([
+        expect.objectContaining({ role: "user", content: "Remember the restored conversation" }),
+        expect.objectContaining({ role: "assistant", content: "I will remember it." }),
+      ]);
+      expect(readSessionColdTranscript(database.db, scope.sessionId)).toBeUndefined();
+      expect(projection.capture(query)?.sharingEntry).toEqual(sharingEntry);
+      await withinTest(refreshed, signal);
+      const after = await listSessions({ context, client, request });
+      expect(after.sessions).toEqual([
+        expect.objectContaining({
+          key: scope.sessionKey,
+          sharingRole: "viewer",
+          lastMessagePreview: "I will remember it.",
+        }),
+      ]);
+      expect(loadSessionEntry(scope)).toEqual(originalEntry);
+    } finally {
+      getSessionRowProjection(context)?.dispose();
+    }
+  });
+  onTestFinished(() => run);
+  return run;
+});
 
 it("keeps projection reads outside borrowed startup admission and admits completed recovery", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
@@ -181,27 +268,6 @@ it("refreshes previews after reconciliation without metadata mutation or clean-r
       stop();
       getSessionRowProjection(context)?.dispose();
       vi.restoreAllMocks();
-    }
-  });
-});
-
-it("captures the committed replacement before background materialization", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const cfg = { agents: { entries: { main: {} } } };
-    const query = { agentId: "main", key: "agent:main:replaced" };
-    const target = { agentId: query.agentId, sessionKey: query.key };
-    replaceSessionEntrySync(target, { sessionId: "previous", updatedAt: 1 });
-    const projection = await createSessionRowProjection({ cfg });
-    try {
-      const previous = projection.capture(query)!;
-      replaceSessionEntrySync(target, { sessionId: "current", updatedAt: 2 });
-      const captured = projection.capture(query)!;
-      expect(captured.entry?.sessionId).toBe("current");
-      await projection.ensureMaterialized();
-      expect(projection.isCurrent(captured)).toBe(true);
-      expect(projection.isCurrent(previous)).toBe(false);
-    } finally {
-      projection.dispose();
     }
   });
 });

@@ -220,26 +220,17 @@ function pickPreferredManifestAuthChoice(
   candidates: readonly ProviderAuthChoiceCandidate[],
 ): ProviderAuthChoiceCandidate | undefined {
   let preferred: ProviderAuthChoiceCandidate | undefined;
-  let ambiguous = false;
+  let priority = Infinity;
   for (const candidate of candidates) {
-    if (!preferred) {
+    const candidatePriority = resolveProviderAuthChoiceOriginPriority(candidate.origin);
+    if (candidatePriority < priority) {
       preferred = candidate;
-      continue;
-    }
-    if (
-      resolveProviderAuthChoiceOriginPriority(candidate.origin) <
-      resolveProviderAuthChoiceOriginPriority(preferred.origin)
-    ) {
-      preferred = candidate;
-      ambiguous = false;
-    } else if (
-      resolveProviderAuthChoiceOriginPriority(candidate.origin) ===
-      resolveProviderAuthChoiceOriginPriority(preferred.origin)
-    ) {
-      ambiguous = true;
+      priority = candidatePriority;
+    } else if (candidatePriority === priority) {
+      preferred = undefined;
     }
   }
-  return ambiguous ? undefined : preferred;
+  return preferred;
 }
 
 function resolvePreferredManifestAuthChoicesByChoiceId(

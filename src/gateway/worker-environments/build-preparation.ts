@@ -65,7 +65,7 @@ export function createWorkerEnvironmentBuildPreparation(options: BuildPreparatio
     if (!project) {
       throw serviceError(
         "invalid_project",
-        "Project must be an accessible local Git checkout root with a HEAD commit",
+        "Project must be an accessible local Git checkout root with committed files",
       );
     }
     authorize?.();

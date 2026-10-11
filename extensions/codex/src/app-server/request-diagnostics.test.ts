@@ -111,9 +111,14 @@ describe("scoped Codex timeout diagnostics", () => {
     const entered = createDeferred<void>();
     const pending = createDeferred<object>();
     const privateText = "synthetic-private-prompt-token-environment";
+    let started = 0;
     const request = vi.fn(
-      (method: string, _params?: unknown, _options?: { signal?: AbortSignal }) =>
-        method === "account/read" ? Promise.resolve({}) : pending.promise,
+      (method: string, _params?: unknown, _options?: { signal?: AbortSignal }) => {
+        if (++started === 5) {
+          entered.resolve();
+        }
+        return method === "account/read" ? Promise.resolve({}) : pending.promise;
+      },
     );
     shared.acquire.mockResolvedValue(client(request));
     const result = runWithDiagnosticTraceContext(trace, () =>
@@ -123,7 +128,6 @@ describe("scoped Codex timeout diagnostics", () => {
             (method) =>
               send({ method, requestParams: { prompt: privateText, token: privateText } }),
           );
-          entered.resolve();
           return await Promise.all(calls);
         },
         { sessionId: privateText, sessionKey: privateText },

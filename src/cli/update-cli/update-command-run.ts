@@ -1,5 +1,4 @@
 import path from "node:path";
-import { isDeepStrictEqual } from "node:util";
 import { detectCurrentSqliteCapabilities, nodeRuntimeFailure } from "../../../node-sqlite.mjs";
 import {
   formatUnsupportedNodeVersionMessage,
@@ -45,7 +44,6 @@ import { readUpdateRunDriver } from "../../infra/update-run-driver.js";
 import {
   adoptUpdateRun,
   createUpdateRun,
-  finishInterruptedUpdatePreview,
   finishUpdateRun,
   getUpdateRun,
   heartbeatUpdateRun,
@@ -56,6 +54,7 @@ import {
 } from "../../infra/update-run-ledger.js";
 import type { UpdateRunRecord, UpdateRunStep } from "../../infra/update-run-record.js";
 import { assertUpdateRecoveryAdmission } from "../../infra/update-run-recovery-admission.js";
+import { isUpdateRecoveryPending } from "../../infra/update-run-recovery-schema.js";
 import {
   inspectUpdateRecoveries,
   loadUpdateRecovery,
@@ -74,7 +73,6 @@ import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.pa
 import { assertOpenClawStateWriteAllowedAtPath } from "../../state/openclaw-state-ownership.js";
 import { VERSION } from "../../version.js";
 import { exitCliAfterOutput } from "../one-shot-exit.js";
-import { registerSignalExitBarrier, waitForSignalExitBarriers } from "../signal-exit-barrier.js";
 import type { UpdateDisplayProgress } from "./progress.js";
 import {
   parseUpdateTimeoutMs,
@@ -90,9 +88,9 @@ import { revalidateUpdateDatabaseContext } from "./update-command-managed-contex
 import {
   admitMutableUpdateSignalRun,
   retireMutableUpdateSignalRun,
-  withMutableUpdateSignals,
 } from "./update-command-mutable-signals.js";
 import { assertUpdatePackageActivationAdmission } from "./update-command-package-activation.js";
+import { admitUpdatePreviewSignalRun } from "./update-command-preview-signals.js";
 import {
   resolveOwnedManagedUpdateEnv,
   withOwnedManagedUpdateEnv,
@@ -107,36 +105,10 @@ import {
 } from "./update-command-service-plan.js";
 import { preflightWindowsUpdateTask } from "./update-command-windows-preflight.js";
 
-// Identity in this map is minted only for a new local preview, never reconstructed
-// from a run ID, process absence, or another invocation's diagnostic history.
-const previewAdmissions = new WeakMap<
-  object,
-  { record: UpdateRunRecord; env: NodeJS.ProcessEnv; active?: boolean }
->();
-
-/** Advance preview custody only across this owner's committed target writes. */
-export function recordUpdateCommandTarget(
-  run: UpdateCommandOptions["run"],
-  patch: { target?: UpdateRunRecord["target"]; step?: UpdateRunStep },
-): void {
-  if (!run) {
-    return;
-  }
-  let before: UpdateRunRecord | undefined;
-  const committed = recordUpdateRunPhase(
-    run.runId,
-    "requested",
-    patch,
-    { env: run.env },
-    (record) => {
-      before = record;
-    },
-  );
-  const admission = previewAdmissions.get(run);
-  if (admission && isDeepStrictEqual(before, admission.record)) {
-    admission.record = committed;
-  }
-}
+export {
+  recordUpdateCommandTarget,
+  withUpdatePreviewSignals,
+} from "./update-command-preview-signals.js";
 
 /** Admission follows the managed service root before a redirect or discovered install. */
 export function resolveUpdateCommandAdmissionRoot(
@@ -327,7 +299,7 @@ export async function admitUpdateCommandRun(params: {
     env[POST_CORE_UPDATE_ENV] !== "1"
   ) {
     if (params.opts.dryRun === true) {
-      previewAdmissions.set(run, { record, env: { ...env } });
+      admitUpdatePreviewSignalRun(run, record, env);
     } else {
       admitMutableUpdateSignalRun(run, record);
     }
@@ -335,64 +307,10 @@ export async function admitUpdateCommandRun(params: {
   return run;
 }
 
-/** Own diagnostics only for this freshly admitted invocation's lexical lifetime. */
-export async function withUpdatePreviewSignals<T>(
-  opts: UpdateCommandOptions,
-  operation: () => Promise<T>,
-): Promise<T> {
-  const admission = opts.dryRun === true && opts.run ? previewAdmissions.get(opts.run) : undefined;
-  if (!admission || !opts.run || admission.active) {
-    return await withMutableUpdateSignals(opts, operation);
-  }
-  admission.active = true;
-  const { env } = admission;
-  let interrupted = false;
-  let shutdown: Promise<void> | undefined;
-  const unregister = registerSignalExitBarrier(async () => {
-    if (
-      !interrupted ||
-      process.env.OPENCLAW_UPDATE_RUN_HANDOFF === "1" ||
-      process.env[POST_CORE_UPDATE_ENV] === "1"
-    ) {
-      return;
-    }
-    // Missing/displaced canonical state, pending recovery, or a changed row is
-    // not permission to open a writable runtime or dispose of another owner.
-    await assertUpdateRecoveryAdmission({ env });
-    if (!isDeepStrictEqual(getUpdateRun(admission.record.runId, { env }), admission.record)) {
-      return;
-    }
-    finishInterruptedUpdatePreview(admission.record, { env });
-  });
-  const onSignal = (code: number) => {
-    interrupted = true;
-    shutdown ??= waitForSignalExitBarriers()
-      .catch(() => {
-        defaultRuntime.error(
-          "Preview interruption could not be recorded; history remains pending.",
-        );
-      })
-      .finally(() => process.exit(code));
-  };
-  const onSigint = () => onSignal(130);
-  const onSigterm = () => onSignal(143);
-  process.on("SIGINT", onSigint);
-  process.on("SIGTERM", onSigterm);
-  try {
-    return await operation();
-  } finally {
-    await shutdown;
-    previewAdmissions.delete(opts.run);
-    process.off("SIGINT", onSigint);
-    process.off("SIGTERM", onSigterm);
-    unregister();
-  }
-}
-
 export function createUpdateRunProgress(
   run: NonNullable<UpdateCommandOptions["run"]>,
   progress: UpdateDisplayProgress,
-  recordStep: (step: UpdateRunStep) => Promise<UpdateRunRecord>,
+  recordStep: (step: UpdateRunStep) => Promise<UpdateRunRecord | undefined>,
 ): UpdateStepProgress & {
   deferLedgerWrites: () => void;
   flushLedgerWrites: () => Promise<void>;
@@ -491,12 +409,10 @@ export function completeUpdateCommandRun(
   }
   // A process-local result cannot complete an operationally pending update or
   // authorize package retirement. Only the durable finalizer may close it.
-  const inspected = inspectUpdateRecoveries({ env: run.env }).find(
-    (entry) => entry.record.runId === run.runId,
-  );
-  // A matching historical record can only project its saved outcome or remain
-  // pending below. The mutable fallback still uses strict execution admission;
-  // unrelated legacy evidence must not become an absent/clean recovery state.
+  const recoveries = inspectUpdateRecoveries({ env: run.env });
+  const inspected = recoveries.find((entry) => entry.record.runId === run.runId);
+  // A matching historical record only projects its saved outcome. Execution
+  // remains strict, while unrelated completed history grants no authority.
   const recovery =
     inspected?.format === "legacy-serving"
       ? inspected.record
@@ -519,6 +435,9 @@ export function completeUpdateCommandRun(
           : (result.reason ?? "update-recovery-pending"),
       runId: run.runId,
     });
+  }
+  if (recoveries.some(({ record }) => isUpdateRecoveryPending(record))) {
+    return { ...result, status: "error", reason: "update-recovery-pending", runId: run.runId };
   }
   const recordOptions = { env: run.env, redactPaths: result.root ? [result.root] : [] };
   // Both finalization and outer CLI unwind come here. A verified restored generation

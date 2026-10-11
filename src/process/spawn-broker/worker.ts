@@ -1,12 +1,18 @@
 import type { ChildProcess, SendHandle } from "node:child_process";
 import { Socket } from "node:net";
+import { setTimeout as delay } from "node:timers/promises";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { killProcessTree } from "../kill-tree.js";
+import { getProcessInstanceStartTime } from "../../shared/pid-alive.js";
 import { spawnWithInheritedOomScore } from "../linux-oom-score.js";
-import { GRACEFUL_CANCEL_TIMEOUT_MS } from "../supervisor/cancellation-policy.js";
-import { hasLiveOwnedProcessGroupMembers } from "../supervisor/service-child-group-ownership.js";
+import { waitForBrokerChildCompletion } from "./child-completion.js";
+import {
+  drainCurrentBrokerProcessGroup,
+  isBrokerChildGroupAlive,
+  terminateLostBrokerChild,
+  type BrokerChildGroupIdentity,
+} from "./cleanup.js";
 import { serializeExecaError } from "./execa-protocol.js";
 import { startBrokerExeca, type BrokerExecaProcess } from "./execa-worker.js";
 import { createBrokerReceiver } from "./ipc.js";
@@ -29,6 +35,11 @@ type Owned = {
   events: BrokerResponse[];
   exited: boolean;
   resultSettled: boolean;
+  closed: Promise<void>;
+  stopping?: Promise<void>;
+  groupIdentity?: BrokerChildGroupIdentity;
+  groupObservation?: Promise<void>;
+  groupGone?: boolean;
   openPipes: Set<number>;
 };
 type Admission = { type: "started"; entry: Owned } | { type: "failed"; execa: BrokerExecaProcess };
@@ -39,6 +50,8 @@ const starting = new Map<number, { canceled?: boolean; signal?: NodeJS.Signals |
 const launchGrants = new Map<number, ReturnType<typeof createDeferredCore<boolean>>>();
 let resources: Awaited<ReturnType<typeof createBrokerNativeResourceServer>> | undefined;
 let startup: "waiting" | "initializing" | "ready" = "waiting";
+let initialization = Promise.resolve();
+const launches = new Set<Promise<void>>();
 
 const sender = createWorkerSender((message, handle, callback) => {
   if (!process.send || !process.connected) {
@@ -60,8 +73,64 @@ function report(
 
 function forget(id: number, entry: Owned): void {
   if (entry.announced && entry.exited && entry.resultSettled && entry.openPipes.size === 0) {
+    if (entry.groupIdentity && !entry.groupGone) {
+      // The command result is complete, but an inherited detached group can
+      // still own descendants. Keep its original identity until group extinction.
+      const identity = entry.groupIdentity;
+      entry.groupObservation ??= (async () => {
+        for (;;) {
+          // Shutdown keeps the entry for stopChild to settle the retained group.
+          if (stopping) {
+            return;
+          }
+          if (!isBrokerChildGroupAlive(identity)) {
+            entry.groupGone = true;
+            owned.delete(id);
+            return;
+          }
+          await delay(50, undefined, { ref: false });
+        }
+      })();
+      void entry.groupObservation.catch(() => {});
+      return;
+    }
     owned.delete(id);
   }
+}
+
+function stopChild(entry: Owned): Promise<void> {
+  return (entry.stopping ??= (async () => {
+    const { child, execa } = entry;
+    if (child.connected) {
+      child.disconnect();
+    }
+    // Arm the group join before cancellation lets the leader exit. A retained
+    // identity also permits cleanup after the command has already closed.
+    const directChildAlive = child.exitCode === null && child.signalCode === null;
+    const groupAlive =
+      !entry.groupGone &&
+      (entry.groupIdentity ? isBrokerChildGroupAlive(entry.groupIdentity) : directChildAlive);
+    const termination =
+      child.pid && groupAlive
+        ? terminateLostBrokerChild(child.pid, entry.detached, undefined, entry.groupIdentity)
+        : undefined;
+    void termination?.settled.catch(() => {});
+    if (groupAlive && directChildAlive) {
+      execa?.cancel();
+    }
+    // The host can no longer acknowledge transferred output. Settle both halves
+    // of execa's forwarding pipes before joining its native result.
+    for (const fd of entry.openPipes) {
+      execa?.outputDrained(fd, new Error("Spawn broker is stopping"));
+    }
+    entry.openPipes.clear();
+    for (const stream of execa?.stdio ?? child.stdio ?? []) {
+      stream?.destroy();
+    }
+    await Promise.allSettled([entry.closed, execa?.result]);
+    await termination?.settled;
+    entry.groupGone = true;
+  })());
 }
 
 function shutdown(): void {
@@ -75,46 +144,38 @@ function shutdown(): void {
   resources?.disconnect();
   sender.close(new Error("Spawn broker parent disconnected"));
   receiver.clear();
-  const terminations: Array<ReturnType<typeof killProcessTree>> = [];
-  for (const entry of owned.values()) {
-    if (entry.child.connected) {
-      entry.child.disconnect();
-    }
-    if (entry.child.pid) {
-      terminations.push(
-        killProcessTree(entry.child.pid, {
-          detached: entry.detached,
-          graceMs: GRACEFUL_CANCEL_TIMEOUT_MS,
-        }),
-      );
-    }
+  const childStops = [...owned.values()].map(stopChild);
+  for (const stopped of childStops) {
+    void stopped.catch(() => {});
   }
-  const signalGroup = (signal: NodeJS.Signals) => {
+  void (async () => {
     try {
-      process.kill(-process.pid, signal);
-    } catch {
-      /* An absent private group needs no signal. */
+      await initialization.catch(() => undefined);
+      await Promise.allSettled(launches);
+      const outcomes = await Promise.allSettled([
+        ...childStops,
+        ...[...owned.values()].map(stopChild),
+        resources?.close(),
+      ]);
+      const failures = outcomes.flatMap((outcome) =>
+        outcome.status === "rejected" ? [outcome.reason] : [],
+      );
+      if (failures.length) {
+        throw new AggregateError(failures, "Spawn broker native cleanup failed");
+      }
+      // Native owners have settled. Only abandoned members of our private group
+      // remain; never signal the broker or tear down its isolate during cleanup.
+      await drainCurrentBrokerProcessGroup();
+    } catch (error) {
+      process.exitCode = 1;
+      process.stderr.write("Spawn broker cleanup failed: " + String(error) + "\n");
+    } finally {
+      process.stdin.destroy();
+      if (process.connected) {
+        process.disconnect?.();
+      }
     }
-  };
-  const finish = () => {
-    // Killing our own group must not cancel the timers for detached children.
-    for (const termination of terminations) {
-      termination?.force();
-    }
-    signalGroup("SIGKILL");
-    process.exit(0);
-  };
-  signalGroup("SIGTERM");
-  if (
-    owned.size === 0 &&
-    starting.size === 0 &&
-    !resources?.size &&
-    hasLiveOwnedProcessGroupMembers() === false
-  ) {
-    finish();
-    return;
-  }
-  setTimeout(finish, GRACEFUL_CANCEL_TIMEOUT_MS + 250);
+  })();
 }
 
 function disposeFailedChild(child: ChildProcess | undefined): void {
@@ -123,7 +184,7 @@ function disposeFailedChild(child: ChildProcess | undefined): void {
   }
   // Setup can fail before Node emits its queued spawn error.
   child.once("error", () => {});
-  if (child.pid) {
+  if (child.pid && child.exitCode === null && child.signalCode === null) {
     child.kill("SIGKILL");
   }
   if (child.connected) {
@@ -171,6 +232,11 @@ async function launch(
   const pending: { canceled?: boolean; signal?: NodeJS.Signals | number } = {};
   starting.set(message.id, pending);
   let spawnedChild: ChildProcess | undefined;
+  let spawnedClose: Promise<void> | undefined;
+  let spawnedGroupIdentity: BrokerChildGroupIdentity | undefined;
+  const detached =
+    message.options.detached === true ||
+    (message.type === "spawn-execa" && message.options.killDescendants === true);
   const assertActive = () => {
     // Ordinary queued commands still settle cancellation through their native process result.
     if (
@@ -212,12 +278,20 @@ async function launch(
       if (!child) {
         throw new Error("Spawn broker command did not start");
       }
+      spawnedClose = waitForBrokerChildCompletion(child);
+      if (detached && child.pid && process.platform !== "win32") {
+        spawnedGroupIdentity = {
+          pid: child.pid,
+          startedAt: execa
+            ? (execa.groupStartedAt ?? null)
+            : getProcessInstanceStartTime(child.pid),
+          isLeaderAlive: () => child.exitCode === null && child.signalCode === null,
+        };
+      }
       if (!execa) {
         // EMFILE/ENFILE can return before stdio exists; Node still owns error and close.
         if (child.stdio === undefined) {
-          const closed = new Promise<void>((resolve) => {
-            child.once("close", () => resolve());
-          });
+          const closed = spawnedClose;
           const error = await new Promise<Error>((resolve) => {
             child.once("error", resolve);
           });
@@ -239,14 +313,14 @@ async function launch(
       }
       const current: Owned = {
         child,
-        detached:
-          message.options.detached === true ||
-          (message.type === "spawn-execa" && message.options.killDescendants === true),
+        detached,
+        ...(spawnedGroupIdentity ? { groupIdentity: spawnedGroupIdentity } : {}),
         execa,
         announced: false,
         events: [],
         exited: false,
         resultSettled: !execa,
+        closed: spawnedClose,
         openPipes: new Set(
           (execa?.stdio ?? child.stdio).flatMap((stream, fd) =>
             stream instanceof Socket ? [fd] : [],
@@ -278,7 +352,7 @@ async function launch(
       );
       child.once("disconnect", () => event({ type: "disconnect", id: message.id }));
       child.once("exit", (code, signal) => event({ type: "exit", id: message.id, code, signal }));
-      child.once("close", () => {
+      void spawnedClose.then(() => {
         event({ type: "closed", id: message.id });
         current.exited = true;
         forget(message.id, current);
@@ -329,15 +403,7 @@ async function launch(
     const current = admission.entry;
     const { child, execa } = current;
     if (stopping) {
-      if (child.connected) {
-        child.disconnect();
-      }
-      if (child.pid) {
-        killProcessTree(child.pid, {
-          detached: current.detached,
-          graceMs: GRACEFUL_CANCEL_TIMEOUT_MS,
-        });
-      }
+      await stopChild(current);
       return;
     }
     const streams = execa?.stdio ?? child.stdio;
@@ -377,7 +443,18 @@ async function launch(
     current.announced = true;
     forget(message.id, current);
   } catch (error) {
-    disposeFailedChild(spawnedChild);
+    const current = owned.get(message.id);
+    if (current) {
+      await stopChild(current);
+    } else {
+      const termination = spawnedGroupIdentity
+        ? terminateLostBrokerChild(spawnedGroupIdentity.pid, true, undefined, spawnedGroupIdentity)
+        : undefined;
+      void termination?.settled.catch(() => {});
+      disposeFailedChild(spawnedChild);
+      await spawnedClose;
+      await termination?.settled;
+    }
     owned.delete(message.id);
     if (!stopping) {
       await report({
@@ -403,9 +480,16 @@ const onSupervisorSignal = () => {
 process.on("SIGTERM", onSupervisorSignal);
 process.on("SIGINT", onSupervisorSignal);
 process.on("message", (raw: unknown, handle: SendHandle) => {
+  if (stopping) {
+    if (handle instanceof Socket) {
+      handle.destroy();
+    }
+    return;
+  }
   if (startup === "waiting") {
     startup = "initializing";
-    void initialize(raw).catch(shutdown);
+    initialization = initialize(raw);
+    void initialization.catch(shutdown);
     return;
   }
   if (startup !== "ready") {
@@ -444,7 +528,9 @@ process.on("message", (raw: unknown, handle: SendHandle) => {
     message.type === "prepare-spawn" ||
     message.type === "spawn-execa"
   ) {
-    void launch(message).catch(shutdown);
+    const launched = launch(message).catch(shutdown);
+    launches.add(launched);
+    void launched.finally(() => launches.delete(launched));
     return;
   }
   if (

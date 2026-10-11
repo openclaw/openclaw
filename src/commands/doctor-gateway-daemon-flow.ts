@@ -368,7 +368,7 @@ export async function maybeRepairGatewayDaemon(params: {
   if (!conflict && loaded && serviceRuntime?.status === "running") {
     const lastError = await readLastGatewayErrorLine(process.env);
     if (lastError) {
-      note(`Last gateway error: ${lastError}`, "Gateway");
+      note(`Recent Gateway log error (may be from an earlier run): ${lastError}`, "Gateway");
     }
   }
 
@@ -508,10 +508,7 @@ export async function maybeRepairGatewayDaemon(params: {
     );
   }
 
-  if (serviceRuntime?.status !== "running") {
-    return;
-  }
-  if (params.healthSkipped) {
+  if (serviceRuntime?.status !== "running" || params.healthSkipped) {
     return;
   }
   if (serviceRepairDeferred) {

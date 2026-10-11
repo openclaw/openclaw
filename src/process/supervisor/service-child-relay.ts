@@ -64,7 +64,10 @@ function runServiceChildRelay(): void {
       // Preserve the current host's retirement receipt until it releases this handle.
       reportRetirement();
     } else {
-      process.exit(anchorExit.code === 0 || anchorExit.signal === "SIGKILL" ? 0 : 1);
+      process.exitCode = anchorExit.code === 0 || anchorExit.signal === "SIGKILL" ? 0 : 1;
+      if (process.connected) {
+        process.disconnect?.();
+      }
     }
   };
   const releaseParentLineage = async () => {
@@ -112,8 +115,8 @@ function runServiceChildRelay(): void {
   };
 
   process.once("disconnect", notifyParentLoss);
-  process.once("SIGTERM", notifyParentLoss);
-  process.once("SIGINT", notifyParentLoss);
+  process.on("SIGTERM", notifyParentLoss);
+  process.on("SIGINT", notifyParentLoss);
   process.on("message", (raw: unknown) => {
     // SAFETY: the spawned host is the sole sender on this private IPC channel.
     const start = raw as ServiceChildStart | ServiceChildControlMessage;

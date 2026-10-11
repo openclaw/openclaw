@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { isCrablineServerChannel, OPENCLAW_CRABLINE_DEFAULT_CHANNEL } from "@openclaw/crabline";
+import { OPENCLAW_CRABLINE_DEFAULT_CHANNEL } from "@openclaw/crabline";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { parseBooleanValue, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
@@ -42,21 +42,20 @@ import {
   type JsonlReplayInput,
 } from "./jsonl-replay.js";
 import { startQaLabServer } from "./lab-server.js";
-import { listLiveTransportQaAdapterFactories } from "./live-transports/cli.js";
 import { runQaManualLane } from "./manual-lane.runtime.js";
 import { resolveQaRuntimeModelPair } from "./model-selection.runtime.js";
 import { runQaMultipass } from "./multipass.runtime.js";
+import { resolveQaChannelDriverSelection } from "./profile-channel-selection.runtime.js";
 import { qaProfileEvidencePlan } from "./profile-evidence-plan.js";
 import {
   resolveQaRunProfileExecutionSelection,
   resolveQaRunProfileMembership,
 } from "./profile-planning.js";
-import { DEFAULT_QA_LIVE_PROVIDER_MODE, getQaProvider } from "./providers/index.js";
+import { DEFAULT_QA_LIVE_PROVIDER_MODE } from "./providers/index.js";
 import {
   QA_FRONTIER_PARITY_BASELINE_LABEL,
   QA_FRONTIER_PARITY_CANDIDATE_LABEL,
 } from "./providers/live-frontier/parity.js";
-import { startQaProviderServer } from "./providers/server-runtime.js";
 import { QA_CHANNEL_DEFAULT_SUITE_CONCURRENCY } from "./qa-channel-transport.js";
 import {
   addQaCredentialSet,
@@ -68,11 +67,7 @@ import {
 } from "./qa-credentials-admin.runtime.js";
 import { parseQaCredentialPositiveIntegerEnv } from "./qa-credentials-common.runtime.js";
 import { normalizeQaThinkingLevel, type QaThinkingLevel } from "./qa-gateway-config.js";
-import {
-  normalizeQaTransportId,
-  qaTransportSupportsModuleFlows,
-  type QaTransportId,
-} from "./qa-transport-registry.js";
+import { normalizeQaTransportId, type QaTransportId } from "./qa-transport-registry.js";
 import {
   defaultQaModelForMode,
   normalizeQaProviderMode,
@@ -119,6 +114,8 @@ import {
   renderQaToolCoverageMarkdownReport,
 } from "./tool-coverage-report.js";
 
+export { runQaLabUiCommand, runQaProviderServerCommand } from "./cli-server.runtime.js";
+
 const QA_CREDENTIAL_PAYLOAD_MAX_BYTES_ENV = "OPENCLAW_QA_CREDENTIAL_PAYLOAD_MAX_BYTES";
 const DEFAULT_QA_CREDENTIAL_PAYLOAD_MAX_BYTES = 64 * 1024 * 1024;
 const QA_HARNESS_ROOT_MAX_PARENT_HOPS = 8;
@@ -128,11 +125,6 @@ type QaCredentialCommandOptions = {
   endpointPrefix?: string;
   json?: boolean;
   siteUrl?: string;
-};
-
-type InterruptibleServer = {
-  baseUrl: string;
-  stop(): Promise<void>;
 };
 export type QaLabSelfCheckCommandOptions = {
   repoRoot?: string;
@@ -531,26 +523,6 @@ function parseQaModelSpecs(label: string, entries: readonly string[] | undefined
   };
 }
 
-async function runInterruptibleServer(label: string, server: InterruptibleServer) {
-  process.stdout.write(`${label}: ${server.baseUrl}\n`);
-  process.stdout.write("Press Ctrl+C to stop.\n");
-
-  const shutdown = async () => {
-    process.off("SIGINT", onSignal);
-    process.off("SIGTERM", onSignal);
-    await server.stop();
-    process.exit(0);
-  };
-
-  const onSignal = () => {
-    void shutdown();
-  };
-
-  process.on("SIGINT", onSignal);
-  process.on("SIGTERM", onSignal);
-  await new Promise(() => {});
-}
-
 async function readQaCredentialPayloadFile(filePath: string) {
   const maxBytes = parseQaCredentialPositiveIntegerEnv({
     env: process.env,
@@ -619,6 +591,20 @@ function printQaCredentialDoctorTable(
     process.stdout.write(
       `${check.name.padEnd(nameWidth)}  ${check.status.padEnd(4)}  ${check.details ?? ""}\n`,
     );
+  }
+}
+
+function resolveQaCommandOutputDir(repoRoot: string, outputDir: string | undefined, kind: string) {
+  return (
+    resolveRepoRelativeOutputDir(repoRoot, outputDir) ??
+    path.join(repoRoot, ".artifacts", "qa-e2e", `${kind}-${createQaArtifactRunId()}`)
+  );
+}
+
+function writeQaCommandVerdict(label: string, pass: boolean) {
+  process.stdout.write(`${label} verdict: ${pass ? "pass" : "fail"}\n`);
+  if (!pass) {
+    process.exitCode = 1;
   }
 }
 
@@ -695,27 +681,16 @@ export async function runQaProfileCommand(opts: QaProfileCommandOptions) {
           ...scenarioPack.scenarios.filter((scenario) => missingScenarioIdSet.has(scenario.id)),
         ]
       : taxonomyScenarios;
-  const liveAdapterFactories =
-    profileReport.channelDriver === "live" ? listLiveTransportQaAdapterFactories() : undefined;
+  const { defaultChannel, supportsChannel, resolveModuleFlowSupport } =
+    resolveQaChannelDriverSelection(profileReport.channelDriver);
   const executionSelection = resolveQaRunProfileExecutionSelection({
     scenarios: executionScenarios,
     providerMode: normalizedProviderMode,
     primaryModel,
     channelDriver: profileReport.channelDriver,
-    defaultChannel:
-      profileReport.channelDriver === "crabline" ? OPENCLAW_CRABLINE_DEFAULT_CHANNEL : undefined,
-    supportsChannel:
-      profileReport.channelDriver === "crabline" ? isCrablineServerChannel : undefined,
-    resolveModuleFlowSupport:
-      profileReport.channelDriver === "live"
-        ? (channel) =>
-            channel
-              ? qaTransportSupportsModuleFlows(liveAdapterFactories, {
-                  channelId: channel,
-                  driver: "live",
-                })
-              : false
-        : undefined,
+    defaultChannel,
+    supportsChannel,
+    resolveModuleFlowSupport,
   });
   if (requestedScenarioIds.length > 0 && executionSelection.excludedScenarios.length > 0) {
     const exclusions = executionSelection.excludedScenarios
@@ -850,24 +825,14 @@ export async function runQaSuiteCommand(opts: QaSuiteCommandOptions) {
     scenarioIds: opts.scenarioIds,
   });
   const liveChannelId = channelDriver === "live" ? opts.channel?.trim() : undefined;
-  const liveAdapterFactories =
-    channelDriver === "live" ? listLiveTransportQaAdapterFactories() : undefined;
-  const resolveModuleFlowSupport =
-    channelDriver === "live"
-      ? (channel?: string) =>
-          channel
-            ? qaTransportSupportsModuleFlows(liveAdapterFactories, {
-                channelId: channel,
-                driver: "live",
-              })
-            : false
-      : undefined;
+  const { liveAdapterFactories, defaultChannel, resolveModuleFlowSupport } =
+    resolveQaChannelDriverSelection(channelDriver);
   const runtimePairLanes = parseQaRuntimePairLaneFilters(opts.runtimePairLane);
   const runtimePairLaneSelection = resolveQaRuntimePairLaneScenarioIds({
     channel: opts.channel,
     channelDriver,
     claudeCliAuthMode,
-    defaultChannel: channelDriver === "crabline" ? OPENCLAW_CRABLINE_DEFAULT_CHANNEL : undefined,
+    defaultChannel,
     primaryModel: primaryModel ?? defaultQaModelForMode(providerMode),
     providerMode,
     scenarioIds: explicitScenarioIds,
@@ -1091,9 +1056,7 @@ export async function runQaParityReportCommand(opts: {
   if (opts.tokenEfficiency === true && opts.runtimeAxis !== true) {
     throw new Error("--token-efficiency requires --runtime-axis.");
   }
-  const outputDir =
-    resolveRepoRelativeOutputDir(repoRoot, opts.outputDir) ??
-    path.join(repoRoot, ".artifacts", "qa-e2e", `parity-${createQaArtifactRunId()}`);
+  const outputDir = resolveQaCommandOutputDir(repoRoot, opts.outputDir, "parity");
   await fs.mkdir(outputDir, { recursive: true });
 
   if (opts.runtimeAxis === true) {
@@ -1160,10 +1123,7 @@ export async function runQaParityReportCommand(opts: {
     renderQaAgenticParityMarkdownReport(comparison),
     comparison,
   );
-  process.stdout.write(`QA parity verdict: ${comparison.pass ? "pass" : "fail"}\n`);
-  if (!comparison.pass) {
-    process.exitCode = 1;
-  }
+  writeQaCommandVerdict("QA parity", comparison.pass);
 }
 
 export async function runQaConfidenceReportCommand(opts: {
@@ -1177,9 +1137,7 @@ export async function runQaConfidenceReportCommand(opts: {
   const repoRoot = path.resolve(opts.repoRoot ?? process.cwd());
   const manifestPath = path.resolve(repoRoot, opts.manifest);
   const artifactRoot = path.resolve(repoRoot, opts.artifactRoot ?? ".");
-  const outputDir =
-    resolveRepoRelativeOutputDir(repoRoot, opts.outputDir) ??
-    path.join(repoRoot, ".artifacts", "qa-e2e", `confidence-${createQaArtifactRunId()}`);
+  const outputDir = resolveQaCommandOutputDir(repoRoot, opts.outputDir, "confidence");
   await fs.mkdir(outputDir, { recursive: true });
   const manifest = await readQaConfidenceManifestFile(manifestPath);
   const reportPayload = await buildQaConfidenceReport({
@@ -1194,10 +1152,7 @@ export async function runQaConfidenceReportCommand(opts: {
     renderQaConfidenceMarkdownReport(reportPayload),
     reportPayload,
   );
-  process.stdout.write(`QA confidence verdict: ${reportPayload.pass ? "pass" : "fail"}\n`);
-  if (!reportPayload.pass) {
-    process.exitCode = 1;
-  }
+  writeQaCommandVerdict("QA confidence", reportPayload.pass);
 }
 
 export async function runQaConfidenceSelfTestCommand(opts: {
@@ -1205,18 +1160,11 @@ export async function runQaConfidenceSelfTestCommand(opts: {
   outputDir?: string;
 }) {
   const repoRoot = path.resolve(opts.repoRoot ?? process.cwd());
-  const outputDir =
-    resolveRepoRelativeOutputDir(repoRoot, opts.outputDir) ??
-    path.join(repoRoot, ".artifacts", "qa-e2e", `confidence-self-test-${createQaArtifactRunId()}`);
+  const outputDir = resolveQaCommandOutputDir(repoRoot, opts.outputDir, "confidence-self-test");
   const result = await writeQaConfidenceSelfTestArtifacts({ outputDir });
   process.stdout.write(`QA confidence self-test report: ${result.reportPath}\n`);
   process.stdout.write(`QA confidence self-test summary: ${result.summaryPath}\n`);
-  process.stdout.write(
-    `QA confidence self-test verdict: ${result.summary.pass ? "pass" : "fail"}\n`,
-  );
-  if (!result.summary.pass) {
-    process.exitCode = 1;
-  }
+  writeQaCommandVerdict("QA confidence self-test", result.summary.pass);
 }
 
 export async function runQaCoverageReportCommand(opts: {
@@ -1295,9 +1243,7 @@ export async function runQaJsonlReplayCommand(opts: {
     throw new Error("qa jsonl-replay currently supports mock-openai curated fixtures only.");
   }
   const transcriptDir = path.resolve(repoRoot, opts.transcripts ?? "qa/scenarios/jsonl-replay");
-  const outputDir =
-    resolveRepoRelativeOutputDir(repoRoot, opts.outputDir) ??
-    path.join(repoRoot, ".artifacts", "qa-e2e", `jsonl-replay-${createQaArtifactRunId()}`);
+  const outputDir = resolveQaCommandOutputDir(repoRoot, opts.outputDir, "jsonl-replay");
   await fs.mkdir(outputDir, { recursive: true });
   const result = await runJsonlReplay(
     {
@@ -1518,37 +1464,6 @@ export async function runQaCredentialsDoctorCommand(opts: QaCredentialCommandOpt
   }
 }
 
-export async function runQaLabUiCommand(opts: {
-  repoRoot?: string;
-  host?: string;
-  port?: number;
-  advertiseHost?: string;
-  advertisePort?: number;
-  controlUiUrl?: string;
-  controlUiProxyTarget?: string;
-  uiDistDir?: string;
-  autoKickoffTarget?: string;
-  embeddedGateway?: string;
-  sendKickoffOnStart?: boolean;
-}) {
-  const repoRoot = path.resolve(opts.repoRoot ?? process.cwd());
-  const server = await startQaLabServer({
-    repoRoot,
-    host: opts.host,
-    port: Number.isFinite(opts.port) ? opts.port : undefined,
-    advertiseHost: opts.advertiseHost,
-    advertisePort: Number.isFinite(opts.advertisePort) ? opts.advertisePort : undefined,
-    controlUiUrl: opts.controlUiUrl,
-    controlUiProxyToken: process.env.OPENCLAW_QA_CONTROL_UI_PROXY_TOKEN,
-    controlUiProxyTarget: opts.controlUiProxyTarget,
-    uiDistDir: opts.uiDistDir,
-    autoKickoffTarget: opts.autoKickoffTarget,
-    embeddedGateway: opts.embeddedGateway,
-    sendKickoffOnStart: opts.sendKickoffOnStart,
-  });
-  await runInterruptibleServer("QA Lab UI", server);
-}
-
 export async function runQaDockerScaffoldCommand(
   opts: Omit<Parameters<typeof runQaDockerUp>[0], "skipUiBuild"> & { outputDir: string },
 ) {
@@ -1596,25 +1511,6 @@ export async function runQaDockerUpCommand(opts: Parameters<typeof runQaDockerUp
   process.stdout.write(`QA Lab UI: ${result.qaLabUrl}\n`);
   process.stdout.write(`Gateway UI: ${result.gatewayUrl}\n`);
   process.stdout.write(`Stop: ${result.stopCommand}\n`);
-}
-
-export async function runQaProviderServerCommand(
-  providerMode: QaProviderMode,
-  opts: { host?: string; port?: number },
-) {
-  const provider = getQaProvider(providerMode);
-  const standaloneCommand = provider.standaloneCommand;
-  if (!standaloneCommand) {
-    throw new Error(`QA provider "${providerMode}" does not expose a standalone server command.`);
-  }
-  const server = await startQaProviderServer(providerMode, {
-    host: opts.host,
-    port: Number.isFinite(opts.port) ? opts.port : undefined,
-  });
-  if (!server) {
-    throw new Error(`QA provider "${providerMode}" does not expose a standalone server command.`);
-  }
-  await runInterruptibleServer(standaloneCommand.serverLabel, server);
 }
 
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

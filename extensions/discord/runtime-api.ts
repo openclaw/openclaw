@@ -35,11 +35,6 @@ export {
 } from "./src/resolve-channels.js";
 export { resolveDiscordUserAllowlist, type DiscordUserResolution } from "./src/resolve-users.js";
 export { setDiscordRuntime } from "./src/runtime.js";
-export type {
-  DiscordAllowList,
-  DiscordChannelConfigResolved,
-  DiscordGuildEntryResolved,
-} from "./src/monitor/allow-list.js";
 export {
   allowListMatches,
   isDiscordGroupAllowedByPolicy,
@@ -52,14 +47,16 @@ export {
   resolveDiscordShouldRequireMention,
   resolveGroupDmAllow,
   shouldEmitDiscordReactionNotification,
+  type DiscordAllowList,
+  type DiscordChannelConfigResolved,
+  type DiscordGuildEntryResolved,
 } from "./src/monitor/allow-list.js";
 export type { DiscordMessageEvent, DiscordMessageHandler } from "./src/monitor/listeners.js";
 export { registerDiscordListener } from "./src/monitor/listeners.js";
 
 export { createDiscordMessageHandler } from "./src/monitor/message-handler.js";
 export { createDiscordNativeCommand } from "./src/monitor/native-command.js";
-export type { MonitorDiscordOpts } from "./src/monitor/provider.js";
-export { monitorDiscordProvider } from "./src/monitor/provider.js";
+export { monitorDiscordProvider, type MonitorDiscordOpts } from "./src/monitor/provider.js";
 
 export { resolveDiscordReplyTarget, sanitizeDiscordThreadName } from "./src/monitor/threading.js";
 export {

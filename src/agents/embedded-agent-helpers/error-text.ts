@@ -1,9 +1,14 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import {
+  REPEATED_TOOL_ERROR_CODE,
+  REPEATED_TOOL_ERROR_MESSAGE,
+} from "../../../packages/agent-core/src/errors.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { classifyGatewayStorageFailure } from "../../infra/sqlite-error-diagnostics.js";
 import type { AssistantMessage } from "../../llm/types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
+  CONTEXT_OVERFLOW_ERROR_MESSAGE,
   extractErrorHttpStatus,
   extractLeadingHttpStatus,
   formatProviderRefusalText,
@@ -18,6 +23,7 @@ import {
   renderAssistantFormatFailureCopy,
   renderAssistantRequestFailureCopy,
   renderFormatErrorCopy,
+  renderModelLoadFailureCopy,
 } from "../failover/assistant-request-failure-copy.js";
 import { failoverReasonFromClassification } from "../failover/classification-rules.js";
 import {
@@ -129,6 +135,9 @@ export function formatAssistantErrorText(
     status: formatStatus,
     providerRuntimeFailureKind,
   } = classifiedFacts;
+  if (formatStatus === 403 && (msg.errorType ?? parseApiErrorInfo(raw)?.type) === "FreeTierError") {
+    return "This model's free tier is limited to the provider's own client. Choose another model or use a paid plan.";
+  }
   const unknownTool =
     raw.match(/unknown tool[:\s]+["']?([a-z0-9_-]+)["']?/i) ??
     raw.match(/tool\s+["']?([a-z0-9_-]+)["']?\s+(?:not found|is not available)/i);
@@ -175,10 +184,7 @@ export function formatAssistantErrorText(
     return formatCopy;
   }
   if (failoverReason === "context_overflow") {
-    return (
-      "Context overflow: prompt too large for the model. " +
-      "Try /reset (or /new) to start a fresh session, or use a larger-context model."
-    );
+    return CONTEXT_OVERFLOW_ERROR_MESSAGE;
   }
   if (isReasoningConstraintErrorMessage(raw)) {
     return (
@@ -301,6 +307,13 @@ export function formatUserFacingAssistantErrorText(
   msg: AssistantMessage,
   opts?: AssistantErrorTextOptions,
 ): string {
+  if (msg.errorCode === REPEATED_TOOL_ERROR_CODE) {
+    return REPEATED_TOOL_ERROR_MESSAGE;
+  }
+  const modelLoadCopy = renderModelLoadFailureCopy(msg);
+  if (modelLoadCopy) {
+    return modelLoadCopy;
+  }
   const rawError = msg.errorMessage?.trim();
   const approvalMessage = resolveExecutionApprovalFailureMessage(rawError);
   if (approvalMessage) {

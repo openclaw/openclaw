@@ -5,6 +5,8 @@ import type {
   OpenKeyedStoreOptions,
   PluginStateKeyedStore,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
+import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
+import { captureMemoryMutationAuthority } from "./memory-mutation-authority.js";
 
 const MEMORY_CORE_PLUGIN_ID = "memory-core";
 export const DREAMING_DAILY_INGESTION_NAMESPACE = "dreaming-daily-ingestion";
@@ -48,19 +50,25 @@ type WriteMemoryCoreWorkspaceEntriesParams<T> = MemoryCoreWorkspaceParams & {
 type WriteMemoryCoreWorkspaceEntryParams<T> = MemoryCoreWorkspaceParams &
   MemoryCoreWorkspaceEntry<T>;
 
-let configuredOpenKeyedStore: MemoryCoreOpenKeyedStore | undefined;
+const dreamingState = createPluginRuntimeStore<MemoryCoreOpenKeyedStore>({
+  key: "memory-core:dreaming-state",
+  errorMessage: "memory-core dreaming SQLite state store is not configured",
+});
 
-export function configureMemoryCoreDreamingState(openKeyedStore: MemoryCoreOpenKeyedStore): void {
-  configuredOpenKeyedStore = openKeyedStore;
-}
+export const configureMemoryCoreDreamingState = dreamingState.setRuntime;
 
 export function openMemoryCoreStateStore<T>(
   options: OpenKeyedStoreOptions,
 ): PluginStateKeyedStore<T> {
-  if (!configuredOpenKeyedStore) {
-    throw new Error("memory-core dreaming SQLite state store is not configured");
+  const store = dreamingState.getRuntime()<T>(options);
+  const assertCurrent = captureMemoryMutationAuthority();
+  if (!assertCurrent) {
+    return store;
   }
-  return configuredOpenKeyedStore<T>(options);
+  if (!store.withCurrent) {
+    throw new Error("Memory mutations require a host with action-bound SQLite stores");
+  }
+  return store.withCurrent({ assertCurrent });
 }
 
 export function normalizeMemoryCoreWorkspaceKey(workspaceDir: string): string {

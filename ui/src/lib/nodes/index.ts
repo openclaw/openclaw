@@ -34,11 +34,8 @@ hashes.sha512Async = async (message: Uint8Array) => {
   return Uint8Array.from((await loadPureSha2()).sha512(message));
 };
 
-type StoredIdentity = {
+type StoredIdentity = DeviceIdentity & {
   version: 1;
-  deviceId: string;
-  publicKey: string;
-  privateKey: string;
   createdAtMs: number;
 };
 
@@ -323,9 +320,7 @@ export async function loadOrCreateDeviceIdentity(): Promise<DeviceIdentity> {
   const identity = await generateIdentity();
   const stored: StoredIdentity = {
     version: 1,
-    deviceId: identity.deviceId,
-    publicKey: identity.publicKey,
-    privateKey: identity.privateKey,
+    ...identity,
     createdAtMs: Date.now(),
   };
   try {

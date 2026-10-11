@@ -7,7 +7,7 @@ import type {
   WorkboardStatus,
 } from "@openclaw/workboard-contract";
 import { resolveNonNegativeIntegerOption } from "openclaw/plugin-sdk/number-runtime";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { PersistedWorkboardCard } from "./persistence-types.js";
 import { normalizeAutomationPatch, normalizeCardAutomation } from "./store-automation.js";
 import { WorkboardBoardStore } from "./store-boards.js";
@@ -109,11 +109,7 @@ export class WorkboardCoreStore extends WorkboardBoardStore {
     const errors: unknown[] = [];
     for (const entry of journal.toReversed()) {
       try {
-        if (!entry.before) {
-          await this.rollbackCreatedCard(entry.after);
-          continue;
-        }
-        await this.rollbackUpdatedCard(entry.before, entry.after);
+        await this.rollbackCardMutation(entry.before, entry.after);
       } catch (error) {
         errors.push(error);
       }
@@ -123,12 +119,12 @@ export class WorkboardCoreStore extends WorkboardBoardStore {
 
   async compensateWorkspaceMutation(before: WorkboardCard, after: WorkboardCard): Promise<void> {
     await this.enqueueMutation(() =>
-      this.rollbackUpdatedCard(before, after, invertWorkboardWorkspaceMutation),
+      this.rollbackCardMutation(before, after, invertWorkboardWorkspaceMutation),
     );
   }
 
-  private async rollbackUpdatedCard(
-    before: WorkboardCard,
+  private async rollbackCardMutation(
+    before: WorkboardCard | undefined,
     after: WorkboardCard,
     invert = invertWorkboardCardMutation,
   ): Promise<void> {
@@ -136,6 +132,15 @@ export class WorkboardCoreStore extends WorkboardBoardStore {
       const current = await this.get(after.id);
       if (!current) {
         return;
+      }
+      if (!before) {
+        if (
+          !sameWorkboardCardState(current, after) ||
+          (await this.store.deleteIfUpdatedAt(after.id, current.updatedAt))
+        ) {
+          return;
+        }
+        continue;
       }
       const merged = invert(before, after, current);
       if (sameWorkboardCardState(current, merged)) {
@@ -156,19 +161,6 @@ export class WorkboardCoreStore extends WorkboardBoardStore {
       }
     }
     throw new Error(`card changed repeatedly during compensation: ${after.id}`);
-  }
-
-  private async rollbackCreatedCard(created: WorkboardCard): Promise<void> {
-    for (let attempt = 0; attempt < WORKBOARD_CAS_ATTEMPTS; attempt += 1) {
-      const current = await this.get(created.id);
-      if (!current || !sameWorkboardCardState(current, created)) {
-        return;
-      }
-      if (await this.store.deleteIfUpdatedAt(created.id, current.updatedAt)) {
-        return;
-      }
-    }
-    throw new Error(`card changed repeatedly during compensation: ${created.id}`);
   }
 
   protected async updateLatestCard(
@@ -559,13 +551,8 @@ export class WorkboardCoreStore extends WorkboardBoardStore {
       ) {
         // Ignore stale lifecycle status writes, but still accept any non-status updates in the patch.
         effectivePatch = { ...patch, status: undefined };
-        if (
-          patch.metadata &&
-          typeof patch.metadata === "object" &&
-          !Array.isArray(patch.metadata)
-        ) {
-          const metadataPatch = patch.metadata as Record<string, unknown>;
-          const { lifecycleStatusSourceUpdatedAt: _ignored, ...rest } = metadataPatch;
+        if (isRecord(patch.metadata)) {
+          const { lifecycleStatusSourceUpdatedAt: _ignored, ...rest } = patch.metadata;
           effectivePatch.metadata = Object.keys(rest).length > 0 ? rest : undefined;
         }
         const hasSemanticPatch = Object.entries(effectivePatch).some(
@@ -646,10 +633,7 @@ export class WorkboardCoreStore extends WorkboardBoardStore {
             ? existing.notes
             : normalizeNotes(effectivePatch.notes),
         status,
-        priority:
-          effectivePatch.priority === undefined
-            ? existing.priority
-            : normalizePriority(effectivePatch.priority, existing.priority),
+        priority: normalizePriority(effectivePatch.priority, existing.priority),
         labels:
           effectivePatch.labels === undefined
             ? existing.labels
@@ -899,28 +883,19 @@ export class WorkboardCoreStore extends WorkboardBoardStore {
     if (await this.dependsOn(parent.id, child.id)) {
       throw new Error("dependency link would create a cycle.");
     }
-    const parentLinks = parent.metadata?.links ?? [];
-    const childLinks = child.metadata?.links ?? [];
-    const nextParentLinks = parentLinks.some(
-      (link) => link.type === "child" && link.targetCardId === child.id,
-    )
-      ? parentLinks
-      : appendLinkPreservingDependencies(parentLinks, {
-          id: randomUUID(),
-          type: "child" as const,
-          targetCardId: child.id,
-          createdAt: now,
-        });
-    const nextChildLinks = childLinks.some(
-      (link) => link.type === "parent" && link.targetCardId === parent.id,
-    )
-      ? childLinks
-      : appendLinkPreservingDependencies(childLinks, {
-          id: randomUUID(),
-          type: "parent" as const,
-          targetCardId: parent.id,
-          createdAt: now,
-        });
+    const linkTo = (card: WorkboardCard, targetCardId: string, type: "parent" | "child") => {
+      const links = card.metadata?.links ?? [];
+      return links.some((link) => link.type === type && link.targetCardId === targetCardId)
+        ? links
+        : appendLinkPreservingDependencies(links, {
+            id: randomUUID(),
+            type,
+            targetCardId,
+            createdAt: now,
+          });
+    };
+    const nextParentLinks = linkTo(parent, child.id, "child");
+    const nextChildLinks = linkTo(child, parent.id, "parent");
     await this.updateCard(
       await this.requireCard(parent.id),
       {

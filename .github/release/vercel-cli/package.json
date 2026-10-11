@@ -3,11 +3,11 @@
   "private": true,
   "version": "1.0.0",
   "dependencies": {
-    "sandbox": "4.4.0",
-    "vercel": "59.23.2"
+    "sandbox": "4.6.0",
+    "vercel": "62.2.0"
   },
   "overrides": {
-    "@bytecodealliance/preview2-shim@0.17.6": "0.27.0",
+    "@bytecodealliance/preview2-shim@0.17.6": "0.27.1",
     "@tootallnate/once@2.0.0": "2.0.1",
     "ajv@8.6.3": "8.20.0",
     "fast-uri@3.1.6": "3.1.7",

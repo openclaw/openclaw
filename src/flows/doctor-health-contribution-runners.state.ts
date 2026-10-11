@@ -8,9 +8,6 @@ import {
 } from "./doctor-health-contribution-utils.js";
 import { recordDoctorHealthWarnings } from "./doctor-health-contribution.js";
 
-const loadDoctorStateIntegrityModule = async () =>
-  await import("../commands/doctor-state-integrity.js");
-
 export async function runLegacyPluginManifestHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { maybeRepairLegacyPluginManifestContracts } =
     await import("../commands/doctor-plugin-manifests.js");
@@ -125,7 +122,7 @@ export async function runStateIntegrityHealth(ctx: DoctorHealthFlowContext): Pro
     ctx.updateWarnings ??= [];
     ctx.updateWarnings.push(...warnings);
   }
-  const { noteStateIntegrity } = await loadDoctorStateIntegrityModule();
+  const { noteStateIntegrity } = await import("../commands/doctor-state-integrity.js");
   await noteStateIntegrity(ctx.cfg, ctx.prompter, ctx.configPath, {
     stateDirExistedAtStart: ctx.stateDirExistedAtStart,
   });
@@ -144,6 +141,9 @@ export async function runCodexSessionRouteHealth(ctx: DoctorHealthFlowContext): 
       ? { retiredModelRefConfig: ctx.configResult.retiredModelRefConfig }
       : {}),
     env: ctx.env ?? process.env,
+    ...(!ctx.prompter.shouldRepair && ctx.configResult.providerRenames?.length
+      ? { providerRenames: ctx.configResult.providerRenames }
+      : {}),
     shouldRepair: ctx.prompter.shouldRepair,
     ...(ctx.configResult.blockedCodexModelIdentities?.length
       ? { blockedModelIdentities: new Set(ctx.configResult.blockedCodexModelIdentities) }
@@ -212,7 +212,8 @@ export async function runSessionSnapshotsHealth(ctx: DoctorHealthFlowContext): P
 
 export async function runConfigAuditScrubHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { maybeRepairLegacyRuntimeFiles } = await import("../commands/doctor-usage-cost-cache.js");
-  await maybeRepairLegacyRuntimeFiles(ctx.prompter.shouldRepair, ctx.env);
+  const warnings = await maybeRepairLegacyRuntimeFiles(ctx.prompter.shouldRepair, ctx.env);
+  recordDoctorHealthWarnings(ctx, [], warnings);
 }
 
 export async function runLegacyCronHealth(ctx: DoctorHealthFlowContext): Promise<void> {
@@ -230,7 +231,7 @@ export async function runSandboxHealth(ctx: DoctorHealthFlowContext): Promise<vo
   const { maybeRepairSandboxImages, maybeRepairSandboxRegistryFiles, noteSandboxScopeWarnings } =
     await import("../commands/doctor-sandbox.js");
   await maybeRepairSandboxRegistryFiles(ctx.prompter);
-  ctx.cfg = await maybeRepairSandboxImages(ctx.cfg, ctx.runtime, ctx.prompter);
+  await maybeRepairSandboxImages(ctx.cfg, ctx.runtime, ctx.prompter);
   noteSandboxScopeWarnings(ctx.cfg);
 }
 

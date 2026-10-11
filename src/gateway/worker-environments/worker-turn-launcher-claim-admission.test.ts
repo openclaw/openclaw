@@ -4,7 +4,7 @@ import { installSessionPlacementAdmissionProvider } from "../../agents/session-p
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { SpawnResult } from "../../process/exec.js";
-import { completeWorkerLaunchDescriptor } from "../../worker/launch-descriptor.js";
+import { parseWorkerLaunchDescriptor } from "../../worker/launch-descriptor.js";
 import { placementTurnOwner } from "./placement-record.js";
 import { completeWorkerWorkspaceTeardown } from "./placement-teardown.js";
 import {
@@ -316,8 +316,11 @@ describe("worker turn launcher claim admission", () => {
       runId: "remote-result-run",
       owner: placementTurnOwner(active),
     });
+    const projectionReads = vi.spyOn(placements, "readProjection");
+    let readsBeforeClaim = 0;
     const claimTurn = placements.claimTurn.bind(placements);
     vi.spyOn(placements, "claimTurn").mockImplementationOnce(async (...args) => {
+      readsBeforeClaim = projectionReads.mock.calls.length;
       try {
         return await claimTurn(...args);
       } catch (error) {
@@ -352,6 +355,8 @@ describe("worker turn launcher claim admission", () => {
     await expect(replacement).rejects.toThrow(
       "Active remote-exec placement does not match its attached environment",
     );
+    // Placement and pending-result preparation must use the same worker request.
+    expect(readsBeforeClaim).toBe(1);
   });
 
   it("redispatches the admitted replacement after pending-result recovery reclaims it", async () => {
@@ -722,9 +727,12 @@ describe("worker turn launcher claim admission", () => {
           launchTurn: vi.fn(async (request): Promise<SpawnResult> => {
             request.onDispatchReady?.();
             launchCount += 1;
-            const descriptor = completeWorkerLaunchDescriptor(structuredClone(request.plan), {
-              kind: "unix",
-              socketPath: "/worker/gateway.sock",
+            const descriptor = parseWorkerLaunchDescriptor({
+              ...structuredClone(request.plan),
+              connectionEndpoint: {
+                kind: "unix",
+                socketPath: "/worker/gateway.sock",
+              },
             });
             turnIds.push(descriptor.assignment.turnId);
             if (launchCount === 1) {

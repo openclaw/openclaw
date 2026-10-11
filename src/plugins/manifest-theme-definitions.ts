@@ -38,6 +38,7 @@ export function loadManifestThemeDefinitions(params: {
         throw new Error("source must be a readable JSON file inside the plugin root");
       }
       const definition = normalizeThemeDefinition(JSON.parse(file.contents.toString("utf8")), {
+        iconIds: Object.keys(theme.icons ?? {}),
         hatIds: Object.keys(theme.hats ?? {}),
         critterIds: Object.keys(theme.critters ?? {}),
       });
@@ -63,6 +64,13 @@ export function loadManifestThemeDefinitions(params: {
         return svg;
       };
       const artwork: PluginThemeArtwork = {
+        ...(theme.icons
+          ? {
+              icons: Object.fromEntries(
+                Object.entries(theme.icons).map(([id, source]) => [id, { svg: readSvg(source) }]),
+              ),
+            }
+          : {}),
         ...(theme.hats
           ? {
               hats: Object.fromEntries(
@@ -81,7 +89,13 @@ export function loadManifestThemeDefinitions(params: {
             }
           : {}),
       };
-      return [{ id: theme.id, definition, ...(theme.hats || theme.critters ? { artwork } : {}) }];
+      return [
+        {
+          id: theme.id,
+          definition,
+          ...(theme.icons || theme.hats || theme.critters ? { artwork } : {}),
+        },
+      ];
     } catch (error) {
       params.diagnostics.push({
         level: "warn",

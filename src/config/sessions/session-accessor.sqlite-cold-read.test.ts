@@ -43,14 +43,14 @@ import {
   findTranscriptEventInDatabase,
   loadLatestAssistantText,
   loadTranscriptEventsFromDatabase,
-  loadTranscriptEventRowsAfterSeqInDatabase,
   loadTranscriptEventRowsAfterSeqSync,
   loadTranscriptHeaderSync,
   readTranscriptEventAtSeqSync,
   readTranscriptStatsBatchReadOnlySync,
   readTranscriptStatsSync,
 } from "./session-accessor.sqlite-read.js";
-import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.js";
+import { loadTranscriptEventRowsAfterSeqInDatabase } from "./session-accessor.sqlite-transcript-incremental-read.js";
+import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { resolveSessionColdArchivePath } from "./session-cold-storage-codec.js";
 import { readSessionColdStorageInventory } from "./session-cold-storage-inventory.js";
 import { readRestoredSessionTranscript } from "./session-cold-storage-read.js";

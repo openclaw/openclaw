@@ -934,21 +934,14 @@ suite.define(() => {
         await jobTitle(page, existingJob.name).click();
         await page.locator("details.cron-advanced > summary").click();
         expect(
-          await page
-            .locator("wa-switch.settings-toggle")
-            .filter({ hasText: "Delete after run" })
-            .count(),
+          await page.getByRole("switch", { name: "Delete after run", exact: true }).count(),
         ).toBe(0);
 
         await page.locator('[data-test-id="cron-schedule-kind-at"]').click();
         await page.locator("#cron-schedule-at").fill("2026-07-19T09:00");
         const expectedAt = await page.evaluate(() => new Date("2026-07-19T09:00").toISOString());
-        const deleteToggle = page.locator("wa-switch.settings-toggle").filter({
-          hasText: "Delete after run",
-        });
-        await expect
-          .poll(() => deleteToggle.evaluate((element) => Reflect.get(element, "checked")))
-          .toBe(true);
+        const deleteToggle = page.getByRole("switch", { name: "Delete after run", exact: true });
+        await expect.poll(() => deleteToggle.isChecked()).toBe(true);
 
         await page.locator('[data-test-id="cron-submit"]').click();
         const request = await gateway.waitForRequest("cron.update");

@@ -31,17 +31,24 @@ function parseDiscordMessageLink(link: string) {
 
 export async function handleDiscordMessageManagementAction(ctx: DiscordMessagingActionContext) {
   switch (ctx.action) {
-    case "permissions": {
-      if (!ctx.isActionEnabled("permissions")) {
-        throw new Error("Discord permissions are disabled.");
+    case "permissions":
+    case "listPins": {
+      const permissions = ctx.action === "permissions";
+      const gate = permissions ? "permissions" : "pins";
+      if (!ctx.isActionEnabled(gate)) {
+        throw new Error(`Discord ${gate} are disabled.`);
       }
       const channelId = ctx.resolveChannelId();
       await ctx.assertReadTargetAllowed({ channelId });
-      const permissions = await discordMessagingActionRuntime.fetchChannelPermissionsDiscord(
-        channelId,
-        ctx.withOpts(),
-      );
-      return jsonResult({ ok: true, permissions });
+      const value = permissions
+        ? await discordMessagingActionRuntime.fetchChannelPermissionsDiscord(
+            channelId,
+            ctx.withOpts(),
+          )
+        : (await discordMessagingActionRuntime.listPinsDiscord(channelId, ctx.withOpts())).map(
+            (pin) => ctx.normalizeMessage(pin),
+          );
+      return jsonResult({ ok: true, [gate]: value });
     }
     case "fetchMessage": {
       if (!ctx.isActionEnabled("messages")) {
@@ -118,6 +125,7 @@ export async function handleDiscordMessageManagementAction(ctx: DiscordMessaging
               active: true,
               seed: `${ctx.accountId}:${channelId}`,
               initialSnapshot: snapshot,
+              toolIcons: true,
             }).getText(),
             {
               maxChars: Math.min(ctx.accountConfig.textChunkLimit ?? 2000, 2000),
@@ -157,15 +165,6 @@ export async function handleDiscordMessageManagementAction(ctx: DiscordMessaging
           : discordMessagingActionRuntime.unpinMessageDiscord;
       await mutate(channelId, messageId, ctx.withOpts());
       return jsonResult({ ok: true });
-    }
-    case "listPins": {
-      if (!ctx.isActionEnabled("pins")) {
-        throw new Error("Discord pins are disabled.");
-      }
-      const channelId = ctx.resolveChannelId();
-      await ctx.assertReadTargetAllowed({ channelId });
-      const pins = await discordMessagingActionRuntime.listPinsDiscord(channelId, ctx.withOpts());
-      return jsonResult({ ok: true, pins: pins.map((pin) => ctx.normalizeMessage(pin)) });
     }
     case "searchMessages": {
       if (!ctx.isActionEnabled("search")) {

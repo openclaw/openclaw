@@ -14,6 +14,7 @@ import {
   getActivePluginChannelRegistryFromState,
   getActivePluginChannelRegistrySnapshotFromState,
 } from "../../plugins/runtime-channel-state.js";
+import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import {
   executeExistingOpenClawStateRead,
   withExistingOpenClawStateDatabaseReadOnly,
@@ -32,6 +33,7 @@ import { createSqliteWorkerWriteAdmission } from "../sqlite-worker-store.js";
 import {
   CURRENT_BINDINGS_ID_PREFIX,
   buildBindingId,
+  isBindingExpired,
   removeCurrentConversationBindingsInDatabase,
   readCurrentConversationBindingListInDatabase,
   pruneCurrentConversationBindingListInTransaction,
@@ -40,6 +42,10 @@ import {
   readCurrentConversationBindingResolutionInDatabase,
   type CurrentConversationBindingScope,
 } from "./current-conversation-bindings.kernel.js";
+import {
+  currentConversationBindingPublication,
+  withCurrentConversationBindingPublication,
+} from "./current-conversation-bindings.publication.js";
 import type {
   CurrentConversationBindingBind,
   CurrentConversationBindingRemove,
@@ -64,6 +70,24 @@ import type {
   SessionBindingUnbindInput,
 } from "./session-binding.types.js";
 
+const resolvedBindings = resolveGlobalSingleton(
+  Symbol.for("openclaw.resolvedCurrentConversationBindings"),
+  () => {
+    const records = new Map<string, Promise<SessionBindingRecord | null>>();
+    currentConversationBindingPublication.subscribeFacts((change) => {
+      if (
+        "receipt" in change ||
+        change.kind === "unknown" ||
+        (change.kind === "settled" && change.outcome === "unknown")
+      ) {
+        records.clear();
+      }
+    });
+    return records;
+  },
+  (records) => records.clear(),
+);
+
 function bindingWriteOptions(
   context: OpenClawStateWorkerContext,
   assertCurrent?: () => void,
@@ -71,15 +95,19 @@ function bindingWriteOptions(
 ) {
   return {
     assertCurrent,
-    createAdmission: createSqliteWorkerWriteAdmission(
-      (request) => {
-        context.admission.assertCurrent();
-        assertCurrent?.();
-        if (request.stage === "transaction" && request.facts === true) {
-          assertAgentResolved?.();
-        }
-      },
-      [context.admission.databasePath],
+    createAdmission: withCurrentConversationBindingPublication(
+      createSqliteWorkerWriteAdmission(
+        (request) => {
+          context.admission.assertCurrent();
+          assertCurrent?.();
+          if (request.stage === "transaction" && request.facts === true) {
+            assertAgentResolved?.();
+          }
+        },
+        [context.admission.databasePath],
+      ),
+      () => context.admission.identity.key,
+      () => (context.assertPublicationCurrent ?? (() => context.admission.assertCurrent()))(),
     ),
   };
 }
@@ -212,16 +240,14 @@ function supportsGenericCurrentConversationBinding(ref: SessionBindingScope): bo
     return true;
   }
   const bindingSupport = resolveChannelConversationBindingSupport(normalized);
-  if (
-    bindingSupport?.supportsCurrentConversationBinding !== true ||
-    bindingSupport.bindingStore === "adapter" ||
-    typeof bindingSupport.createManager === "function"
-  ) {
-    return false;
-  }
   return (
-    bindingSupport.isCurrentConversationBindingSupported?.({ accountId: normalized.accountId }) ??
-    true
+    bindingSupport?.supportsCurrentConversationBinding === true &&
+    bindingSupport.bindingStore !== "adapter" &&
+    typeof bindingSupport.createManager !== "function" &&
+    (bindingSupport.isCurrentConversationBindingSupported?.({
+      accountId: normalized.accountId,
+    }) ??
+      true)
   );
 }
 
@@ -474,14 +500,39 @@ export async function resolveCurrentConversationBindingRecordAsync(
 ): Promise<SessionBindingRecord | null> {
   const conversation = captureConversationRef(ref);
   const context = captureOpenClawStateWorkerContext();
-  const result = await runOpenClawStateWorkerOperation(
-    context,
-    (scope) => scope.execute({ type: "conversationBindings.resolve", input: conversation }),
-    bindingWriteOptions(context, assertCurrent),
-  );
   context.admission.assertCurrent();
   assertCurrent?.();
-  return result;
+  const key = `${context.admission.identity.key}\u0000${buildBindingId(conversation)}`;
+  let pending = resolvedBindings.get(key);
+  if (pending) {
+    const record = await pending;
+    // Expiry remains the worker's pruning responsibility, even without a write receipt.
+    if (record && isBindingExpired(record)) {
+      resolvedBindings.delete(key);
+      pending = undefined;
+    }
+  }
+  if (!pending) {
+    pending = runOpenClawStateWorkerOperation(
+      context,
+      (scope) => scope.execute({ type: "conversationBindings.resolve", input: conversation }),
+      bindingWriteOptions(context, assertCurrent),
+    );
+    if (resolvedBindings.size >= 256) {
+      resolvedBindings.delete(resolvedBindings.keys().next().value!);
+    }
+    // In-flight reads are evicted with completed facts and never reinsert themselves.
+    resolvedBindings.set(key, pending);
+    void pending.catch(() => {
+      if (resolvedBindings.get(key) === pending) {
+        resolvedBindings.delete(key);
+      }
+    });
+  }
+  const result = await pending;
+  context.admission.assertCurrent();
+  assertCurrent?.();
+  return structuredClone(result);
 }
 
 /** Reads one live ordered selection without repairing rows or inheriting discovery snapshots. */
@@ -685,5 +736,6 @@ export const testing = {
         getNodeSqliteKysely<Pick<OpenClawStateKyselyDatabase, "current_conversation_bindings">>(db);
       executeSqliteQuerySync(db, bindingDb.deleteFrom("current_conversation_bindings"));
     });
+    resolvedBindings.clear();
   },
 };

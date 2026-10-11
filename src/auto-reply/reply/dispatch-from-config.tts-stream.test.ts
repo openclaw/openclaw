@@ -18,7 +18,7 @@ import {
   globalBeforeAll0,
   installCaptionedVoiceTestPlugin,
   setNoAbort,
-} from "./dispatch-from-config.test-harness.js";
+} from "./dispatch-from-config.test-support.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 import { buildTestCtx } from "./test-ctx.js";
 
@@ -208,9 +208,10 @@ describe("source completion", () => {
           "../../config/sessions/session-accessor.js",
         )
       : undefined;
+    const storePath = path.join(tempDirs.make("openclaw-source-completion-"), "sessions.json");
     const preparedScope = actualSessions
       ? {
-          storePath: path.join(tempDirs.make("openclaw-source-completion-"), "sessions.json"),
+          storePath,
           sessionKey: "agent:main:discord:direct:source-completion",
         }
       : undefined;
@@ -219,6 +220,13 @@ describe("source completion", () => {
       const patch = actualSessions.patchSessionEntryCore;
       vi.spyOn(sessionAccessors, "patchSessionEntryCore").mockImplementation((...args) =>
         patch(...args),
+      );
+      const sqliteEntries = await import("../../config/sessions/session-accessor.sqlite-entry.js");
+      const actualSqliteEntries = await vi.importActual<
+        typeof import("../../config/sessions/session-accessor.sqlite-entry.js")
+      >("../../config/sessions/session-accessor.sqlite-entry.js");
+      vi.spyOn(sqliteEntries, "applySessionEntryOperation").mockImplementation(
+        actualSqliteEntries.applySessionEntryOperation,
       );
     }
     let buffered = false;
@@ -317,7 +325,7 @@ describe("source completion", () => {
                 intentId: "source-intent",
                 sessionId: "session-1",
                 sessionKey: "agent:main:main",
-                storePath: "/tmp/mock-sessions.json",
+                storePath,
               },
             });
           }

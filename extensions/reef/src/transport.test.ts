@@ -20,12 +20,26 @@ import type { RelayFriend } from "./types.js";
 type EffectAuthority = ReturnType<
   typeof import("openclaw/plugin-sdk/fetch-runtime").captureEffectAuthority
 >;
-const effectInput = vi.hoisted(() => ({ current: undefined as EffectAuthority | undefined }));
+const effectInput = vi.hoisted(() => ({
+  available: true,
+  captureFailure: undefined as Error | undefined,
+  current: undefined as EffectAuthority | undefined,
+}));
 vi.mock("openclaw/plugin-sdk/fetch-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/fetch-runtime")>();
   return {
     ...actual,
-    captureEffectAuthority: () => effectInput.current ?? actual.captureEffectAuthority(),
+    get captureEffectAuthority() {
+      if (!effectInput.available) {
+        return undefined;
+      }
+      return () => {
+        if (effectInput.captureFailure) {
+          throw effectInput.captureFailure;
+        }
+        return effectInput.current ?? actual.captureEffectAuthority();
+      };
+    },
   };
 });
 
@@ -42,6 +56,8 @@ function pendingFriend(peer = "bob"): RelayFriend {
 }
 
 afterEach(() => {
+  effectInput.available = true;
+  effectInput.captureFailure = undefined;
   effectInput.current = undefined;
   vi.useRealTimers();
 });
@@ -63,6 +79,81 @@ describe("isRetryableReefRelayFailure", () => {
 });
 
 describe("ReefTransportClient network failures", () => {
+  it.each([false, true])(
+    "checks caller authority before fetch when the host has no effect capability (allowed=%s)",
+    async (allowed) => {
+      effectInput.available = false;
+      const refusal = new Error("peer trust revoked");
+      let checked = false;
+      const fetcher = vi.fn<typeof fetch>(() => {
+        expect(checked).toBe(true);
+        return Promise.resolve(Response.json({ id: "synthetic-message", status: "queued" }));
+      });
+      const completion = createClient(fetcher).signed(
+        "POST",
+        "/v1/mail/bob",
+        undefined,
+        undefined,
+        [],
+        () => {
+          checked = true;
+          if (!allowed) {
+            throw refusal;
+          }
+        },
+      );
+
+      expect(checked).toBe(true);
+      expect(fetcher).toHaveBeenCalledTimes(allowed ? 1 : 0);
+      if (allowed) {
+        await expect(completion).resolves.toEqual({ id: "synthetic-message", status: "queued" });
+      } else {
+        await expect(completion).rejects.toBe(refusal);
+      }
+    },
+  );
+
+  it("does not fall back to fetch when an available host effect capture fails", async () => {
+    const refusal = new Error("effect owner closed");
+    effectInput.captureFailure = refusal;
+    const fetcher = vi.fn<typeof fetch>();
+
+    await expect(createClient(fetcher).listFriends()).rejects.toBe(refusal);
+
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it("rechecks peer authority after ambient effect preparation before fetch", async () => {
+    const refusal = new Error("peer trust revoked");
+    let current = true;
+    effectInput.current = {
+      active: true,
+      run: (run) => run(),
+      async initiate(effect) {
+        await Promise.resolve();
+        current = false;
+        return effect();
+      },
+    };
+    const fetcher = vi.fn<typeof fetch>();
+    const completion = createClient(fetcher).signed(
+      "POST",
+      "/v1/mail/bob",
+      undefined,
+      undefined,
+      [],
+      () => {
+        if (!current) {
+          throw refusal;
+        }
+      },
+    );
+
+    await expect(completion).rejects.toBe(refusal);
+    expect(fetcher).not.toHaveBeenCalled();
+    expect(isRetryableReefRelayFailure(refusal)).toBe(false);
+  });
+
   it.each([false, true])(
     "keeps authority refusal outside transport retries (allowed=%s)",
     async (allowed) => {

@@ -210,6 +210,12 @@ export async function resolveApiKeyForProviderCore(input: {
   const changedAuthProvider = modelAuthConfig !== input.cfg;
   const params = { ...input, cfg: modelAuthConfig };
   const { provider, cfg, profileId, preferredProfile } = params;
+  const modelPolicy = {
+    provider,
+    modelApi: params.modelApi,
+    modelBaseUrl: params.modelBaseUrl,
+    capability: params.capability,
+  };
   let deprecatedProfileIds: ReadonlySet<string> | undefined;
   const getDeprecatedProfileIds = () =>
     (deprecatedProfileIds ??= new Set(
@@ -262,10 +268,7 @@ export async function resolveApiKeyForProviderCore(input: {
     const configuredProfileType = configuredCredential?.type;
     if (configuredProfileType) {
       assertAuthModeAllowedForModel({
-        provider,
-        modelApi: params.modelApi,
-        modelBaseUrl: params.modelBaseUrl,
-        capability: params.capability,
+        ...modelPolicy,
         profileId,
         mode: authConfig.profileTypeToAuthMode(configuredProfileType),
         authFlow:
@@ -300,10 +303,7 @@ export async function resolveApiKeyForProviderCore(input: {
     }
     const result = projectProfileAuth(resolved, resolvedProfileId, credential, store);
     assertAuthModeAllowedForModel({
-      provider,
-      modelApi: params.modelApi,
-      modelBaseUrl: params.modelBaseUrl,
-      capability: params.capability,
+      ...modelPolicy,
       profileId: resolvedProfileId,
       mode: result.mode,
       authFlow: result.authFlow,
@@ -367,10 +367,7 @@ export async function resolveApiKeyForProviderCore(input: {
 
   const modeAllowed = (mode: ResolvedProviderAuth["mode"], authFlow?: string) =>
     isAuthModeAllowedForModel({
-      provider,
-      modelApi: params.modelApi,
-      modelBaseUrl: params.modelBaseUrl,
-      capability: params.capability,
+      ...modelPolicy,
       mode,
       authFlow,
     });
@@ -441,12 +438,9 @@ export async function resolveApiKeyForProviderCore(input: {
     return providerEntryAuth;
   }
 
+  const directAuthParams = { cfg, provider, secretSentinels: params.secretSentinels };
   if (authConfig.shouldPreferExplicitConfigApiKeyAuth(cfg, provider)) {
-    const runtimeCustomKey = resolveManagedSecretRefRuntimeProviderAuth({
-      cfg,
-      provider,
-      secretSentinels: params.secretSentinels,
-    });
+    const runtimeCustomKey = resolveManagedSecretRefRuntimeProviderAuth(directAuthParams);
     if (runtimeCustomKey) {
       // Managed (file/exec) SecretRef provider keys are config-backed inline
       // credentials too, so they must honor the inline-key cooldown gate just
@@ -455,11 +449,7 @@ export async function resolveApiKeyForProviderCore(input: {
       authConfig.assertInlineProviderApiKeyUsable({ store: getScopedStore(), provider });
       return runtimeCustomKey;
     }
-    const customKey = authConfig.resolveUsableCustomProviderApiKey({
-      cfg,
-      provider,
-      secretSentinels: params.secretSentinels,
-    });
+    const customKey = authConfig.resolveUsableCustomProviderApiKey(directAuthParams);
     if (customKey) {
       authConfig.assertInlineProviderApiKeyUsable({ store: getScopedStore(), provider });
       return {
@@ -470,11 +460,7 @@ export async function resolveApiKeyForProviderCore(input: {
     }
   }
   const providerConfig = resolveMergedModelProviderConfig(cfg, provider);
-  const configuredLocalKey = authConfig.resolveUsableCustomProviderApiKey({
-    cfg,
-    provider,
-    secretSentinels: params.secretSentinels,
-  });
+  const configuredLocalKey = authConfig.resolveUsableCustomProviderApiKey(directAuthParams);
   if (configuredLocalKey && isNonSecretApiKeyMarker(configuredLocalKey.apiKey)) {
     return {
       apiKey: configuredLocalKey.apiKey,
@@ -586,21 +572,13 @@ export async function resolveApiKeyForProviderCore(input: {
     return envAuth;
   }
 
-  const managedRuntimeAuth = resolveManagedSecretRefRuntimeProviderAuth({
-    cfg,
-    provider,
-    secretSentinels: params.secretSentinels,
-  });
+  const managedRuntimeAuth = resolveManagedSecretRefRuntimeProviderAuth(directAuthParams);
   if (managedRuntimeAuth && modeAllowed(managedRuntimeAuth.mode)) {
     assertInlineSourceUsable(managedRuntimeAuth.source);
     return managedRuntimeAuth;
   }
 
-  const customKey = authConfig.resolveUsableCustomProviderApiKey({
-    cfg,
-    provider,
-    secretSentinels: params.secretSentinels,
-  });
+  const customKey = authConfig.resolveUsableCustomProviderApiKey(directAuthParams);
   if (customKey) {
     const mode = resolveDirectProviderCredentialMode({
       cfg,

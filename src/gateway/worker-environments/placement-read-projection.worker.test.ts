@@ -14,6 +14,10 @@ import {
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../../test-utils/gateway-scheduler-clock.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import type { NodeWorkerSupervisorTransport } from "../node-registry-private.js";
 import { createNodeWorkerBundleTestNode } from "./node-worker-bundle.test-support.js";
@@ -71,6 +75,77 @@ async function activePlacement(
 }
 
 describe("worker placement read projection", () => {
+  it("publishes scheduled node retention after the scheduler callback finishes", async () => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", roots.make("placement-scheduled-retention-"));
+    const placements = createWorkerSessionPlacementStore({
+      database: openOpenClawStateDatabase(),
+    });
+    const time = createGatewaySchedulerClock();
+    const scheduler = createTestGatewayScheduler(time.clock);
+    const node = createNodeWorkerBundleTestNode();
+    node.workerHost.bundleRetention = 1;
+    const build = { bundleHash: "b".repeat(64), openclawVersion: "2026.10.10" };
+    const preparing = createDeferred();
+    const prepared = createDeferred<typeof build>();
+    let holdPreparation = false;
+    const warn = vi.fn();
+    const invoke = vi.fn<NodeWorkerSupervisorTransport["invoke"]>(async () => ({
+      ok: true,
+      payloadJSON: JSON.stringify({ applied: true, deleted: 0, hasMore: false }),
+    }));
+    const coordinator = createNodeWorkspaceRetainCoordinator({
+      gatewayNamespace: "gateway-retention",
+      placements,
+      environments: { list: () => [] },
+      bundleRetention: {
+        currentBuild: async () => {
+          if (holdPreparation) {
+            preparing.resolve();
+            return await prepared.promise;
+          }
+          return build;
+        },
+        isEnvironmentOwnedNode: () => false,
+      },
+      warn,
+    });
+    coordinator.bindTransport({
+      getCurrentNode: async () => node,
+      listCurrentNodes: async () => [node],
+      hasCurrentRunner: () => true,
+      isCurrent: () => true,
+      invoke,
+    });
+    let publication: Promise<void> | undefined;
+    try {
+      await coordinator.start();
+      invoke.mockClear();
+      holdPreparation = true;
+      scheduler.schedule({
+        id: "node-retention",
+        delayMs: 60_000,
+        run: async () => {
+          publication = coordinator.schedule();
+        },
+      });
+      await time.advanceBy(60_000);
+      await preparing.promise;
+      prepared.resolve(build);
+      await publication;
+      expect(warn).not.toHaveBeenCalled();
+      expect(invoke).toHaveBeenCalledOnce();
+      expect(invoke.mock.calls[0]?.[0].params).toMatchObject({
+        retain: [],
+        bundleHashes: [build.bundleHash],
+      });
+    } finally {
+      prepared.resolve(build);
+      await publication;
+      await coordinator.stop();
+      await scheduler.stop();
+    }
+  });
+
   it("prepares native placement lookups off thread and rejects a placement created before mutation", async () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", roots.make("placement-native-read-worker-"));
     const database = openOpenClawStateDatabase();
@@ -296,7 +371,9 @@ describe("worker placement read projection", () => {
                 expect(prepared.placement).toEqual(placement);
               }
               prepared.assertCurrent();
-              expect(readCalls()).toHaveLength(1);
+              expect(readCalls()).toHaveLength(
+                kind === "inventory" && settlement === "rollback" ? 0 : 1,
+              );
             } finally {
               prepared.release();
             }

@@ -131,6 +131,13 @@ fallback even with explicit `agentRuntime.id: "codex"`; see
     each buffered event to 16 MiB of bytes before decoding or parsing it, and
     cancels oversized events, including events without a closing delimiter.
 
+    For cached ChatGPT Responses WebSocket requests, an explicit "Rustponses
+    cannot replay" rejection before any response event triggers one retry on a
+    fresh connection with full input instead of the cached response reference.
+    The retry preserves reasoning, compaction, and completed tool results; it
+    does not rerun tools. Rejections of full input and failures after response
+    events remain terminal.
+
     Related OpenAI docs:
     - [Responses API WebSocket mode](https://developers.openai.com/api/docs/guides/websocket-mode)
     - [Streaming API responses (SSE)](https://platform.openai.com/docs/guides/streaming-responses)
@@ -339,11 +346,10 @@ fallback even with explicit `agentRuntime.id: "codex"`; see
     <Note>
     `responsesServerCompaction` only controls `context_management` injection.
     The public OpenAI Responses API also uses `/responses/compact` by default
-    for budget-triggered compaction. Set
-    `params.responsesCompactEndpoint: false` to disable this separate endpoint.
-    Provider-confirmed overflow and endpoint failures use client-side
-    summarization. Manual compaction keeps its existing behavior unless this
-    endpoint is explicitly enabled with `params.responsesCompactEndpoint: true`.
+    for budget-triggered compaction and for `/compact` without focus
+    instructions. Set `params.responsesCompactEndpoint: false` to disable this
+    separate endpoint. `/compact <focus>`, provider-confirmed overflow, and
+    endpoint failures use client-side summarization.
 
     Direct OpenAI Responses models still force `store: true` unless compat
     sets `supportsStore: false`.

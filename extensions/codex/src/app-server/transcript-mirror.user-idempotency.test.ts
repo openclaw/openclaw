@@ -1,6 +1,6 @@
 import path from "node:path";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
-import type { CodexSessionTranscriptMirrorWriteLockContext } from "openclaw/plugin-sdk/codex-session-transcript-runtime";
+import type { CodexSessionTranscriptMirrorWriteContext } from "openclaw/plugin-sdk/codex-session-transcript-runtime";
 import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
@@ -53,14 +53,14 @@ vi.mock("openclaw/plugin-sdk/codex-session-transcript-runtime", async (importOri
     await importOriginal<typeof import("openclaw/plugin-sdk/codex-session-transcript-runtime")>();
   return {
     ...actual,
-    withCodexSessionTranscriptMirrorWriteLock: async (
-      params: Parameters<typeof actual.withCodexSessionTranscriptMirrorWriteLock>[0],
-      run: Parameters<typeof actual.withCodexSessionTranscriptMirrorWriteLock>[1],
+    withCodexSessionTranscriptMirrorWrite: async (
+      params: Parameters<typeof actual.withCodexSessionTranscriptMirrorWrite>[0],
+      run: Parameters<typeof actual.withCodexSessionTranscriptMirrorWrite>[1],
     ) =>
-      await actual.withCodexSessionTranscriptMirrorWriteLock(params, async (locked) => {
+      await actual.withCodexSessionTranscriptMirrorWrite(params, async (locked) => {
         const competingMessage = transcriptRace.competingMessage;
         transcriptRace.competingMessage = undefined;
-        const intercepted: CodexSessionTranscriptMirrorWriteLockContext = {
+        const intercepted: CodexSessionTranscriptMirrorWriteContext = {
           ...locked,
           readMessageFacts: async (factParams) => {
             const staleFacts = await locked.readMessageFacts(factParams);

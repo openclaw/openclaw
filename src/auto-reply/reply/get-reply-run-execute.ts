@@ -291,20 +291,13 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     normalizeOptionalString(conversationIdentity?.channel) ??
     normalizeOptionalString(sessionCtx.OriginatingChannel) ??
     normalizeOptionalString(sessionCtx.Provider);
-  const transport =
-    conversationRef ||
-    sourceMessageId ||
-    transportReplyToId ||
-    transportThreadId ||
-    transportChannel
-      ? {
-          ...(transportChannel ? { channel: transportChannel } : {}),
-          ...(conversationRef ? { conversationRef } : {}),
-          ...(sourceMessageId ? { messageId: sourceMessageId } : {}),
-          ...(transportReplyToId ? { replyToId: transportReplyToId } : {}),
-          ...(transportThreadId ? { threadId: transportThreadId } : {}),
-        }
-      : undefined;
+  const transport = {
+    ...(transportChannel ? { channel: transportChannel } : {}),
+    ...(conversationRef ? { conversationRef } : {}),
+    ...(sourceMessageId ? { messageId: sourceMessageId } : {}),
+    ...(transportReplyToId ? { replyToId: transportReplyToId } : {}),
+    ...(transportThreadId ? { threadId: transportThreadId } : {}),
+  };
   const userTurnInput =
     userTurnTranscriptText !== undefined || userTurnMediaForPersistence.length > 0
       ? {
@@ -320,7 +313,7 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
                 }).provenance,
               }
             : {}),
-          ...(transport ? { transport } : {}),
+          ...(Object.keys(transport).length > 0 ? { transport } : {}),
           ...(userTurnMediaForPersistence.length > 0 ? { media: userTurnMediaForPersistence } : {}),
           ...(mediaImageLayout ? { mediaImageLayout } : {}),
           // Persist the message's own arrival timestamp so the single
@@ -406,6 +399,7 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
       onModelSelected: opts?.onModelSelected,
       prepareAssistantTranscriptMessage: opts?.prepareAssistantTranscriptMessage,
       resolveReplyDelivery: opts?.resolveReplyDelivery,
+      onDeliberateSilentTerminalReply: opts?.onDeliberateSilentTerminalReply,
     },
     ...(opts?.onFollowupQueueDisposition
       ? { onQueueDisposition: opts.onFollowupQueueDisposition }
@@ -443,6 +437,7 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
       normalizeOptionalString(sessionCtx.ChatId),
     originatingChatType: replyRoute.chatType,
     run: {
+      internalEventExecution: opts?.internalEventExecution,
       providerReviewAcknowledgment: opts?.providerReviewAcknowledgment,
       agentId,
       agentDir,

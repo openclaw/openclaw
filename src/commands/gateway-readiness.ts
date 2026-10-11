@@ -110,14 +110,10 @@ export async function ensureDashboardGatewayReady(options: GatewayReadinessOptio
 
   const reason = readinessFailureReason(initialStatus);
   const nativeServiceCanRecover = nativeServiceTargetsGateway(initialStatus);
-  if (!gatewayLooksStopped(initialStatus) || !nativeServiceCanRecover) {
-    printGatewayNotReadyHints(options.runtime, reason, false);
-    return { ready: false as const, status: initialStatus, reason, recoverable: false };
-  }
-
-  const shouldInstall = !gatewayServiceIsInstalled(initialStatus);
-  if (shouldInstall && options.allowInstall === false) {
-    printGatewayNotReadyHints(options.runtime, reason);
+  const canStartService = gatewayLooksStopped(initialStatus) && nativeServiceCanRecover;
+  const shouldInstall = canStartService && !gatewayServiceIsInstalled(initialStatus);
+  if (!canStartService || (shouldInstall && options.allowInstall === false)) {
+    printGatewayNotReadyHints(options.runtime, reason, canStartService);
     return { ready: false as const, status: initialStatus, reason, recoverable: false };
   }
 

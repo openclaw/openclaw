@@ -21,8 +21,18 @@ import {
 } from "../agents/worktrees/service.js";
 import type { ManagedWorktreeRecord, WorktreeWorkerAuthority } from "../agents/worktrees/types.js";
 import { loadSessionEntry, type SessionAccessScope } from "../config/sessions/session-accessor.js";
+import {
+  captureSessionEntryMetadataRead,
+  captureSessionEntrySourceAssertion,
+} from "../config/sessions/session-entry-source-authority.js";
+import {
+  composeSessionSourceAssertion,
+  type SessionSourceAssertion,
+} from "../config/sessions/session-source-authority.js";
+import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { getChildLogger } from "../logging/logger.js";
+import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 
 function belongsToSession(record: ManagedWorktreeRecord, sessionKey: string) {
@@ -123,25 +133,25 @@ export async function removeSessionWorktree(params: {
 export async function restoreSessionWorktree(params: {
   entry: SessionEntry;
   scope: SessionAccessScope;
-  commitGuard?: () => void;
+  commitGuard?: SessionSourceAssertion;
   assertRestoreAllowed?: () => void;
-}): Promise<() => void> {
+}): Promise<SessionSourceAssertion> {
   const { entry, scope: requestedScope } = params;
   const id = entry.worktree?.id;
   if (!id) {
-    return () => params.commitGuard?.();
+    return composeSessionSourceAssertion([params.commitGuard]);
   }
   const context = captureWorktreeRunEndContext(requestedScope.env ?? process.env);
   const scope = {
     ...requestedScope,
     env: { ...(requestedScope.env ?? process.env), ...context.environment },
   };
+  const metadata = captureSessionEntryMetadataRead(scope);
   const accept = captureWorktreeRegistryReadGuard(context, "session-owner");
   const record = await readRegistryWorktree(context, id);
   const assertWorktreeCurrent = accept(record);
   const assertSessionCurrent = () => {
-    params.commitGuard?.();
-    const current = loadSessionEntry(scope);
+    const current = metadata ? metadata.readCurrent() : loadSessionEntry(scope);
     if (
       current?.sessionId !== entry.sessionId ||
       current?.lifecycleRevision !== entry.lifecycleRevision ||
@@ -154,26 +164,47 @@ export async function restoreSessionWorktree(params: {
       );
     }
   };
-  const assertCurrent = () => {
-    assertSessionCurrent();
-    assertWorktreeCurrent();
-    try {
-      assertWorktreeRemovalAvailable(scope.env ?? process.env, id);
-    } catch (error) {
-      if (error instanceof WorktreeRemovalContentionError) {
-        throw new SessionWorktreeLifecycleError(error.message, "busy");
-      }
-      throw error;
-    }
-    if (record && !belongsToSession(record, scope.sessionKey)) {
-      throw new SessionWorktreeLifecycleError(
-        "Session worktree has a different owner; restore the correct binding before retrying.",
-        "owner-mismatch",
-      );
-    }
-  };
-  const workerAuthority: WorktreeWorkerAuthority = {
+  const source = captureSessionEntrySourceAssertion({
+    scope: {
+      agentId: scope.agentId ?? resolveAgentIdFromSessionKey(scope.sessionKey),
+      sessionKey: scope.sessionKey,
+      storePath: resolveSessionStorePathForScope(scope),
+      env: scope.env,
+    },
+    expected: entry,
+    // The destination's patch snapshot owns archivedAt; successful unarchive changes it.
+    fields: ["sessionId", "lifecycleRevision", "worktree"],
     assertCurrent: assertSessionCurrent,
+    refuse: () => {
+      throw new SessionWorktreeLifecycleError(
+        "Session changed while preparing its worktree; retry the request.",
+        "session-changed",
+      );
+    },
+  });
+  const assertCurrent = composeSessionSourceAssertion(
+    [params.commitGuard, source],
+    (assertSources) => {
+      assertSources();
+      assertWorktreeCurrent();
+      try {
+        assertWorktreeRemovalAvailable(scope.env ?? process.env, id);
+      } catch (error) {
+        if (error instanceof WorktreeRemovalContentionError) {
+          throw new SessionWorktreeLifecycleError(error.message, "busy");
+        }
+        throw error;
+      }
+      if (record && !belongsToSession(record, scope.sessionKey)) {
+        throw new SessionWorktreeLifecycleError(
+          "Session worktree has a different owner; restore the correct binding before retrying.",
+          "owner-mismatch",
+        );
+      }
+    },
+  );
+  const workerAuthority: WorktreeWorkerAuthority = {
+    assertCurrent: composeSessionSourceAssertion([params.commitGuard, source]),
     predicates: [{ kind: "session-owner", id, sessionKey: scope.sessionKey }],
   };
   assertCurrent();

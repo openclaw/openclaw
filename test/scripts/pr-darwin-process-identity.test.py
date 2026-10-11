@@ -146,6 +146,7 @@ class LockTests(unittest.TestCase):
         library = self.sources.parent/'lib';library.mkdir()
         # Preserve the supervisor's eager script imports without copying an app graph.
         for name in ('plain-gh.mjs', 'direct-run.mjs', 'managed-child-process.mts',
+                     'managed-cleanup-handoff.mts',
                      'vitest-resource-ownership.mts', 'windows-taskkill.mjs'):
             shutil.copyfile(ROOT/'scripts'/'lib'/name,library/name)
         shutil.copyfile(ROOT/'scripts'/'windows-cmd-helpers.mjs',

@@ -11,7 +11,8 @@ read_when:
 
 OpenClaw keeps one global, ordered list of recommended models. It names the
 models OpenClaw suggests first, independent of which provider serves them, so
-one entry covers every provider that serves that model.
+one entry covers every provider that serves that model. A provider may also
+publish its own featured list, which leads that provider's recommendations.
 
 Maintainers curate the list by hand in
 [`scripts/lib/recommended-models.json`](https://github.com/openclaw/openclaw/blob/main/scripts/lib/recommended-models.json)
@@ -24,7 +25,26 @@ disabled, and replaced rows never match. Catalog v2 lists the
 matches as that provider's `recommendedModels`, in list order and under the
 provider's own ids. When a provider serves several listed models of one family,
 only the newest appears. Providers without matching catalog rows get no list,
-and catalog v1 carries none. Pickers do not use the field yet.
+and catalog v1 carries none. Model pickers list a provider's recommended models
+first and collapse its other models under **All models**; see
+[Models](/concepts/models#selection-source-and-fallback-strictness).
+
+## Provider featured lists
+
+Some providers publish the models they want to feature. NVIDIA is currently the
+only one; its feed is
+`https://assets.ngc.nvidia.com/products/api-catalog/featured-models.json`.
+At publication, each featured id is matched to that provider's served rows by
+canonical id, so `z-ai/glm-5-3` matches `z-ai/glm-5.3`. That provider's
+`recommendedModels` lists its featured models first, in feed order and under
+its own ids, then the global list's matches that are not already included.
+
+Provider picks win as listed: the family rule only trims the global part, so a
+featured model stays even when the provider also serves a newer listed member
+of its family. Featured ids the provider does not serve, or serves only as
+deprecated, disabled, or replaced rows, are skipped and logged. When the feed
+is unavailable, malformed, empty, or matches no served model, the provider gets
+the global list alone.
 
 ## Entry format
 

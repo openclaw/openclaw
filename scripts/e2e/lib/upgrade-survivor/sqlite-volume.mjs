@@ -1,13 +1,14 @@
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { pathToFileURL } from "node:url";
 import {
   readSqliteTranscriptPayload,
   sqliteTranscriptPayloadColumns,
 } from "../../../lib/sqlite-transcript-payload.mjs";
 import { assert, readJson, write, writeJson } from "../fixtures/common.mjs";
+import { readPluginInstallIndex } from "../plugin-index-sqlite.mjs";
+import { readDatabase } from "./observations.mjs";
 import {
   assertUpgradeVolumeSharedState,
   seedUpgradeVolumeSharedState,
@@ -32,6 +33,37 @@ const PREEXISTING_SESSION_FIXTURES = [
     sessionId: "upgrade-group-session",
   },
 ];
+
+export function measureVolumeDoctorBudget(stateDir) {
+  const counts = { sessions: 0, events: 0, cronJobs: 0, pluginRoots: 0 };
+  for (const agentId of VOLUME_AGENT_IDS) {
+    readDatabase(path.join(stateDir, "agents", agentId, "agent", "openclaw-agent.sqlite"), (db) => {
+      counts.sessions += Number(
+        db.prepare("SELECT count(*) AS count FROM session_nodes").get().count,
+      );
+      counts.events += Number(
+        db.prepare("SELECT count(*) AS count FROM transcript_events").get().count,
+      );
+    });
+  }
+  readDatabase(path.join(stateDir, "state", "openclaw.sqlite"), (db) => {
+    counts.cronJobs = Number(db.prepare("SELECT count(*) AS count FROM cron_jobs").get().count);
+  });
+  const index = readPluginInstallIndex({ stateDir, configPath: null });
+  counts.pluginRoots = new Set(
+    (index.plugins ?? []).filter((plugin) => plugin.enabled).map((plugin) => plugin.rootDir),
+  ).size;
+  // Slow-host allowance, calibrated against the 473s AWS fixture; never learn
+  // from the timed run itself, which would hide a Doctor slowdown.
+  const computedSeconds = Math.ceil(
+    60 +
+      counts.sessions * 0.08 +
+      counts.events * 0.002 +
+      counts.cronJobs * 0.02 +
+      counts.pluginRoots * 20,
+  );
+  return { counts, computedSeconds };
+}
 
 function assertJsonEqual(actual, expected, message) {
   assert(JSON.stringify(actual) === JSON.stringify(expected), message);
@@ -275,9 +307,7 @@ export async function seedUpgradeVolume(stateDir, packageRoot) {
 }
 
 function assertHealthySqlite(databasePath, assertContents) {
-  const db = new DatabaseSync(databasePath, { readOnly: true });
-  let contents;
-  try {
+  const contents = readDatabase(databasePath, (db) => {
     assert(
       db.prepare("PRAGMA journal_mode").get()?.journal_mode === "wal",
       `${databasePath} is not WAL`,
@@ -290,19 +320,14 @@ function assertHealthySqlite(databasePath, assertContents) {
       db.prepare("PRAGMA foreign_key_check").all().length === 0,
       `${databasePath} has FK errors`,
     );
-    contents = assertContents(db);
-  } finally {
-    db.close();
-  }
-  const reopened = new DatabaseSync(databasePath, { readOnly: true });
-  try {
+    return assertContents(db);
+  });
+  readDatabase(databasePath, (reopened) => {
     assert(
       reopened.prepare("PRAGMA integrity_check").get()?.integrity_check === "ok",
       `${databasePath} failed reopen`,
     );
-  } finally {
-    reopened.close();
-  }
+  });
   return contents;
 }
 

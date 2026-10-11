@@ -78,29 +78,28 @@ function formatStartupMemoryBlock(relativePath: string, content: string): string
   ].join("\n");
 }
 
-function fitStartupMemoryBlock(params: {
-  relativePath: string;
-  content: string;
-  maxChars: number;
-}): string | null {
-  if (params.maxChars <= 0) {
+function fitStartupMemoryBlock(
+  entry: { relativePath: string; content: string },
+  maxChars: number,
+): string | null {
+  if (maxChars <= 0) {
     return null;
   }
-  const fullBlock = formatStartupMemoryBlock(params.relativePath, params.content);
-  if (fullBlock.length <= params.maxChars) {
+  const fullBlock = formatStartupMemoryBlock(entry.relativePath, entry.content);
+  if (fullBlock.length <= maxChars) {
     return fullBlock;
   }
 
   let low = 0;
-  let high = params.content.length;
+  let high = entry.content.length;
   let best: string | null = null;
   while (low <= high) {
     const mid = Math.floor((low + high) / 2);
     const candidate = formatStartupMemoryBlock(
-      params.relativePath,
-      trimStartupMemoryContent(params.content, mid),
+      entry.relativePath,
+      trimStartupMemoryContent(entry.content, mid),
     );
-    if (candidate.length <= params.maxChars) {
+    if (candidate.length <= maxChars) {
       best = candidate;
       low = mid + 1;
     } else {
@@ -108,28 +107,6 @@ function fitStartupMemoryBlock(params: {
     }
   }
   return best;
-}
-
-async function readStartupMemoryFile(params: {
-  workspaceDir: string;
-  relativePath: string;
-  maxFileBytes: number;
-}): Promise<string | null> {
-  const absolutePath = path.join(params.workspaceDir, params.relativePath);
-  const opened = await openRootFile({
-    absolutePath,
-    rootPath: params.workspaceDir,
-    boundaryLabel: "workspace root",
-    maxBytes: params.maxFileBytes,
-  });
-  if (!opened.ok) {
-    return null;
-  }
-  try {
-    return (await readFileDescriptorBounded(opened.fd, params.maxFileBytes)).toString("utf-8");
-  } finally {
-    await promisify(fs.close)(opened.fd);
-  }
 }
 
 async function listStartupMemoryPaths(params: {
@@ -224,12 +201,22 @@ export async function buildSessionStartupContextPrelude(params: {
   const loaded: Array<{ relativePath: string; content: string }> = [];
 
   for (const relativePath of dailyPaths) {
-    const content = await readStartupMemoryFile({
-      workspaceDir: params.workspaceDir,
-      relativePath,
-      maxFileBytes: limits.maxFileBytes,
+    const opened = await openRootFile({
+      absolutePath: path.join(params.workspaceDir, relativePath),
+      rootPath: params.workspaceDir,
+      boundaryLabel: "workspace root",
+      maxBytes: limits.maxFileBytes,
     });
-    if (!content?.trim()) {
+    if (!opened.ok) {
+      continue;
+    }
+    let content: string;
+    try {
+      content = (await readFileDescriptorBounded(opened.fd, limits.maxFileBytes)).toString("utf-8");
+    } finally {
+      await promisify(fs.close)(opened.fd);
+    }
+    if (!content.trim()) {
       continue;
     }
     loaded.push({
@@ -246,11 +233,7 @@ export async function buildSessionStartupContextPrelude(params: {
   let totalChars = 0;
   for (const entry of loaded) {
     const remainingChars = limits.maxTotalChars - totalChars;
-    const block = fitStartupMemoryBlock({
-      relativePath: entry.relativePath,
-      content: entry.content,
-      maxChars: remainingChars,
-    });
+    const block = fitStartupMemoryBlock(entry, remainingChars);
     if (!block) {
       if (sections.length > 0) {
         sections.push("...[additional startup memory truncated]...");
