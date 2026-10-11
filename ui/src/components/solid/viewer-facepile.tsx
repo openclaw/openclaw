@@ -1,5 +1,4 @@
-import { dynamic, type JSX } from "@solidjs/web";
-import { createComponent, createMemo, For, Show } from "solid-js";
+import { createMemo, For, Show } from "solid-js";
 import type {
   SessionParticipant,
   SessionParticipantIdentity,
@@ -8,12 +7,13 @@ import type { AuthenticatedUser } from "../../app/user-profile.ts";
 import { sessionParticipantIdentityKey } from "../../lib/chat/sender-label.ts";
 import { resolveAvatar } from "../../lib/identity-avatar.ts";
 import {
-  presenceViewerLabel,
+  presenceViewerLabel as readPresenceViewerLabel,
   projectPresenceViewers,
   type PresenceViewer,
 } from "../../lib/presence-users.ts";
 import { projectGateway } from "../../lib/reactive/application.ts";
-import { t } from "../../lib/reactive/i18n.ts";
+import { i18nRevision, t } from "../../lib/reactive/i18n.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../../lit/solid-bridge.ts";
 import { resolveIdentityAvatarView } from "../identity-avatar-view.ts";
 import { personActivityLink, type PersonActivityRouting } from "../person-activity-link.ts";
 import { useIdentityApplication } from "./identity-application.ts";
@@ -21,16 +21,9 @@ import { IdentityAvatarImage, identityAvatarState } from "./identity-avatar-imag
 import { AgentIdentityAvatar } from "./identity-avatar.tsx";
 import "../tooltip.ts";
 
-const TooltipTag = dynamic(() => "openclaw-tooltip");
-function Tooltip(props: { content: string; children: JSX.Element }) {
-  return createComponent(TooltipTag, {
-    get "prop:content"() {
-      return props.content;
-    },
-    get children() {
-      return props.children;
-    },
-  });
+function presenceViewerLabel(user: Pick<PresenceViewer, "id" | "name" | "email">) {
+  i18nRevision();
+  return readPresenceViewerLabel(user);
 }
 
 export const EMPTY_VIEWER_IDENTITIES: readonly SessionParticipantIdentity[] = Object.freeze([]);
@@ -145,7 +138,7 @@ export function ViewerFacepileContent(props: ViewerFacepileProps) {
           }
         >
           {(user) => (
-            <Tooltip content={presenceViewerLabel(user())}>
+            <openclaw-tooltip prop:content={presenceViewerLabel(user())}>
               <span class="viewer-facepile__tooltip-anchor">
                 <FacepilePerson
                   user={user()}
@@ -153,15 +146,15 @@ export function ViewerFacepileContent(props: ViewerFacepileProps) {
                   routing={props.personActivity}
                 />
               </span>
-            </Tooltip>
+            </openclaw-tooltip>
           )}
         </For>
         <Show when={overflowCount() > 0}>
-          <Tooltip content={overflowLabel()}>
+          <openclaw-tooltip prop:content={overflowLabel()}>
             <span class="viewer-avatar viewer-avatar--overflow" aria-label={overflowLabel()}>
               +{overflowCount()}
             </span>
-          </Tooltip>
+          </openclaw-tooltip>
         </Show>
       </span>
     </Show>
@@ -186,17 +179,21 @@ function FacepilePerson(props: {
         markAsViewer={props.markAsViewer}
       />
     ) : (
-      <openclaw-viewer-avatar
-        prop:user={props.user}
-        prop:identity={props.user.identity}
-        prop:markAsViewer={props.markAsViewer}
+      <ViewerAvatar
+        user={props.user}
+        identity={props.user.identity}
+        markAsViewer={props.markAsViewer}
         variant="session"
       />
     );
   return (
     <Show when={link()} fallback={avatar()}>
       {(target) => (
-        <a class="person-activity-avatar-link" href={target().href} onClick={target().open}>
+        <a
+          class="person-activity-avatar-link"
+          href={target().href}
+          onClick={(event) => target().open(event)}
+        >
           {avatar()}
         </a>
       )}
@@ -228,4 +225,52 @@ export function AgentViewerAvatar(props: {
       <AgentIdentityAvatar agent={{ id: props.identity.id, avatar: avatar() }} />
     </span>
   );
+}
+
+export type ViewerAvatarElement = SolidBridgeElement<ViewerAvatarProps>;
+export type ViewerFacepileElement = SolidBridgeElement<ViewerFacepileProps>;
+
+export const ViewerAvatar = defineSolidBridge<ViewerAvatarProps>(
+  "openclaw-viewer-avatar",
+  (props, host) => {
+    host.style.display = "contents";
+    return <ViewerAvatarContent {...props} />;
+  },
+  {
+    properties: {
+      user: { default: null, attribute: false },
+      variant: { default: "session" },
+      identity: { default: undefined, attribute: false },
+      markAsViewer: { default: true, attribute: false },
+    },
+  },
+);
+
+export const ViewerFacepile = defineSolidBridge<ViewerFacepileProps>(
+  "openclaw-viewer-facepile",
+  (props, host) => {
+    host.style.display = "contents";
+    return <ViewerFacepileContent {...props} />;
+  },
+  {
+    properties: {
+      presencePayload: { default: undefined, attribute: false },
+      selfUser: { default: undefined, attribute: false },
+      selfInstanceId: { default: undefined, attribute: false },
+      sessionKey: { default: undefined, attribute: false },
+      excludeIdentities: { default: EMPTY_VIEWER_IDENTITIES, attribute: false },
+      staticParticipants: { default: undefined, attribute: false },
+      staticUsers: { default: undefined, attribute: false },
+      maxVisible: { default: 3, attribute: "max-visible", type: Number },
+      totalCount: { default: undefined, attribute: false },
+      personActivity: { default: undefined, attribute: false },
+    },
+  },
+);
+
+declare global {
+  interface HTMLElementTagNameMap {
+    "openclaw-viewer-avatar": ViewerAvatarElement;
+    "openclaw-viewer-facepile": ViewerFacepileElement;
+  }
 }

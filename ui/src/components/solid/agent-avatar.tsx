@@ -3,6 +3,7 @@ import type { AgentIdentityResult } from "../../api/types.ts";
 import { resolveAgentTextAvatar } from "../../lib/agents/display.ts";
 import { resolveAgentAvatarUrl } from "../../lib/avatar.ts";
 import { IdentityAvatarController } from "../../lib/identity-avatar-loader.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../../lit/solid-bridge.ts";
 import type { AgentSelectOption } from "../agent-select.ts";
 import { AgentIdentityAvatar, avatarArtwork } from "./identity-avatar.tsx";
 
@@ -29,7 +30,7 @@ export function AgentAvatarContent(props: AgentAvatarProps) {
 
   return (
     <Show
-      when={!props.option.icon || avatar().image}
+      when={!props.option.icon || Boolean(avatar().image)}
       fallback={
         <span
           ref={avatarArtwork(() => props.option.icon)}
@@ -51,4 +52,23 @@ export function AgentAvatarContent(props: AgentAvatarProps) {
       />
     </Show>
   );
+}
+
+export type AgentAvatarElement = SolidBridgeElement<AgentAvatarProps>;
+export const AgentAvatar = defineSolidBridge<AgentAvatarProps>(
+  "openclaw-agent-avatar",
+  (props) => {
+    return <AgentAvatarContent {...props} />;
+  },
+  {
+    properties: {
+      option: { default: { value: "", label: "" }, attribute: false },
+      identity: { default: null, attribute: false },
+    },
+  },
+);
+declare global {
+  interface HTMLElementTagNameMap {
+    "openclaw-agent-avatar": AgentAvatarElement;
+  }
 }

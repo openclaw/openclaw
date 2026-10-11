@@ -1,5 +1,6 @@
 import { createSignal, flush } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
+import { i18n } from "../../i18n/index.ts";
 import { setAvatarGatewayOrigin } from "../../lib/identity-avatar-context.ts";
 /* @vitest-environment jsdom */
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
@@ -13,13 +14,39 @@ import {
 } from "./viewer-facepile.tsx";
 
 const disposals: Array<() => void> = [];
-afterEach(() => {
+const originalLocale = i18n.getLocale();
+afterEach(async () => {
   for (const dispose of disposals.splice(0)) {
     dispose();
   }
   document.body.replaceChildren();
   setAvatarGatewayOrigin(null);
   vi.restoreAllMocks();
+  await i18n.setLocale(originalLocale);
+});
+
+it("refreshes shared-owner labels without changing identity initials on locale publication", async () => {
+  const user = { id: "gateway-owner", name: "Saved owner name", watchedSessions: [] };
+  const view = mountSolid(() => (
+    <>
+      <ViewerAvatarContent user={user} />
+      <ViewerFacepileContent staticUsers={[user]} />
+    </>
+  ));
+  disposals.push(view.unmount);
+  expect(view.container.querySelector(".viewer-avatar")?.getAttribute("aria-label")).toBe(
+    "Shared owner",
+  );
+  i18n.registerTranslation("pt-BR", { presence: { sharedOwner: { name: "Dono compartilhado" } } });
+  await i18n.setLocale("pt-BR");
+  flush();
+  expect(view.container.querySelector(".viewer-avatar")?.getAttribute("aria-label")).toBe(
+    "Dono compartilhado",
+  );
+  expect(view.container.querySelector(".viewer-avatar__initials")?.textContent).toBe("SO");
+  expect(view.container.querySelector(".viewer-facepile")?.getAttribute("aria-label")).toBe(
+    "Dono compartilhado",
+  );
 });
 
 it.each([false, true])(

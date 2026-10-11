@@ -7,7 +7,8 @@ import {
   type SessionCreatedActor,
   type SessionOwnerOption,
 } from "../../lib/session-owner.ts";
-import { AgentViewerAvatar } from "./viewer-facepile.tsx";
+import { defineSolidBridge, type SolidBridgeElement } from "../../lit/solid-bridge.ts";
+import { AgentViewerAvatar, ViewerAvatar } from "./viewer-facepile.tsx";
 
 export type SessionOwnerChipProps = {
   owner?: SessionCreatedActor | null;
@@ -37,15 +38,15 @@ export function SessionOwnerAvatar(props: {
     <Show
       when={identity()}
       fallback={
-        <openclaw-viewer-avatar
-          prop:identity={props.owner.identity}
-          prop:user={{
+        <ViewerAvatar
+          identity={props.owner.identity}
+          user={{
             id: props.owner.id,
             name: props.owner.label,
             avatarUrl: props.owner.avatarUrl,
             watchedSessions: [],
           }}
-          prop:markAsViewer={false}
+          markAsViewer={false}
           variant="session"
           aria-hidden="true"
         />
@@ -143,4 +144,26 @@ export function SessionOwnerChipContent(props: SessionOwnerChipProps) {
       </Show>
     </Show>
   );
+}
+
+export type SessionOwnerChipElement = SolidBridgeElement<SessionOwnerChipProps>;
+export const SessionOwnerChip = defineSolidBridge<SessionOwnerChipProps>(
+  "openclaw-session-owner-chip",
+  (props) => <SessionOwnerChipContent {...props} />,
+  {
+    properties: {
+      owner: { default: null, attribute: false },
+      size: { default: "row" },
+      attribution: { default: "created" },
+      viewingNow: { default: undefined, attribute: false },
+      participants: { default: [], attribute: false },
+      participantCount: { default: 0, type: Number },
+    },
+  },
+);
+
+declare global {
+  interface HTMLElementTagNameMap {
+    "openclaw-session-owner-chip": SessionOwnerChipElement;
+  }
 }

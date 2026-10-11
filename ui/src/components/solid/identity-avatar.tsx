@@ -1,19 +1,20 @@
+import { dynamic } from "@solidjs/web";
 import { nothing, render } from "lit";
-import { createEffect, createMemo, onCleanup, Show } from "solid-js";
+import { createComponent, createEffect, createMemo, onCleanup, Show } from "solid-js";
 import type { ThemeBranding } from "../../../../packages/gateway-protocol/src/theme.ts";
 import { isReservedSystemAgentId } from "../../../../src/system-agent/agent-id.js";
 import { inferControlUiPublicAssetPath } from "../../app/public-assets.ts";
 import { currentThemeBranding, subscribeThemeBranding } from "../../app/theme-branding.ts";
 import { projectSource } from "../../lib/reactive/projection.ts";
 import { resolveAvatarHat } from "../agent-avatar-hat.ts";
-import { icons } from "../icons.ts";
 import {
   renderAgentAvatarFallback,
   renderAgentAvatarHatContents,
   resolveAgentIdentityAvatarView,
   type AgentIdentity,
 } from "../identity-avatar-view.ts";
-import { renderThemeBrandIcon } from "../theme-brand-icon.ts";
+import "../theme-brand-icon.ts";
+import { BrandIcon } from "./icon.tsx";
 import { IdentityAvatarImage, identityAvatarState } from "./identity-avatar-image.tsx";
 import "../../styles/identity-avatar.css";
 
@@ -79,6 +80,8 @@ export function AgentIdentityAvatar(props: {
   );
 }
 
+const ThemeIcon = dynamic(() => "openclaw-theme-brand-icon");
+
 function SystemAgentAvatar(props: { name?: string; class?: string; branding: ThemeBranding }) {
   return (
     <Show
@@ -93,12 +96,23 @@ function SystemAgentAvatar(props: { name?: string; class?: string; branding: The
       }
     >
       <span
-        ref={avatarArtwork(() => renderThemeBrandIcon(icons.mark, props.branding))}
         class={["identity-avatar--agent", "identity-avatar--neutral", props.class]}
         role={props.name ? "img" : undefined}
         aria-label={props.name}
         aria-hidden={props.name ? undefined : "true"}
-      />
+      >
+        <Show
+          when={props.branding.brandIcon === "mark"}
+          fallback={createComponent(ThemeIcon, {
+            get "prop:branding"() {
+              return props.branding;
+            },
+            "aria-hidden": "true",
+          })}
+        >
+          <BrandIcon name="mark" />
+        </Show>
+      </span>
     </Show>
   );
 }

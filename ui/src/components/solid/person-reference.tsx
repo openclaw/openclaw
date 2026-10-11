@@ -25,6 +25,7 @@ import {
   resolveUiConfiguredMainKey,
   resolveUiDefaultAgentId,
 } from "../../lib/sessions/session-key.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../../lit/solid-bridge.ts";
 import { resolveIdentityAvatarView } from "../identity-avatar-view.ts";
 import { renderPersonActivityCard } from "../person-activity-card.ts";
 import { observePersonActivityData } from "../person-activity-data.ts";
@@ -158,7 +159,7 @@ export function PersonReferenceContent(props: PersonReferenceProps) {
 
   async function loadPerson(card: HTMLDivElement) {
     const scope = connection.capture();
-    const requestedId = profileId();
+    const requestedId = untrack(profileId);
     if (!scope || !context) {
       return;
     }
@@ -180,7 +181,7 @@ export function PersonReferenceContent(props: PersonReferenceProps) {
           name:
             profile.displayName?.trim() ||
             profile.githubIdentity?.login ||
-            t("presence.card.person"),
+            untrack(() => t("presence.card.person")),
           avatarUrl: profile.hasAvatar
             ? buildControlUiUserAvatarPath(profile.id, profile.updatedAt)
             : undefined,
@@ -190,7 +191,11 @@ export function PersonReferenceContent(props: PersonReferenceProps) {
     } catch {
       // An unavailable or unauthorized profile remains an explicit, unresolved reference.
     }
-    if (portal.card !== card || profileId() !== requestedId || !connection.isCurrent(scope)) {
+    if (
+      portal.card !== card ||
+      untrack(profileId) !== requestedId ||
+      !connection.isCurrent(scope)
+    ) {
       return;
     }
     person = resolved;
@@ -198,34 +203,34 @@ export function PersonReferenceContent(props: PersonReferenceProps) {
   }
 
   function renderCard() {
-    activityExpiry.sync();
-    const card = portal.card;
-    if (!card) {
-      return;
-    }
-    card.setAttribute(
-      "aria-label",
-      t("presence.card.ariaLabel", { name: person?.name ?? label() }),
-    );
-    const data = activity?.data;
-    const presence = projectPresencePayload(data?.presencePayload).users.find((user) =>
-      presenceMatchesProfile(user, person?.identity),
-    );
-    const user = person && {
-      ...person,
-      name: presence?.name ?? person.name,
-      avatarUrl: presence?.avatarUrl ?? person.avatarUrl,
-      watchedSessions: presence?.watchedSessions ?? [],
-      entries: presence?.entries ?? (data?.presencePayload ? [] : undefined),
-    };
-    const defaults = {
-      agentsList: context?.agents.state.agentsList,
-      hello: context?.gateway.snapshot.hello,
-    };
-    const scope = connection.capture();
-    const route = context?.router.getState().location;
-    portal.renderContents(card, () =>
-      untrack(() =>
+    untrack(() => {
+      activityExpiry.sync();
+      const card = portal.card;
+      if (!card) {
+        return;
+      }
+      card.setAttribute(
+        "aria-label",
+        t("presence.card.ariaLabel", { name: person?.name ?? label() }),
+      );
+      const data = activity?.data;
+      const presence = projectPresencePayload(data?.presencePayload).users.find((user) =>
+        presenceMatchesProfile(user, person?.identity),
+      );
+      const user = person && {
+        ...person,
+        name: presence?.name ?? person.name,
+        avatarUrl: presence?.avatarUrl ?? person.avatarUrl,
+        watchedSessions: presence?.watchedSessions ?? [],
+        entries: presence?.entries ?? (data?.presencePayload ? [] : undefined),
+      };
+      const defaults = {
+        agentsList: context?.agents.state.agentsList,
+        hello: context?.gateway.snapshot.hello,
+      };
+      const scope = connection.capture();
+      const route = context?.router.getState().location;
+      portal.renderContents(card, () =>
         render(
           user && context
             ? renderPersonActivityCard({
@@ -280,9 +285,9 @@ export function PersonReferenceContent(props: PersonReferenceProps) {
               </div>`,
           card,
         ),
-      ),
-    );
-    portal.position();
+      );
+      portal.position();
+    });
   }
 
   // The avatar route follows merged profiles; rendering a mention needs no directory read.
@@ -370,4 +375,26 @@ export function PersonReferenceContent(props: PersonReferenceProps) {
       )}
     </button>
   );
+}
+
+type PersonReferenceProperties = { profileId: string; label: string };
+export type PersonReferenceElement = SolidBridgeElement<PersonReferenceProperties>;
+export const PersonReference = defineSolidBridge<PersonReferenceProperties>(
+  "openclaw-person-reference",
+  (props, host) => {
+    host.style.display = "contents";
+    return <PersonReferenceContent {...props} host={host} />;
+  },
+  {
+    properties: {
+      profileId: { default: "", attribute: "profile-id" },
+      label: { default: "" },
+    },
+  },
+);
+
+declare global {
+  interface HTMLElementTagNameMap {
+    "openclaw-person-reference": PersonReferenceElement;
+  }
 }
