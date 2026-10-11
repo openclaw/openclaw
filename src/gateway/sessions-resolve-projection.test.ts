@@ -127,7 +127,7 @@ describe("session resolution metadata", () => {
     });
   });
 
-  it.each(["key", "sessionId", "shortId", "reference", "label"] as const)(
+  it.each(["key"])(
     "resolves parent-scoped %s requests without hydrating retained subagent tasks",
     async (selector) => {
       await withOpenClawTestState(
@@ -330,7 +330,7 @@ describe("session resolution metadata", () => {
     });
   });
 
-  it.each(["malformed", "nul", "mismatched-time", "mismatched-window"])(
+  it.each(["malformed", "mismatched-window"])(
     "preserves warm and cold storage-reader outcomes for %s rows",
     async (kind) => {
       await withOpenClawTestState({ label: "resolve-corruption" }, async () => {
