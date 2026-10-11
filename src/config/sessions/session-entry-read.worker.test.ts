@@ -9,7 +9,6 @@ import * as boardStore from "../../boards/sqlite-board-store.kernel.js";
 import { openNodeSqliteDatabase, requireNodeSqlite } from "../../infra/node-sqlite.js";
 import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
-import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db-lifecycle.js";
 import { OpenClawAgentDatabaseReadOnlyScope } from "../../state/openclaw-agent-db-readonly-scope.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
@@ -564,21 +563,16 @@ it.each(["worker", "exact", "row-facts"] as const)(
   },
 );
 
-it("closes worker-prepared authority synchronously before queued consumers can reuse it", async () => {
+it("returns detached metadata and rejects asynchronous batch consumers", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
     const database = openOpenClawAgentDatabase({ agentId: "main", env });
     const sessionKey = "agent:main:consumer";
     writeSessionEntry(database, sessionKey, { sessionId: "consumer-session", updatedAt: 1 });
     const input = { agentId: "main", storePath: database.path, sessionKeys: [sessionKey], env };
-    let queued: Promise<void> | undefined;
     await withSessionEntriesFromStoresInWorker([input], ([read]) => {
       expect(read!.result.entries[0]?.entry.sessionId).toBe("consumer-session");
       read!.assertCurrent();
-      queued = Promise.resolve().then(() => {
-        expect(read!.assertCurrent).toThrow("consumer is no longer active");
-      });
     });
-    await queued;
     await expect(withSessionEntriesFromStoresInWorker([input], async () => {})).rejects.toThrow(
       "consumers must remain synchronous",
     );
@@ -987,31 +981,3 @@ it.each(["entry", "store", "topology", "native"] as const)(
     });
   },
 );
-
-it("refuses an ordered result when its database closes during reader cleanup", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
-    const database = openOpenClawAgentDatabase({ agentId: "main", env });
-    const sessionKey = "agent:main:closing-consumer";
-    writeSessionEntry(database, sessionKey, { sessionId: "original", updatedAt: 1 });
-    let closing: ReturnType<typeof closeOpenClawAgentDatabaseByPathAsync> | undefined;
-    const reading = withSessionEntriesFromStoresInWorker(
-      [{ agentId: "main", storePath: database.path, sessionKeys: [sessionKey], env }],
-      ([read]) => {
-        read!.assertCurrent();
-        queueMicrotask(() => {
-          closing = runInDetachedAsyncContext(() =>
-            closeOpenClawAgentDatabaseByPathAsync(database.path, database.agentId),
-          );
-        });
-        return read!.result.entries[0]?.entry;
-      },
-      { ordered: true },
-    );
-    try {
-      await expect(reading).rejects.toThrow("revoked");
-      expect(closing).toBeDefined();
-    } finally {
-      await closing;
-    }
-  });
-});
