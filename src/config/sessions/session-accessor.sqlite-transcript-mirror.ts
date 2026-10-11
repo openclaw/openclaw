@@ -1,4 +1,3 @@
-import { sql } from "kysely";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -18,7 +17,7 @@ import { assertSessionTranscriptHot } from "./session-cold-storage-state.js";
 import { sessionTranscriptIndexNeedsReconcile } from "./session-transcript-index.js";
 import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
 import { readMessageIdempotencyKey } from "./transcript-message-identity.js";
-import { transcriptEventJsonSql, transcriptEventNavigationSql } from "./transcript-payload.js";
+import { transcriptEventJsonSql, transcriptEventRunIdSql } from "./transcript-payload.js";
 import { selectVisibleTranscriptEvents } from "./transcript-visible-events.js";
 
 // Keep supplied-key probes below SQLite's conservative variable ceiling.
@@ -136,11 +135,7 @@ export function readTranscriptMirrorFacts(
                     matchesKey,
                     eb.and([
                       eb("active.event_seq", "is not", null),
-                      eb(
-                        sql<string>`json_extract(${transcriptEventNavigationSql("event")}, '$.message.__openclaw.runId')`,
-                        "=",
-                        sourceRunId,
-                      ),
+                      eb(transcriptEventRunIdSql("event"), "=", sourceRunId),
                     ]),
                   ])
                 : matchesKey;
