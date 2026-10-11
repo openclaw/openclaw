@@ -44,17 +44,13 @@ export const HomeSession = defineSolidBridge<Props>(
     }));
     const owner = () =>
       JSON.stringify([app.gateway.connection.gatewayUrl, props.agentId, props.sessionKey]);
-    const updateSelectionAvailability = () => {
+    const externalSelection = () => {
       const selected = window.getSelection();
-      setSelectionAvailable(
-        Boolean(
-          selected &&
-          !selected.isCollapsed &&
-          selected.anchorNode &&
-          !host.contains(selected.anchorNode),
-        ),
-      );
+      return selected && !selected.isCollapsed && !host.contains(selected.anchorNode)
+        ? selected
+        : null;
     };
+    const updateSelectionAvailability = () => setSelectionAvailable(Boolean(externalSelection()));
     onSettled(() => {
       document.addEventListener("selectionchange", updateSelectionAvailability);
       updateSelectionAvailability();
@@ -63,12 +59,8 @@ export const HomeSession = defineSolidBridge<Props>(
     const attachSelection = (event: MouseEvent) => {
       // Capture on the explicit action before focus clears the selection.
       event.preventDefault();
-      const selected = window.getSelection();
-      if (
-        !selected ||
-        selected.isCollapsed ||
-        (selected.anchorNode && host.contains(selected.anchorNode))
-      ) {
+      const selected = externalSelection();
+      if (!selected) {
         return;
       }
       setSelection(truncateUtf16Safe(selected.toString(), 640));

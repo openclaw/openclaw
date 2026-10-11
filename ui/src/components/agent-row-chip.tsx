@@ -38,13 +38,8 @@ export const AgentRowChip = defineSolidBridge<AgentRowChipProps>(
       const name = normalizeAgentLabel(agent, identity);
       const label = name === id ? `agent:${id}` : `${name} (agent:${id})`;
       const avatar = resolveAgentAvatarUrl(agent, identity);
-      return {
-        id,
-        name,
-        label,
-        avatar,
-        textAvatar: resolveAgentTextAvatar(agent, identity),
-      };
+      const textAvatar = resolveAgentTextAvatar(agent, identity);
+      return { id, name, label, avatar, textAvatar };
     });
     return (
       <span

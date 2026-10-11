@@ -37,18 +37,17 @@ type Options = {
 
 let active = false;
 
+function MenuChoice(props: Parameters<typeof renderSessionMenuItem>[0]) {
+  return <LitContent render={() => renderSessionMenuItem(props, false)} />;
+}
+
 function targetKey(target: SessionMoveTarget | null): string {
   if (!target) {
     return "";
   }
-  switch (target.kind) {
-    case "gateway":
-      return "gateway";
-    case "profile":
-      return `profile:${target.profileId}`;
-    default:
-      return `device:${target.deviceId}`;
-  }
+  return target.kind === "gateway"
+    ? "gateway"
+    : `${target.kind}:${target.kind === "profile" ? target.profileId : target.deviceId}`;
 }
 
 export function showSessionPlacementTargetDialog(
@@ -78,6 +77,12 @@ export function showSessionPlacementTargetDialog(
         const profiles = createMemo(() => catalog().profiles.toSorted(compareCloudProfiles));
         const title = () => t(`sessionsView.${options.mode}SessionTitle`);
         const dispatch = options.mode === "dispatch";
+        const warning = options.mode === "restart" || (!dispatch && options.activeRun);
+        const notice = {
+          restart: "restartSessionWarning",
+          dispatch: "dispatchSessionNotice",
+          move: options.activeRun ? "moveSessionActiveRunWarning" : "moveSessionNoReplayWarning",
+        }[options.mode];
 
         const submit = (event: Event) => {
           event.preventDefault();
@@ -147,19 +152,12 @@ export function showSessionPlacementTargetDialog(
                   })}
                 </div>
               </div>
-              {options.mode === "restart" ? (
-                <div class="exec-approval-error" role="alert">
-                  {t("sessionsView.restartSessionWarning")}
-                </div>
-              ) : dispatch ? (
-                <div class="callout">{t("sessionsView.dispatchSessionNotice")}</div>
-              ) : options.activeRun ? (
-                <div class="exec-approval-error" role="alert">
-                  {t("sessionsView.moveSessionActiveRunWarning")}
-                </div>
-              ) : (
-                <div class="callout">{t("sessionsView.moveSessionNoReplayWarning")}</div>
-              )}
+              <div
+                class={warning ? "exec-approval-error" : "callout"}
+                role={warning ? "alert" : undefined}
+              >
+                {t(`sessionsView.${notice}`)}
+              </div>
               {loading() ? (
                 <div class="muted">{t("common.loading")}</div>
               ) : loadError() ? (
@@ -169,21 +167,14 @@ export function showSessionPlacementTargetDialog(
               ) : (
                 <div class="new-session-page__picker-root">
                   {!dispatch ? (
-                    <LitContent
-                      render={() =>
-                        renderSessionMenuItem(
-                          {
-                            value: "gateway",
-                            label: t("newSession.gateway"),
-                            icon: icons.monitor,
-                            checked: selectedKey() === "gateway",
-                            disabled: Boolean(options.gatewayDisabledReason),
-                            title: options.gatewayDisabledReason,
-                            onSelect: () => select({ kind: "gateway" }),
-                          },
-                          false,
-                        )
-                      }
+                    <MenuChoice
+                      value="gateway"
+                      label={t("newSession.gateway")}
+                      icon={icons.monitor}
+                      checked={selectedKey() === "gateway"}
+                      disabled={Boolean(options.gatewayDisabledReason)}
+                      title={options.gatewayDisabledReason}
+                      onSelect={() => select({ kind: "gateway" })}
                     />
                   ) : null}
                   {catalog().devices.length > 0 ? (
@@ -191,27 +182,20 @@ export function showSessionPlacementTargetDialog(
                   ) : null}
                   <For each={catalog().devices} keyed={(device) => device.deviceId}>
                     {(device) => (
-                      <LitContent
-                        render={() =>
-                          renderSessionMenuItem(
-                            {
-                              value: `device:${device().deviceId}`,
-                              label: device().label,
-                              sub: device().subtitle,
-                              icon: icons.monitor,
-                              facts: options.deviceDisabledReason
-                                ? [options.deviceDisabledReason]
-                                : device().facts,
-                              checked: selectedKey() === `device:${device().deviceId}`,
-                              disabled:
-                                Boolean(options.deviceDisabledReason) || !device().selectable,
-                              title: options.deviceDisabledReason ?? device().disabledReason,
-                              onSelect: () =>
-                                select({ kind: "device", deviceId: device().deviceId }),
-                            },
-                            false,
-                          )
+                      <MenuChoice
+                        value={`device:${device().deviceId}`}
+                        label={device().label}
+                        sub={device().subtitle}
+                        icon={icons.monitor}
+                        facts={
+                          options.deviceDisabledReason
+                            ? [options.deviceDisabledReason]
+                            : device().facts
                         }
+                        checked={selectedKey() === `device:${device().deviceId}`}
+                        disabled={Boolean(options.deviceDisabledReason) || !device().selectable}
+                        title={options.deviceDisabledReason ?? device().disabledReason}
+                        onSelect={() => select({ kind: "device", deviceId: device().deviceId })}
                       />
                     )}
                   </For>

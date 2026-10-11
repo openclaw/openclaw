@@ -79,34 +79,33 @@ export const CatalogSessionMenu = defineSolidBridge<Props>(
             {t("sessionsView.lastActive", { time: props.lastActive })}
           </div>
         </Show>
-        <For
-          keyed={(entry) => entry[0]}
-          each={actions.filter(([action]) =>
-            action === "import" ? props.canImport : action === "delete" ? props.canDelete : true,
-          )}
-        >
-          {(entry) => (
-            <wa-dropdown-item
-              class={[
-                "session-menu__item",
-                { "session-menu__item--destructive": entry()[0] === "delete" },
-              ]}
-              variant={entry()[0] === "delete" ? "danger" : undefined}
-              value={entry()[0]}
-              title={
-                entry()[0] === "terminal"
-                  ? props.terminalDisabled
-                    ? t("chat.catalog.terminalUnavailable")
-                    : ""
-                  : undefined
+        <For each={actions}>
+          {([action, key, icon]) => (
+            <Show
+              when={
+                action === "import" ? props.canImport : action === "delete" ? props.canDelete : true
               }
-              disabled={entry()[0] === "terminal" && props.terminalDisabled}
             >
-              <span slot="icon" class="session-menu__icon" aria-hidden="true">
-                <Icon name={entry()[2]} />
-              </span>
-              <span class="session-menu__text">{t(entry()[1])}</span>
-            </wa-dropdown-item>
+              <wa-dropdown-item
+                class={[
+                  "session-menu__item",
+                  { "session-menu__item--destructive": action === "delete" },
+                ]}
+                variant={action === "delete" ? "danger" : undefined}
+                value={action}
+                title={
+                  action === "terminal" && props.terminalDisabled
+                    ? t("chat.catalog.terminalUnavailable")
+                    : undefined
+                }
+                disabled={action === "terminal" && props.terminalDisabled}
+              >
+                <span slot="icon" class="session-menu__icon" aria-hidden="true">
+                  <Icon name={icon} />
+                </span>
+                <span class="session-menu__text">{t(key)}</span>
+              </wa-dropdown-item>
+            </Show>
           )}
         </For>
       </wa-dropdown>

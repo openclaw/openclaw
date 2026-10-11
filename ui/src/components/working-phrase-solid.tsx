@@ -31,12 +31,7 @@ const WORKING_PHRASE_SHOW_AFTER_MS = 30_000;
 const WORKING_PHRASE_ROTATE_EVERY_MS = 45_000;
 
 function greatestCommonDivisor(left: number, right: number): number {
-  let divisor = left;
-  let remainder = right;
-  while (remainder !== 0) {
-    [divisor, remainder] = [remainder, divisor % remainder];
-  }
-  return divisor;
+  return right === 0 ? left : greatestCommonDivisor(right, left % right);
 }
 
 // A coprime stride visits every phrase in O(1) per bucket, even for old runs.

@@ -5,6 +5,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { createContext, createGateway, createSessions } from "../test-helpers/app-sidebar.ts";
 import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
+import { flush } from "../test-helpers/solid-settle.ts";
 import type { OpenClawHomeSession } from "./home-session.runtime.ts";
 import "./home-session.runtime.ts";
 
@@ -43,9 +44,11 @@ it("captures external text, clears it on context changes, and retains the conver
   range.selectNodeContents(source);
   window.getSelection()!.addRange(range);
   document.dispatchEvent(new Event("selectionchange"));
-  await home.updateComplete;
-  home.querySelector<HTMLButtonElement>('[aria-label="Attach selected text"]')?.click();
-  await home.updateComplete;
+  flush();
+  const attach = home.querySelector<HTMLButtonElement>('[aria-label="Attach selected text"]');
+  expect(attach?.disabled).toBe(false);
+  attach!.click();
+  flush();
   expect(home.querySelector("pre")?.textContent).toContain("Selected source text");
 
   home.workContext = { page: "chat", file: "first.ts", title: "Updated title" };
