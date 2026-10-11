@@ -1,6 +1,14 @@
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdirSync, readdirSync, realpathSync, readFileSync, lstatSync } from "node:fs";
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  realpathSync,
+  readFileSync,
+  lstatSync,
+} from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { build } from "tsdown";
@@ -16,6 +24,7 @@ import { packageActivationRuntimeForTest } from "../../src/infra/package-update-
 import { createPackageIntegrityReader } from "../../src/infra/package-update-integrity.js";
 import { createPackageSwapFixture } from "../../src/infra/package-update-swap.test-support.js";
 import { resolveRuntimeWorkerUrl } from "../../src/infra/runtime-worker-url.js";
+import { stageFreeBsdManagedHandoffNativeRuntime } from "../../src/infra/update-managed-service-handoff-native.js";
 import { MANAGED_HANDOFF_RUNTIME_ENTRY } from "../../src/infra/update-managed-service-handoff-runtime-assets.js";
 import { stageManagedHandoffRuntime } from "../../src/infra/update-managed-service-handoff-runtime.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
@@ -132,6 +141,10 @@ it.each(
       );
       expect(modules).not.toContain(path.resolve("src/shared/freebsd-process-identity-native.ts"));
     } else {
+      expect(modules).toContain(
+        path.resolve("src/infra/package-update-activation-native-loader.ts"),
+      );
+      expect(modules).not.toContain(path.resolve("src/shared/freebsd-process-identity-native.ts"));
       // Lease observation and error-code metadata must not capture execution controllers.
       for (const module of [
         "src/infra/update-managed-service-handoff.ts",
@@ -174,6 +187,13 @@ it.each(
       mkdirSync(base, { mode: 0o700 });
       prepareNext = async () => {
         const fixture = await createPackageSwapFixture(base);
+        // npm nests the FreeBSD identity dependency inside the installed package.
+        const nativeModules = path.join(fixture.packageRoot, "node_modules");
+        if (process.platform === "freebsd" && !existsSync(nativeModules)) {
+          const native = tempDirs.make("openclaw-package-native-");
+          stageFreeBsdManagedHandoffNativeRuntime(native);
+          cpSync(path.join(native, "runtime", "node_modules"), nativeModules, { recursive: true });
+        }
         return withUpdateCommandExecutor(randomUUID(), async (executor) =>
           preparePackageActivationJournal({
             options: {
