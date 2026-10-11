@@ -3,7 +3,7 @@ import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 
 // Handles can cross transformed SDK module graphs. Retain their first terminal
 // failure even when an inner caller catches it and continues.
-export const abortedTransactionSymbol = Symbol.for("openclaw.sqliteAbortedTransaction");
+const abortedTransactionSymbol = Symbol.for("openclaw.sqliteAbortedTransaction");
 
 export function assertTransactionUsable(
   db: SqlConnection & { [abortedTransactionSymbol]?: { error: unknown } },
