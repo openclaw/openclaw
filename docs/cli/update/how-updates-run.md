@@ -848,7 +848,9 @@ for update status and Gateway health, then exits; this acknowledges the handoff,
 not a completed update. The acknowledging CLI exits with code `75` (`EX_TEMPFAIL`)
 so scripts cannot mistake accepted background work for a completed update. The
 detached helper remains the settlement authority; use the printed status and
-health commands to retrieve its terminal result. The helper launches staging and validation outside the
+health commands to retrieve its terminal result. A handoff accepted during candidate
+admission keeps this pending result after local staging cleanup; it does not create
+an update failure report. The helper launches staging and validation outside the
 Gateway's service boundary while the old Gateway keeps serving. It parks the Gateway
 only when the orchestrator reaches `activating`, then completes the existing
 commit-or-cancel handoff. Keep stdout connected to the agent: stopping the service

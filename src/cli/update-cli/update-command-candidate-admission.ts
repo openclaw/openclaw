@@ -10,6 +10,7 @@ import {
 import { canResolveRegistryVersionForPackageTarget } from "../../infra/update-global.js";
 import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
 import { recordUpdateRunPhase, recordUpdateRunStep } from "../../infra/update-run-ledger.js";
+import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { defaultRuntime } from "../../runtime.js";
 import { parsePackageOpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
 import { VERSION } from "../../version.js";
@@ -32,6 +33,7 @@ import type { prepareUpdateCommand } from "./update-command-run.js";
 import { withOwnedManagedUpdateEnv } from "./update-command-service-env.js";
 import type { resolveUpdateCommandTarget } from "./update-command-target.js";
 import { reportPreMutationUpdateResult } from "./update-command-terminal.js";
+import { UpdateCommandAbort } from "./update-command-windows-task.js";
 
 type Target = NonNullable<Awaited<ReturnType<typeof resolveUpdateCommandTarget>>>;
 type CandidateAdmissionParams = {
@@ -273,7 +275,7 @@ export async function withUpdateCandidateAdmission<T>(
     candidateAdmission?: Awaited<ReturnType<typeof inspectStagedUpdateCandidateAdmission>>;
   },
   execute: (stagedPackage?: StagedPackageInstallUpdate) => Promise<T>,
-): Promise<T> {
+): Promise<T | void> {
   const { target, opts, prepared } = params;
   const run = opts.run!;
   try {
@@ -342,6 +344,9 @@ export async function withUpdateCandidateAdmission<T>(
       ({ stage }) => inspect(stage),
     );
   } catch (error) {
+    if (error instanceof UpdateCommandAbort && !hasCommandProcessCleanupError(error)) {
+      return;
+    }
     if (!(error instanceof UpdatePreMutationError)) {
       throw error;
     }
