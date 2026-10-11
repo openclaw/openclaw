@@ -604,12 +604,12 @@ export const MeetingsPage = defineSolidBridge<{ routeSearch: string }>(
           onNavigate={navigate}
           onRefresh={refresh}
           onReaderRetry={() => {
+            if (!readerPages().length) {
+              resetReader();
+            }
             if (readerTab() === "summary") {
               void summaryTask.run();
               return;
-            }
-            if (!readerPages().length) {
-              resetReader();
             }
             if (!summary()) {
               void summaryTask.run();

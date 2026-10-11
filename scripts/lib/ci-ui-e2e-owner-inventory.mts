@@ -950,7 +950,7 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
     ["cloud-workers", "config"],
     [
       "ui/src/components/modal-dialog.ts",
-      "ui/src/pages/cloud-workers/cloud-worker-snapshot-rows.ts",
+      "ui/src/pages/cloud-workers/cloud-worker-snapshot-rows.tsx",
     ],
   ),
   pageWatch("ui/src/e2e/cloud-workspace-conflict.e2e.test.ts", ["chat"]),
@@ -1235,7 +1235,11 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
     ["chat", "new-session"],
     ["ui/src/components/lobster-pet-plans.ts", "ui/src/components/lobster-pet.runtime.ts"],
   ),
-  pageWatch("ui/src/e2e/logs-autofollow.e2e.test.ts", ["logs"], ["ui/src/pages/logs/logs-page.ts"]),
+  pageWatch(
+    "ui/src/e2e/logs-autofollow.e2e.test.ts",
+    ["logs"],
+    ["ui/src/pages/logs/logs-page.tsx"],
+  ),
   pageWatch("ui/src/e2e/logs-layout.e2e.test.ts", ["config", "logs"]),
   pageWatch(
     "ui/src/e2e/managed-media-base-path.e2e.test.ts",

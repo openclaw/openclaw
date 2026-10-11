@@ -2689,7 +2689,6 @@ ui/src/components/desktop/desktop-mobile-keyboard.ts	1
 ui/src/components/desktop/desktop-panel.ts	2
 ui/src/components/dock-panel-layout.ts	3
 ui/src/components/exec-approval.ts	1
-ui/src/components/hub-tabs.ts	1
 ui/src/components/input-dialog.ts	1
 ui/src/components/lobster-dex.ts	2
 ui/src/components/login-gate.ts	2
@@ -2802,7 +2801,6 @@ ui/src/pages/config/view.ts	3
 ui/src/pages/custodian/custodian-surface.ts	2
 ui/src/pages/custodian/session-lifecycle.ts	1
 ui/src/pages/labs/labs-registry.ts	4
-ui/src/pages/logs/view.ts	2
 ui/src/pages/new-session/draft-place-browser.ts	2
 ui/src/pages/new-session/place-browser.ts	1
 ui/src/pages/new-session/preferences.ts	1
@@ -2813,4 +2811,3 @@ ui/src/pages/skills/view.ts	2
 ui/src/pages/usage/view-details.ts	4
 ui/src/pages/usage/view-overview.ts	2
 ui/src/pages/usage/view.ts	5
-ui/src/pages/worktrees/worktrees-page.ts	2

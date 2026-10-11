@@ -29,7 +29,6 @@ import { createSkill } from "./skills/view.test-support.ts";
 import type { UsageRefreshPolicy } from "./usage/refresh-policy.ts";
 import { cacheSnapshot } from "./usage/usage-page.test-support.ts";
 import type { UsageRouteData } from "./usage/usage-page.ts";
-import "./logs/logs-page.ts";
 import "./model-providers/model-providers-page.tsx";
 import "./skills/skills-page.ts";
 import "./usage/usage-page.ts";
@@ -755,25 +754,5 @@ describe("gateway source replacement across reconnect with a reused client", () 
     await load;
 
     expect(page.context.agents.state.agentsList).toBe(replacementAgents);
-  });
-
-  it("clears logs loaded by the previous provider", async () => {
-    const client = {} as GatewayBrowserClient;
-    const page = createPage("openclaw-logs-page", contextWithClient(client)) as TestPage & {
-      logsEntries: unknown[];
-      logsFile: string | null;
-      logsCursor: number | null;
-    };
-    document.body.append(page);
-    await page.updateComplete;
-    page.logsEntries = [{ raw: "old" }];
-    page.logsFile = "/old/provider.log";
-    page.logsCursor = 42;
-
-    await replaceContext(page, client);
-
-    expect(page.logsEntries).toEqual([]);
-    expect(page.logsFile).toBeNull();
-    expect(page.logsCursor).toBeNull();
   });
 });
