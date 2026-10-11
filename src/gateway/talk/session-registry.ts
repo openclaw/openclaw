@@ -1,6 +1,4 @@
-import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { formatErrorMessage as formatError } from "../../infra/errors.js";
-import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveGlobalMap } from "../../shared/global-singleton.js";
 import {
   prepareClientVoiceSessionClose,
@@ -77,9 +75,6 @@ function runTalkConnectionCleanup(
   if (talkConnectionCleanups.get(connId)?.get(kind) !== cleanup) {
     return;
   }
-  // A cleanup callback can reenter shutdown before returning its own promise.
-  const completion = createDeferredCore();
-  cleanup.pending = completion.promise;
   const completed = (): void | Promise<void> => {
     cleanup.pending = undefined;
     cleanup.failed = false;
@@ -104,17 +99,12 @@ function runTalkConnectionCleanup(
   try {
     const run = cleanup.run;
     const result = run();
-    if (isPromiseLike(result)) {
-      completion.resolve(Promise.resolve(result).then(completed, failed));
-      return completion.promise;
+    if (result) {
+      cleanup.pending = Promise.resolve(result).then(completed, failed);
+      return cleanup.pending;
     }
-    const next = completed();
-    completion.resolve(next);
-    return next;
+    return completed();
   } catch (error) {
-    completion.reject(error);
-    // The caller observes the synchronous throw; a reentrant drain may also join this promise.
-    void completion.promise.catch(() => {});
     return failed(error);
   }
 }

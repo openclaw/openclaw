@@ -5,6 +5,7 @@ import type {
 } from "../../packages/gateway-protocol/src/schema/session-github-publication.js";
 import type { PreparedGitHubPublicationIdentity } from "../agents/github-tool-identity.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import type { RepositoryGitHubPublicationRow } from "../state/github-publication-read.types.js";
 import {
   decodeGitHubPublicationRequester,
@@ -54,7 +55,6 @@ import {
   listRepositoryGitHubPublicationsAsync,
   readRepositoryGitHubPublicationBranchAsync,
   readRepositoryGitHubPublicationAsync,
-  markGitHubPublicationReportedAsync,
 } from "./github-publication-store-async.js";
 import { markGitHubPublicationReported } from "./github-publication-store.js";
 import { createRepositoryGitHubPublicationExecution } from "./github-repository-publication-execution.js";
@@ -608,7 +608,7 @@ export function createRepositoryGitHubPublicationCoordinator(params: {
       params.assertCurrent();
       return Boolean(row);
     },
-
+    /** @deprecated Await listUnreportedResultsAsync; removed in the next Plugin SDK major. */
     listUnreportedResults: () =>
       listRepositoryGitHubPublications({ pending: false, unreported: true }).map((row) => ({
         sessionId: row.session_id,
@@ -629,15 +629,18 @@ export function createRepositoryGitHubPublicationCoordinator(params: {
         result: projectGitHubPublicationResult(row),
       }));
     },
-
+    /** @deprecated Await markReportedAsync; removed in the next Plugin SDK major. */
     markReported: (requestId: string) => markGitHubPublicationReported("repository", requestId),
-    markReportedAsync: (requestId: string) =>
-      markGitHubPublicationReportedAsync("repository", requestId, params.assertCurrent),
   };
   return {
     ...methods,
-
+    /** @deprecated Use requestForClaimV2; removed in the next Plugin SDK major. */
     requestForClaim(input: GitHubPublicationClaimRequest) {
+      warnPluginSdkDeprecation({
+        family: "github-publication",
+        method: "requestForClaim",
+        replacement: "requestForClaimV2",
+      });
       return methods.requestForClaim(input);
     },
     requestForClaimV2(input: GitHubPublicationClaimRequestV2) {
@@ -646,8 +649,13 @@ export function createRepositoryGitHubPublicationCoordinator(params: {
       }
       return methods.requestForClaim(input);
     },
-
+    /** @deprecated Use requestForSessionV2; removed in the next Plugin SDK major. */
     requestForSession(input: SharedRequest) {
+      warnPluginSdkDeprecation({
+        family: "github-publication",
+        method: "requestForSession",
+        replacement: "requestForSessionV2",
+      });
       return methods.requestForSession(input);
     },
     requestForSessionV2(input: GitHubPublicationSessionRequestV2) {
@@ -656,15 +664,25 @@ export function createRepositoryGitHubPublicationCoordinator(params: {
       }
       return methods.requestForSession(input);
     },
-
+    /** @deprecated Use requestPersonalForSessionV2; removed in the next Plugin SDK major. */
     requestPersonalForSession(
       input: SessionGitHubPublishParams,
       action: PersonalGitHubSessionAction,
     ) {
+      warnPluginSdkDeprecation({
+        family: "github-publication",
+        method: "requestPersonalForSession",
+        replacement: "requestPersonalForSessionV2",
+      });
       return methods.requestPersonalForSession(input, action);
     },
-
+    /** @deprecated Use confirmPersonalV2; removed in the next Plugin SDK major. */
     confirmPersonal(input: SessionGitHubConfirmParams, action: PersonalGitHubSessionAction) {
+      warnPluginSdkDeprecation({
+        family: "github-publication",
+        method: "confirmPersonal",
+        replacement: "confirmPersonalV2",
+      });
       return methods.confirmPersonal(input, action);
     },
     requestPersonalForSessionV2(

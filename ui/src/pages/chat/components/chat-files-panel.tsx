@@ -30,7 +30,7 @@ type Props = {
   onClose: (id: string) => void;
 };
 type Methods = { selectHostedTab(id: string): void; closeHostedTab(id: string): Promise<void> };
-export type ChatFilesPanel = SolidBridgeElement<Props, Methods> & {
+type ChatFilesPanel = SolidBridgeElement<Props, Methods> & {
   readonly hostedTabs: PanelHostedTab[];
   readonly activeHostedTabId: string | null;
   readonly hostedActions: HTMLButtonElement;
@@ -38,7 +38,7 @@ export type ChatFilesPanel = SolidBridgeElement<Props, Methods> & {
 let filesPanelSequence = 0;
 
 /** The workspace owns tab order and selection; this view retains retiring app DOM. */
-export const ChatFilesPanel = defineSolidBridge<Props, Methods>(
+defineSolidBridge<Props, Methods>(
   "openclaw-chat-files-panel",
   (props, host) => {
     const contentId = `chat-files-content-${++filesPanelSequence}`;

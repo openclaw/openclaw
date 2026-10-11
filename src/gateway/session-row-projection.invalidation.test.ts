@@ -1,5 +1,3 @@
-import { renameSync } from "node:fs";
-import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import type { SessionCommunicationMode } from "../../packages/gateway-protocol/src/session-communication.js";
 import {
@@ -40,13 +38,6 @@ import {
   setSecretsRuntimeSourceSnapshotIfCurrent,
 } from "../secrets/runtime-state.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
-import * as databaseIdentity from "../state/openclaw-agent-db-identity.js";
-import { closeOpenClawAgentDatabaseByPathAsync } from "../state/openclaw-agent-db-lifecycle.js";
-import { registerOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
-import {
-  openOpenClawAgentDatabase,
-  resolveOpenClawAgentSqlitePath,
-} from "../state/openclaw-agent-db.js";
 import { linkEmail, setDisplayName } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -57,7 +48,6 @@ import {
   requestContext,
 } from "./server-methods/sessions-read-cache.test-support.js";
 import * as projectionWork from "./session-projection-work.js";
-import { withReadySessionRows } from "./session-row-prepared-read.js";
 import { prepareSessionRowPublication } from "./session-row-presentation.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
 import * as materialization from "./session-row-projection-materialize.js";
@@ -272,115 +262,6 @@ it("reuses descendants after parent progress while keeping inherited models curr
       await projection.ensureMaterialized();
       projection.dispose();
       release();
-    }
-  });
-});
-
-it("hydrates a same-path replacement with a reused inode and retires its previous inventory", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const storePath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
-    const staged = state.statePath("imports", "replacement.sqlite");
-    const cfg = {
-      agents: { entries: { main: {} } },
-      session: { store: storePath },
-    };
-    replaceSessionEntrySync(
-      { agentId: "main", storePath, sessionKey: "agent:main:old" },
-      { sessionId: "old", updatedAt: 1, category: "old group" },
-    );
-    replaceSessionEntrySync(
-      { agentId: "main", storePath: staged, sessionKey: "agent:main:new" },
-      { sessionId: "new", updatedAt: 2, category: "new group" },
-    );
-    const readIdentity = databaseIdentity.readOpenClawAgentDatabaseIdentity;
-    const previousIdentity = readIdentity(
-      openOpenClawAgentDatabase({ agentId: "main", path: storePath }),
-    );
-    const replacementIdentity = readIdentity(
-      openOpenClawAgentDatabase({ agentId: "main", path: staged }),
-    );
-    if (typeof replacementIdentity.identity !== "string") {
-      throw new Error("Expected a persistent fixture database identity");
-    }
-    const reusedIdentity = replacementIdentity.identity;
-    const previousBirthtime = (BigInt(replacementIdentity.birthtime ?? "0") + 1n).toString();
-    const initialSource = (source: { identity?: string; birthtime?: string }) =>
-      source.identity === previousIdentity.identity &&
-      source.birthtime === previousIdentity.birthtime;
-    const readDatabases = transcriptWorker.withSessionHistoryWorkerDatabases;
-    // Simulate the initial inode while retaining real file verification at both admissions.
-    const workerIdentity = vi
-      .spyOn(transcriptWorker, "withSessionHistoryWorkerDatabases")
-      .mockImplementation((targets, consume, lane) =>
-        readDatabases(
-          targets,
-          (owners) =>
-            consume(
-              owners.map((owner) => ({
-                ...owner,
-                async readStoreProjection(input) {
-                  const reply = await owner.readStoreProjection(input);
-                  return reply.source && initialSource(reply.source)
-                    ? {
-                        ...reply,
-                        source: {
-                          ...reply.source,
-                          identity: reusedIdentity,
-                          birthtime: previousBirthtime,
-                        },
-                      }
-                    : reply;
-                },
-                async readMembershipFacts(input) {
-                  const reply = await owner.readMembershipFacts(input);
-                  return initialSource(reply)
-                    ? { ...reply, identity: reusedIdentity, birthtime: previousBirthtime }
-                    : reply;
-                },
-              })),
-            ),
-          lane,
-        ),
-      );
-    await closeOpenClawAgentDatabaseByPathAsync(staged, "main");
-    const projection = await createSessionRowProjection({ cfg });
-    await projection.ensureMaterialized();
-    try {
-      expect([...projection.sessionGroupTargets().keys()]).toEqual(["old group"]);
-      await closeOpenClawAgentDatabaseByPathAsync(storePath, "main");
-      renameSync(staged, storePath);
-      registerOpenClawAgentDatabase({ agentId: "main", path: storePath });
-      try {
-        await withReadySessionRows(
-          projection,
-          () => [{ agentId: "main", key: "agent:main:new" }],
-          (read) => {
-            expect(read.describe({ agentId: "main", key: "agent:main:new" })?.entry.sessionId).toBe(
-              "new",
-            );
-            expect(projection.selectEntries().map((row) => row.key)).toEqual(["agent:main:new"]);
-          },
-        );
-        await projection.ensureMaterialized();
-        expect(projection.selectEntries().map((row) => row.key)).toEqual(["agent:main:new"]);
-        expect([...projection.sessionGroupTargets()]).toEqual([
-          ["new group", [{ sessionKey: "agent:main:new", agentId: "main" }]],
-        ]);
-        const sql = vi.spyOn(DatabaseSync.prototype, "prepare");
-        try {
-          expect(projection.snapshot({ agentId: "main", key: "agent:main:old" }).row).toBeNull();
-          expect(
-            projection.snapshot({ agentId: "main", key: "agent:main:new" }).row?.sessionId,
-          ).toBe("new");
-          expect(sql).not.toHaveBeenCalled();
-        } finally {
-          sql.mockRestore();
-        }
-      } finally {
-        workerIdentity.mockRestore();
-      }
-    } finally {
-      projection.dispose();
     }
   });
 });

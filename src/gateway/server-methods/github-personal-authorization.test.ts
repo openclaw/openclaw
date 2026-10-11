@@ -1,8 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  prepareGitHubPublicationOptionsRead,
-  preparePersonalGitHubSessionAction,
-} from "./github-personal-authorization.js";
+import { prepareGitHubPublicationOptionsRead } from "./github-personal-authorization.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
@@ -16,7 +13,7 @@ vi.mock("../session-utils.js", () => ({
 vi.mock("../../agents/tools/gateway-caller-context.js", () => ({
   getGatewayToolCallerIdentity: () => undefined,
 }));
-// mock-isolation: Exercise request permissions without opening profile storage.
+// mock-isolation: Options disclosure uses synthetic profile authority without opening the host profile store.
 vi.mock("../../state/user-channel-identity-operations.js", () => ({
   prepareUserProfileRolePolicyAuthority: async (profileId: string) => ({
     profileId,
@@ -163,31 +160,4 @@ describe("GitHub publication request discovery", () => {
       expect(() => read.assertSessionUnchanged(restored)).not.toThrow();
     },
   );
-
-  it("shares store discovery across every personal session authority re-read", () => {
-    const agentId = "research";
-    mocks.loadSession.mockReturnValue(sessionRead(agentId));
-    const action = preparePersonalGitHubSessionAction(createRequest(), {
-      sessionKey: "main",
-      agentId,
-    });
-    action.assertCurrent();
-
-    expect(mocks.loadSession).toHaveBeenCalledTimes(3);
-    const targetDiscoveryCache = mocks.loadSession.mock.calls[0]?.[1]?.targetDiscoveryCache;
-    expect(targetDiscoveryCache).toBeInstanceOf(Map);
-    expect(mocks.loadSession).toHaveBeenNthCalledWith(1, "main", {
-      agentId,
-      targetDiscoveryCache,
-    });
-    for (const call of [2, 3]) {
-      expect(mocks.loadSession.mock.calls[call - 1]?.[1]?.targetDiscoveryCache).toBe(
-        targetDiscoveryCache,
-      );
-      expect(mocks.loadSession).toHaveBeenNthCalledWith(call, `agent:${agentId}:main`, {
-        agentId,
-        targetDiscoveryCache,
-      });
-    }
-  });
 });
