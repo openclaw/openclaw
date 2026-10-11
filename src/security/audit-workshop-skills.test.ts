@@ -22,42 +22,45 @@ async function writeAuditSkill(root: string, unsafe: boolean, name = "shared-pro
   return await fs.realpath(dir);
 }
 
-it.each([{ label: "default discovery", limits: {}, group: "" }])(
-  "audits hidden and shadowed Workshop skills with $label ($group)",
-  async ({ limits, group }) => {
-    await withOpenClawTestState({ label: "workshop-security-audit" }, async (state) => {
-      const cfg = {
-        skills: { limits },
-        agents: {
-          entries: {
-            alpha: { workspace: state.workspaceDir, skills: [] },
-            beta: { workspace: state.workspaceDir },
-          },
+it.each([
+  { label: "default discovery", limits: {}, group: "" },
+  { label: "default discovery", limits: {}, group: "group" },
+  { label: "zero candidates", limits: { maxCandidatesPerRoot: 0 }, group: "group" },
+  { label: "zero loaded skills", limits: { maxSkillsLoadedPerSource: 0 }, group: "group" },
+  { label: "small prompt file cap", limits: { maxSkillFileBytes: 1 }, group: "group" },
+])("audits hidden and shadowed Workshop skills with $label ($group)", async ({ limits, group }) => {
+  await withOpenClawTestState({ label: "workshop-security-audit" }, async (state) => {
+    const cfg = {
+      skills: { limits },
+      agents: {
+        entries: {
+          alpha: { workspace: state.workspaceDir, skills: [] },
+          beta: { workspace: state.workspaceDir },
         },
-      };
-      await writeAuditSkill(path.join(state.workspaceDir, "skills"), false);
-      const workshopDirs = await Promise.all(
-        ["alpha", "beta"].map(async (agentId) => {
-          const root = resolveWorkshopSkillsDir(cfg, agentId);
-          await writeAuditSkill(root, false, "aaa-safe");
-          return await writeAuditSkill(path.join(root, group), true);
-        }),
-      );
+      },
+    };
+    await writeAuditSkill(path.join(state.workspaceDir, "skills"), false);
+    const workshopDirs = await Promise.all(
+      ["alpha", "beta"].map(async (agentId) => {
+        const root = resolveWorkshopSkillsDir(cfg, agentId);
+        await writeAuditSkill(root, false, "aaa-safe");
+        return await writeAuditSkill(path.join(root, group), true);
+      }),
+    );
 
-      const findings = await collectInstalledSkillsCodeSafetyFindings({
-        cfg,
-        stateDir: state.stateDir,
-      });
-      const critical = findings.filter(
-        (finding) => finding.checkId === "skills.code_safety" && finding.severity === "critical",
-      );
-      expect(critical).toHaveLength(2);
-      for (const dir of workshopDirs) {
-        expect(critical.some((finding) => finding.detail.includes(dir))).toBe(true);
-      }
+    const findings = await collectInstalledSkillsCodeSafetyFindings({
+      cfg,
+      stateDir: state.stateDir,
     });
-  },
-);
+    const critical = findings.filter(
+      (finding) => finding.checkId === "skills.code_safety" && finding.severity === "critical",
+    );
+    expect(critical).toHaveLength(2);
+    for (const dir of workshopDirs) {
+      expect(critical.some((finding) => finding.detail.includes(dir))).toBe(true);
+    }
+  });
+});
 
 it("reports an unreadable grouping directory without skipping readable siblings", async () => {
   await withOpenClawTestState({ label: "workshop-audit-group-failure" }, async (state) => {

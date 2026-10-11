@@ -187,6 +187,11 @@ describe("native host origin and topology boundary", () => {
     expect(() => parseBrowserNativeHostOrigins(argv)).toThrow();
   });
 
+  it("rejects a wrong extension origin", async () => {
+    const result = await invokeHost({ callerOrigin: OTHER_ORIGIN });
+    expect(result.response).toEqual({ v: 1, ok: false, code: "origin_forbidden" });
+  });
+
   it.skipIf(process.platform === "win32")(
     "accepts owned private hardlinked artifacts",
     async () => {

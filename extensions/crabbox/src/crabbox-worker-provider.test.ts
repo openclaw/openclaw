@@ -409,6 +409,27 @@ describe("Crabbox worker provider", () => {
     expect(warn).not.toHaveBeenCalled();
   });
 
+  it("returns an enrolled node transport without command-line credentials", async () => {
+    const calls: Array<{ argv: string[]; options: Parameters<CrabboxCommandRunner>[1] }> = [];
+    const provider = providerWithRunner(async (argv, options) => {
+      calls.push({ argv, options });
+      return commandResult({ stdout: argv[1] === "inspect" ? inspectJson() : "" });
+    });
+    await expect(
+      provider.provision(PROFILE, OPERATION_ID, { executionMode: "remote-exec" }),
+    ).resolves.toEqual({ leaseId: LEASE_ID, node: { deviceId: "device-1" }, sharedHost: false });
+    const enrollment = calls.find(({ argv }) => argv[1] === "run")!;
+    expect(enrollment).toBeDefined();
+    expect(String(enrollment.options.input)).toContain("--ephemeral");
+    expect(String(enrollment.options.input)).not.toContain("secret-setup-value");
+    expect(String(enrollment.options.input)).not.toContain("synthetic-bootstrap-token");
+    expect(enrollment.argv).toContain("CRABBOX_WORKER_BOOTSTRAP_TOKEN");
+    const argumentsUsed = calls.flatMap(({ argv }) => argv);
+    for (const forbidden of ["remote-exec", "worker-turn", "ssh", "scp", "rsync"]) {
+      expect(argumentsUsed).not.toContain(forbidden);
+    }
+  });
+
   it.each([
     {
       name: "non-PNG bytes",

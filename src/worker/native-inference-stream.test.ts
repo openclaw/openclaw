@@ -357,7 +357,7 @@ describe("worker native inference output owner", () => {
     expect(result.message).toEqual(final);
     expect(result.events.filter((event) => event.type === "toolcall_delta")).toEqual([]);
   });
-  it.each([true])(
+  it.each([false, true])(
     "sanitizes credential-bearing provider startup failure (async=%s)",
     async (asyncFailure) => {
       const guard = createNativeInferenceStreamGuard(native());
@@ -376,6 +376,27 @@ describe("worker native inference output owner", () => {
       });
     },
   );
+  it.each(["id", "name"] as const)(
+    "rejects a complete credential in tool-call %s metadata",
+    async (field) => {
+      const source = createAssistantMessageEventStream();
+      const call = {
+        type: "toolCall" as const,
+        id: "call",
+        name: "read",
+        arguments: {},
+        [field]: secret,
+      };
+      const final = message([call]);
+      source.push({ type: "toolcall_end", contentIndex: 0, toolCall: call, partial: final });
+      source.push({ type: "done", reason: "stop", message: final });
+      source.end();
+      const result = await collect(createNativeInferenceStreamGuard(native())(() => source));
+      expect(result.message.stopReason).toBe("error");
+      expect(JSON.stringify(result)).not.toContain(secret);
+    },
+  );
+
   it("holds incomplete prefixes across tool blocks before any generated tool can escape", async () => {
     const source = createAssistantMessageEventStream();
     const prefix = secret.slice(0, 12),

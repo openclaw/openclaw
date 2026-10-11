@@ -166,39 +166,49 @@ describe("wiki query page reads", () => {
     },
   );
 
-  it("rejects a page swapped outside the vault during basename reads", async () => {
-    const { config, targetPath } = await createReadVault();
-    const outside = await createReadVault();
-    const canonicalTarget = await fs.realpath(targetPath);
-    await fs.writeFile(
-      outside.targetPath,
-      (await fs.readFile(outside.targetPath, "utf8")).replace(
-        "readable line",
-        "outside-vault marker",
-      ),
-    );
-    let swapped = false;
-    const swap = async () => {
-      if (swapped) {
-        return;
-      }
-      swapped = true;
-      await fs.unlink(targetPath);
-      await fs.symlink(outside.targetPath, targetPath);
-    };
-    __setFsSafeTestHooksForTest({
-      beforeOpen: async (filePath) => {
-        if (path.resolve(filePath) === canonicalTarget) {
-          await swap();
+  it.each(["exact", "basename", "search"] as const)(
+    "rejects a page swapped outside the vault during %s reads",
+    async (route) => {
+      const { config, targetPath, relativePath } = await createReadVault();
+      const outside = await createReadVault();
+      const canonicalTarget = await fs.realpath(targetPath);
+      await fs.writeFile(
+        outside.targetPath,
+        (await fs.readFile(outside.targetPath, "utf8")).replace(
+          "readable line",
+          "outside-vault marker",
+        ),
+      );
+      let swapped = false;
+      const swap = async () => {
+        if (swapped) {
+          return;
         }
-      },
-    });
-    const read = getMemoryWikiPage({ config, lookup: "alpha" });
+        swapped = true;
+        await fs.unlink(targetPath);
+        await fs.symlink(outside.targetPath, targetPath);
+      };
+      __setFsSafeTestHooksForTest({
+        beforeOpen: async (filePath) => {
+          if (path.resolve(filePath) === canonicalTarget) {
+            await swap();
+          }
+        },
+      });
+      const readdir = vi.spyOn(fs, "readdir");
+      const read =
+        route === "search"
+          ? searchMemoryWiki({ config, query: "Alpha" })
+          : getMemoryWikiPage({ config, lookup: route === "exact" ? relativePath : "alpha" });
 
-    await expect(read).rejects.toMatchObject({
-      name: "FsSafeError",
-      code: expect.stringMatching(/symlink|path-mismatch/u),
-    });
-    expect(swapped).toBe(true);
-  });
+      await expect(read).rejects.toMatchObject({
+        name: "FsSafeError",
+        code: expect.stringMatching(/symlink|path-mismatch/u),
+      });
+      expect(swapped).toBe(true);
+      if (route === "exact") {
+        expect(readdir).not.toHaveBeenCalled();
+      }
+    },
+  );
 });

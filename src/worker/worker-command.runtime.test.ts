@@ -628,6 +628,16 @@ describe("worker command lifetime gate", () => {
     expect(managedRuntime.close).toHaveBeenCalledOnce();
   });
 
+  it("bounds an unterminated managed input line before attempting admission", async () => {
+    const harness = managedHarness();
+    const running = runWorkerCommand({ ...harness, managed: true });
+    const rejected = expect(running).rejects.toThrow("exceeds the protocol payload limit");
+    harness.input.write(Buffer.alloc(WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES + 1, 120));
+    await rejected;
+    expect(runWorkerDescriptor).not.toHaveBeenCalled();
+    expect(createWorkerRuntimeEnvironment).not.toHaveBeenCalled();
+  });
+
   it("handles a turn and its cancellation in the same input chunk", async () => {
     const harness = managedHarness();
     const running = runWorkerCommand({ ...harness, managed: true });

@@ -362,6 +362,29 @@ describe("Discord Activity HTTP OAuth", () => {
     expect(legitimate.status).toBe(200);
   });
 
+  it("limits valid token exchanges globally across rotating source IPs", async () => {
+    const base = await startServer(createProxyAwareRuntime(), {
+      fetchGuard: guardedJsonFetch(),
+      now: () => 1_000,
+    });
+    await requestTokens(
+      base,
+      60,
+      (index) => ({
+        code: "ok",
+        origin: activityOrigin,
+        forwardedFor: `198.51.100.${index + 1}`,
+      }),
+      (response) => expect(response.status).toBe(200),
+    );
+    const limited = await requestToken(base, {
+      code: "ok",
+      origin: activityOrigin,
+      forwardedFor: "192.0.2.250",
+    });
+    expect(limited.status).toBe(429);
+  });
+
   it("reserves global capacity before concurrent exchanges complete", async () => {
     let releaseExchanges = () => {};
     const exchangeGate = new Promise<void>((resolve) => {
