@@ -41,11 +41,11 @@ export function executeSessionUpstreamCommand(
         }
       };
       const admit = (stage: "transaction" | "commit") => {
-        assertSource();
         requestSqliteWorkerOperationAdmission({ stage, facts: undefined });
-        assertSource();
       };
       admit("transaction");
+      // The writer transaction owns this source through commit; host grants only check live authority.
+      assertSource();
       const result =
         command.type === "sessionUpstream.upsert"
           ? upsertSessionUpstreamLinkInDatabase(
