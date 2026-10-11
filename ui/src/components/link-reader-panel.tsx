@@ -1,4 +1,3 @@
-import { render, nothing, type TemplateResult } from "lit";
 import {
   createEffect,
   createRenderEffect,
@@ -13,6 +12,7 @@ import { LinkReaderContent } from "./link-reader-content.tsx";
 import { LinkReaderPanelOwner, type LinkReaderPanelProps } from "./link-reader-panel-owner.ts";
 import {
   linkReaderViewStyles,
+  ReaderPanelPart,
   tabTarget,
   tabLabel,
   type ReaderTab,
@@ -24,20 +24,6 @@ import { Icon } from "./solid/icon.tsx";
 import { PanelIconButton } from "./solid/panel-icon-button.tsx";
 
 const panelStyles = `@scope (openclaw-link-reader-panel) { ${linkReaderViewStyles.map((style) => style.cssText.replace(/:host\(([^)]+)\)/gu, ":scope$1").replaceAll(":host", ":scope")).join("\n")} }`;
-
-// These shared helpers still serve Lit panels; each owns only its isolated outlet.
-function PanelPart(props: { content: TemplateResult | typeof nothing }) {
-  const outlet = document.createElement("div");
-  outlet.style.display = "contents";
-  createRenderEffect(
-    () => props.content,
-    (content) => {
-      render(content, outlet);
-    },
-  );
-  onCleanup(() => render(nothing, outlet));
-  return outlet;
-}
 
 function PanelContent(props: { tab: ReaderTab; available: boolean; refresh: () => void }) {
   const target = () => tabTarget(props.tab);
@@ -178,11 +164,13 @@ function PanelView(
           }}
         >
           {!props.embedded && (
-            <PanelPart content={view().dockLayout.renderResizer("bp", t("linkReader.resize"))} />
+            <ReaderPanelPart
+              content={view().dockLayout.renderResizer("bp", t("linkReader.resize"))}
+            />
           )}
           {!(props.embedded && props.tabsInHeader) && (
             <header class="rail-header bp-header lr-tab-header">
-              <PanelPart
+              <ReaderPanelPart
                 content={renderPanelTabStrip({
                   tabs: view().hostedTabs.map((item) => ({
                     id: item.id,

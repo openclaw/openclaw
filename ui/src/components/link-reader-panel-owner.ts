@@ -1,5 +1,4 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type { ReactiveController } from "lit";
 import type {
   ControlUiLinkReaderDocument,
   ControlUiLinkReaderDetailParams,
@@ -33,6 +32,8 @@ registerLinkReaderEnglish();
 
 const HISTORY_LIMIT = 30;
 const TAB_LIMIT = 10;
+// Only the still-shared dock controller participates in this lifecycle adapter.
+type DockController = { hostConnected?(): void; hostDisconnected?(): void };
 export type LinkReaderPanelProps = {
   client: GatewayBrowserClient | null;
   available: boolean;
@@ -86,11 +87,11 @@ export class LinkReaderPanelOwner {
   get isConnected() {
     return this.host.isConnected;
   }
-  private controllers: ReactiveController[] = [];
-  addController(controller: ReactiveController) {
+  private controllers: DockController[] = [];
+  addController(controller: DockController) {
     this.controllers.push(controller);
   }
-  removeController(controller: ReactiveController) {
+  removeController(controller: DockController) {
     this.controllers = this.controllers.filter((item) => item !== controller);
   }
   requestUpdate() {

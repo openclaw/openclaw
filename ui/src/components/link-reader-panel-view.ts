@@ -1,3 +1,5 @@
+import { render, nothing, type TemplateResult } from "lit";
+import { createRenderEffect, onCleanup } from "solid-js";
 import type { ControlUiLinkReaderDocument } from "../../../src/shared/control-ui-link-reader.js";
 import { t } from "../i18n/index.ts";
 import { createDockPanelLayout } from "./dock-panel-layout.ts";
@@ -46,4 +48,18 @@ export function tabLabel(tab: ReaderTab): string {
   return target
     ? target.reader.label + " · " + new URL(target.href).pathname
     : t("linkReader.newTab");
+}
+
+// These shared helpers still serve Lit panels; each owns only its isolated outlet.
+export function ReaderPanelPart(props: { content: TemplateResult | typeof nothing }) {
+  const outlet = document.createElement("div");
+  outlet.style.display = "contents";
+  createRenderEffect(
+    () => props.content,
+    (content) => {
+      render(content, outlet);
+    },
+  );
+  onCleanup(() => render(nothing, outlet));
+  return outlet;
 }
