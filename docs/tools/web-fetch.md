@@ -202,7 +202,7 @@ Current runtime behavior:
   whose official npm or ClawHub provenance is verified. Today that permits the
   official Firecrawl plugin; third-party external fetch plugins stay excluded.
 - If Readability is disabled, `web_fetch` skips straight to the selected
-  provider fallback. If no provider is available, it fails closed.
+  provider fallback. If no provider is available, the request fails.
 
 ## Custom request headers
 
@@ -239,7 +239,7 @@ Behavior worth knowing:
   [Firecrawl](/tools/firecrawl) call their own API and never receive these headers.
 - Entries are validated when the request is built, not at config load, so one bad
   entry is dropped while the rest still apply. Config load stays permissive on
-  purpose: a fail-closed validation error over a single header-name typo would
+  purpose: rejecting the config over a single header-name typo would
   disable the whole surface. Every dropped entry is logged by name.
 - Dropped names:
   - `Accept`, `Accept-Language`, and `User-Agent` belong to the fetch and

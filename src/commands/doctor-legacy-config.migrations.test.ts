@@ -602,13 +602,13 @@ describe("normalizeCompatibilityConfigValues", () => {
       },
     });
     expect(normalized.changes).toContain(
-      "Moved agents.defaults.model legacy runtime primary refs to canonical provider refs and selected codex runtime.",
+      "Moved agents.defaults.model legacy runtime primary refs to provider references and selected codex runtime.",
     );
     expect(normalized.changes).toContain(
-      "Moved agents.defaults.models legacy runtime keys to canonical provider keys.",
+      "Moved agents.defaults.models legacy runtime keys to provider keys.",
     );
     expect(normalized.changes).toContain(
-      "Moved agents.list.reviewer.model legacy runtime primary refs to canonical provider refs and selected codex runtime.",
+      "Moved agents.list.reviewer.model legacy runtime primary refs to provider references and selected codex runtime.",
     );
   });
 
@@ -826,9 +826,9 @@ describe("normalizeCompatibilityConfigValues", () => {
       worker: { model: "openai/gpt-5.5" },
     });
     expect(res.changes).toEqual([
-      "Moved agents.entries.main.model legacy runtime primary refs to canonical provider refs and selected claude-cli runtime.",
-      "Moved agents.entries.main.models legacy runtime keys to canonical provider keys.",
-      "Moved agents.entries.main.modelPolicy.allow legacy runtime refs to canonical provider refs.",
+      "Moved agents.entries.main.model legacy runtime primary refs to provider references and selected claude-cli runtime.",
+      "Moved agents.entries.main.models legacy runtime keys to provider keys.",
+      "Moved agents.entries.main.modelPolicy.allow legacy runtime refs to provider references.",
     ]);
   });
 
