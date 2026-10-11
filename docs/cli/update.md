@@ -486,6 +486,8 @@ the installation control or its native executor lease. It first validates a
 private recovered copy and acquires current ownership before allowing SQLite to
 repair the source. Ordinary update and status reads do not perform that repair.
 Repairing preparation-only metadata never enables activation.
+On Windows, recovery creates this private copy with the current user's protected
+directory permissions; POSIX mode bits do not determine Windows access.
 
 The [immutable update design](/reference/team-immutable-update-design#three-proposed-prs)
 records the preparation, activation, and recovery contracts. Existing
