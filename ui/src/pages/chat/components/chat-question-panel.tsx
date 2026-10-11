@@ -58,16 +58,16 @@ function QuestionPanelRequest(props: { panel: QuestionPanelProps; host: ChatQues
   };
   const focusPanel = () =>
     host.querySelector<HTMLElement>(".chat-question-panel")?.focus({ preventScroll: true });
+  const focusTarget = createMemo(() => [collapsed(), currentQuestionIndex()] as const, {
+    equals: (previous, next) => previous[0] === next[0] && previous[1] === next[1],
+  });
   let initialFocus = true;
-  createEffect(
-    () => [collapsed(), currentQuestionIndex(), model().autoFocus] as const,
-    ([isCollapsed, , autoFocus]) => {
-      if (!isCollapsed && (!initialFocus || autoFocus !== false)) {
-        focusPanel();
-      }
-      initialFocus = false;
-    },
-  );
+  createEffect(focusTarget, ([isCollapsed]) => {
+    if (!isCollapsed && (!initialFocus || initialModel.autoFocus !== false)) {
+      focusPanel();
+    }
+    initialFocus = false;
+  });
   createEffect(
     () => [draft(), currentQuestionIndex(), collapsed()] as const,
     () => {

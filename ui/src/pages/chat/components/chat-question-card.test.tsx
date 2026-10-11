@@ -162,6 +162,7 @@ describe("shared question panel", () => {
       "Which extras should I include?",
     );
     expect(container.querySelector(".chat-question-panel__progress")?.textContent).toBe("2/2");
+    expect(document.activeElement).toBe(container.querySelector(".chat-question-panel"));
     container.querySelector<HTMLButtonElement>(".chat-question-panel__back")?.click();
     flush();
     expect(container.querySelector(".chat-question-panel__prompt")?.textContent).toBe(
@@ -338,6 +339,40 @@ describe("shared question panel", () => {
     container.querySelector<HTMLButtonElement>(".chat-question-panel__advance")?.click();
     expect(onSubmit).toHaveBeenCalledWith({ api_key: [fakeSecret] });
   });
+
+  it.each([
+    { field: "text answer", selector: "textarea", isSecret: false },
+    { field: "password answer", selector: 'input[type="password"]', isSecret: true },
+    { field: "destination hosts", selector: ".chat-question-panel__hosts", isSecret: true },
+  ])(
+    "preserves focus in $field across controlled draft updates",
+    async ({ selector, isSecret }) => {
+      drawGateway(
+        gatewayPrompt({
+          questions: [
+            freeTextQuestion({
+              isSecret,
+              secretStore: isSecret
+                ? { name: "FAKE_API_KEY", kind: "secret", allowedHosts: [] }
+                : undefined,
+            }),
+          ],
+        }),
+      );
+      await panelIn(container);
+      const input = container.querySelector<HTMLInputElement | HTMLTextAreaElement>(selector)!;
+      input.focus();
+
+      for (const value of ["a", "ab"]) {
+        input.value = value;
+        input.dispatchEvent(new InputEvent("input", { bubbles: true }));
+        flush();
+
+        expect(document.activeElement).toBe(input);
+        expect(input.value).toBe(value);
+      }
+    },
+  );
 
   it("labels optionless answers when the compact header is empty", async () => {
     drawGateway(
@@ -520,6 +555,19 @@ describe("shared question panel", () => {
     container.querySelector<HTMLButtonElement>(".chat-question-panel__collapsed-button")?.click();
     flush();
     expect(container.querySelector(".chat-question-panel--collapsed")).toBeNull();
+  });
+
+  it("honors initial autofocus opt-out and focuses the panel when expanded", async () => {
+    const props = createGatewayQuestionPanelProps(gatewayPrompt(), {});
+    drawPanel({ ...props, model: { ...props.model, autoFocus: false } });
+    await panelIn(container);
+    expect(document.activeElement).toBe(document.body);
+
+    container.querySelector<HTMLButtonElement>(".chat-question-panel__collapse")!.click();
+    flush();
+    container.querySelector<HTMLButtonElement>(".chat-question-panel__collapsed-button")!.click();
+    flush();
+    expect(document.activeElement).toBe(container.querySelector(".chat-question-panel"));
   });
 
   it("keeps a typed answer distinct from an identical option across remounts", async () => {

@@ -21,7 +21,9 @@ export const ChatDetails = defineSolidBridge<Props>(
     let panel!: HTMLDivElement;
     let trigger!: HTMLButtonElement;
     const position = () => {
-      const frame = host.closest(".chat-main__conversation-frame");
+      const frame =
+        host.closest(".chat-main__conversation-frame") ??
+        host.closest("openclaw-chat-pane")?.querySelector(".chat-main__conversation-frame");
       const footer = frame?.querySelector(".chat-footer");
       const bounds = frame?.getBoundingClientRect();
       if (!panel || !bounds) {
@@ -40,7 +42,11 @@ export const ChatDetails = defineSolidBridge<Props>(
           bounds.bottom,
           (viewport?.offsetTop ?? 0) + (viewport?.height ?? window.innerHeight),
         ) - 8;
-      const triggerBottom = trigger?.getBoundingClientRect().bottom ?? minimumTop + 28;
+      const triggerBounds = trigger?.getBoundingClientRect();
+      // Retain the gutter clearance when the trigger sits above the conversation.
+      const triggerBottom = triggerBounds
+        ? Math.max(triggerBounds.bottom, minimumTop + triggerBounds.height)
+        : minimumTop + 28;
       const top = Math.max(minimumTop, Math.min(triggerBottom + 6, bottom - 120));
       panel.style.left = `${Math.max(left, right - 352)}px`;
       panel.style.top = `${top}px`;
@@ -108,7 +114,9 @@ export const ChatDetails = defineSolidBridge<Props>(
       () => close(),
     );
     onSettled(() => {
-      const frame = host.closest(".chat-main__conversation-frame");
+      const frame =
+        host.closest(".chat-main__conversation-frame") ??
+        host.closest("openclaw-chat-pane")?.querySelector(".chat-main__conversation-frame");
       const resize =
         typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(position);
       for (const element of [frame, frame?.querySelector(".chat-footer")]) {

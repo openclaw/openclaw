@@ -22,14 +22,14 @@ export async function initializeNodeWorkerGitWorkspace(params: {
     throw new Error("workspace transfer Git base object id is invalid");
   }
   const gitPrefix = process.platform === "win32" ? ["-c", "core.longpaths=true"] : [];
-  const git = async (args: string[], options: { input?: string; maxOutputBytes?: number } = {}) =>
-    await runWorkspaceCommand({
+  const git = (args: string[], options: { input?: string; maxOutputBytes?: number } = {}) =>
+    runWorkspaceCommand({
       workspaceDir: params.workspaceDir,
       homeDir: params.manifestHome,
       argv: ["git", ...gitPrefix, "-C", params.workspaceDir, ...args],
-      ...(options.input === undefined ? {} : { input: options.input }),
+      input: options.input,
       signal: params.signal,
-      ...(options.maxOutputBytes === undefined ? {} : { maxOutputBytes: options.maxOutputBytes }),
+      maxOutputBytes: options.maxOutputBytes,
     });
   await git(["init", "--quiet", `--object-format=${objectFormat}`, "."]);
   if (process.platform === "win32") {

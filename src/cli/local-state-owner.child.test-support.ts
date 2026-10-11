@@ -14,7 +14,87 @@ fs.mkdirSync(control, { recursive: true });
 registerSealedRuntime({ json5, resolveSecureTempRoot: () => control });
 installCliSignalExitHandlers();
 try {
-  if (process.argv[2] === "settlement") {
+  if (process.argv[2] === "migrate-uncertain") {
+    const [
+      { runMigrationApply },
+      { hasCommandProcessCleanupError },
+      { retainCommandProcessCleanup },
+      { resolveGatewayLockPaths, readLockPayloadSync },
+    ] = await Promise.all([
+      import("../commands/migrate/apply.js"),
+      import("../process/exec-result.js"),
+      import("../process/exec-spawn.js"),
+      import("../infra/gateway-lock.js"),
+    ]);
+    const plan = {
+      providerId: "fixture",
+      source: "synthetic-source",
+      summary: {
+        total: 0,
+        planned: 0,
+        migrated: 0,
+        skipped: 0,
+        conflicts: 0,
+        errors: 0,
+        sensitive: 0,
+      },
+      items: [],
+    };
+    let applyCompleted = false;
+    let failure: unknown;
+    try {
+      await runMigrationApply({
+        runtime: {
+          log() {},
+          error() {},
+          exit(code) {
+            throw new Error(`unexpected exit ${code}`);
+          },
+        },
+        opts: { json: true, noBackup: true, configOverride: {} },
+        providerId: "fixture",
+        provider: {
+          id: "fixture",
+          label: "Fixture",
+          plan: async () => plan,
+          apply: async () => {
+            retainCommandProcessCleanup(Promise.resolve("uncertain"));
+            return plan;
+          },
+        },
+        onApplyCompleted: () => {
+          applyCompleted = true;
+        },
+      });
+    } catch (error) {
+      failure = error;
+    }
+    let laterMutationRan = false;
+    let laterRefused = false;
+    try {
+      await runWithLocalStateOwner({
+        method: "migrate.apply",
+        params: {},
+        target: "later mutation",
+        onForeignOwner: "refuse",
+        runLocal: async () => {
+          laterMutationRan = true;
+        },
+      });
+    } catch {
+      laterRefused = true;
+    }
+    const owner = readLockPayloadSync(resolveGatewayLockPaths(process.env).ownerLockPath);
+    process.stdout.write(
+      `${JSON.stringify({
+        applyCompleted,
+        uncertain: hasCommandProcessCleanupError(failure),
+        ownsState: owner?.pid === process.pid,
+        laterMutationRan,
+        laterRefused,
+      })}\n`,
+    );
+  } else if (process.argv[2] === "settlement") {
     const [
       { ManagedWorktreeService },
       { getOpenClawDatabaseMaintenanceScope },
