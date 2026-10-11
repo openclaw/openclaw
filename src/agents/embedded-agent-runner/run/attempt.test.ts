@@ -945,7 +945,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
     expect(repairedToolResult.content).toEqual([
       {
         type: "text",
-        text: "Tool call interrupted before a result was recorded; its outcome is unknown. Retry only if the operation is read-only or idempotent. If it may have had side effects, verify the current state first instead of repeating it.",
+        text: "Tool call interrupted before a result was recorded; its outcome is unknown. Retry only if the operation is read-only or safe to repeat. If it may have had side effects, verify the current state first instead of repeating it.",
       },
     ]);
     expect(repairedToolResult.isError).toBe(true);

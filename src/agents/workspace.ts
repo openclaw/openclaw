@@ -141,7 +141,7 @@ function loadTemplate(name: string): Promise<string> {
         }
       }
       throw new Error(
-        `Missing workspace template: ${name} (${triedPaths.join(", ")}). Ensure workspace templates are packaged.`,
+        `Missing workspace template: ${name} (${triedPaths.join(", ")}). Check that workspace templates are packaged.`,
       );
     },
     { cacheRejections: false },
