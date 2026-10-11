@@ -12,6 +12,7 @@ import {
   resolvePackageActivationHelper,
   resolvePackageActivationJournalPath,
 } from "./package-update-activation-journal.js";
+import { selectPackageActivationNativeRoots } from "./package-update-activation-native-loader.js";
 import { assertPackageActivationRecoveryRuntime } from "./package-update-activation-sqlite.js";
 import {
   readPackageActivationStatus,
@@ -58,6 +59,12 @@ try {
       "Invoked helper is not the recorded package recovery object. Preserve the journal and use the original helper for unfinished recovery.",
     );
   }
+  // Publication moves the live package to "previous" before the candidate replaces it.
+  selectPackageActivationNativeRoots([
+    record.descriptor.authority.installKey,
+    path.join(anchor, "previous"),
+    path.join(anchor, "candidate"),
+  ]);
   if (action === "repair" && !complete) {
     console.error(
       "Repair may republish the recorded candidate into a missing installation. Keep other package managers stopped. This does not restart or verify the Gateway.",

@@ -31,7 +31,7 @@ import {
   type NodeWorkerChildAdapter,
 } from "./node-worker-launch-transport.js";
 import {
-  assertNodeWorkerNativeInferenceAvailable,
+  resolveNodeWorkerNativeInferenceWorkspace,
   type NodeWorkerNativeInferenceSnapshot,
 } from "./node-worker-native-inference.js";
 import {
@@ -361,7 +361,9 @@ export class NodeWorkerChildLifecycle {
     signal: AbortSignal,
     idleGeneration?: number,
   ): Promise<NodeWorkerLaunchReceipt> {
-    assertNodeWorkerNativeInferenceAvailable(this.options.nativeInferenceSnapshot, descriptor);
+    if (descriptor.assignment.inference === "runtime-local") {
+      resolveNodeWorkerNativeInferenceWorkspace(this.options.nativeInferenceSnapshot, descriptor);
+    }
     const isCurrent = () => this.owners.get(active.launchId) === active && !this.options.isClosed();
     const assertCurrent = () => {
       signal.throwIfAborted();

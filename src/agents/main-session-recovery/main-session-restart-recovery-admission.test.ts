@@ -495,7 +495,7 @@ describe("startup recovery admission", () => {
           const lines = info.mock.calls.map(([line]) => line);
           expect(lines).toContainEqual(
             expect.stringMatching(
-              /startup complete: started=2 .*skipReasons=.*not_main_session:1.*work_start_blocked:1/,
+              /startup complete: started=2 .*skipReasons=.*archived:1.*not_main_session:1/,
             ),
           );
           const decisions = lines
@@ -516,8 +516,9 @@ describe("startup recovery admission", () => {
               }),
               expect.objectContaining({
                 sessionKey: "agent:main:archived",
-                decision: "blocked",
-                nextOwner: "operator",
+                reason: "archived",
+                decision: "deferred",
+                nextOwner: "none",
               }),
             ]),
           );
