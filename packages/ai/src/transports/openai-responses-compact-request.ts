@@ -16,9 +16,15 @@ export type OpenAIResponsesCompactEndpointResult = {
   replayMetadata: OpenAIResponsesReasoningReplayMetadata;
 };
 
+export type OpenAIResponsesV2ReplayBudget = {
+  maxTokens: number;
+  estimateTokens(output: OpenAIResponsesCompactionOutput, outputTokens: number): number;
+};
+
 type ResponsesCompactRequestController = {
   claimed: boolean;
   mode: "endpoint" | "v2";
+  replayBudget?: OpenAIResponsesV2ReplayBudget;
   onClaimed(): void;
   resolve(result: OpenAIResponsesCompactEndpointResult): void;
   reject(error: unknown): void;
@@ -53,6 +59,7 @@ export async function requestPreparedOpenAIResponsesCompaction(
   context: Context,
   options: OpenAIResponsesOptions,
   mode: "endpoint" | "v2" = "endpoint",
+  replayBudget?: OpenAIResponsesV2ReplayBudget,
 ): Promise<OpenAIResponsesCompactEndpointResult> {
   const preparedOptions = { ...options };
   let resolveResult!: (result: OpenAIResponsesCompactEndpointResult) => void;
@@ -68,6 +75,7 @@ export async function requestPreparedOpenAIResponsesCompaction(
   const controller = {
     claimed: false,
     mode,
+    replayBudget,
     onClaimed: markClaimed,
     resolve: resolveResult,
     reject: rejectResult,

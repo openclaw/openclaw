@@ -6,7 +6,10 @@ import {
 } from "@openclaw/normalization-core/cjk-chars";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ResponseInput } from "openai/resources/responses/responses.js";
-import type { OpenAIResponsesCompactEndpointResult } from "./openai-responses-compact-request.js";
+import type {
+  OpenAIResponsesCompactEndpointResult,
+  OpenAIResponsesV2ReplayBudget,
+} from "./openai-responses-compact-request.js";
 import { buildOpenAIResponsesReasoningReplayMetadata } from "./openai-responses-compaction-replay.js";
 import { isOpenAIResponsesCompactionOutput } from "./openai-responses-compaction-window.js";
 import {
@@ -19,10 +22,23 @@ import { sanitizeResponsesImagePayload } from "./responses-image-payload-sanitiz
 import { sha256Hex } from "./transport-utils.js";
 
 /** Request-local collection; no partial checkpoint may survive a provider retry. */
-export function createResponsesV2CompactionCollector() {
+export function createResponsesV2CompactionCollector(replayBudget?: OpenAIResponsesV2ReplayBudget) {
   let count = 0;
   let item: OpenAIResponsesCompactEndpointResult["item"] | undefined;
   return {
+    assertReplayFits(input: ResponseInput, model: Model) {
+      if (!replayBudget) {
+        return;
+      }
+      const minimumCheckpoint = { type: "compaction" as const, encrypted_content: "opaque" };
+      const output = [...retainV2Users(input), minimumCheckpoint];
+      if (!isOpenAIResponsesCompactionOutput(output, model)) {
+        throw new Error("Responses V2 compaction produced an incompatible replay window");
+      }
+      if (replayBudget.estimateTokens(output, 1) > replayBudget.maxTokens) {
+        throw new Error("ChatGPT V2 retained window exceeds the next request budget");
+      }
+    },
     sanitizeImages(request: OpenAIResponsesRequestParams) {
       const sanitized = sanitizeResponsesImagePayload(request);
       // Image normalization preserves order but copies only JSON fields.

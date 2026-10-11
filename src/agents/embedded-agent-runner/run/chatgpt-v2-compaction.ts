@@ -186,6 +186,41 @@ export function createChatGPTV2CompactionBoundary(params: {
                 context,
                 { ...requestOptions, signal: timeoutSignal },
                 "v2",
+                {
+                  maxTokens: outgoing.promptBudgetBeforeReserve,
+                  estimateTokens: (output, outputTokens) => {
+                    const checkpoint: AssistantMessage = {
+                      role: "assistant",
+                      content: [],
+                      api: model.api,
+                      provider: model.provider,
+                      model: model.id,
+                      stopReason: "stop",
+                      usage: makeZeroUsageSnapshot(),
+                      timestamp: 0,
+                    };
+                    const item = output.at(-1);
+                    if (!item || item.type !== "compaction") {
+                      throw new Error("ChatGPT V2 replay window is missing its checkpoint");
+                    }
+                    captureOpenAIResponsesCompaction(
+                      checkpoint,
+                      item,
+                      "retained-users",
+                      model,
+                      undefined,
+                      output,
+                      outputTokens,
+                    );
+                    return estimateLlmBoundaryTokenPressure({
+                      messages: [checkpoint],
+                      systemPrompt: context.systemPrompt,
+                      prompt: "",
+                      toolSchemaTokens: estimateToolSchemaTokenPressure(context.tools),
+                      replay: { model },
+                    });
+                  },
+                },
               ),
             params.timeoutMs,
             {

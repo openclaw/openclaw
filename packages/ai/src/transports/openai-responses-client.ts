@@ -174,7 +174,9 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
     const responsesOptions = options as OpenAIResponsesOptions | undefined;
     const compactRequest = claimResponsesCompactRequest(responsesOptions);
     const v2Compaction =
-      compactRequest?.mode === "v2" ? createResponsesV2CompactionCollector() : undefined;
+      compactRequest?.mode === "v2"
+        ? createResponsesV2CompactionCollector(compactRequest.replayBudget)
+        : undefined;
     const { eventStream, stream } = createWritableTransportEventStream();
     void (async () => {
       const output = createOpenAIResponsesAssistantOutput(model, config.outputApi);
@@ -290,6 +292,7 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
           if (v2Compaction) {
             // V2 is the next normal request, with one protocol control item.
             params.input = [...(params.input ?? []), { type: "compaction_trigger" }];
+            v2Compaction.assertReplayFits(params.input, model);
           }
           return params;
         };

@@ -1,9 +1,11 @@
+import { zstdDecompressSync } from "node:zlib";
 import { createApiRegistry } from "@openclaw/ai";
 import { createOpenAIResponsesTransportStreamFn } from "@openclaw/ai/transports";
 import type { Model, StreamFn } from "@openclaw/llm-core";
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { configureAiTransportHost, getAiTransportHost } from "../../../../packages/ai/src/host.js";
+import { streamSimpleOpenAICodexResponses } from "../../../../packages/ai/src/providers/openai-chatgpt-responses.js";
 import type { OpenAIResponsesOptions } from "../../../../packages/ai/src/transports/openai-responses-contracts.js";
 import { ensureCustomApiRegistered } from "../../custom-api-registry.js";
 import {
@@ -108,27 +110,36 @@ beforeEach(() => {
   let compactions = 0;
   respond = (body) =>
     body.input.at(-1)?.type === "compaction_trigger" ? compactEvents(++compactions) : textEvents();
-  configureAiTransportHost({
-    buildModelFetch: () => async (_input, init) => {
-      const body = (await new Response(init?.body).json()) as Body;
-      requests.push(body);
-      return new Response(
-        respond(body)
-          .map((event) => "data: " + JSON.stringify(event) + "\n\n")
-          .join(""),
-        {
-          headers: { "content-type": "text/event-stream" },
-        },
-      );
-    },
-  });
+  const captureFetch: typeof fetch = async (_input, init) => {
+    const raw = Buffer.from(await new Response(init?.body).arrayBuffer());
+    const body = JSON.parse(
+      (new Headers(init?.headers).get("content-encoding") === "zstd"
+        ? zstdDecompressSync(raw)
+        : raw
+      ).toString(),
+    ) as Body;
+    requests.push(body);
+    return new Response(
+      respond(body)
+        .map((event) => "data: " + JSON.stringify(event) + "\n\n")
+        .join(""),
+      {
+        headers: { "content-type": "text/event-stream" },
+      },
+    );
+  };
+  configureAiTransportHost({ buildModelFetch: () => captureFetch });
+  vi.stubGlobal("fetch", captureFetch);
 });
-afterEach(() => configureAiTransportHost(initialHost));
+afterEach(() => {
+  configureAiTransportHost(initialHost);
+  vi.unstubAllGlobals();
+});
 
 async function fixture(
   sessionManager = SessionManager.inMemory(),
   withHistory = true,
-  { asyncProvider = false } = {},
+  { asyncProvider = false, nativeProvider = false } = {},
 ) {
   if (withHistory) {
     sessionManager.appendMessage({ role: "user", content: "remember copper", timestamp: 1 });
@@ -173,7 +184,21 @@ async function fixture(
       authProfileId: "fixture-profile",
       onPayload: (payload: unknown) => ({ ...(payload as object), hook_marker: "normal-hook" }),
     } satisfies OpenAIResponsesOptions;
-    return transport(activeModel, context, transportOptions);
+    return nativeProvider
+      ? streamSimpleOpenAICodexResponses(
+          { ...activeModel, api: "openai-chatgpt-responses" },
+          context,
+          {
+            ...transportOptions,
+            apiKey: `eyJhbGciOiJub25lIn0.${Buffer.from(
+              JSON.stringify({
+                "https://api.openai.com/auth": { chatgpt_account_id: "test-account" },
+              }),
+            ).toString("base64url")}.signature`,
+            transport: "sse",
+          },
+        )
+      : transport(activeModel, context, transportOptions);
   };
   if (asyncProvider) {
     // Plugin providers resolve credentials before dispatch; the registry adapter
@@ -343,6 +368,72 @@ describe("ChatGPT V2 at the embedded normal request boundary", () => {
       "compaction",
     ]);
   });
+
+  it.each([
+    { userTokens: 40_000, fits: false, nativeProvider: false },
+    { userTokens: 20_000, fits: true, nativeProvider: false },
+    { userTokens: 40_000, fits: false, nativeProvider: true },
+    { userTokens: 20_000, fits: true, nativeProvider: true },
+  ])(
+    "preflights retained users before paid V2 work ($userTokens tokens, native=$nativeProvider)",
+    async ({ userTokens, fits, nativeProvider }) => {
+      const manager = SessionManager.inMemory();
+      manager.appendMessage({ role: "user", content: "中".repeat(userTokens), timestamp: 1 });
+      manager.appendMessage(
+        createAssistant(model, [{ type: "text", text: "old detail" }], "stop", 60_000),
+      );
+      const f = await fixture(manager, false, { nativeProvider });
+      const warn = vi.spyOn(log, "warn");
+      const boundary = createChatGPTV2CompactionBoundary({
+        ...f.boundaryParams,
+        contextTokenBudget: 32_000,
+      });
+      const result = boundary(
+        f.session.agent.streamFn,
+        { ...model, contextWindow: 200_000 },
+        {
+          systemPrompt: "stable system",
+          messages: manager
+            .buildSessionContext()
+            .messages.filter(
+              (message) =>
+                message.role === "user" ||
+                message.role === "assistant" ||
+                message.role === "toolResult",
+            ),
+        },
+        { sessionId: f.session.sessionId },
+      );
+      if (fits) {
+        await expect(result).resolves.toMatchObject({
+          providerReplay: { compactedWindow: { outputTokens: 5 } },
+        });
+        expect(requests).toHaveLength(1);
+        expect(requests[0]?.input.at(-1)?.type).toBe("compaction_trigger");
+        expect(f.onFallback).not.toHaveBeenCalled();
+        expect(
+          manager
+            .buildSessionContext()
+            .messages.filter((message) => message.role === "assistant" && message.providerReplay),
+        ).toHaveLength(1);
+      } else {
+        await expect(result).rejects.toBeInstanceOf(MidTurnPrecheckSignal);
+        expect(
+          manager
+            .buildSessionContext()
+            .messages.some((message) => message.role === "assistant" && message.providerReplay),
+        ).toBe(false);
+        expect(requests).toHaveLength(0);
+        expect(f.onFallback).toHaveBeenCalledOnce();
+        expect(f.onFallback).toHaveBeenCalledWith(
+          expect.objectContaining({ route: "compact_only" }),
+        );
+        expect(warn).toHaveBeenCalledWith(
+          expect.stringContaining("ChatGPT V2 retained window exceeds the next request budget"),
+        );
+      }
+    },
+  );
 
   it("falls back before transport dispatch when the outgoing input exceeds the hard model budget", async () => {
     const f = await fixture();

@@ -364,7 +364,9 @@ fallback even with explicit `agentRuntime.id: "codex"`; see
     </Tabs>
 
     <Note>
-    `responsesServerCompaction` only controls `context_management` injection.
+    On the public OpenAI Responses route, `responsesServerCompaction` only
+    controls `context_management` injection; on the native ChatGPT sign-in route,
+    setting it to `false` also disables V2 compaction as described above.
     The public OpenAI Responses API also uses `/responses/compact` by default
     for budget-triggered compaction and for `/compact` without focus
     instructions. Set `params.responsesCompactEndpoint: false` to disable this

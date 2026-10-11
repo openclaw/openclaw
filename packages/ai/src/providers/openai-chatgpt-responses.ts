@@ -229,7 +229,9 @@ export const streamOpenAICodexResponses: StreamFunction<
   const stream = new AssistantMessageEventStream();
   const compactRequest = claimResponsesCompactRequest(options);
   const v2Compaction =
-    compactRequest?.mode === "v2" ? createResponsesV2CompactionCollector() : undefined;
+    compactRequest?.mode === "v2"
+      ? createResponsesV2CompactionCollector(compactRequest.replayBudget)
+      : undefined;
 
   void (async () => {
     const startedAt = Date.now();
@@ -268,6 +270,7 @@ export const streamOpenAICodexResponses: StreamFunction<
         }
         if (restoreUsers) {
           body.input = [...restoreUsers(body.input ?? []), { type: "compaction_trigger" }];
+          v2Compaction?.assertReplayFits(body.input, model);
         }
         return body;
       };
