@@ -20,7 +20,7 @@ it("keeps modified sidebar links native and handles ordinary navigation", () => 
     }),
   );
   flush();
-  const link = view.getByRole("link", { name: "Sessions icon Sessions" });
+  const link = view.getByRole("link", { name: "Sessions" });
   expect(link.getAttribute("aria-current")).toBe("page");
 
   const modified = new MouseEvent("click", { bubbles: true, cancelable: true, ctrlKey: true });
@@ -89,7 +89,7 @@ it("keeps the focused pin choice mounted while live availability and selection u
   item.focus();
 
   setEnabled(["usage", "sessions"]);
-  setEntries(["usage"]);
+  setEntries(["route:usage"]);
   flush();
 
   expect(view.container.querySelector('wa-dropdown-item[value="usage"]')).toBe(item);

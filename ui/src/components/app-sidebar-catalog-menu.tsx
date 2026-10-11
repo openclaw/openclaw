@@ -2,8 +2,8 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 // Owns catalog-row menu state, actions, focus anchor, and rendering for AppSidebar.
 import { Show } from "solid-js";
 import { pathForRoute } from "../app-route-paths.ts";
-import { t } from "../i18n/index.ts";
 import { formatUiError } from "../lib/format-error.ts";
+import { t } from "../lib/reactive/i18n.ts";
 import { readSessionMethodScopeAccess } from "../lib/session-method-access.ts";
 import { parseCatalogSessionKey, type CatalogSessionKey } from "../lib/sessions/catalog-key.ts";
 import { openCatalogSessionInTerminal } from "../lib/sessions/catalog-terminal.ts";

@@ -1,6 +1,6 @@
 import type { JSX } from "@solidjs/web";
-import { t } from "../../i18n/index.ts";
 import { redactLoginFailureError } from "../../lib/connection-hints.ts";
+import { t } from "../../lib/reactive/i18n.ts";
 import { canRetryGatewayStatus, type GatewayStatusProps } from "../gateway-status.ts";
 import { Icon } from "./icon.tsx";
 import "../tooltip.ts";

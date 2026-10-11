@@ -32,7 +32,7 @@ import { rowDemandsVisibility } from "./app-sidebar-session-types.ts";
 import type { SessionDataController } from "./session-data-controller.ts";
 import type { SessionOrganizerController } from "./session-organizer-controller.ts";
 import type { SessionOwnerOption } from "./session-owner-chip.ts";
-import type { SidebarMenusController } from "./sidebar-menus-controller.ts";
+import type { SidebarMenusController } from "./sidebar-menus-controller.tsx";
 import { Icon } from "./solid/icon.tsx";
 import { renderSidebarSessionSubtitle } from "./solid/session-presentation.tsx";
 import "./elapsed-time.ts";

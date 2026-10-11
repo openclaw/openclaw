@@ -257,7 +257,7 @@ function SidebarAgentRosterContent(
                       {main()
                         ? renderSidebarSessionIndicators(
                             roster.host(),
-                            main()!,
+                            () => main()!,
                             undefined,
                             undefined,
                             headerSummary(),

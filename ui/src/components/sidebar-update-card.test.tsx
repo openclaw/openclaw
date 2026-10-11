@@ -192,36 +192,58 @@ describe("SidebarUpdateCard", () => {
     expect(onReviewUpdate).toHaveBeenCalledOnce();
   });
 
-  it("shows live run progress and stops surfacing an acknowledged or old result", async () => {
-    const element = await mount(null);
-    element.setProps({ updateRun: createUpdateRunFixture() });
-    await settle();
-    expect(element.element.textContent).toContain("OpenClaw update in progress: staging");
-    expect(element.element.textContent).toContain("phases complete");
-    expect(
-      element.element.querySelector<HTMLButtonElement>(".sidebar-update-card__action")?.disabled,
-    ).toBe(false);
+  it.each([false, true])(
+    "keeps live run controls focused until acknowledgement (compact: %s)",
+    async (compact) => {
+      const element = await mount(null);
+      element.setProps({ compact, updateRun: createUpdateRunFixture() });
+      await settle();
+      expect(element.element.textContent).toContain("OpenClaw update in progress: staging");
+      expect(element.element.textContent).toContain("phases complete");
+      const action = element.element.querySelector<HTMLButtonElement>(
+        ".sidebar-update-card__action",
+      )!;
+      const details = element.element.querySelector("details");
+      if (details) {
+        details.open = true;
+      }
+      expect(action.disabled).toBe(false);
+      action.focus();
+      expect(document.activeElement).toBe(action);
 
-    element.setProps({
-      updateRun: createUpdateRunFixture({
-        status: "succeeded",
-        phase: "finished",
-        finishedAtMs: Date.now(),
-        after: { version: "2026.9.2" },
-      }),
-    });
-    await settle();
-    expect(element.element.textContent).toContain("OpenClaw updated to 2026.9.2");
-    element.setProps({ updateRunAcknowledged: true });
-    await settle();
-    expect(element.element.querySelector(".sidebar-update-card")).toBeNull();
-    element.setProps({ updateRunAcknowledged: false });
-    element.setProps({
-      updateRun: { ...element.props().updateRun, finishedAtMs: Date.now() - 24 * 60 * 60 * 1000 },
-    });
-    await settle();
-    expect(element.element.querySelector(".sidebar-update-card")).toBeNull();
-  });
+      element.setProps({
+        updateRun: createUpdateRunFixture({ phase: "verifying", updatedAtMs: 3 }),
+      });
+      await settle();
+      expect(element.element.textContent).toContain("OpenClaw update in progress: verifying");
+      expect(element.element.querySelector(".sidebar-update-card__action")).toBe(action);
+      expect(document.activeElement).toBe(action);
+      if (details) {
+        expect(element.element.querySelector("details")).toBe(details);
+        expect(details.open).toBe(true);
+      }
+
+      element.setProps({
+        updateRun: createUpdateRunFixture({
+          status: "succeeded",
+          phase: "finished",
+          finishedAtMs: Date.now(),
+          after: { version: "2026.9.2" },
+        }),
+      });
+      await settle();
+      expect(element.element.textContent).toContain("OpenClaw updated to 2026.9.2");
+      element.setProps({ updateRunAcknowledged: true });
+      await settle();
+      expect(element.element.querySelector(".sidebar-update-card")).toBeNull();
+      element.setProps({ updateRunAcknowledged: false });
+      element.setProps({
+        updateRun: { ...element.props().updateRun, finishedAtMs: Date.now() - 24 * 60 * 60 * 1000 },
+      });
+      await settle();
+      expect(element.element.querySelector(".sidebar-update-card")).toBeNull();
+    },
+  );
 
   it("renders an available update and narrates it after the Gateway drops its metadata", async () => {
     const element = await mount(

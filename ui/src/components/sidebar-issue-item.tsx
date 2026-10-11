@@ -473,7 +473,7 @@ export function renderSidebarIssueItem(
   return <SidebarIssueItem item={item} handlers={handlers} />;
 }
 
-function renderSidebarApprovalRow(props: SidebarApprovalRowProps) {
+export function renderSidebarApprovalRow(props: SidebarApprovalRowProps) {
   const expired = () => props.approval.expiresAtMs <= Date.now();
   const command = createMemo(() => compactApprovalCommand(props.approval.request.command));
   const sessionTitle = createMemo(() => {

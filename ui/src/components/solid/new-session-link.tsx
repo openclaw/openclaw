@@ -50,7 +50,7 @@ export function renderNewSessionLink(params: {
             event.preventDefault();
             return;
           }
-          if (shouldHandleNavigationClick(event)) {
+          if (params.onOpen && shouldHandleNavigationClick(event)) {
             event.preventDefault();
             params.onOpen?.(params.agentId, params.target);
           }

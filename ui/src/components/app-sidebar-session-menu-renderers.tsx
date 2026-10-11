@@ -313,7 +313,7 @@ export function renderSidebarSessionSortMenuForController(
     id: string,
     label: () => string,
     value: () => T,
-    options: ReadonlyArray<{ value: T; label: () => string }>,
+    options: () => ReadonlyArray<{ value: T; label: string }>,
     onChange: (value: T) => void,
   ) => (
     <div id={id} class="sidebar-session-menu-row">

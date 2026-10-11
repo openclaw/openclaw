@@ -37,7 +37,7 @@ import {
   renderSessionLeadingState,
   renderSessionRowBadges,
 } from "./solid/session-presentation.tsx";
-import { renderThemeBrandIcon } from "./solid/theme-brand-icon.tsx";
+import "./theme-brand-icon.ts";
 
 export type AppSidebarRenderHost = AppSidebarSessionNavigationElement & {
   teamOnlineExpanded: boolean;
@@ -164,7 +164,13 @@ function renderSidebarWorkspaceHeader(host: AppSidebarRenderHost): JSX.Element {
             class="sidebar-workspace-header__mark sidebar-workspace-header__mark--neutral"
             aria-hidden="true"
           >
-            {renderThemeBrandIcon(<Icon name="lobster" />, branding())}
+            {branding().brandIcon === "claw" ? (
+              <Icon name="lobster" />
+            ) : branding().brandIcon === "mark" ? (
+              <Icon name="mark" />
+            ) : (
+              <openclaw-theme-brand-icon prop:branding={branding()} aria-hidden="true" />
+            )}
           </span>
         ) : (
           <span class="sidebar-workspace-header__mark" aria-hidden="true">
