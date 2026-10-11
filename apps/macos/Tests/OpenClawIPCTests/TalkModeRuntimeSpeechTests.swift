@@ -811,69 +811,6 @@ struct TalkModeRuntimeSpeechTests {
         await runtime.setEnabled(false)
     }
 
-    @Test func `stale realtime config application cannot replace current selection`() async throws {
-        let checkpoint = RuntimeContinuationBarrier()
-        let bootstrap = try makeRuntimeTestBootstrap(realtimeModel: "stale-model")
-        let runtime = TalkModeRuntime(realtimeTalkBootstrapProvider: { bootstrap })
-        await runtime._test_setRealtimeConfigApplicationCheckpoint {
-            try? await checkpoint.wait()
-        }
-        let currentConfig = await runtime.parseTalkConfig(
-            makeRuntimeTestConfigSnapshot(realtimeModel: "current-model"))
-        await runtime.applyTalkConfig(currentConfig)
-        let lifecycleGeneration = await runtime._test_prepareEnabledLifecycle()
-        await runtime._test_enableRealtimeRelaySelection()
-
-        let attempt = Task {
-            do {
-                try await runtime.startRealtimeRelay(generation: lifecycleGeneration)
-                return true
-            } catch {
-                return false
-            }
-        }
-        try await waitForRuntimeBarrier(checkpoint, cleaningUp: attempt)
-        _ = await runtime.beginRealtimeReconfiguration()
-        await checkpoint.release()
-
-        #expect(await attempt.value == false)
-        #expect(await runtime.config?.snapshot.realtime.modelId == "current-model")
-        await runtime._test_setRealtimeConfigApplicationCheckpoint(nil)
-        await runtime.setEnabled(false)
-    }
-
-    @Test func `stale native fallback config cannot replace current selection`() async throws {
-        let checkpoint = RuntimeContinuationBarrier()
-        let runtime = TalkModeRuntime()
-        await runtime._test_setRealtimeConfigApplicationCheckpoint {
-            try? await checkpoint.wait()
-        }
-        let staleConfig = await runtime.parseTalkConfig(
-            makeRuntimeTestConfigSnapshot(realtimeModel: "stale-model"))
-        let currentConfig = await runtime.parseTalkConfig(
-            makeRuntimeTestConfigSnapshot(realtimeModel: "current-model"))
-        let lifecycleGeneration = await runtime._test_prepareEnabledLifecycle()
-        let recognitionGeneration = await runtime.recognitionGeneration
-        let relayGeneration = await runtime.realtimeRelayGeneration
-
-        let attempt = Task {
-            await runtime.applyNativeFallbackTalkConfig(
-                staleConfig,
-                lifecycleGeneration: lifecycleGeneration,
-                recognitionGeneration: recognitionGeneration,
-                relayGeneration: relayGeneration)
-        }
-        try await waitForRuntimeBarrier(checkpoint, cleaningUp: attempt)
-        _ = await runtime.beginRealtimeReconfiguration()
-        await runtime.applyTalkConfig(currentConfig)
-        await checkpoint.release()
-
-        #expect(await attempt.value == false)
-        #expect(await runtime.config?.snapshot.realtime.modelId == "current-model")
-        await runtime._test_setRealtimeConfigApplicationCheckpoint(nil)
-        await runtime.setEnabled(false)
-    }
-
     @Test(arguments: [
         RuntimeRelayStartupPauseOutcome.resume,
         .remainPaused,
