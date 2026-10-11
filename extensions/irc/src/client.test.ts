@@ -634,3 +634,51 @@ describe("irc client inbound line bound", () => {
     }
   });
 });
+
+describe("irc client inbound CTCP", () => {
+  it("hands ACTION and plain messages to ingress but not CTCP queries", async () => {
+    const inbound = [
+      ":scanner!ctcp@scanner.example PRIVMSG bot :\u0001VERSION\u0001",
+      ":alice!a@example.com PRIVMSG bot :\u0001PING 1760000000\u0001",
+      ":alice!a@example.com PRIVMSG #ops :\u0001TIME\u0001",
+      ":alice!a@example.com PRIVMSG bot :\u0001ACTION waves\u0001",
+      ":alice!a@example.com PRIVMSG bot :hello",
+    ];
+    const server = await startIrcTestServer((socket) => {
+      onIrcTestLine(socket, (line) => {
+        if (line.startsWith("USER ")) {
+          socket.write(":server 001 bot :welcome\r\n");
+          for (const message of inbound) {
+            socket.write(`${message}\r\n`);
+          }
+          socket.write(":server PING :done\r\n");
+        }
+      });
+    });
+    const done = createDeferred<void>();
+    const dispatched: string[] = [];
+    try {
+      const client = await connectIrcClient({
+        host: "127.0.0.1",
+        port: server.port,
+        tls: false,
+        nick: "bot",
+        username: "bot",
+        realname: "OpenClaw Bot",
+        onPrivmsg: (event) => {
+          dispatched.push(event.rawLine);
+        },
+        onLine: (line) => {
+          if (line === ":server PING :done") {
+            done.resolve();
+          }
+        },
+      });
+      await withTimeout(done.promise, 2000, "IRC inbound CTCP lines");
+      expect(dispatched).toEqual(inbound.slice(3));
+      client.quit("test complete");
+    } finally {
+      await server.close();
+    }
+  });
+});
