@@ -2,6 +2,7 @@ import type { AgentCapability } from "../agents/index.ts";
 import type { rosterActivityStore } from "../agents/roster-activity-store.ts";
 import type { ChannelCapability } from "../channels/index.ts";
 import type { RuntimeConfigCapability } from "../config/runtime-config-capability.ts";
+import type { SessionCapability, SessionListScope } from "../sessions/session-capability.ts";
 import { projectSource } from "./projection.ts";
 
 /** These owners mutate synchronously; every publication invalidates their projection. */
@@ -46,6 +47,20 @@ export function projectRuntimeConfig(
       canOpenFile: config.canOpenFile,
     }),
     subscribe: (config, notify) => config.subscribe(notify),
+    equality: "revision",
+  });
+}
+
+export type SessionListProjectionSource = {
+  sessions: Pick<SessionCapability, "listSnapshot" | "subscribeList">;
+  scope: SessionListScope;
+};
+
+/** Query membership and admission remain with the session capability. */
+export function projectSessionList(source: SessionListProjectionSource) {
+  return projectSource(source, {
+    read: ({ sessions, scope }) => sessions.listSnapshot(scope),
+    subscribe: ({ sessions, scope }, notify) => sessions.subscribeList(scope, notify),
     equality: "revision",
   });
 }

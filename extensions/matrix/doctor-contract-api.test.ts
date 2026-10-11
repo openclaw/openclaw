@@ -15,13 +15,10 @@ import type {
 } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createPluginStateKeyedStoreForTests,
-  executeSqliteQuerySync,
-  getNodeSqliteKysely,
   getPluginStateCapacityForTests,
   importPluginStateEntriesForDoctorForTests,
   openOpenClawStateDatabase,
   resetPluginStateStoreForTests,
-  type OpenClawStateKyselyDatabaseForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import type { PluginDoctorStateMigrationContext } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
@@ -624,21 +621,11 @@ describe("matrix doctor contract state migrations", () => {
       expiresAt: now + remainingTtlMs,
       value: storedEntry.value,
     });
-    nowSpy.mockRestore();
+    nowSpy.mockReturnValue(now + remainingTtlMs - 1);
     await expect(store.lookup(storedEntry.key)).resolves.toEqual(storedEntry.value);
-
-    // Preserve the imported deadline above, then seed expiry visible to the worker clock.
-    const { db } = openOpenClawStateDatabase({ env });
-    executeSqliteQuerySync(
-      db,
-      getNodeSqliteKysely<Pick<OpenClawStateKyselyDatabaseForTests, "plugin_state_entries">>(db)
-        .updateTable("plugin_state_entries")
-        .set({ expires_at: 1 })
-        .where("plugin_id", "=", "matrix")
-        .where("namespace", "=", resolveMatrixInboundDedupeStateNamespace())
-        .where("entry_key", "=", storedEntry.key),
-    );
+    nowSpy.mockReturnValue(now + remainingTtlMs);
     await expect(store.lookup(storedEntry.key)).resolves.toBeUndefined();
+    nowSpy.mockRestore();
   });
 
   it("keeps sources when the completion namespace is full and imports them after capacity frees", async () => {
