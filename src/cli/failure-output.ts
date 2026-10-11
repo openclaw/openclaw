@@ -66,8 +66,9 @@ export class ExpectedCliError extends Error {
     humanOutputWritten?: boolean;
     machineOutput: string;
     matches?: readonly CronCliJobMatch[];
+    cause?: unknown;
   }) {
-    super(params.message);
+    super(params.message, params.cause === undefined ? undefined : { cause: params.cause });
     this.name = "ExpectedCliError";
     this.humanOutput = params.humanOutput;
     this.humanOutputWritten = params.humanOutputWritten ?? false;
@@ -114,6 +115,35 @@ export function isExpectedCliError(error: unknown): error is Error {
     (error instanceof Error && EXPECTED_CLI_ERROR_NAMES.has(error.name)) ||
     isGatewayTransportError(error)
   );
+}
+
+/**
+ * Plugin actions and command hooks report their failure message like core command
+ * boundaries; the root renderer still owns JSON envelopes and exit codes.
+ */
+export function toPluginCommandFailure(error: unknown): unknown {
+  if (
+    isExpectedCliError(error) ||
+    (error instanceof Error && (error.name === "CommanderError" || error.name === "ExitError"))
+  ) {
+    return error;
+  }
+  const commanderCode =
+    error !== null &&
+    typeof error === "object" &&
+    "code" in error &&
+    typeof error.code === "string" &&
+    error.code.startsWith("commander.");
+  if (shouldShowDebugDetails() && !commanderCode) {
+    return error;
+  }
+  const message = formatCliOperatorError(error);
+  return new ExpectedCliError({
+    message,
+    humanOutput: message,
+    machineOutput: message,
+    cause: error,
+  });
 }
 
 export function rethrowExpectedCliError(error: unknown): void {

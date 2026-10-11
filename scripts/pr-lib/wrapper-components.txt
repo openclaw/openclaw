@@ -1796,6 +1796,7 @@ src/state/openclaw-state-feature-schema.ts
 src/state/openclaw-state-lease-acquisition.ts
 src/state/openclaw-state-lease-cleanup.ts
 src/state/openclaw-state-lease-error.ts
+src/state/openclaw-state-lease-heartbeat-carrier.ts
 src/state/openclaw-state-lease-heartbeat-cleanup.ts
 src/state/openclaw-state-lease-heartbeat-shared.ts
 src/state/openclaw-state-lease-heartbeat.ts
