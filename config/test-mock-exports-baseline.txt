@@ -2049,7 +2049,6 @@
 ["src/agents/auth-profiles/oauth.validator-fallback.test.ts","../../plugins/provider-runtime.runtime.js","8a22cb814219960aa07a8f68a5857b52e39ebf118dcbba9701632b1bd755dbcf",1]
 ["src/agents/auth-profiles/order.test.ts","../../plugins/plugin-metadata-snapshot.js","864210ade719601c34497b7db3744af6e7911876b01741ff3766b177dd35fd98",1]
 ["src/agents/auth-profiles/session-override.test-support.ts","../../plugins/provider-model-routes.js","c0954b2f1be7311c964206a926a30e64da830e25cff4033c6a6c88397331b87d",1]
-["src/agents/auth-profiles/session-override.test-support.ts","./store-runtime.js","345df821afd799c1bbfcf4a37f22e42032b0ff45627e76e6aeba30ecb797ac9c",1]
 ["src/agents/auth-profiles/session-override.test-support.ts","./usage.js","07bdb7d5357d369c84fcda8609474758d94e9a65ef9c1e307437de29b400b73c",1]
 ["src/agents/auth-profiles/session-override.user-link.test.ts","../model-runtime-choice.js","7f26e428365f8032102ad2b312937a5ada4b04f8a8288b7769629dd009f1796c",1]
 ["src/agents/auth-profiles/upsert-with-lock.test.ts","./credential-normalize.js","a2c4f44312343522b11eafdcd119da46f23bfec09da07308a80e74cc24e8c379",1]
