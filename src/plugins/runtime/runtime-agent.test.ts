@@ -5,6 +5,7 @@ import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { readWorkspaceStateSnapshot } from "../../agents/workspace-state-store.js";
 import { loadTranscriptEvents } from "../../config/sessions/session-accessor.js";
+import * as sessionEntryRead from "../../config/sessions/session-entry-read-runtime.js";
 import { createGatewaySession } from "../../gateway/session-create-service.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
@@ -812,11 +813,24 @@ describe("plugin runtime session work admission", () => {
     });
     await mutationStarted.promise;
 
-    const work = runtime.session.runWithWorkAdmission({ storePath, sessionKey }, async () => {});
+    const snapshotRead = createDeferred();
+    const readEntry = sessionEntryRead.readSessionEntryReadOnlyInWorker;
+    using captureRead = vi
+      .spyOn(sessionEntryRead, "readSessionEntryReadOnlyInWorker")
+      .mockImplementationOnce(async (...args) => {
+        const entry = await readEntry(...args);
+        snapshotRead.resolve();
+        return entry;
+      });
+    const run = vi.fn(async () => {});
+    const work = runtime.session.runWithWorkAdmission({ storePath, sessionKey }, run);
     try {
+      await snapshotRead.promise;
+      captureRead.mockRestore();
       releaseMutation.resolve();
       await mutation;
       await expect(work).rejects.toMatchObject({ code: "SESSION_WORK_START_CHANGED" });
+      expect(run).not.toHaveBeenCalled();
     } finally {
       releaseMutation.resolve();
       await Promise.allSettled([mutation, work]);

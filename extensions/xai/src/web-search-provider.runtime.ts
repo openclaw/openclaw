@@ -2,8 +2,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { buildTimeoutAbortSignal } from "openclaw/plugin-sdk/extension-shared";
 import {
   coerceSecretRef,
-  ensureAuthProfileStore,
-  listUsableProviderAuthProfileIds,
+  listUsableProviderAuthProfileIdsAsync,
 } from "openclaw/plugin-sdk/provider-auth";
 import {
   isProviderAuthError,
@@ -235,23 +234,17 @@ async function resolveXaiProviderApiKeyProfileFallback(params: {
 }): Promise<XaiResolvedWebSearchAuth | undefined> {
   params.signal?.throwIfAborted();
   const config = params.config as OpenClawConfig | undefined;
-  const usableProfiles = listUsableProviderAuthProfileIds({
+  const usableProfiles = await listUsableProviderAuthProfileIdsAsync({
     agentDir: params.agentDir,
     cfg: config,
     provider: XAI_PROVIDER_ID,
+    profileTypes: ["api_key", "token"],
   });
   if (!usableProfiles.agentDir || usableProfiles.profileIds.length === 0) {
     return undefined;
   }
 
-  const store = ensureAuthProfileStore(usableProfiles.agentDir, {
-    allowKeychainPrompt: false,
-  });
   for (const profileId of usableProfiles.profileIds) {
-    const profile = store.profiles[profileId];
-    if (!profile || profile.provider !== XAI_PROVIDER_ID || profile.type === "oauth") {
-      continue;
-    }
     const resolved = await resolveXaiProviderAuthCredential({
       agentDir: usableProfiles.agentDir,
       config: params.config,

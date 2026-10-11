@@ -45,9 +45,10 @@ const transport = vi.hoisted(() => ({
   resolveAuth: vi.fn<() => Promise<unknown>>(),
 }));
 
+// mock-isolation: Synthetic selected-account auth avoids host credentials while preserving guarded HTTP dispatch.
 vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
   resolveApiKeyForProvider: transport.resolveAuth,
-  resolveProviderAuthProfileMetadata: () => ({ accountId: "synthetic-account" }),
+  resolveProviderAuthProfileMetadataAsync: async () => ({ accountId: "synthetic-account" }),
 }));
 
 // Only the destination and DNS fixture change. Acquisition, guarded fetch,

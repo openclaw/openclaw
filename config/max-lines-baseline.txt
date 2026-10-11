@@ -402,7 +402,6 @@ src/gateway/server-methods/agents-mutate.test.ts
 src/gateway/server-methods/approval-shared.test.ts
 src/gateway/server-methods/chat.directive-tags.test.ts
 src/gateway/server-methods/config.ts
-src/gateway/server-methods/cron.ts
 src/gateway/server-methods/cron.validation.test.ts
 src/gateway/server-methods/models-auth-status.test.ts
 src/gateway/server-methods/models.test.ts

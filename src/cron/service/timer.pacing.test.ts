@@ -53,7 +53,7 @@ function maintain(job: CronJob) {
 describe("cron dynamic cadence", () => {
   it.each(["recurring retry", "pacing"])(
     "auto-disables a job when %s cannot produce a Date-valid next run",
-    (scenario) => {
+    async (scenario) => {
       const endedAt = MAX_DATE_TIMESTAMP_MS - 1_000;
       const state = makeState();
       const deferredNotifications: DeferredCronNotifications = [];
@@ -92,7 +92,7 @@ describe("cron dynamic cadence", () => {
       expect(state.deps.enqueueSystemEvent).not.toHaveBeenCalled();
       expect(state.deps.requestHeartbeat).not.toHaveBeenCalled();
       expect(deferredNotifications).toHaveLength(1);
-      runPostPersistCronNotifications(state, structuredClone(deferredNotifications));
+      await runPostPersistCronNotifications(state, structuredClone(deferredNotifications));
       expect(state.deps.enqueueSystemEvent).toHaveBeenCalledOnce();
       expect(state.deps.requestHeartbeat).toHaveBeenCalledOnce();
     },

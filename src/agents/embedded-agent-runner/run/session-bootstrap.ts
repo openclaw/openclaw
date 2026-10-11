@@ -525,6 +525,7 @@ export async function claimAgentSessionWriter(params: RunEmbeddedAgentParams): P
   | {
       expectedLifecycleRevision: string | undefined;
       expectedWriterRunId: string;
+      entry: InternalSessionEntry;
     }
   | undefined
 > {
@@ -601,5 +602,6 @@ export async function claimAgentSessionWriter(params: RunEmbeddedAgentParams): P
   return {
     expectedLifecycleRevision,
     expectedWriterRunId: params.runId,
+    entry: claimed,
   };
 }

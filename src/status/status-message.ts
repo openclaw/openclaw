@@ -15,7 +15,6 @@ import { resolveCronStyleNow } from "../agents/current-time.js";
 import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveExtraParams } from "../agents/embedded-agent-runner/extra-params.js";
 import { resolveFastModeState } from "../agents/fast-mode.js";
-import { resolveModelAuthMode } from "../agents/model-auth.js";
 import { findModelInCatalog } from "../agents/model-catalog-lookup.js";
 import {
   areRuntimeModelRefsEquivalent,
@@ -66,6 +65,7 @@ import type { MediaUnderstandingDecision } from "../media-understanding/types.js
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { formatFastModeStatusValue } from "../shared/fast-mode.js";
 import { resolveStatusTtsSnapshot } from "../tts/status-config.js";
+import type { PreparedTtsPreferences } from "../tts/tts-preferences.js";
 import { sessionDeliveryChannel, sessionDeliveryOrigin } from "../utils/delivery-context.read.js";
 import {
   estimateAggregateUsageCost,
@@ -94,6 +94,7 @@ type QueueStatus = {
 
 type StatusArgs = {
   config: OpenClawConfig;
+  preparedTtsPreferences?: PreparedTtsPreferences;
   modelRefs: ReturnType<typeof resolveSelectedAndActiveModel>;
   agent: AgentConfig;
   agentId?: string;
@@ -404,12 +405,14 @@ const formatVoiceModeLine = (
   config?: OpenClawConfig,
   sessionEntry?: SessionEntry,
   agentId?: string,
+  preparedTtsPreferences?: PreparedTtsPreferences,
 ): string | null => {
   if (!config) {
     return null;
   }
   const snapshot = resolveStatusTtsSnapshot({
     cfg: config,
+    preparedTtsPreferences,
     sessionAuto: sessionEntry?.ttsAuto,
     agentId,
   });
@@ -814,14 +817,12 @@ export function buildStatusMessageParts(args: StatusArgs) {
     .join(" · ");
 
   const selectedModelLabel = modelRefs.selected.label || "unknown";
-  const selectedAuthMode =
-    normalizeAuthMode(args.modelAuth) ?? resolveModelAuthMode(selectedLookupProvider, args.config);
+  const selectedAuthMode = normalizeAuthMode(args.modelAuth);
   const rawSelectedAuthLabelValue =
     selectedAuthMode && selectedAuthMode !== "unknown"
       ? (args.modelAuth ?? selectedAuthMode)
       : undefined;
-  const activeAuthMode =
-    normalizeAuthMode(args.activeModelAuth) ?? resolveModelAuthMode(activeProvider, args.config);
+  const activeAuthMode = normalizeAuthMode(args.activeModelAuth);
   const activeAuthLabelValue =
     activeAuthMode && activeAuthMode !== "unknown"
       ? (args.activeModelAuth ?? activeAuthMode)
@@ -929,7 +930,12 @@ export function buildStatusMessageParts(args: StatusArgs) {
   const contextMeter =
     contextPct === null ? "" : `${"▰".repeat(filled)}${"▱".repeat(10 - filled)} `;
   const mediaLine = formatMediaUnderstandingLine(args.mediaDecisions);
-  const voiceLine = formatVoiceModeLine(args.config, args.sessionEntry, args.agentId);
+  const voiceLine = formatVoiceModeLine(
+    args.config,
+    args.sessionEntry,
+    args.agentId,
+    args.preparedTtsPreferences,
+  );
 
   const text = [
     [versionLine, timeLine, uptimeLine],

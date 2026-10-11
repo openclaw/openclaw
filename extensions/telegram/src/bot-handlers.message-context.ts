@@ -1,11 +1,11 @@
 import type { Message } from "grammy/types";
 import { formatMediaPlaceholderText } from "openclaw/plugin-sdk/channel-inbound";
-import { resolveStoredModelOverride } from "openclaw/plugin-sdk/command-auth-native";
+import { resolveStoredModelOverrideAsync } from "openclaw/plugin-sdk/command-auth-native";
 import type { OpenClawConfig, TelegramAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolvePromptHistoryLimit } from "openclaw/plugin-sdk/number-runtime";
 import {
   getSessionEntryAsync,
-  readAmbientTranscriptWatermark,
+  readAmbientTranscriptWatermarkAsync,
   resolveAmbientTranscriptWatermarkKey,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { asFiniteNumber } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -176,34 +176,16 @@ export function createTelegramMessageSessionRuntime({
       agentId: route.agentId,
     });
     const entry = await loadSessionEntry({ agentId: route.agentId, storePath, sessionKey });
-    const overrideParams = {
+    const storedOverride = await resolveStoredModelOverrideAsync({
       sessionEntry: entry,
+      loadSessionEntry: (parentSessionKey) =>
+        loadSessionEntry({ agentId: route.agentId, storePath, sessionKey: parentSessionKey }),
       sessionKey,
       defaultProvider: resolveDefaultModelForAgent({
         cfg: params.runtimeCfg,
         agentId: route.agentId,
       }).provider,
-    };
-    // Discover the inherited row before asking the worker to load it.
-    let parentSessionKey: string | undefined;
-    let storedOverride = resolveStoredModelOverride({
-      ...overrideParams,
-      loadSessionEntry: (key) => {
-        parentSessionKey = key;
-        return undefined;
-      },
     });
-    if (parentSessionKey) {
-      const parentEntry = await loadSessionEntry({
-        agentId: route.agentId,
-        storePath,
-        sessionKey: parentSessionKey,
-      });
-      storedOverride = resolveStoredModelOverride({
-        ...overrideParams,
-        loadSessionEntry: () => parentEntry,
-      });
-    }
     const provider = entry?.modelProvider?.trim();
     const model = entry?.model?.trim();
     const modelCfg = params.runtimeCfg.agents?.defaults?.model;
@@ -225,9 +207,9 @@ export function createTelegramMessageSessionRuntime({
     };
   };
 
-  const resolvePromptContextAmbientWatermark = (
+  const resolvePromptContextAmbientWatermark = async (
     params: ResolvePromptContextAmbientWatermarkParams,
-  ): TelegramAmbientTranscriptWatermark | undefined => {
+  ): Promise<TelegramAmbientTranscriptWatermark | undefined> => {
     if (!params.isGroup) {
       return undefined;
     }
@@ -239,7 +221,9 @@ export function createTelegramMessageSessionRuntime({
       conversationId: String(params.chatId),
       ...(params.resolvedThreadId !== undefined ? { threadId: params.resolvedThreadId } : {}),
     });
-    return (telegramDeps.readAmbientTranscriptWatermark ?? readAmbientTranscriptWatermark)({
+    return await (
+      telegramDeps.readAmbientTranscriptWatermarkAsync ?? readAmbientTranscriptWatermarkAsync
+    )({
       storePath: params.storePath,
       sessionKey: params.sessionKey,
       key,

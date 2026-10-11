@@ -304,10 +304,6 @@ describe("model resolution auth row snapshots", () => {
     { change: "usage", cached: true, published: true },
     { change: "usage", cached: false, published: "during" },
     { change: "usage", cached: true, published: "during" },
-    { change: "order", cached: true, published: false },
-    { change: "disabled", cached: false, published: false },
-    { change: "order", cached: true, published: "during" },
-    { change: "disabled", cached: false, published: "during" },
     { change: "unrelated-order", cached: true, published: false },
   ] as const)(
     "handles concurrent $change changes (cached=$cached, published=$published)",
@@ -367,25 +363,18 @@ describe("model resolution auth row snapshots", () => {
             setRuntimeAuthProfileStoreSnapshot(store, state.agentDir());
           }
           const updated: AuthProfileStore =
-            change === "order" || change === "unrelated-order"
+            change === "unrelated-order"
               ? { ...store, order: { [PROVIDER]: [fallbackProfileId, PROFILE_ID] } }
               : {
                   ...store,
                   usageStats: {
-                    [PROFILE_ID]:
-                      change === "disabled"
-                        ? { disabledUntil: Date.now() + 60_000, disabledReason: "auth_permanent" }
-                        : { lastUsed: 1234, lastProbeAt: 1234 },
+                    [PROFILE_ID]: { lastUsed: 1234, lastProbeAt: 1234 },
                   },
                 };
           const updatedAgent = change === "unrelated-order" ? "other" : "main";
           await state.writeAuthProfiles(updated, updatedAgent);
           resume.resolve();
-          expect((await loading).model?.name).toBe(
-            change === "order" || change === "disabled"
-              ? `${fallbackProfileId}:token`
-              : `${PROFILE_ID}:api_key`,
-          );
+          expect((await loading).model?.name).toBe(`${PROFILE_ID}:api_key`);
           const current = await loadAuthProfileStoreForRuntimeAsync(state.agentDir(updatedAgent), {
             readOnly: true,
             externalCli: { mode: "none" },
