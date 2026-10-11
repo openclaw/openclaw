@@ -393,7 +393,11 @@ export function isClaudeSubagentRecord(parsed: Record<string, unknown>): boolean
 // classification.
 export function isClaudeStopHookFeedbackRecord(parsed: Record<string, unknown>): boolean {
   if (parsed.type === "system") {
-    return parsed.subtype === "notification" && String(parsed.key ?? "").startsWith("stop-hook");
+    return (
+      parsed.subtype === "notification" &&
+      typeof parsed.key === "string" &&
+      parsed.key.startsWith("stop-hook")
+    );
   }
   if (parsed.type !== "user" || !isRecord(parsed.message)) {
     return false;
