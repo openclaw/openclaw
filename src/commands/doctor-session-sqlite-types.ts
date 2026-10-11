@@ -39,6 +39,11 @@ export function isRetainedSourceIssue(issue: DoctorSessionSqliteIssue): boolean 
   ].includes(issue.code);
 }
 
+// Deferred historical originals stay protected; they are warnings, not settlement failures.
+export function isSettleableIssue(issue: DoctorSessionSqliteIssue): boolean {
+  return isRetainedSourceIssue(issue) || issue.code === "historical_transcript_deferred";
+}
+
 export function isInformationalMissingSessionIndex(
   report: DoctorSessionSqliteTargetReport,
 ): boolean {
