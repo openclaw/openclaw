@@ -56,6 +56,9 @@ export function createReplyRecoveryActorFixture(params: {
     async acquireSessionActor() {
       const { operation } = await admission();
       const actor = await acquireReplyOperationSessionActor(operation);
+      if (!actor) {
+        return undefined;
+      }
       const target = getReplyOperationSessionTarget(operation);
       if (!target) {
         throw new Error("Recovery fixture lost its admitted target");

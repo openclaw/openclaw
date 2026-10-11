@@ -142,6 +142,52 @@ describe("sessions_send dispatch admission", () => {
     expect(runSessionsSendA2AFlow).not.toHaveBeenCalled();
   });
 
+  it.each(["send", "receive"] as const)(
+    "rechecks an in-place default %s policy publication at final input admission",
+    async (direction) => {
+      const currentConfig: OpenClawConfig = {
+        ...config,
+        session: { ...config.session, communication: { send: "always", receive: "always" } },
+      };
+      setRuntimeConfigSnapshot(currentConfig);
+      let admitted = false;
+      const callGateway = vi.fn();
+      callGateway.mockImplementation(
+        async (request: Parameters<AgentToolGatewayRequestCaller>[0]) => {
+          if (request.method === "sessions.resolve") {
+            return { key: targetSessionKey, agentId: "main" };
+          }
+          if (request.method === "agent") {
+            currentConfig.session!.communication![direction] = "never";
+            setRuntimeConfigSnapshot(currentConfig);
+            request.assertDispatchCurrent?.();
+            request.sessionMutationCommitGuard?.();
+            admitted = true;
+            return { runId, status: "accepted" };
+          }
+          throw new Error(`Unexpected Gateway method: ${request.method}`);
+        },
+      );
+      const result = await createSessionsSendTool({
+        agentSessionKey: requesterSessionKey,
+        config: currentConfig,
+        callGateway,
+        idempotencyKey: runId,
+      }).execute("revoked-default", {
+        sessionKey: targetSessionKey,
+        message: "Must not enter the target after policy revocation",
+        mode: "followup",
+        timeoutSeconds: 0,
+      });
+      expect(admitted).toBe(false);
+      expect(result.details).toMatchObject({
+        status: "error",
+        error: expect.stringContaining("communication"),
+      });
+      expect(runSessionsSendA2AFlow).not.toHaveBeenCalled();
+    },
+  );
+
   const callerKeys = [requesterSessionKey, "agent:main:telegram:direct:peer-1"];
   it.each(callerKeys)("retains accepted reply source (%s)", async (sourceKey) => {
     if (sourceKey !== requesterSessionKey) {

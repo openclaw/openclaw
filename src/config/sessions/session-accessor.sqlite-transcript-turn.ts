@@ -31,7 +31,7 @@ import { readTranscriptContextVersionInTransaction } from "./session-accessor.sq
 import { readTranscriptMessageByScopedIdempotencyKey } from "./session-accessor.sqlite-transcript-store.js";
 import { readWithCanonicalSessionAdmission } from "./session-canonical-key.js";
 import { captureIncognitoSessionOperation } from "./session-incognito-binding.js";
-import { hasSessionInputActor } from "./session-input-actor.js";
+import { getSessionInputActor } from "./session-input-actor.js";
 import { SqliteTranscriptMutationConflictError } from "./session-mutation-conflict-error.js";
 import type { SessionSourceAssertion } from "./session-source-authority.js";
 import { completeSessionTranscriptCommit } from "./session-transcript-commit-completion.js";
@@ -107,11 +107,12 @@ export async function appendExpectedSessionTranscriptTurn(
       return !append.workerPreparation || (!append.predicate && !repeated);
     });
   const incognito = captureIncognitoSessionOperation({ ...scope, storePath: resolved.path });
+  const inputActor = !nativeReservation && (await getSessionInputActor(resolved));
   if (
     !nativeReservation &&
     independentPreparation &&
     isMainThread &&
-    (hasSessionInputActor() ||
+    (inputActor ||
       incognito ||
       supportsOpenClawAgentDatabaseExecution(toDatabaseOptions(resolved))) &&
     options.messages.every((message) => {
@@ -121,7 +122,7 @@ export async function appendExpectedSessionTranscriptTurn(
         !message.shouldAppendInTransaction &&
         !message.prepareMessageAfterIdempotencyCheck &&
         !message.beforeFreshMessageCommit &&
-        (hasSessionInputActor() || !guard?.nativeSource)
+        (inputActor || !guard?.nativeSource)
       );
     })
   ) {
@@ -133,7 +134,7 @@ export async function appendExpectedSessionTranscriptTurn(
       ),
     );
   }
-  if (incognito || hasSessionInputActor()) {
+  if (incognito || inputActor) {
     throw new Error("Actor transcript turns require preparation outside the transaction");
   }
   if (options.acceptedResultGuard || options.sessionTurnMutation?.routingPredicate) {

@@ -22,7 +22,6 @@ import {
   resolveTranscriptBoundaryWindow,
 } from "./session-accessor.sqlite-reset-window.js";
 import type { ResolvedTranscriptReadScope } from "./session-accessor.sqlite-scope.js";
-import { readTranscriptContextVersionInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import {
   DEFAULT_VISIBLE_MESSAGE_MAX_BYTES,
   DEFAULT_VISIBLE_MESSAGE_MAX_MESSAGES,
@@ -460,10 +459,7 @@ export function readSessionTranscriptBoundedActiveContextCore(
     // Retention moves forward from a cut; append ancestry moves backward. Keep both
     // outside the byte-counted events so excluded payloads cannot change either boundary.
     const firstKeptRanges = readBoundedRetentionRanges(projection, rows, header ? 1 : 0);
-    const version = readTranscriptContextVersionInTransaction(
-      projection.database,
-      projection.resolved.sessionId,
-    );
+    const version = projection.version;
     const consumed = options.onRead?.(projection);
     if (isPromiseLike(consumed)) {
       void Promise.resolve(consumed).catch(() => {});
@@ -483,6 +479,12 @@ export function readSessionTranscriptBoundedActiveContextCore(
       totalEvents: projection.state.activeEventCount,
       transcriptMutationAt: version.updatedAt,
       truncated,
+      ...(!truncated &&
+      !fence &&
+      !projection.hasUnindexedPrefix &&
+      selectedRows.length === projection.state.activeEventCount
+        ? { completeActivePath: true as const }
+        : {}),
     };
   };
   return withCurrentProjectionSnapshot(scope, read, {

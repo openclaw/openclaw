@@ -61,7 +61,7 @@ export type ReplyOperationAdmission = {
   sessionTarget?: SessionEntryTargetPatchScope;
   resolveSessionTarget?: () => SessionEntryTargetPatchScope | undefined;
   sessionActor?: SessionActor;
-  acquireSessionActor?: () => Promise<SessionActor>;
+  acquireSessionActor?: () => Promise<SessionActor | undefined>;
   afterTransition?: (transition: SessionAdmissionTransition) => Promise<void>;
 };
 
@@ -108,7 +108,7 @@ export function getReplyOperationSessionTarget(operation: ReplyOperation | undef
 
 export function acquireReplyOperationSessionActor(
   operation: ReplyOperation,
-): Promise<SessionActor> {
+): Promise<SessionActor | undefined> {
   const admission = lifecycleAdmissionByOperation.get(operation);
   if (!admission?.acquireSessionActor) {
     throw new Error("Reply operation has no session actor admission");

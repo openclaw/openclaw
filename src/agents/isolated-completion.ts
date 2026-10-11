@@ -49,7 +49,12 @@ import {
   resolveIsolatedCompletionRoute,
 } from "./isolated-completion-route.js";
 import { ensureAuthProfileStore } from "./model-auth.js";
+import {
+  createModelCatalogSnapshotView,
+  listModelCatalogObservedRoutes,
+} from "./model-catalog-view.js";
 import type { ModelRef } from "./model-ref-shared.js";
+import { readAdmittedPublishedModelCatalog } from "./prepared-model-runtime.capture.js";
 import { acquireAgentRunPreparedModelRuntime } from "./prepared-model-runtime.js";
 import {
   unwrapModelHeaderSentinelsForProviderEgress,
@@ -522,11 +527,20 @@ async function runIsolatedCompletionOwned(
             allowKeychainPrompt: false,
             config,
           });
+          const catalog =
+            readAdmittedPublishedModelCatalog(lease.snapshot) ?? lease.snapshot.modelCatalog;
+          const variants =
+            catalog &&
+            createModelCatalogSnapshotView(config, catalog).variantsOf({
+              provider: runtimeModel.provider,
+              id: runtimeModel.id,
+            });
           const authParams = {
             provider: runtimeModel.provider,
             modelId: runtimeModel.id,
-            modelApi: runtimeModel.api,
-            modelBaseUrl: runtimeModel.baseUrl,
+            ...(variants
+              ? { observedRoutes: listModelCatalogObservedRoutes(variants) }
+              : { modelApi: runtimeModel.api, modelBaseUrl: runtimeModel.baseUrl }),
             ...context,
             env: process.env,
             authProfileStore,

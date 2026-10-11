@@ -26,6 +26,9 @@ it("retains actor-bound recorder custody through a durable worker publication fa
       { agentId: f.scope.agentId, storePath: f.scope.storePath, target: f.target },
       { assertCurrent() {}, assertReadable() {} },
     );
+    if (!input) {
+      throw new Error("Durable input must acquire a session actor");
+    }
     const failure = new Error("durable input publication failed");
     const message = {
       role: "user" as const,

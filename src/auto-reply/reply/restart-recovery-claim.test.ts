@@ -1,4 +1,5 @@
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
@@ -665,7 +666,10 @@ describe("createReplyRestartRecoveryClaimController", () => {
             : { restartRecoveryDeliverySourceRunId: "concurrent-source" }),
         });
       };
-      const { actor } = await fixture.controller.acquireSessionActor();
+      const { actor } = expectDefined(
+        await fixture.controller.acquireSessionActor(),
+        "durable recovery actor",
+      );
       const adopt = actor.adoptRun.bind(actor);
       const patch = entryPatch.patchSessionEntryInWorker;
       const spy =
@@ -722,7 +726,10 @@ describe("createReplyRestartRecoveryClaimController", () => {
       await using fixture = await createAcknowledgedClaim();
       await fixture.controller.admitUserTurn(fixture.recorder);
       const before = fixture.read();
-      const { actor } = await fixture.controller.acquireSessionActor();
+      const { actor } = expectDefined(
+        await fixture.controller.acquireSessionActor(),
+        "durable recovery actor",
+      );
       const adopt = actor.adoptRun.bind(actor);
       let revoked = false;
       const spy = vi.spyOn(actor, "adoptRun").mockImplementationOnce((input, authority, observer) =>

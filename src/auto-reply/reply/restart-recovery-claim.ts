@@ -20,7 +20,6 @@ import type {
 } from "../../config/sessions/session-actor-contract.js";
 import { readSessionEntryInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { bindUserTurnInputActor } from "../../config/sessions/session-input-actor.js";
-import type { SessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import type { SessionTranscriptTurnLifecyclePatch } from "../../config/sessions/session-transcript-turn-lifecycle.types.js";
 import {
   buildRestartRecoveryExpectedState,
@@ -49,6 +48,7 @@ import type {
 } from "../../sessions/user-turn-transcript.types.js";
 import type { DeliveryContext } from "../../utils/delivery-context.shared.js";
 import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
+import { retireTerminalRestartRecoverySourceClaim } from "./restart-recovery-source.js";
 
 type ReplyRestartRecoveryClaimController = {
   admitUserTurn: (
@@ -68,64 +68,15 @@ type ReplyRestartRecoveryClaimController = {
   isArmed: () => Promise<boolean>;
 };
 
-/** Provider redelivery guard shared by ingress and the agent admission boundary. */
-export function isDuplicateRestartRecoverySource(
-  entry: SessionEntry | null | undefined,
-  sourceTurnId: unknown,
-): boolean {
-  const normalizedSourceTurnId = normalizeOptionalString(sourceTurnId);
-  return Boolean(
-    normalizedSourceTurnId &&
-    (hasRestartRecoveryTerminalRun(entry ?? undefined, normalizedSourceTurnId) ||
-      hasRestartRecoverySourceClaim(entry ?? undefined, normalizedSourceTurnId)),
-  );
-}
-
-export async function retireTerminalRestartRecoverySourceClaim(params: {
-  target: SessionEntryTargetPatchScope;
-  assertCurrent: SessionSourceAssertion;
-  sessionId: string;
-  sourceTurnId: string;
-}): Promise<SessionEntry | undefined> {
-  let didRetire = false;
-  const retired = await patchSessionEntryTarget(
-    params.target,
-    (current) => {
-      if (
-        current.sessionId !== params.sessionId ||
-        !isTerminalSessionStatus(current.status) ||
-        current.status === "interrupted" ||
-        current.abortedLastRun === true ||
-        current.restartRecoveryDeliveryReceiptState === "terminal-pending" ||
-        !hasRestartRecoverySourceClaim(current, params.sourceTurnId)
-      ) {
-        return null;
-      }
-      didRetire = true;
-      return {
-        ...buildRestartRecoveryClaimCleanupPatch({
-          entry: current,
-          recordTerminalSource: true,
-          terminalSourceRunId: params.sourceTurnId,
-        }),
-        updatedAt: Date.now(),
-      };
-    },
-    {
-      skipMaintenance: true,
-      takeCacheOwnership: true,
-      workerGuard: { source: params.assertCurrent },
-    },
-  );
-  return didRetire ? (retired ?? undefined) : undefined;
-}
-
 export function createReplyRestartRecoveryClaimController(params: {
   agentId: string;
-  acquireSessionActor: () => Promise<{
-    actor: SessionActor;
-    target: SessionEntryTargetPatchScope;
-  }>;
+  acquireSessionActor: () => Promise<
+    | {
+        actor: SessionActor;
+        target: SessionEntryTargetPatchScope;
+      }
+    | undefined
+  >;
   operatorAuthority?: AdmittedRunOperatorAuthority;
   inputProvenance?: InputProvenance;
   admissionRunId?: unknown;
@@ -221,14 +172,26 @@ export function createReplyRestartRecoveryClaimController(params: {
     if (!sessionActor) {
       const acquired = await params.acquireSessionActor();
       assertReadCurrent();
+      if (!acquired) {
+        return undefined;
+      }
       recordReadTarget(acquired.target);
       sessionActor = acquired.actor;
     }
     return sessionActor;
   };
-  const readActor = async () => {
+  const readEntry = async (sessionKey: string) => {
     const actor = await acquireActor();
-    return actor.snapshot(readAuthority) ?? (await actor.read(readAuthority));
+    if (actor) {
+      return (actor.snapshot(readAuthority) ?? (await actor.read(readAuthority))).entry;
+    }
+    // Native incognito retains the existing reader and its captured source.
+    return readSessionEntryInWorker(
+      { agentId: params.agentId, sessionKey, storePath: params.storePath },
+      assertReadCurrent,
+      undefined,
+      recordReadTarget,
+    );
   };
   const adoptLifecycle = async (options: {
     entry: SessionEntry;
@@ -256,6 +219,25 @@ export function createReplyRestartRecoveryClaimController(params: {
       assertClaimCurrent(sessionId);
       params.operatorAuthority?.assertCurrent();
     };
+    if (!actor) {
+      const committed = await patchSessionEntryTarget(
+        preparedTarget(),
+        (entry) => {
+          validate(entry);
+          return options.patch;
+        },
+        {
+          skipMaintenance: true,
+          takeCacheOwnership: true,
+          workerGuard: { assertCurrent },
+        },
+      );
+      if (!committed) {
+        throw createRestartRecoveryClaimChangedError();
+      }
+      options.committed(committed);
+      return committed;
+    }
     let admitted = false;
     let authorityFailure: unknown;
     const authorize = (stage?: "transaction" | "commit", entry?: SessionEntry) => {
@@ -326,7 +308,10 @@ export function createReplyRestartRecoveryClaimController(params: {
     if (options.recorder && !options.recorder.hasPersisted()) {
       bindUserTurnInputActor(options.recorder, {
         phase: "adoptRun",
-        acquire: async () => ({ actor: await acquireActor(), target: preparedTarget() }),
+        acquire: async () => {
+          const actor = await acquireActor();
+          return actor ? { actor, target: preparedTarget() } : undefined;
+        },
       });
       const result = await options.recorder.persistApproved({
         target: params.resolveUserTurnTarget?.({
@@ -389,7 +374,7 @@ export function createReplyRestartRecoveryClaimController(params: {
       };
       let current: SessionEntry | undefined;
       try {
-        current = (await readActor()).entry;
+        current = await readEntry(params.sessionKey);
       } catch (error) {
         assertAdmissionCurrent();
         throw error;
@@ -594,7 +579,7 @@ export function createReplyRestartRecoveryClaimController(params: {
       return;
     }
     const updatedAt = Date.now();
-    const current = (await readActor()).entry;
+    const current = await readEntry(params.sessionKey);
     if (!isTrackedClaim(current) || !current) {
       throw createRestartRecoveryClaimChangedError();
     }
@@ -701,7 +686,7 @@ export function createReplyRestartRecoveryClaimController(params: {
             undefined,
             recordReadTarget,
           )
-        : (await readActor()).entry;
+        : await readEntry(params.sessionKey);
       assertReadCurrent();
       if (!confirmedArmed) {
         const current = params.getEntry();

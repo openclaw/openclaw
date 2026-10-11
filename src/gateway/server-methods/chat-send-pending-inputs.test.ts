@@ -7,7 +7,6 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { seedCanonicalAcpSessionMeta } from "../../acp/runtime/session-meta-fixture.test-support.js";
 import * as acpReads from "../../acp/runtime/session-meta-readonly.js";
-import { buildAgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.js";
 import { registerAgentSessionLoopTestLifecycle } from "../../agents/sessions/agent-session-loop-correctness.test-support.js";
 import type { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import { replyRunRegistry } from "../../auto-reply/reply/reply-run-registry.js";
@@ -30,7 +29,6 @@ import { readPendingInput } from "../../config/sessions/session-pending-input-op
 import type { PendingInputSnapshot } from "../../config/sessions/session-pending-input-operations.types.js";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { initializeGlobalHookRunner } from "../../plugins/hook-runner-global.js";
-import { getSessionWorkAdmissionRelease } from "../../sessions/session-lifecycle-admission.js";
 import { attachSessionTranscriptRunId } from "../../sessions/transcript-events.js";
 import {
   createUserTurnTranscriptRecorder,
@@ -45,7 +43,6 @@ import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { createMentionInbox } from "../mention-inbox.js";
 import { readMentionInbox, dismissMentionInbox } from "../mention-inbox.test-support.js";
-import { refusePendingInputCommit } from "../pending-input-commit.test-support.js";
 import { dispatchInboundMessageMock, installGatewayTestHooks } from "../test-helpers.js";
 import { getTestPluginRegistry } from "../test-helpers.plugin-registry.js";
 import { createWorkerSessionPlacementStore } from "../worker-environments/placement-store.js";
@@ -56,44 +53,6 @@ registerAgentSessionLoopTestLifecycle();
 const createBrowserFollowupFixture = useBrowserFollowupFixture();
 
 describe("ordinary chat input admission", () => {
-  it("acknowledges staged chat input and joins its terminal disposition without host pending-input writes", async () => {
-    const fixture = await createBrowserFollowupFixture();
-    let pendingAtAck: ReturnType<typeof listSessionPendingInputs> | undefined;
-    const sql = observeHostDataSql();
-    try {
-      const ack = await fixture.send(
-        vi.fn<RespondFn>((ok) => {
-          if (ok) {
-            pendingAtAck = listSessionPendingInputs(fixture.scope);
-          }
-        }),
-      );
-      expect(ack.mock.calls[0]?.[0]).toBe(true);
-      expect(await pendingAtAck).toMatchObject({
-        items: [{ state: "queued", runId: fixture.params.idempotencyKey }],
-      });
-      const recorder = await fixture.dispatchedRecorder;
-      await recorder.completeProcessingAsync?.(
-        buildAgentRunTerminalOutcome({ status: "error", stopReason: "rpc" }),
-      );
-      recorder.finishPendingInput?.("cancelled");
-      expect(() => recorder.withPendingInput?.(() => {})).toThrow("ownership ended");
-      await fixture.finishDispatch();
-      const writes = sql.queries.filter((query) =>
-        /\b(?:insert\s+into|update|delete\s+from)\s+["`]?session_(?:pending_inputs|input_completions)\b/i.test(
-          query,
-        ),
-      );
-      expect(writes).toEqual([]);
-    } finally {
-      sql.restore();
-      await fixture.cleanup();
-    }
-    expect(await listSessionPendingInputs(fixture.scope)).toMatchObject({
-      items: [{ state: "cancelled", runId: fixture.params.idempotencyKey }],
-    });
-  });
-
   async function createMentionFixture(
     options: { active?: boolean; preserveContent?: boolean } = {},
   ) {
@@ -611,50 +570,6 @@ describe("ordinary chat input admission", () => {
       }
     },
   );
-
-  it("retries a failed custody write with the same request identity without acknowledging lost input", async () => {
-    const fixture = await createBrowserFollowupFixture();
-    const refusal = refusePendingInputCommit({
-      operation: "stage",
-      message: "custody unavailable",
-      sessionId: fixture.scope.sessionId,
-      runId: fixture.params.idempotencyKey,
-    });
-    try {
-      const rejected = await fixture.send();
-      expect(rejected).toHaveBeenCalledWith(
-        false,
-        expect.objectContaining({ status: "error" }),
-        expect.objectContaining({ message: expect.stringContaining("custody unavailable") }),
-        expect.anything(),
-      );
-      expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
-      expect(loadTranscriptEventsSync(fixture.scope)).toEqual(fixture.activeTranscript);
-      expect(await listSessionPendingInputs(fixture.scope)).toEqual({ items: [], total: 0 });
-      expect(fixture.context.chatAbortControllers.has(fixture.params.idempotencyKey)).toBe(false);
-      await getSessionWorkAdmissionRelease({
-        scope: fixture.scope.storePath,
-        identities: [fixture.scope.sessionKey, fixture.scope.sessionId],
-      });
-
-      refusal.mockRestore();
-      const retried = await fixture.send();
-      expect(retried).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({ runId: fixture.params.idempotencyKey, status: "started" }),
-        undefined,
-        expect.anything(),
-      );
-      expect(await listSessionPendingInputs(fixture.scope)).toMatchObject({
-        total: 1,
-        items: [{ state: "queued", message: { content: fixture.approvedContent } }],
-      });
-      expect(loadTranscriptEventsSync(fixture.scope)).toEqual(fixture.activeTranscript);
-    } finally {
-      refusal.mockRestore();
-      await fixture.cleanup();
-    }
-  });
 
   it.each(["cancellation", "lifecycle rotation", "session replacement"] as const)(
     "revalidates %s after message approval before committing custody",

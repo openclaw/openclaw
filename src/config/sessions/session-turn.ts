@@ -1,12 +1,10 @@
 import { randomUUID } from "node:crypto";
-import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   createSqliteLifecycleAggregateError,
   throwSqliteLifecycleErrors,
 } from "../../infra/sqlite-lifecycle-errors.js";
 import { retainSqliteWorkerErrorCode } from "../../infra/sqlite-worker-contract.js";
-import { getOpenClawAgentDatabaseIfOpen } from "../../state/openclaw-agent-db.js";
 import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { getCliHistoryWriter } from "./cli-history-boundary.js";
 import { assertSessionGoalOperationTime } from "./goals-operations.js";
@@ -18,13 +16,11 @@ import {
   toDatabaseOptions,
   type ResolvedTranscriptScope,
 } from "./session-accessor.sqlite-scope.js";
-import { installCommittedTranscriptMessageSequences } from "./session-accessor.sqlite-transcript-sequences.js";
 import { redactTranscriptMessageForStorage } from "./session-accessor.sqlite-transcript-store.js";
 import type {
   SessionTranscriptTurnMessageAppend,
   SessionTranscriptTurnWriteContext,
 } from "./session-accessor.types.js";
-import { captureNativeIncognitoSessionActorSources } from "./session-actor-native-incognito.js";
 import { SessionTranscriptColdError } from "./session-cold-storage-state.js";
 import { runSessionEntryWorkerOperation } from "./session-entry-patch.js";
 import {
@@ -41,9 +37,11 @@ import {
   type PreparedSessionSourceAuthority,
   type SessionSourceValidation,
 } from "./session-source-authority.js";
-import { completeSessionTranscriptCommit } from "./session-transcript-commit-completion.js";
-import { startSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
 import { buildRestartRecoveryExpectedState } from "./session-transcript-turn-state.js";
+import {
+  completeSessionTurnPublication,
+  publishCommittedSessionTurn,
+} from "./session-turn-publication.js";
 import { prepareSessionTurnGoalMessage } from "./session-turn.kernel.js";
 import type {
   IncognitoSessionTurnOperations,
@@ -131,16 +129,8 @@ export async function appendSessionTurnInWorker(
     relocation: custody?.relocation,
   };
   const actor = inputActor?.actor;
-  const transportSources = (checks: PreparedSessionSourceAuthority["checks"]) => {
-    const predicates = checks.map(({ predicate }) => predicate);
-    return actor?.target.database.kind === "native-incognito"
-      ? captureNativeIncognitoSessionActorSources({
-          database,
-          target: { ...actor.target, database: actor.target.database },
-          sources: predicates,
-        })
-      : predicates;
-  };
+  const transportSources = (checks: PreparedSessionSourceAuthority["checks"]) =>
+    checks.map(({ predicate }) => predicate);
   if (ownerSource && actor) {
     plan.ownerSources = transportSources(ownerSource.checks);
   }
@@ -195,7 +185,7 @@ export async function appendSessionTurnInWorker(
       throw new Error("Incognito turns require owner authority prepared for the same actor");
     }
     const restore = async () => {
-      if (incognito || actor?.target.database.kind === "native-incognito") {
+      if (incognito) {
         return undefined;
       }
       const { restoreSessionColdTranscript, SessionColdTurnReboundError } =
@@ -426,74 +416,19 @@ export async function appendSessionTurnInWorker(
         return commit();
       },
       onAcknowledged(candidate) {
-        try {
-          installCommittedTranscriptMessageSequences(
-            candidate.result.appendedMessages,
-            candidate.sequences,
-          );
-          // Accept canonical custody before source/identity publication can fail.
-          try {
-            const completion = completeSessionTranscriptCommit(
-              candidate.result.appendedMessages,
-              options.onMessageCommitted,
-              candidate.result,
-            );
-            if (completion) {
-              void completion.catch(() => undefined);
-              committedCompletions.push(completion);
-            }
-          } catch (error) {
-            const completion = Promise.reject(
-              toErrorObject(error, "Session transcript completion failed"),
-            );
-            void completion.catch(() => undefined);
-            committedCompletions.push(completion);
-          }
-          if (
-            options.onCommittedSource &&
-            !candidate.result.rejectedReason &&
-            candidate.result.sessionEntry
-          ) {
-            const identity = execution?.fileIdentity;
-            const originalSource = inputActor?.target.readSource;
-            if (!identity && !incognito && !originalSource) {
-              throw new Error("Committed transcript turn omitted its admitted database identity");
-            }
-            options.onCommittedSource(
-              originalSource ?? {
-                agentId: scope.agentId,
-                path: database.path,
-                databaseIdentity: incognito
-                  ? incognito.actor.identity.incarnation
-                  : identity!.physicalIdentity,
-                databaseBirthtime: identity?.birthtime,
-              },
-              candidate.result.sessionEntry,
-            );
-          }
-        } finally {
-          if (candidate.custody) {
-            custody?.publish(candidate.custody);
-          }
-          if (candidate.projectionNeedsReconcile) {
-            startSessionTranscriptIndexReconcile({
-              ...database,
-              preferredSessionId: scope.sessionId,
-            });
-          }
-        }
+        publishCommittedSessionTurn(candidate, {
+          scope,
+          database,
+          options,
+          custody,
+          committedCompletions,
+          execution,
+          incognito,
+          inputActor,
+        });
       },
       async onCommitted(candidate, published, identity) {
-        if (published) {
-          publishCommittedSessionIdentity(
-            scope.agentId,
-            identity,
-            published.previous,
-            published.current,
-            published.prepared,
-          );
-        }
-        return candidate.result;
+        return completeSessionTurnPublication(candidate, scope.agentId, identity, published);
       },
     } satisfies Omit<
       Parameters<
@@ -541,28 +476,6 @@ export async function appendSessionTurnInWorker(
             const replicaPreparation = prepareSessionInputFromReplica(plan, hot, scope);
             if (replicaPreparation) {
               return replicaPreparation;
-            }
-            if (actor.target.database.kind === "native-incognito") {
-              const opened = getOpenClawAgentDatabaseIfOpen(database);
-              if (!opened) {
-                throw new Error("Input actor lost its native database");
-              }
-              const { prepareSessionTurn } = await import("./session-turn.worker.js");
-              return prepareSessionTurn(
-                plan,
-                {
-                  options: database,
-                  open: () => opened,
-                  admit: (_stage, publication) => {
-                    operation.onTransactionFacts(publication);
-                    assertCurrent();
-                  },
-                  writeTransaction: () => {
-                    throw new Error("Input preparation cannot write");
-                  },
-                },
-                actor.target.database.incarnation,
-              );
             }
             if (incognito) {
               return incognito.actor.sessions.entry(

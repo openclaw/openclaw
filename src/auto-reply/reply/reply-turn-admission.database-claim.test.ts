@@ -62,7 +62,9 @@ function complete(result: Awaited<ReturnType<typeof admitReplyTurn>> | undefined
   }
 }
 
-it("retains the native incognito owner until accepted actor work drains", async ({ signal }) => {
+it("keeps native incognito admission with its existing owner without an actor", async ({
+  signal,
+}) => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const key = "agent:main:dashboard:incognito-reply-admission";
     const storePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env: state.env });
@@ -74,8 +76,6 @@ it("retains the native incognito owner until accepted actor work drains", async 
       env: state.env,
     });
     expect(native).toBeDefined();
-    const release = createDeferred();
-    let phase: Promise<void> | undefined;
     const result = await admit(storePath, { agentId: "main", sessionKey: key });
     try {
       if (result.status !== "owned" || !result.databaseClaim) {
@@ -93,53 +93,26 @@ it("retains the native incognito owner until accepted actor work drains", async 
         target: { canonicalKey: key, storeKeys: [key] },
       });
       expect(typeof databaseClaim.identity).toBe("symbol");
-      const [actor, sibling] = await Promise.all([
-        acquireReplyOperationSessionActor(operation),
-        acquireReplyOperationSessionActor(operation),
-      ]);
-      expect(sibling).toBe(actor);
-      const authority = {
-        assertCurrent: () => databaseClaim.assertCurrent(),
-        authorize() {},
-      };
-      const snapshot = await actor.read(authority);
-      expect(snapshot.entry).toMatchObject({ sessionId, incognito: true, updatedAt: 1 });
+      await expect(acquireReplyOperationSessionActor(operation)).resolves.toBeUndefined();
+      expect(sessionEntries.loadSessionEntry(scope)).toMatchObject({
+        sessionId,
+        incognito: true,
+        updatedAt: 1,
+      });
       expect(getOpenClawAgentDatabaseIfOpen({ agentId: "main", path: storePath })).toBe(native);
       expect(fs.existsSync(storePath)).toBe(false);
-
-      const entered = createDeferred();
-      phase = actor.withPhase("native-reply-admission", authority, async (currentPhase) => {
-        currentPhase.patch([{ kind: "activity", updatedAt: 543 }]);
-        entered.resolve();
-        await release.promise;
-      });
-      await withinTest(
-        awaitGateBeforeSettlement(
-          entered.promise,
-          phase,
-          "Native actor phase completed before retaining accepted work",
-        ),
-        signal,
-      );
+      expect(databaseClaim.isCurrent()).toBe(true);
       operation.complete();
-      expect(() => actor.snapshot(authority)).toThrow();
       expect(() => acquireReplyOperationSessionActor(operation)).toThrow();
       expect(() => getReplyOperationSessionTarget(operation)).toThrow();
-      expect(registry.isReplyRunSuccessorAdmissionBlocked(key)).toBe(true);
-      expect(databaseClaim.isCurrent()).toBe(true);
-
-      release.resolve();
-      await withinTest(phase, signal);
       expect(
         await withinTest(registry.waitForReplyRunSuccessorAdmission(key, null), signal),
       ).toMatchObject({ settled: true });
       expect(databaseClaim.isCurrent()).toBe(false);
-      expect(sessionEntries.loadSessionEntry(scope)).toMatchObject({ sessionId, updatedAt: 543 });
+      expect(sessionEntries.loadSessionEntry(scope)).toMatchObject({ sessionId, updatedAt: 1 });
       expect(getOpenClawAgentDatabaseIfOpen({ agentId: "main", path: storePath })).toBe(native);
       expect(fs.existsSync(storePath)).toBe(false);
     } finally {
-      release.resolve();
-      await Promise.allSettled([phase]);
       complete(result);
       await registry.waitForReplyRunSuccessorAdmission(key, null);
     }

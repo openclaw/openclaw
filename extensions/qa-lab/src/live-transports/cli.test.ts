@@ -1,7 +1,7 @@
 // Qa Lab tests cover live transport CLI and adapter contribution discovery.
 import { Command } from "commander";
 import type { QaRunnerCliContribution } from "openclaw/plugin-sdk/qa-runner-runtime";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
   adapterRuntimeLoads,
@@ -73,9 +73,19 @@ function registerCommand(commandName: string) {
 }
 
 describe("live transport QA contributions", () => {
+  let previousExitCode: typeof process.exitCode;
+  let stderrWrite: ReturnType<typeof vi.spyOn>;
+
   beforeEach(() => {
+    previousExitCode = process.exitCode;
+    stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
     vi.clearAllMocks();
     listQaRunnerCliContributions.mockReturnValue([]);
+  });
+
+  afterEach(() => {
+    process.exitCode = previousExitCode;
+    stderrWrite.mockRestore();
   });
 
   it("registers all three dedicated commands without loading suite or adapter runtimes", () => {
@@ -219,8 +229,9 @@ describe("live transport QA contributions", () => {
 
     const failure = new Error(`${commandName} suite failed`);
     runLiveTransportQaSuiteCommand.mockRejectedValueOnce(failure);
-    const next = registerCommand(commandName).qa.parseAsync(["node", "openclaw", commandName]);
-    await expect(next).rejects.toBe(failure);
+    await registerCommand(commandName).qa.parseAsync(["node", "openclaw", commandName]);
+    expect(stderrWrite).toHaveBeenCalledWith(`${failure.message}\n`);
+    expect(process.exitCode).toBe(1);
   });
 
   it("rejects a missing standard option value before suite dispatch", async () => {

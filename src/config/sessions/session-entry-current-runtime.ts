@@ -91,6 +91,16 @@ export function captureSessionEntryCurrentRead(
   if (owner.incognito) {
     return captureIncognitoSessionEntryCurrentRead(owner.incognito, sessionKey);
   }
+  if (owner.kind === "incognito") {
+    return {
+      kind: "missing",
+      assertSourceCurrent: owner.assertCurrent,
+      readCurrent() {
+        owner.assertCurrent();
+        return undefined;
+      },
+    };
+  }
   if (owner.kind === "native") {
     return captureNativeSessionEntryCurrentRead(scope);
   }

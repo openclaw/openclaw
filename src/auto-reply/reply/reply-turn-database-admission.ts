@@ -17,7 +17,7 @@ export function bindReplyOperationDatabaseAdmission(
 ) {
   let handoff: Promise<void> | undefined;
   let releasing: Promise<void> | undefined;
-  let sessionActor: Promise<SessionActor> | undefined;
+  let sessionActor: Promise<SessionActor | undefined> | undefined;
   const assertReaderOperation = () => {
     readerOperation.abortSignal.throwIfAborted();
     if (
@@ -100,7 +100,7 @@ export function bindReplyOperationDatabaseAdmission(
             operationAdmission.sessionActor = actor;
             return actor;
           } catch (error) {
-            await actor.release();
+            await actor?.release();
             throw error;
           }
         });

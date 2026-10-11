@@ -81,7 +81,7 @@ type NativeIncognitoSessionAdmissionClaim = Omit<OpenClawAgentDatabaseClaim, "re
   readonly target: SessionEntryTargetPatchScope;
   reader?: undefined;
   afterTransition?: undefined;
-  acquireSessionActor(lifetime: SessionActorLifetime): Promise<SessionActor>;
+  acquireSessionActor(lifetime: SessionActorLifetime): Promise<undefined>;
   release(): Promise<void>;
 };
 
@@ -262,32 +262,8 @@ export async function loadSessionEntryForAdmission(
       async acquireSessionActor(lifetime) {
         nativeClaim.assertCurrent();
         lifetime.assertCurrent();
-        const { captureNativeIncognitoSessionActor, captureNativeIncognitoSessionActorTarget } =
-          await import("./session-actor-native-incognito.js");
-        nativeClaim.assertCurrent();
-        lifetime.assertCurrent();
-        const actorDatabase = { ...options, path: database.path };
-        const target = captureNativeIncognitoSessionActorTarget({
-          database: actorDatabase,
-          sessionKey: resolved.sessionKey,
-        });
-        if (!target || target.database.incarnation !== nativeClaim.incarnation) {
-          throw new IncognitoSessionEndedError();
-        }
-        return captureNativeIncognitoSessionActor({
-          database: actorDatabase,
-          target,
-          lifetime: {
-            assertCurrent() {
-              nativeClaim.assertCurrent();
-              lifetime.assertCurrent();
-            },
-            assertReadable() {
-              nativeClaim.assertCurrent();
-              lifetime.assertReadable();
-            },
-          },
-        });
+        // Native incognito stays with its existing owner until the worker cutover.
+        return undefined;
       },
       async release() {
         nativeClaim.release();

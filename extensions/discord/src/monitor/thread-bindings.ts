@@ -30,6 +30,7 @@ export {
 export {
   autoBindSpawnedDiscordSubagent,
   listThreadBindingsBySessionKey,
+  listThreadBindingsBySessionKeyAsync,
   listThreadBindingsForAccount,
   reconcileAcpThreadBindingsOnStartup,
   setThreadBindingIdleTimeoutBySessionKey,

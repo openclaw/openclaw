@@ -14,7 +14,6 @@ import type {
 import type {
   SessionActorHotState,
   SessionActorLifetime,
-  SessionActorNativeIncognitoIdentity,
   SessionActorOutcome,
   SessionActorTarget,
 } from "./session-actor-contract.js";
@@ -22,7 +21,7 @@ import { collectSessionEntryLookupKeys } from "./store-entry.js";
 
 type FileTarget = SessionActorTarget & { database: AgentDatabaseExecutionFileIdentity };
 type EphemeralTarget = SessionActorTarget & {
-  database: AgentDatabaseIncognitoIdentity | SessionActorNativeIncognitoIdentity;
+  database: AgentDatabaseIncognitoIdentity;
 };
 type ReplicaCell = {
   target: SessionActorTarget;
@@ -68,15 +67,7 @@ function targetKey(target: SessionActorTarget): string {
   return JSON.stringify(
     database.kind === "file"
       ? [database.kind, database.physicalIdentity, database.birthtime, sessionKey]
-      : database.kind === "ephemeral"
-        ? [database.kind, database.handle, database.incarnation, sessionKey]
-        : [
-            database.kind,
-            database.agentId,
-            database.nativeLocation,
-            database.incarnation,
-            sessionKey,
-          ],
+      : [database.kind, database.handle, database.incarnation, sessionKey],
   );
 }
 

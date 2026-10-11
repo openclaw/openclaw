@@ -187,6 +187,9 @@ it("retains one actor per cold/reopened reply admission and drains it without ma
           acquireReplyOperationSessionActor(operation),
           acquireReplyOperationSessionActor(operation),
         ]);
+        if (!actor || !sibling) {
+          throw new Error("Persistent admission must acquire a session actor");
+        }
         expect(sibling).toBe(actor);
         const authority = {
           assertCurrent: () => databaseClaim.assertCurrent(),

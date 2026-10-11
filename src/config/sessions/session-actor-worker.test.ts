@@ -651,7 +651,6 @@ it("stages queued custody without rewriting the active session lifecycle", async
     expect(f.nativeEntry()).toEqual(before.entry);
   });
 });
-
 it.each(["assistant append", "empty append"] as const)(
   "commits terminal custody and guarded accounting atomically with %s",
   async (mode) => {

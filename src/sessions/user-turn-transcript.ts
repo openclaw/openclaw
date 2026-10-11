@@ -2,13 +2,11 @@ import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import {
   bindSessionPendingInputSources,
-  persistSessionTranscriptTurn,
   stageSessionPendingInput,
   withSessionPendingInputPersistence,
   resolveSessionTranscriptRuntimeTarget,
   type TranscriptEntryAnchor,
   type SessionTranscriptTurnPersistOptions,
-  type TranscriptMessageAppendResult,
 } from "../config/sessions/session-accessor.js";
 import { readWithdrawnSessionPendingInputId } from "../config/sessions/session-accessor.pending-inputs.js";
 import {
@@ -17,9 +15,6 @@ import {
   type SessionInputActorBinding,
 } from "../config/sessions/session-input-actor.js";
 import { createDynamicSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
-import { readActiveTranscriptEntryAnchorAsync } from "../config/sessions/session-transcript-anchor-read.js";
-import { waitForSessionTranscriptProjection } from "../config/sessions/session-transcript-reconcile.js";
-import { captureOwnedTranscriptWriteAssertion } from "../config/sessions/transcript-write-context.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import {
   getUserTurnTranscriptAdmissionOwner,
@@ -32,7 +27,6 @@ import {
 } from "./user-turn-transcript-updates.js";
 import {
   buildLateResolvedMediaMessage,
-  isUserMessage,
   resolvePersistedUserTurnMessage,
 } from "./user-turn-transcript.message.js";
 import {
@@ -42,9 +36,14 @@ import {
   restorePreparedUserTurnOperationalMetaForRuntime,
   rewritePersistedSteerTargetRunId,
 } from "./user-turn-transcript.metadata.js";
+import {
+  admittedUserTurnResult,
+  persistUserTurnTranscript,
+  resolveCommittedUserTurnTranscript,
+  type CommittedUserTurnTranscript,
+} from "./user-turn-transcript.persistence.js";
 import type {
   CreateUserTurnTranscriptRecorderParams,
-  PersistUserTurnTranscriptParams,
   PersistedUserTurnMessage,
   UserTurnTranscriptAdmissionReceipt,
   UserTurnOriginalInputCommit,
@@ -59,44 +58,6 @@ const originalInputCommitNotifiers = new WeakMap<
   UserTurnTranscriptRecorder,
   (anchor: TranscriptEntryAnchor) => void
 >();
-
-type CommittedUserTurnTranscript = TranscriptMessageAppendResult<PersistedUserTurnMessage> &
-  Pick<UserTurnTranscriptPersistResult, "sessionEntry" | "sessionTurnMutationResult">;
-
-function admittedUserTurnResult(
-  committed: CommittedUserTurnTranscript,
-  logicalTurnId: string,
-  sessionKey: string,
-): UserTurnTranscriptPersistResult | undefined {
-  if (!committed.anchor) {
-    return undefined;
-  }
-  return {
-    ...committed,
-    admission: { ...committed.anchor, logicalTurnId, role: "user" },
-    sessionFile: sessionKey,
-  };
-}
-
-async function resolveCommittedUserTurnTranscript(
-  originalCommit: CommittedUserTurnTranscript,
-  params: PersistUserTurnTranscriptParams,
-): Promise<UserTurnTranscriptPersistResult | undefined> {
-  let committed = originalCommit;
-  if (!committed.anchor) {
-    const assertCurrent = captureOwnedTranscriptWriteAssertion(params);
-    await waitForSessionTranscriptProjection(params);
-    const anchor = await readActiveTranscriptEntryAnchorAsync({
-      ...params,
-      entryId: committed.messageId,
-    });
-    assertCurrent();
-    if (anchor) {
-      committed = { ...committed, anchor };
-    }
-  }
-  return admittedUserTurnResult(committed, params.logicalTurnId ?? randomUUID(), params.sessionKey);
-}
 
 export type {
   PersistedUserTurnMessage,
@@ -117,105 +78,6 @@ export {
   preparePersistedUserTurnMessageForTranscriptWrite,
   restorePreparedUserTurnOperationalMetaForRuntime,
 };
-
-// Store-backed persistence resolves the current session transcript file lazily
-// so callers can pass a session entry/store without knowing the final path.
-async function persistUserTurnTranscript(
-  params: PersistUserTurnTranscriptParams & {
-    onCommitted?: (
-      committed: CommittedUserTurnTranscript,
-      acceptCompletion: (complete: () => Promise<void>) => void,
-    ) => void;
-  },
-): Promise<UserTurnTranscriptPersistResult | undefined> {
-  const message = resolvePersistedUserTurnMessage(params);
-  if (!message) {
-    return undefined;
-  }
-  let committedWithoutAnchor = false;
-
-  const turn = await persistSessionTranscriptTurn(
-    {
-      sessionId: params.sessionId,
-      sessionKey: params.sessionKey,
-      sessionEntry: params.sessionEntry,
-      ...(params.sessionStore ? { sessionStore: params.sessionStore } : {}),
-      ...(params.storePath ? { storePath: params.storePath } : {}),
-      agentId: params.agentId,
-      ...(params.threadId !== undefined ? { threadId: params.threadId } : {}),
-    },
-    {
-      ...(params.cwd ? { cwd: params.cwd } : {}),
-      ...(params.config
-        ? { config: params.config as SessionTranscriptTurnPersistOptions["config"] }
-        : {}),
-      ...(params.expectedSessionId ? { expectedSessionId: params.expectedSessionId } : {}),
-      ...(params.initialSessionEntry ? { initialSessionEntry: params.initialSessionEntry } : {}),
-      ...(params.expectedSessionState ? { expectedSessionState: params.expectedSessionState } : {}),
-      ...(params.sessionLifecyclePatch
-        ? { sessionLifecyclePatch: params.sessionLifecyclePatch }
-        : {}),
-      ...(params.sessionTurnMutation ? { sessionTurnMutation: params.sessionTurnMutation } : {}),
-      updateMode: params.updateMode ?? "inline",
-      onMessageCommitted: (result, acceptCompletion, committedTurn) => {
-        if (!isUserMessage(result.message)) {
-          return;
-        }
-        if (committedTurn) {
-          params.onCommitted?.(
-            { ...result, message: result.message, ...committedTurn },
-            acceptCompletion,
-          );
-        }
-        if (!result.appended) {
-          return;
-        }
-        if (result.anchor) {
-          params.onOriginalInputCommitted?.({ message: result.message, anchor: result.anchor });
-        } else {
-          committedWithoutAnchor = true;
-        }
-      },
-      messages: [
-        {
-          message,
-          idempotencyLookup: "scan",
-          workerPreparation: {
-            beforeFreshMessageCommit: params.beforeFreshMessageCommit,
-            prepareMessageAfterIdempotencyCheck: (candidate) =>
-              preparePersistedUserTurnMessageForTranscriptWrite(
-                candidate as PersistedUserTurnMessage,
-                params,
-              ),
-          },
-        },
-      ],
-    },
-  );
-  const result = turn.messages[0];
-  if (!result || !isUserMessage(result.message)) {
-    return undefined;
-  }
-  const appended = await resolveCommittedUserTurnTranscript(
-    {
-      ...result,
-      message: result.message,
-      sessionEntry: turn.sessionEntry,
-      sessionTurnMutationResult: turn.sessionTurnMutationResult,
-    },
-    params,
-  );
-  if (!appended) {
-    return undefined;
-  }
-  if (committedWithoutAnchor && appended.appended) {
-    // A deferred projection supplies its anchor later; only the captured fresh
-    // append may complete here, never an idempotent history match.
-    params.onOriginalInputCommitted?.({ message: appended.message, anchor: appended.admission });
-  }
-
-  return appended;
-}
 
 async function resolveUserTurnTranscriptTarget(
   target: UserTurnTranscriptTargetResolver,

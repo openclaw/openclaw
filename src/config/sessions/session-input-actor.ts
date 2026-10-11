@@ -3,8 +3,7 @@ import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
 import { isIncognitoSessionKey } from "../../shared/incognito-session-key.js";
-import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
-import { getOpenClawAgentDatabaseIfOpen } from "../../state/openclaw-agent-db.js";
+import { isIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { withSessionEntryWorker } from "./session-accessor.sqlite-replacement-worker.js";
 import { resolveSqliteSessionKey } from "./session-accessor.sqlite-scope-helpers.js";
 import type { SessionEntryTargetPatchScope } from "./session-accessor.types.js";
@@ -13,7 +12,7 @@ import { captureIncognitoSessionOperation } from "./session-incognito-binding.js
 
 export type SessionInputActorBinding = {
   phase: "acceptInput" | "adoptRun";
-  acquire(): Promise<{ actor: SessionActor; target: SessionEntryTargetPatchScope }>;
+  acquire(): Promise<{ actor: SessionActor; target: SessionEntryTargetPatchScope } | undefined>;
 };
 
 const recorderBindings = new WeakMap<
@@ -44,7 +43,7 @@ export function bindUserTurnInputActor(
 export async function acquireSessionInputActor(
   requestedTarget: SessionEntryTargetPatchScope,
   lifetime: SessionActorLifetime,
-): Promise<{ actor: SessionActor; target: SessionEntryTargetPatchScope }> {
+): Promise<{ actor: SessionActor; target: SessionEntryTargetPatchScope } | undefined> {
   const agentId = requestedTarget.readSource?.agentId ?? requestedTarget.agentId;
   if (!agentId) {
     throw new Error("Input actor requires its captured agent owner");
@@ -64,42 +63,35 @@ export async function acquireSessionInputActor(
     env: target.env,
   };
   lifetime.assertCurrent();
-  const [{ createSessionActorFactory }, { captureNativeIncognitoSessionActorTarget }] =
-    await Promise.all([
-      import("./session-actor-durable.js"),
-      import("./session-actor-native-incognito.js"),
-    ]);
+  const { createSessionActorFactory } = await import("./session-actor-durable.js");
   lifetime.assertCurrent();
   const bound = captureIncognitoSessionOperation({
     ...database,
     storePath: database.path,
     sessionKey,
   });
-  const native = captureNativeIncognitoSessionActorTarget({ database, sessionKey });
-  if (bound || native) {
+  if (
+    bound ||
+    isIncognitoSessionKey(sessionKey) ||
+    isIncognitoOpenClawAgentSqlitePath(database.path, database)
+  ) {
     const actor = await createSessionActorFactory(database).acquire(
-      bound ? { database: bound.actor.identity, sessionKey } : native!,
+      bound
+        ? { database: bound.actor.identity, sessionKey }
+        : { database: { kind: "native-incognito" }, sessionKey },
       lifetime,
     );
-    let readSource = target.readSource;
-    if (!readSource) {
-      const owner = bound ? undefined : getOpenClawAgentDatabaseIfOpen(database);
-      if (!bound && !owner) {
-        await actor.release();
-        throw new Error("Input actor lost its native source before publication");
-      }
-      readSource = {
+    if ("kind" in actor) {
+      return undefined;
+    }
+    const readSource =
+      target.readSource ??
+      (bound && {
         agentId,
         path: database.path,
-        databaseIdentity: bound
-          ? bound.actor.identity.incarnation
-          : readOpenClawAgentDatabaseIdentity(owner!).identity,
-      };
-    }
+        databaseIdentity: bound.actor.identity.incarnation,
+      });
     return { actor, target: { ...target, readSource } };
-  }
-  if (isIncognitoSessionKey(sessionKey)) {
-    throw new Error("Input actor lost its incognito database owner");
   }
   if (typeof target.readSource?.databaseIdentity === "symbol") {
     throw new Error("Input actor lost its original native owner");
@@ -118,6 +110,9 @@ export async function acquireSessionInputActor(
         { database: identity, sessionKey },
         lifetime,
       );
+      if ("kind" in actor) {
+        return undefined;
+      }
       return {
         actor,
         target: {
@@ -136,10 +131,6 @@ export async function acquireSessionInputActor(
 
 const inputActor = new AsyncLocalStorage<SessionInputActorBinding | undefined>();
 
-export function hasSessionInputActor(): boolean {
-  return inputActor.getStore() !== undefined;
-}
-
 /** Recorder calls capture their binding before yielding; handoff never redirects accepted work. */
 export function withSessionInputActor<T>(
   binding: SessionInputActorBinding | undefined,
@@ -154,6 +145,9 @@ export async function getSessionInputActor(scope: { agentId: string; sessionKey:
     return undefined;
   }
   const acquired = await binding.acquire();
+  if (!acquired) {
+    return undefined;
+  }
   if (
     acquired.target.target.canonicalKey !== resolveSqliteSessionKey(scope.sessionKey, scope.agentId)
   ) {

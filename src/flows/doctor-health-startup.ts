@@ -1,10 +1,15 @@
 import fs from "node:fs";
+import { intro as clackIntro, outro as clackOutro } from "@clack/prompts";
+import { stylePromptTitle } from "../../packages/terminal-core/src/prompt-style.js";
 import { exitCliAfterOutput } from "../cli/one-shot-exit.js";
 import type { DoctorDatabasePreflight } from "../commands/doctor-database-preflight.js";
 import type { DoctorOptions } from "../commands/doctor-prompter.js";
 import { resolveDoctorRepairMode } from "../commands/doctor-repair-mode.js";
 import { resolveIsNixMode, resolveStateDir } from "../config/paths.js";
 import { createNonExitingRuntime, defaultRuntime, type RuntimeEnv } from "../runtime.js";
+
+export const intro = (message: string) => clackIntro(stylePromptTitle(message) ?? message);
+export const outro = (message: string) => clackOutro(stylePromptTitle(message) ?? message);
 
 export function exitDoctorHealthFlow(runtime: RuntimeEnv, code: number): void {
   if (runtime === defaultRuntime) {
@@ -24,7 +29,7 @@ function stateDirectoryExistsAtDoctorStart(): boolean {
 export async function prepareDoctorHealthFlow(
   runtime: RuntimeEnv | undefined,
   options: DoctorOptions,
-  intro: (message: string) => void,
+  showIntro: (message: string) => void,
 ) {
   const effectiveRuntime = runtime ?? (await import("../runtime.js")).defaultRuntime;
   const repairRuntime: RuntimeEnv = {
@@ -34,7 +39,7 @@ export async function prepareDoctorHealthFlow(
   // Config loading can initialize SQLite-backed state before integrity runs.
   // Preserve the entry fact so doctor can report that automatic initialization.
   const stateDirExistedAtStart = stateDirectoryExistsAtDoctorStart();
-  intro("OpenClaw doctor");
+  showIntro("OpenClaw doctor");
   const { resolveOpenClawPackageRoot } = await import("../infra/openclaw-root.js");
   const root = await resolveOpenClawPackageRoot({
     moduleUrl: import.meta.url,
