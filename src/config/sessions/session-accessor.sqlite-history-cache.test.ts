@@ -10,12 +10,10 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import {
   appendTranscriptEvent,
-  appendTranscriptEventSync,
   appendTranscriptMessage,
   appendTranscriptMessageSync,
   persistSessionTranscriptTurn,
   replaceSessionEntrySync,
-  replaceTranscriptEvents,
   withTranscriptWriteTransaction,
 } from "./session-accessor.js";
 import {
@@ -27,6 +25,10 @@ import {
   readSessionTranscriptHistoryEventCount,
   useHistoryEventScope,
 } from "./session-accessor.sqlite-history.test-support.js";
+import {
+  appendTranscriptEventSync,
+  replaceTranscriptEvents,
+} from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { transcriptMessage } from "./transcript-message.test-support.js";
 
 describe("SQLite transcript history cache", () => {

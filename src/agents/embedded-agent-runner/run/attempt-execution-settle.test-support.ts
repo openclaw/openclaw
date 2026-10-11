@@ -127,7 +127,6 @@ export function createFixture(mocks: {
     cache: {},
     history: {
       contextEnginePromptAuthority: "assembled",
-      contextEngineAssemblySucceeded: true,
       unwindowedContextEngineMessagesForPrecheck: [{ role: "user", content: "history" }],
     },
     isProbeSession: false,
@@ -163,6 +162,7 @@ export function createFixture(mocks: {
     },
     cacheTrace,
     contextGuards: {
+      checkMidTurnPrecheck: vi.fn(),
       getAfterTurnCheckpoint: vi.fn(() => 2),
       takePendingMidTurnPrecheckRequest: vi.fn(() => null),
     },

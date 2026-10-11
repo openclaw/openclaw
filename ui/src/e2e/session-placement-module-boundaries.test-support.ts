@@ -469,7 +469,7 @@ export function defineSessionPlacementModuleBoundaryTests(
         await expect.poll(() => page.url()).toContain(controlUiSessionPath(sessionKey));
         await expect
           .poll(() => page.locator(".agent-chat__composer-combobox textarea").isDisabled())
-          .toBe(true);
+          .toBe(false);
         const publishPlacement = async (
           state: "requested" | "provisioning" | "syncing" | "starting",
           generation: number,

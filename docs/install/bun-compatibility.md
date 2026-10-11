@@ -14,11 +14,11 @@ Plugin resolution stays with Bun's native/Jiti loader and `Bun.plugin` on Bun, e
 
 OpenClaw requires **Bun 1.4.0+**, an available **`node:sqlite`** API, and the same [WAL-safe SQLite floor as Node](/install/node-compatibility#why-the-floors-exist).
 
-| Platform | SQLite library Bun uses                       | Extension loading              | What OpenClaw does                                   |
-| -------- | --------------------------------------------- | ------------------------------ | ---------------------------------------------------- |
-| Linux    | Statically linked SQLite; 3.53.2 in Bun 1.4.2 | Supported                      | No additional library setup needed.                  |
-| macOS    | Apple system SQLite by default                | Unavailable in Apple's library | Automatically selects a suitable library; see below. |
-| Windows  | Same static SQLite build as Linux             | Supported                      | No additional library setup needed.                  |
+| Platform | SQLite library Bun uses                       | Extension loading              | What OpenClaw does                                 |
+| -------- | --------------------------------------------- | ------------------------------ | -------------------------------------------------- |
+| Linux    | Statically linked SQLite; 3.53.2 in Bun 1.4.2 | Supported                      | No additional library setup needed.                |
+| macOS    | Apple system SQLite by default                | Unavailable in Apple's library | Selects a supported library or refuses; see below. |
+| Windows  | Same static SQLite build as Linux             | Supported                      | No additional library setup needed.                |
 
 The platform defaults come from [Bun's SQLite build policy](https://github.com/oven-sh/bun/blob/bun-v1.4.2/scripts/build/deps/sqlite.ts); the [Bun 1.4.2 version definition](https://github.com/oven-sh/bun/blob/bun-v1.4.2/src/jsc/bindings/sqlite/sqlite3_local.h) pins SQLite 3.53.2.
 
@@ -56,9 +56,8 @@ runtime pins remain with their existing owner. See
 
 ## SQLite library selection on macOS
 
-For external Bun installations, install Homebrew SQLite for native `sqlite-vec`
-KNN memory queries. The macOS app's private runtime already includes its own
-library.
+External Bun installations on macOS need Homebrew SQLite or another supported
+library. The macOS app's private runtime already includes its own library.
 
 ```sh
 brew install sqlite
@@ -72,7 +71,15 @@ Before opening databases, OpenClaw selects a library in this order:
 4. `/usr/local/opt/sqlite/lib/libsqlite3.dylib`.
 5. `/opt/local/lib/libsqlite3.dylib` (MacPorts).
 
-Candidates must meet the WAL safety floor and support extension loading before selection. If automatic discovery finds no qualifying library, Bun keeps its runtime library; ordinary agent databases can open if that library meets the WAL floor. The memory KNN child uses the same selected library.
+Candidates must meet the WAL safety floor and support extension loading before selection. The memory KNN child uses the same selected library.
+
+If automatic discovery finds no qualifying library, OpenClaw refuses to open databases instead of using Bun's runtime library. That library is Apple's patched system SQLite, which deviates from upstream SQLite where OpenClaw's read-only connections depend on it. It cannot open a WAL database read-only before its `-wal` and `-shm` files exist (`unable to open database file`). In rollback-journal mode, it also fails to begin a write transaction while a read-only connection in the same process holds a read lock (`disk I/O error`). The refusal lists any present candidate that could not load:
+
+```text
+No supported SQLite library for Bun on macOS (<arch>); unusable: <path> (<reason>). Apple's system SQLite fails OpenClaw's read-only database connections. Install one with brew install sqlite, or set OPENCLAW_SQLITE_LIBRARY to a libsqlite3.dylib built for <arch>.
+```
+
+An x64 Bun running under Rosetta cannot load an arm64-only Homebrew library. Point `OPENCLAW_SQLITE_LIBRARY` at a universal or x86_64 build, such as the one `scripts/build-mac-sqlite.sh universal <runtime-directory>` produces from a source checkout.
 
 SQLite storage workers inherit the main process's selected library. Opening another database or restarting a storage worker reuses that selection without repeating Bun's one-shot library initialization.
 
@@ -110,6 +117,10 @@ The browser plugin starts its helper processes with the Bun executable that runs
 - **Chrome extension:** on macOS and Linux, the native messaging host and the relay daemon it starts use the runtime that ran `openclaw browser extension install`.
 
 ## Bun-only installs
+
+The [Bun installer](/install/bun#bun-only-global-install) resolves and verifies the
+OpenClaw release’s fork pin without requiring Node. Node remains the default
+installer runtime; select `--runtime bun` explicitly.
 
 Trusted Bun-only global installs on macOS and Linux install an `openclaw` shell
 launcher in Bun's existing global bin directory (`bun pm bin -g`). It records the
@@ -226,6 +237,12 @@ with a one-time `SQLITE_EARLY_TOPOLOGY` warning explaining its retained layout. 
 decision at creation; those started before it completes remain conservative for
 their lifetime, while later workers inherit the completed result.
 
+On conservative runtimes, a successful service runtime-pin inspection can leave
+private snapshot files pending cleanup until process exit. OpenClaw records a
+cleanup warning and retains ownership of those files without failing the
+inspection. Read errors and required-cleanup failures still stop the operation;
+the original state database is unchanged.
+
 The result is never saved in config or state. Each new long-lived host checks its
 selected runtime and library again, including after an upgrade, downgrade, or rollback.
 No schema or data migration is needed, and the installed updater is unchanged.
@@ -261,6 +278,7 @@ See [Bun](/install/bun) for the workflow and lifecycle trust commands.
 
 | Release                            | Change                                                                                                                                                                                                |
 | ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Unreleased (main)                  | Refuses Apple's system SQLite on macOS when discovery finds no supported library, naming unloadable candidates such as an arm64 Homebrew library under x64 Rosetta Bun.                               |
 | Unreleased (main)                  | Reuses SQLite workers after a native-close check passes on macOS or Linux. Stock Bun 1.4.2, Windows, and inconclusive checks retain conservative cleanup.                                             |
 | Unreleased (main)                  | Runs the macOS app's private worker and Chrome setup on the OpenClaw Bun fork, bundling the full package and signed extension-capable SQLite in one shared runtime. Gateway hosting remains external. |
 | Unreleased (main)                  | Headless node updates on macOS and Linux fetch and verify registry archives in-process and prepare private runtimes with Bun, without Node or npm. Windows preparation still requires npm. #160575    |

@@ -96,7 +96,6 @@ describe("registered MiniMax Code Mode tool surface", () => {
         tools: [...controls, createStubTool("query_records")],
         config,
         ...plan,
-        forceDirectMessageTool: false,
         catalogRef,
       });
       return {

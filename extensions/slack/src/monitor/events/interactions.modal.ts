@@ -83,12 +83,12 @@ function resolveSlackPluginSystemEventPayload(
   return Object.keys(output).length > 0 ? output : undefined;
 }
 
-function resolveModalSessionRouting(params: {
+async function resolveModalSessionRouting(params: {
   ctx: SlackMonitorContext;
   metadata: ReturnType<typeof parseSlackModalPrivateMetadata>;
   userId?: string;
   eventScope?: SlackEventScope;
-}): { agentId: string; sessionKey: string; channelId?: string; channelType?: string } {
+}): Promise<{ agentId: string; sessionKey: string; channelId?: string; channelType?: string }> {
   const metadata = params.metadata;
   const metadataAgentId = metadata.sessionKey
     ? resolveAgentIdFromSessionKey(metadata.sessionKey)
@@ -102,13 +102,13 @@ function resolveModalSessionRouting(params: {
     };
   }
   const routing = {
-    ...params.ctx.resolveSlackSystemEventRoute({
+    ...(await params.ctx.resolveSlackSystemEventRoute({
       ...(metadata.channelId
         ? { channelId: metadata.channelId, channelType: metadata.channelType }
         : { channelType: "im" }),
       senderId: params.userId,
       eventScope: params.eventScope,
-    }),
+    })),
     ...(metadata.channelId
       ? { channelId: metadata.channelId, channelType: metadata.channelType }
       : { channelType: params.eventScope ? "im" : undefined }),
@@ -136,7 +136,7 @@ async function emitSlackModalLifecycleEvent(params: {
   const userId = params.body.user?.id ?? "unknown";
   const viewId = params.body.view?.id;
   const inputs = summarizeSlackViewState(params.body.view?.state?.values);
-  const sessionRouting = resolveModalSessionRouting({
+  const sessionRouting = await resolveModalSessionRouting({
     ctx: params.ctx,
     metadata,
     userId,

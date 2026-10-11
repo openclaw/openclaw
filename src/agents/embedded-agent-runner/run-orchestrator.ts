@@ -440,7 +440,9 @@ async function runEmbeddedAgentForSession(
               });
               const normalizedSessionKey = params.sessionKey?.trim();
               const modelFallbackAvailability =
-                params.modelFallbackAvailability ??
+                (params.resolvedModelSelection?.fallbacksOverride === undefined
+                  ? params.modelFallbackAvailability
+                  : undefined) ??
                 resolveModelFallbackAvailability({
                   cfg: params.config ?? EMPTY_EMBEDDED_AGENT_CONFIG,
                   agentId: workspaceResolution.agentId,
@@ -475,7 +477,10 @@ async function runEmbeddedAgentForSession(
                 runId: params.runId,
                 trigger: params.trigger,
                 event: { cleanedBody: params.prompt },
-                context: hookCtx,
+                context: {
+                  ...hookCtx,
+                  heartbeatEventQueueSessionKey: params.heartbeatEventQueueSessionKey,
+                },
                 onDispatch: () =>
                   notifyExecutionPhase("before_agent_reply", { provider, model: modelId }),
                 onDeclined: () =>
@@ -498,7 +503,7 @@ async function runEmbeddedAgentForSession(
               }
 
               assistantErrorTranscript ??=
-                params.assistantErrorTranscript ?? createAssistantErrorTranscript(params);
+                params.assistantErrorTranscript ?? createAssistantErrorTranscript();
               terminal ??=
                 (params.deferTerminalLifecycle ?? params.deferTerminalLifecycleEnd)
                   ? undefined
@@ -666,7 +671,7 @@ async function runEmbeddedAgentForSession(
         } finally {
           // Error transcript and terminal publication belong to the logical run, not each generation.
           if (ownsAssistantErrorTranscript) {
-            await assistantErrorTranscript?.settle(failed && !params.abortSignal?.aborted);
+            assistantErrorTranscript?.settle(failed && !params.abortSignal?.aborted);
           }
         }
         refresh.mergeTerminalReceipt(result);

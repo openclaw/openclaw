@@ -247,7 +247,6 @@ export async function runCodeModeScriptHeadless(params: {
       releaseReservation ??= reserveActiveRunSlot();
       pending.push(
         ...createPendingBridgeStates(newRequests, {
-          config,
           inbox: owner.inbox,
           results: owner.results,
           runtime,

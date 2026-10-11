@@ -23,6 +23,11 @@ async function readPairing(
   const snapshot = current ? undefined : getActiveOpenClawStateDatabaseReadSnapshot(selected);
   const read = async () => {
     const publication = captureDevicePairingPublication(context.admission);
+    const nodes = prepareNodes && !snapshot ? publication.readNodes() : undefined;
+    if (nodes) {
+      context.admission.assertCurrent();
+      return { reply: undefined, nodes };
+    }
     let reply;
     try {
       reply = await executeExistingOpenClawStateRead(
@@ -50,11 +55,11 @@ async function readPairing(
     } else if (!reply) {
       publication.publish("missing", [], true);
     }
-    const nodes =
+    const preparedNodes =
       prepareNodes && (!reply || (reply.ok && reply.type === "devicePairing.list"))
         ? publication.prepareNodes(reply?.revision ?? "missing", reply?.list.paired ?? [])
         : undefined;
-    return { reply, nodes };
+    return { reply, nodes: preparedNodes };
   };
   const observed = await read();
   if (observed) {

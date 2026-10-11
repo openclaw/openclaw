@@ -340,14 +340,20 @@ functions remain valid after the original cache buffer is garbage-collected.
 It also keeps allocator ownership during zero-time event-loop polls, while
 retaining the idle handoff for polls that can block.
 
-The pinned build pairs Bun `42bd1d282ad16189ff71789ddbf81fa89dcd9d3a` with WebKit
-`cb8d6f202b5a396caa204ee1bb75d78175aa841a` in prerelease
-`openclaw-v1.4.3-20261008-42bd1d282a-webkit-cb8d6f202b`.
-WebKit is unchanged from the previous `fc53bf8c0f` pin. This build defers full
-`node:vm` bytecode generation until payload reuse, returns integral heap-sampling
-byte sizes, and releases inspector snapshot metadata when sessions close.
-It retains the previous worker heap-cap, module-resolution, test-deadline,
-GC cadence, and idle-worker fixes. The release publishes the four Darwin/Linux targets;
+The pinned build pairs Bun `65d94e7156da4b6aca649dac5f19b8294b757570` with WebKit
+`01f208ae7a87661e7503f514c946a37bc76ad1d1` in prerelease
+`openclaw-v1.4.3-20261010-65d94e7156-webkit-01f208ae7a`.
+This build shares source buffers on `node:vm` cache hits, refactors module
+resolution, aligns TLS teardown with Node, fixes subprocess retirement, and
+enforces Node-compatible process and Worker heap limits. It fixes N-API cleanup
+and external strings across Workers, releases Worker-local event-name state,
+and skips the preliminary full collection at Worker shutdown. WebKit fixes
+stale VM-entry storage initialization, uses a two-pointer VMEntryScope, and
+fixes Linux foreign-stack suspension deadlocks.
+It retains deferred VM bytecode generation, integral heap-sampling byte sizes,
+inspector snapshot cleanup, and the previous worker heap-cap, module-resolution,
+test-deadline, GC cadence, and idle-worker fixes. The release publishes the four
+Darwin/Linux targets; Darwin executables are Developer ID signed and notarized.
 Windows publication remains gated on signing.
 
 The build adds an adaptive, bounded `node:vm` compilation cache for large module
@@ -1036,15 +1042,6 @@ remains the explicit operator override for attempting a different budget.
 sizes. Budget violations do not prevent artifact generation. The separate
 `control-ui-performance` job enforces the budgets without blocking other jobs
 from building or testing the same source.
-
-The report counts retained identity bytes: asset-manifest entries minus `.br`/`.gz`
-sidecars, which the Gateway keeps for already-open tabs after an update. The limit
-is 48 MiB, half the 96 MiB retention budget in
-`src/gateway/control-ui-asset-manifest.ts`, so the current and previous builds
-stay retained. Like the other size limits, it fails locally and warns in GitHub
-Actions; `--base-dist` reports the delta. Exceeding it means shrinking retained
-assets (locale catalogs are the largest share) or deliberately changing the
-retention budget.
 
 Startup CSS has a 45 KiB advisory target and a 50 KiB hard ceiling. Growth below
 1 KiB passes; an increase of 1 KiB or more in either startup CSS or the largest

@@ -14,6 +14,7 @@ import { makeProviderModelFixture } from "../test-helpers/provider-model-fixture
 import { formatContextLimitTruncationNotice } from "./context-truncation-notice.js";
 import { normalizeMessagesForLlmBoundary } from "./run/attempt-llm-boundary.js";
 import { MidTurnPrecheckSignal } from "./run/midturn-precheck.js";
+import { checkMidTurnPrecheck } from "./run/preemptive-compaction.js";
 import {
   createMessageCharEstimateCache,
   estimateMessageCharsCached,
@@ -34,7 +35,6 @@ import {
   makeGuardableAgent,
   getToolResultText,
   applyGuardToContext,
-  applyMidTurnPrecheckGuardToContext,
   expectOpenClawTruncation,
 } from "./tool-result-context-guard.test-support.js";
 
@@ -91,19 +91,24 @@ function hook(engine: ContextEngine, options: HookOptions = {}, agent = makeGuar
   };
 }
 
-function pressureCheck(
+async function pressureCheck(
   agent: ReturnType<typeof makeGuardableAgent>,
   messages: AgentMessage[],
   toolResultMaxChars?: number,
 ) {
-  return applyMidTurnPrecheckGuardToContext(agent, messages, {
-    contextWindowTokens: 200_000,
+  installToolResultContextGuard({ agent, contextWindowTokens: 200_000 });
+  const projected = await expectDefined(agent.transformContext, "installed guard")(
+    messages,
+    new AbortController().signal,
+  );
+  checkMidTurnPrecheck({
+    context: { messages: convertToLlm(projected), systemPrompt: "sys" },
     contextTokenBudget: 20_000,
     reserveTokens: 12_000,
     toolResultMaxChars,
-    systemPrompt: "sys",
-    prePromptMessageCount: 1,
+    onPrecheck: () => {},
   });
+  return projected;
 }
 
 describe("installToolResultContextGuard", () => {

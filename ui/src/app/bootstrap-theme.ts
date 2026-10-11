@@ -6,10 +6,12 @@ import { registerListener } from "../../../src/shared/listeners.js";
 import type {
   ApplicationGateway,
   ApplicationTheme,
+  ApplicationThemePalette,
   ApplicationThemeServerSelection,
 } from "./context.ts";
 import { applyControlUiAccent, syncControlUiSystemChrome } from "./control-ui-presentation.ts";
 import { syncCustomThemeStyleTag } from "./custom-theme.ts";
+import { backgroundPreferenceStorageKey } from "./settings-background.ts";
 import {
   bindUiPreferences,
   loadUiPreferences,
@@ -105,6 +107,7 @@ export function createApplicationTheme(
   const { token: _token, ...initialPreferences } = initialSettings;
   let settings: UiPreferences = initialPreferences;
   let serverSelection: ApplicationThemeServerSelection | null = null;
+  let appliedPalette: ApplicationThemePalette | null = null;
   let systemThemeCleanup: (() => void) | undefined;
   const listeners = new Set<() => void>();
 
@@ -126,6 +129,12 @@ export function createApplicationTheme(
         return;
       }
       applyThemePresentation(settings, catalog?.theme(settings.theme));
+      const mode = catalog?.theme(settings.theme)?.mode ?? settings.themeMode;
+      appliedPalette = {
+        revision: generation,
+        theme: settings.theme,
+        resolvedMode: resolveTheme(settings.theme, mode).endsWith("light") ? "light" : "dark",
+      };
       // Computed-style consumers need the applied palette, not just the new
       // preference. Synchronous application shares the publication below.
       if (preferencesPublished) {
@@ -209,11 +218,15 @@ export function createApplicationTheme(
     () => syncControlUiSystemChrome(),
   );
 
-  const refresh = () => {
+  const refresh = (options?: { notify?: boolean }) => {
     const next = loadUiPreferences(gateway.connection.gatewayUrl);
     const changed = livePreferencesKey(next) !== livePreferencesKey(settings);
     settings = next;
     if (!changed) {
+      // Readiness can change without changing the stored preference values.
+      if (options?.notify) {
+        publish();
+      }
       return;
     }
     void loadCatalog();
@@ -225,7 +238,11 @@ export function createApplicationTheme(
     refresh,
   });
   const onStorage = (event: StorageEvent) => {
-    if (event.key === null || event.key === settingsKeyForGateway(gateway.connection.gatewayUrl)) {
+    if (
+      event.key === null ||
+      event.key === settingsKeyForGateway(gateway.connection.gatewayUrl) ||
+      event.key === backgroundPreferenceStorageKey(gateway.connection.gatewayUrl)
+    ) {
       refresh();
     }
   };
@@ -263,6 +280,9 @@ export function createApplicationTheme(
     },
     get serverSelection() {
       return serverSelection;
+    },
+    get appliedPalette() {
+      return appliedPalette;
     },
     recordServerSelection(theme, scope) {
       serverSelection = { revision: (serverSelection?.revision ?? 0) + 1, scope, theme };

@@ -156,7 +156,9 @@ describe("AppSidebar catalog event refresh", () => {
     await vi.advanceTimersByTimeAsync(180_000);
     await sidebar.updateComplete;
     expect(request.mock.calls.length).toBeGreaterThan(30);
-    expect(sidebar.querySelector('[role="status"]')?.textContent).toContain("Starting up");
+    expect(
+      sidebar.querySelector('.sidebar-session-empty-hint--startup[role="status"]')?.textContent,
+    ).toContain("Starting up");
     expect(sidebar.querySelector(".callout.danger")).toBeNull();
     expect(sidebar.textContent).not.toContain("doctor --fix");
     expect(warning).not.toHaveBeenCalled();

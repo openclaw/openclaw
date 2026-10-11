@@ -2,7 +2,7 @@
 // them without importing the resolver in chat-reply-preview.ts.
 import type { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
 import type { renderChatAuthorAvatar } from "./chat-author-avatar.ts";
-import type { MessageReplyTarget } from "./chat-message-markdown.ts";
+import type { MessageReplyTarget } from "./chat-message-markdown.types.ts";
 
 export type ReplyPreview = MessageReplyTarget & {
   sourceMessageId: string;

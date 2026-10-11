@@ -72,18 +72,6 @@ export class DraftGatewayState {
     return Boolean(gateway.requiredProfile) && !catalog.isTarget(data);
   }
 
-  static requiredWorkerInference(
-    gateway: DraftGatewayState,
-    data: NewSessionRouteData | undefined,
-  ) {
-    return (
-      DraftGatewayState.requiredPlacement(gateway, data) &&
-      gateway.cloudProfiles.some(
-        (profile) => profile.id === gateway.requiredProfile && profile.inference === "worker",
-      )
-    );
-  }
-
   private cloudProfilesValue: DraftCloudProfile[] = [];
   private requiredProfileValue: string | undefined;
   private placementPolicyReadyValue = false;

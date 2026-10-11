@@ -23,6 +23,7 @@ import {
 import type { SessionCreatedActor } from "../../../components/session-owner-chip.ts";
 import { t } from "../../../i18n/index.ts";
 import { OpenClawLightDomElement } from "../../../lit/openclaw-element.ts";
+import { isChatBubbleMode, setChatBubbleMode } from "../chat-bubble-mode.ts";
 import {
   canManageChatSessionSharing,
   renderChatSessionSharing,
@@ -74,6 +75,8 @@ class ChatHeaderSessionMenu extends OpenClawLightDomElement {
   @property({ attribute: false }) onboarding = false;
   @property({ attribute: false }) preferencesBrowserOnly = false;
   @property({ attribute: false }) compact = false;
+  @property({ attribute: false }) bubbleModeEnabled = false;
+  @property({ attribute: false }) mainKey = "main";
   @property({ attribute: false }) copyMarkdownAllowed = false;
   @property({ attribute: false }) splitAllowed = false;
   @property({
@@ -81,7 +84,9 @@ class ChatHeaderSessionMenu extends OpenClawLightDomElement {
     hasChanged: (next: UiSettings, previous?: UiSettings) =>
       next?.chatShowThinking !== previous?.chatShowThinking ||
       next?.chatShowToolCalls !== previous?.chatShowToolCalls ||
-      next?.chatPersistCommentary !== previous?.chatPersistCommentary,
+      next?.chatPersistCommentary !== previous?.chatPersistCommentary ||
+      next?.chatBubbleSessionKeys !== previous?.chatBubbleSessionKeys ||
+      next?.chatBubbleDisabledSessionKeys !== previous?.chatBubbleDisabledSessionKeys,
   })
   settings: UiSettings = EMPTY_SETTINGS;
   @property({ attribute: false }) panelActions: HeaderMenuQuickAction[] = [];
@@ -193,6 +198,19 @@ class ChatHeaderSessionMenu extends OpenClawLightDomElement {
         this.onSettingsChange({
           chatPersistCommentary: this.settings.chatPersistCommentary === false,
         });
+      } else if (
+        setting === "speech-bubbles" &&
+        this.bubbleModeEnabled &&
+        this.session.target?.key
+      ) {
+        const sessionKey = this.session.target.key;
+        this.onSettingsChange(
+          setChatBubbleMode(
+            this.settings,
+            sessionKey,
+            !isChatBubbleMode(this.settings, sessionKey, this.bubbleModeEnabled, this.mainKey),
+          ),
+        );
       }
       return;
     }
@@ -314,6 +332,15 @@ class ChatHeaderSessionMenu extends OpenClawLightDomElement {
       ${item("tool-calls", t("chat.view.toolCalls"), showToolCalls)}
       ${item("commentary", t("chat.view.commentary"), persistCommentary)}
       ${
+        this.bubbleModeEnabled
+          ? item(
+              "speech-bubbles",
+              t("chat.view.speechBubbles"),
+              isChatBubbleMode(this.settings, this.session.target?.key ?? "", true, this.mainKey),
+            )
+          : nothing
+      }
+      ${
         this.preferencesBrowserOnly
           ? html`<div slot=${inline ? nothing : "submenu"} class="session-menu__info" role="note">
               ${t("quickSettings.personal.browserOnly")}
@@ -330,7 +357,10 @@ class ChatHeaderSessionMenu extends OpenClawLightDomElement {
       this.compactView === "copy" ||
       this.compactView === "assign-owner" ||
       this.compactView === "icon" ||
-      this.compactView === "group"
+      this.compactView === "group" ||
+      this.compactView === "snooze" ||
+      this.compactView === "advanced" ||
+      this.compactView === "archive"
     ) {
       return this.managementActions.renderCompactView(this.compactView);
     }
@@ -400,9 +430,7 @@ class ChatHeaderSessionMenu extends OpenClawLightDomElement {
       ${this.managementActions.renderOrganizationActions()}
       ${this.renderQuickActionItems("session", this.sessionActions, true)}
       <div class="session-menu__separator" role="separator"></div>
-      ${this.managementActions.renderTransferActions()}
-      <div class="session-menu__separator" role="separator"></div>
-      ${this.managementActions.renderDeleteAction()}
+      ${this.managementActions.renderAdvancedAction()}
     `;
   }
 
@@ -438,6 +466,7 @@ class ChatHeaderSessionMenu extends OpenClawLightDomElement {
           }
         }}
         @wa-show=${this.handleShow}
+        @wa-after-hide=${this.managementActions.advanced.close}
         @wa-select=${this.handleSelect}
       >
         <button

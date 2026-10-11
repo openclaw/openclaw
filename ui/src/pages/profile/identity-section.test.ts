@@ -93,6 +93,12 @@ describe("renderIdentitySection", () => {
       "Git co-author credit",
     ]);
     expect(container.textContent).toContain("ada@example.test, ada@work.test");
+    expect(container.querySelector(".settings-account")).toBeNull();
+    expect(container.textContent).toContain("Unavailable");
+    expect(container.textContent).toContain("Refresh to retry");
+    const toggle = container.querySelector<HTMLInputElement>("input.settings-toggle__input");
+    expect(toggle?.checked).toBe(false);
+    expect(toggle?.hasAttribute("disabled")).toBe(true);
   });
 
   it("falls back to initials when no same-origin avatar route is available", async () => {
@@ -180,26 +186,12 @@ describe("renderIdentitySection", () => {
     expect(container.textContent).not.toContain("Disconnect");
     expect(container.textContent).toContain("public GitHub noreply address");
     expect(container.textContent).toContain("future commits only");
-    const toggle = container.querySelector<HTMLElement & { checked: boolean }>("wa-switch");
+    const toggle = container.querySelector<HTMLInputElement>("input.settings-toggle__input");
     expect(toggle?.checked).toBe(true);
     expect(toggle?.hasAttribute("disabled")).toBe(false);
     toggle!.checked = false;
     toggle?.dispatchEvent(new Event("change", { bubbles: true }));
     expect(onGitCoauthorChange).toHaveBeenCalledWith(false);
-  });
-
-  it("explains unavailable GitHub verification and disables co-author credit", () => {
-    const container = document.createElement("div");
-    render(renderIdentitySection(createProps()), container);
-
-    expect(container.querySelector(".settings-account")).toBeNull();
-    expect(container.textContent).toContain("Unavailable");
-    expect(container.textContent).toContain("GitHub-backed sign-in");
-    expect(container.textContent).toContain("Refresh to retry");
-    expect(container.querySelector(".identity-github-form")).toBeNull();
-    const toggle = container.querySelector<HTMLElement & { checked: boolean }>("wa-switch");
-    expect(toggle?.checked).toBe(false);
-    expect(toggle?.hasAttribute("disabled")).toBe(true);
   });
 
   it("explains personal GitHub sign-in for the shared owner without email or retry rows", () => {
@@ -222,7 +214,7 @@ describe("renderIdentitySection", () => {
     );
     expect(container.textContent).not.toContain("Linked emails");
     expect(container.textContent).not.toContain("Refresh to retry");
-    const toggle = container.querySelector<HTMLElement & { checked: boolean }>("wa-switch");
+    const toggle = container.querySelector<HTMLInputElement>("input.settings-toggle__input");
     expect(toggle?.checked).toBe(false);
     expect(toggle?.hasAttribute("disabled")).toBe(true);
   });

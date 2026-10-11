@@ -7,6 +7,9 @@ export const en: TranslationMap & {
   mcpApp: TranslationMap;
   linkReader: TranslationMap;
   agentTools: TranslationMap;
+  githubPublication: TranslationMap & Record<"newAction" | "capacity", string>;
+  githubConnections: TranslationMap &
+    Record<"title" | "mine" | "system" | "forMe" | "forSystem", string>;
   board: TranslationMap & { widget: TranslationMap };
   browser: TranslationMap & { errors: TranslationMap; annotatePrompt: TranslationMap };
   shortcutsOverlay: TranslationMap & { title: string };
@@ -29,7 +32,7 @@ export const en: TranslationMap & {
         | "errorSender",
         string
       >;
-    pullRequests: TranslationMap;
+    pullRequests: TranslationMap & Record<"open" | "draft" | "merged" | "closed", string>;
     processesPanel: TranslationMap;
   };
   configForm: TranslationMap & { sections: TranslationMap };
@@ -75,6 +78,23 @@ export const en: TranslationMap & {
   devices: TranslationMap & { pairing: TranslationMap };
   desktop: TranslationMap &
     Record<"title" | "openWindow" | "unavailable" | "toggle" | "reconnect" | "connecting", string>;
+  sessionHovercard: TranslationMap & { states: TranslationMap; checks: TranslationMap } & Record<
+      | "ariaLabel"
+      | "linkedChannel"
+      | "moreParticipants"
+      | "moreParticipantsLabel"
+      | "projectLabel"
+      | "workspaceLabel"
+      | "branchLabel"
+      | "runsOn"
+      | "machineLabel"
+      | "machineCpu"
+      | "machineMemory"
+      | "more"
+      | "changedFile"
+      | "changedFiles",
+      string
+    >;
   filePreview: TranslationMap;
   updates: TranslationMap;
   login: TranslationMap;
@@ -258,20 +278,7 @@ export const en: TranslationMap & {
   mcpApp: {},
   sessionHovercard: {
     ariaLabel: "Session information",
-    agentNotepad: "Agent Notepad",
     linkedChannel: "Linked to {channel}",
-    viaAccount: "Via {account}",
-    topicNumber: "Topic {id}",
-    sessionParticipants: "In this session",
-    chatKinds: {
-      direct: "Direct chat",
-      group: "Group chat",
-      channel: "Channel",
-      thread: "Thread",
-      topic: "Topic",
-    },
-    attributionOther: "& {count} other",
-    attributionOthers: "& {count} others",
     moreParticipants: "+{count}",
     moreParticipantsLabel: "{count} more participants",
     projectLabel: "Project",
@@ -284,19 +291,8 @@ export const en: TranslationMap & {
     more: "+{count} more",
     changedFile: "{count} file",
     changedFiles: "{count} files",
-    pullRequestLabel: "Pull request #{number}, {state}",
-    pullRequestAuthorLabel: "Opened by {login}",
-    states: {
-      open: "Open",
-      draft: "Draft",
-      merged: "Merged",
-      closed: "Closed",
-    },
-    checks: {
-      passing: "CI checks passing",
-      failing: "CI checks failing",
-      pending: "CI checks running",
-    },
+    states: {},
+    checks: {},
   },
   sessionProgressCard: {
     title: "Progress",
@@ -785,6 +781,23 @@ export const en: TranslationMap & {
       "Could not load this dashboard: {error}. Check the Gateway connection and try again.",
   },
   sessionsView: {
+    advanced: "Advanced",
+    copyDetails: "Copy details",
+    copyLink: "Copy link",
+    archiveSessionOnly: "Session only",
+    communication: {
+      send: "Send messages",
+      receive: "Receive messages",
+      always: "Always",
+      ask: "Ask",
+      never: "Never",
+      default: "default",
+      sendDescription:
+        "Allow this session to initiate messages to other sessions. Ask requires human approval; Never blocks them.",
+      receiveDescription:
+        "Allow other sessions to initiate messages to this session. Ask requires human approval; Never blocks them.",
+      resetDescription: "Use the configured defaults for sending and receiving messages.",
+    },
     subagentPrefix: "Subagent:",
     automationPrefix: "Automation:",
     actionRequiresConnection: "Connect to the Gateway to change sessions.",
@@ -857,6 +870,7 @@ export const en: TranslationMap & {
     archivedOnlyTooltip: "Show only archived sessions.",
     minutesPlaceholder: "min",
     searchPlaceholder: "Filter by key, agent, label, kind…",
+    clearSearch: "Clear search",
     user: "User",
     assistant: "Assistant",
     selected: "{count} selected",
@@ -929,6 +943,7 @@ export const en: TranslationMap & {
     runErrorUnknown: "Unknown error",
     attentionRequired: "Session needs attention",
     openSession: "Open session",
+    openFailed: "Could not open this session. Try again.",
     model: "Model",
     provider: "Provider",
     runtime: "Runtime",
@@ -1620,6 +1635,8 @@ export const en: TranslationMap & {
     more: "More",
     home: "Home",
     pages: "Pages",
+    pin: "Pin",
+    unpin: "Unpin",
     customize: "Edit pinned items",
     customizeReset: "Reset pinned items",
     workboardGroup: "WorkBoard",
@@ -2254,85 +2271,16 @@ export const en: TranslationMap & {
     notFoundDescription: "No online presence or visible session association matches this identity.",
   },
   githubPublication: {
-    personal: "My GitHub",
-    system: "System",
-    agent: "Agent override",
-    publishAs: "Publish as @{account}",
-    account: "Publication account",
     newAction: "Choose a new publication",
-    failedAttempt: "Publication attempt failed",
     capacity:
       'Too many publications are awaiting review. Finish an existing publication, then select "{newAction}" to make room. Existing retries remain available.',
-    confirm: "Confirm original publication",
-    check: "Check publication",
-    refresh: "Refresh publication",
-    statusFailed: "Publication failed",
-    statusConfirm: "Confirmation needed",
-    statusRequested: "Publication queued",
-    statusPublishing: "Publication in progress",
-    statusUnavailable: "Publication status unavailable",
-    statusUnknown: "Outcome unknown",
-    unknown:
-      "The outcome is unknown. Retry keeps the original account and request; it does not switch accounts.",
-    target: "Pull request: {repository} \u2192 {base}",
-    pushTarget: "Push: {repository} \u00b7 {branch}",
-    snapshot: "Original accepted snapshot",
-    head: "HEAD",
-    index: "Index tree",
-    workspace: "Workspace tree",
-    dispatched: "GitHub {kind} was dispatched; its remote outcome may still be unknown.",
-    observed: "GitHub {kind} was observed. Disconnecting does not undo this effect.",
-    effectLink: "View GitHub effect",
-    effectPush: "push",
-    effectPullRequest: "pull request",
-    personalWorkspace:
-      "Wait for work to finish and reclaim the workspace to publish with My GitHub.",
-    unidentified: "Sign in with a personal profile to use My GitHub.",
-    connectHelp: "Connect GitHub in Settings \u2192 Profile \u2192 GitHub connections.",
   },
   githubConnections: {
     title: "GitHub connections",
-    description:
-      "Check the accounts used for agent commands, dashboard data, and publishing. These connections are separate from your GitHub sign-in and co-author credit.",
     mine: "My GitHub",
     system: "System GitHub",
-    personalDescription: "Your account for explicitly selected Publish PR actions.",
-    systemDescription:
-      "Default account for agent commands, authenticated dashboards, and publishing.",
-    unboundDescription:
-      "Sign in with a personal Gateway profile to connect My GitHub. Administrators can still manage System GitHub.",
-    signInRequired: "Personal sign-in required",
-    connected: "Connected",
-    disconnected: "Not connected",
-    notLoaded: "Status not loaded",
-    checking: "Checking connection…",
-    statusUnavailable: "Connection status unavailable",
-    manage: "Manage connections",
-    reconnectRequired: "Reconnect required",
-    connectMine: "Connect My GitHub",
-    changeMine: "Change My GitHub",
-    changeSystem: "Change System GitHub",
-    disconnectMine: "Disconnect My GitHub",
-    disconnectDescription:
-      "Stops unfinished personal publication. Published work stays intact; revoke the app grant separately in GitHub settings.",
-    adminManaged: "Admin managed",
-    purpose: "Connect GitHub",
     forMe: "For me",
     forSystem: "For the system",
-    purposeHint: "Only the selected connection changes.",
-    continue: "Continue with GitHub",
-    usage: "Where these accounts are used",
-    usageDescription:
-      "My GitHub is used only when you explicitly select it for Gateway-brokered Publish PR on an idle, reconciled local workspace. Publication still needs write access to the session. Agent git/gh, model actions, previews, and workers keep the shared account. Finish and reclaim remote work before personal publication. Connecting My GitHub changes no defaults.",
-    details: "Connection details",
-    agentTitle: "GitHub account",
-    agentFor: "GitHub for {agent}",
-    agentDescription:
-      "Used for this agent's commands and authenticated dashboard data. Verified confirms the account; repository access is checked when data is requested.",
-    viewAgent: "View agent account",
-    agentOverride: "Agent override",
-    advancedOverride: "Advanced: agent GitHub override",
-    manageCommon: "Manage connections in Profile",
   },
   profilePage: {
     personalInstructions: {
@@ -2762,6 +2710,34 @@ export const en: TranslationMap & {
   // Login copy lives in the lazy en-login catalog; the anchor keeps its merge target.
   login: {},
   chat: {
+    sessionDetails: {
+      title: "Details",
+      close: "Close details",
+      session: "Session details",
+      createdBy: "Created by",
+      owner: "Owner",
+      participants: "{count} participants",
+      moreParticipants: "{count} more participants",
+      workspaceUnavailable: "Workspace unavailable",
+      allChanges: "All changes",
+      pullRequests: "Pull requests",
+      noPullRequests: "No pull requests",
+      automations: "Automations",
+      progressOptions: "Task progress options",
+      hideProgress: "Don't show task progress again",
+      collapseDefault: "Collapse task progress by default",
+      settings: "Task progress settings",
+      progressHidden: "Task progress hidden in this browser.",
+      automationError: "Couldn't load automations.",
+      automationUnavailable: "Automations unavailable for this session.",
+      automationOffline: "Offline · last-known automations",
+      automationLoading: "Loading automations…",
+      automationEmpty: "No automations for this session",
+      automationMore: "Load more automations",
+      automationAttention: "Needs attention",
+      automationPaused: "Paused",
+      automationEnabled: "Enabled",
+    },
     agentDatabaseWarming: "This agent is still starting. Retry in a moment.",
     historyRequestTimedOut: "Chat history request timed out. Retry to load the conversation.",
     clawhub: {
@@ -3090,12 +3066,15 @@ export const en: TranslationMap & {
       copyBranch: "Copy branch name",
       copied: "Copied",
       incognito: "Incognito session",
-      branches: "Session branches",
-      branchSwitchUnavailable: "Branch switch is unavailable while the agent is working.",
-      untitledBranch: "Untitled branch",
+      branches: "Versions",
+      versionsHelpLabel: "About versions",
+      versionsHelp:
+        "Saved copies of this conversation from rewinds or repairs. You can return to an earlier version here.",
+      branchSwitchUnavailable: "Versions cannot be switched while the agent is working.",
+      untitledBranch: "Untitled version",
       oneMessage: "{count} message",
       messages: "{count} messages",
-      activeBranch: "Active branch",
+      activeBranch: "Current version",
     },
     board: {
       faceLabel: "Session face",
@@ -3158,40 +3137,17 @@ export const en: TranslationMap & {
       adminRequired: "Administrator access is required to start suggested tasks.",
     },
     pullRequests: {
-      linkLabel: "Pull request #{number}: {title}",
-      createPr: "Create PR",
-      createPrLabel: "Create a pull request for {branch}",
-      publishPr: "Publish PR",
-      publishing: "Publishing…",
-      publicationRequested: "Requested",
-      retryPublication: "Retry publication",
-      openPublishedPr: "Open PR",
-      cloudPublicationGuidance:
-        "Start a live agent turn and ask it to publish this cloud workspace after reconciliation.",
-      dismiss: "Dismiss pull request #{number}",
-      dismissBranch: "Hide {branch} for this session",
       open: "Open",
       draft: "Draft",
       merged: "Merged",
       closed: "Closed",
-      checks: "CI",
-      checksPassing: "CI checks passing",
-      checksFailing: "CI checks failing",
-      checksPending: "CI checks running",
-      ciMonitoring: "CI monitoring",
-      openChecks: "Open checks on GitHub",
-      checksPassed: "Passed",
-      checksFailed: "Failed",
-      checksRunning: "Running",
-      checksSkipped: "Skipped",
-      rateLimited:
-        "GitHub API rate limit reached. Pull request status may be out of date until the limit resets.",
-      unavailable:
-        "GitHub status could not be refreshed. Showing the last known state; check GitHub for the latest.",
     },
     usageRemaining: "Usage Remaining",
     view: {
       menu: "View",
+      speechBubbles: "Speech bubbles",
+      activityDetails: "View activity details",
+      workingDetails: "Agent is working. View details",
       reasoning: "Reasoning",
       toolCalls: "Tool calls",
       commentary: "Keep commentary",
@@ -3361,6 +3317,18 @@ export const en: TranslationMap & {
       },
       showContent: "Show content",
     },
+    skillLearned: {
+      label: "Learned",
+      created: "Created",
+      updated: "Updated",
+      archived: "Archived",
+      restored: "Restored",
+      open: "Open {name} in Skill Workshop",
+      undo: "Undo",
+      undoing: "Undoing…",
+      undone: "Undone",
+      undoError: "Could not undo: {error}",
+    },
     progressLabels: {
       shelling: "Shelling",
       scuttling: "Scuttling",
@@ -3406,6 +3374,7 @@ export const en: TranslationMap & {
       dropOpenHere: "Open here",
     },
     sidebar: {
+      mySessions: "My sessions",
       updateMacAndGateway: "Update Mac app + Gateway",
       updateGateway: "Update Gateway",
       serverUpdatedTitle: "Server updated",
@@ -3554,6 +3523,7 @@ export const en: TranslationMap & {
       unavailable: "Unavailable",
       expired: "Expired",
       disconnected: "Not connected. Try again after reconnecting.",
+      loadFailed: "Could not load this question. Try again.",
     },
     imageLightbox: {
       actions: "Image actions",

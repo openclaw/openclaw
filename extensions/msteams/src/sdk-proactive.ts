@@ -55,6 +55,7 @@ type MSTeamsApiClient = {
 };
 
 type MSTeamsProactiveOptions = {
+  accountId?: string | null;
   quoteActivityId?: string;
   threadActivityId?: string;
   serviceUrlBoundary?: MSTeamsSdkCloudOptions;
@@ -261,7 +262,10 @@ export async function sendMSTeamsActivityWithReference(
       ref.conversation.conversationType === "channel" &&
       ref.conversation.id === conversationId
     ) {
-      recordMSTeamsSentMessage(conversationId, res.id, ref.bot.id);
+      recordMSTeamsSentMessage(conversationId, res.id, {
+        accountId: options?.accountId,
+        botId: ref.bot.id,
+      });
     }
     return { ...activityWithRef, ...res };
   });

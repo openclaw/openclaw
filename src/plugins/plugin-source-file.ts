@@ -2,7 +2,6 @@ import { createHash, type Hash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import {
-  assertDirectoryIdentitySync,
   copyFileDescriptorSync,
   copyRootFileSync,
   createFileSync,
@@ -55,12 +54,6 @@ function withPluginSourceFile<T>(source: string, boundary: string, read: (fd: nu
   }
 }
 
-export function pluginSourceFileIdentity(source: string, boundary: string): string {
-  return withPluginSourceFile(source, boundary, (fd) =>
-    pluginSourceStatIdentity(fs.fstatSync(fd, { bigint: true })),
-  );
-}
-
 export function isPluginNativeExecutable(source: string, boundary: string): boolean {
   return withPluginSourceFile(source, boundary, isPluginNativeDescriptor);
 }
@@ -79,42 +72,15 @@ function isPluginNativeDescriptor(fd: number): boolean {
 }
 
 function copySmallPluginSourceFile(
-  source: string,
-  boundary: string,
   target: string,
   fd: number,
   admitted: fs.BigIntStats,
   mode: number,
   hashCopiedContent?: boolean,
 ) {
-  const parent = path.dirname(target);
-  const parentIdentity = fs.lstatSync(parent, { bigint: true });
-  const assertParent = () =>
-    assertDirectoryIdentitySync(parent, {
-      dev: parentIdentity.dev,
-      ino: parentIdentity.ino,
-      realPath: parent,
-    });
-  const assertSource = () =>
-    withPluginSourceFile(source, boundary, (currentFd) => {
-      const current = fs.fstatSync(currentFd, { bigint: true });
-      const before = pluginSourceStatIdentity(admitted);
-      const after = pluginSourceStatIdentity(current);
-      if (before !== after && !pluginSourceIdentityChangedOnlyByCtime(before, after)) {
-        throw new FsSafeError(
-          current.size > admitted.size ? "too-large" : "path-mismatch",
-          "Plugin source changed while preparing its reload; retry after the edit finishes.",
-        );
-      }
-    });
-  const assertAdmission = () => {
-    assertParent();
-    assertSource();
-  };
-  using copied = createFileSync(target, { mode: 0o600, assertBeforeMutation: assertAdmission });
+  using copied = createFileSync(target, { mode: 0o600 });
   const identity = fs.fstatSync(copied.fd, { bigint: true });
   const assertCurrent = () => {
-    assertAdmission();
     const named = fs.lstatSync(target, { bigint: true });
     const current = fs.fstatSync(copied.fd, { bigint: true });
     if (
@@ -130,11 +96,10 @@ function copySmallPluginSourceFile(
       throw new FsSafeError("path-mismatch", "Plugin capture destination changed during copying");
     }
   };
-  // Small copies need one bounded descriptor transfer, rather than repeated
-  // pathname clone admission. The source pin and exclusive output stay owned.
+  // The pinned source and exclusive output own this synchronous transfer.
+  // Source edits after opening are best effort; validate the completed destination once.
   const bytes = copyFileDescriptorSync(fd, copied.fd, {
     maxBytes: Number(admitted.size),
-    assertBeforeMutation: assertCurrent,
   });
   if (bytes !== Number(admitted.size)) {
     throw new FsSafeError("path-mismatch", "Plugin source changed while copying");
@@ -165,22 +130,15 @@ export function copyPluginSourceFile(
       const mode = options.preserveSourceMode
         ? Number(admitted.mode & 0o777n)
         : 0o600 | Number(admitted.mode & 0o100n);
+      // Windows needs this path most: fs-safe skips native copies and path-admission
+      // caching on win32, so guarded clones of every small file stall Gateway startup.
       if (
-        process.platform !== "win32" &&
         admitted.size <= BigInt(SMALL_SOURCE_COPY_BYTES) &&
         !/\.(?:node|so|dylib|dll)$/iu.test(source) &&
         !isPluginNativeDescriptor(fd) &&
         fs.realpathSync.native(path.dirname(target)) === path.dirname(target)
       ) {
-        return copySmallPluginSourceFile(
-          source,
-          boundary,
-          target,
-          fd,
-          admitted,
-          mode,
-          options.hashCopiedContent,
-        );
+        return copySmallPluginSourceFile(target, fd, admitted, mode, options.hashCopiedContent);
       }
       // Keep our pin alive; fs-safe binds its own admitted open to this exact inode.
       using copied = (options.copyFile ?? copyRootFileSync)({

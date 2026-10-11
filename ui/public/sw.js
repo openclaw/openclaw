@@ -10,7 +10,6 @@ const CACHE_VERSION =
 // Replaced by Vite with generic HTML and its measured, integrity-bound boot graph.
 const OFFLINE_BOOT = null;
 const CACHE_NAME = `${CACHE_PREFIX}${CACHE_VERSION}${OFFLINE_BOOT ? `-${OFFLINE_BOOT.id}` : ""}`;
-const CONTROL_CACHE_LIMIT = 3;
 const SCOPE_URL = new URL(self.registration.scope);
 const SCOPE_PATH = SCOPE_URL.pathname.endsWith("/") ? SCOPE_URL.pathname : `${SCOPE_URL.pathname}/`;
 
@@ -43,7 +42,6 @@ self.addEventListener("message", (event) => {
 });
 
 const OFFLINE_SHELL_URL = new URL(`${SCOPE_PATH}__offline_shell__`, SCOPE_URL).href;
-const PUBLIC_ASSETS_URL = new URL(`${SCOPE_PATH}__offline_assets__`, SCOPE_URL).href;
 
 function cacheableResponse(response) {
   return (
@@ -100,13 +98,6 @@ async function precacheOfflineShell(signal) {
     return;
   }
   const cache = await caches.open(CACHE_NAME);
-  await cache.put(
-    PUBLIC_ASSETS_URL,
-    Response.json({
-      version: OFFLINE_BOOT.publicAssetVersion,
-      assets: OFFLINE_BOOT.publicAssets,
-    }),
-  );
   const ready = await Promise.all(
     OFFLINE_BOOT.assets.map(async (asset) => {
       try {
@@ -171,17 +162,10 @@ self.addEventListener("activate", (event) => {
     (async () => {
       const cacheKeys = await caches.keys();
       const controlKeys = cacheKeys.filter((key) => key.startsWith(CACHE_PREFIX));
-      const priorCacheLimit = Math.max(0, CONTROL_CACHE_LIMIT - 1);
-      // Keep a small prior-build window so open tabs can still load old hashed chunks after updates.
-      const retained = new Set([
-        ...controlKeys.filter((key) => key !== CACHE_NAME).slice(-priorCacheLimit),
-        CACHE_NAME,
-      ]);
-
       await Promise.all([
         self.clients.claim(),
         Promise.all(
-          controlKeys.filter((key) => !retained.has(key)).map((key) => caches.delete(key)),
+          controlKeys.filter((key) => key !== CACHE_NAME).map((key) => caches.delete(key)),
         ),
       ]);
       // Queue the announcement without waiting for suspended pages or navigating
@@ -243,60 +227,16 @@ async function matchControlUiAsset(request) {
     if (current && cacheableResponse(current)) {
       return current;
     }
-    // Only hashed/versioned public URLs may reuse the retained prior-build window.
-    const keys = await caches.keys();
-    for (const cacheName of keys
-      .filter((key) => key.startsWith(CACHE_PREFIX) && key !== CACHE_NAME)
-      .toReversed()) {
-      const cached = await caches.match(request.url, { cacheName });
-      if (cached && cacheableResponse(cached)) {
-        return cached;
-      }
-    }
   } catch {
     // Storage denial must not prevent ordinary network delivery.
   }
   return undefined;
 }
 
-let priorPublicAssets;
-async function isVersionedPublicAsset(url, pathname) {
-  if (
+function isVersionedPublicAsset(url, pathname) {
+  return (
     OFFLINE_BOOT?.publicAssets.includes(pathname.slice(1)) &&
     url.search === `?v=${encodeURIComponent(OFFLINE_BOOT.publicAssetVersion)}`
-  ) {
-    return true;
-  }
-  if (!url.searchParams.get("v") || url.searchParams.size !== 1) {
-    return false;
-  }
-  // The running build and its retained predecessors are immutable for this
-  // worker lifetime. Old tabs with unsaved work may still request their version.
-  // An arbitrary ?v= value is not authority to cache a response.
-  priorPublicAssets ??= (async () => {
-    try {
-      const keys = await caches.keys();
-      return await Promise.all(
-        keys
-          .filter((key) => key.startsWith(CACHE_PREFIX) && key !== CACHE_NAME)
-          .map(async (cacheName) => {
-            try {
-              return await (await caches.match(PUBLIC_ASSETS_URL, { cacheName }))?.json();
-            } catch {
-              return undefined;
-            }
-          }),
-      );
-    } catch {
-      return [];
-    }
-  })();
-  return (await priorPublicAssets).some(
-    (inventory) =>
-      typeof inventory?.version === "string" &&
-      Array.isArray(inventory.assets) &&
-      inventory.assets.includes(pathname.slice(1)) &&
-      url.search === `?v=${encodeURIComponent(inventory.version)}`,
   );
 }
 
@@ -344,7 +284,9 @@ self.addEventListener("fetch", (event) => {
       new URL(self.location.href).searchParams.get("session-entry") === "1" &&
       pathname.startsWith("/chat/") &&
       pathname !== "/chat/" &&
-      [...url.searchParams.keys()].every((key) => key === "dashboard" || key === "draft")
+      [...url.searchParams.keys()].every(
+        (key) => key === "dashboard" || key === "draft" || key === "openclaw_mount_recovery",
+      )
     ) {
       event.respondWith(fetchChatNavigation(event.request, url));
     } else if (
@@ -373,8 +315,7 @@ self.addEventListener("fetch", (event) => {
 
   event.respondWith(
     (async () => {
-      const cacheable =
-        permitsCache && (hashedAsset || (await isVersionedPublicAsset(url, pathname)));
+      const cacheable = permitsCache && (hashedAsset || isVersionedPublicAsset(url, pathname));
       const cached = cacheable ? await matchControlUiAsset(event.request) : undefined;
       return cached || fetchControlUiRequest(event, cacheable);
     })(),

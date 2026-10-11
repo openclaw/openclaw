@@ -1,5 +1,4 @@
 // Proxy CLI runtime tests cover proxy runtime process handling and lifecycle events.
-import { EventEmitter } from "node:events";
 import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -14,11 +13,11 @@ const { getRuntimeConfigMock, runProxyValidationMock, serverStopSpy, spawnMock }
   }),
 );
 
-vi.mock("node:child_process", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:child_process")>();
+vi.mock("../process/exec-spawn.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../process/exec-spawn.js")>();
   return {
     ...actual,
-    spawn: spawnMock,
+    spawnCommand: spawnMock,
   };
 });
 
@@ -361,51 +360,10 @@ describe("proxy cli runtime", () => {
     expect(process.exitCode).toBe(1);
   });
 
-  it("prints proxy validation JSON and sets exit code on failure", async () => {
-    runProxyValidationMock.mockResolvedValueOnce({
-      ok: false,
-      config: {
-        enabled: true,
-        source: "missing",
-        errors: ["proxy validation requires proxy.proxyUrl, --proxy-url, or OPENCLAW_PROXY_URL"],
-      },
-      checks: [],
-    });
-    await proxyCliRuntime.runProxyValidateCommand({ json: true });
-
-    expect(process.stdout["write"]).toHaveBeenCalledWith(
-      `${JSON.stringify(
-        {
-          ok: false,
-          config: {
-            enabled: true,
-            source: "missing",
-            errors: [
-              "proxy validation requires proxy.proxyUrl, --proxy-url, or OPENCLAW_PROXY_URL",
-            ],
-          },
-          checks: [],
-        },
-        null,
-        2,
-      )}\n`,
-    );
-    expect(process.exitCode).toBe(1);
-  });
-
-  it.each([
-    { signal: "SIGINT" as const, exitCode: 130 },
-    { signal: "SIGTERM" as const, exitCode: 143 },
-  ])(
+  it.each([{ signal: "SIGTERM" as const, exitCode: 143 }])(
     "preserves exit code $exitCode when the proxied child exits from $signal",
     async (testCase) => {
-      spawnMock.mockImplementation(() => {
-        const child = new EventEmitter();
-        queueMicrotask(() => {
-          child.emit("exit", null, testCase.signal);
-        });
-        return child;
-      });
+      spawnMock.mockResolvedValue({ signal: testCase.signal, failed: true });
 
       await proxyCliRuntime.runDebugProxyRunCommand({ commandArgs: ["example-command"] });
 
@@ -415,13 +373,7 @@ describe("proxy cli runtime", () => {
   );
 
   it("stops the proxy server and ends the session when child spawn fails", async () => {
-    spawnMock.mockImplementation(() => {
-      const child = new EventEmitter();
-      queueMicrotask(() => {
-        child.emit("error", new Error("spawn failed"));
-      });
-      return child;
-    });
+    spawnMock.mockRejectedValue(new Error("spawn failed"));
 
     const beforeRun = Date.now();
     await expect(

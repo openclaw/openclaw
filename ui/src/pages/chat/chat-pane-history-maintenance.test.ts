@@ -3,6 +3,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { html } from "lit";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { flush } from "../../test-helpers/solid-settle.ts";
 import { nativeHistoryMessage } from "./chat-pane-history.test-support.ts";
 import {
   createGatewayBrowserClientFixture,
@@ -66,7 +67,7 @@ it.each(["idle measurement", "end-command measurement", "native end clamp"] as c
     const mounting = mountTestTranscript("maintenance-history", rows, props.transcript);
     await vi.advanceTimersByTimeAsync(0);
     const { container, renderRows, transcript } = await mounting;
-    let maximum = 1400;
+    let maximum = 800;
     Object.defineProperties(container, {
       clientHeight: { configurable: true, value: 600 },
       scrollHeight: { configurable: true, get: () => maximum + 600 },
@@ -89,7 +90,12 @@ it.each(["idle measurement", "end-command measurement", "native end clamp"] as c
         scrolling = event.scrolling;
       }
     });
-    container.scrollTop = 800;
+    // Finish initial anchoring before exercising maintenance above the end.
+    renderRows(rows);
+    flush();
+    vi.advanceTimersToNextFrame();
+    flush();
+    expect(container.scrollTop).toBe(800);
     container.dispatchEvent(new Event("scroll"));
     renderRows(rows);
     const sentinel = container.appendChild(document.createElement("div"));
@@ -111,6 +117,7 @@ it.each(["idle measurement", "end-command measurement", "native end clamp"] as c
     expect(scrolling).toBe(false);
     expect(request).not.toHaveBeenCalled();
     expect(state.chatFollowLocked).toBe(false);
+    maximum = 1400;
 
     if (movement === "native end clamp") {
       // The browser clamps the current position as the scroll range shrinks,

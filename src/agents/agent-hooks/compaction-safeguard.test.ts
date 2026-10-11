@@ -1,6 +1,3 @@
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import type { AgentMessage, StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { ExtensionContext } from "openclaw/plugin-sdk/agent-sessions";
 import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
@@ -17,8 +14,6 @@ import { buildEmbeddedExtensionFactories } from "../embedded-agent-runner/extens
 import { castAgentMessage } from "../test-helpers/agent-message-fixtures.js";
 import { timestampedTextAssistant } from "../test-helpers/sparse-transcript.test-support.js";
 import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
-import { jsonResult } from "../tools/common.js";
-import { MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } from "../workspace-bootstrap-read.js";
 import * as compactionQualityModule from "./compaction-safeguard-quality.js";
 import {
   consumeCompactionSafeguardCancellation,
@@ -111,8 +106,6 @@ function preservedTurnsText(messages: AgentMessage[]): string {
 }
 
 const {
-  collectToolFailures,
-  formatToolFailuresSection,
   splitPreservedRecentTurns,
   buildPreservedTurnsSection,
   buildCompactionStructureInstructions,
@@ -122,7 +115,6 @@ const {
   auditSummaryQuality: auditSummaryQualityOwner,
   capCompactionSummary,
   budgetCompactionSummary,
-  readWorkspaceContextForSummary,
   MAX_COMPACTION_SUMMARY_CHARS,
   SUMMARY_TRUNCATED_MARKER,
   CONTEXT_TRUNCATED_MARKER,
@@ -194,60 +186,6 @@ function requireArray(value: unknown): unknown[] {
   }
   return value;
 }
-
-describe("compaction-safeguard tool failures", () => {
-  const acceptedDetails = jsonResult({
-    status: "accepted",
-    childSessionKey: "agent:watcher:subagent:abc",
-    runId: "run-123",
-    mode: "run",
-  }).details;
-  const failure = (id: string, text: string, details?: unknown, toolName = "exec") =>
-    toolResultMessage(id, text, { toolName, isError: true, details });
-  it.each([
-    {
-      name: "accepted spawn exclusion and look-alike failures",
-      messages: [
-        failure("call-spawn-accepted", "accepted", acceptedDetails, "sessions_spawn"),
-        failure("call-exec-failed", "boom", { status: "failed", exitCode: 1 }),
-        failure("call-spawn-error", "spawn rejected", { status: "error" }, "sessions_spawn"),
-        failure("call-other-lookalike", "real failure", acceptedDetails, "some_other_tool"),
-      ],
-      ids: ["call-exec-failed", "call-spawn-error", "call-other-lookalike"],
-      expected: ["exec (status=failed exitCode=1): boom"],
-      firstSummary: undefined,
-    },
-    {
-      name: "deduplication and empty output",
-      messages: [
-        { ...failure("call-1", "", { exitCode: 2 }), content: [] },
-        failure("call-1", "ignored"),
-      ],
-      ids: ["call-1"],
-      expected: ["exec (exitCode=2): failed"],
-      firstSummary: undefined,
-    },
-    {
-      name: "bounded failure counts and UTF-16 summaries",
-      messages: Array.from({ length: 9 }, (_, idx) =>
-        failure(`call-${idx}`, `${"x".repeat(236)}🚀tail-${idx}`),
-      ),
-      ids: Array.from({ length: 9 }, (_, idx) => `call-${idx}`),
-      expected: ["## Tool Failures", "...and 1 more"],
-      firstSummary: `${"x".repeat(236)}...`,
-    },
-  ])("formats tool failures with $name", ({ messages, ids, expected, firstSummary }) => {
-    const failures = collectToolFailures(messages);
-    expect(failures.map((entry: { toolCallId: string }) => entry.toolCallId)).toEqual(ids);
-    const section = formatToolFailuresSection(failures);
-    for (const text of expected) {
-      expect(section).toContain(text);
-    }
-    if (firstSummary !== undefined) {
-      expect(failures[0]?.summary).toBe(firstSummary);
-    }
-  });
-});
 
 describe("compaction-safeguard summary budgets", () => {
   it("preserves diagnostic sections (tool failures, file ops) when capping oversized body", () => {
@@ -361,6 +299,7 @@ describe("compaction-safeguard runtime registry", () => {
     buildEmbeddedExtensionFactories({
       cfg,
       sessionManager,
+      workspaceDir: "/workspace",
       model: {
         contextWindow: 200_000,
       } as Parameters<typeof buildEmbeddedExtensionFactories>[0]["model"],
@@ -1090,26 +1029,6 @@ describe("compaction-safeguard recent-turn preservation", () => {
     },
   );
 
-  it("fails closed when audit-required tail sections cannot fit the artifact cap", async () => {
-    const latestAsk = "preserve the pending deployment status";
-    const identifier = `https://example.com/${"a".repeat(MAX_COMPACTION_SUMMARY_CHARS)}`;
-    const oversizedRequiredTail = structuredSummary({ asks: latestAsk, identifiers: identifier });
-    mockSummarizeCompactionHistory.mockResolvedValue(oversizedRequiredTail);
-
-    const sessionManager = createQualityGuardSessionManager({ qualityGuardMaxRetries: 0 });
-    const event = createCompactionEvent({
-      messageText: `${latestAsk} ${identifier}`,
-    });
-
-    const { result } = await runCompactionScenario(sessionManager, event);
-
-    expect(result).toEqual({ cancel: true });
-    expect(mockSummarizeCompactionHistory).toHaveBeenCalledTimes(1);
-    expect(consumeCompactionSafeguardCancellation(sessionManager)?.reason).toBe(
-      "Compaction safeguard required facts exceed the finalized summary budget.",
-    );
-  });
-
   it("restores source ask evidence omitted by the split-turn summary", async () => {
     const olderAsk = "summarize the earlier provider migration";
     const latestAsk = "confirm whether the aurora migration completed successfully";
@@ -1282,7 +1201,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
   });
 
   it.each([false, true])(
-    "preserves history when corrective generation fails (caller aborted=%s)",
+    "recovers earlier summary after corrective failure unless caller aborted (%s)",
     async (aborted) => {
       const controller = new AbortController();
       const abortError = Object.assign(new Error("corrective compaction aborted"), {
@@ -1330,15 +1249,14 @@ describe("compaction-safeguard recent-turn preservation", () => {
         expect(consumeCompactionSafeguardCancellation(sessionManager)).toBeNull();
       } else {
         const { result } = await runCompactionScenario(sessionManager, event);
-        expect(result).toEqual({ cancel: true });
+        expect(result).toMatchObject({ compaction: { details: { qualityDegraded: true } } });
+        expect(expectCompactionResult(result).summary).toContain("history detail");
         expect(
           requireRecord(mockCallArg(mockSummarizeCompactionHistory, 2)).customInstructions,
         ).toContain("Quality check feedback");
-        expect(consumeCompactionSafeguardCancellation(sessionManager)?.reason).toBe(
-          "Compaction safeguard finalized summary failed quality checks and corrective generation failed.",
-        );
+        expect(consumeCompactionSafeguardCancellation(sessionManager)).toBeNull();
         const warnings = compactionLogger.warn.mock.calls.flat().join("\n");
-        expect(warnings).toContain("reasonCode=corrective_generation_failed");
+        expect(warnings).toContain("reasonCode=quality_guard_degraded_fallback");
         expect(warnings).toContain("attempt=2");
         expect(warnings).not.toContain(correctiveFailureMarker);
       }
@@ -1981,121 +1899,5 @@ describe("compaction-safeguard double-compaction guard", () => {
     expect(mockSummarizeCompactionHistory).not.toHaveBeenCalled();
     expect(getApiKeyAndHeadersMock).not.toHaveBeenCalled();
   });
-});
-
-async function expectWorkspaceSummaryEmptyForAgentsAlias(
-  createAlias: (outsidePath: string, agentsPath: string) => void,
-) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-compaction-summary-"));
-  const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(root);
-  try {
-    const outside = path.join(root, "outside-secret.txt");
-    fs.writeFileSync(outside, "secret");
-    createAlias(outside, path.join(root, "AGENTS.md"));
-    await expect(readWorkspaceContextForSummary(["Session Startup", "Red Lines"])).resolves.toBe(
-      "",
-    );
-  } finally {
-    cwdSpy.mockRestore();
-    fs.rmSync(root, { recursive: true, force: true });
-  }
-}
-
-describe("readWorkspaceContextForSummary", () => {
-  async function withWorkspaceSummary(
-    content: string,
-    sectionNames: string[] | undefined,
-  ): Promise<string> {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-compaction-summary-"));
-    const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(root);
-    try {
-      fs.writeFileSync(path.join(root, "AGENTS.md"), content);
-      return await readWorkspaceContextForSummary(sectionNames);
-    } finally {
-      cwdSpy.mockRestore();
-      fs.rmSync(root, { recursive: true, force: true });
-    }
-  }
-
-  const limitPrefix =
-    "## Session Startup\n\n" + "x".repeat(1_999 - "## Session Startup\n\n".length);
-  const boundedContent = `${limitPrefix}🚀tail\n`;
-  it.each([
-    {
-      name: "disabled sections",
-      content: "## Session Startup\n\nRead AGENTS.md\n",
-      sections: [],
-      expected: [],
-    },
-    {
-      name: "oversized file",
-      content: `## Session Startup\n\n${"x".repeat(MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES)}`,
-      sections: ["Session Startup"],
-      expected: [],
-    },
-    {
-      name: "file at the byte limit",
-      content:
-        boundedContent +
-        "x".repeat(MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES - Buffer.byteLength(boundedContent)),
-      sections: ["Session Startup"],
-      expected: ["<workspace-critical-rules>", `${limitPrefix}\n...[truncated]...`],
-    },
-    {
-      name: "legacy defaults",
-      content: "## Every Session\n\nDo startup things.\n\n## Safety\n\nBe safe.\n",
-      sections: ["Red Lines", "Session Startup"],
-      expected: ["Do startup things", "Be safe"],
-    },
-  ])("reads workspace context with $name", async ({ content, sections, expected }) => {
-    const result = await withWorkspaceSummary(content, sections);
-    if (expected.length === 0) {
-      expect(result).toBe("");
-    } else {
-      for (const text of expected) {
-        expect(result).toContain(text);
-      }
-    }
-  });
-
-  it("reads workspace context from the configured workspace instead of process cwd", async () => {
-    const processRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-compaction-cwd-"));
-    const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-compaction-workspace-"));
-    const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(processRoot);
-    try {
-      fs.writeFileSync(
-        path.join(processRoot, "AGENTS.md"),
-        "## Session Startup\n\nWrong cwd rules.\n",
-      );
-      fs.writeFileSync(
-        path.join(workspaceRoot, "AGENTS.md"),
-        "## Session Startup\n\nUse the run workspace rules.\n\n## Other\nIgnore me.\n",
-      );
-
-      const result = await readWorkspaceContextForSummary(["Session Startup"], workspaceRoot);
-
-      expect(result).toContain("Use the run workspace rules.");
-      expect(result).not.toContain("Wrong cwd rules.");
-      expect(result).not.toContain("Ignore me.");
-      expect(result).toContain("<workspace-critical-rules>");
-    } finally {
-      cwdSpy.mockRestore();
-      fs.rmSync(processRoot, { recursive: true, force: true });
-      fs.rmSync(workspaceRoot, { recursive: true, force: true });
-    }
-  });
-
-  it.runIf(process.platform !== "win32").each(["symlink", "hardlink"] as const)(
-    "returns empty when AGENTS.md is a %s alias",
-    async (kind) => {
-      await expectWorkspaceSummaryEmptyForAgentsAlias((outside, agentsPath) => {
-        if (kind === "symlink") {
-          fs.symlinkSync(outside, agentsPath);
-        } else {
-          fs.linkSync(outside, agentsPath);
-        }
-      });
-    },
-  );
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

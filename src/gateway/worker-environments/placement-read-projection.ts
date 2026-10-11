@@ -1,6 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { Selectable } from "kysely";
-import { jsonArrayFrom, jsonObjectFrom } from "kysely/helpers/sqlite";
+import { jsonArrayFrom } from "kysely/helpers/sqlite";
 import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
@@ -15,10 +15,8 @@ import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction
 import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 import type { DB as StateDatabase } from "../../state/openclaw-state-db.generated.js";
 import { workerInferenceMetadata } from "./inference-placement.js";
-import {
-  workerPlacementMoveFromRow,
-  type WorkerPlacementMoveIntent,
-} from "./placement-move-intent.js";
+import { workerPlacementMoveFromRow } from "./placement-move-intent.js";
+import type { WorkerPlacementMoveIntent } from "./placement-move-intent.types.js";
 import type {
   WorkerEnvironmentPlacementFacts,
   WorkerPlacementConflictBinding,
@@ -126,44 +124,6 @@ function moveRows(db: DatabaseSync, sessionIds: readonly string[], schema: Proje
     .$assertType<Selectable<StateDatabase["worker_session_placement_moves"]>>();
 }
 
-export function readWorkerPlacementMoveAuthorityInDatabase(db: DatabaseSync, sessionId: string) {
-  const schema = readProjectionSchema(db);
-  const query = getNodeSqliteKysely<StateDatabase>(db);
-  const row = executeSqliteQuerySync(
-    db,
-    query.selectNoFrom((eb) => [
-      jsonObjectFrom(selectWorkerPlacementRows(db, [sessionId]))
-        .$castTo<string | null>()
-        .as("placement"),
-      schema.moves
-        ? jsonObjectFrom(moveRows(db, [sessionId], schema))
-            .$castTo<string | null>()
-            .as("move")
-        : eb.val(null).as("move"),
-    ]),
-  ).rows[0]!;
-  return {
-    placement:
-      row.placement === null
-        ? undefined
-        : fromRow(
-            // SAFETY: jsonObjectFrom serializes the typed placement selection; fromRow validates its domain shape.
-            JSON.parse(row.placement, revivePlacementProjectionInteger) as Selectable<
-              StateDatabase["worker_session_placements"]
-            >,
-          ),
-    move:
-      row.move === null
-        ? undefined
-        : workerPlacementMoveFromRow(
-            // SAFETY: jsonObjectFrom serializes the typed move selection; workerPlacementMoveFromRow validates its domain shape.
-            JSON.parse(row.move, revivePlacementProjectionInteger) as Selectable<
-              StateDatabase["worker_session_placement_moves"]
-            >,
-          ),
-  };
-}
-
 function readProjectionRows(
   db: DatabaseSync,
   sessionIds: readonly string[],
@@ -246,8 +206,7 @@ function readProjectionRows(
         .select("environment_id")
         .where("session_id", "in", ids)
         .where("environment_id", "is not", null),
-    )
-    .$assertType<Selectable<StateDatabase["worker_environments"]>>();
+    );
   // Each recovery table contributes independently, including local and terminal placements.
   // The native sync executor returns JSON text without Kysely's result plugins.
   return executeSqliteQuerySync(

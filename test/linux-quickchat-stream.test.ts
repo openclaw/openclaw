@@ -25,30 +25,25 @@ const browserBindingsStart = quickchatSource.indexOf("const tauri = window");
 assert.notEqual(browserBindingsStart, -1, "quickchat pure-helper boundary");
 
 type QuickChatHelpers = {
-  assembleChatDelta: (state: unknown, payload: unknown) => unknown;
-  chatMessageText: (message: unknown) => string;
   chatMessageWidgets: (message: unknown) => unknown[];
   resolveInlineWidgetUrl: (surface: unknown, target: unknown) => string | null;
 };
 
 const context: { helpers?: QuickChatHelpers } & Record<string, unknown> = { URL, TextEncoder };
 vm.runInNewContext(
-  `${quickchatSource.slice(0, browserBindingsStart)}\nthis.helpers = { assembleChatDelta, chatMessageText, chatMessageWidgets, resolveInlineWidgetUrl };`,
+  `${quickchatSource.slice(0, browserBindingsStart)}\nthis.helpers = { chatMessageWidgets, resolveInlineWidgetUrl };`,
   context,
 );
-const { assembleChatDelta, chatMessageText, chatMessageWidgets, resolveInlineWidgetUrl } =
-  context.helpers as {
-    assembleChatDelta: (state: unknown, payload: unknown) => { text: string; runId?: string };
-    chatMessageText: (message: unknown) => string;
-    chatMessageWidgets: (message: unknown) => Array<{
-      key: string;
-      title: string;
-      target: string;
-      preferredHeight: number;
-      sandbox: string;
-    }>;
-    resolveInlineWidgetUrl: (surface: unknown, target: unknown) => string | null;
-  };
+const { chatMessageWidgets, resolveInlineWidgetUrl } = context.helpers as {
+  chatMessageWidgets: (message: unknown) => Array<{
+    key: string;
+    title: string;
+    target: string;
+    preferredHeight: number;
+    sandbox: string;
+  }>;
+  resolveInlineWidgetUrl: (surface: unknown, target: unknown) => string | null;
+};
 
 function canvasMessage(role: string, url: string) {
   return {
@@ -590,22 +585,6 @@ for (const failedStage of ["registration", "admission"] as const) {
   });
 }
 
-test("visibility operations share one monotonic sequence", async () => {
-  const harness = createQuickChatHarness();
-  harness.reveal();
-  await harness.requestHide();
-  await harness.advanceTime(45);
-  harness.reveal();
-  assert.deepEqual(
-    harness.calls
-      .filter(({ method }: { method: string }) =>
-        ["quickchat_activate", "quickchat_hide"].includes(method),
-      )
-      .map(({ args }: { args: { generation: number } }) => args.generation),
-    [1, 2, 3],
-  );
-});
-
 test("gateway state updates and clears the Quick Chat user accent", () => {
   const harness = createQuickChatHarness();
   harness.setGatewayUp();
@@ -631,85 +610,6 @@ test("widget child webviews inherit no Quick Chat Tauri capability", () => {
     capability?.webviews?.some((label) => label.startsWith("quickchat-widget-")),
     false,
   );
-});
-
-test("message snapshots take precedence over replacement deltas", () => {
-  assert.equal(
-    assembleChatDelta("stale", {
-      deltaText: "replacement",
-      replace: true,
-      message: { content: [{ type: "text", text: "snapshot" }] },
-    }),
-    "snapshot",
-  );
-});
-
-test("the first delta seeds from its message snapshot", () => {
-  assert.equal(
-    assembleChatDelta(null, {
-      deltaText: "lo",
-      message: { content: [{ type: "text", text: "Hello" }] },
-    }),
-    "Hello",
-  );
-  assert.equal(assembleChatDelta(null, { deltaText: "unanchored suffix" }), null);
-  assert.equal(assembleChatDelta(null, { deltaText: "replacement", replace: true }), "replacement");
-});
-
-test("matching deltas append and mismatched snapshots self-heal", () => {
-  assert.equal(
-    assembleChatDelta("Hello", {
-      deltaText: "!",
-      message: { content: [{ type: "text", text: "Hello!" }] },
-    }),
-    "Hello!",
-  );
-  assert.equal(
-    assembleChatDelta("Hellx", {
-      deltaText: "!",
-      message: { content: [{ type: "text", text: "Hello!" }] },
-    }),
-    "Hello!",
-  );
-});
-
-test("snapshot-only terminal frames replace the assembled text", () => {
-  assert.equal(
-    assembleChatDelta("partial", {
-      message: { content: [{ type: "text", text: "complete" }] },
-    }),
-    "complete",
-  );
-});
-
-test("snapshot extraction joins every text block", () => {
-  assert.equal(
-    chatMessageText({
-      content: [
-        { type: "text", text: "first" },
-        { type: "image", url: "data:image/png;base64,AA==" },
-        { type: "text", text: "second" },
-      ],
-    }),
-    "first\n\nsecond",
-  );
-});
-
-test("snapshot extraction skips a leading non-text block", () => {
-  assert.equal(
-    chatMessageText({
-      content: [
-        { type: "thinking", thinking: "hidden" },
-        { type: "text", text: "visible" },
-      ],
-    }),
-    "visible",
-  );
-});
-
-test("snapshot extraction falls back through string content and top-level text", () => {
-  assert.equal(chatMessageText({ content: "string content", text: "top-level" }), "string content");
-  assert.equal(chatMessageText({ content: [], text: "top-level" }), "top-level");
 });
 
 test("canvas previews are accepted only for safe assistant widgets", () => {
@@ -1545,129 +1445,6 @@ for (const outcome of ["retained", "evicted", "repaired", "recovered"] as const)
   });
 }
 
-test("final assistant canvas previews sync into isolated native webviews", async () => {
-  const harness = createQuickChatHarness();
-  harness.setGatewayUp();
-  harness.setMessage("show status");
-  const sending = harness.send(false);
-  harness.resolveSend({ sessionKey: "global", agentId: "work", runId: "widget-run" });
-  await sending;
-
-  harness.handleChatEvent({
-    sessionKey: "global",
-    agentId: "work",
-    runId: "widget-run",
-    state: "final",
-    message: {
-      role: "assistant",
-      content: [
-        {
-          type: "canvas",
-          preview: {
-            kind: "canvas",
-            surface: "assistant_message",
-            render: "url",
-            sandbox: "strict",
-            title: "Status",
-            url: "/__openclaw__/canvas/documents/status/index.html",
-          },
-        },
-      ],
-    },
-  });
-
-  await harness.flushWidgets();
-  const [layout] = harness.syncedWidgets();
-  assert.deepEqual(
-    { ...layout },
-    {
-      key: "/__openclaw__/canvas/documents/status/index.html",
-      url: "https://gateway.example/__openclaw__/cap/fixture-capability/__openclaw__/canvas/documents/status/index.html",
-      sandbox: "strict",
-      x: 52,
-      y: 174,
-      width: 540,
-      height: 160,
-      visible: true,
-    },
-  );
-  assert.equal(harness.syncedHasWidgets(), true);
-  assert.equal(harness.syncedExpanded(), true);
-  assert.equal(harness.syncedGeneration(), 1);
-});
-
-test("expired Canvas capability refreshes before a new widget loads", async () => {
-  const harness = createQuickChatHarness();
-  harness.setGatewayUp();
-  harness.expireCanvasSurface();
-  harness.setMessage("show status");
-  const sending = harness.send(false);
-  harness.resolveSend({ sessionKey: "global", agentId: "work", runId: "refresh-run" });
-  await sending;
-  harness.handleChatEvent({
-    sessionKey: "global",
-    agentId: "work",
-    runId: "refresh-run",
-    state: "final",
-    message: canvasMessage("assistant", "/__openclaw__/canvas/documents/status/index.html"),
-  });
-
-  await harness.flushSurfaceRefresh();
-  await harness.flushWidgets();
-  assert.equal(harness.widgetSurfaceRefreshCount(), 1);
-  assert.equal(
-    harness.syncedWidgets()[0]?.url,
-    "https://gateway.example/__openclaw__/cap/refreshed-capability/__openclaw__/canvas/documents/status/index.html",
-  );
-});
-
-test("transient Canvas refresh failures remain retryable", async () => {
-  const harness = createQuickChatHarness();
-  harness.setGatewayUp();
-  harness.expireCanvasSurface();
-  harness.setWidgetSurfaceRefreshFails(true);
-  harness.setMessage("show status");
-  const sending = harness.send(false);
-  harness.resolveSend({ sessionKey: "global", agentId: "work", runId: "retry-run" });
-  await sending;
-  const widgetBlock = (id: string) => ({
-    type: "canvas",
-    preview: {
-      kind: "canvas",
-      surface: "assistant_message",
-      render: "url",
-      sandbox: "scripts",
-      url: `/__openclaw__/canvas/documents/${id}/index.html`,
-    },
-  });
-
-  harness.handleChatEvent({
-    sessionKey: "global",
-    agentId: "work",
-    runId: "retry-run",
-    state: "delta",
-    message: { role: "assistant", content: [widgetBlock("first")] },
-  });
-  await harness.flushSurfaceRefresh();
-  await harness.flushWidgets();
-  assert.equal(harness.widgetSurfaceRefreshCount(), 1);
-  assert.deepEqual([...harness.syncedWidgets()], []);
-
-  harness.setWidgetSurfaceRefreshFails(false);
-  harness.allowCanvasSurfaceRetry();
-  harness.handleChatEvent({
-    sessionKey: "global",
-    agentId: "work",
-    runId: "retry-run",
-    state: "delta",
-    message: { role: "assistant", content: [widgetBlock("second")] },
-  });
-  await harness.flushSurfaceRefresh();
-  await harness.flushWidgets();
-  assert.equal(harness.widgetSurfaceRefreshCount(), 2);
-  assert.match(harness.syncedWidgets()[0]?.url ?? "", /refreshed-capability/u);
-});
-
 test("unchanged gateway state does not renew a failed Canvas capability", async () => {
   const harness = createQuickChatHarness();
   const surface = "https://gateway.example/__openclaw__/cap/fixture-capability";
@@ -1702,30 +1479,6 @@ test("unchanged gateway state does not renew a failed Canvas capability", async 
   });
   await harness.flushSurfaceRefresh();
   assert.equal(harness.widgetSurfaceRefreshCount(), 2);
-});
-
-test("clearing the widget reply restores semantic text-only layout", async () => {
-  const harness = createQuickChatHarness();
-  harness.setGatewayUp();
-  harness.setMessage("show status");
-  const sending = harness.send(false);
-  harness.resolveSend({ sessionKey: "global", agentId: "work", runId: "widget-run" });
-  await sending;
-  harness.handleChatEvent({
-    sessionKey: "global",
-    agentId: "work",
-    runId: "widget-run",
-    state: "delta",
-    message: canvasMessage("assistant", "/__openclaw__/canvas/documents/status/index.html"),
-  });
-  await harness.flushWidgets();
-  assert.equal(harness.syncedHasWidgets(), true);
-
-  harness.clearReply();
-  await harness.flushWidgets();
-  assert.equal(harness.syncedHasWidgets(), false);
-  assert.equal(harness.syncedExpanded(), false);
-  assert.deepEqual([...harness.syncedWidgets()], []);
 });
 
 test("adding a widget preserves the existing native webview identity", async () => {

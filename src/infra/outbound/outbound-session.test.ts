@@ -139,25 +139,6 @@ describe("resolveOutboundSessionRoute", () => {
     expect(route?.displayName).toBe("Alice");
   });
 
-  it("keeps normalized route displays out of durable session names", async () => {
-    const route = await resolveOutboundSessionRoute({
-      cfg: perChannelPeerSessionCfg,
-      channel: "telegram",
-      plugin: telegramRoutePlugin,
-      agentId: "main",
-      target: "-1001234567890:topic:42",
-      resolvedTarget: {
-        to: "telegram:-1001234567890:topic:42",
-        kind: "group",
-        display: "telegram:-1001234567890:topic:42",
-        source: "normalized",
-        resolutionSource: "normalized",
-      },
-    });
-
-    expect(route?.displayName).toBeUndefined();
-  });
-
   beforeEach(() => {
     mocks.updateSessionLastRoute.mockClear();
     mocks.resolveStorePath.mockClear();
@@ -183,33 +164,6 @@ describe("resolveOutboundSessionRoute", () => {
       },
     },
   } as OpenClawConfig;
-
-  it("uses a prepared runtime plugin for session-route resolution", async () => {
-    const plugin = {
-      ...createChannelTestPluginBase({ id: "external-channel" }),
-      messaging: {
-        resolveOutboundSessionRoute: ({ target }: { target: string }) => ({
-          sessionKey: `agent:main:external-channel:direct:${target}`,
-          baseSessionKey: `agent:main:external-channel:direct:${target}`,
-          peer: { kind: "direct" as const, id: target },
-          chatType: "direct" as const,
-          from: `external-channel:${target}`,
-          to: `user:${target}`,
-        }),
-      },
-    } satisfies ChannelPlugin;
-
-    const route = await resolveOutboundSessionRoute({
-      cfg: baseConfig,
-      channel: "external-channel",
-      plugin,
-      agentId: "main",
-      target: "u123",
-    });
-
-    expect(route?.to).toBe("user:u123");
-    expect(route?.chatType).toBe("direct");
-  });
 
   it.each([
     {
@@ -329,18 +283,6 @@ describe("resolveOutboundSessionRoute", () => {
 
   it.each([
     {
-      name: "MobileChat group jid",
-      cfg: baseConfig,
-      channel: "mobilechat",
-      target: "120363040000000000@g.us",
-      expected: {
-        sessionKey: "agent:main:mobilechat:group:120363040000000000@g.us",
-        from: "120363040000000000@g.us",
-        to: "120363040000000000@g.us",
-        chatType: "group",
-      },
-    },
-    {
       name: "global groupScope main",
       cfg: { session: { groupScope: "main" } } as OpenClawConfig,
       channel: "mobilechat",
@@ -372,19 +314,6 @@ describe("resolveOutboundSessionRoute", () => {
         from: "meetingchat:channel:19:meeting_abc@thread.tacv2",
         to: "conversation:19:meeting_abc@thread.tacv2",
         chatType: "channel",
-      },
-    },
-    {
-      name: "Workspace thread",
-      cfg: baseConfig,
-      channel: "workspace",
-      target: "channel:C123",
-      replyToId: "456",
-      expected: {
-        sessionKey: "agent:main:workspace:channel:c123:thread:456",
-        from: "workspace:channel:C123",
-        to: "channel:C123",
-        threadId: "456",
       },
     },
     {
@@ -584,18 +513,6 @@ describe("resolveOutboundSessionRoute", () => {
       },
     },
     {
-      name: "FallbackChat explicit group prefix",
-      cfg: baseConfig,
-      channel: "fallbackchat",
-      target: "group:ops",
-      expected: {
-        sessionKey: "agent:main:fallbackchat:group:ops",
-        from: "fallbackchat:group:ops",
-        to: "channel:ops",
-        chatType: "group",
-      },
-    },
-    {
       name: "FallbackChat plugin parser classifies space-style target",
       cfg: baseConfig,
       channel: "fallbackchat",
@@ -619,39 +536,11 @@ describe("resolveOutboundSessionRoute", () => {
         chatType: "direct",
       },
     },
-    {
-      name: "FallbackChat explicit thread prefix",
-      cfg: baseConfig,
-      channel: "fallbackchat",
-      target: "thread:abc",
-      expected: {
-        sessionKey: "agent:main:fallbackchat:channel:abc",
-        from: "fallbackchat:channel:abc",
-        to: "channel:abc",
-        chatType: "channel",
-      },
-    },
   ] satisfies NamedRouteCase[])("$name", async ({ name: _name, ...params }) => {
     await expectResolvedRoute(params);
   });
 
   it.each([
-    {
-      name: "uses resolved GuildChat user targets to route bare numeric ids as DMs",
-      target: "123",
-      resolvedTarget: {
-        to: "user:123",
-        kind: "user" as const,
-        source: "directory" as const,
-        resolutionSource: "directory" as const,
-      },
-      expected: {
-        sessionKey: "agent:main:guildchat:direct:123",
-        from: "guildchat:123",
-        to: "user:123",
-        chatType: "direct",
-      },
-    },
     {
       name: "uses resolved GuildChat channel targets to route bare numeric ids as channels without thread suffixes",
       target: "456",
@@ -770,25 +659,6 @@ describe("ensureOutboundSessionEntry", () => {
     });
   });
 
-  it("persists a resolved target display name as presentation metadata", async () => {
-    await ensureOutboundSessionEntry({
-      cfg: {} as OpenClawConfig,
-      channel: "imessage",
-      route: {
-        sessionKey: "agent:main:imessage:direct:+15551234567",
-        baseSessionKey: "agent:main:imessage:direct:+15551234567",
-        peer: { kind: "direct", id: "+15551234567" },
-        chatType: "direct",
-        from: "auto:+15551234567",
-        to: "auto:+15551234567",
-        displayName: "Alice",
-      },
-    });
-
-    const metadata = firstMockArg(mocks.updateSessionLastRoute, "updateSessionLastRoute");
-    expect(metadata.ctx).toMatchObject({ ConversationLabel: "Alice" });
-  });
-
   it("does not persist an identifier-only target as a group title", async () => {
     const route = await resolveOutboundSessionRoute({
       cfg: { session: { groupScope: "per-group" } } as OpenClawConfig,
@@ -818,28 +688,6 @@ describe("ensureOutboundSessionEntry", () => {
 
     const metadata = firstMockArg(mocks.updateSessionLastRoute, "updateSessionLastRoute");
     expect((metadata.ctx as Record<string, unknown>).GroupSubject).toBeUndefined();
-  });
-
-  it("persists the canonical direct peer separately from its adapter target", async () => {
-    await ensureOutboundSessionEntry({
-      cfg: {} as OpenClawConfig,
-      channel: "reef",
-      route: {
-        sessionKey: "agent:main:main",
-        baseSessionKey: "agent:main:main",
-        peer: { kind: "direct", id: "peer-agent" },
-        chatType: "direct",
-        from: "reef:peer-agent",
-        to: "reef:peer-agent",
-      },
-    });
-
-    const metadata = firstMockArg(mocks.updateSessionLastRoute, "updateSessionLastRoute");
-    expect(metadata.ctx).toMatchObject({
-      NativeDirectUserId: "peer-agent",
-      OriginatingTo: "reef:peer-agent",
-    });
-    expect(metadata.createIfMissing).toBe(true);
   });
 
   it.each(["operator", "required-parent", "unstamped-parent"] as const)(

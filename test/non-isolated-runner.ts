@@ -23,6 +23,7 @@ import {
   resetGatewayWorkAdmission,
 } from "../src/process/gateway-work-admission.js";
 import { hasOpenClawAgentDatabaseAsyncResources } from "../src/state/openclaw-agent-db-resources.js";
+import { cleanupSolid } from "../ui/src/test-helpers/solid-cleanup.ts";
 import { clearJsdomViewportFocus } from "./jsdom-compat.mjs";
 import {
   type CustomElementTracking,
@@ -130,6 +131,15 @@ function resetEvaluatedModules(
     if (skipPaths.some((pattern) => pattern.test(modulePath))) {
       return;
     }
+    const mocked = modulePath.startsWith("mock:") || (node.meta && "mockedModule" in node.meta);
+    // Keep one scheduler/context graph per worker. Roots are disposed before
+    // this reset; re-evaluating Solid would split retained dependency imports.
+    if (
+      !mocked &&
+      /[\\/]node_modules[\\/](?:solid-js|@solidjs[\\/][^\\/]+)[\\/]/u.test(modulePath)
+    ) {
+      return;
+    }
     // importActual can execute a source then replace its meta with a mock placeholder.
     // Vitest's evaluator records each execution independently (including native ones),
     // using the unprefixed id for automocks. Module resets preserve those records.
@@ -155,7 +165,7 @@ function resetEvaluatedModules(
     }
     // Mock metadata owns factories and cached exports after the registry resets.
     // Retire those nodes while preserving ordinary transformed-code metadata.
-    if (modulePath.startsWith("mock:") || (node.meta && "mockedModule" in node.meta)) {
+    if (mocked) {
       modules.invalidateModule(node);
       node.mockedExports = undefined;
     } else {
@@ -580,6 +590,7 @@ export default class OpenClawNonIsolatedRunner extends TestRunner {
         [],
       );
     clean("Vitest file completion", () => super.onAfterRunFiles(files));
+    clean("Solid roots", cleanupSolid);
     await drain("mock resolution", () => drainMockerResolveMocks(internals.moduleRunner?.mocker));
     // The last test's scheduled closes must finish before cleanup restores shared state.
     await settleSqliteTestAgentCloses();
@@ -672,7 +683,6 @@ export default class OpenClawNonIsolatedRunner extends TestRunner {
         ["custom elements", dropTrackedRepoOwnedCustomElements],
         ["document body", resetSharedDocumentBody],
         ["Gateway admission", resetGatewayWorkAdmission],
-        ["module cache", () => vi.resetModules()],
         ["module mocks", () => internals.moduleRunner?.mocker?.reset?.()],
         [
           "evaluated modules",

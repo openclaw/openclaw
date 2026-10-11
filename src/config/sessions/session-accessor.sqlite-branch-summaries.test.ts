@@ -23,7 +23,7 @@ import {
   readSessionBranchSummariesInWorker,
 } from "./session-accessor.sqlite-branches.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
-import { replaceTranscriptEventsSync } from "./session-accessor.sqlite-transcript-write.js";
+import { replaceTranscriptEventsSync } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import type { SessionBranchListResult } from "./session-accessor.types.js";
 import { prepareTranscriptPayload } from "./transcript-payload.js";
 
@@ -200,7 +200,7 @@ const cases: Array<{
         { type: "text", text: "joined" },
       ]),
       message("analysis", "root", "not the headline", { role: "assistant", phase: "commentary" }),
-      message("answer", "analysis", " final\n  answer ", {
+      message("answer", "analysis", "## **final**\n  [answer](https://example.com) ", {
         role: "assistant",
         phase: "final_answer",
       }),

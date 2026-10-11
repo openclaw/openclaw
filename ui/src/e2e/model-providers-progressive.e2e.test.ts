@@ -580,7 +580,7 @@ describeControlUiE2e("Control UI progressive Model Providers loading", () => {
   });
 
   it.each(["snapshot", "ordinary"] as const)(
-    "opens the Models route from %s catalog publication while auth is pending",
+    "opens the Models route from %s catalog publication and refreshes after overlapping reads",
     async (publicationKind) => {
       const context = await browser.newContext({ locale: "en-US", serviceWorkers: "block" });
       const page = await context.newPage();
@@ -651,19 +651,25 @@ describeControlUiE2e("Control UI progressive Model Providers loading", () => {
           await gateway.resolveDeferred("models.list", { models: [older] });
         }
         await expect.poll(() => preparedRow.isVisible()).toBe(true);
-        expect(await picker.locator('[data-value="fixture/older"]').count()).toBe(0);
 
-        await gateway.deferNext("models.list");
-        await gateway.emitGatewayEvent("chat.metadata.changed", {});
-        await expect.poll(async () => (await routeCatalogRequests()).length).toBe(2);
-        expect(await trigger.getAttribute("aria-expanded")).toBe("true");
+        const beforeRefresh = await gateway.deferNext("models.list", { refresh: true });
+        await page.locator(".model-providers__refresh-button").click();
+        const refreshed = await gateway.waitForRequest("models.list", {
+          after: beforeRefresh,
+          match: { refresh: true },
+        });
+        expect(refreshed.params).toMatchObject({ agentId: "main", refresh: true });
         await gateway.resolveDeferred("models.list", {
           models: [prepared, added],
           defaultModels: { automaticUtilityModel: "fixture/added" },
         });
+        if ((await trigger.getAttribute("aria-expanded")) !== "true") {
+          await trigger.click();
+        }
         await expect
           .poll(() => picker.locator('[role="option"][data-value="fixture/added"]').isVisible())
           .toBe(true);
+        expect(await picker.locator('[data-value="fixture/older"]').count()).toBe(0);
         expect(await trigger.getAttribute("aria-expanded")).toBe("true");
       } finally {
         await context.close();

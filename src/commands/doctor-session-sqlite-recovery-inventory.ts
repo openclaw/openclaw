@@ -27,26 +27,14 @@ import {
   type SessionSqliteMigrationMove,
   type SessionSqliteMigrationTargetManifest,
 } from "../infra/session-sqlite-migration-manifest.js";
-import { listUpdateRuns } from "../infra/update-run-reader.js";
+import { withSynchronousArtifactPreservingStateSnapshot } from "../state/openclaw-state-db-readonly.js";
+import {
+  collectUpdateCaptureInventory,
+  readCompletedUpdateHistory,
+} from "./update-capture-cleanup.js";
+import type { RecoveryCleanupArtifact } from "./update-cleanup-types.js";
 
-type Outcome =
-  | "candidate"
-  | "verification-required"
-  | "protected"
-  | "blocked"
-  | "removed"
-  | "disposed"
-  | "failed";
-type RecoveryCleanupArtifact = {
-  path: string;
-  runs: string[];
-  bytes: number;
-  outcome: Outcome;
-  reason: string;
-  detail?: string;
-  consequence?: string;
-  removedBytes?: number;
-};
+type Outcome = RecoveryCleanupArtifact["outcome"];
 export type RecoveryCleanupReport = ReturnType<typeof summarizeRecoveryCleanup>;
 export type RecoveryArtifactReference = {
   run: ActiveSessionSqliteMigrationRun;
@@ -158,16 +146,7 @@ export function collectRecoveryInventory(params: { cfg: OpenClawConfig; env: Nod
     }
   }
   if ([...references.values()].some((refs) => refs.some((ref) => ref.target.databaseIdentity))) {
-    try {
-      laterUpdateStartedAt = Math.max(
-        0,
-        ...listUpdateRuns({ limit: 100 }, { env: params.env })
-          .filter((run) => run.status === "succeeded" && run.finishedAtMs !== null)
-          .map((run) => run.createdAtMs),
-      );
-    } catch {
-      // Missing/unreadable update history cannot release rollback originals.
-    }
+    laterUpdateStartedAt = readCompletedUpdateHistory(params.env)?.latestCompletedStartedAt ?? 0;
   }
   for (const [archivePath, refs] of references) {
     const evidence = resolveRecoveryArtifact(refs);
@@ -464,9 +443,35 @@ export function summarizeRecoveryCleanup(
   return { stateDir, artifacts, totals, status };
 }
 
+/** Update cleanup also reviews original-state captures; Doctor's session repair does not. */
+export function collectUpdateCleanupInventory(params: {
+  cfg: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+}) {
+  return withSynchronousArtifactPreservingStateSnapshot(
+    () => {
+      const inventory = collectRecoveryInventory(params);
+      const captures = collectUpdateCaptureInventory({
+        stateDir: inventory.report.stateDir,
+        env: params.env,
+      });
+      return {
+        ...inventory,
+        captureIdentities: captures.identities,
+        report: summarizeRecoveryCleanup(
+          inventory.report.stateDir,
+          [...inventory.report.artifacts, ...captures.artifacts],
+          "preview",
+        ),
+      };
+    },
+    { current: { env: params.env } },
+  );
+}
+
 export function inspectSessionSqliteRecovery(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
 }): RecoveryCleanupReport {
-  return collectRecoveryInventory(params).report;
+  return collectUpdateCleanupInventory(params).report;
 }

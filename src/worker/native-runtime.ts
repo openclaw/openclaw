@@ -157,6 +157,10 @@ export async function createNativeRuntime(
     dev: directory.dev,
     ino: directory.ino,
   };
+  const protocolSpellings = [...protocolSecrets].flatMap((secret) => [
+    secret,
+    JSON.stringify(secret).slice(1, -1),
+  ]);
 
   const hasCredentialPrefix = (value: unknown): boolean => {
     if (typeof value === "string") {
@@ -273,13 +277,7 @@ export async function createNativeRuntime(
           assertProtocolSafe: (value) => {
             assertActive();
             const serialized = JSON.stringify(value);
-            if (
-              [...protocolSecrets].some(
-                (secret) =>
-                  serialized.includes(secret) ||
-                  serialized.includes(JSON.stringify(secret).slice(1, -1)),
-              )
-            ) {
+            if (protocolSpellings.some((secret) => serialized.includes(secret))) {
               throw new Error("Native credential appeared in a protocol payload");
             }
           },
@@ -310,6 +308,7 @@ export async function createNativeRuntime(
       }
       models.clear();
       protocolSecrets.clear();
+      protocolSpellings.length = 0;
       runtime.registry.clearApiProviders();
     },
   };

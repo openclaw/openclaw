@@ -29,10 +29,7 @@ import {
   readGitHubPublicationRequest,
   readKnownGitHubPublicationPullRequestUrlsInDatabase,
 } from "../gateway/github-publication-store.js";
-import {
-  readKnownRepositoryGitHubPublicationPullRequestUrlsInDatabase,
-  readRepositoryGitHubPublicationInDatabase,
-} from "../gateway/github-repository-publication-store.js";
+import { readKnownRepositoryGitHubPublicationPullRequestUrlsInDatabase } from "../gateway/github-repository-publication-store.js";
 import { readPlacementGrantRows } from "../gateway/operator-approval-placement-grants.read.js";
 import {
   listCronStandingGrantsInDatabase,
@@ -56,7 +53,7 @@ import { listPendingWorkerWorkspaceResultsInDatabase } from "../gateway/worker-e
 import { getSqliteRuntimeCapabilities } from "../infra/bun-sqlite-library.js";
 import { executeDevicePairingRead } from "../infra/device-pairing-read.kernel.js";
 import { readExecApprovalsConfigRow } from "../infra/exec-approvals-sqlite.js";
-import { inspectGatewayOwnerLeaseForMaintenance } from "../infra/gateway-owner-lease.worker.js";
+import { inspectGatewayOwnerLease } from "../infra/gateway-owner-lease.worker.js";
 import { bunSqliteNativeCleanupPending } from "../infra/node-sqlite.js";
 import { inspectCurrentConversationBindingRecordInDatabase } from "../infra/outbound/current-conversation-bindings.kernel.js";
 import { readOutboundDeliveriesInDatabase } from "../infra/outbound/delivery-queue-storage.kernel.js";
@@ -118,6 +115,7 @@ import type {
 import { isReadRequest } from "./openclaw-state-read.validation.js";
 import { encodeOpenClawStateWorkerError } from "./openclaw-state-worker-error.js";
 import { findSessionRepositoryWorkspaceInDatabase } from "./session-repository-workspaces.kernel.js";
+import { readUserBackgroundCommand } from "./user-background.kernel.js";
 import { readUserModelAccountCommand } from "./user-model-accounts.read.worker.js";
 import { selectUserPreferenceValues } from "./user-preferences.store.js";
 import { readUserProfileCommand } from "./user-profile-read.worker.js";
@@ -157,10 +155,14 @@ serveOwnedWorkerTasks(
             }),
           );
         }
-        if (command.type === "doctor.gatewayOwnerLease.read") {
-          const lease = inspectGatewayOwnerLeaseForMaintenance(input, () => {
-            sourceAdmitted = true;
-          });
+        if (command.type === "gatewayOwnerLease.read") {
+          const lease = inspectGatewayOwnerLease(
+            input,
+            () => {
+              sourceAdmitted = true;
+            },
+            command.schemaMaintenance,
+          );
           return { ok: true, type: command.type, sourceAdmitted: true, lease };
         }
         const locationArgs = [
@@ -481,12 +483,6 @@ serveOwnedWorkerTasks(
                 row: readGitHubPublicationRequest(db, { requestId: command.requestId }),
               };
             }
-            if (command.type === "githubRepository.request") {
-              return {
-                type: command.type,
-                row: readRepositoryGitHubPublicationInDatabase(db, command.requestId),
-              };
-            }
             if (
               command.type === "githubPublication.knownPullRequestUrls" ||
               command.type === "githubRepository.knownPullRequestUrls"
@@ -517,6 +513,12 @@ serveOwnedWorkerTasks(
               command.type === "userProfiles.email.resolve"
             ) {
               return readUserProfileCommand(db, command);
+            }
+            if (
+              command.type === "userBackground.snapshot" ||
+              command.type === "userBackground.image"
+            ) {
+              return readUserBackgroundCommand(db, command);
             }
             if (command.type === "userPreferences.values") {
               return {

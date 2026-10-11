@@ -30,6 +30,7 @@ export type SessionMessageRewriteCommitted = {
 
 export type SessionTranscriptEventCommitted = {
   kind: "session-transcript-event";
+  appended: boolean;
   projectionNeedsReconcile: boolean;
 };
 

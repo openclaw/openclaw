@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { constants, copyFileSync, existsSync, renameSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { BoardWidgetMaterializedPutParams } from "../../packages/gateway-protocol/src/index.js";
@@ -805,6 +805,8 @@ describe("SqliteBoardStore persistence", () => {
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
 
+    renameSync(databasePath, `${databasePath}.template`);
+    copyFileSync(`${databasePath}.template`, databasePath, constants.COPYFILE_EXCL);
     const { DatabaseSync } = requireNodeSqlite();
     const existingV14 = new DatabaseSync(databasePath);
     restoreEmptyV21StorageForHistoricalFixture(existingV14);

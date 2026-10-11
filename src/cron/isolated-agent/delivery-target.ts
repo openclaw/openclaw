@@ -1,5 +1,6 @@
 /** Resolves isolated cron delivery requests into concrete outbound targets. */
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { resolveChannelAllowFrom } from "../../channels/account-resolution.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -15,6 +16,7 @@ import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import type { CronDeliveryPlan } from "../delivery-plan.js";
 import { hasExplicitCronDeliveryTarget } from "../delivery-target-validation.js";
 import type { CronStoredJob } from "../types.js";
+import { selectCronRouteCurrentSessionKey } from "./delivery-route-session-key.js";
 import {
   readCronDeliveryTargetContexts,
   type CronDeliveryContextRequest,
@@ -30,6 +32,7 @@ export type DeliveryTargetResolution =
       accountId?: string;
       threadId?: string | number;
       mode: "explicit" | "implicit";
+      sessionRoute?: OutboundSessionRoute;
     }
   | {
       ok: false;
@@ -62,12 +65,12 @@ async function resolveOutboundTargetWithRuntime(
   params: Parameters<typeof tryResolveLoadedOutboundTarget>[0],
 ) {
   try {
-    const loaded = tryResolveLoadedOutboundTarget(params);
+    const loaded = await tryResolveLoadedOutboundTarget(params);
     if (loaded) {
       return loaded;
     }
     const { resolveOutboundTarget } = await targetsRuntimeLoader.load();
-    return resolveOutboundTarget({ ...params, allowBootstrap: true });
+    return await resolveOutboundTarget({ ...params, allowBootstrap: true });
   } catch (err) {
     return {
       ok: false as const,
@@ -157,8 +160,7 @@ export async function resolveDeliveryTarget(
   const explicitTo = typeof jobPayload.to === "string" ? jobPayload.to : undefined;
   const allowMismatchedLastTo = requestedChannel === "last";
   const deliveryTargetRuntime = await deliveryTargetRuntimeLoader.load();
-  const source =
-    jobPayload.sessionTarget === "isolated" ? jobPayload.sourceConversation : undefined;
+  const source = jobPayload.sourceConversation;
   if (source && !hasExplicitCronDeliveryTarget(jobPayload)) {
     try {
       const { prepareSessionGenerationFacts } = await sessionGenerationRuntimeLoader.load();
@@ -194,11 +196,9 @@ export async function resolveDeliveryTarget(
       }
       return result.value;
     })();
-  const { mainSessionKey, rawSessionKey, threadSessionKey, usedSharedMainFallback } =
-    sessionContext;
+  const { rawSessionKey, usedSharedMainFallback } = sessionContext;
   const hasConversationCompletion =
-    jobPayload.sessionTarget === "current" ||
-    (jobPayload.sessionTarget === "isolated" && jobPayload.sourceConversation !== undefined);
+    jobPayload.sessionTarget === "current" || jobPayload.sourceConversation !== undefined;
   // A missing creating conversation cannot inherit another conversation's shared route.
   const main =
     hasConversationCompletion && usedSharedMainFallback ? undefined : sessionContext.main;
@@ -294,10 +294,9 @@ export async function resolveDeliveryTarget(
     const { getLoadedChannelPluginForRead, mapAllowFromEntries } = deliveryTargetRuntime;
     const channelPlugin = getLoadedChannelPluginForRead(channel);
     const resolvedAccountId = normalizeAccountId(accountId);
-    const configuredAllowFromRaw = channelPlugin?.config.resolveAllowFrom?.({
-      cfg,
-      accountId: resolvedAccountId,
-    });
+    const configuredAllowFromRaw = channelPlugin
+      ? await resolveChannelAllowFrom({ plugin: channelPlugin, cfg, accountId: resolvedAccountId })
+      : undefined;
     const configuredAllowFrom = configuredAllowFromRaw
       ? mapAllowFromEntries(configuredAllowFromRaw)
       : [];
@@ -398,7 +397,12 @@ export async function resolveDeliveryTarget(
         channel,
         agentId,
         ...targetParams,
-        currentSessionKey: threadSessionKey ?? mainSessionKey,
+        currentSessionKey: selectCronRouteCurrentSessionKey(
+          rawSessionKey,
+          agentId,
+          channel,
+          targetParams.target,
+        ),
       });
     } catch {
       return null;
@@ -450,6 +454,10 @@ export async function resolveDeliveryTarget(
     });
   const threadId =
     explicitThreadId ?? route?.threadId ?? (canUseSessionThread ? resolved.threadId : undefined);
+  const sessionRoute =
+    route && route.threadId === threadId
+      ? route
+      : await resolveRoute({ accountId, target: toCandidate, resolvedTarget, threadId });
   return {
     ok: true,
     channel,
@@ -457,5 +465,6 @@ export async function resolveDeliveryTarget(
     accountId,
     threadId,
     mode,
+    ...(sessionRoute ? { sessionRoute } : {}),
   };
 }

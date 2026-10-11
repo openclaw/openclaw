@@ -122,7 +122,6 @@ export function resetFollowupTurnTestState() {
         ...createSessionHistoryWorkerReaders(async () => {
           throw new Error("Visibility policy fixtures supply prepared entries");
         }),
-        generation: 0,
         assertCurrent() {},
       },
       database: { agentId, path: scope.storePath, env: scope.env ?? {} },

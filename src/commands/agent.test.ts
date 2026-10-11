@@ -43,8 +43,8 @@ import {
   loadSessionEntry,
   loadTranscriptEvents,
   replaceSessionEntry,
-  replaceTranscriptEvents,
 } from "../config/sessions/session-accessor.js";
+import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { addSessionMember, listSessionMembers } from "../config/sessions/session-sharing-store.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
@@ -192,12 +192,12 @@ vi.mock("../cli/command-secret-targets.js", () => ({
   getScopedChannelsCommandSecretTargets: () => ({ targetIds: new Set<string>() }),
 }));
 
-vi.mock("../infra/outbound/channel-bootstrap.runtime.js", () => ({
+vi.mock("../infra/outbound/channel-bootstrap.runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/outbound/channel-bootstrap.runtime.js")>()),
   // Every channel fixture in this suite is already active. Bootstrap discovery
   // and its plugin-loader graph have focused owner coverage.
   bootstrapOutboundChannelPlugin: vi.fn(() => undefined),
   bootstrapOutboundChannelPluginAsync: vi.fn(() => undefined),
-  resetOutboundChannelBootstrapStateForTests: vi.fn(),
 }));
 
 vi.mock("../config/sessions/inbound.runtime.js", () => ({

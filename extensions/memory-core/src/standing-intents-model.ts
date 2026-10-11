@@ -238,6 +238,15 @@ export type StandingIntentOperations = {
   match: { input: StandingIntentMatchInput; output: StandingIntent[] };
 };
 
+export type StandingIntentWorkerOperations = {
+  [Key in keyof StandingIntentOperations]: {
+    input: StandingIntentOperations[Key]["input"];
+    output:
+      | { kind: "schema-prepared" }
+      | { kind: "result"; value: StandingIntentOperations[Key]["output"] };
+  };
+};
+
 function renderStandingIntentContext(intents: StandingIntent[]): string {
   const lines = intents.map((intent) => {
     const createdDate = new Date(intent.createdAt).toISOString().slice(0, 10);

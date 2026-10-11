@@ -1,11 +1,8 @@
 import type { DatabaseSync } from "node:sqlite";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
-import {
-  cosineSimilarity,
-  decodeMemoryEmbedding,
-} from "openclaw/plugin-sdk/memory-core-host-engine-knn";
 import type { MemorySource } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import type { VectorKnnRequest, VectorKnnResponse } from "./manager-search-knn.js";
+import { createEmbeddingScorer } from "./manager-search-scorer.js";
 import {
   buildMemoryModelFilter,
   projectMemorySearchRow,
@@ -74,19 +71,23 @@ export async function searchChunksByEmbedding(params: {
   queryVec: number[];
   limit: number;
   snippetMaxChars: number;
+  candidateIds?: string[];
   signal?: AbortSignal;
 }): Promise<SearchRowResult[]> {
-  if (params.limit <= 0) {
+  if (params.limit <= 0 || params.candidateIds?.length === 0) {
     return [];
   }
   const providerModels = resolveProviderModels(params.providerModel, params.providerModelAliases);
   const modelFilter = buildMemoryModelFilter("model", providerModels);
+  const candidateFilter = params.candidateIds
+    ? ` AND id IN (${params.candidateIds.map(() => "?").join(", ")})`
+    : "";
   // Keep batches bounded instead of calling `.all()` across the entire chunks
   // table, and do not hold a sqlite iterator open across the setImmediate yield
   // below. The rowid cursor keeps memory bounded without OFFSET rescans.
   const projection = `SELECT rowid AS rowid, embedding
   FROM memory_index_chunks
- WHERE ${modelFilter}`;
+ WHERE ${modelFilter}${candidateFilter}`;
   const ordering = `${params.sourceFilter.sql}\n ORDER BY rowid ASC\n LIMIT ?`;
   // The first batch includes zero and negative identities, including INT64_MIN;
   // later batches retain an indexed range predicate and the exact native cursor.
@@ -102,11 +103,13 @@ export async function searchChunksByEmbedding(params: {
   const payloadStmt = params.db.prepare(
     `SELECT id, path, start_line, end_line, ${snippet.sql} AS text, source FROM memory_index_chunks WHERE rowid = ?`,
   );
+  const scoreEmbedding = createEmbeddingScorer(params.queryVec);
   const topResults: SearchRowResult[] = [];
   let lastRowid: bigint | undefined;
   while (true) {
     const rows = (lastRowid === undefined ? firstStmt : stmt).iterate(
       ...providerModels,
+      ...(params.candidateIds ?? []),
       ...(lastRowid === undefined ? [] : [lastRowid]),
       ...params.sourceFilter.params,
       FALLBACK_VECTOR_BATCH_SIZE,
@@ -117,7 +120,7 @@ export async function searchChunksByEmbedding(params: {
     for (const row of batch) {
       batchSize += 1;
       lastRowid = row.rowid;
-      const score = cosineSimilarity(params.queryVec, decodeMemoryEmbedding(row.embedding));
+      const score = scoreEmbedding(row.embedding);
       const lowest = topResults.at(-1);
       if (
         Number.isFinite(score) &&

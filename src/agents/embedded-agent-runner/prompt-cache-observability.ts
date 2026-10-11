@@ -10,13 +10,10 @@ import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import type { Message } from "../../llm/types.js";
 import type { NormalizedUsage } from "../usage.js";
 import { log } from "./logger.js";
+import type { ProviderPromptCachePrefix } from "./provider-prompt-serialization.js";
 import type { ProviderPromptState } from "./provider-prompt-state.js";
 
-type PromptHistoryRewriteReason =
-  | "compaction"
-  | "pruning"
-  | "runtimeContextCarrier"
-  | "imageCleanup";
+type PromptHistoryRewriteReason = "compaction" | "pruning" | "runtimeContextCarrier";
 type PromptCacheIdentity = { sessionId: string; promptCacheKey?: string; sessionKey?: string };
 
 export type { PromptCacheChange };
@@ -81,6 +78,7 @@ type PromptCacheTracker = {
   lastProviderPrompt?: ProviderPromptState["lastAttempt"];
   requestedAt: number;
   pendingChanges: PromptCacheChange[] | null;
+  unmeasuredChanges?: PromptCacheChange[] | null;
 };
 
 type PromptHistoryFingerprint = {
@@ -257,6 +255,26 @@ function buildTrackerKey(params: PromptCacheIdentity): string {
   ]);
 }
 
+function describeProviderFields(
+  before: ProviderPromptCachePrefix["parameters"],
+  after: ProviderPromptCachePrefix["parameters"] | undefined,
+): string {
+  if (!after) {
+    return "removed";
+  }
+  const beforeFields = before.fields ?? {};
+  const afterFields = after.fields ?? {};
+  const changed = [...new Set([...Object.keys(beforeFields), ...Object.keys(afterFields)])].filter(
+    (key) => beforeFields[key] !== afterFields[key],
+  );
+  return changed.length
+    ? changed.slice(0, MAX_HISTORY_DIFF_FIELDS).join("+") +
+        (changed.length > MAX_HISTORY_DIFF_FIELDS ? "+remaining" : "")
+    : Object.keys(beforeFields).length || Object.keys(afterFields).length
+      ? "order"
+      : "value";
+}
+
 function describeProviderPrefix(
   previous: ProviderPromptState["lastAttempt"],
   next: ProviderPromptState["lastAttempt"],
@@ -269,27 +287,37 @@ function describeProviderPrefix(
   if (previous.scopeDigest !== next.scopeDigest) {
     return "provider-scope";
   }
-  for (const segment of ["system", "tools"] as const) {
-    if (before[segment] !== after[segment]) {
-      return segment;
-    }
-  }
-  const index = before.messages.findIndex((digest, i) => digest !== after.messages[i]);
-  if (index >= 0) {
-    return `message:${index}`;
-  }
-  if (before.parameters !== after.parameters) {
-    return "parameters";
-  }
-  if (before.tail !== undefined) {
+  const continuation = before.continuation || after.continuation;
+  const segment = (["system", "tools"] as const).find((key) => before[key] !== after[key]);
+  const index = before.messages.findIndex((item, i) => item.digest !== after.messages[i]?.digest);
+  let prefix = segment ?? (continuation ? "wire-prefix-match" : "prefix-match");
+  if (!segment && index >= 0) {
+    const item = before.messages[index]!;
+    const fields = item.fields ? `.${describeProviderFields(item, after.messages[index])}` : "";
+    prefix = `${continuation ? "wire-input" : "message"}:${index}${fields}`;
+  } else if (!segment && before.tail !== undefined) {
     // A growing tail cannot establish equality of its earlier messages from one digest.
-    return before.messageCount !== after.messageCount
-      ? `unverified-after:${before.messages.length}`
-      : before.tail !== after.tail
-        ? `message-tail:${before.messages.length}`
-        : "prefix-match";
+    prefix =
+      before.messageCount !== after.messageCount
+        ? `unverified-after:${before.messages.length}`
+        : before.tail !== after.tail
+          ? `message-tail:${before.messages.length}`
+          : prefix;
   }
-  return "prefix-match";
+  const parameters =
+    before.parameters.digest !== after.parameters.digest
+      ? `parameters:${describeProviderFields(before.parameters, after.parameters)}`
+      : undefined;
+  const format = before.messageField !== after.messageField ? "input-format" : undefined;
+  const details = [
+    prefix.endsWith("prefix-match") && (parameters || format) ? undefined : prefix,
+    format,
+    parameters,
+  ]
+    .filter(Boolean)
+    .join(",");
+  // A delta request's wire input is not its logical conversation prefix.
+  return `${continuation ? "continuation:" : ""}${details}`;
 }
 
 function describeToolChanges(previous: PromptCacheSnapshot, next: PromptCacheSnapshot): string {
@@ -506,6 +534,7 @@ export function beginPromptCacheObservation(
   );
   const changes = previous
     ? [
+        ...(previous.unmeasuredChanges ?? []),
         ...(previous.pendingChanges?.filter(
           (change) => change.code === "aggregateToolResultTruncation",
         ) ?? []),
@@ -518,12 +547,11 @@ export function beginPromptCacheObservation(
   const restarted = changes.some(
     ({ code }) => code === "model" || code === "transport" || code === "cacheRetention",
   );
-  const divergence =
-    previous && !restarted && !previous.declaredRewrites?.size
-      ? previous.history.findIndex((message, index) => message.digest !== history[index]?.digest)
-      : -1;
+  const divergence = previous
+    ? previous.history.findIndex((message, index) => message.digest !== history[index]?.digest)
+    : -1;
   const violation =
-    divergence < 0
+    divergence < 0 || restarted || previous?.declaredRewrites?.size
       ? undefined
       : {
           code: "historyRewrite" as const,
@@ -532,6 +560,7 @@ export function beginPromptCacheObservation(
   if (violation) {
     changes.push(violation);
   }
+  const pendingChanges = [...new Map(changes.map((change) => [change.code, change])).values()];
   const tracker: PromptCacheTracker = {
     sessionId: params.sessionId,
     sessionKey: params.sessionKey?.trim(),
@@ -541,7 +570,7 @@ export function beginPromptCacheObservation(
     lastCacheReadSnapshot: previous?.lastCacheReadSnapshot,
     lastProviderPrompt: previous?.lastProviderPrompt,
     requestedAt,
-    pendingChanges: changes.length > 0 ? changes : null,
+    pendingChanges: pendingChanges.length > 0 ? pendingChanges : null,
   };
   trackers.delete(key);
   pruneMapToMaxSize(trackers, MAX_TRACKERS - 1);
@@ -556,7 +585,8 @@ export function beginPromptCacheObservation(
   }
   return {
     snapshot,
-    changes: changes.length > 0 ? changes : null,
+    prefixUnchanged: previous !== undefined && divergence < 0,
+    changes: tracker.pendingChanges,
     previousCacheRead: previous?.lastCacheRead ?? null,
     requestGapMs: previous ? Math.max(0, requestedAt - previous.requestedAt) : undefined,
   };
@@ -604,9 +634,16 @@ export function completePromptCacheObservation(
   tracker.pendingChanges = null;
 
   const cacheRead = params.usage?.cacheRead;
-  if (typeof cacheRead !== "number" || !Number.isFinite(cacheRead)) {
+  if (
+    params.usage?.cacheTelemetry?.state === "unavailable" ||
+    typeof cacheRead !== "number" ||
+    !Number.isFinite(cacheRead)
+  ) {
+    // Keep cause evidence paired with the last measured cache hit, not a usage-less request.
+    tracker.unmeasuredChanges = changes;
     return null;
   }
+  tracker.unmeasuredChanges = null;
   const previousCacheRead = tracker.lastCacheRead;
   const previousSnapshot = tracker.lastCacheReadSnapshot;
   const previousProviderPrompt = tracker.lastProviderPrompt;

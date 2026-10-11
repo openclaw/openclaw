@@ -24,7 +24,6 @@ import {
   createConditionalWarningCollector,
 } from "openclaw/plugin-sdk/channel-policy";
 import { PAIRING_APPROVED_MESSAGE } from "openclaw/plugin-sdk/channel-status";
-import { getSessionBindingService } from "openclaw/plugin-sdk/conversation-runtime";
 import {
   createChannelDirectoryAdapter,
   createRuntimeDirectoryLiveAdapter,
@@ -117,6 +116,7 @@ import { feishuSetupContract } from "./setup-core.js";
 import { feishuSetupWizard, runFeishuLogin } from "./setup-surface.js";
 import { resolveFeishuStickerSet, searchFeishuStickerSet } from "./sticker-catalog.js";
 import { looksLikeFeishuId, normalizeFeishuTarget, resolveReceiveIdType } from "./targets.js";
+import { getFeishuThreadBindingManager } from "./thread-bindings.js";
 import type { FeishuConfig, FeishuProbeResult, ResolvedFeishuAccount } from "./types.js";
 
 function resolveFeishuSendAttachmentMedia(params: Record<string, unknown>): string | undefined {
@@ -611,18 +611,10 @@ function resolveFeishuSenderScopedCommandConversation(params: {
   if (!params.sessionKey?.trim()) {
     return undefined;
   }
-  const boundConversation = getSessionBindingService()
-    .listBySession(params.sessionKey)
-    .find((binding) => {
-      if (
-        binding.conversation.channel !== "feishu" ||
-        binding.conversation.accountId !== params.accountId
-      ) {
-        return false;
-      }
-      return binding.conversation.conversationId === senderScopedConversationId;
-    });
-  return boundConversation?.conversation.conversationId;
+  const boundConversation = getFeishuThreadBindingManager(params.accountId)
+    ?.listBySessionKey(params.sessionKey)
+    .find((binding) => binding.conversationId === senderScopedConversationId);
+  return boundConversation?.conversationId;
 }
 
 function resolveFeishuCommandConversation(params: {

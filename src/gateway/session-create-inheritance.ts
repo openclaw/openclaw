@@ -27,9 +27,12 @@ type SessionCreation = NonNullable<CreateGatewaySessionParams["creation"]> &
 /** Inherit parent selection without replacing explicitly requested choices. */
 export function inheritSessionCreateParentFields(params: {
   parent: SessionEntry | undefined;
+  newExplicitChild: boolean;
+  newDashboardRoot: boolean;
+  selectedModel?: string;
   overrides: Pick<
     CreateGatewaySessionParams,
-    "catalogTarget" | "model" | "toolOverrides" | "fastMode"
+    "catalogTarget" | "model" | "toolOverrides" | "fastMode" | "communication"
   >;
 }): Partial<InternalSessionEntry> {
   const { parent, overrides } = params;
@@ -43,6 +46,15 @@ export function inheritSessionCreateParentFields(params: {
   if (overrides.fastMode !== undefined) {
     // Explicit choices have already been validated by the canonical patch owner.
     delete inherited.fastMode;
+  }
+  // Communication inheritance initializes only a new explicit child. Adopting a
+  // key or automatically grouping a dashboard root cannot replace its policy.
+  if (params.newExplicitChild && overrides.communication === undefined && parent?.communication) {
+    inherited.communication = { ...parent.communication };
+  }
+  // Main groups dashboard roots; it must not supply their reply-time model.
+  if (params.newDashboardRoot && !params.selectedModel) {
+    inherited.modelOverrideSource = "default";
   }
   return inherited;
 }

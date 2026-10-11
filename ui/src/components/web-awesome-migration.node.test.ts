@@ -11,28 +11,37 @@ function productionTypeScriptFiles(dir = sourceRoot): string[] {
     if (entry.isDirectory()) {
       return productionTypeScriptFiles(filePath);
     }
-    if (!entry.name.endsWith(".ts") || entry.name.includes(".test.")) {
+    if (!/\.tsx?$/u.test(entry.name) || entry.name.includes(".test.")) {
       return [];
     }
     return [filePath];
   });
 }
 
-function matchingFiles(pattern: RegExp): string[] {
+function matchingFiles(pattern: RegExp, owners: readonly string[] = []): string[] {
   const matches: string[] = [];
   for (const filePath of productionTypeScriptFiles()) {
-    if (pattern.test(readFileSync(filePath, "utf8"))) {
-      matches.push(path.relative(sourceRoot, filePath));
+    const relativePath = path.relative(sourceRoot, filePath);
+    // A renderer change may move an owner from .ts to .tsx without changing
+    // which shared primitive owns accessibility and keyboard policy.
+    const ownerPath = relativePath.replace(/\.tsx$/u, ".ts");
+    if (!owners.includes(ownerPath) && pattern.test(readFileSync(filePath, "utf8"))) {
+      matches.push(ownerPath);
     }
   }
   return matches.toSorted();
 }
 
-describe("Web Awesome control ownership", () => {
+describe("shared control ownership", () => {
   it("keeps dialogs, menus, and tabs on shared primitives", () => {
-    expect(matchingFiles(/<dialog\b/u)).toEqual([]);
+    expect(matchingFiles(/<dialog\b/u, ["components/modal-dialog.ts"])).toEqual([]);
     expect(
-      matchingFiles(/<[a-z][^>]*\srole=["'](?:menu|menubar|menuitem|tab|tablist)["']/u),
+      matchingFiles(/<[a-z][^>]*\srole=["'](?:menu|menubar|menuitem|tab|tablist)["']/u, [
+        "components/menu-surface.ts",
+        "components/web-awesome.ts",
+        "components/panel-tab-strip.ts",
+        "components/hub-tabs.ts",
+      ]),
     ).toEqual([]);
     expect(
       matchingFiles(/<details\b[^>]*class=["'][^"']*(?:menu|select|popover|dropdown)/u),
@@ -43,13 +52,13 @@ describe("Web Awesome control ownership", () => {
   });
 
   it("limits custom comboboxes to approved searchable controls", () => {
-    // Web Awesome Core has no combobox; its combobox is a paid Pro component.
-    // This inventory tracks literal ARIA roles, not Web Awesome elements that own roles internally.
+    // Searchable controls own their keyboard policy; page consumers reuse them.
     expect(matchingFiles(/<[a-z][^>]*\srole=["'](?:combobox|listbox|option)["']/u)).toEqual([
       "components/command-palette-view.ts",
       "components/composer-menu.ts",
       "components/multi-select.ts",
       "components/select-picker.ts",
+      "components/session-group-defaults-dialog.ts",
       "pages/chat/components/chat-model-account-control.ts",
       "pages/chat/components/chat-model-picker-options.ts",
       "pages/chat/components/chat-model-picker.ts",
@@ -59,11 +68,13 @@ describe("Web Awesome control ownership", () => {
   });
 
   it("limits custom dividers to docked multi-pane layouts", () => {
-    // Web Awesome split panel owns exactly two panes; these layouts coordinate
-    // sidebar, inspector, and responsive dock state across more than two panes.
+    // These layouts coordinate sidebar, inspector, and responsive dock state
+    // across more than two panes.
     expect(matchingFiles(/<resizable-divider\b/u)).toEqual([
       "app/app-shell-view.ts",
+      "components/assistant-panel-view.ts",
       "components/dock-layout-controller.ts",
+      "components/dock-layout-solid.ts",
       "pages/chat/chat-page-pane-render.ts",
       "pages/chat/components/chat-resizable-divider.ts",
     ]);

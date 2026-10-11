@@ -564,11 +564,13 @@ it.each(["blue", "red"])(
     ]);
     const control = new NewSessionModelControl(() => undefined);
     control.load(context, "main", true);
-    await waitForFast(() =>
+    await waitForFast(() => {
+      const container = renderControl(control, context);
       expect(
-        renderControl(control, context).querySelector('[data-chat-speed-option="on"]'),
-      ).not.toBeNull(),
-    );
+        container.querySelector('[data-chat-model-option="openai/' + id + '"]'),
+      ).not.toBeNull();
+      expect(container.querySelector('[data-chat-speed-option="on"]')).not.toBeNull();
+    });
     renderControl(control, context)
       .querySelector<HTMLButtonElement>('[data-chat-speed-option="on"]')!
       .click();
@@ -723,7 +725,7 @@ describe("runtime choices", () => {
       }
     });
 
-    it("drops a saved runtime that is no longer offered instead of running it through the base harness", async () => {
+    it("blocks a saved runtime that is no longer offered instead of silently selecting the default", async () => {
       const { runtimeChoices: _choices, ...base } = models[0]!;
       const { context } = contextWith([base]);
       const changed = vi.fn();
@@ -734,10 +736,11 @@ describe("runtime choices", () => {
       });
       try {
         await vi.waitFor(() =>
-          expect(changed).toHaveBeenCalledWith({ model: "", agentRuntime: "", thinkingLevel: "" }),
+          expect(control.modelSelectionBlockedReason(agent)).toBe("Models unavailable"),
         );
-        expect(control.agentRuntime).toBeUndefined();
-        expect(control.modelForSubmission()).toBe("");
+        expect(control.agentRuntime).toBe("codex");
+        expect(control.modelForSubmission()).toBe("openai/gpt-5.6-sol");
+        expect(changed).not.toHaveBeenCalled();
       } finally {
         control.reset();
       }

@@ -15,6 +15,8 @@ import {
 
 export type ComposerProgressDisclosureContext = {
   presented?: boolean;
+  /** Details is a user-opened surface, not a transcript-scroll sheet. */
+  manualOnly?: boolean;
   gatewayScope?: object;
   sessionIdentity?: string;
   cardLifetime?: object;
@@ -77,7 +79,7 @@ class ProgressDisclosureController {
     this.rememberedChoice = this.cardLifetime ? choicesByCard.get(this.cardLifetime) : undefined;
     return resolveProgressDisclosure(undefined, {
       type: "mount",
-      open: initialOpen && !isMobileNavLayout(),
+      open: initialOpen && (lifecycle?.manualOnly === true || !isMobileNavLayout()),
       manualOpen: this.rememberedChoice?.choice,
       readingHistory: lifecycle?.readingHistory === true,
     });
@@ -251,7 +253,7 @@ class ProgressDisclosureController {
       return;
     }
     const transcript =
-      this.lifecycle?.presented === false
+      this.lifecycle?.presented === false || this.lifecycle?.manualOnly
         ? null
         : (this.element.closest(".chat-main")?.querySelector<HTMLElement>(".chat-thread") ?? null);
     if (transcript === this.transcript) {
@@ -266,7 +268,7 @@ class ProgressDisclosureController {
   }
 
   private connectHeader(): void {
-    if (this.disposed || this.lifecycle?.presented === false) {
+    if (this.disposed || this.lifecycle?.presented === false || this.lifecycle?.manualOnly) {
       return;
     }
     this.summary ??= this.element.querySelector<HTMLElement>("summary") ?? undefined;

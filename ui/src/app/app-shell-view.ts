@@ -46,10 +46,12 @@ import { beginNativeWindowDragFromTopInset } from "./native-window-drag.ts";
 import {
   floatingSidebarAttentionVisible,
   navigationSurfaceIsHidden,
+  NAVIGATION_RAIL_WIDTH,
   renderFloatingUpdateCard,
 } from "./navigation-surface.ts";
 import { readGatewayOperatorAccess } from "./operator-access.ts";
 import { isDesktopPanelAvailable, isHomePanelAvailable } from "./panel-availability.ts";
+import { resolveProfileAppearancePrefs } from "./server-prefs-profile.ts";
 import { NAV_WIDTH_MAX, NAV_WIDTH_MIN, normalizeCatalogOpenTarget } from "./settings.ts";
 import { renderCollapsedHomeToggle } from "./shell-assistant-toggles.ts";
 import type { ShellLayoutController } from "./shell-layout-traits.ts";
@@ -196,11 +198,15 @@ export function renderApplicationShell(host: ShellViewHost) {
     !host.desktopNavigationExpanded &&
     !navDrawerOpen &&
     !settingsTakeover;
+  const railAvailable = !nativeEmbed && !settingsTakeover && !onboarding;
+  const railWidth = railAvailable ? NAVIGATION_RAIL_WIDTH : 0;
+  const expandedNavWidth = navigationSnapshot.navWidth + railWidth;
   const navigationSurfaceHidden = navigationSurfaceIsHidden({
     onboarding,
     navCollapsed,
     navDrawerOpen,
     mobileNavLayout,
+    railAvailable,
   });
   const floatingAttentionVisible =
     !nativeEmbed &&
@@ -232,6 +238,13 @@ export function renderApplicationShell(host: ShellViewHost) {
     sessionScope: true,
   });
   const uiSettings = context.theme.settings;
+  // Unknown profile preferences are not absence. Keep the first shell paint
+  // image-free so a saved None choice cannot download artwork before hydration.
+  const profileId = gatewaySnapshot.selfUser?.id;
+  const backgroundReady =
+    gatewayConnected &&
+    (!profileId ||
+      resolveProfileAppearancePrefs(context.gateway.connection.gatewayUrl, profileId) !== null);
   // The new-session draft shares the chat layout: full-height pane that owns
   // its scrolling and pins the composer dock to the bottom.
   const chatLikeRoute = sessionRoute || activeRoute === "new-session" || activeRoute === "systems";
@@ -250,9 +263,9 @@ export function renderApplicationShell(host: ShellViewHost) {
       terminalAvailable,
       catalogOpenTarget: normalizeCatalogOpenTarget(uiSettings.catalogOpenTarget),
       canPairDevice: gatewayConnected && (operatorAccess.canAdmin || operatorAccess.canPair),
-      preferencesBrowserOnly: gatewayConnected && context.runtimeConfig.canPatch === false,
       sidebarEntries: navigationSnapshot.sidebarEntries,
       navigationVisible: !navigationSurfaceHidden,
+      navigationCollapsed: navCollapsed,
       sidebarAgentsMode: uiSettings.sidebarAgentsMode ?? "chip",
       sidebarLiveActivity: uiSettings.sidebarLiveActivity !== false,
       pinnedAgentIds: navigationSnapshot.pinnedAgentIds,
@@ -366,18 +379,19 @@ export function renderApplicationShell(host: ShellViewHost) {
   const workspace = html`
     ${renderShellLazyOverlays(host, desktopPanelAvailable, custodianPanelAvailable, nativeEmbed)}
     <div
-      class="shell ${chatLikeRoute ? "shell--chat" : ""} ${
+      class="shell ${railAvailable ? "shell--navigation-rail" : ""} ${chatLikeRoute ? "shell--chat" : ""} ${
         navCollapsed ? "shell--nav-collapsed" : ""
       } ${mobileNavLayout ? "shell--mobile-nav" : ""} ${
         mergedChatChrome ? "shell--merged-chat-chrome" : ""
       } ${navDrawerOpen ? "shell--nav-drawer-open" : ""} ${
         onboarding ? "shell--onboarding" : ""
       } ${nativeEmbed ? "shell--embed" : ""} ${embedSettings ? "shell--embed-settings" : ""} ${settingsTakeover ? "shell--settings" : ""} ${
-        collapsedControls && homePanelAvailable ? "shell--home-control" : ""
+        collapsedControls && homePanelAvailable && !railAvailable ? "shell--home-control" : ""
       } ${shellConnectionStatus ? "shell--connection-status" : ""} ${
         floatingSidebarAttentionVisible(floatingUpdateCard) ? "shell--floating-attention" : ""
       } ${host.navResizing ? "shell--nav-resizing" : ""}"
-      style=${`--shell-nav-expanded-width: ${navigationSnapshot.navWidth}px`}
+      ?data-background-managed=${!backgroundReady || uiSettings.background !== undefined}
+      style=${`--shell-nav-expanded-width: ${expandedNavWidth}px; --shell-nav-rail-width: ${railWidth}px`}
       @theme-change=${(event: CustomEvent<ThemeModeChangeDetail>) => host.handleThemeChange(event)}
     >
       <a class="shell-skip-link" href="#control-ui-main" ?inert=${navDrawerOpen}>
@@ -455,7 +469,7 @@ export function renderApplicationShell(host: ShellViewHost) {
                     ${icons.search}
                   </button>
                 </openclaw-tooltip>
-                ${homePanelAvailable ? renderCollapsedHomeToggle() : nothing}
+                ${homePanelAvailable && !railAvailable ? renderCollapsedHomeToggle() : nothing}
               </div>
             `
           : nothing
@@ -489,10 +503,10 @@ export function renderApplicationShell(host: ShellViewHost) {
               <resizable-divider
                 class="sidebar-resizer"
                 .label=${t("nav.resize")}
-                .splitRatio=${navigationSnapshot.navWidth / shellWidth}
-                .minRatio=${NAV_WIDTH_MIN / shellWidth}
-                .maxRatio=${NAV_WIDTH_MAX / shellWidth}
-                aria-valuetext=${`${navigationSnapshot.navWidth} pixels`}
+                .splitRatio=${expandedNavWidth / shellWidth}
+                .minRatio=${(NAV_WIDTH_MIN + railWidth) / shellWidth}
+                .maxRatio=${(NAV_WIDTH_MAX + railWidth) / shellWidth}
+                aria-valuetext=${`${expandedNavWidth} pixels`}
                 title=${t("nav.resize")}
                 @resize-start=${() => {
                   host.navResizing = true;
@@ -509,6 +523,8 @@ export function renderApplicationShell(host: ShellViewHost) {
       <main
         id="control-ui-main"
         class="content ${chatLikeRoute ? "content--chat" : ""} ${
+          activeRoute === "new-session" ? "content--new-session" : ""
+        } ${
           activeRoute === "custodian" ? "content--custodian" : ""
         } ${activeRoute === "workboard" ? "content--workboard" : ""} ${
           pageActionsBlocked ? "content--actions-blocked" : ""

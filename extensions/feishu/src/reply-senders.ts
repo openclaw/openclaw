@@ -34,18 +34,6 @@ import {
   type CardHeaderConfig,
 } from "./send.js";
 
-type StreamingCloseOutcome = {
-  disposition: "closed" | "discarded";
-  result: FeishuReplyDeliveryResult;
-  generation?: number;
-  error?: unknown;
-};
-
-export type ClosedStreamingSettlement = StreamingCloseOutcome & {
-  content: string;
-  contentClaimed?: boolean;
-};
-
 type FeishuReplySenderContext = {
   core: ReturnType<typeof getFeishuRuntime>;
   cfg: ClawdbotConfig;
@@ -62,7 +50,7 @@ type FeishuReplySenderContext = {
   markVisibleReplySent: () => void;
   deliveredFinalTexts: Set<string>;
   blockPostDeliveries: Map<string, Promise<FeishuReplyDeliveryResult>>;
-  closedStreamingSettlements: Map<number, ClosedStreamingSettlement>;
+  rememberStreamingSettlement: (content: string, result: FeishuReplyDeliveryResult) => void;
   tableNeedsPostPath: (value: string) => boolean;
   answerTableNeedsPostPath: (value: string) => boolean;
   resolveCardChrome: () => { header?: CardHeaderConfig; note?: string };
@@ -105,7 +93,7 @@ export function createFeishuReplySenders(ctx: FeishuReplySenderContext) {
     markVisibleReplySent,
     deliveredFinalTexts,
     blockPostDeliveries,
-    closedStreamingSettlements,
+    rememberStreamingSettlement,
     tableNeedsPostPath,
     answerTableNeedsPostPath,
     resolveCardChrome,
@@ -404,35 +392,6 @@ export function createFeishuReplySenders(ctx: FeishuReplySenderContext) {
     return true;
   };
 
-  const claimClosedStreamingResult = (
-    generation: number | undefined,
-    content: string | undefined,
-  ): ClosedStreamingSettlement | undefined => {
-    if (generation !== undefined) {
-      // Several logical payloads can share one CardKit session, and media can delay each
-      // completion until after close. The per-turn generation settlement is immutable so every
-      // owner can reuse the same provider identity without emitting a duplicate fallback.
-      const settlement = closedStreamingSettlements.get(generation);
-      if (settlement) {
-        settlement.contentClaimed = true;
-      }
-      return settlement;
-    }
-    let result: ClosedStreamingSettlement | undefined;
-    for (const settlement of closedStreamingSettlements.values()) {
-      if (
-        settlement.contentClaimed !== true &&
-        (content === undefined || settlement.content === content)
-      ) {
-        result = settlement;
-      }
-    }
-    if (result) {
-      result.contentClaimed = true;
-    }
-    return result;
-  };
-
   const ensureVisibleStreamingDelivery = async (
     result: FeishuReplyDeliveryResult | undefined,
     content: string | undefined,
@@ -456,7 +415,13 @@ export function createFeishuReplySenders(ctx: FeishuReplySenderContext) {
           note: cardNote,
         }),
       );
-    return await sendChunkedTextReply({ text: content, useCard: useRecoveryCard, infoKind });
+    const delivered = await sendChunkedTextReply({
+      text: content,
+      useCard: useRecoveryCard,
+      infoKind,
+    });
+    rememberStreamingSettlement(content, delivered);
+    return delivered;
   };
 
   return {
@@ -464,7 +429,6 @@ export function createFeishuReplySenders(ctx: FeishuReplySenderContext) {
     sendPostReply,
     sendMediaReplies,
     ensureNoVisibleReplyFallback,
-    claimClosedStreamingResult,
     ensureVisibleStreamingDelivery,
   };
 }

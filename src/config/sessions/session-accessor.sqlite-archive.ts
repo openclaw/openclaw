@@ -7,10 +7,14 @@ import {
   resolveRuntimeWorkerThreadExecArgv,
   resolveRuntimeWorkerUrl,
 } from "../../infra/runtime-worker-url.js";
+import { trackSqliteDatabaseAdmissionWorker } from "../../infra/sqlite-database-admission.js";
+import { retainSqliteWriteAdmissionService } from "../../infra/sqlite-transaction.js";
+import { createSqliteDatabaseAdmissionRelay } from "../../infra/sqlite-worker-operation-admission.js";
 import { createCpuTrackedWorker } from "../../infra/worker-cpu.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
+import { resolveQuarantineStorePath } from "../../state/openclaw-state-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { runScopedSqliteArchiveOperation } from "./session-accessor.sqlite-archive-session.js";
 import type {
@@ -38,13 +42,40 @@ import {
 import type { SessionColdWorkerData } from "./session-cold-storage-worker.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 
-export function createSqliteTranscriptArchiveWorker(workerData: object): Worker {
+export function createSqliteTranscriptArchiveWorker(
+  workerData: object,
+  nativeLocations: readonly string[] = [],
+): Worker {
   const workerUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sessionTranscriptArchive);
-  return createCpuTrackedWorker(workerUrl, {
-    resourceLimits: { maxOldGenerationSizeMb: 512 },
-    workerData,
-    execArgv: resolveRuntimeWorkerThreadExecArgv(workerUrl),
+  let active = true;
+  const admission = createSqliteDatabaseAdmissionRelay(() => {
+    if (!active) {
+      throw new Error("SQLite archive database admission is closed");
+    }
   });
+  const releaseService = retainSqliteWriteAdmissionService(nativeLocations, () =>
+    admission.service(),
+  );
+  const finish = () => {
+    active = false;
+    admission.finish();
+    releaseService();
+  };
+  let worker: Worker;
+  try {
+    worker = createCpuTrackedWorker(workerUrl, {
+      resourceLimits: { maxOldGenerationSizeMb: 512 },
+      workerData: { ...workerData, databaseAdmissionPort: admission.port },
+      transferList: [admission.port],
+      execArgv: resolveRuntimeWorkerThreadExecArgv(workerUrl),
+    });
+  } catch (error) {
+    finish();
+    throw error;
+  }
+  trackSqliteDatabaseAdmissionWorker(worker);
+  worker.once("exit", finish);
+  return worker;
 }
 
 type TranscriptArchiveWorkerOperation<Result> = {
@@ -76,7 +107,12 @@ function spawnSqliteTranscriptArchiveWorkerOperation<Result>(
       : input;
   let worker: Worker;
   try {
-    worker = createSqliteTranscriptArchiveWorker(params.workerData);
+    worker = createSqliteTranscriptArchiveWorker(
+      params.workerData,
+      params.expectedMessageType === "reclaimed"
+        ? [params.workerData.plan.databaseOptions.path, params.stateContext.admission.databasePath]
+        : [],
+    );
   } catch (error) {
     return Promise.reject(toStringifiedError(error));
   }
@@ -98,6 +134,19 @@ function spawnSqliteTranscriptArchiveWorkerOperation<Result>(
           transport: { kind: "dedicated", channel: worker },
           operationId: 0,
           completion: "exit",
+          databaseAuthority: {
+            databasePath: params.stateContext.admission.databasePath,
+            maintenanceScope: params.stateContext.maintenanceScope,
+            creationPaths: [
+              params.workerData.plan.databaseOptions.path,
+              params.stateContext.admission.databasePath,
+              resolveQuarantineStorePath(params.stateContext.environment),
+            ],
+            assertCurrent() {
+              params.stateContext.admission.assertCurrent();
+              params.assertCurrent?.();
+            },
+          },
           onCommitRequest: params.onCommitRequest,
           withWriteAdmission: params.withWriteAdmission,
           validationOwner: params.validationOwner,

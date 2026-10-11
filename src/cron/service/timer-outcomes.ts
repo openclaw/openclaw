@@ -7,11 +7,11 @@ import { normalizeCronRunDiagnostics, summarizeCronRunDiagnostics } from "../run
 import { resolveCronRunErrorReason } from "../run-error-reason.js";
 import { cronSchedulingInputsEqual } from "../schedule-identity.js";
 import { computeNextRunAtMs } from "../schedule.js";
-import type { CronJob, CronRunStatus } from "../types.js";
+import type { CronRunFinalizationOutcome } from "../store/runtime-worker.types.js";
+import type { CronJob, CronRunStatus, CronTriggerEvalOutcome } from "../types.js";
 import { maybeAutoDisableCronJobAfterRunFailure } from "./auto-disable.js";
 import {
   finalizeCronFailureNotifications,
-  maybeEmitFailureAlert,
   resolveFailureIncident,
   resolveFailureAlert,
 } from "./failure-alerts.js";
@@ -28,7 +28,6 @@ import { recordQuietCronEvaluation } from "./run-history.js";
 import type { CronJobPolicyContext, CronServiceState, DeferredCronNotifications } from "./state.js";
 import {
   type CronJobRunResult,
-  type CronTriggerEvalOutcome,
   MIN_REFIRE_GAP_MS,
   type TimedCronRunOutcome,
 } from "./timer-execution-timeout.js";
@@ -51,7 +50,7 @@ type CronTriggerOwnership = "current" | "stale";
 function resolveCronRunScheduleOwnership(params: {
   admittedJob: CronJob;
   currentJob: CronJob;
-  activeJobMarker?: CronActiveJobMarker;
+  activeJobMarker?: Pick<CronActiveJobMarker, "scheduleMutated">;
 }): CronScheduleOwnership {
   return typeof params.currentJob.state.runningScheduleChangeId === "string" ||
     params.activeJobMarker?.scheduleMutated === true ||
@@ -64,7 +63,7 @@ function resolveCronRunScheduleOwnership(params: {
 function resolveCronRunTriggerOwnership(params: {
   admittedJob: CronJob;
   currentJob: CronJob;
-  activeJobMarker?: CronActiveJobMarker;
+  activeJobMarker?: Pick<CronActiveJobMarker, "triggerMutated">;
 }): CronTriggerOwnership {
   return params.activeJobMarker?.triggerMutated === true ||
     params.admittedJob.trigger?.script !== params.currentJob.trigger?.script ||
@@ -169,7 +168,7 @@ export function applyJobResult(
     );
 
   // Track consecutive errors for backoff / auto-disable; skipped runs use a
-  // separate counter so opt-in skip alerts do not affect retry behavior.
+  // separate counter so skip alerts do not affect retry behavior.
   const previousConsecutiveErrors = job.state.consecutiveErrors ?? 0;
   const computeNaturalNext = (restartInterval: boolean) => {
     try {
@@ -201,17 +200,6 @@ export function applyJobResult(
   } else if (result.status === "skipped") {
     job.state.consecutiveErrors = 0;
     job.state.consecutiveSkipped = (job.state.consecutiveSkipped ?? 0) + 1;
-    if (alertConfig?.includeSkipped && !opts.replay) {
-      maybeEmitFailureAlert(state, {
-        job,
-        alertConfig,
-        status: "skipped",
-        error: result.error,
-        runAtMs: result.startedAt,
-        consecutiveCount: job.state.consecutiveSkipped,
-        deferredNotifications: opts.deferredNotifications,
-      });
-    }
   } else {
     job.state.consecutiveErrors = 0;
     job.state.consecutiveSkipped = 0;
@@ -668,9 +656,9 @@ export async function applyOutcomeToStoredJob(
 
 /** Applies one outcome to a row already re-read under the runtime write transaction. */
 export function applyOutcomeToAuthoritativeJob(
-  state: CronServiceState,
+  state: CronJobPolicyContext,
   job: CronJob,
-  result: TimedCronRunOutcome,
+  result: CronRunFinalizationOutcome,
   opts: {
     deferredNotifications: DeferredCronNotifications;
     triggerStateRetired?: boolean;

@@ -19,10 +19,8 @@ import {
 } from "../../state/openclaw-agent-db-readonly.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import { resolveSessionLifecycleTimestampsWithHeader } from "./lifecycle-timestamps.js";
-import {
-  readSessionEntryRow,
-  readSessionKeyBySessionIdInDatabase,
-} from "./session-accessor.sqlite-entry-read.js";
+import { readExactSessionEntryFactsInDatabase } from "./session-accessor.sqlite-entry-facts.worker.js";
+import { readSessionKeyBySessionIdInDatabase } from "./session-accessor.sqlite-entry-read.js";
 import { assertCanonicalSqliteSessionKeysCurrent } from "./session-canonical-key.js";
 import {
   sessionColdArchiveMetadataColumns,
@@ -119,6 +117,14 @@ export function readSessionEntryCohort(
     throw new Error("Session entry cohort requires its admitted durable owner");
   }
   const identity = source.identity;
+  const requiresSnapshot = Boolean(
+    transcript ||
+    runtimeTarget ||
+    includeAuthProfileSource ||
+    includeColdMetadata ||
+    input.lifecycleSessionKey ||
+    input.replyInitializationSessionKey,
+  );
   const assertSource = () => {
     assertExistingDatabaseIdentity(database.path, `file:${identity}`, source.birthtime);
     const current = readOpenClawAgentDatabaseIdentity(database);
@@ -135,15 +141,25 @@ export function readSessionEntryCohort(
     assertSource();
     const sharedHeader =
       transcript?.includeHeader && transcript.sessionKey === input.lifecycleSessionKey;
-    const result = readEntries({
-      ...selection,
-      kind: "session-exact-entries",
-      database: { agentId: database.agentId, path: database.path },
-      env: {},
-      projection: "full",
-      includeAuthorization: true,
-      ...(sharedHeader ? { lifecycleSessionKey: undefined } : {}),
-    });
+    const result: SessionExactEntriesWorkerResult = requiresSnapshot
+      ? readEntries({
+          ...selection,
+          kind: "session-exact-entries",
+          database: { agentId: database.agentId, path: database.path },
+          env: {},
+          projection: "full",
+          includeAuthorization: true,
+          ...(sharedHeader ? { lifecycleSessionKey: undefined } : {}),
+        })
+      : {
+          kind: "session-exact-entries",
+          ...readExactSessionEntryFactsInDatabase(
+            database,
+            input.sessionKeys,
+            input.snapshotFields ?? "full",
+          ),
+          lifecycleTimestamps: {},
+        };
     for (const selected of expected?.sessions ?? []) {
       const entry = result.entries.find(
         ({ sessionKey }) => sessionKey === selected.sessionKey,
@@ -170,6 +186,9 @@ export function readSessionEntryCohort(
               sessionId: entry.sessionId,
             },
             { ...transcript, entryIds: [...new Set(transcript.entryIds)] },
+            undefined,
+            undefined,
+            entry,
           )
         : { anchors: [] };
     const authProfileSource = includeAuthProfileSource
@@ -215,8 +234,8 @@ export function readSessionEntryCohort(
       ...(includeAuthProfileSource ? { authProfileSource } : {}),
     };
   };
-  // The transaction owner performs the one fresh probe after BEGIN; nested kernels share it.
-  return database.db.isTransaction
+  // A single statement owns simple facts; richer cohorts retain one shared snapshot.
+  return database.db.isTransaction || !requiresSnapshot
     ? runSqliteReadOperationSync(database.db, read)
     : runSqliteDeferredTransactionSync(database.db, read);
 }
@@ -241,7 +260,7 @@ export function readSessionEntryDataInDatabase(
     }
   };
   assertSource();
-  const entry = readSessionEntryRow(database, sessionKey)?.entry;
+  const facts = readExactSessionEntryFactsInDatabase(database, [sessionKey]);
   assertSource();
   return {
     kind: "session-exact-entries",
@@ -252,7 +271,7 @@ export function readSessionEntryDataInDatabase(
       databaseBirthtime: source.birthtime,
     },
     databaseIdentity: { ...source, identity },
-    entries: entry ? [{ sessionKey, entry }] : [],
+    ...facts,
     lifecycleTimestamps: {},
   };
 }

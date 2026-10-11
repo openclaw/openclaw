@@ -2,16 +2,16 @@ import type {
   WorkerInferenceCancelResult,
   WorkerInferenceErrorReason,
   WorkerInferenceEventFrame,
-  WorkerInferenceEventParams,
   WorkerInferenceStartParams,
   WorkerInferenceStartResult,
   WorkerInferenceTerminalFrame,
   WorkerInferenceTerminalOutcome,
 } from "../../../packages/gateway-protocol/src/schema/worker-inference.js";
 import type { BoundAgentRunSessionTarget } from "../../agents/run-session-target.types.js";
-import type { OpenClawConfig } from "../../config/types.js";
-import type { WorkerConnectionIdentity } from "./connection-identity.js";
+import type { WorkerConnectionIdentity, WorkerInferenceExecutor } from "./connection-identity.js";
 import type { WorkerInferenceStore, WorkerInferenceTurnInput } from "./inference-store.js";
+
+export type { WorkerInferenceExecutor } from "./connection-identity.js";
 
 type WorkerInferenceFenceReason = Extract<
   WorkerInferenceErrorReason,
@@ -22,16 +22,6 @@ export type WorkerInferenceSink = {
   connectionId: string;
   send(frame: WorkerInferenceEventFrame | WorkerInferenceTerminalFrame): void;
 };
-
-export type WorkerInferenceExecutor = (params: {
-  identity: WorkerConnectionIdentity;
-  request: WorkerInferenceStartParams;
-  signal: AbortSignal;
-  emit: (event: WorkerInferenceEventParams["event"]) => void;
-  isCurrent(): boolean;
-  sessionTarget: BoundAgentRunSessionTarget;
-  config?: OpenClawConfig;
-}) => Promise<WorkerInferenceTerminalOutcome>;
 
 export type RevalidateInference = () => WorkerInferenceFenceReason | null;
 
@@ -83,7 +73,6 @@ export type ActiveInference = {
 export type WorkerInferenceManagerOptions = {
   execute: WorkerInferenceExecutor;
   store?: WorkerInferenceStore;
-  getConfig?: () => OpenClawConfig;
   requestMaxBytes?: number;
   streamMaxBytes?: number;
 };

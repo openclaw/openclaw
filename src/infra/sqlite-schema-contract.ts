@@ -9,7 +9,7 @@ import {
 } from "./bun-sqlite-library.js";
 import { executeWithCachedStatement } from "./kysely-sync-cache-state.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
-import { runSqlitePinnedReadSnapshotSync } from "./sqlite-pinned-read-snapshot.js";
+import { runSqliteSchemaReadSnapshotSync } from "./sqlite-pinned-read-snapshot.js";
 import {
   createSqliteIndexContract,
   createSqliteTableContract,
@@ -144,7 +144,7 @@ export function collectSqliteSchemaIssues(
   compatibility: SqliteSchemaCompatibility = {},
   readTable?: SqliteTableContractReader,
 ): SqliteSchemaIssue[] {
-  return runSqlitePinnedReadSnapshotSync(database, () =>
+  return runSqliteSchemaReadSnapshotSync(database, () =>
     collectSqliteSchemaIssuesInSnapshot(database, schemaSql, compatibility, readTable),
   );
 }

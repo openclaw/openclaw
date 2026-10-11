@@ -1,13 +1,9 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
 import { choosePickerValue, updatePickers } from "../../test-helpers/select-picker.ts";
-import { card, mount, props, text } from "./view.test-support.ts";
-import { renderModelProviders } from "./view.ts";
-
-type SegmentedGroup = HTMLElement & { disabled: boolean; value: string };
+import { card, mount, props, text } from "./view.test-support.tsx";
 
 it("offers only decision models, even without a chat provider, and retains an unavailable selection", async () => {
   const onDecisionChange = vi.fn();
@@ -38,10 +34,7 @@ it("offers only decision models, even without a chat provider, and retains an un
   await choosePickerValue(picker, "");
   expect(onDecisionChange).toHaveBeenLastCalledWith(null);
 
-  render(
-    renderModelProviders({ ...viewProps, defaultsMutationBlockedReason: "Read only" }),
-    container,
-  );
+  mount({ ...viewProps, defaultsMutationBlockedReason: "Read only" }, container);
   await updatePickers(container);
   expect(
     container.querySelector<HTMLButtonElement>("#model-providers-decision-model")!.disabled,
@@ -104,9 +97,12 @@ function settingsRow(container: Element, label: string): HTMLElement {
   return match;
 }
 
-function selectSegment(group: SegmentedGroup, value: string) {
-  group.value = value;
-  group.dispatchEvent(new Event("change", { bubbles: true }));
+function selectedSegment(group: Element) {
+  return group.querySelector<HTMLInputElement>(".settings-segmented__input:checked")?.value;
+}
+
+function selectSegment(group: Element, value: string) {
+  group.querySelector<HTMLInputElement>(`.settings-segmented__input[value="${value}"]`)!.click();
 }
 
 describe("renderModelProviders", () => {
@@ -130,6 +126,9 @@ describe("renderModelProviders", () => {
     expect(
       container.querySelector('.model-providers__catalog-progress[role="status"]'),
     ).not.toBeNull();
+    expect(
+      container.querySelector('.model-providers__catalog-progress[role="alert"] span')?.textContent,
+    ).toBe("A provider failed discovery.");
     const retry = container.querySelector<HTMLButtonElement>(
       '.model-providers__catalog-progress[role="alert"] button',
     );
@@ -164,7 +163,7 @@ describe("renderModelProviders", () => {
     const thinkingRow = settingsRow(behavior, "Thinking");
     const fastRow = settingsRow(behavior, "Fast Mode");
 
-    expect(thinkingRow.querySelector<SegmentedGroup>("wa-radio-group")?.value).toBe("adaptive");
+    expect(selectedSegment(thinkingRow)).toBe("adaptive");
     expect(text(thinkingRow)).toContain("Adaptive");
     expect(text(thinkingRow)).not.toContain("Default: Model policy");
     expect(text(fastRow)).not.toContain("Default: Model policy");
@@ -172,41 +171,44 @@ describe("renderModelProviders", () => {
     const fastModeHelp = fastRow.querySelector('openclaw-tooltip [slot="content"]');
     expect(thinkingHelp?.textContent).toContain("model's thinking policy");
     expect(fastModeHelp?.textContent).toContain("Unlike Auto");
-    expect(thinkingRow.querySelector("wa-radio button")).toBeNull();
-    expect(fastRow.querySelector("wa-radio button")).toBeNull();
-    expect(thinkingRow.querySelector('wa-radio[value=""]')?.hasAttribute("title")).toBe(false);
-    expect(fastRow.querySelector('wa-radio[value=""]')?.hasAttribute("title")).toBe(false);
+    expect(thinkingRow.querySelector(".settings-segmented__btn button")).toBeNull();
+    expect(fastRow.querySelector(".settings-segmented__btn button")).toBeNull();
+    expect(
+      thinkingRow
+        .querySelector('.settings-segmented__input[value=""]')
+        ?.parentElement?.hasAttribute("title"),
+    ).toBe(false);
+    expect(
+      fastRow
+        .querySelector('.settings-segmented__input[value=""]')
+        ?.parentElement?.hasAttribute("title"),
+    ).toBe(false);
 
-    selectSegment(thinkingRow.querySelector<SegmentedGroup>("wa-radio-group")!, "");
-    selectSegment(fastRow.querySelector<SegmentedGroup>("wa-radio-group")!, "");
+    selectSegment(thinkingRow, "");
+    selectSegment(fastRow, "");
     expect(onThinkingReset).toHaveBeenCalledOnce();
     expect(onFastModeReset).toHaveBeenCalledOnce();
 
-    render(
-      renderModelProviders(
-        props({
-          thinkingLevel: undefined,
-          thinkingOverridden: false,
-          fastMode: undefined,
-          fastModeOverridden: false,
-        }),
-      ),
+    mount(
+      props({
+        thinkingLevel: undefined,
+        thinkingOverridden: false,
+        fastMode: undefined,
+        fastModeOverridden: false,
+      }),
       container,
     );
     const inheritedBehavior = container.querySelector("#settings-model-behavior")!;
     const inheritedThinking = settingsRow(inheritedBehavior, "Thinking");
     const inheritedFast = settingsRow(inheritedBehavior, "Fast Mode");
-    expect(inheritedThinking.querySelector<SegmentedGroup>("wa-radio-group")?.value).toBe("");
-    expect(inheritedFast.querySelector<SegmentedGroup>("wa-radio-group")?.value).toBe("");
+    expect(selectedSegment(inheritedThinking)).toBe("");
+    expect(selectedSegment(inheritedFast)).toBe("");
     expect(
-      (
-        inheritedThinking.querySelector('wa-radio[value=""]') as HTMLElement & {
-          checked: boolean;
-        }
-      ).checked,
+      inheritedThinking.querySelector<HTMLInputElement>('.settings-segmented__input[value=""]')!
+        .checked,
     ).toBe(true);
     expect(
-      (inheritedFast.querySelector('wa-radio[value=""]') as HTMLElement & { checked: boolean })
+      inheritedFast.querySelector<HTMLInputElement>('.settings-segmented__input[value=""]')!
         .checked,
     ).toBe(true);
     expect(text(inheritedThinking)).not.toContain("Using default: Model policy");
@@ -233,8 +235,8 @@ describe("renderModelProviders", () => {
     const thinking = settingsRow(behavior, "Thinking");
     const fast = settingsRow(behavior, "Fast Mode");
 
-    thinking.querySelector<HTMLElement>('wa-radio[value=""]')?.click();
-    fast.querySelector<HTMLElement>('wa-radio[value=""]')?.click();
+    selectSegment(thinking, "");
+    selectSegment(fast, "");
     expect(onThinkingReset).toHaveBeenCalledOnce();
     expect(onFastModeReset).toHaveBeenCalledOnce();
   });
@@ -246,36 +248,35 @@ describe("renderModelProviders", () => {
     });
     const container = mount(viewProps);
     const behavior = container.querySelector("#settings-model-behavior")!;
-    const thinking = settingsRow(behavior, "Thinking").querySelector<SegmentedGroup>(
-      "wa-radio-group",
-    )!;
-    const fastMode = settingsRow(behavior, "Fast Mode").querySelector<SegmentedGroup>(
-      "wa-radio-group",
-    )!;
+    const thinking = settingsRow(behavior, "Thinking");
+    const fastMode = settingsRow(behavior, "Fast Mode");
 
     selectSegment(thinking, "");
     selectSegment(fastMode, "");
-    render(renderModelProviders(viewProps), container);
+    mount(viewProps, container);
 
-    expect(thinking.value).toBe("high");
-    expect(fastMode.value).toBe("on");
+    expect(selectedSegment(thinking)).toBe("high");
+    expect(selectedSegment(fastMode)).toBe("on");
     expect(
-      (thinking.querySelector('wa-radio[value="high"]') as HTMLElement & { checked: boolean })
-        .checked,
+      thinking.querySelector<HTMLInputElement>('.settings-segmented__input[value="high"]')!.checked,
     ).toBe(true);
     expect(
-      (fastMode.querySelector('wa-radio[value="on"]') as HTMLElement & { checked: boolean })
-        .checked,
+      fastMode.querySelector<HTMLInputElement>('.settings-segmented__input[value="on"]')!.checked,
     ).toBe(true);
   });
 
   it("locks model behavior while shared config work is pending", () => {
     const container = mount(props({ configBusy: true }));
     const behavior = container.querySelector("#settings-model-behavior");
-    const groups = behavior?.querySelectorAll<SegmentedGroup>("wa-radio-group") ?? [];
+    const groups = behavior?.querySelectorAll('.settings-segmented[role="radiogroup"]') ?? [];
 
     expect(groups).toHaveLength(2);
-    expect([...groups].every((group) => group.disabled)).toBe(true);
+    expect(
+      [...groups].every((group) => {
+        const inputs = [...group.querySelectorAll<HTMLInputElement>(".settings-segmented__input")];
+        return inputs.length > 0 && inputs.every((input) => input.disabled);
+      }),
+    ).toBe(true);
   });
 
   it("locks provider and default-model mutations while shared config work is pending", async () => {
@@ -463,12 +464,8 @@ describe("renderModelProviders", () => {
     const behavior = container.querySelector("#settings-model-behavior");
 
     expect(behavior).not.toBeNull();
-    expect(
-      settingsRow(behavior!, "Thinking").querySelector<SegmentedGroup>("wa-radio-group")?.value,
-    ).toBe("high");
-    expect(
-      settingsRow(behavior!, "Fast Mode").querySelector<SegmentedGroup>("wa-radio-group")?.value,
-    ).toBe("on");
+    expect(selectedSegment(settingsRow(behavior!, "Thinking"))).toBe("high");
+    expect(selectedSegment(settingsRow(behavior!, "Fast Mode"))).toBe("on");
     expect(text(container)).not.toContain("Configure a provider before selecting default models.");
     expect(container.querySelector('[aria-busy="true"]')).not.toBeNull();
     expect(container.querySelector('[data-provider-id="openai"]')).toBeNull();
@@ -864,26 +861,36 @@ describe("renderModelProviders", () => {
     expect(onProbe).toHaveBeenCalledWith("openai", ["anthropic", "claude-cli"]);
   });
 
-  it("uses the original config key for credential mutations", () => {
+  it("keeps the key editor focused while typing and uses the original config key for mutations", () => {
     const onSaveKey = vi.fn();
     const onRemoveKey = vi.fn();
-    const container = mount(
-      props({
-        cards: [
-          card({
-            configKey: "OpenAI",
-            apiKey: { source: "config" },
-            hasConfigApiKey: true,
-          }),
-        ],
-        keyEditorProvider: "openai",
-        keyDraft: "replacement",
-        onSaveKey,
-        onRemoveKey,
-      }),
-    );
+    let viewProps = props({
+      cards: [card({ configKey: "OpenAI", apiKey: { source: "config" }, hasConfigApiKey: true })],
+      keyEditorProvider: "openai",
+      keyDraft: "replacement",
+      onSaveKey,
+      onRemoveKey,
+      onKeyDraftChange: (value) => {
+        viewProps = {
+          ...viewProps,
+          keyDraft: value,
+          cards: viewProps.cards.map((entry) => ({ ...entry })),
+        };
+        mount(viewProps, container);
+      },
+    });
+    const container = mount(viewProps);
     const provider = container.querySelector('[data-provider-id="openai"]');
     expect(provider).not.toBeNull();
+    const input = provider!.querySelector<HTMLInputElement>(".model-providers__inline-form input")!;
+    input.focus();
+    for (const value of ["replacement-1", "replacement-12"]) {
+      input.value = value;
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      expect(container.querySelector(".model-providers__inline-form input")).toBe(input);
+      expect(document.activeElement).toBe(input);
+      expect(input.value).toBe(value);
+    }
     button(provider!, "Save")?.click();
     button(provider!, "Remove key")?.click();
     expect(onSaveKey).toHaveBeenCalledWith("openai", "OpenAI");
@@ -940,10 +947,14 @@ it("filters provider access without hiding global defaults and exposes an empty 
   expect(container.querySelector('[data-provider-id="anthropic"]')).not.toBeNull();
   expect(container.querySelector("#settings-model-behavior")).not.toBeNull();
   const search = container.querySelector<HTMLInputElement>('input[type="search"]')!;
+  document.body.append(container);
+  search.focus();
   search.value = "missing";
   search.dispatchEvent(new Event("input", { bubbles: true }));
   expect(onProviderQueryChange).toHaveBeenCalledExactlyOnceWith("missing");
-  render(renderModelProviders({ ...viewProps, providerQuery: "missing" }), container);
+  mount({ ...viewProps, providerQuery: "missing" }, container);
+  expect(container.querySelector('input[type="search"]')).toBe(search);
+  expect(document.activeElement).toBe(search);
   expect(text(container)).toContain("No providers match your search.");
   expect(container.querySelectorAll("[data-provider-id]")).toHaveLength(0);
   expect(container.querySelector("#settings-model-behavior")).not.toBeNull();

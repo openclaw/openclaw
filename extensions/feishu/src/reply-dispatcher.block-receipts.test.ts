@@ -907,4 +907,84 @@ describe("createFeishuReplyDispatcher block table receipts", () => {
       visibleReplySent: true,
     });
   });
+
+  // A failed close that had nothing accepted owns nothing, including an earlier close's
+  // receipt. Its deferred final still posts its own table instead of settling on that card.
+  it("recovers a failed idle post after an earlier close instead of reusing its receipt", async () => {
+    resolveFeishuAccountMock.mockReturnValue(createReplyAccount("auto", "partial", "feishu"));
+    const { result, options } = createDispatcherHarness({
+      accountId: "main",
+      cfg: tableCfg("off"),
+    });
+    result.replyOptions.onPartialReply?.({ text: "Roster ready." });
+    await options.onIdle?.();
+    expect(requireStreamingInstance(0).closeWithResult).toHaveBeenCalledTimes(1);
+    result.replyOptions.onPartialReply?.({ text: tableMarkdown });
+    expect(streamingInstances).toHaveLength(2);
+    const instance = requireStreamingInstance(1);
+    let release!: (closed: StreamingCloseResult) => void;
+    instance.discard.mockImplementationOnce(() => {
+      instance.discardStarted.resolve();
+      return new Promise<StreamingCloseResult>((resolve) => {
+        release = resolve;
+      });
+    });
+    sendMessageFeishuMock
+      .mockRejectedValueOnce(new Error("post unavailable"))
+      .mockResolvedValue({ messageId: "om-recovery-post" });
+    const idle = Promise.resolve(options.onIdle?.()).catch((error: unknown) => error);
+    await instance.discardStarted.promise;
+    instance.active = false;
+    const delivery = await options.deliver({ text: tableMarkdown }, { kind: "final" });
+    const finalization = delivery?.finalization;
+    release({ visibleReplySent: false, content: "" });
+
+    expect(await idle).toBeInstanceOf(Error);
+    const accepted = await finalization;
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(2);
+    expect(sendMessageFeishuMock.mock.calls[1]?.[0]?.text).toBe(tableMarkdown);
+    expect(accepted).toMatchObject({
+      messageIds: ["om-recovery-post"],
+      visibleReplySent: true,
+    });
+  });
+
+  // The close posts reasoning and answer together, so a table in the reasoning alone sends
+  // the whole close to a post while the matching final carries no table to divert it. A
+  // partly accepted post still owns that answer: the final settles with the partial failure
+  // and neither starts a card nor posts the accepted prefix again.
+  it("keeps a partly accepted reasoning-table close as the owner of its matching final", async () => {
+    const { chunkMarkdownTextWithMode } = await vi.importActual<
+      typeof import("openclaw/plugin-sdk/reply-chunking")
+    >("openclaw/plugin-sdk/reply-chunking");
+    getFeishuRuntimeMock().channel.text.chunkMarkdownTextWithMode.mockImplementation(
+      chunkMarkdownTextWithMode,
+    );
+    getFeishuRuntimeMock().channel.text.resolveTextChunkLimit.mockReturnValue(200);
+    const { result, options } = createBlockTableHarness(tableCfg("off"), true);
+    const answer = "Roster ready.";
+    sendMessageFeishuMock
+      .mockResolvedValueOnce({ messageId: "om-accepted-prefix" })
+      .mockRejectedValueOnce(new Error("later chunk rejected"))
+      .mockResolvedValue({ messageId: "om-unwanted-resend" });
+    result.replyOptions.onReasoningStream?.({
+      text: `${tableMarkdown}\n${"| Grace | Engineer |\n".repeat(30)}`.trim(),
+    });
+    result.replyOptions.onPartialReply?.({ text: answer });
+    expect(streamingInstances).toHaveLength(1);
+
+    const idleError: unknown = await Promise.resolve(options.onIdle?.()).catch(
+      (error: unknown) => error,
+    );
+    expect(isChannelPartialDeliveryError(idleError)).toBe(true);
+    const callsAfterIdle = sendMessageFeishuMock.mock.calls.length;
+
+    const lateError: unknown = await options
+      .deliver({ text: answer }, { kind: "final" })
+      .catch((error: unknown) => error);
+
+    expect(isChannelPartialDeliveryError(lateError)).toBe(true);
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(callsAfterIdle);
+    expect(streamingInstances).toHaveLength(1);
+  });
 });

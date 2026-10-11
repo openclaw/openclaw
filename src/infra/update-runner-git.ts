@@ -535,15 +535,20 @@ export async function updateGitCheckout(params: {
         return await rollbackError("checkout-failed");
       }
     }
-    if (!runtimePromotion) {
+    const promotedRuntime = runtimePromotion;
+    if (!promotedRuntime) {
       return await rollbackError("runtime-verification-failed");
     }
     try {
-      await runtimePromotion.activate();
-    } catch (error) {
-      steps.push(
-        failureStep("git-runtime-activation", "activate validated runtime", String(error)),
-      );
+      // Timed like other activation work; a thrown activation records the failed step.
+      await runStep({
+        ...workStep("git-runtime-activation", [], gitRoot),
+        runCommand: async () => {
+          await promotedRuntime.activate();
+          return { code: 0, stdout: "", stderr: "" };
+        },
+      });
+    } catch {
       return await rollbackError("runtime-verification-failed");
     }
 
@@ -555,7 +560,7 @@ export async function updateGitCheckout(params: {
         }
       };
       runtimeRetained = true;
-      const promotion = runtimePromotion;
+      const promotion = promotedRuntime;
       await opts.onTransaction(
         createGitRuntimeTransaction({
           root: gitRoot,

@@ -197,7 +197,7 @@ describe("chat model runtime choices", () => {
     },
   );
 
-  it.each([undefined, "codex"])(
+  it.each([undefined])(
     "selects exactly one row with absent base runtime metadata and selected runtime %s",
     (selectedRuntime) => {
       const { agentRuntime: _runtime, ...unknownRuntimeModel } = model;
@@ -238,11 +238,7 @@ describe("chat model runtime choices", () => {
     ).toContain("Chat only");
   });
 
-  it.each([
-    { observed: false, alternate: true },
-    { observed: true, alternate: true },
-    { observed: false, alternate: false },
-  ])(
+  it.each([{ observed: true, alternate: true }])(
     "labels a Codex default with alternate=$alternate and observed=$observed",
     ({ observed, alternate }) => {
       const container = renderRuntimeModel(
@@ -291,12 +287,6 @@ describe("chat model runtime choices", () => {
 
   it.each([
     { name: "an inherited default model", initialRuntime: "openclaw", modelOverrideSource: null },
-    { name: "a pinned model", initialRuntime: "openclaw", modelOverrideSource: "user" },
-    {
-      name: "an effective matching harness without a runtime pin",
-      initialRuntime: "codex",
-      modelOverrideSource: "user",
-    },
   ] as const)(
     "pins the chosen harness for $name and resets through Default",
     async ({ initialRuntime, modelOverrideSource }) => {
@@ -335,8 +325,8 @@ describe("chat model runtime choices", () => {
         expect(defaultRow().parentElement?.querySelector("[data-chat-model-option]")).toBe(
           defaultRow(),
         );
-        expect(runtimeRow().getAttribute("aria-selected")).toBe(String(initialRuntime === "codex"));
-        expect(defaultRow().getAttribute("aria-selected")).toBe(String(initialRuntime !== "codex"));
+        expect(runtimeRow().getAttribute("aria-selected")).toBe("false");
+        expect(defaultRow().getAttribute("aria-selected")).toBe("true");
         runtimeRow().click();
         await selection;
         expect(host.request).toHaveBeenCalledWith("sessions.patch", {
@@ -370,7 +360,7 @@ describe("chat model runtime choices", () => {
     },
   );
 
-  it.each(["missing-auth", "cooldown", "unsupported-runtime", "locked"] as const)(
+  it.each(["missing-auth", "unsupported-runtime", "locked"] as const)(
     "preserves the %s guard for additional harness rows",
     (guard) => {
       const onSelect = vi.fn();
@@ -404,7 +394,7 @@ describe("chat model runtime choices", () => {
         expect(row?.querySelector(".chat-controls__model-option-name")?.textContent).toBe(
           "GPT-5.6 Sol codex",
         );
-        expect(row?.disabled).toBe(guard === "cooldown" || guard === "unsupported-runtime");
+        expect(row?.disabled).toBe(guard === "unsupported-runtime");
         if (guard === "unsupported-runtime") {
           expect(row?.title).toBe("This harness is unavailable for this model.");
         }

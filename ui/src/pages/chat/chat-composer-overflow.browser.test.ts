@@ -1,10 +1,10 @@
 import { html, nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { page, userEvent } from "vitest/browser";
+import { page, server, userEvent } from "vitest/browser";
 import "@awesome.me/webawesome/dist/styles/themes/default.css";
 import type { SessionGoal } from "../../api/types.ts";
 import { renderComposerMenu } from "../../components/composer-menu.ts";
-import { createComposerProps } from "./chat-composer.test-support.ts";
+import { createComposerContainer, createComposerProps } from "./chat-composer.test-support.ts";
 import { renderAttachmentPreview } from "./components/chat-attachments.ts";
 import { clearGoalElapsedTimers, renderChatGoal } from "./components/chat-composer-goal.ts";
 import { getChatComposerState, resetChatComposerState } from "./components/chat-composer-state.ts";
@@ -42,7 +42,7 @@ describe("composer overflow presentation", () => {
       goalStyles,
     ].join("\n");
     document.head.append(styles);
-    container = document.createElement("div");
+    container = createComposerContainer();
     container.className = "agent-chat__input";
     container.style.width = "760px";
     document.body.append(container);
@@ -582,6 +582,28 @@ describe("composer overflow presentation", () => {
       });
       expect(Math.max(...centers) - Math.min(...centers)).toBeLessThanOrEqual(1);
       const cardBox = container.querySelector(".agent-chat__goal")!.getBoundingClientRect();
+      // Exercise keyboard order before pointer activation establishes a native
+      // navigation starting point on one of the slotted buttons.
+      const clear = commands.querySelector<HTMLButtonElement>(".agent-chat__goal-clear")!;
+      clear.focus();
+      expect(document.activeElement).toBe(clear);
+      // Option-Tab includes buttons under Safari's default macOS keyboard settings.
+      await userEvent.keyboard(
+        server.browser === "webkit" && server.platform === "darwin"
+          ? "{Alt>}{Shift>}{Tab}{/Shift}{/Alt}"
+          : "{Shift>}{Tab}{/Shift}",
+      );
+      expect(document.activeElement).toBe(
+        commands.querySelector(
+          status === "active" ? ".agent-chat__goal-pause" : ".agent-chat__goal-resume",
+        ),
+      );
+      await userEvent.keyboard("{Enter}");
+      expect(onGoalAction).toHaveBeenCalledExactlyOnceWith(
+        goal.id,
+        status === "active" ? "pause" : "resume",
+      );
+      onGoalAction.mockClear();
       for (const button of commands.querySelectorAll<HTMLButtonElement>("button")) {
         const box = button.getBoundingClientRect();
         expect(box.left).toBeGreaterThanOrEqual(cardBox.left);
@@ -600,17 +622,6 @@ describe("composer overflow presentation", () => {
         [goal.id, status === "active" ? "pause" : "resume"],
         [goal.id, "clear"],
       ]);
-      await userEvent.tab({ shift: true });
-      expect(document.activeElement).toBe(
-        commands.querySelector(
-          status === "active" ? ".agent-chat__goal-pause" : ".agent-chat__goal-resume",
-        ),
-      );
-      await userEvent.keyboard("{Enter}");
-      expect(onGoalAction).toHaveBeenLastCalledWith(
-        goal.id,
-        status === "active" ? "pause" : "resume",
-      );
       objective.scrollTop = objective.scrollHeight;
       await afterLayout();
       expect(commands.getBoundingClientRect().top).toBe(commandBox.top);

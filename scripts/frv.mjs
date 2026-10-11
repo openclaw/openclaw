@@ -119,6 +119,7 @@ function parseArgs(argv) {
     command,
     dryRun: false,
     failedOnly: false,
+    force: false,
     json: false,
     repository: DEFAULT_REPOSITORY,
     runId: "",
@@ -149,6 +150,8 @@ function parseArgs(argv) {
       options.intervalMs = positiveInteger(argv[++index], "--interval") * 1000;
     } else if (argument === "--once") {
       options.once = true;
+    } else if (argument === "--force") {
+      options.force = true;
     } else if (argument === "--failed") {
       options.failedOnly = true;
     } else if (argument === "--restore") {
@@ -161,10 +164,15 @@ function parseArgs(argv) {
       throw new Error(`unknown argument: ${argument}`);
     }
   }
-  if (!["continue", "prioritize", "rerun", "status", "verify", "watch"].includes(command)) {
+  if (
+    !["cancel", "continue", "prioritize", "rerun", "status", "verify", "watch"].includes(command)
+  ) {
     throw new Error(
-      "usage: pnpm frv <status|watch|continue|rerun|verify> --run <id> [--failed | --job <child>:<name> | --child <key|run-id> [--max-attempts <n>]] | pnpm frv prioritize --restore <record>",
+      "usage: pnpm frv <status|watch|cancel|continue|rerun|verify> --run <id> [--failed | --job <child>:<name> | --child <key|run-id> [--max-attempts <n>]] | pnpm frv prioritize --restore <record>",
     );
+  }
+  if (options.force && command !== "cancel") {
+    throw new Error("--force is valid only with cancel");
   }
   const restoring = command === "prioritize";
   if (restoring && options.restore === undefined) {
@@ -185,8 +193,8 @@ function parseArgs(argv) {
   if (command !== "continue" && options.failedOnly) {
     throw new Error("--failed is valid only with continue");
   }
-  if (!["continue", "prioritize", "rerun"].includes(command) && options.dryRun) {
-    throw new Error("--dry-run is valid only with continue, rerun, or prioritize");
+  if (!["cancel", "continue", "prioritize", "rerun"].includes(command) && options.dryRun) {
+    throw new Error("--dry-run is valid only with cancel, continue, rerun, or prioritize");
   }
   if (command === "rerun") {
     if ((options.job === undefined) === (options.child === undefined)) {
@@ -1071,6 +1079,7 @@ export function createClient(repository, dependencies = {}) {
         return apiText(path, undefined, [], options);
       }
     },
+    cancelRun: (runId, force) => rerun(runId, force ? "force-cancel" : "cancel"),
     rerunFailed: (runId) => rerun(runId, "rerun-failed-jobs"),
     rerunRun: (runId) => rerun(runId, "rerun"),
     listRuns: (query) => listReleasePriorityRuns(query, apiJson, apiText),
@@ -1520,23 +1529,24 @@ async function planChildRerun(child, target, client, operationDeadline) {
     ? await client.getVariable("OPENCLAW_CI_RUNNER_BACKEND").catch(() => "unknown")
     : "unknown";
   // The producer rerun also reruns every dependent consumer in the same new attempt.
-  const job =
-    plan.mode === "producer"
-      ? await selectedRerunJob(
-          child,
-          { childKey: child.key, name: plan.producer },
-          client,
-          operationDeadline,
-        )
-      : undefined;
+  const job = plan.producer
+    ? await selectedRerunJob(
+        child,
+        { childKey: child.key, name: plan.producer },
+        client,
+        operationDeadline,
+      )
+    : undefined;
   return { ...plan, failedJobs, job, runnerBackend };
 }
 
 function reportChildRerun(child, rerun, log) {
   log(
-    rerun.mode === "producer"
-      ? `[frv] ${child.key} run ${child.runId} attempt ${child.effectiveRunAttempt}: rerunning green producer "${rerun.producer}" and its dependents; its consumers bind the producer's run attempt`
-      : `[frv] ${child.key} run ${child.runId} attempt ${child.effectiveRunAttempt}: rerunning failed jobs`,
+    rerun.mode === "receipt"
+      ? `[frv] ${child.key} run ${child.runId} attempt ${child.effectiveRunAttempt}: rerunning only failed receipt "${rerun.producer}"; passing workloads are retained`
+      : rerun.mode === "producer"
+        ? `[frv] ${child.key} run ${child.runId} attempt ${child.effectiveRunAttempt}: rerunning green producer "${rerun.producer}" and its dependents; its consumers bind the producer's run attempt`
+        : `[frv] ${child.key} run ${child.runId} attempt ${child.effectiveRunAttempt}: rerunning failed jobs`,
   );
   for (const job of rerun.failedJobs) {
     log(
@@ -2775,6 +2785,15 @@ function print(value, json) {
     console.log(JSON.stringify(value, null, 2));
     return;
   }
+  if (value.cancellation) {
+    console.log(
+      `cancellation: ${value.complete ? "complete" : "incomplete"}; active: ${value.activeRunIds.join(", ") || "none"}`,
+    );
+    for (const run of value.cancellation) {
+      console.log(`${run.key}: ${run.state} attempt=${run.runAttempt} run=${run.runId}`);
+    }
+    console.log(`next: ${value.nextCommand}`);
+  }
   if (value.qualification) {
     console.log(
       `qualification: ${value.qualification.state}; evidence: ${value.qualification.evidence}`,
@@ -2859,6 +2878,15 @@ async function main() {
     return;
   }
   const client = createClient(options.repository);
+  if (options.command === "cancel") {
+    const { cancelReleaseTree } = await import("./frv-cancellation.mjs");
+    const result = await cancelReleaseTree(options.runId, client, options);
+    print(result, options.json);
+    if (!result.complete && !options.dryRun) {
+      process.exitCode = 1;
+    }
+    return;
+  }
   if (options.command === "prioritize") {
     print(
       await restoreReleasePriority(options.restore, client, { dryRun: options.dryRun }),

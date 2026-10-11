@@ -96,7 +96,7 @@ const CODEX_APP_SERVER_HOME_ENV_VARS = new Set([CODEX_HOME_ENV_VAR, HOME_ENV_VAR
 const MAX_COMPUTER_USE_ARTIFACT_OWNERS = 128;
 const activeComputerUseArtifactReconciliations = new Map<
   string,
-  { latestEpoch?: number; appliedCacheBinding?: string; active: number; tail: Promise<void> }
+  { appliedCacheBinding?: string; active: number; tail: Promise<void> }
 >();
 type AuthProfileOrderConfig = Parameters<typeof resolveCodexAppServerAuthProfileId>[0]["config"];
 const scopedOAuthRefreshQueues = new WeakMap<
@@ -161,8 +161,11 @@ function assertNoUnimportedAgentCodexAuthFile(params: {
   // separates auth requirements plus fallback identities. Preserve the supported
   // stdio API-key login instead of turning a leftover file into a hard failure.
   if (
-    params.authRequirement === "api-key" &&
-    resolveCodexAppServerFallbackApiKeyCacheKey({ startOptions: params.startOptions })
+    (params.authRequirement === "api-key" || params.authRequirement === "environment-api-key") &&
+    resolveCodexAppServerFallbackApiKeyCacheKey({
+      startOptions: params.startOptions,
+      allowNativeAuthFile: params.authRequirement === "api-key",
+    })
   ) {
     return;
   }
@@ -449,16 +452,7 @@ export async function reconcileCodexComputerUseStartArtifacts(params: {
   }
   activeComputerUseArtifactReconciliations.set(key, owner);
   owner.active += 1;
-  const epoch = params.desktopGeneration?.epoch;
-  if (epoch !== undefined && (owner.latestEpoch === undefined || epoch > owner.latestEpoch)) {
-    owner.latestEpoch = epoch;
-  }
-  const assertCurrent = () => {
-    params.assertCurrent?.();
-    if (epoch !== undefined && owner.latestEpoch !== epoch) {
-      throw new Error("Codex Computer Use artifact reconciliation was superseded.");
-    }
-  };
+  const assertCurrent = () => params.assertCurrent?.();
   const operation = owner.tail.then(async () => {
     assertCurrent();
     const appliedCacheBinding = await reconcileCodexComputerUseStartArtifactsOnce({
@@ -470,20 +464,11 @@ export async function reconcileCodexComputerUseStartArtifacts(params: {
     assertCurrent();
     owner.appliedCacheBinding = appliedCacheBinding;
   });
-  const settled = operation.catch(() => undefined);
-  owner.tail = settled;
+  owner.tail = operation.catch(() => undefined);
   try {
     await operation;
   } finally {
-    owner.active = Math.max(0, owner.active - 1);
-    if (
-      owner.active === 0 &&
-      owner.latestEpoch === undefined &&
-      activeComputerUseArtifactReconciliations.get(key) === owner &&
-      owner.tail === settled
-    ) {
-      activeComputerUseArtifactReconciliations.delete(key);
-    }
+    owner.active -= 1;
     pruneComputerUseArtifactOwners();
   }
 }
@@ -685,14 +670,14 @@ export async function applyCodexAppServerAuthProfile(params: {
   }
   if (
     !loginParams &&
-    params.authRequirement === "api-key" &&
+    (params.authRequirement === "api-key" || params.authRequirement === "environment-api-key") &&
     params.startOptions?.transport === "stdio"
   ) {
     const env = resolveCodexAppServerSpawnEnv(params.startOptions, process.env);
     loginParams = await resolveCodexAppServerFallbackApiKeyLoginParams({
       client: params.client,
       env,
-      codexCliAuthEnv: process.env,
+      ...(params.authRequirement === "api-key" ? { codexCliAuthEnv: process.env } : {}),
       assertCurrent: params.assertCurrent,
     });
   }
@@ -870,12 +855,12 @@ async function resolveCodexAppServerAuthProfileLoginParamsInternal(
 async function resolveCodexAppServerFallbackApiKeyLoginParams(params: {
   client: CodexAppServerClient;
   env: NodeJS.ProcessEnv;
-  codexCliAuthEnv: NodeJS.ProcessEnv;
+  codexCliAuthEnv?: NodeJS.ProcessEnv;
   assertCurrent?: () => void;
 }): Promise<CodexLoginAccountParams | undefined> {
   const apiKey =
     readFirstNonEmptyEnv(params.env, CODEX_APP_SERVER_API_KEY_ENV_VARS) ??
-    (await readCodexCliAuthFileApiKey(params.codexCliAuthEnv));
+    (params.codexCliAuthEnv ? await readCodexCliAuthFileApiKey(params.codexCliAuthEnv) : undefined);
   if (!apiKey) {
     return undefined;
   }

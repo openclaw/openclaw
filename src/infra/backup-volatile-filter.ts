@@ -5,7 +5,7 @@ import { isLegacyAuditMigrationBackupPath } from "./backup-audit-paths.js";
 // archiving their changing bytes would race the size captured by the tar header.
 const CHROMIUM_SINGLETON_FILES = new Set(["SingletonCookie", "SingletonLock", "SingletonSocket"]);
 const VOLATILE_DIRECTORY_RULES = [
-  // Rebuildable bundles bridge open Control UI documents across updates.
+  // Older installs keep the obsolete Control UI cache until Doctor removes it.
   [["sandbox/skills-workspaces", "cache/control-ui-assets", "tmp/plugin-captures"], undefined],
   [
     ["sessions", "cron/runs", "logs"],

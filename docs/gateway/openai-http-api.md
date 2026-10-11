@@ -336,6 +336,8 @@ curl -sS http://127.0.0.1:18789/v1/embeddings \
 
 `/v1/embeddings` supports `input` as a string or array of strings.
 
+Responses include `usage.prompt_tokens` and `usage.total_tokens`. Native Ollama and OpenAI-compatible embedding providers pass through their reported token counts, including zero. Providers without usage reporting return zero for both fields; OpenClaw does not estimate token usage.
+
 Provider failures use the same error mapping as chat completions: missing provider credentials return `401 authentication_error` with setup guidance, unknown provider models return `404 invalid_request_error`, and provider overload returns `503 api_error`. Credential values are redacted. Unexpected failures return `500 api_error` with `internal error`.
 
 For models that support it, a positive integer `dimensions` requests the output vector size. It overrides the selected agent's active `memory.search.outputDimensionality` and also applies when memory search is disabled. Omitting it keeps the configured or provider default size.

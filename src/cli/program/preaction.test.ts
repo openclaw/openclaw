@@ -582,11 +582,9 @@ describe("registerPreActionHooks", () => {
       parseArgv: ["config", "set", "gateway.auth.mode", "{bad", "--json"],
     });
 
-    expect(ensureConfigReadyMock).toHaveBeenCalledWith({
-      runtime: runtimeMock,
-      measure: expect.any(Function),
-      commandPath: ["config", "set"],
-    });
+    expect(routeLogsToStderrMock).not.toHaveBeenCalled();
+    expect(ensureConfigReadyMock).not.toHaveBeenCalled();
+    expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
   });
 
   it("does not select JSON output when Commander consumed --json as an option value", async () => {
@@ -876,16 +874,13 @@ describe("registerPreActionHooks", () => {
     expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
   });
 
-  it("keeps config guard for config unset mutations", async () => {
+  it("defers config unset preparation to its command owner", async () => {
     await runPreAction({
       parseArgv: ["config", "unset", "gateway.port"],
     });
 
-    expect(ensureConfigReadyMock).toHaveBeenCalledWith({
-      runtime: runtimeMock,
-      measure: expect.any(Function),
-      commandPath: ["config", "unset"],
-    });
+    expect(ensureConfigReadyMock).not.toHaveBeenCalled();
+    expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
   });
 
   it("bypasses config guard for backup create", async () => {

@@ -1,4 +1,5 @@
 ---
+doc-schema-version: 1
 summary: "Worker inference on an externally managed paired worker host"
 title: "Worker-local inference"
 read_when:
@@ -188,26 +189,17 @@ does not need this additional metadata entry.
 
 ### Make the dedicated worker mandatory
 
-For a Gateway dedicated to remote OpenClaw execution, add
+To require this worker for OpenClaw turns, add
 `requiredProfile: "dedicated-native"` alongside `cloudWorkers.profiles` in the
-example above. Control UI then presents the dedicated destination as read-only: a
-user opens a session and sends a message without selecting a cloud worker. The
-Gateway also enforces the same requirement for API and channel turns.
+example above. See [Required worker profile](/gateway/config-cloud-workers#required-worker-profile)
+for admission, permissions, empty workspaces, and existing-session behavior.
+The configured agent model remains the default.
 
-The configured agent model remains the default. A new session without a
-repository gets an owned empty workspace automatically; users do not need to
-create a repository or hold `operator.admin` to use the mandatory destination.
-The existing create → dispatch → send lifecycle still owns initial-message
-recovery. No message runs on the Gateway while its required worker is missing,
-unavailable, or still preparing. Retry and Stop operate on the retained session
-and placement rather than creating a second session.
-
-Provision the paired node and native registry before admitting chats. It is
-valid to start the Gateway with the required profile not yet configured during
-enrollment, but chats remain blocked until the profile is usable. Do not copy
-provider credentials to the Gateway to work around a placement error. See
-[Required worker profile](/gateway/config-cloud-workers#required-worker-profile)
-for policy scope and existing-session behavior.
+Provision the paired node and native registry before admitting chats. Enrollment
+can begin before the required profile is usable, but chats remain blocked while
+it is missing, unavailable, or preparing. Do not copy provider credentials to the
+Gateway to work around a placement error. Retry and Stop use the retained session
+and placement; initial-message recovery never falls back to Gateway execution.
 
 Leave `requiredProfile` unset for the optional, administrator-selected flow below.
 

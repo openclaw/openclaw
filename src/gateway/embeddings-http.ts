@@ -268,9 +268,16 @@ export async function handleOpenAiEmbeddingsHttpRequest(
         await handled.requestAuth.revalidate?.();
         return true;
       }
+      const usage = { prompt_tokens: 0, total_tokens: 0 };
+      let completeUsage = true;
       const embeddings = await provider.embedBatch(texts, {
         signal: abortController.signal,
         inputType: "document",
+        onUsage: (reported) => {
+          completeUsage &&= reported !== undefined;
+          usage.prompt_tokens += reported?.promptTokens ?? 0;
+          usage.total_tokens += reported?.totalTokens ?? 0;
+        },
       });
       if (abortController.signal.aborted) {
         return true;
@@ -285,10 +292,7 @@ export async function handleOpenAiEmbeddingsHttpRequest(
           embedding: encodingFormat === "base64" ? encodeEmbeddingBase64(embedding) : embedding,
         })),
         model: requestModel,
-        usage: {
-          prompt_tokens: 0,
-          total_tokens: 0,
-        },
+        usage: completeUsage ? usage : { prompt_tokens: 0, total_tokens: 0 },
       });
     } finally {
       try {

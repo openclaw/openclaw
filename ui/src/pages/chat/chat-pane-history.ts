@@ -116,6 +116,7 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
             requests.initialSnapshotHydration !== hydration ||
             requests.acceptedHistory ||
             this.state !== state ||
+            !this.ownsChatSnapshot({ sessionKey }) ||
             !areUiSessionKeysEquivalent(state.sessionKey, sessionKey) ||
             resolveChatSnapshotKey(state, { sessionKey }) !== cacheKey
           ) {
@@ -131,6 +132,12 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
           applyChatCacheSnapshot(state, snapshot);
           const mergedSnapshot = { ...snapshot, messages: state.chatMessages };
           cacheChatSessionSnapshot(cache, state, { sessionKey }, mergedSnapshot);
+          if (snapshot.progressCard !== undefined) {
+            const target = this.resolveChatReadTarget();
+            if (target) {
+              this.progressCard.hydrate(target, snapshot.progressCard);
+            }
+          }
           // Release startup with the adopted cursor before Lit queues the snapshot render.
           hydration.complete?.();
           state.requestUpdate?.();

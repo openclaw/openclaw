@@ -19,7 +19,7 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
-import { replaceTranscriptEventsSync } from "./session-accessor.sqlite-transcript-write.js";
+import { replaceTranscriptEventsSync } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { getSessionColdStorageStatus } from "./session-cold-storage-status.js";
 import { runSessionColdStorageMaintenance } from "./session-cold-storage.js";
 import {

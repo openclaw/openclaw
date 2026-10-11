@@ -3,9 +3,13 @@
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import { renderSessionMenuItem, renderCloudProfileMenuItems } from "./cloud-target.ts";
+import {
+  projectDevicePlacements,
+  resolveAutomaticDevicePlacementDisabledReason,
+} from "./device-placement.ts";
 
 describe("cloud target menu", () => {
-  it("renders explicit remediation commands on separate lines", () => {
+  it("renders saved-pairing remediation commands without redeeming a new join URL", () => {
     const container = document.createElement("div");
     render(
       renderSessionMenuItem(
@@ -23,8 +27,44 @@ describe("cloud target menu", () => {
       ),
       container,
     );
-    expect(container.querySelector("code.new-session-page__command")?.textContent).toBe(
-      "openclaw connect --service --session-host",
+    const card = container.querySelector('[slot="content"]');
+    expect(card?.textContent).toContain(
+      "Session hosting is disabled. Run these commands on the paired device:",
+    );
+    expect(Array.from(card!.querySelectorAll("code"), (command) => command.textContent)).toEqual([
+      "openclaw config set nodeHost.workerRuns.enabled true",
+      "openclaw node install --force",
+    ]);
+  });
+
+  it("explains missing hosting without claiming a connected device is unpaired", () => {
+    const environments = [
+      {
+        id: "node:paired",
+        type: "node" as const,
+        status: "available" as const,
+        sessionHost: false,
+      },
+    ];
+    const devices = projectDevicePlacements(environments);
+    const container = document.createElement("div");
+    render(
+      renderSessionMenuItem(
+        {
+          value: "auto",
+          label: "Auto",
+          compact: true,
+          disabled: true,
+          checked: false,
+          title: resolveAutomaticDevicePlacementDisabledReason(environments, devices),
+          onSelect: vi.fn(),
+        },
+        false,
+      ),
+      container,
+    );
+    expect(container.querySelector('[slot="content"]')?.textContent?.trim()).toBe(
+      "No devices have session hosting enabled. Connect a machine with session hosting enabled, or enable it on a paired device.",
     );
   });
 

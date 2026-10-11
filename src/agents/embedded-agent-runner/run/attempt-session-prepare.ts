@@ -36,8 +36,8 @@ import {
 } from "../../sessions/index.js";
 import { DefaultResourceLoader } from "../../sessions/resource-loader.js";
 import { createAgentSession } from "../../sessions/sdk.js";
+import { withSessionManagerAppend } from "../../sessions/session-manager-append-admission.js";
 import { sessionManagerOpenTranscriptCohort } from "../../sessions/session-manager-core.js";
-import { withSessionManagerWrite } from "../../sessions/session-manager-write-admission.js";
 import { wrapToolDefinition } from "../../sessions/tools/tool-definition-wrapper.js";
 import { resolveToolSearchCatalogTool } from "../../tool-search.js";
 import { runContextEngineMaintenance } from "../context-engine-maintenance.js";
@@ -96,6 +96,7 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
   agentDir: string;
   clientToolPreparation: ClientToolPreparation;
   effectiveCwd: string;
+  effectiveWorkspace: string;
   getCurrentAttemptPluginMetadataSnapshot: () => PluginMetadataSnapshot | undefined;
   initialSystemPrompt: string;
   markStage: (stage: string) => void;
@@ -133,6 +134,7 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
   const extensionFactories = buildEmbeddedExtensionFactories({
     cfg: attempt.config,
     sessionManager: input.sessionManager,
+    workspaceDir: input.effectiveWorkspace,
     model: attempt.model,
     agentId: input.sessionAgentId,
     sessionId: attempt.sessionId,
@@ -324,7 +326,7 @@ export async function prepareEmbeddedAttemptSessionBoundary(input: {
   let repairedTarget: ReturnType<typeof sessionManager.getSessionTarget>;
   const orphanRepair = preserveExactPrompt
     ? undefined
-    : await withSessionManagerWrite(sessionManager, async () => {
+    : await withSessionManagerAppend(sessionManager, async () => {
         input.abortSignal?.throwIfAborted();
         const target = sessionManager.getSessionTarget();
         const reader = target && getOwnedSessionTranscriptReader(target);
@@ -401,7 +403,7 @@ export async function prepareEmbeddedAttemptSessionBoundary(input: {
       input.abortSignal?.throwIfAborted();
     }
     // The merged replacement prompt needs a new canonical user row.
-    sessionManager.clearNextUserMessagePersistenceSuppression?.();
+    sessionManager.setNextUserMessagePersistence?.("normal");
     attempt.onUserMessagePersistenceInvalidated?.();
   }
   if (orphanRepair) {

@@ -19,7 +19,7 @@ import { sanitizeAssistantVisibleTextWithProfile } from "../shared/text/assistan
 import { stripSuppressedControlReplyToken } from "./control-reply-text.js";
 
 /** Public-reader lifecycle only: login probe, live refresh, and copy controls; never the operator app, socket, or roster. */
-export const PUBLIC_SESSION_ENTRY_SCRIPT = `(()=>{
+const PUBLIC_SESSION_ENTRY_SCRIPT = `(()=>{
   const link=document.getElementById("session-login");
   function hasClientCredential(){
     if(link?.dataset.gatewayPath===undefined)return false;
@@ -148,7 +148,7 @@ for (const rule of ["fence", "code_block"] as const) {
 // The Control UI lobster mark; its gradient is declared once per document in `svg.defs`.
 const LOBSTER_MARK = `<svg class="mark" viewBox="0 0 120 120" aria-hidden="true" focusable="false"><path class="shell" d="M60 10C30 10 15 35 15 55C15 75 30 95 45 100L45 110L55 110L55 100C55 100 60 102 65 100L65 110L75 110L75 100C90 95 105 75 105 55C105 35 90 10 60 10ZM20 45C5 40 0 50 5 60C10 70 20 65 25 55C28 48 25 45 20 45ZM100 45C115 40 120 50 115 60C110 70 100 65 95 55C92 48 95 45 100 45Z"/><path class="feeler" d="M45 15Q35 5 30 8M75 15Q85 5 90 8"/><circle class="eye" cx="45" cy="35" r="6"/><circle class="eye" cx="75" cy="35" r="6"/><circle class="pupil" cx="46" cy="34" r="2.5"/><circle class="pupil" cx="76" cy="34" r="2.5"/></svg>`;
 
-const OPENCLAW_PITCH = `<section class="colophon" aria-labelledby="openclaw-pitch"><div class="fleuron" aria-hidden="true">${LOBSTER_MARK}</div><p class="kicker">Made with OpenClaw</p><h2 id="openclaw-pitch">Your assistant, on your devices, in your chats.</h2><p>OpenClaw is an open-source AI assistant that runs on your own computer and meets you in the channels you already use: Discord, iMessage, Slack, Teams, Telegram, WhatsApp, and 20+ more. State, memory, and credentials stay on your hardware, and models are plugins you can swap without changing anything else. No paid tier, no hosted service, no token: MIT-licensed and stewarded by the independent OpenClaw Foundation.</p><div class="code install"><pre><code>curl -fsSL https://openclaw.ai/install.sh | bash</code></pre></div><p class="links"><a class="button primary" href="https://docs.openclaw.ai/start/getting-started" rel="noreferrer noopener">Get started <span aria-hidden="true">→</span></a><a href="https://docs.openclaw.ai/start/why-openclaw" rel="noreferrer noopener">Why OpenClaw</a><a href="https://github.com/openclaw/openclaw" rel="noreferrer noopener">GitHub</a></p></section>`;
+const PUBLIC_SESSION_PITCH_HTML = `<section class="colophon" aria-labelledby="openclaw-pitch"><div class="fleuron" aria-hidden="true">${LOBSTER_MARK}</div><p class="kicker">Made with OpenClaw</p><h2 id="openclaw-pitch">Your assistant, on your devices, in your chats.</h2><p>OpenClaw is an open-source AI assistant that runs on your own computer and meets you in the channels you already use: Discord, iMessage, Slack, Teams, Telegram, WhatsApp, and 20+ more. State, memory, and credentials stay on your hardware, and models are plugins you can swap without changing anything else. No paid tier, no hosted service, no token: MIT-licensed and stewarded by the independent OpenClaw Foundation.</p><div class="code install"><pre><code>curl -fsSL https://openclaw.ai/install.sh | bash</code></pre></div><p class="links"><a class="button primary" href="https://docs.openclaw.ai/start/getting-started" rel="noreferrer noopener">Get started <span aria-hidden="true">→</span></a><a href="https://docs.openclaw.ai/start/why-openclaw" rel="noreferrer noopener">Why OpenClaw</a><a href="https://github.com/openclaw/openclaw" rel="noreferrer noopener">GitHub</a></p></section>`;
 
 // Tokens and element styles mirror the Control UI's built-in themes and chat text
 // (ui/src/styles/base.css, chat/text.css). Instrument Sans is the
@@ -344,7 +344,7 @@ ${
   params.unavailable
     ? ""
     : `<footer class="status"><span>${isLatest ? (params.entryUrl ? "Live view · Updates while this tab is visible" : "Live view · Refreshes every 15 seconds") : "Earlier conversation · Updates when you reload"}<br>Public access can be revoked by the session owner.</span><a href="${escapeHtml(params.latestUrl)}">${isLatest ? "Refresh now" : "Back to latest"}</a></footer>
-${OPENCLAW_PITCH}`
+${PUBLIC_SESSION_PITCH_HTML}`
 }
 </div>
 </main><script>${PUBLIC_SESSION_ENTRY_SCRIPT}</script></body></html>`;
