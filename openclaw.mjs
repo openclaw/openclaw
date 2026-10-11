@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 
-import "./worker-heap-flag.mjs";
 import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { access } from "node:fs/promises";
 import module from "node:module";
