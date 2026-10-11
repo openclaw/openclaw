@@ -32,7 +32,9 @@ const approvalMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("./in-process-gateway.js", () => ({ getInProcessGatewayToolContext }));
-vi.mock("../../gateway/session-utils-store.js", () => ({ loadGatewaySessionEntryReadOnly }));
+vi.mock("../../gateway/session-utils-store-worker.js", () => ({
+  loadGatewaySessionEntryReadOnlyInWorker: loadGatewaySessionEntryReadOnly,
+}));
 vi.mock("../bash-tools.exec-approval-request.js", () => ({
   registerExecApprovalRequestForHostOrThrow: approvalMocks.register,
   resolveRegisteredExecApprovalDecision: approvalMocks.decide,
@@ -347,9 +349,10 @@ describe("terminal tool", () => {
       tool.execute("missing-session-input", { action: "input", sessionId, data: "echo unsafe\r" }),
     ).rejects.toThrow("Terminal session unavailable");
 
-    expect(loadGatewaySessionEntryReadOnly).toHaveBeenCalledWith(agentOwner.agentSessionKey, {
+    expect(loadGatewaySessionEntryReadOnly).toHaveBeenCalledWith({
+      cfg: expect.any(Object),
+      key: agentOwner.agentSessionKey,
       agentId: agentOwner.agentId,
-      clone: false,
     });
     expect(backend.writes).toEqual([]);
     expect(approvalMocks.register).not.toHaveBeenCalled();

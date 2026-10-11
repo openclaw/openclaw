@@ -161,8 +161,14 @@ vi.mock("../../utils/delivery-context.read.js", async (importOriginal) => ({
 }));
 vi.mock("../session-utils.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../session-utils.js")>()),
-  loadGatewaySessionEntryReadOnly: runtimeMocks.loadSessionEntry,
   resolveSessionModelRef: runtimeMocks.resolveSessionModelRef,
+}));
+vi.mock("../session-utils-store-worker.js", () => ({
+  loadGatewaySessionEntryReadOnlyInWorker: async (
+    params: Parameters<
+      typeof import("../session-utils-store-worker.js").loadGatewaySessionEntryReadOnlyInWorker
+    >[0],
+  ) => runtimeMocks.loadSessionEntry(params.key, { agentId: params.agentId }),
 }));
 vi.mock("../node-plugin-tool-snapshot.js", () => nodePluginToolSnapshotMocks);
 

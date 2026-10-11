@@ -30,8 +30,10 @@ import {
   resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId,
   resolveSessionCreateAgentId,
 } from "../session-request-agent.js";
-import { resolveGatewaySessionStoreTargetInWorker } from "../session-utils-store-worker.js";
-import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
+import {
+  loadGatewaySessionEntryReadOnlyInWorker,
+  resolveGatewaySessionStoreTargetInWorker,
+} from "../session-utils-store-worker.js";
 import {
   prepareSessionWorktreeCreation,
   resolveSessionProjectRoot,
@@ -333,7 +335,14 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     const preparedDisplayName = normalizeOptionalString(p.displayName);
     const titleAgentId = explicitlyRequestedAgent.agentId;
     const existingTargetEntry = explicitlyRequestedKey
-      ? loadGatewaySessionEntryReadOnly(explicitlyRequestedKey, { agentId: titleAgentId }).entry
+      ? (
+          await loadGatewaySessionEntryReadOnlyInWorker({
+            cfg,
+            key: explicitlyRequestedKey,
+            agentId: titleAgentId,
+            assertActive: commitGuard,
+          })
+        ).entry
       : undefined;
     const workspaceReuseError = requiredWorkerWorkspaceReuseError(
       automaticEmptyWorkspace,
@@ -415,8 +424,11 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
           respond(false, undefined, parentRequestedAgent.error);
           return;
         }
-        const parent = loadGatewaySessionEntryReadOnly(parentSessionKey, {
+        const parent = await loadGatewaySessionEntryReadOnlyInWorker({
+          cfg,
+          key: parentSessionKey,
           agentId: parentRequestedAgent.agentId,
+          assertActive: commitGuard,
         });
         const parentAgentId = parentRequestedAgent.agentId;
         if (
