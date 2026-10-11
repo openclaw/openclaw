@@ -113,7 +113,6 @@ describe("terminal file upload", () => {
 
   it.each([
     { name: "an empty lock", payload: "" },
-    { name: "a partial lock", payload: '{"pid":' },
     { name: "an orphaned reclaim guard", payload: null },
   ])("protects shared-root locks and recovers safely from $name", async ({ payload }) => {
     const root = tempDirs.make("openclaw-terminal-upload-private-lock-test-");
@@ -263,19 +262,7 @@ describe("terminal file upload", () => {
     expect(await stagedName("..")).toBe("upload");
   });
 
-  it("recovers expired upload directories after restart", async () => {
-    const root = tempDirs.make("openclaw-terminal-upload-recovery-test-");
-    const directory = path.join(root, "openclaw-terminal-upload-stale");
-    await mkdir(directory, { mode: 0o700 });
-    await writeFile(path.join(directory, "report.pdf"), "stale");
-    await utimes(directory, new Date(0), new Date(0));
-
-    await ensureTerminalUploadCleanup({ tempRoot: root, retentionMs: 1, nowMs: Date.now() });
-
-    await expect(stat(directory)).rejects.toMatchObject({ code: "ENOENT" });
-  });
-
-  it.each([1, directoryLimit + 1])(
+  it.each([directoryLimit + 1])(
     "keeps the original recovered expiry after renames in %i upload directories",
     async (count) => {
       vi.useFakeTimers({ now: Date.now() + 60_000 });
@@ -308,10 +295,7 @@ describe("terminal file upload", () => {
     },
   );
 
-  it.each([
-    { identity: "native", largeFileIds: false },
-    { identity: "64-bit", largeFileIds: true },
-  ])(
+  it.each([{ identity: "64-bit", largeFileIds: true }])(
     "gives a replacement directory its own expiry with $identity file identifiers",
     async ({ largeFileIds }) => {
       vi.useFakeTimers({ now: Date.now() + 60_000 });

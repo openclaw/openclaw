@@ -166,42 +166,35 @@ export function summarizeAgentActivity(
   return { total, counts, outcomes };
 }
 
-const ACTIVITY_CATEGORIES = new Map<
-  string,
-  "commands" | "reads" | "edits" | "writes" | "searches" | "fetches" | "subagents"
->([
+function categoryTools<Category extends string>(category: Category, names: string[]) {
+  return names.map((name) => [name, category] as const);
+}
+
+const ACTIVITY_CATEGORIES = new Map([
   // A launched subagent is a worker, not one more operation of the launcher.
-  ["sessions_spawn", "subagents"],
-  ["exec", "commands"],
-  ["bash", "commands"],
-  ["shell", "commands"],
-  ["run_command", "commands"],
-  ["run_terminal_cmd", "commands"],
-  ["read", "reads"],
-  ["read_file", "reads"],
-  ["readfile", "reads"],
-  ["notebookread", "reads"],
-  ["notebook_read", "reads"],
-  ["edit", "edits"],
-  ["apply_patch", "edits"],
-  ["applypatch", "edits"],
-  ["patch", "edits"],
-  ["edit_file", "edits"],
-  ["multiedit", "edits"],
-  ["multi_edit", "edits"],
-  ["notebookedit", "edits"],
-  ["notebook_edit", "edits"],
-  ["write", "writes"],
-  ["write_file", "writes"],
-  ["create_file", "writes"],
-  ["grep", "searches"],
-  ["glob", "searches"],
-  ["find", "searches"],
-  ["ls", "searches"],
-  ["list", "searches"],
-  ["codebase_search", "searches"],
-  ["web_search", "searches"],
-  ["web_fetch", "fetches"],
-  ["webfetch", "fetches"],
-  ["fetch", "fetches"],
+  ...categoryTools("subagents", ["sessions_spawn"]),
+  ...categoryTools("commands", ["exec", "bash", "shell", "run_command", "run_terminal_cmd"]),
+  ...categoryTools("reads", ["read", "read_file", "readfile", "notebookread", "notebook_read"]),
+  ...categoryTools("edits", [
+    "edit",
+    "apply_patch",
+    "applypatch",
+    "patch",
+    "edit_file",
+    "multiedit",
+    "multi_edit",
+    "notebookedit",
+    "notebook_edit",
+  ]),
+  ...categoryTools("writes", ["write", "write_file", "create_file"]),
+  ...categoryTools("searches", [
+    "grep",
+    "glob",
+    "find",
+    "ls",
+    "list",
+    "codebase_search",
+    "web_search",
+  ]),
+  ...categoryTools("fetches", ["web_fetch", "webfetch", "fetch"]),
 ]);

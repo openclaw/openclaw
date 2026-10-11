@@ -151,6 +151,18 @@ describe("installSessionToolResultGuard", () => {
     expect(blocked).toMatchObject([{ role: "user", content: "hidden" }]);
   });
 
+  it("consumes runtime attribution when a hook blocks the marker before the next user", () => {
+    let writes = 0;
+    const { sm, guard } = setup({
+      beforeMessageWriteHook: () => (writes++ === 0 ? { block: true } : undefined),
+    });
+    guard.setNextUserMessagePersistence("runtime");
+    sm.appendMessage(makeUserMessage("runtime-only marker", 1));
+    sm.appendMessage(makeUserMessage("actual user", 2));
+
+    expect(messages(sm)).toEqual([{ role: "user", content: "actual user", timestamp: 2 }]);
+  });
+
   it("preserves correlation IDs while backfilling names through redaction", () => {
     const { sm, guard } = setup({
       beforeMessageWriteHook: ({ message }) => ({ message: redactTranscriptMessage(message, {}) }),

@@ -543,7 +543,7 @@ export function renderSessionActivityView(props: SessionActivityViewProps) {
         </label>
         ${renderSettingsSegmented({
           mode: "buttons",
-          className: "activity-feed__time-filter",
+          class: "activity-feed__time-filter",
           value: props.filters.time,
           ariaLabel: t("activityFeed.time"),
           options: ACTIVITY_TIME_FILTERS.map((time) => ({

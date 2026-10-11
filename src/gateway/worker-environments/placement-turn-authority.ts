@@ -61,8 +61,6 @@ function notifyRevoked(claim: RetainedClaim): void {
 function closeOwner(owner: PlacementAuthorityOwner): void {
   owner.active = false;
   owner.pending.clear();
-  owner.settlementListeners.forEach((listener) => listener());
-  owner.settlementListeners.clear();
   owner.published.clear();
   owner.tools.clear();
   owner.workspaceResults.clear();
@@ -103,7 +101,6 @@ function ownerFor(identity: DatabasePathIdentity): PlacementAuthorityOwner {
     observations: new Map(),
     placementReaders: new Map(),
     pending: new Set(),
-    settlementListeners: new Set(),
     sequence: 0,
     published: new Map(),
     tools: new Map(),
@@ -154,7 +151,6 @@ function prunePublication(owner: PlacementAuthorityOwner, sessionId: string): vo
 
 function commitChange(owner: PlacementAuthorityOwner, change: ClaimChange, sequence: number): void {
   owner.pending.delete(change);
-  owner.settlementListeners.forEach((listener) => listener());
   if (!owner.active) {
     return;
   }
@@ -309,7 +305,7 @@ function observePlacementAuthority(pathname: string, sessionId?: string) {
   return capturePlacementObservation(pathname, sessionId).authority;
 }
 
-/** Refresh only unconsumed reads; retained observations and uncertain writes stay fenced. */
+/** A concurrent placement mutation fails this read; the caller can retry it. */
 export async function preparePlacementAuthorityRead<T>(
   pathname: string,
   sessionId: string | undefined,
@@ -380,7 +376,6 @@ function stageChange(db: DatabaseSync, change: ClaimChange): void {
       },
       rollback() {
         owner.pending.delete(change);
-        owner.settlementListeners.forEach((listener) => listener());
         prunePublication(owner, change.sessionId);
         try {
           assertTransactionUsable(db);
@@ -583,7 +578,6 @@ function stageWorkerChange(identity: DatabasePathIdentity, input: ClaimChange) {
     rollback: () =>
       settle(() => {
         owner.pending.delete(change);
-        owner.settlementListeners.forEach((listener) => listener());
         prunePublication(owner, change.sessionId);
       }),
     invalidate: () =>

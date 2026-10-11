@@ -1,8 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { isVitestRuntimeEnv } from "../../../infra/env.js";
-import { SqliteSnapshotCleanupError } from "../../../infra/sqlite-readonly-location-cleanup.js";
-import type { DatabasePathIdentity } from "../../../infra/sqlite-worker-identity.js";
 import { getAsyncWorkSignal } from "../../../shared/async-work-scope.js";
 import {
   isStateDatabaseReadAdmissionInvalidatedError,
@@ -51,18 +49,15 @@ type SubagentRunsCacheState<T extends SubagentRunReadRecord> = (
 ) & {
   admission?: OpenClawStateDatabaseReadAdmission;
   sourceIdentity?: string;
-  retiredPublicationIdentity?: DatabasePathIdentity;
   pending?: {
     promise: Promise<void>;
-    ownerAbortSignal?: AbortSignal;
-    cleanCancellation?: boolean;
-    committedRevision?: number;
+    changes?: Map<string, SubagentRunChange<T>>;
+    replacement?: Map<string, T>;
   };
 };
 
 export type SubagentRunsCache<T extends SubagentRunReadRecord> = {
   state: SubagentRunsCacheState<T>;
-  retainRetiredPublications?: boolean;
   copy: (entry: SubagentRunRecord) => T;
   project: (entry: SubagentRunRecord) => T;
 };
@@ -92,12 +87,12 @@ function captureSubagentFactsAdmission(databasePath = resolveOpenClawStateSqlite
 
 function matchesSubagentCacheAdmission(
   previous: OpenClawStateDatabaseReadAdmission | undefined,
-  current: OpenClawStateDatabaseReadAdmission | undefined,
+  current: OpenClawStateDatabaseReadAdmission,
 ): boolean {
   if (!previous) {
     return true;
   }
-  if (!current || previous.identity.key !== current.identity.key) {
+  if (previous.identity.key !== current.identity.key) {
     return false;
   }
   try {
@@ -135,10 +130,9 @@ export function selectSubagentCacheStateForRead<T extends SubagentRunReadRecord>
   state: SubagentRunsCacheState<T>,
   context?: Pick<OpenClawStateReadContext, "admission">,
 ): SubagentRunsCacheState<T> {
-  const identity = state.retiredPublicationIdentity ?? state.admission?.identity;
+  const identity = state.admission?.identity;
   const matches = context
-    ? !state.retiredPublicationIdentity &&
-      matchesSubagentCacheAdmission(state.admission, context.admission) &&
+    ? matchesSubagentCacheAdmission(state.admission, context.admission) &&
       (state.sourceIdentity === undefined ||
         state.sourceIdentity === context.admission.identity.key)
     : !identity ||
@@ -155,52 +149,38 @@ export function rememberSubagentRunsSnapshot<T extends SubagentRunReadRecord>(
   changedRunIds: readonly string[] | undefined,
   databasePath?: string,
 ): void {
-  let admission: OpenClawStateDatabaseReadAdmission | undefined;
-  let retiredPublicationIdentity: DatabasePathIdentity | undefined;
+  let admission: OpenClawStateDatabaseReadAdmission;
   try {
     admission = captureSubagentFactsAdmission(databasePath);
   } catch (error) {
     if (!isStateDatabaseReadAdmissionInvalidatedError(error)) {
       throw error;
     }
-    // Read retirement cannot turn committed publication into a write failure.
-    if (!cache.retainRetiredPublications) {
-      cache.state = {};
-      return;
-    }
-    // Published full facts survive read retirement; this identity is provenance, not admission.
-    retiredPublicationIdentity = expectDefined(
-      openClawStateDatabaseCache.getKnownOpenClawStateDatabaseIdentity(
-        databasePath ?? resolveOpenClawStateSqlitePath(),
-      ),
-      "retired subagent registry publication identity",
-    );
+    // The write is committed; a closing reader can reload it after reopening.
+    cache.state = {};
+    return;
   }
-  const previous = retiredPublicationIdentity
-    ? (cache.state.retiredPublicationIdentity ?? cache.state.admission?.identity) ===
-      retiredPublicationIdentity
-      ? cache.state
-      : {}
-    : !cache.state.retiredPublicationIdentity &&
-        matchesSubagentCacheAdmission(cache.state.admission, admission) &&
-        (cache.state.sourceIdentity === undefined ||
-          cache.state.sourceIdentity === admission?.identity.key)
-      ? cache.state
-      : {};
+  const previous = selectSubagentCacheStateForRead(cache.state, { admission });
   const owner = {
     admission,
-    sourceIdentity: admission?.identity.key ?? retiredPublicationIdentity?.key,
-    retiredPublicationIdentity,
-    // Publication replaces facts, not custody of an accepted read and its cleanup.
+    sourceIdentity: admission.identity.key,
     pending: previous.pending,
   };
-  if (previous.pending?.committedRevision !== undefined) {
-    previous.pending.committedRevision += 1;
+  if (previous.pending?.changes && changedRunIds) {
+    for (const runId of changedRunIds) {
+      const entry = runs.get(runId);
+      previous.pending.changes.set(runId, { entry: entry ? cache.copy(entry) : undefined });
+    }
   }
   const snapshot = previous.snapshot;
   if (!changedRunIds) {
+    const replacement = new Map([...runs].map(([runId, entry]) => [runId, cache.copy(entry)]));
+    if (previous.pending?.changes) {
+      previous.pending.replacement = replacement;
+      previous.pending.changes.clear();
+    }
     cache.state = {
-      snapshot: new Map([...runs].map(([runId, entry]) => [runId, cache.copy(entry)])),
+      snapshot: replacement,
       ...owner,
     };
     return;
@@ -237,30 +217,12 @@ export function getPersistedSubagentRunsSnapshot<T extends SubagentRunReadRecord
   cache: SubagentRunsCache<T>,
   prepared?: OpenClawStateReadContext,
 ): Map<string, T> | null {
-  let admission: OpenClawStateDatabaseReadAdmission | undefined;
-  if (!cache.retainRetiredPublications) {
-    const context = prepared ?? captureOpenClawStateReadContext();
-    context.maintenanceScope?.assertAdmission();
-    context.admission.assertCurrent();
-    admission = context.admission;
-  } else {
-    try {
-      admission = captureSubagentFactsAdmission();
-    } catch (error) {
-      if (!isStateDatabaseReadAdmissionInvalidatedError(error)) {
-        throw error;
-      }
-      const state = selectSubagentCacheStateForRead(cache.state);
-      return applySubagentRunChanges(new Map(state.snapshot), state.changes);
-    }
-  }
-  if (
-    cache.state.retiredPublicationIdentity ||
-    !matchesSubagentCacheAdmission(cache.state.admission, admission) ||
-    (admission && cache.state.sourceIdentity !== admission.identity.key)
-  ) {
+  const context = prepared ?? captureOpenClawStateReadContext();
+  context.maintenanceScope?.assertAdmission();
+  const admission = context.admission;
+  if (selectSubagentCacheStateForRead(cache.state, context) !== cache.state) {
     if (!prepared) {
-      cache.state = { admission, sourceIdentity: admission?.identity.key };
+      cache.state = { admission, sourceIdentity: admission.identity.key };
     }
     return null;
   }
@@ -282,10 +244,6 @@ export function assertSubagentReadContext(context: OpenClawStateWorkerContext): 
   getAsyncWorkSignal()?.throwIfAborted();
   context.maintenanceScope?.assertAdmission();
   context.admission.assertCurrent();
-  const current = captureOpenClawStateReadContext();
-  if (current.admission.identity.key !== context.admission.identity.key) {
-    throw new Error("Subagent registry database changed during preparation");
-  }
 }
 
 export function getSubagentRunsSnapshot<T extends SubagentRunReadRecord>(
@@ -312,8 +270,6 @@ export function getSubagentRunsSnapshot<T extends SubagentRunReadRecord>(
         merged.set(entry.runId, entry);
       }
     }
-  }
-  if (shouldReadPersistedSubagentRuns()) {
     const state = selectSubagentCacheStateForRead(cache.state, scope?.context);
     for (const [runId, { entry }] of state.changes ?? []) {
       setOrDeleteRun(merged, runId, entry && (!scope || scope.matches(entry)) ? entry : undefined);
@@ -363,7 +319,6 @@ export async function readFullSubagentRuns(
   options: { current?: boolean } = {},
 ) {
   if (scope.kind === "ids" && scope.runIds.length === 0) {
-    assertSubagentReadContext(context);
     return new Map<string, SubagentRunRecord>();
   }
   const reply = await executeExistingOpenClawStateRead(
@@ -371,7 +326,6 @@ export async function readFullSubagentRuns(
     { type: "subagents.runs", scope },
     options.current ? { context, current: true } : undefined,
   );
-  assertSubagentReadContext(context);
   if (!reply) {
     return new Map<string, SubagentRunRecord>();
   }
@@ -394,16 +348,8 @@ export async function prepareSubagentRunsCache<T extends SubagentRunReadRecord>(
   prepared?: OpenClawStateWorkerContext,
 ): Promise<Map<string, T>> {
   const context = prepared ?? captureOpenClawStateWorkerContext();
-  const assertCurrent = () => {
-    if (!prepared) {
-      assertSubagentReadContext(context);
-      return;
-    }
-    getAsyncWorkSignal()?.throwIfAborted();
-    context.maintenanceScope?.assertAdmission();
-    context.admission.assertCurrent();
-  };
-  assertCurrent();
+  // Admission adopts a newly created file; cached bytes still belong to the original source.
+  const sourceIdentity = context.admission.identity.key;
   if (
     getActiveOpenClawStateDatabaseReadSnapshot({
       path: context.admission.databasePath,
@@ -411,107 +357,52 @@ export async function prepareSubagentRunsCache<T extends SubagentRunReadRecord>(
     })
   ) {
     // Private snapshot bytes never become canonical resident facts.
-    const runs = await load(context);
-    assertCurrent();
-    return runs;
+    return load(context);
   }
-  const callerAbortSignal = getAsyncWorkSignal();
-  let retriedCanceledFill = false;
-  while (true) {
-    assertCurrent();
-    let state = cache.state;
-    if (
-      !matchesSubagentCacheAdmission(state.admission, context.admission) ||
-      (state.sourceIdentity !== undefined &&
-        state.sourceIdentity !== context.admission.identity.key)
-    ) {
-      cache.state = state = {
-        admission: captureSubagentFactsAdmission(context.admission.databasePath),
-        sourceIdentity: context.admission.identity.key,
-      };
-    }
-    if (state.snapshot && !state.pending) {
-      return state.snapshot;
-    }
-    if (!state.pending) {
-      const sourceIdentity = context.admission.identity.key;
-      // Readiness checks must recognize the pending fill before its facts exist.
-      state.admission = captureSubagentFactsAdmission(context.admission.databasePath);
-      state.sourceIdentity = sourceIdentity;
-      const fill: NonNullable<SubagentRunsCacheState<T>["pending"]> = {
-        ownerAbortSignal: callerAbortSignal,
-        promise: Promise.resolve().then(async () => {
-          const runs = await load(context);
-          try {
-            assertCurrent();
-          } catch (error) {
-            // Classify only after successful read cleanup, before waiters observe rejection.
-            fill.cleanCancellation =
-              fill.ownerAbortSignal?.aborted === true &&
-              error === fill.ownerAbortSignal.reason &&
-              !(error instanceof AggregateError) &&
-              !isStateDatabaseReadAdmissionInvalidatedError(error) &&
-              !(error instanceof SqliteSnapshotCleanupError);
-            throw error;
-          }
-          // A newer full publication wins, but its readers still join this fill.
-          if (cache.state.pending === fill && !cache.state.snapshot) {
-            const admission = captureSubagentFactsAdmission(context.admission.databasePath);
-            cache.state =
-              sourceIdentity === admission.identity.key
-                ? {
-                    snapshot: applySubagentRunChanges(runs, cache.state.changes),
-                    admission,
-                    sourceIdentity,
-                  }
-                : {
-                    changes: cache.state.changes,
-                    admission,
-                    sourceIdentity: admission.identity.key,
-                  };
-          }
-        }),
-      };
-      state.pending = fill;
-    }
-    const fill = state.pending;
-    try {
-      await fill.promise;
-    } catch (error) {
-      if (
-        !fill.cleanCancellation ||
-        fill.ownerAbortSignal === callerAbortSignal ||
-        retriedCanceledFill
-      ) {
-        throw error;
-      }
-      assertCurrent();
-      retriedCanceledFill = true;
-    } finally {
-      if (cache.state.pending === fill) {
-        cache.state.pending = undefined;
-      }
-    }
-    if (
-      prepared &&
-      cache.state.sourceIdentity !== undefined &&
-      cache.state.sourceIdentity !== context.admission.identity.key
-    ) {
-      throw new Error("Subagent registry database changed during preparation");
+  const state = selectSubagentCacheStateForRead(cache.state, context);
+  if (state !== cache.state) {
+    cache.state = state;
+  }
+  if (state.snapshot && !state.pending) {
+    return state.snapshot;
+  }
+  if (!state.pending) {
+    state.admission = context.admission;
+    state.sourceIdentity = sourceIdentity;
+    state.pending = {
+      promise: Promise.resolve().then(async () => {
+        const runs = await load(context);
+        // Committed local publications win over an older worker snapshot.
+        if (!cache.state.snapshot) {
+          cache.state = {
+            snapshot: applySubagentRunChanges(runs, cache.state.changes),
+            admission: context.admission,
+            sourceIdentity,
+          };
+        }
+      }),
+    };
+  }
+  const fill = state.pending;
+  try {
+    // Shared fill failures propagate; the next request retries.
+    await fill.promise;
+    return expectDefined(cache.state.snapshot, "prepared subagent registry snapshot");
+  } finally {
+    if (cache.state.pending === fill) {
+      cache.state.pending = undefined;
     }
   }
 }
 
-/** Restore consumes durable rows before another host publication can overtake the accepted read. */
+/** Apply local commits made during restore before publishing the durable rows. */
 export async function consumeFreshSubagentRuns<T>(
   cache: SubagentRunsCache<SubagentRunRecord>,
   context: OpenClawStateWorkerContext,
   consume: (runs: Map<string, SubagentRunRecord>) => T,
 ): Promise<T> {
-  assertSubagentReadContext(context);
   while (cache.state.pending) {
     await cache.state.pending.promise;
-    assertSubagentReadContext(context);
   }
   const previous = selectSubagentCacheStateForRead(cache.state, context);
   const state = {
@@ -522,24 +413,12 @@ export async function consumeFreshSubagentRuns<T>(
   cache.state = state;
   let result: T;
   const fill: NonNullable<SubagentRunsCacheState<SubagentRunRecord>["pending"]> = {
-    committedRevision: 0,
+    changes: new Map(),
     promise: Promise.resolve().then(async () => {
-      while (true) {
-        assertSubagentReadContext(context);
-        const revision = fill.committedRevision;
-        const runs = await readAllSubagentRunsInWorker(context);
-        assertSubagentReadContext(context);
-        if (cache.state.pending !== fill) {
-          throw new Error("Subagent restore lost its accepted read owner");
-        }
-        if (revision !== fill.committedRevision) {
-          continue;
-        }
-        // A committed deletion invalidates the read above. Consume and publish
-        // without another asynchronous boundary.
-        result = consumeSubagentRuns(runs, () => consume(runs));
-        return;
-      }
+      const loaded = await readAllSubagentRunsInWorker(context);
+      assertSubagentReadContext(context);
+      const runs = applySubagentRunChanges(fill.replacement ?? loaded, fill.changes);
+      result = consumeSubagentRuns(runs, () => consume(runs));
     }),
   };
   state.pending = fill;
@@ -557,14 +436,11 @@ export function acceptedFullSnapshot(
   cache: SubagentRunsCache<SubagentRunRecord>,
   context: OpenClawStateWorkerContext,
 ) {
-  const state = cache.state;
-  return !state.retiredPublicationIdentity &&
-    !getActiveOpenClawStateDatabaseReadSnapshot({
-      path: context.admission.databasePath,
-      env: context.environment,
-    }) &&
-    state.sourceIdentity === context.admission.identity.key &&
-    matchesSubagentCacheAdmission(state.admission, context.admission)
+  const state = selectSubagentCacheStateForRead(cache.state, context);
+  return !getActiveOpenClawStateDatabaseReadSnapshot({
+    path: context.admission.databasePath,
+    env: context.environment,
+  })
     ? state.snapshot
     : undefined;
 }
@@ -611,9 +487,7 @@ export function mergeSelectedFullRuns(
     !getActiveOpenClawStateDatabaseReadSnapshot({
       path: context.admission.databasePath,
       env: context.environment,
-    }) &&
-    state.sourceIdentity === context.admission.identity.key &&
-    matchesSubagentCacheAdmission(state.admission, context.admission)
+    })
   ) {
     for (const [runId, { entry }] of state.changes ? selectedEntries(state.changes, runIds) : []) {
       setOrDeleteRun(merged, runId, entry && matches(entry) ? entry : undefined);

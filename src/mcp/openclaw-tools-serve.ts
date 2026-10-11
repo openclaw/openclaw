@@ -36,8 +36,6 @@ export {
 
 export { OPENCLAW_TOOLS_MCP_AGENT_SESSION_KEY_ENV } from "./agent-session-env.js";
 
-export { resolveOpenClawToolsMcpAgentSessionKey };
-
 export function resolveOpenClawToolsForMcp(
   params: {
     agentSessionKey?: string;
