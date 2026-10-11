@@ -53,7 +53,7 @@ export type IdentityAvatarView = IdentityAvatarImageProps["view"] & {
 };
 
 /** Resolve one user identity consistently across the roster, profile, and chat. */
-function resolveIdentityAvatarView(identity: IdentityAvatarInput): IdentityAvatarView {
+export function resolveIdentityAvatarView(identity: IdentityAvatarInput): IdentityAvatarView {
   const avatar = resolveAvatar(identity);
   const fallback = avatar.kind === "initials" ? avatar : resolveAvatarInitials(identity);
   const imageUrl = avatar.kind === "profile" ? resolveAvatarImageUrl(avatar.url) : null;

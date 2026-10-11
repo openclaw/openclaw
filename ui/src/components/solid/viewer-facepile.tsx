@@ -37,12 +37,12 @@ export type ViewerAvatarProps = {
 
 export function ViewerAvatarContent(props: ViewerAvatarProps) {
   const view = useIdentityAvatarView(() => ({
-      identity: props.identity ?? props.user?.identity,
-      id: props.user?.id,
-      name: props.user?.name,
-      username: props.user?.email,
-      profileAvatarUrl: props.user?.avatarUrl,
-    }));
+    identity: props.identity ?? props.user?.identity,
+    id: props.user?.id,
+    name: props.user?.name,
+    username: props.user?.email,
+    profileAvatarUrl: props.user?.avatarUrl,
+  }));
   return (
     <Show when={props.user}>
       <span

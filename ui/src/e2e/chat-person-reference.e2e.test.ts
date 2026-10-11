@@ -353,7 +353,7 @@ suite.define(() => {
           expect(avatarRequests).toContain("/api/users/profile-ada/avatar");
           await captureUiProof(suite, page, "person-references", input + "-card.png");
           expect(await reference.getAttribute("aria-expanded")).toBe("true");
-          expect(await gateway.getRequests("users.list")).toHaveLength(1);
+          expect(await gateway.getRequests("users.list")).toHaveLength(2);
           expect(await gateway.getRequests("chat.send")).toHaveLength(0);
           if (input === "keyboard") {
             await reference.press("Tab");
@@ -367,8 +367,16 @@ suite.define(() => {
           }
           await card.waitFor({ state: "detached" });
           expect(await reference.getAttribute("aria-expanded")).toBe("false");
+          await gateway.setMethodResponse("users.list", {
+            profiles: directory.profiles.map((entry) =>
+              entry.id === "profile-ada"
+                ? { ...entry, displayName: "Ada Byron", updatedAt: 3 }
+                : entry,
+            ),
+          });
           await reference.click();
-          await activity.waitFor();
+          await expect.poll(() => card.locator("h2").textContent()).toBe("Ada Byron");
+          expect(await reference.textContent()).toBe(label);
           await activity.click();
           await expect.poll(() => new URL(page.url()).pathname).toBe("/activity/profile-ada");
           await card.waitFor({ state: "detached" });
