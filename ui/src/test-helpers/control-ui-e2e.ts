@@ -11,9 +11,9 @@ import type { Locator, Page } from "playwright";
 import type { InlineConfig, Plugin, PreviewServer, ViteDevServer } from "vite";
 import { GATEWAY_SERVER_CAPS } from "../../../packages/gateway-protocol/src/server-capabilities.js";
 import { PROTOCOL_VERSION } from "../../../packages/gateway-protocol/src/version.js";
+import { canRunChromiumExecutable as canRunPlaywrightChromium } from "../../../scripts/lib/chromium-executable.mts";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../../../src/gateway/control-ui-contract.js";
 import { controlUiPluginAssetRoot } from "../../../src/gateway/control-ui-plugin-assets-contract.js";
-import { canRunPlaywrightChromium } from "../../config/chromium-executable.ts";
 import type {
   AgentsListResult,
   ModelCatalogEntry,
@@ -67,7 +67,7 @@ export type {
   MockGatewayRequest,
   MockGatewayWindow,
 } from "./control-ui-e2e-contract.ts";
-export { canRunPlaywrightChromium } from "../../config/chromium-executable.ts";
+export { canRunChromiumExecutable as canRunPlaywrightChromium } from "../../../scripts/lib/chromium-executable.mts";
 
 export {
   captureControlUiE2eFailureDiagnostics,

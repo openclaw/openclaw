@@ -7,6 +7,7 @@ import type { Plugin } from "vite";
 import { defineConfig, defineProject, type ViteUserConfig } from "vitest/config";
 import type { Vitest } from "vitest/node";
 import { mermaidClassicBundlePlugin } from "../packages/mermaid-renderer/vite-plugin.ts";
+import { canRunChromiumExecutable } from "../scripts/lib/chromium-executable.mts";
 import {
   filterFilesByPatterns,
   intersectIncludePatterns,
@@ -32,7 +33,6 @@ import {
   uiNodeDrivenBrowserTestFiles,
   uiTimingTestFiles,
 } from "../test/vitest/vitest.ui-paths.mjs";
-import { canRunPlaywrightChromium } from "./config/chromium-executable.ts";
 import { controlUiLocaleModulesPlugin } from "./config/control-ui-locales.ts";
 import { controlUiSolidPlugin } from "./config/control-ui-solid.ts";
 import { UiRuntimePartitionSequencer } from "./test/vitest-runtime-sequencer.ts";
@@ -90,16 +90,18 @@ const systemChromiumExecutableCandidates = [
 
 function resolveChromiumLaunchOptions(): { executablePath: string } | undefined {
   const override = process.env[chromiumExecutableOverrideEnvKey]?.trim();
-  if (override && canRunPlaywrightChromium(override)) {
+  if (override && canRunChromiumExecutable(override)) {
     return { executablePath: override };
   }
 
   const defaultExecutablePath = chromium.executablePath();
-  if (canRunPlaywrightChromium(defaultExecutablePath)) {
+  if (canRunChromiumExecutable(defaultExecutablePath)) {
     return undefined;
   }
 
-  const systemExecutablePath = systemChromiumExecutableCandidates.find(canRunPlaywrightChromium);
+  const systemExecutablePath = systemChromiumExecutableCandidates.find((candidate) =>
+    canRunChromiumExecutable(candidate),
+  );
   return systemExecutablePath ? { executablePath: systemExecutablePath } : undefined;
 }
 

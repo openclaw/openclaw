@@ -16,12 +16,33 @@ const playwrightCli = path.join(
 );
 
 describe("ensurePlaywrightChromium", () => {
+  it.each([undefined, " C:\\browser\\chrome.exe "])(
+    "uses an installed Windows browser without a version process (override=%s)",
+    (override) => {
+      const spawnSync = vi.fn(() => {
+        throw new Error("an installed Windows browser must not run a version probe");
+      });
+      expect(
+        ensurePlaywrightChromium({
+          env: override ? { PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH: override } : {},
+          executablePath: "C:\\cache\\chrome.exe",
+          existsSync: () => true,
+          platform: "win32",
+          spawnSync,
+          systemExecutablePath: "",
+        }),
+      ).toBe(0);
+      expect(spawnSync).not.toHaveBeenCalled();
+    },
+  );
+
   it("uses an explicit Chromium executable override", () => {
     const spawnSync = vi.fn(() => ({ status: 0 }));
 
     expect(
       ensurePlaywrightChromium({
         env: { PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH: " /snap/bin/chromium " },
+        platform: "linux",
         executablePath: "/cache/chromium/chrome",
         existsSync: (candidatePath: string) => candidatePath === "/snap/bin/chromium",
         spawnSync,
@@ -92,7 +113,7 @@ describe("ensurePlaywrightChromium", () => {
   });
 
   it("installs a relative pinned browser cache in the caller's directory, not the UI package", () => {
-    const callerDirectory = "/repo";
+    const callerDirectory = path.resolve("/repo");
     const browserCache = path.join(callerDirectory, ".artifacts", "playwright-browsers");
     const executablePath = path.join(browserCache, "chromium-1234", "chrome-linux64", "chrome");
     const installedCaches: string[] = [];
@@ -183,6 +204,7 @@ describe("ensurePlaywrightChromium", () => {
         cwd: "/repo",
         ensureFfmpeg: true,
         env: { PATH: "/bin" },
+        platform: "linux",
         executablePath: "/cache/chromium/chrome",
         existsSync: (candidatePath: string) => candidatePath === "/usr/bin/chromium-browser",
         log: (line: string) => logs.push(line),
@@ -211,6 +233,7 @@ describe("ensurePlaywrightChromium", () => {
     expect(
       ensurePlaywrightChromium({
         env: {},
+        platform: "linux",
         executablePath: "/cache/chromium/chrome",
         existsSync: (candidatePath: string) =>
           candidatePath === "/snap/bin/chromium" || candidatePath === "/usr/bin/google-chrome",

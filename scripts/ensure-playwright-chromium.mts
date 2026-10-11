@@ -6,6 +6,11 @@ import { isAbsolute, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
 import { parsePermissiveBooleanToken } from "./lib/arg-utils.mts";
+import {
+  canRunChromiumExecutable,
+  type ChromiumExecutableOptions,
+  type SpawnSyncLike,
+} from "./lib/chromium-executable.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import { resolveNodePackageBin } from "./run-node-package-bin.mts";
 
@@ -13,22 +18,14 @@ const repoRoot = resolveRepoRoot(import.meta.url);
 const requireFromUi = createRequire(resolve(repoRoot, "ui/package.json"));
 const executableOverrideEnvKey = "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH";
 const chromiumPackageNames = ["chromium-browser", "chromium"];
-type SpawnSyncLike = (
-  command: string,
-  args: string[],
-  options?: Record<string, unknown>,
-) => { status: number | null };
-type ChromiumInstallOptions = {
+type ChromiumInstallOptions = ChromiumExecutableOptions & {
   cwd?: string;
   env?: NodeJS.ProcessEnv;
   ensureFfmpeg?: boolean;
   executablePath?: string;
-  existsSync?: (path: string) => boolean;
   getuid?: () => number;
   log?: (message: string) => void;
-  platform?: NodeJS.Platform;
   requirePlaywrightChromium?: boolean;
-  spawnSync?: SpawnSyncLike;
   stdio?: "ignore" | "inherit" | "pipe";
   systemExecutablePath?: string;
 };
@@ -43,23 +40,14 @@ export const systemChromiumExecutableCandidates = [
   "/usr/bin/google-chrome-stable",
 ];
 
-export function canRunChromiumExecutable(
-  executablePath: string,
-  spawnSync: SpawnSyncLike = spawnSyncImpl,
-) {
-  const result = spawnSync(executablePath, ["--version"], {
-    stdio: "ignore",
-  });
-  return result.status === 0;
-}
-
 export function resolveSystemChromiumExecutablePath(
   existsSync: (path: string) => boolean = existsSyncImpl,
   spawnSync: SpawnSyncLike = spawnSyncImpl,
+  platform: NodeJS.Platform = process.platform,
 ) {
   return (
-    systemChromiumExecutableCandidates.find(
-      (candidate) => existsSync(candidate) && canRunChromiumExecutable(candidate, spawnSync),
+    systemChromiumExecutableCandidates.find((candidate) =>
+      canRunChromiumExecutable(candidate, { existsSync, spawnSync, platform }),
     ) ?? ""
   );
 }
@@ -183,6 +171,9 @@ export function ensurePlaywrightChromium(options: ChromiumInstallOptions = {}) {
   const existsSync = options.existsSync ?? existsSyncImpl;
   const log = options.log ?? console.error;
   const spawnSync = options.spawnSync ?? spawnSyncImpl;
+  const platform = options.platform ?? process.platform;
+  const canRun = (candidate: string) =>
+    canRunChromiumExecutable(candidate, { existsSync, spawnSync, platform });
   const runPlaywrightInstall = (targets: string[] = ["chromium"], withDeps = false) => {
     const result = spawnSync(
       process.execPath,
@@ -222,6 +213,7 @@ export function ensurePlaywrightChromium(options: ChromiumInstallOptions = {}) {
     const installedSystemExecutablePath = resolveSystemChromiumExecutablePath(
       existsSync,
       spawnSync,
+      platform,
     );
     if (installedSystemExecutablePath) {
       log(`[ui-e2e] Using system Chromium at ${installedSystemExecutablePath}.`);
@@ -242,7 +234,7 @@ export function ensurePlaywrightChromium(options: ChromiumInstallOptions = {}) {
   };
 
   if (!requirePlaywrightChromium && executableOverride) {
-    if (existsSync(executableOverride) && canRunChromiumExecutable(executableOverride, spawnSync)) {
+    if (canRun(executableOverride)) {
       return ensureFfmpeg();
     }
     log(
@@ -251,14 +243,15 @@ export function ensurePlaywrightChromium(options: ChromiumInstallOptions = {}) {
     return 1;
   }
 
-  if (existsSync(executablePath) && canRunChromiumExecutable(executablePath, spawnSync)) {
+  if (canRun(executablePath)) {
     return ensureFfmpeg();
   }
 
   if (!requirePlaywrightChromium) {
     const systemExecutablePath =
-      options.systemExecutablePath ?? resolveSystemChromiumExecutablePath(existsSync, spawnSync);
-    if (systemExecutablePath && canRunChromiumExecutable(systemExecutablePath, spawnSync)) {
+      options.systemExecutablePath ??
+      resolveSystemChromiumExecutablePath(existsSync, spawnSync, platform);
+    if (systemExecutablePath && canRun(systemExecutablePath)) {
       log(`[ui-e2e] Using system Chromium at ${systemExecutablePath}.`);
       return ensureFfmpeg();
     }
@@ -287,7 +280,7 @@ export function ensurePlaywrightChromium(options: ChromiumInstallOptions = {}) {
       if (depsStatus !== 0) {
         return useLinuxSystemChromiumPackage();
       }
-      if (existsSync(executablePath) && canRunChromiumExecutable(executablePath, spawnSync)) {
+      if (canRun(executablePath)) {
         return ensureFfmpeg();
       }
       log(
@@ -298,7 +291,7 @@ export function ensurePlaywrightChromium(options: ChromiumInstallOptions = {}) {
     return status;
   }
 
-  if (!existsSync(executablePath) || !canRunChromiumExecutable(executablePath, spawnSync)) {
+  if (!canRun(executablePath)) {
     if (canInstallSystemDependencies) {
       log(
         `[ui-e2e] Chromium is installed but still cannot start; installing Linux system dependencies.`,
@@ -307,7 +300,7 @@ export function ensurePlaywrightChromium(options: ChromiumInstallOptions = {}) {
       if (depsStatus !== 0) {
         return useLinuxSystemChromiumPackage();
       }
-      if (existsSync(executablePath) && canRunChromiumExecutable(executablePath, spawnSync)) {
+      if (canRun(executablePath)) {
         return ensureFfmpeg();
       }
       return useLinuxSystemChromiumPackage();
