@@ -11,6 +11,7 @@ import {
   installSessionPlacementAdmissionProvider,
   prepareSessionPlacementSandbox,
   resolveSessionPlacementRuntimeOverride,
+  sessionPlacementUsesWorkerInference,
 } from "../../agents/session-placement-admission.js";
 import {
   resolveSessionPlacementForcedTerminalSettlement,
@@ -90,6 +91,49 @@ describe("worker turn launcher local placement", () => {
       uninstall();
     }
   });
+
+  it.each(["worker-turn", "remote-exec"] as const)(
+    "uses current %s placement facts for worker inference without caller-thread SQL",
+    async (executionMode) => {
+      const environment = {
+        ...attachedEnvironment(),
+        providerId: "device",
+        profileSnapshot: { settings: { inference: "worker" } },
+      };
+      const provider = createWorkerSessionTurnPlacementProvider({
+        environments: { ...unusedEnvironments(), get: () => environment },
+        placements,
+      });
+      const uninstall = installSessionPlacementAdmissionProvider(provider);
+      const identity = { sessionId: SESSION_ID, sessionKey: SESSION_KEY, agentId: "main" };
+      const sql = observeMainThreadSql();
+      try {
+        expect(await sessionPlacementUsesWorkerInference(identity)).toBe(false);
+        sql.expectIdle();
+        await seedActivePlacement(executionMode);
+        sql.clear();
+        expect(await sessionPlacementUsesWorkerInference(identity)).toBe(
+          executionMode === "worker-turn",
+        );
+        for (const mismatch of [
+          { sessionId: "other-session" },
+          { sessionKey: "agent:main:other" },
+          { agentId: "other-agent" },
+        ]) {
+          expect(await sessionPlacementUsesWorkerInference({ ...identity, ...mismatch })).toBe(
+            false,
+          );
+        }
+        environment.ownerEpoch += 1;
+        expect(await sessionPlacementUsesWorkerInference(identity)).toBe(false);
+        sql.expectIdle();
+      } finally {
+        sql.restore();
+        uninstall();
+      }
+      expect(await sessionPlacementUsesWorkerInference(identity)).toBe(false);
+    },
+  );
 
   it.each(["worker-turn", "remote-exec"] as const)(
     "uses only the matching %s placement as a runtime default",

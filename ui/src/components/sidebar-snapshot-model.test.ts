@@ -14,8 +14,6 @@ const model: SidebarSnapshotModel = {
   roster: null,
   mode: "roster",
   navigationView: "sessions",
-  navigationScope: "all",
-  scopesEquivalent: false,
   pages: [],
   pageScopeId: null,
   pinnedSessions: [],

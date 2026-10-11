@@ -83,7 +83,10 @@ type WorkerPlacementDispatchOptions = WorkerPlacementReclaimBarriers &
       identity: Pick<WorkerPlacementMoveRequest, "sessionId" | "sessionKey" | "agentId">,
       target: WorkerPlacementMoveRequest["target"],
     ) => Promise<WorkerPlacementMoveDestination | undefined>;
-    onActivated?: (request: WorkerPlacementDispatchRequest) => void;
+    onActivated?: (
+      request: WorkerPlacementDispatchRequest,
+      placement: WorkerActiveDispatchPlacement,
+    ) => void;
     resolveGitAuthor?: (agentId: string) => { name?: string; email?: string } | undefined;
     resolveDevicePlacementRequirement?: WorkerDevicePlacementRequirementResolver;
     isCurrentNodePlacement?: WorkerNodePlacementAuthority;

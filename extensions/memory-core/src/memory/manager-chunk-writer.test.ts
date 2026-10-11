@@ -2,7 +2,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it, vi } from "vitest";
-import { createManagerIndexFixture } from "./manager-index.test-support.js";
+import {
+  createManagerIndexFixture,
+  memoryIndexFixtureWriter,
+} from "./manager-index.test-support.js";
 
 const { closeAllMemorySearchManagers, getMemorySearchManager } = await import("./index.js");
 const CHUNK_WRITE_TABLES = [
@@ -151,7 +154,7 @@ describe("memory chunk publication", () => {
         expect(before[1]?.some((row) => String(row.text).includes("Alpha memory line."))).toBe(
           true,
         );
-        db.exec(`
+        memoryIndexFixtureWriter(manager).exec(`
           CREATE TRIGGER fail_chunk_publication
           AFTER INSERT ON ${failedTable}
           BEGIN
@@ -179,7 +182,7 @@ describe("memory chunk publication", () => {
         expect(retainedCache).toHaveLength(cacheBefore.length + 1);
         const completedRequests = fixture.provider.embedBatchCalls;
 
-        db.exec("DROP TRIGGER fail_chunk_publication");
+        memoryIndexFixtureWriter(manager).exec("DROP TRIGGER fail_chunk_publication");
         await manager.sync({ reason: "retry" });
         expect(fixture.provider.embedBatchCalls).toBe(completedRequests);
         expect(cacheSnapshot()).toEqual(retainedCache);

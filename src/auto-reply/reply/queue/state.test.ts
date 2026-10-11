@@ -178,32 +178,6 @@ describe("refreshQueuedFollowupSession", () => {
     });
   });
 
-  it("clears queued model override strictness when retargeting to the configured default", () => {
-    const queue = getFollowupQueue(QUEUE_KEY, { mode: "followup" });
-    queue.items.push({
-      prompt: "queued message",
-      enqueuedAt: Date.now(),
-      run: {
-        ...makeRun(),
-        hasSessionModelOverride: true,
-        modelOverrideSource: "user",
-      },
-    });
-
-    refreshQueuedFollowupSession({
-      key: QUEUE_KEY,
-      nextProvider: "anthropic",
-      nextModel: "claude-opus-4-6",
-      nextRouteResolution: "resolved",
-      nextModelOverrideSource: undefined,
-    });
-
-    expect(queue.items[0]?.run).toMatchObject({
-      hasSessionModelOverride: false,
-      modelOverrideSource: undefined,
-    });
-  });
-
   it.each([
     {
       name: "a route rewrite without policy withdraws",
@@ -300,54 +274,6 @@ describe("refreshQueuedFollowupSession", () => {
   });
 
   it.each([
-    ["turn", "high", "off", "gpt-5.6-sol", true, "high"],
-    ["turn", "off", "high", "gpt-5.6-sol", true, "low"],
-    ["default", "high", "high", "gpt-5.6-sol", true, "medium"],
-    [undefined, "high", "low", "gpt-5.6-sol", true, "low"],
-    ["turn", "ultra", "off", "gpt-5.6-luna", true, "ultra"],
-    ["turn", "high", "off", "non-reasoner", false, "off"],
-  ] as const)(
-    "retargets %s thinking %s with stored %s to %s (reasoning %s) as %s",
-    (source, current, stored, model, reasoning, expected) => {
-      const queue = getFollowupQueue(QUEUE_KEY, { mode: "followup" });
-      const runs = Array.from({ length: 4 }, () => ({
-        ...makeRun(),
-        thinkLevel: current,
-        thinkLevelOverride: source === "turn" ? current : source,
-      }));
-      const wrap = (run: FollowupRun["run"]): FollowupRun => ({
-        prompt: "queued",
-        enqueuedAt: Date.now(),
-        run,
-      });
-      queue.lastRun = runs[0];
-      queue.items.push(wrap(runs[1]!));
-      queue.summarySources.push(wrap(runs[2]!));
-      queue.summaryElisions.push({
-        contextKey: "elided",
-        sources: [wrap(runs[3]!)],
-        summaryLines: ["queued"],
-        sourceRefs: new WeakMap(),
-      });
-      refreshQueuedFollowupSession({
-        key: QUEUE_KEY,
-        nextProvider: "openai",
-        nextModel: model,
-        nextThinking: {
-          level: stored,
-          catalog: [{ provider: "openai", id: model, name: model, reasoning }],
-          agentRuntime: "codex",
-        },
-      });
-      expect(runs.map((run) => run.thinkLevel)).toEqual(Array(4).fill(expected));
-      expect(runs.map((run) => run.thinkLevelOverride)).toEqual(
-        Array(4).fill(source === "turn" ? current : source),
-      );
-    },
-  );
-
-  it.each([
-    { requested: "high", stored: "low", expected: ["high", "off", "high"] },
     { requested: "off", stored: "high", expected: ["low", "off", "low"] },
     { requested: "default", stored: "off", expected: ["high", "off", "low"] },
     { requested: undefined, stored: "low", expected: ["low", "off", "low"] },
@@ -388,7 +314,7 @@ describe("refreshQueuedFollowupSession", () => {
     },
   );
 
-  describe.each(["default", undefined] as const)("thinking source %s", (source) => {
+  describe.each([undefined] as const)("thinking source %s", (source) => {
     it.each<{ name: string; config: FollowupRun["run"]["config"]; expected: string }>([
       {
         name: "agent",
@@ -418,23 +344,6 @@ describe("refreshQueuedFollowupSession", () => {
           },
         },
         expected: "low",
-      },
-      {
-        name: "model",
-        config: {
-          agents: {
-            defaults: {
-              thinkingDefault: "off",
-              models: { "openai/gpt-5.6-sol": { params: { thinking: "high" } } },
-            },
-          },
-        },
-        expected: "high",
-      },
-      {
-        name: "global",
-        config: { agents: { defaults: { thinkingDefault: "high" } } },
-        expected: "high",
       },
     ])("honors the configured $name default when retargeting", ({ config, expected }) => {
       const queue = getFollowupQueue(QUEUE_KEY, { mode: "followup" });

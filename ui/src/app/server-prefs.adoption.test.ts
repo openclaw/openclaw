@@ -22,14 +22,12 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-it.each(["empty", "scope", "unpersisted-scope", "order"])(
+it.each(["empty", "order"])(
   "folds newly persisted sibling pins into an adopted %s writer",
   async (mode) => {
-    const editsScope = mode === "scope" || mode === "unpersisted-scope";
     const backend = createProfilePrefsServer({
       a: {
         [pins]: mode === "order" ? ["route:cron", "route:usage"] : ["route:usage"],
-        "ui.navigationScope": "mine",
       },
     });
     const b = backend.connect("a");
@@ -37,23 +35,6 @@ it.each(["empty", "scope", "unpersisted-scope", "order"])(
     Object.assign(b.writer.state, { connected: false });
     const hooks = { profileId: "a", canWrite: true };
     flushServerUiPrefs(b.writer, hooks);
-    if (editsScope) {
-      const originalSet = localStorage.setItem.bind(localStorage);
-      const quota =
-        mode === "unpersisted-scope"
-          ? vi.spyOn(localStorage, "setItem").mockImplementation((key, value) => {
-              if (key === pendingKey) {
-                throw new Error("quota");
-              }
-              originalSet(key, value);
-            })
-          : null;
-      const previous = loadSettings();
-      const next = patchSettings({ navigationScope: "all" });
-      pushServerUiPrefs(b.writer, changedServerUiPrefs(previous, next)!, hooks);
-      await vi.dynamicImportSettled();
-      quota?.mockRestore();
-    }
     // Another realm persists its offline addition after B adopted an empty pin pool.
     localStorage.setItem(
       pendingKey,
@@ -61,11 +42,6 @@ it.each(["empty", "scope", "unpersisted-scope", "order"])(
         sidebarEntries: ["route:usage", "route:cron"],
         sidebarEntriesBase: mode === "order" ? ["route:usage", "route:cron"] : ["route:usage"],
         ...(mode === "order" ? { sidebarEntriesOrder: true } : {}),
-        ...(mode === "scope"
-          ? { navigationScope: "all" }
-          : mode === "unpersisted-scope"
-            ? { navigationScope: "mine" }
-            : {}),
       }),
     );
     patchSettings({ sidebarEntries: ["route:usage", "route:cron"] });
@@ -83,9 +59,6 @@ it.each(["empty", "scope", "unpersisted-scope", "order"])(
       sidebarEntriesBase: mode === "order" ? ["route:usage", "route:cron"] : ["route:usage"],
       ...(mode === "order" ? { sidebarEntriesOrder: true } : {}),
     });
-    if (editsScope) {
-      expect(backend.profiles.a?.["ui.navigationScope"]).toBe("all");
-    }
     expect(localStorage.getItem(pendingKey)).toBeNull();
   },
 );

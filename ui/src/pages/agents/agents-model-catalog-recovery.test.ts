@@ -1,41 +1,37 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ModelCatalogEntry } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
+import { mountSolid } from "../../test-helpers/solid-render.tsx";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import {
   emitCatalogChanged,
   setPageGateway,
   snapshot,
-  type TestAgentsPage,
+  createAgentsPage,
 } from "./agents-page.test-support.ts";
 import { createAgentViewTestProps as createProps } from "./agents-view.test-helpers.ts";
 import type { AgentsRouteData } from "./route.ts";
-import { renderAgents } from "./view.ts";
-import "./agents-page.ts";
+import { Agents } from "./view.tsx";
 
 describe("agent model catalog recovery", () => {
   it("shows a model-catalog failure without a manual retry button", () => {
-    const container = document.createElement("div");
-    render(
-      renderAgents(
-        createProps({
-          overview: {
-            ...createProps().overview,
-            modelCatalogStatus: {
-              error: "model catalog unavailable",
-              hasLoaded: true,
-              stale: true,
-              awaitingGateway: false,
-            },
+    const { container } = mountSolid(
+      Agents,
+      createProps({
+        overview: {
+          ...createProps().overview,
+          modelCatalogStatus: {
+            error: "model catalog unavailable",
+            hasLoaded: true,
+            stale: true,
+            awaitingGateway: false,
           },
-        }),
-      ),
-      container,
+        },
+      }),
     );
 
     const alert = container.querySelector('[role="alert"]');
@@ -67,7 +63,7 @@ describe("agent model catalog recovery", () => {
         .mockReturnValueOnce(pending.promise)
         .mockResolvedValue({ models: nextModels });
       const client = { request } as unknown as GatewayBrowserClient;
-      const page = document.createElement("openclaw-agents-page") as TestAgentsPage;
+      const page = createAgentsPage();
       page.routeData = { panel: "overview" } as AgentsRouteData;
       setPageGateway(page, client);
       page.agentsSelectedId = "main";

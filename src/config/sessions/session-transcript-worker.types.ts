@@ -20,6 +20,8 @@ import type {
   TrajectoryRetentionWorkerInput,
   TrajectoryRuntimeRetentionPlan,
 } from "../../trajectory/runtime-retention.contract.js";
+import type { SqliteTrajectoryRuntimeReadScope } from "../../trajectory/runtime-store.contract.js";
+import type { TrajectoryEvent } from "../../trajectory/types.js";
 import type {
   SessionActivitySummaryBatchInput,
   SessionActivitySummaryBatchResult,
@@ -63,7 +65,6 @@ import type { readSessionTranscriptModelContext } from "./session-accessor.sqlit
 import type { listSessionPendingInputReceipts } from "./session-accessor.sqlite-pending-input-receipts.js";
 import type { SessionTranscriptWatermark } from "./session-accessor.sqlite-transcript-watermark-read.js";
 import type {
-  SessionAccessScope,
   SessionEntryReadScope,
   SessionTranscriptReadScope,
 } from "./session-accessor.types.js";
@@ -104,7 +105,11 @@ import type {
   SessionRetirementReadResult,
   SessionRetirementReadWorkerInput,
 } from "./session-retirement-read.types.js";
-import type { SessionRowDatabaseFacts } from "./session-row-facts.types.js";
+import type {
+  SessionRowFactsWorkerInput,
+  SessionRowFactsWorkerResult,
+  SessionRowPresenceWorkerInput,
+} from "./session-row-facts.types.js";
 import type {
   SessionMembersWorkerInput,
   SessionMembershipFactsWorkerInput,
@@ -222,12 +227,6 @@ type SessionRowBackfillWorkerInput = {
   params: SessionRowTranscriptReadParams;
 };
 
-export type SessionRowPresenceWorkerInput = {
-  kind: "session-row-presence";
-  database: { agentId: string; path: string };
-  scope: SessionAccessScope & { databaseAgentId: string };
-};
-
 export type SessionEntryCurrentWorkerInput = Omit<SessionEntryReadWorkerInput, "kind"> & {
   kind: "session-entry-current";
   source?: SessionEntryCurrentSource;
@@ -258,18 +257,11 @@ type SessionStoreSummaryWorkerInput = {
 
 export const MAX_SESSION_ROW_FACTS_KEYS = 64;
 
-export type SessionRowFactsWorkerInput = {
-  kind: "session-row-facts";
-  database: { agentId: string; path: string };
-  env: NodeJS.ProcessEnv;
-  sessionKeys: readonly string[];
-  continuation?: CanonicalSessionReaderContinuation;
-};
-
-export type SessionRowFactsWorkerResult = {
-  kind: "session-row-facts";
-  rows: SessionRowDatabaseFacts[];
-};
+export type {
+  SessionRowFactsWorkerInput,
+  SessionRowFactsWorkerResult,
+  SessionRowPresenceWorkerInput,
+} from "./session-row-facts.types.js";
 
 type SessionMaintenanceReadWorkerInput = {
   kind: "session-maintenance-read";
@@ -302,9 +294,16 @@ type SessionBranchSummaryWorkerInput = {
   request: Omit<SessionBranchSummaryReadRequest, "database">;
 };
 
+type TrajectoryEventsWorkerInput = {
+  kind: "trajectory-events";
+  database: { agentId: string; path: string };
+  scope: SqliteTrajectoryRuntimeReadScope;
+};
+
 export type SessionHistoryWorkerInput =
   | SessionRetirementReadWorkerInput
   | TrajectoryRetentionWorkerInput
+  | TrajectoryEventsWorkerInput
   | SessionCleanupReadInput
   | BoardSnapshotWorkerInput
   | BoardWidgetDocumentWorkerInput
@@ -391,6 +390,7 @@ export type SessionTranscriptWorkerValues = SessionTranscriptInventoryWorkerValu
       kind: "session-retirement-read";
       result: SessionRetirementReadResult;
     };
+    "trajectory-events": { kind: "trajectory-events"; events: TrajectoryEvent[] };
     "trajectory-retention": {
       kind: "trajectory-retention";
       plan: TrajectoryRuntimeRetentionPlan;
@@ -556,6 +556,10 @@ export type SessionHistoryWorkerDatabase = SessionTranscriptInventoryReaders &
       SessionRetirementReadWorkerInput,
       SessionRetirementReadResult
     >;
+    readTrajectoryEvents: CancellableSessionHistoryReader<
+      TrajectoryEventsWorkerInput,
+      TrajectoryEvent[]
+    >;
     readTrajectoryRetention: (
       input: Omit<TrajectoryRetentionWorkerInput, "kind" | "database">,
       options: { signal?: AbortSignal; timeoutMs: number },
@@ -629,7 +633,6 @@ export type SessionHistoryWorkerDatabase = SessionTranscriptInventoryReaders &
       params: SessionTranscriptSearchWorkerInput["params"],
       readIndexStatus: (signal: AbortSignal) => Promise<boolean>,
     ) => Promise<SessionTranscriptSearchResult>;
-    generation: number;
     assertCurrent: () => void;
     run: (
       prepare: () => Omit<SessionTranscriptHistoryWorkerInput, "database">,

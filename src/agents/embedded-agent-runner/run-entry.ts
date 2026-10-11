@@ -297,7 +297,7 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
   const hasCommittedSideEffect = canFallback ? () => !canFallback() : undefined;
   try {
     let capturedCyberRefusal: { provider: string; model: string } | undefined;
-    const runFallbackSearch = (
+    const runFallbackSearch = async (
       selection: EmbeddedAgentRunEntryParams<T>["selection"],
       runOptions: { captureCyberRefusal?: boolean; forceFallbackRetry?: boolean } = {},
     ) =>
@@ -305,7 +305,7 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
         ...selection,
         ...params.identity,
         operatorAuthority,
-        skipAuthProfileRuntime: sessionPlacementUsesWorkerInference(params.identity),
+        skipAuthProfileRuntime: await sessionPlacementUsesWorkerInference(params.identity),
         abortSignal: params.abortSignal,
         resolveAgentHarnessRuntimeOverride: resolveRuntimeOverride,
         prepareCandidateChain: async (candidates) => {

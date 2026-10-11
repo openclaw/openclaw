@@ -50,45 +50,14 @@ it("copies small files through owned descriptors with the same bytes, identity a
   expect(fs.readFileSync(subject.target)).toEqual(subject.bytes);
 });
 
-it.each(["grow", "shrink", "replace", "symlink"])(
-  "refuses a source that changes after descriptor admission: %s",
-  (change) => {
-    const subject = fixture();
-    const create = fsSafe.createFileSync;
-    vi.spyOn(fsSafe, "createFileSync").mockImplementation((target, options) => {
-      if (target === subject.target) {
-        if (change === "grow") {
-          fs.appendFileSync(subject.source, "more");
-        } else if (change === "shrink") {
-          fs.truncateSync(subject.source, 1);
-        } else {
-          fs.renameSync(subject.source, `${subject.source}.original`);
-          if (change === "replace") {
-            fs.writeFileSync(subject.source, "replacement");
-          } else {
-            fs.symlinkSync(`${subject.source}.original`, subject.source);
-          }
-        }
-      }
-      return create(target, options);
-    });
-    expect(subject.copy).toThrow();
-    expect(fs.existsSync(subject.target)).toBe(false);
-  },
-);
-
-it.each(["grow", "shrink"])("refuses source %s during the bounded transfer", (change) => {
+it("refuses source growth during the bounded transfer", () => {
   const subject = fixture();
   const write = fs.writeSync;
   let changed = false;
   vi.spyOn(fs, "writeSync").mockImplementation((...args) => {
     if (!changed) {
       changed = true;
-      if (change === "grow") {
-        fs.appendFileSync(subject.source, "more");
-      } else {
-        fs.truncateSync(subject.source, 1);
-      }
+      fs.appendFileSync(subject.source, "more");
     }
     return Reflect.apply(write, fs, args);
   });

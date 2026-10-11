@@ -13,7 +13,7 @@ import {
 import type { GatewayPageController } from "../../lit/gateway-page-controller.ts";
 import type { PluginsPageCatalogDetail, PluginsPageDetail } from "./plugins-page-model.ts";
 import type { PluginsRouteData } from "./route-data.ts";
-import type { PluginToolPreview } from "./tool-preview.ts";
+import type { PluginToolPreview } from "./tool-preview.tsx";
 
 /** Local inspection owns availability; optional metadata never delays the installed controls. */
 export async function loadInstalledPluginDetail(params: {

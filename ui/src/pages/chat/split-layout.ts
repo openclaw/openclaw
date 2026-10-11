@@ -185,9 +185,6 @@ export function applyUiCommandToSplitLayout(
 
 function resizePair(weights: number[], boundaryIndex: number, pairRatio: number): number[] {
   const next = [...weights];
-  if (boundaryIndex < 0 || boundaryIndex + 1 >= weights.length) {
-    return next;
-  }
   const before = weights[boundaryIndex];
   const after = weights[boundaryIndex + 1];
   if (before === undefined || after === undefined) {

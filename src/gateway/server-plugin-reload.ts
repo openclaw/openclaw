@@ -130,11 +130,11 @@ export async function reloadGatewayPlugins(
   let memoryReplacement: ReturnType<typeof prepareMemoryRuntimeReload> | undefined;
   const changedPluginIds = new Set(replacePluginIds);
   let resourceHandoffIds = new Set<string>();
+  let releaseResourceHandoff: (() => void) | undefined;
   const sidecarReplacements: ReturnType<
     NonNullable<GatewayPostReadySidecarHandle["preparePluginReload"]>
   >[] = [];
   let rollbackConfigEffects: (() => Promise<void>) | undefined;
-  let releaseResourceHandoff: (() => void) | undefined;
   const channels = createPluginReloadChannels({
     channelManager,
     previousRegistry,
@@ -150,7 +150,7 @@ export async function reloadGatewayPlugins(
     isBlockingStopError,
     rethrowServiceStopTimeout,
     includeServiceStopFailure,
-    reserveResourceHandoff,
+    assertResourceHandoff,
     selectResourceHandoff,
     drainInstances,
     drainMemory,
@@ -250,8 +250,8 @@ export async function reloadGatewayPlugins(
       recordWarning(warning);
     }
     await checkpoint();
-    // Reserve and gate new model runs atomically; admitted runs keep their callbacks until settled.
-    releaseResourceHandoff = reserveResourceHandoff(resourceHandoffIds);
+    // Refuse self-reload before stopping the plugin whose callback must finish this request.
+    releaseResourceHandoff = assertResourceHandoff(resourceHandoffIds);
     const configEffects = params.prepareConfigEffects({
       pluginIds: changedPluginIds,
       channels: channelTargets,

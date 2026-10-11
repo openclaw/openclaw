@@ -6,9 +6,12 @@ import { expect, vi } from "vitest";
 import { decodeLaunchAgentPlistFixture } from "../../daemon/launchd-plist.test-support.js";
 import type { GatewayServiceCommandConfig } from "../../daemon/service-types.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
+import { pkgQueryResult } from "../../infra/update-freebsd-pkg-ownership.test-support.js";
 import { resolveNpmGlobalPrefixLayoutFromPrefix } from "../../infra/update-npm-prefix.js";
 import { recordCommandProcessFailure } from "../../process/exec-result.js";
 import type {
+  BufferedCommandOptions,
+  BufferedCommandResult,
   runCommandWithTimeout,
   runExec,
   runUtf8CommandWithTimeout,
@@ -25,25 +28,32 @@ export function isLegacyUpdateDoctorCommand(argv: readonly string[]) {
 
 // The real snapshot worker has separate WAL/source-inode boundary coverage.
 // Retain real rehearsal config projection and drift checks in this CLI fixture.
-export async function runUpdateStateSnapshotFixture(
-  ...[, options]: [string[], { input: string; timeoutMs?: number }]
-) {
+export async function runUpdateBufferedCommandFixture(
+  argv: string[],
+  options: BufferedCommandOptions = {},
+): Promise<BufferedCommandResult> {
+  if (argv[0] === "pacman") {
+    return pkgQueryResult("", {
+      code: null,
+      termination: "error",
+      error: Object.assign(new Error("pacman is absent in this fixture"), { code: "ENOENT" }),
+    });
+  }
+  if (typeof options.input !== "string") {
+    throw new Error("Unexpected buffered update command without snapshot input");
+  }
   const input: unknown = JSON.parse(options.input);
   const mode = isRecord(input) ? input.mode : undefined;
   if (mode !== "inventory" && mode !== "snapshot") {
     throw new Error("Unexpected update state worker mode");
   }
-  return {
-    code: 0,
-    stdout: Buffer.from(
-      JSON.stringify(
-        mode === "inventory"
-          ? { databases: [], pluginBytes: 0, pluginPlan: "plugin-copy-plan.json" }
-          : { versions: [], pluginPaths: {} },
-      ),
+  return pkgQueryResult(
+    JSON.stringify(
+      mode === "inventory"
+        ? { databases: [], pluginBytes: 0, pluginPlan: "plugin-copy-plan.json" }
+        : { versions: [], pluginPaths: {} },
     ),
-    stderr: Buffer.alloc(0),
-  };
+  );
 }
 
 export function createUpdateExecTransportFixture(params: {

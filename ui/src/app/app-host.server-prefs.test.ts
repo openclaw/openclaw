@@ -182,12 +182,11 @@ describe("profile preference ACK publication across browser realms", () => {
       const scope = "ws://ack-publication";
       const profileId = "profile-a";
       const pinsKey = "ui.sidebarEntries";
-      const scopeKey = "ui.navigationScope";
       const pendingKey =
         "openclaw.control.serverPrefs.pending.v1:" + scope + ":profile:" + profileId;
       const lastSeenKey = "openclaw.control.serverPrefs.v1:" + scope + ":profile:" + profileId;
       const config = {};
-      const server: Record<string, unknown> = { [pinsKey]: ["route:usage"], [scopeKey]: "mine" };
+      const server: Record<string, unknown> = { [pinsKey]: ["route:usage"] };
       const aCommitted = createDeferred();
       const aReply = createDeferred<unknown>();
       const requestFor = (holdReply: boolean) =>
@@ -239,7 +238,6 @@ describe("profile preference ACK publication across browser realms", () => {
         const beforeA = a.settings.loadSettings();
         const wantedA = a.settings.patchSettings({
           sidebarEntries: ["route:usage", "route:cron"],
-          navigationScope: observed && !baseline && !identical ? "mine" : "all",
         });
         a.prefs.pushServerUiPrefs(aWriter, a.intent.changedServerUiPrefs(beforeA, wantedA)!, {
           profileId,
@@ -264,13 +262,12 @@ describe("profile preference ACK publication across browser realms", () => {
               : baseline
                 ? ["route:usage"]
                 : ["route:plugins"],
-          navigationScope: identical ? wantedA.navigationScope : ("mine" as const),
         };
         if (observed && !identical) {
           // A different writer can publish a confirmed read without settling A's outbox.
           await bWriter.state.client!.request("users.prefs.set", {
-            entries: { [pinsKey]: wantedB.sidebarEntries, [scopeKey]: wantedB.navigationScope },
-            expectedEntries: { [pinsKey]: server[pinsKey], [scopeKey]: server[scopeKey] },
+            entries: { [pinsKey]: wantedB.sidebarEntries },
+            expectedEntries: { [pinsKey]: server[pinsKey] },
           });
         }
         await b.reconcile.refreshProfileAppearancePrefs({
@@ -319,14 +316,12 @@ describe("profile preference ACK publication across browser realms", () => {
           );
           expect(JSON.parse(localStorage.getItem(lastSeenKey)!)).toMatchObject({
             sidebarEntries: confirmed.sidebarEntries,
-            navigationScope: confirmed.navigationScope,
             navigationConfirmation: confirmed.navigationConfirmation,
           });
         }
         const newestLastSeen = localStorage.getItem(lastSeenKey);
         expect(JSON.parse(newestLastSeen!)).toMatchObject({
           sidebarEntries: cancelled ? wantedA.sidebarEntries : wantedB.sidebarEntries,
-          navigationScope: cancelled ? "all" : wantedB.navigationScope,
         });
         const aReads = aRequest.mock.calls.filter(
           ([method]) => method === "users.prefs.get",
@@ -335,7 +330,6 @@ describe("profile preference ACK publication across browser realms", () => {
         await vi.dynamicImportSettled();
         expect(a.settings.loadSettings(scope)).toMatchObject({
           sidebarEntries: wantedB.sidebarEntries,
-          navigationScope: wantedB.navigationScope,
         });
         expect(b.settings.loadSettings(scope).sidebarEntries).toEqual(wantedB.sidebarEntries);
         if (identical) {
@@ -351,7 +345,6 @@ describe("profile preference ACK publication across browser realms", () => {
         expect(a.settings.loadSettings(scope).sidebarEntries).toEqual(wantedB.sidebarEntries);
         expect(JSON.parse(localStorage.getItem(lastSeenKey)!)).toMatchObject({
           sidebarEntries: cancelled ? wantedA.sidebarEntries : wantedB.sidebarEntries,
-          navigationScope: cancelled ? "all" : wantedB.navigationScope,
         });
         expect(aRequest.mock.calls.filter(([method]) => method === "users.prefs.get")).toHaveLength(
           aReads + (observed && !identical ? 1 : 0),
@@ -374,7 +367,7 @@ describe("profile preference ACK publication across browser realms", () => {
     const a = await loadPreferenceRealm();
     const scope = "ws://ack-before-commit";
     const profileId = "profile-a";
-    const server = { "ui.sidebarEntries": ["route:usage"], "ui.navigationScope": "mine" };
+    const server = { "ui.sidebarEntries": ["route:usage"] };
     const dispatched = createDeferred();
     const commit = createDeferred();
     const request = vi.fn(async (method: string, params?: unknown): Promise<unknown> => {
@@ -400,7 +393,6 @@ describe("profile preference ACK publication across browser realms", () => {
       const before = a.settings.loadSettings(scope);
       const desired = a.settings.patchSettings({
         sidebarEntries: ["route:usage", "route:cron"],
-        navigationScope: "all",
       });
       const afterCommit = vi.fn();
       a.prefs.pushServerUiPrefs(writer, a.intent.changedServerUiPrefs(before, desired)!, {
@@ -432,11 +424,9 @@ describe("profile preference ACK publication across browser realms", () => {
       await vi.dynamicImportSettled();
       expect(a.settings.loadSettings(scope)).toMatchObject({
         sidebarEntries: desired.sidebarEntries,
-        navigationScope: "all",
       });
       expect(server).toMatchObject({
         "ui.sidebarEntries": desired.sidebarEntries,
-        "ui.navigationScope": "all",
       });
       expect(afterCommit).toHaveBeenCalledOnce();
     } finally {
@@ -455,7 +445,6 @@ describe("profile preference ACK publication across browser realms", () => {
       const profileId = "profile-a";
       const entries: Record<string, unknown> = {
         "ui.sidebarEntries": ["route:usage"],
-        "ui.navigationScope": "mine",
       };
       const committed = createDeferred();
       const reply = createDeferred<unknown>();
@@ -504,7 +493,6 @@ describe("profile preference ACK publication across browser realms", () => {
         const before = realm.settings.loadSettings(scope);
         const desired = realm.settings.patchSettings({
           sidebarEntries: ["route:usage", "route:cron"],
-          navigationScope: "all",
         });
         const afterCommit = vi.fn();
         realm.prefs.pushServerUiPrefs(writer, realm.intent.changedServerUiPrefs(before, desired)!, {
@@ -514,18 +502,15 @@ describe("profile preference ACK publication across browser realms", () => {
         });
         await committed.promise;
         entries["ui.sidebarEntries"] = ["route:usage"];
-        entries["ui.navigationScope"] = "mine";
         await refresh();
         const confirmed = realm.prefs.serverUiPrefsOutbox.confirmedPrefsFallback?.prefs;
         reply.resolve({ status: "ok" });
         await vi.dynamicImportSettled();
         expect(realm.settings.loadSettings(scope)).toMatchObject({
           sidebarEntries: ["route:usage"],
-          navigationScope: "mine",
         });
         expect(realm.prefs.serverUiPrefsOutbox.confirmedPrefsFallback?.prefs).toMatchObject({
           sidebarEntries: confirmed?.sidebarEntries,
-          navigationScope: confirmed?.navigationScope,
         });
         expect(afterCommit).not.toHaveBeenCalled();
         expect(request.mock.calls.filter(([method]) => method === "users.prefs.set")).toHaveLength(
