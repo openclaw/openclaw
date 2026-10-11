@@ -797,6 +797,9 @@ NODE
       registry_dist_tags="latest=$baseline_plugin_version,beta=$baseline_plugin_version,alpha=$baseline_plugin_version"
     else
       registry_dist_tags="latest=$candidate_version,beta=$candidate_version,alpha=$candidate_version"
+      if is_extended_stable_release_version "$candidate_version"; then
+        registry_dist_tags+=",extended-stable=$candidate_version"
+      fi
     fi
     # Published name/version pairs keep their archive across registry phases.
     if [ -n "$baseline_plugin_tarball" ]; then
@@ -1115,8 +1118,15 @@ assert_schema_outcome() {
 assert_legacy_operator_update_noop() {
   # An explicit tarball requests a refresh; the registry's exact candidate
   # version exercises the operator's already-current path without a reinstall.
-  openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" openclaw update \
-    --tag "$candidate_version" --yes --no-restart --json \
+  local update_args=(update --yes --no-restart --json)
+  local update_env=(env)
+  if is_extended_stable_release_version "$candidate_version"; then
+    # Retain the inferred monthly channel and opt into its loopback selector.
+    update_env+=(OPENCLAW_UPDATE_PACKAGE_SPEC=openclaw)
+  else
+    update_args+=(--tag "$candidate_version")
+  fi
+  openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" "${update_env[@]}" openclaw "${update_args[@]}" \
     >"$ARTIFACT_ROOT/update-noop.json" 2>"$ARTIFACT_ROOT/update-noop.err"
   node --input-type=module - "$ARTIFACT_ROOT/update-noop.json" <<'NODE'
 import assert from "node:assert/strict";
