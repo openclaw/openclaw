@@ -318,7 +318,7 @@ it("inserts a repository request through its retained session source", async () 
       kind: "postimage",
       value: { request_id: row.request_id, status: "requested" },
     });
-    expect(await read(row)).toMatchObject({ ok: true, rows: [row] });
+    expect(read(row)).toMatchObject({ ok: true, rows: [row] });
   } finally {
     await source.release();
   }
@@ -361,7 +361,7 @@ it("revokes personal source authority at commit before reply delivery without re
     await expect(insertRepositoryGitHubPublicationAsync(row, source)).rejects.toThrow(
       "source authority changed",
     );
-    expect(await read(row)).toMatchObject({ ok: true, rows: [] });
+    expect(read(row)).toMatchObject({ ok: true, rows: [] });
   } finally {
     await source.release();
   }
@@ -387,7 +387,7 @@ it("runs policy writes before source reservation and refuses the changed source"
     await expect(insertRepositoryGitHubPublicationAsync(row, source)).rejects.toThrow(
       "source authority changed",
     );
-    expect(await read(row)).toMatchObject({ ok: true, rows: [] });
+    expect(read(row)).toMatchObject({ ok: true, rows: [] });
   } finally {
     await source.release();
   }
@@ -401,7 +401,7 @@ it("rejects a requested branch that does not belong to the captured source", asy
     await expect(insertRepositoryGitHubPublicationAsync(row, source)).rejects.toThrow(
       "requested repository changed",
     );
-    expect(await read(row)).toMatchObject({ ok: true, rows: [] });
+    expect(read(row)).toMatchObject({ ok: true, rows: [] });
   } finally {
     await source.release();
   }
@@ -431,7 +431,7 @@ it("does not use one session's source authority for another session's publicatio
         first.source,
       ),
     ).rejects.toThrow("source");
-    expect(await read(second.row)).toMatchObject({ ok: true, rows: [{ last_effect: null }] });
+    expect(read(second.row)).toMatchObject({ ok: true, rows: [{ last_effect: null }] });
   } finally {
     await first.source.release();
     await second.source.release();
@@ -468,7 +468,7 @@ it("publishes a committed receipt before a delayed ordinary worker reply", async
     kind: "repository",
     rows: [{ request_id: row.request_id, status: "publishing", execution_id: "execution" }],
   });
-  const durable = await read(row);
+  const durable = read(row);
   expect(durable).toMatchObject({
     ok: true,
     rows: [{ request_id: row.request_id, status: "publishing" }],
@@ -495,7 +495,7 @@ it("publishes a committed receipt before a delayed ordinary worker reply", async
   await expect(
     runGitHubPublicationMaintenanceAsync({ operation: "report", requestId: row.request_id }),
   ).resolves.toBeUndefined();
-  expect(await read(row)).toMatchObject({
+  expect(read(row)).toMatchObject({
     ok: true,
     rows: [{ reported_at_ms: expect.any(Number) }],
   });
@@ -567,7 +567,7 @@ it.for(["superseded", "closed"] as const)(
     }
     reply.release();
     await expect(claim).resolves.toMatchObject({ rows: [{ execution_id: "original" }] });
-    expect(await read(row)).toMatchObject({
+    expect(read(row)).toMatchObject({
       ok: true,
       rows: [{ execution_id: outcome === "superseded" ? "replacement" : "original" }],
     });
@@ -605,7 +605,7 @@ it("revokes prepared sources when canonical deletion commits before its ordinary
       reply.release();
       await deletion;
     }
-    expect(await read(row)).toMatchObject({ ok: true, rows: [] });
+    expect(read(row)).toMatchObject({ ok: true, rows: [] });
     runOpenClawStateWriteTransaction((database) =>
       insertRepositoryGitHubPublicationInDatabase(database, row, context.admission.assertCurrent),
     );
@@ -628,13 +628,13 @@ it("settles execution bookkeeping without source authority while distinguishing 
   });
   await execution.updateHead("d".repeat(40));
   await execution.recordEffect("push");
-  expect(await read(row)).toMatchObject({
+  expect(read(row)).toMatchObject({
     ok: true,
     rows: [{ effect_state: "dispatched", pushed_head_commit: null }],
   });
   await execution.recordEffect("push", { headCommit: "d".repeat(40) });
   await execution.interrupt();
-  expect(await read(row)).toMatchObject({
+  expect(read(row)).toMatchObject({
     ok: true,
     rows: [
       {
@@ -681,7 +681,7 @@ it("refuses delayed observation from an execution replaced by a later claim", as
       () => undefined,
     ),
   ).rejects.toThrow("no longer current");
-  expect(await read(row)).toMatchObject({
+  expect(read(row)).toMatchObject({
     ok: true,
     rows: [{ execution_id: "replacement", pushed_head_commit: null }],
   });
