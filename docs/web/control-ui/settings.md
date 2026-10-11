@@ -739,8 +739,8 @@ an agent filter does not bypass that restriction.
 
 If a library read or download reports denied access, the browser clears its
 cached library and reader pages. **Retry** keeps those notes hidden until a fresh
-authorized response arrives and starts the reader from its first page. Temporary
-network errors alone do not remove already loaded reader pages. Files already
+authorized response arrives and starts the reader from its first page, whether
+**Summary** or **Transcript** is selected. Temporary network errors alone do not remove already loaded reader pages. Files already
 downloaded remain yours.
 
 Configure capture in **Settings → Communications → Meeting capture**, which also

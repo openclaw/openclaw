@@ -544,12 +544,12 @@ class MeetingsPage extends OpenClawLightDomElement {
       onNavigate: (patch) => this.navigate(patch),
       onRefresh: () => this.refresh(),
       onReaderRetry: () => {
+        if (!this.readerPages.length) {
+          this.resetReader();
+        }
         if (this.readerTab === "summary") {
           void this.summaryTask.run();
           return;
-        }
-        if (!this.readerPages.length) {
-          this.resetReader();
         }
         if (!this.summary) {
           void this.summaryTask.run();

@@ -773,31 +773,77 @@ describe("meeting transcript library", () => {
     },
   );
 
-  it("keeps the reader Retry available when only the list recovers from an archive denial", async () => {
-    const request = vi.fn(async (method: string) => {
-      if (method === "transcripts.export") {
-        throw new GatewayRequestError({ code: "FORBIDDEN", message: "Restricted" });
-      }
-      return method === "transcripts.get"
-        ? meetingPage
-        : { sessions: [meetingEntry], nextCursor: null };
-    });
-    const { page } = mount(request, "?tab=transcript&selector=meeting");
-    await vi.waitFor(() => expect(page.textContent).toContain("Keep the reader quiet"));
-    button(page, "Download Markdown").click();
-    await vi.waitFor(() => expect(page.textContent).toContain("Transcript access is restricted"));
-    const filter = page.querySelector<HTMLInputElement>('input[name="query"]')!;
-    filter.value = "new filter";
-    filter.form!.dispatchEvent(new Event("submit", { cancelable: true }));
-    await vi.waitFor(() => expect(page.querySelector(".transcripts-list__entry")).not.toBeNull());
-    const reader = page.querySelector(".transcripts-reader")!;
-    expect(reader.textContent).not.toContain("Keep the reader quiet");
-    expect(reader.textContent).toContain("Transcript access is restricted");
-    expect(request.mock.calls.filter(([method]) => method === "transcripts.get")).toHaveLength(2);
-    button(reader, "Retry").click();
-    await vi.waitFor(() => expect(reader.textContent).toContain("Keep the reader quiet"));
-    expect(page.textContent).not.toContain("Transcript access is restricted");
-  });
+  it.each(["text", "summary"] as const)(
+    "recovers every speech page when retrying the %s tab after archive denial",
+    async (tab) => {
+      vi.useFakeTimers();
+      const utterances = Array.from({ length: 51 }, (_, sequence) => ({
+        sequence,
+        text: `Meeting utterance ${sequence + 1}`,
+      }));
+      const detail = {
+        ...meetingPage,
+        session: { ...meetingEntry, utteranceCount: 51 },
+      };
+      const request = vi.fn(
+        async (method: string, params: { includeUtterances?: boolean; cursor?: string }) => {
+          if (method === "transcripts.export") {
+            throw new GatewayRequestError({ code: "FORBIDDEN", message: "Restricted" });
+          }
+          if (method === "transcripts.list") {
+            return { sessions: [detail.session], nextCursor: null };
+          }
+          return params.includeUtterances
+            ? {
+                ...detail,
+                utterances: params.cursor ? utterances.slice(50) : utterances.slice(0, 50),
+                nextCursor: params.cursor ? null : "after-50",
+              }
+            : { ...detail, utterances: undefined };
+        },
+      );
+      const { page } = mount(
+        request,
+        tab === "text" ? "?tab=transcript&selector=meeting" : "?selector=meeting",
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      expect(request).toHaveBeenCalledWith(
+        "transcripts.get",
+        expect.objectContaining({ cursor: "after-50" }),
+        expect.anything(),
+      );
+      button(page, "Download Markdown").click();
+      await vi.advanceTimersByTimeAsync(0);
+      const reader = page.querySelector(".transcripts-reader")!;
+      expect(reader.textContent).toContain("Transcript access is restricted");
+      const deniedCount = request.mock.calls.length;
+      await vi.advanceTimersByTimeAsync(9_000);
+      expect(request).toHaveBeenCalledTimes(deniedCount);
+
+      const filter = page.querySelector<HTMLInputElement>('input[name="query"]')!;
+      filter.value = "design";
+      filter.dispatchEvent(new Event("input"));
+      button(page, "Filter").click();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(page.querySelector(".transcripts-list__entry")).not.toBeNull();
+      expect(reader.textContent).toContain("Transcript access is restricted");
+      expect(reader.textContent).not.toContain("Meeting utterance");
+      const recoveredListCount = request.mock.calls.length;
+      await vi.advanceTimersByTimeAsync(9_000);
+      expect(request).toHaveBeenCalledTimes(recoveredListCount);
+
+      button(reader, "Retry").click();
+      await vi.advanceTimersByTimeAsync(0);
+      window.dispatchEvent(new Event("focus"));
+      await vi.advanceTimersByTimeAsync(0);
+      selectTab(page, "text");
+      await page.updateComplete;
+      expect(
+        [...reader.querySelectorAll(".transcripts-utterances p")].map((entry) => entry.textContent),
+      ).toEqual(utterances.map((entry) => entry.text));
+      expect(page.textContent).not.toContain("Transcript access is restricted");
+    },
+  );
 
   it.each([
     ["speech", "selection"],
