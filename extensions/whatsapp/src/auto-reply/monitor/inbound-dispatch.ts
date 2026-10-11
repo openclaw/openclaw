@@ -19,7 +19,6 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { buildInboundHistoryFromEntries } from "openclaw/plugin-sdk/reply-history";
 import type { FinalizedMsgContext, ReplyDispatchKind } from "openclaw/plugin-sdk/reply-runtime";
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { resolveMergedWhatsAppAccountConfig } from "../../account-config.js";
 import { resolveWhatsAppAdmissionChannelIngress } from "../../inbound/admission.js";
 import type { AdmittedWebInboundMessage } from "../../inbound/types.js";
 import {
@@ -35,6 +34,7 @@ import type {
 } from "../deliver-reply.js";
 import { createWhatsAppReplyTransportContext } from "../deliver-reply.js";
 import { markWhatsAppVisibleDeliveryError } from "../util.js";
+import { resolveWebMonitorConfigSnapshot } from "./config.js";
 import { formatGroupMembers } from "./group-members.js";
 import type { GroupHistoryEntry } from "./inbound-context.js";
 import type {
@@ -523,9 +523,7 @@ export function createWhatsAppReplyPlan(params: {
       ? resolveChannelMessageSourceReplyDeliveryMode({ cfg: params.cfg, ctx: params.context })
       : undefined;
   const sourceRepliesAreToolOnly = sourceReplyDeliveryMode === "message_tool_only";
-  const blockStreamingEnabled = resolveChannelStreamingBlockEnabled(
-    resolveMergedWhatsAppAccountConfig({ cfg: params.cfg, accountId: params.route.accountId }),
-  );
+  const blockStreamingEnabled = resolveChannelStreamingBlockEnabled(params.cfg.channels?.whatsapp);
   let didSendReply = false;
   let reactionDeferred = false;
   let agentRunOutcome: "completed" | "failed" | undefined;
@@ -661,6 +659,8 @@ export function createWhatsAppReplyPlan(params: {
         return false;
       }
       return {
+        prepareRuntimeHandoff: (cfg) =>
+          resolveWebMonitorConfigSnapshot({ cfg, accountId: params.route.accountId }).cfg,
         to: conversationId,
         replyToId: resolveWhatsAppDurableReplyToId({
           context: params.context,

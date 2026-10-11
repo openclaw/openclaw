@@ -16,7 +16,6 @@ import {
   createDelegatedSetupWizardProxy,
   setSetupChannelEnabled,
 } from "openclaw/plugin-sdk/setup-runtime";
-import { resolveMergedWhatsAppAccountConfig } from "./account-config.js";
 import {
   hasAnyWhatsAppAuth,
   listWhatsAppAccountIds,
@@ -176,15 +175,6 @@ export function createWhatsAppPluginBase() {
     configSchema: WhatsAppChannelConfigSchema,
     config: {
       ...whatsappConfigAdapter,
-      resolveMessagingConfig: (cfg, accountId) => {
-        const account = resolveMergedWhatsAppAccountConfig({ cfg, accountId });
-        return {
-          responsePrefix: account.responsePrefix,
-          textChunkLimit: account.textChunkLimit,
-          streaming: account.streaming,
-          groups: account.groups,
-        };
-      },
       isEnabled: (account) => account.enabled,
       disabledReason: () => "disabled",
       isConfigured: (account) => Boolean(account.authDir),

@@ -16,7 +16,7 @@ import {
   type RuntimeEnv,
 } from "openclaw/plugin-sdk/runtime-env";
 import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
-import { resolveWhatsAppAccount, resolveWhatsAppMediaMaxBytes } from "../accounts.js";
+import { resolveWhatsAppMediaMaxBytes } from "../accounts.js";
 import { WHATSAPP_AUTH_UNSTABLE_CODE, WhatsAppAuthUnstableError } from "../auth-store.js";
 import {
   WhatsAppConnectionController,
@@ -43,6 +43,7 @@ import { resolveWhatsAppSocketTiming } from "../socket-timing.js";
 import { getRuntimeConfig } from "./config.runtime.js";
 import { whatsappHeartbeatLog, whatsappLog } from "./loggers.js";
 import { createWebChannelStatusController } from "./monitor-state.js";
+import { resolveWebMonitorConfigSnapshot } from "./monitor/config.js";
 import type { GroupHistoryEntry } from "./monitor/inbound-context.js";
 import { formatWhatsAppInboundListeningLog } from "./monitor/listener-log.js";
 import { createWebOnMessageHandler } from "./monitor/on-message.js";
@@ -94,9 +95,16 @@ export async function monitorWebChannel(
   const replyLogger = getChildLogger({ module: "web-auto-reply", runId });
   const heartbeatLogger = getChildLogger({ module: "web-heartbeat", runId });
   const reconnectLogger = getChildLogger({ module: "web-reconnect", runId });
-  const cfg = getRuntimeConfig();
-  const account = resolveWhatsAppAccount({ cfg, accountId: tuning.accountId });
-  const loadCurrentMonitorConfig = getRuntimeConfig;
+  const baseCfg = getRuntimeConfig();
+  const { cfg, account } = resolveWebMonitorConfigSnapshot({
+    cfg: baseCfg,
+    accountId: tuning.accountId,
+  });
+  const loadCurrentMonitorConfig = () =>
+    resolveWebMonitorConfigSnapshot({
+      cfg: getRuntimeConfig(),
+      accountId: account.accountId,
+    }).cfg;
 
   const maxMediaBytes = resolveWhatsAppMediaMaxBytes(account);
   const heartbeatSeconds = resolveHeartbeatSeconds(tuning.heartbeatSeconds);

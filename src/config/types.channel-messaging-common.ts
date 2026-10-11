@@ -18,16 +18,6 @@ export type CommonChannelGroupConfig = SchemaContract<
   toolsBySender?: GroupToolPolicyBySenderConfig;
 };
 
-export type ChannelGroupConfig = Pick<
-  CommonChannelGroupConfig,
-  "requireMention" | "tools" | "toolsBySender"
-> & {
-  requireMentionInBotThreads?: boolean;
-  ingest?: boolean;
-};
-
-export type ChannelGroups = Record<string, ChannelGroupConfig>;
-
 export type CommonChannelMessagingConfig<
   TCapabilities = string[],
   TAllowFromEntry = string | number,
