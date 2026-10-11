@@ -36,7 +36,7 @@ afterEach(async () => {
 
 describe.skipIf(process.platform === "win32")("verified package cleanup", () => {
   it.each(["rollback", "displacement"] as const)(
-    "settles the previous generation after ctime-only drift following %s",
+    "settles the previous generation after link-count drift following %s",
     async (boundary) => {
       const f = await createPackageSwapFixture(root);
       await fixtures.writePostCoreCapability(f.params.stage.packageRoot);
@@ -71,13 +71,11 @@ describe.skipIf(process.platform === "win32")("verified package cleanup", () => 
       const before = fs.statSync(manifest, { bigint: true });
       const link = path.join(root, "retained-manifest");
       fs.linkSync(manifest, link);
-      fs.unlinkSync(link);
       const after = fs.statSync(manifest, { bigint: true });
-      expect(after.ctimeNs).not.toBe(before.ctimeNs);
-      expect([after.dev, after.ino, after.nlink, after.mtimeNs]).toEqual([
+      expect(after.nlink).toBe(before.nlink + 1n);
+      expect([after.dev, after.ino, after.mtimeNs]).toEqual([
         before.dev,
         before.ino,
-        before.nlink,
         before.mtimeNs,
       ]);
 

@@ -45,15 +45,14 @@ it.skipIf(process.platform === "win32").each(["previous", "candidate"] as const)
 );
 
 it.skipIf(process.platform === "win32").each(["previous", "candidate", "current"] as const)(
-  "limits ctime fallback to the legacy previous generation: %s",
+  "limits link-count fallback to the legacy previous generation: %s",
   async (selected) => {
     const parent = dirs.make("publication-ctime-");
     const root = path.join(parent, "package");
     await writePackageRoot(root, "2026.9.8");
+    const legacyFingerprint = legacyPackageFingerprint(root);
     const fingerprint =
-      selected === "current"
-        ? await createPackageIntegrityReader().tree(root)
-        : legacyPackageFingerprint(root);
+      selected === "current" ? await createPackageIntegrityReader().tree(root) : legacyFingerprint;
     const warning = vi.fn();
     const matcher = createPackagePublicationTreeMatcher(
       {
@@ -67,8 +66,8 @@ it.skipIf(process.platform === "win32").each(["previous", "candidate", "current"
     const before = fs.statSync(file, { bigint: true });
     const link = path.join(parent, "temporary-hardlink");
     fs.linkSync(file, link);
-    fs.unlinkSync(link);
-    expect(fs.statSync(file, { bigint: true }).ctimeNs).not.toBe(before.ctimeNs);
+    expect(fs.statSync(file, { bigint: true }).nlink).toBe(before.nlink + 1n);
+    expect(legacyPackageFingerprint(root).digest).not.toBe(legacyFingerprint.digest);
 
     if (selected === "candidate") {
       await expect(matcher.matches(root, fingerprint, root)).rejects.toThrow(

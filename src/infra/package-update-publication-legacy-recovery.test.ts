@@ -39,7 +39,7 @@ it.skipIf(process.platform === "win32").each([
   { phase: "aborted", action: "public repair" },
   { phase: "publishing", action: "repair" },
 ] as const)(
-  "settles the legacy $phase record through $action after ctime drift",
+  "settles the legacy $phase record through $action after link-count drift",
   async ({ phase, action }) => {
     const f = await fixtures.prepare();
     const journal = openPackageActivationJournal(f.anchor);
@@ -75,8 +75,7 @@ it.skipIf(process.platform === "win32").each([
     const before = fs.statSync(manifest, { bigint: true });
     const link = path.join(path.dirname(f.anchor), "retention-link");
     fs.linkSync(manifest, link);
-    fs.unlinkSync(link);
-    expect(fs.statSync(manifest, { bigint: true }).ctimeNs).not.toBe(before.ctimeNs);
+    expect(fs.statSync(manifest, { bigint: true }).nlink).toBe(before.nlink + 1n);
 
     const reported = vi.fn();
     if (action === "public repair") {
