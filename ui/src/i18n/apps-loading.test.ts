@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import { flattenTranslations } from "../../../scripts/lib/control-ui-i18n-sync-plan.ts";
 import { useLazyEnglishTest } from "./lazy-english.test-support.ts";
 
-// These cold-catalog imports don't mount child elements; keep their registry outside the reset.
+// mock-isolation: Cold catalog imports test page-owned copy, without registering child elements.
 vi.mock("../components/native-chrome-setup.ts", () => ({}));
 
 const loadI18n = useLazyEnglishTest();
