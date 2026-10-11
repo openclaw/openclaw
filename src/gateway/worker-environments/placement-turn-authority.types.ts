@@ -57,7 +57,6 @@ export type RetainedPlacement = {
 };
 export type PlacementAuthorityOwner = {
   identity: DatabasePathIdentity;
-  incarnation: string;
   active: boolean;
   claims: Map<string, Set<RetainedClaim>>;
   observations: Map<string | undefined, Set<{ revoked: boolean; indeterminate: boolean }>>;

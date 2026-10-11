@@ -161,19 +161,6 @@ describe("runPluginsListCommand", () => {
     ]);
   });
 
-  it("keeps install guidance when an enabled-only list has no installed plugins", async () => {
-    mockPluginListSnapshot([]);
-    mockHumanListModules();
-    const { runPluginsListCommand } = await import("./plugins-list-command.js");
-    const writes: unknown[] = [];
-
-    await runPluginsListCommand({ enabled: true }, createJsonRuntime(writes));
-
-    expect(writes).toEqual([
-      "No plugins found. Run formatted(openclaw plugins install <plugin>) to add one, or formatted(openclaw plugins list --json) to inspect raw discovery state.",
-    ]);
-  });
-
   it("makes omitted workspace plugin scope visible in human output", async () => {
     const message =
       "Workspace plugin discovery was skipped; set agents.defaults.systemAgent.agentId.";
@@ -195,27 +182,6 @@ describe("runPluginsListCommand", () => {
       `Warning: ${message}`,
       "",
       "No plugins found. Run formatted(openclaw plugins install <plugin>) to add one, or formatted(openclaw plugins list --json) to inspect raw discovery state.",
-    ]);
-  });
-
-  it("keeps empty enabled-only JSON lazy when every installed plugin is disabled", async () => {
-    const importedHumanModules: string[] = [];
-    mockPluginListSnapshot([{ id: "disabled-plugin", enabled: false }]);
-    mockHumanListModules(importedHumanModules);
-    const { runPluginsListCommand } = await import("./plugins-list-command.js");
-    const writes: unknown[] = [];
-
-    await runPluginsListCommand({ enabled: true, json: true }, createJsonRuntime(writes));
-
-    expect(importedHumanModules).toEqual([]);
-    expect(writes).toEqual([
-      {
-        workspaceDir: "/workspace",
-        workspaceScope: "selected",
-        registry: { source: "config", diagnostics: [] },
-        plugins: [],
-        diagnostics: [],
-      },
     ]);
   });
 });

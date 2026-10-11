@@ -24,12 +24,12 @@ import type {
   TranscriptMessageWriteSnapshot,
   TranscriptWriteSnapshot,
 } from "./session-accessor.sqlite-contract.js";
+import type { SessionTranscriptRuntimeTarget } from "./session-accessor.types.js";
+import type { PreparedSessionTranscriptHydration as PreparedSessionTranscriptReload } from "./session-history-read.types.js";
 import type {
   SessionPendingInputWorkerFacts,
   SessionPendingInputWorkerReceipt,
-} from "./session-accessor.sqlite-pending-inputs.js";
-import type { SessionTranscriptRuntimeTarget } from "./session-accessor.types.js";
-import type { PreparedSessionTranscriptHydration as PreparedSessionTranscriptReload } from "./session-history-read.types.js";
+} from "./session-pending-input.types.js";
 import type {
   InitialSessionTranscriptWriter,
   SessionTranscriptWriterFence,

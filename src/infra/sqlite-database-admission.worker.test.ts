@@ -10,17 +10,15 @@ import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execut
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { openNodeSqliteDatabase, requireNodeSqlite } from "./node-sqlite.js";
-import {
-  SQLITE_DATABASE_GENERATION_LENGTH,
-  SqliteDatabaseGenerationSlot,
-} from "./sqlite-database-admission-record.js";
 import { runWithSqliteDatabaseAdmissionTurn } from "./sqlite-database-admission-turn.js";
 import {
   captureSqliteDatabaseAdmissions,
   hasPendingSqliteDatabaseSchemaMutation,
   readSqliteDatabaseAdmissions,
+  prepareSqliteDatabaseWriter,
   publishSqliteDatabaseAdmission,
   readSqliteDatabaseWriteRevision,
+  readSqliteDatabaseScopedWriteToken,
 } from "./sqlite-database-admission.js";
 import type {
   AdmissionTaskInput,
@@ -28,6 +26,7 @@ import type {
 } from "./sqlite-database-admission.task.test-support.js";
 import {
   hostFactKey,
+  workerFactKey,
   type AdmissionOperations,
 } from "./sqlite-database-admission.worker.test-support.js";
 import { admitSqliteSchema, getAdmittedSqliteSchemaFacts } from "./sqlite-schema-facts.js";
@@ -94,10 +93,50 @@ it.each([undefined, 42])(
   },
 );
 
-it("assigns a distinct shared generation slot to every admission witness", () => {
-  const slots = Object.values(SqliteDatabaseGenerationSlot);
-  expect(new Set(slots).size).toBe(slots.length);
-  expect(Math.max(...slots)).toBeLessThan(SQLITE_DATABASE_GENERATION_LENGTH);
+it("defers unknown writer and fact refresh until the worker releases its transaction", async () => {
+  const location = path.join(tempDirs.make("sqlite-transaction-facts-"), "shared.sqlite");
+  createDatabase(location, 1);
+  const database = openNodeSqliteDatabase(location);
+  admitSqliteSchema(database);
+  const broker = new SqliteWorkerBroker();
+  try {
+    const store = await broker.open<AdmissionOperations>({
+      moduleUrl,
+      databasePath: location,
+      input: undefined,
+    });
+    const result = await broker.runOperation(
+      store!,
+      (scope) => scope.execute({ type: "transactionFacts", input: undefined }),
+      undefined,
+      undefined,
+      () => ({
+        nativeLocations: [location],
+        admission: createSqliteWorkerOperationAdmission((_request, grant) => {
+          // This writer and its facts were absent from the worker's dispatch snapshot.
+          prepareSqliteDatabaseWriter(database);
+          publishSqliteDatabaseAdmission(database, hostFactKey, 42);
+          publishSqliteDatabaseAdmission(database, workerFactKey, 43);
+          grant();
+        }),
+      }),
+    );
+    expect(result).toMatchObject({
+      transactionLookups: 0,
+      transactionRevision: undefined,
+      transactionHostFact: undefined,
+      transactionWorkerFact: undefined,
+      pendingSchema: true,
+      transactionSchemaHasProof: true,
+      outsideHostFact: 42,
+      outsideWorkerFact: 43,
+    });
+    expect(result.outsideLookups).toBeGreaterThan(0);
+    expect(result.outsideRevision).toBeTypeOf("number");
+  } finally {
+    database.close();
+    await broker.close();
+  }
 });
 
 it("joins host admission created after a worker's operation context before its first DDL", async () => {
@@ -206,6 +245,52 @@ it.each([
     }
   },
 );
+
+it("shares exact session receipts with existing writer isolates and fences unclassified writes", async () => {
+  const location = path.join(tempDirs.make("sqlite-scoped-receipts-"), "shared.sqlite");
+  const database = openNodeSqliteDatabase(location);
+  database.exec("CREATE TABLE original(value)");
+  admitSqliteSchema(database);
+  const broker = new SqliteWorkerBroker();
+  try {
+    const store = await broker.open<AdmissionOperations>({
+      moduleUrl,
+      databasePath: location,
+      input: undefined,
+    });
+    const first = readSqliteDatabaseScopedWriteToken(database, "first");
+    const second = readSqliteDatabaseScopedWriteToken(database, "second");
+    await store!.execute({
+      type: "writeRows",
+      input: { sql: "INSERT INTO original VALUES (2)", sessionKeys: ["second"] },
+    });
+    expect(readSqliteDatabaseScopedWriteToken(database, "first")).toBe(first);
+    expect(readSqliteDatabaseScopedWriteToken(database, "second")).not.toBe(second);
+    const secondCommitted = readSqliteDatabaseScopedWriteToken(database, "second");
+
+    // The writer already exists when a new actor registers another dependency.
+    const late = readSqliteDatabaseScopedWriteToken(database, "late");
+    await store!.execute({
+      type: "writeRows",
+      input: { sql: "INSERT INTO original VALUES (3)", sessionKeys: ["late"] },
+    });
+    expect(readSqliteDatabaseScopedWriteToken(database, "late")).not.toBe(late);
+    expect(readSqliteDatabaseScopedWriteToken(database, "first")).toBe(first);
+    expect(readSqliteDatabaseScopedWriteToken(database, "second")).toBe(secondCommitted);
+
+    await store!.execute({ type: "writeRows", input: { sql: "INSERT INTO original VALUES (4)" } });
+    expect(readSqliteDatabaseScopedWriteToken(database, "first")).not.toBe(first);
+    expect(readSqliteDatabaseScopedWriteToken(database, "second")).not.toBe(secondCommitted);
+    expect(database.prepare("SELECT value FROM original ORDER BY value").all()).toEqual([
+      { value: 2 },
+      { value: 3 },
+      { value: 4 },
+    ]);
+  } finally {
+    database.close();
+    await broker.close();
+  }
+});
 
 it("keeps one shared generation when the host opens a newly created worker database before publication", async () => {
   const location = path.join(tempDirs.make("sqlite-created-generation-"), "created.sqlite");

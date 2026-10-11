@@ -31,7 +31,6 @@ describe("workspace manifest HTTP negotiation", () => {
         environmentId: "environment",
         ownerEpoch: 1,
         sessionId: "session",
-        generation: 1,
         localPath,
         isAuthorized: () => true,
       });

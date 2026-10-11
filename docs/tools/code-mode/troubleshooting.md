@@ -136,6 +136,6 @@ This logs a capped, redacted JSON snapshot of the model request; use it only
 while debugging, since prompts and message text can still appear.
 
 For stream debugging, use `OPENCLAW_DEBUG_SSE=peek` to log the first five
-redacted SSE events. Code mode also fails closed if the final provider
-payload does not contain exactly one `exec`, one `wait`, and only approved
+redacted SSE events. Code mode also rejects the final provider
+payload if it does not contain exactly one `exec`, one `wait`, and only approved
 direct-only tools after the code-mode surface has activated.
