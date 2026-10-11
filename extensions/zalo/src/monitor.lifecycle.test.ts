@@ -153,7 +153,11 @@ describe("monitorZaloProvider lifecycle", () => {
         started.resolve(signal);
         return new Promise<Response>((resolve, reject) => {
           finishRequest = () => resolve(new Response(JSON.stringify({ ok: true })));
-          signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+          signal.addEventListener(
+            "abort",
+            () => reject(new DOMException("Polling request aborted", "AbortError")),
+            { once: true },
+          );
         });
       }),
     );
