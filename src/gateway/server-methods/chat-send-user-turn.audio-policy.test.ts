@@ -8,7 +8,8 @@ import {
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/types.js";
 import type { MediaUnderstandingScopeConfig } from "../../config/types.tools.js";
-import { transcribeFirstAudio } from "../../media-understanding/audio-preflight.js";
+import { applyMediaUnderstanding } from "../../media-understanding/apply.js";
+import { transcribeAudioAttachments } from "../../media-understanding/audio-preflight.js";
 import { createSafeAudioFixtureBuffer } from "../../media-understanding/runner.test-utils.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import * as chatAttachments from "../chat-attachments.js";
@@ -40,6 +41,7 @@ describe("chat.send voice transcription policy boundary", () => {
   async function prepare(
     scope: MediaUnderstandingScopeConfig,
     assertClientUploadAllowed?: () => void,
+    echoFormat?: string,
   ) {
     const dir = tempDirs.make("chat-audio-policy-");
     const mediaPath = path.join(dir, "voice.wav");
@@ -64,7 +66,7 @@ describe("chat.send voice transcription policy boundary", () => {
               capabilities: ["audio"],
             },
           ],
-          audio: { enabled: true, echoTranscript: true, scope },
+          audio: { enabled: true, echoTranscript: true, scope, echoFormat },
         },
       },
     };
@@ -147,6 +149,21 @@ describe("chat.send voice transcription policy boundary", () => {
     });
   });
 
+  it.each(["Voice note received", ""])(
+    "preserves spoken input with static echo format %j",
+    async (echoFormat) => {
+      await withEnvAsync({ PATH: "" }, async () => {
+        const { prepared, input, cfg } = await prepare({ default: "allow" }, undefined, echoFormat);
+        expect(input.text).toBe("caption");
+        expect(runExec).not.toHaveBeenCalled();
+        prepared.applyApprovedText(requireInputText(input));
+        await applyMediaUnderstanding({ ctx: prepared.ctx, cfg, processingMode: "audio-only" });
+        expect(runExec).toHaveBeenCalledOnce();
+        expect(prepared.ctx.BodyForAgent).toContain("policy-approved voice");
+      });
+    },
+  );
+
   it("hands one policy-approved result to the same media context without retranscribing", async () => {
     await withEnvAsync({ PATH: "" }, async () => {
       const { prepared, input, cfg } = await prepare({
@@ -164,7 +181,7 @@ describe("chat.send voice transcription policy boundary", () => {
       expect(prepared.ctx.media?.[0]?.transcribed).toBe(true);
       expect(runExec).toHaveBeenCalledOnce();
       prepared.applyApprovedText(approvedText);
-      await expect(transcribeFirstAudio({ ctx: prepared.ctx, cfg })).resolves.toBeUndefined();
+      await expect(transcribeAudioAttachments({ ctx: prepared.ctx, cfg })).resolves.toBeUndefined();
       expect(runExec).toHaveBeenCalledOnce();
       expect(prepared.ctx.BodyForAgent).toContain("machine-generated, untrusted");
     });

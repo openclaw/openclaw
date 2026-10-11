@@ -1946,6 +1946,51 @@ class GatewaySessionReconnectTest {
       }
     }
 
+  @OptIn(ExperimentalCoroutinesApi::class)
+  @Test
+  fun audioSendWaitsForAdmissionWithoutChangingExplicitRequestDeadlines() =
+    runBlocking {
+      val connected = CompletableDeferred<Unit>()
+      val issued = Channel<Pair<WebSocket, String>>(Channel.UNLIMITED)
+      val server =
+        startGatewayServer(json = Json) { socket, id, method ->
+          when (method) {
+            "connect" -> socket.send(connectResponseFrame(id))
+            "chat.send" -> issued.trySend(socket to id).getOrThrow()
+          }
+        }
+      val harness = createReconnectHarness(onConnected = { connected.complete(Unit) })
+      val scheduler = TestCoroutineScheduler()
+      val dispatcher = StandardTestDispatcher(scheduler)
+      val params = """{"attachments":[{"type":"file","mimeType":"audio/wav","fileName":"voice.wav","content":"abc"}]}"""
+      try {
+        connectSession(harness.session, server.port)
+        withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { connected.await() }
+        val send = async(dispatcher) { harness.session.requestDetailed("chat.send", params) }
+        scheduler.runCurrent()
+        withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { issued.receive() }
+        scheduler.advanceTimeBy(60_000)
+        scheduler.runCurrent()
+        assertFalse("Slow transcription must retain the original request", send.isCompleted)
+        send.cancel()
+        scheduler.runCurrent()
+        send.join()
+        assertTrue(send.isCancelled)
+
+        val bounded =
+          async(dispatcher) {
+            runCatching { harness.session.requestDetailed("chat.send", params, timeoutMs = 1200) }
+          }
+        scheduler.runCurrent()
+        withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { issued.receive() }
+        scheduler.advanceTimeBy(1200)
+        scheduler.runCurrent()
+        assertTrue(bounded.await().exceptionOrNull() is GatewayRequestOutcomeUnknown)
+      } finally {
+        shutdownReconnectHarness(harness, server)
+      }
+    }
+
   @Test
   fun staleConnectionDrainCannotCancelReplacementRpc() =
     runBlocking {

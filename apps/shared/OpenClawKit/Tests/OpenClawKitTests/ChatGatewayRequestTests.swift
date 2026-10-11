@@ -788,6 +788,22 @@ struct ChatGatewayRequestTests {
         #expect(json.contains("a.png"))
     }
 
+    @Test func `audio send waits for admission while explicit request deadlines remain caller owned`() {
+        for timeout in [nil, 1200] as [Int?] {
+            let request = OpenClawChatGatewayRequests.sendMessage(
+                sessionKey: "main",
+                agentID: nil,
+                expectedSessionRoutingContract: nil,
+                message: "caption",
+                thinking: nil,
+                idempotencyKey: "audio-send",
+                attachments: [.init(type: "file", mimeType: "audio/wav", fileName: "voice.wav", content: "abc")],
+                requestTimeoutMs: timeout)
+            #expect(request.timeoutMs == Double(timeout ?? 0))
+            #expect(request.params["timeoutMs"] == nil)
+        }
+    }
+
     @Test func `send request omits inherited thinking override`() {
         let inherited = OpenClawChatGatewayRequests.sendMessage(
             sessionKey: "global",

@@ -66,18 +66,26 @@ async function resolveChatUiTranscriptEcho(params: {
     params.clientInfo?.id === GATEWAY_CLIENT_IDS.MACOS_APP ||
     params.clientInfo?.id === GATEWAY_CLIENT_IDS.IOS_APP ||
     params.clientInfo?.id === GATEWAY_CLIENT_IDS.ANDROID_APP;
-  if (!transcriptEchoClient || !audio?.echoTranscript || !params.ctx.media?.length) {
+  const echoFormat = audio?.echoFormat ?? DEFAULT_ECHO_TRANSCRIPT_FORMAT;
+  // A static/empty display format does not contain speech to persist. Leave
+  // the attachment for ordinary media processing instead of consuming it here.
+  if (
+    !transcriptEchoClient ||
+    !audio?.echoTranscript ||
+    !echoFormat.includes("{transcript}") ||
+    !params.ctx.media?.length
+  ) {
     return undefined;
   }
 
   // Use the actual admitted turn context: audio scope rules depend on its
-  // channel, chat type, and session key, and transcribeFirstAudio marks the
+  // channel, chat type, and session key, and transcribeAudioAttachments marks the
   // same media facts later passed to agent dispatch as already transcribed.
   params.assertCurrent();
   const transcript = await audioPreflightLoader
     .load()
-    .then(({ transcribeFirstAudio }) =>
-      transcribeFirstAudio({
+    .then(({ transcribeAudioAttachments }) =>
+      transcribeAudioAttachments({
         ctx: params.ctx,
         ...(params.cfg
           ? {
@@ -110,10 +118,7 @@ async function resolveChatUiTranscriptEcho(params: {
   // retain the result for the approval-aware agent context and canonical user
   // turn. Do not add it to the prompt until the canonical text is approved.
   params.ctx.Transcript = transcript;
-  return (audio.echoFormat ?? DEFAULT_ECHO_TRANSCRIPT_FORMAT).replace(
-    "{transcript}",
-    () => transcript,
-  );
+  return echoFormat.replace("{transcript}", () => transcript);
 }
 
 async function persistChatSendImages(params: {
@@ -345,8 +350,10 @@ export function prepareChatSendUserTurn(params: {
   );
   let transcriptEchoForAgent: string | undefined;
   let machineTranscriptForAgent: string | undefined;
+  let inlineImageOmitted = false;
   userTurn.setInputPromise(
     persistedMediaForTranscriptPromise.then(async (result) => {
+      inlineImageOmitted = result.omission === "inline-image-save-failed";
       const media = result.entries.map((entry) => entry.fact);
       const slots = result.entries.flatMap((entry, factIndex) =>
         entry.imageKind ? [{ kind: entry.imageKind, factIndex }] : [],
@@ -364,11 +371,7 @@ export function prepareChatSendUserTurn(params: {
       });
       if (transcriptEcho !== undefined && ctx.Transcript) {
         transcriptEchoForAgent = transcriptEcho;
-        const echoFormat =
-          session.cfg?.tools?.media?.audio?.echoFormat ?? DEFAULT_ECHO_TRANSCRIPT_FORMAT;
-        if (echoFormat.includes("{transcript}")) {
-          machineTranscriptForAgent = formatAudioTranscriptForAgent(ctx.Transcript);
-        }
+        machineTranscriptForAgent = formatAudioTranscriptForAgent(ctx.Transcript);
       }
       return {
         ...userTurn.baseInput,
@@ -404,42 +407,49 @@ export function prepareChatSendUserTurn(params: {
       }
     },
     applyApprovedText: (text: string) => {
-      if (text === request.inboundMessage.trim()) {
+      if (text === request.inboundMessage.trim() && !machineTranscriptForAgent) {
         return;
       }
       Object.assign(ctx, buildTextContext(text));
+      let approvedCaption = text;
       if (machineTranscriptForAgent) {
-        // The approved canonical text may include the user-visible echo. Keep
-        // it in Body/history, while retaining untrusted transcript framing in
-        // the prompt passed to the agent.
-        let agentBaseText = text;
+        // The durable omission note follows the display echo, but does not
+        // change which speech or caption the write hook approved.
+        const omissionSuffix =
+          inlineImageOmitted && text.endsWith("\n" + INLINE_IMAGE_DURABLE_OMISSION_MARKER)
+            ? INLINE_IMAGE_DURABLE_OMISSION_MARKER
+            : undefined;
+        const captionAndEcho = omissionSuffix ? text.slice(0, -(omissionSuffix.length + 1)) : text;
         const retainedEcho =
           transcriptEchoForAgent !== undefined &&
-          (text === transcriptEchoForAgent || text.endsWith("\n" + transcriptEchoForAgent));
-        if (retainedEcho && transcriptEchoForAgent) {
-          agentBaseText =
-            text === transcriptEchoForAgent
+          (captionAndEcho === transcriptEchoForAgent ||
+            captionAndEcho.endsWith("\n" + transcriptEchoForAgent));
+        approvedCaption =
+          retainedEcho && transcriptEchoForAgent !== undefined
+            ? captionAndEcho === transcriptEchoForAgent
               ? ""
-              : text.slice(0, -(transcriptEchoForAgent.length + 1));
-        }
-        const approvedTranscript =
-          retainedEcho || (transcriptEchoForAgent === "" && text === request.inboundMessage.trim())
-            ? machineTranscriptForAgent
-            : undefined;
-        ctx.agentText = [agentBaseText, approvedTranscript].filter(Boolean).join("\n");
+              : captionAndEcho.slice(0, -(transcriptEchoForAgent.length + 1))
+            : captionAndEcho;
+        const approvedContext = buildTextContext(approvedCaption);
+        ctx.agentText = [
+          approvedContext.BodyForAgent,
+          retainedEcho ? machineTranscriptForAgent : undefined,
+          omissionSuffix,
+        ]
+          .filter(Boolean)
+          .join("\n");
         ctx.BodyForAgent = ctx.agentText;
-
-        // The display echo belongs in canonical history, but the machine
-        // transcript must never become executable command input.
-        ctx.BodyForCommands = commandBody;
-        ctx.CommandBody = commandBody;
-        ctx.RawBody = attachments.parsedMessage;
+        if (!retainedEcho) {
+          ctx.Transcript = undefined;
+        }
+        // Command/raw consumers receive the approved caption and its managed
+        // media hints; synthesized speech never becomes executable input.
+        ctx.BodyForCommands = approvedContext.BodyForCommands;
+        ctx.CommandBody = approvedContext.CommandBody;
+        ctx.RawBody = approvedContext.RawBody;
       }
       if (ctx.CommandTurn) {
-        ctx.CommandTurn = {
-          ...ctx.CommandTurn,
-          body: machineTranscriptForAgent ? commandBody : text,
-        };
+        ctx.CommandTurn = { ...ctx.CommandTurn, body: approvedCaption };
       }
     },
     discardUnreferencedMedia: async (approved: PersistedUserTurnMessage | undefined) => {

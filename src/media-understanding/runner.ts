@@ -38,6 +38,7 @@ import { logWarn } from "../logger.js";
 import { classifyMediaReferenceSource } from "../media/media-reference.js";
 import { createLazyRuntimeModule, createLazyRuntimeNamedExport } from "../shared/lazy-runtime.js";
 import { MediaAttachmentCache, selectAttachments } from "./attachments.js";
+import { createAttachmentDispositions } from "./attachments.select.js";
 import {
   matchesMediaEntryCapability,
   resolveConfiguredMediaEntryCapabilities,
@@ -646,13 +647,6 @@ function hasFailedMediaAttempt(attachments: MediaUnderstandingDecision["attachme
   );
 }
 
-function createAttachmentDispositions(
-  indexes: readonly number[],
-  disposition: MediaAttachmentDisposition,
-): Record<number, MediaAttachmentDisposition> {
-  return Object.fromEntries(indexes.map((index) => [index, disposition]));
-}
-
 export async function runCapability(
   params: Omit<AutoModelSelectionParams, "providerRegistry"> & {
     ctx: MsgContext;
@@ -669,6 +663,7 @@ export async function runCapability(
   const selection = selectAttachments({
     capability,
     attachments: params.media,
+    previousDecisions: ctx.MediaUnderstandingDecisions,
     policy: config.attachments,
   });
   const selectedAttachmentIndexes = selection.selected.map((attachment) => attachment.index);

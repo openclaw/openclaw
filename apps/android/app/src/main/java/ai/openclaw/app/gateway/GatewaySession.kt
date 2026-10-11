@@ -790,7 +790,7 @@ class GatewaySession(
   suspend fun request(
     method: String,
     paramsJson: String?,
-    timeoutMs: Long = 15_000,
+    timeoutMs: Long? = null,
   ): String = requestDetailed(method = method, paramsJson = paramsJson, timeoutMs = timeoutMs).payloadOrThrow()
 
   suspend fun loadImageArtifact(
@@ -879,7 +879,7 @@ class GatewaySession(
     expectedEndpointStableId: String,
     method: String,
     paramsJson: String?,
-    timeoutMs: Long = 15_000,
+    timeoutMs: Long? = null,
   ): String = requestDetailed(expectedEndpointStableId, method, paramsJson, timeoutMs).payloadOrThrow()
 
   private fun RpcResult.payloadOrThrow(): String {
@@ -915,7 +915,7 @@ class GatewaySession(
   suspend fun requestDetailed(
     method: String,
     paramsJson: String?,
-    timeoutMs: Long = 15_000,
+    timeoutMs: Long? = null,
   ): RpcResult =
     requestDetailed(
       expectedEndpointStableId = null,
@@ -928,7 +928,7 @@ class GatewaySession(
     expectedEndpointStableId: String?,
     method: String,
     paramsJson: String?,
-    timeoutMs: Long,
+    timeoutMs: Long?,
   ): RpcResult {
     val conn = readyConnection(expectedEndpointStableId) ?: throw GatewayRequestNotEnqueued("not connected")
     return requestDetailed(conn, method, paramsJson, timeoutMs)
@@ -938,7 +938,7 @@ class GatewaySession(
     conn: Connection,
     method: String,
     paramsJson: String?,
-    timeoutMs: Long,
+    timeoutMs: Long?,
     withEnqueue: (() -> Unit) -> Unit = { it() },
   ): RpcResult {
     val params =
@@ -947,7 +947,15 @@ class GatewaySession(
       } else {
         json.parseToJsonElement(paramsJson)
       }
-    return conn.request(method, params, timeoutMs, guardRequestEnqueue(conn, withEnqueue))
+    val hasAudio =
+      method == "chat.send" &&
+        params.asObjectOrNull()?.get("attachments").asArrayOrNull()?.any { attachment ->
+          attachment.asObjectOrNull()?.get("mimeType").asStringOrNull()?.lowercase()?.startsWith("audio/") == true
+        } == true
+    // Audio transcription precedes durable admission. Disconnect and caller
+    // cancellation still settle the request while it waits for that ACK.
+    val requestTimeoutMs = timeoutMs ?: if (hasAudio) 0L else 15_000L
+    return conn.request(method, params, requestTimeoutMs, guardRequestEnqueue(conn, withEnqueue))
   }
 
   private fun guardRequestEnqueue(
@@ -1173,7 +1181,7 @@ class GatewaySession(
       val deferred = registerPending(id)
       try {
         sendJson(buildRequestFrame(id = id, method = method, params = params), withEnqueue)
-        return withTimeout(timeoutMs) { deferred.await() }
+        return if (timeoutMs == 0L) deferred.await() else withTimeout(timeoutMs) { deferred.await() }
       } catch (err: TimeoutCancellationException) {
         if (method == GatewayMethod.Connect.rawValue) {
           throw GatewayConnectFailure(gatewayNetworkConnectError(timedOut = true))

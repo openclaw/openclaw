@@ -1,16 +1,31 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { formatAudioTranscriptForAgent } from "../plugin-sdk/media-understanding-runtime.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { applyMediaUnderstanding } from "./apply.js";
-import { transcribeFirstAudio } from "./audio-preflight.js";
+import { transcribeAudioAttachments, transcribeFirstAudio } from "./audio-preflight.js";
 import { createSafeAudioFixtureBuffer } from "./runner.test-utils.js";
 import type { MediaUnderstandingProvider } from "./types.js";
 
+const runExecMock = vi.hoisted(() => vi.fn());
+vi.mock("../process/exec.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../process/exec.js")>();
+  return {
+    ...actual,
+    runExec: (...args: Parameters<typeof actual.runExec>) =>
+      args[0] === "fixture-transcriber" && runExecMock.getMockImplementation()
+        ? runExecMock(...args)
+        : actual.runExec(...args),
+  };
+});
+
 describe("audio preflight attachment handoff", () => {
+  beforeEach(() => {
+    runExecMock.mockReset();
+  });
   it("preserves prepared text when there is no media enrichment", async () => {
     const ctx: MsgContext = {
       Body: "transport envelope",
@@ -184,6 +199,95 @@ process.stdout.write(process.argv[3] === "empty" && name === "first.wav" ? "  \\
         if (!emptyFirst) {
           expect(ctx.agentText).toContain(preparedText);
         }
+      });
+    },
+  );
+  it.each([
+    { name: "default limit", emptyFirst: false, attachments: undefined, expected: ["first.wav"] },
+    {
+      name: "last preference",
+      emptyFirst: false,
+      attachments: { prefer: "last" as const },
+      expected: ["second.wav"],
+    },
+    {
+      name: "all attachments",
+      emptyFirst: false,
+      attachments: { mode: "all" as const, maxAttachments: 2 },
+      expected: ["first.wav", "second.wav"],
+    },
+    {
+      name: "partial success",
+      emptyFirst: true,
+      attachments: { mode: "all" as const, maxAttachments: 2 },
+      expected: ["first.wav", "second.wav"],
+    },
+  ])(
+    "preserves configured $name through internal preflight and later enrichment",
+    async ({ attachments, expected, emptyFirst }) => {
+      await withTestDir({ prefix: "openclaw-audio-selection-" }, async (dir) => {
+        const calls: string[] = [];
+        runExecMock.mockImplementation(async (_command, args: string[]) => {
+          const attachmentPath = args[0];
+          if (attachmentPath === undefined) {
+            throw new Error("Expected the selected audio attachment path");
+          }
+          const name = path.basename(attachmentPath);
+          calls.push(name);
+          return {
+            stdout: emptyFirst && name === "first.wav" ? "  \n" : "heard " + name,
+            stderr: "",
+          };
+        });
+        const media = await Promise.all(
+          ["first.wav", "second.wav"].map(async (name) => {
+            const filePath = path.join(dir, name);
+            await fs.writeFile(filePath, createSafeAudioFixtureBuffer());
+            return { path: filePath, contentType: "audio/wav", workspaceDir: dir };
+          }),
+        );
+        const cfg: OpenClawConfig = {
+          plugins: { enabled: false },
+          tools: {
+            media: {
+              models: [
+                {
+                  type: "cli",
+                  command: "fixture-transcriber",
+                  args: ["{{AttachmentPath}}"],
+                  capabilities: ["audio"],
+                },
+              ],
+              audio: { attachments },
+            },
+          },
+        };
+        const ctx: MsgContext = { Body: "typed caption", media: [{}, ...media] };
+        const transcript = await transcribeAudioAttachments({ ctx, cfg });
+        expect(transcript).toBe(
+          emptyFirst
+            ? "heard second.wav"
+            : expected.length === 1
+              ? "heard " + expected[0]
+              : "Audio 1:\nheard first.wav\n\nAudio 2:\nheard second.wav",
+        );
+        expect(ctx.media?.map((fact) => fact.transcribed === true)).toEqual([
+          false,
+          !emptyFirst && expected.includes("first.wav"),
+          expected.includes("second.wav"),
+        ]);
+        expect(transcript).toBeDefined();
+        const preparedText = formatAudioTranscriptForAgent(transcript ?? "");
+        ctx.agentText = preparedText;
+        await applyMediaUnderstanding({
+          ctx,
+          cfg,
+          workspaceDir: dir,
+          processingMode: "audio-only",
+        });
+        expect(calls).toEqual(expected);
+        expect(ctx.agentText).toBe(preparedText);
+        expect(ctx.MediaUnderstanding).toBeUndefined();
       });
     },
   );

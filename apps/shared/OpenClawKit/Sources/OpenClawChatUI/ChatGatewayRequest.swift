@@ -690,7 +690,7 @@ public enum OpenClawChatGatewayRequests {
         idempotencyKey: String,
         attachments: [OpenClawChatAttachmentPayload],
         runTimeoutMs: Int? = nil,
-        requestTimeoutMs: Int = 30000) -> OpenClawChatGatewayRequest
+        requestTimeoutMs: Int? = nil) -> OpenClawChatGatewayRequest
     {
         var params: [String: AnyCodable] = [
             "sessionKey": AnyCodable(sessionKey),
@@ -724,7 +724,10 @@ public enum OpenClawChatGatewayRequests {
         return OpenClawChatGatewayRequest(
             method: "chat.send",
             params: params,
-            timeoutMs: Double(requestTimeoutMs))
+            // Admission includes audio transcription; zero waits until the
+            // captured connection closes, the caller cancels, or the ACK arrives.
+            timeoutMs: Double(requestTimeoutMs ??
+                (attachments.contains { $0.mimeType.lowercased().hasPrefix("audio/") } ? 0 : 30000)))
     }
 
     public static func agentWait(
