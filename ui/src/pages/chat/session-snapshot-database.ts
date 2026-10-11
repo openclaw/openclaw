@@ -10,7 +10,7 @@ export const CHAT_SNAPSHOT_DB_NAME = "openclaw-chat-snapshots";
 export const CHAT_SNAPSHOT_STORE_NAME = "snapshots";
 export const CHAT_SNAPSHOT_METADATA_STORE_NAME = "snapshotMetadata";
 export const SIDEBAR_SNAPSHOT_STORE_NAME = "sidebarSnapshots";
-const CHAT_SNAPSHOT_DB_VERSION = 6;
+const CHAT_SNAPSHOT_DB_VERSION = 7;
 
 export function isPersistableChatSnapshotKey(key: string): boolean {
   return key.startsWith("scope:[") && !isIncognitoSessionKey(key.slice(key.indexOf("\u0000") + 1));
