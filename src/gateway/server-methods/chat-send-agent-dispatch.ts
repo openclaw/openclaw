@@ -6,6 +6,7 @@ import {
 } from "../../../packages/gateway-protocol/src/client-info.js";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { classifyAgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.js";
+import { resolveWebchatPromptCacheKey } from "../../agents/embedded-agent-runner/run/session-boundary-prompt-cache-key.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import { dispatchInboundMessageWithProjectedDispatcher } from "../../auto-reply/dispatch.js";
 import type { ReplyDispatchRun } from "../../auto-reply/get-reply-options.types.js";
@@ -29,10 +30,7 @@ import { prepareGatewaySkillLibraryTurn } from "../skill-library-authoring.js";
 import { buildAbortedChatSendPayload } from "./chat-abort-authorization.js";
 import { broadcastChatDelta } from "./chat-broadcast.js";
 import type { StartChatDispatchParams } from "./chat-send-agent-dispatch.types.js";
-import {
-  resolveWebchatPromptCacheKey,
-  scheduleChatDashboardSessionTitle,
-} from "./chat-send-background.js";
+import { scheduleChatDashboardSessionTitle } from "./chat-send-background.js";
 import { readChatSendReplyPayload } from "./chat-send-command-replies.js";
 import {
   createChatSendDispatchErrorLifecycle,

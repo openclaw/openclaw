@@ -76,12 +76,12 @@ export function ListView(props: CronProps) {
               </div>
             </SettingsSection>
           ) : (
-            [
+            <>
               <SettingsSection>
                 <JobsTable {...props} hasAnyJobsFilters={hasAnyJobsFilters()} />
-              </SettingsSection>,
-              showStarterAutomations() ? <Suggestions {...props} /> : undefined,
-            ]
+              </SettingsSection>
+              {showStarterAutomations() ? <Suggestions {...props} /> : undefined}
+            </>
           )}
         </div>
       </SettingsPage>

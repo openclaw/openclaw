@@ -124,21 +124,13 @@ export function getElement<T extends Element>(
 }
 
 export function selectSegmented(control: HTMLElement) {
-  const input =
-    control instanceof HTMLInputElement
-      ? control
-      : control.querySelector<HTMLInputElement>('input[type="radio"]');
-  expect(input).toBeInstanceOf(HTMLInputElement);
-  if (input) {
-    input.checked = true;
-    input.dispatchEvent(new Event("change", { bubbles: true }));
-  }
+  getElement(control, "input.settings-segmented__input", HTMLInputElement).click();
 }
 
 export function findToggleByLabel(container: Element, label: string) {
   return (
-    [...container.querySelectorAll(".settings-row--toggle")]
-      .find((row) => row.textContent?.includes(label))
-      ?.querySelector<HTMLInputElement>('input[type="checkbox"]') ?? null
+    Array.from(container.querySelectorAll(".settings-toggle")).find((toggle) =>
+      (toggle.closest(".settings-row--toggle") ?? toggle).textContent?.includes(label),
+    ) ?? null
   );
 }

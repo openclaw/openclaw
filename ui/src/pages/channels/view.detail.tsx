@@ -3,7 +3,7 @@ import type { JSX } from "@solidjs/web";
 import { createMemo, For, Show } from "solid-js";
 import type { ChannelStatus } from "../../api/types.ts";
 import { renderChannelIcon } from "../../components/channel-icon.ts";
-import { icons } from "../../components/icons.ts";
+import { Icon } from "../../components/solid/icon.tsx";
 import { SettingsSection } from "../../components/solid/settings-ui.tsx";
 import { resolveChannelAccounts } from "../../lib/channels/index.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
@@ -239,7 +239,7 @@ export function renderChannelDetail(params: {
               aria-label={t("common.close")}
               onClick={() => params.onClose()}
             >
-              <LitContent value={icons.x} />
+              <Icon name="x" />
             </button>
           </div>
         </div>

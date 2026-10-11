@@ -4,10 +4,8 @@ import type { StatementSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import * as configEnv from "../../config/config-env-vars.js";
-import {
-  upsertSessionEntryCore,
-  replaceTranscriptEvents,
-} from "../../config/sessions/session-accessor.js";
+import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import * as transcriptHydration from "../../config/sessions/session-transcript-hydration.js";
 import { SessionTranscriptStorageUnavailableError } from "../../config/sessions/session-transcript-projection-error.js";
 import { runWithSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";

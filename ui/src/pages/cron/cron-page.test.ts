@@ -624,7 +624,7 @@ describe("CronPage editor state sync", () => {
     const page = createPage(createContext(gateway, "writer"), { render: true });
 
     await waitForCronPage(() =>
-      expect(page.querySelector('[data-test-id="cron-new-task"]')).not.toBeNull(),
+      expect(page.querySelector('[data-suggestion="repoPulse"]')).not.toBeNull(),
     );
     (page.querySelector('[data-suggestion="repoPulse"]') as HTMLButtonElement).click();
     await waitForCronPage(() =>
@@ -812,12 +812,12 @@ describe("CronPage editor state sync", () => {
 
     await waitForCronPage(() =>
       expect(
-        page.querySelector('[data-test-id="cron-toggle-enabled"] input[type="checkbox"]'),
+        page.querySelector('[data-test-id="cron-toggle-enabled"] input.settings-toggle__input'),
       ).not.toBeNull(),
     );
     const enabledToggle = page.querySelector(
-      '[data-test-id="cron-toggle-enabled"] input[type="checkbox"]',
-    ) as HTMLElement & { checked: boolean };
+      '[data-test-id="cron-toggle-enabled"] input.settings-toggle__input',
+    ) as HTMLInputElement;
     enabledToggle.checked = false;
     enabledToggle.dispatchEvent(new Event("change", { bubbles: true }));
     await waitForCronPage(() => expect(page.cron.cronForm.enabled).toBe(false));

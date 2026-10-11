@@ -948,6 +948,15 @@ describe("channel draft editing", () => {
     expect(container.querySelector("#nostr-profile-name")).toBe(input);
     expect(input?.value).toBe("after");
     expect(container.textContent).toContain("You have unsaved changes");
+
+    const save = vi.fn();
+    props.onNostrProfileSave = save;
+    renderChannelView(ChannelsView, props, container);
+    const publish = Array.from(container.querySelectorAll("button")).find(
+      (button) => button.textContent?.trim() === "Save & Publish",
+    );
+    publish?.click();
+    expect(save).toHaveBeenCalledOnce();
   });
 });
 

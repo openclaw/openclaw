@@ -50,12 +50,15 @@ async function createFixture(
         resolveStorePath: () => path.join(stateDir, "sessions.json"),
         getSessionEntry: ({ sessionKey: key }: { sessionKey: string }) =>
           key === sessionKey ? entry : undefined,
-        patchSessionEntry: async ({
-          update,
-        }: {
-          update: (current: SessionEntry) => Promise<Partial<SessionEntry>>;
-        }) => {
-          entry = { ...entry, ...(await update(entry)) };
+        prepareSessionEntryPatch: async ({
+          prepare,
+          authority,
+        }: Parameters<PluginRuntime["agent"]["session"]["prepareSessionEntryPatch"]>[0]) => {
+          const patch = await prepare(entry, { existingEntry: entry });
+          if (authority?.kind === "host") {
+            authority.assertCurrent();
+          }
+          entry = { ...entry, ...patch };
           return entry;
         },
       },

@@ -194,7 +194,6 @@ export class CronPageController {
   activate() {
     document.addEventListener("visibilitychange", this.onActivation);
     globalThis.addEventListener("focus", this.onActivation);
-    this.ensureInitialData();
   }
 
   dispose() {

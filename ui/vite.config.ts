@@ -757,6 +757,7 @@ export default function controlUiViteConfig(
       ],
     },
     build: {
+      target: ["chrome147", "firefox150", "safari26.2"],
       outDir: options.outDir ?? outDir,
       emptyOutDir: true,
       // Release packages omit maps; keep generating them without advertising dead URLs.

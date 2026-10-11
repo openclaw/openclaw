@@ -57,9 +57,7 @@ export function renderNostrProfileForm(params: {
   );
 
   const renderField = ([field, labelKey, placeholderKey, helpKey, type]: ProfileField) => {
-    const label = t(`channels.nostr.${labelKey}`);
-    const placeholder = t(`channels.nostr.${placeholderKey}`);
-    const help = t(`channels.nostr.${helpKey}`);
+    const help = createMemo(() => t(`channels.nostr.${helpKey}`));
     const value = createMemo(() => params.state.values[field] ?? "");
     const error = createMemo(() => params.state.fieldErrors[field]);
 
@@ -67,7 +65,7 @@ export function renderNostrProfileForm(params: {
     const helpId = `${inputId}-help`;
     const errorId = `${inputId}-error`;
     const descriptionIds = createMemo(() =>
-      [help ? helpId : "", error() ? errorId : ""].filter(Boolean).join(" "),
+      [help() ? helpId : "", error() ? errorId : ""].filter(Boolean).join(" "),
     );
     const multiline = type === "textarea";
     const control = multiline ? (
@@ -75,7 +73,7 @@ export function renderNostrProfileForm(params: {
         id={inputId}
         class="settings-input"
         prop:value={value()}
-        placeholder={placeholder}
+        placeholder={t(`channels.nostr.${placeholderKey}`)}
         maxlength="2000"
         rows="3"
         aria-describedby={descriptionIds() || undefined}
@@ -89,7 +87,7 @@ export function renderNostrProfileForm(params: {
         class="settings-input"
         type={type}
         prop:value={value()}
-        placeholder={placeholder}
+        placeholder={t(`channels.nostr.${placeholderKey}`)}
         maxlength="256"
         aria-describedby={descriptionIds() || undefined}
         aria-invalid={error() ? "true" : undefined}
@@ -102,11 +100,11 @@ export function renderNostrProfileForm(params: {
       <div class="settings-row settings-row--stacked">
         <div class="settings-row__text">
           <label class="settings-row__title" for={inputId}>
-            {label}
+            {t(`channels.nostr.${labelKey}`)}
           </label>
-          {help ? (
+          {help() ? (
             <span id={helpId} class="settings-row__desc">
-              {help}
+              {help()}
             </span>
           ) : undefined}
           {error() ? (
@@ -184,7 +182,7 @@ export function renderNostrProfileForm(params: {
         <div class="settings-row__control">
           <button
             class="btn primary"
-            onClick={params.callbacks.onSave}
+            onClick={() => params.callbacks.onSave()}
             disabled={params.state.saving || !isDirty()}
           >
             {params.state.saving ? t("common.saving") : t("common.saveAndPublish")}
@@ -192,7 +190,7 @@ export function renderNostrProfileForm(params: {
 
           <button
             class="btn"
-            onClick={params.callbacks.onImport}
+            onClick={() => params.callbacks.onImport()}
             disabled={params.state.importing || params.state.saving}
           >
             {params.state.importing ? t("common.importing") : t("common.importFromRelays")}
@@ -201,12 +199,16 @@ export function renderNostrProfileForm(params: {
           <button
             class="btn"
             aria-expanded={String(params.state.showAdvanced)}
-            onClick={params.callbacks.onToggleAdvanced}
+            onClick={() => params.callbacks.onToggleAdvanced()}
           >
             {params.state.showAdvanced ? t("common.hideAdvanced") : t("common.showAdvanced")}
           </button>
 
-          <button class="btn" onClick={params.callbacks.onCancel} disabled={params.state.saving}>
+          <button
+            class="btn"
+            onClick={() => params.callbacks.onCancel()}
+            disabled={params.state.saving}
+          >
             {t("common.cancel")}
           </button>
         </div>

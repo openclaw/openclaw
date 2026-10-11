@@ -2,13 +2,12 @@ import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { JSX } from "@solidjs/web";
 import { createMemo, For, Show } from "solid-js";
 import type { ChannelAccountSnapshot, ChannelStatus } from "../../api/types.ts";
-import { icons } from "../../components/icons.ts";
+import { Icon } from "../../components/solid/icon.tsx";
 import { SettingsRow, SettingsStatus } from "../../components/solid/settings-ui.tsx";
 import { resolveChannelAccounts } from "../../lib/channels/index.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { LitContent } from "../../lit/lit-content.tsx";
 import type { ChannelsProps } from "./view.types.ts";
 
 type ChannelStatusKind = "ok" | "warn" | "danger" | "accent" | "muted";
@@ -145,7 +144,7 @@ export function ChannelRefresh(params: {
         disabled={params.disabled}
         onClick={() => params.onRefresh()}
       >
-        <LitContent value={icons.refresh} />
+        <Icon name="refresh" />
       </button>
     </openclaw-tooltip>
   );

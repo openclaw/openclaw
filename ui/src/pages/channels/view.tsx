@@ -2,7 +2,7 @@ import { createMemo, For, Show } from "solid-js";
 import type { ChannelsStatusSnapshot } from "../../api/types.ts";
 import "../../styles/channels.css";
 import { renderChannelIcon } from "../../components/channel-icon.ts";
-import { icons } from "../../components/icons.ts";
+import { Icon } from "../../components/solid/icon.tsx";
 import {
   SettingsEmpty,
   SettingsPage,
@@ -257,7 +257,7 @@ function ConnectedRow(params: { channelId: string; props: ChannelsProps }) {
       <div class="settings-row__control">
         {rowStatus(statusIssue() ? "attention" : resolveRowState(params.channelId, params.props))}
         <span class="settings-row__chevron">
-          <LitContent value={icons.chevronRight} />
+          <Icon name="chevronRight" />
         </span>
       </div>
     </button>
@@ -324,7 +324,7 @@ function renderBrowseAllRow(props: ChannelsProps) {
       </div>
       <div class="settings-row__control">
         <span class="settings-row__chevron">
-          <LitContent value={icons.chevronRight} />
+          <Icon name="chevronRight" />
         </span>
       </div>
     </button>
