@@ -136,7 +136,7 @@ export function bindPluginInstanceModuleLoader(params: PluginInstanceModuleLoade
     // Node keeps evaluated native graphs until worker retirement; their lazy
     // imports still need the captured files and previously compiled helpers.
     if (retained?.loaded) {
-      return;
+      return undefined;
     }
     retained?.discard();
     for (const build of sourceBuilds.values()) {

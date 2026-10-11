@@ -14,9 +14,9 @@ type RetainedNativeEsmCapture = {
   knownOwners: WeakSet<object>;
   sourceBuilds: Map<string, ReturnType<typeof buildPluginTypeScriptSource>>;
   owner(): PluginModuleLoaderOwner;
-  execute<T>(run: () => T): T;
+  execute: <T>(run: () => T) => T;
   sourceForOutput(filename: string): PluginSourceFile;
-  moduleSource(filename: string): string;
+  moduleSource: (filename: string) => string;
   load(source: string, load: (source: string) => unknown): unknown;
   discard(): void;
 };
@@ -80,9 +80,7 @@ function createRetainedCapture(entry: string): RetainedNativeEsmCapture {
       }
       return owner;
     },
-    execute<T>(run: () => T): T {
-      return capture.owner().run(run);
-    },
+    execute: <T>(run: () => T): T => capture.owner().run(run),
     sourceForOutput(filename: string): PluginSourceFile {
       for (const build of sourceBuilds.values()) {
         const source = build.sourceForOutput(filename);
@@ -92,7 +90,7 @@ function createRetainedCapture(entry: string): RetainedNativeEsmCapture {
       }
       return { source: filename };
     },
-    moduleSource(filename: string): string {
+    moduleSource: (filename: string): string => {
       const source = capture.sourceForOutput(filename);
       return source.generated ? filename : source.source;
     },

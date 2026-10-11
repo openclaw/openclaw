@@ -321,10 +321,10 @@ export function register(api) {
     catalogModelIds: string[];
   }> = [];
   try {
-    for (let index = 0; index < revisions.length; index++) {
+    for (const revision of revisions) {
       const result = await pool.run(
         {
-          value: revisions[index]!,
+          value: revision,
           request: {
             kind: "catalog",
             syntheticAuth: [],
