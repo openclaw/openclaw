@@ -52,12 +52,17 @@ export function readSessionActorMemoryHistory(
   const navigation = scanSessionTranscriptTree(state.events.map((row) => row.event));
   const active = selectSessionTranscriptTreePathNodes(navigation, navigation.leafId)
     .filter((node) => shouldProjectActiveEvent(node.entry))
-    .map((node, activePosition) => ({
-      ...state.events[node.index]!,
-      node,
-      activePosition,
-      serialized_bytes: Buffer.byteLength(state.events[node.index]!.eventJson) + 1,
-    }));
+    .map((node, activePosition) => {
+      const row = state.events[node.index]!;
+      return {
+        rawSeq: row.rawSeq,
+        event: row.event,
+        eventJson: row.eventJson,
+        node,
+        activePosition,
+        serialized_bytes: Buffer.byteLength(row.eventJson) + 1,
+      };
+    });
   const header = state.events.find((row) => isRecord(row.event) && row.event.type === "session");
   const headerBytes = header ? Buffer.byteLength(header.eventJson) + 1 : 0;
   const retained = new Set(
@@ -68,11 +73,12 @@ export function readSessionActorMemoryHistory(
   const eligible = active.filter(
     (row) => transcriptEventContextEligibility(row.event) === 1 || retained.has(row.rawSeq),
   );
-  let { selectedRows, serializedBytes, truncated } = selectBoundedContextRows(
-    eligible.toReversed(),
-    headerBytes,
-    { maxBytes, maxEvents },
-  );
+  const selection = selectBoundedContextRows(eligible.toReversed(), headerBytes, {
+    maxBytes,
+    maxEvents,
+  });
+  const { selectedRows } = selection;
+  let { serializedBytes, truncated } = selection;
   const boundaries = active.filter(
     ({ event }) => isRecord(event) && (event.type === "reset" || event.type === "compaction"),
   );
@@ -119,12 +125,17 @@ export function readSessionActorMemoryHistory(
       !isRecord(event) ||
       (event.type !== "reset" && event.type !== "compaction") ||
       typeof event.firstKeptEntryId !== "string"
-    )
+    ) {
       continue;
+    }
     const first = active.find((candidate) => candidate.node.id === event.firstKeptEntryId);
-    if (!first) continue;
+    if (!first) {
+      continue;
+    }
     let startIndex = endIndex > 0 && rows[0]!.rawSeq >= first.rawSeq ? 0 : Math.min(1, endIndex);
-    while (startIndex < endIndex && rows[startIndex]!.rawSeq < first.rawSeq) startIndex++;
+    while (startIndex < endIndex && rows[startIndex]!.rawSeq < first.rawSeq) {
+      startIndex++;
+    }
     firstKeptRanges.set(row.node.id, {
       startIndex: startIndex + headerOffset,
       endIndex: endIndex + headerOffset,

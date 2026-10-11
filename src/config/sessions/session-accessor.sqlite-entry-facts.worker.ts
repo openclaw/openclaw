@@ -13,7 +13,7 @@ import {
 } from "./session-accessor.sqlite-participant-projection.js";
 import type { SessionEntrySummary } from "./session-accessor.types.js";
 import { canonicalSessionValidationQuery } from "./session-canonical-key.js";
-import { type SessionEntryProjection } from "./session-entry-snapshot-values.js";
+import type { SessionEntryProjection } from "./session-entry-snapshot-values.js";
 import { sessionEntrySnapshotColumnsForKeys } from "./session-entry-snapshots.js";
 import type { SessionMember } from "./session-membership-facts.types.js";
 import { MAX_SESSION_ROW_FACTS_KEYS } from "./session-transcript-worker.types.js";

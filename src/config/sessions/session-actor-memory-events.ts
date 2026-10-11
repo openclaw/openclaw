@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { iterateSessionContextEntries } from "../../../packages/agent-core/src/harness/session/session.js";
 import { advanceCliHistoryBoundary, getCliHistoryWriter } from "./cli-history-boundary.js";
 import type { TranscriptEventAppendOptions } from "./session-accessor.sqlite-contract.js";
@@ -206,7 +206,7 @@ export function createSessionActorMemoryEvents(options: {
           return [];
         }
         const message = event.message;
-        const internal = isRecord(message.__openclaw) ? message.__openclaw : undefined;
+        const internal = asOptionalRecord(message["__openclaw"]);
         const provenance = isRecord(message.provenance) ? message.provenance : undefined;
         return [
           {

@@ -12,7 +12,9 @@ const path = ":memory:transcript-test";
 const authority: SessionActorAuthority = { assertCurrent() {}, authorize() {} };
 const owners: ReturnType<typeof createMemorySessionActorOwner>[] = [];
 afterEach(() => {
-  for (const owner of owners.splice(0)) owner.close();
+  for (const owner of owners.splice(0)) {
+    owner.close();
+  }
 });
 
 function committed<Value>(outcome: SessionActorOutcome<Value>) {
@@ -513,7 +515,9 @@ describe("memory actor transcript", () => {
     expect(actor.snapshot(authority)?.entry).toEqual(snapshot.entry);
     expect(replay.receipt.transcript.after).toEqual(snapshot.transcript.version);
     const identity = actor.target.database;
-    if (identity.kind !== "memory") throw new Error("Expected memory identity");
+    if (identity.kind !== "memory") {
+      throw new Error("Expected memory identity");
+    }
     expect(
       await append({
         ...plan,
@@ -568,7 +572,9 @@ describe("memory actor transcript", () => {
       ),
     );
     const user = latest.receipt.transcript.appendedMessages[0]?.anchor;
-    if (!user) throw new Error("Expected admitted user anchor");
+    if (!user) {
+      throw new Error("Expected admitted user anchor");
+    }
     const result = committed(
       await actor.appendTranscriptEvent(
         {
@@ -606,8 +612,9 @@ describe("memory actor transcript", () => {
       appended?.kind !== "metadata" ||
       !appended.value.reload?.ok ||
       appended.value.reload.value.kind !== "bounded"
-    )
+    ) {
       throw new Error("Expected bounded reload");
+    }
     const context = appended.value.reload.value.snapshot;
     expect(context.events).toMatchObject([
       { type: "session" },

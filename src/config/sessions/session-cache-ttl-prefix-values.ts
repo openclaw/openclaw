@@ -28,8 +28,12 @@ export function collectCacheTtlProjectionPrefix(
     ) {
       continue;
     }
-    if (isRecord(entry)) prefix.push(entry);
-    if (entry.type === "reset" || readCacheTtlCheckpoint([entry])) break;
+    if (isRecord(entry)) {
+      prefix.push(entry);
+    }
+    if (entry.type === "reset" || readCacheTtlCheckpoint([entry])) {
+      break;
+    }
   }
   return prefix.length ? { anchorIds: [anchor.id], entries: prefix.toReversed() } : undefined;
 }

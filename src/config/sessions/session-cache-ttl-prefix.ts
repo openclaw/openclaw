@@ -22,7 +22,9 @@ export function readCacheTtlProjectionPrefix(
     | { activePosition: number; id: string; entry: Record<string, unknown>; beforeRawSeq?: number }
     | undefined,
 ): CacheTtlProjectionPrefix | undefined {
-  if (!anchor) return undefined;
+  if (!anchor) {
+    return undefined;
+  }
   const lastNavigationValue = (key: "type" | "customType") =>
     /* kysely-allow-raw: legacy duplicate members follow JSON.parse's last-key semantics. */
     sql`(SELECT value FROM json_each(${transcriptEventResetNavigationSql("event")})
@@ -82,7 +84,9 @@ export function readCacheTtlProjectionPrefix(
   return collectCacheTtlProjectionPrefix(
     anchor,
     (function* () {
-      for (const row of rows) yield JSON.parse(row.event_json) as unknown;
+      for (const row of rows) {
+        yield JSON.parse(row.event_json) as unknown;
+      }
     })(),
   );
 }

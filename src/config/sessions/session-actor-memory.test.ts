@@ -290,8 +290,8 @@ describe("memory session actor", () => {
 
   it("flushes phase reducers and closes old handles without reviving them on reacquisition", async () => {
     const { owner, target, actor } = await fixture();
-    await actor.withPhase("bookkeeping", authority, async ({ patch }) => {
-      patch([{ kind: "activity", updatedAt: 30 }]);
+    await actor.withPhase("bookkeeping", authority, async (phase) => {
+      phase.patch([{ kind: "activity", updatedAt: 30 }]);
     });
     expect(actor.snapshot(authority)?.entry?.updatedAt).toBe(30);
     owner.closeSession(sessionKey);

@@ -398,7 +398,9 @@ export function createSessionActorMemoryTranscript(options: {
         const goal = mutation
           ? applySessionGoalOperation(entry, mutation.operation, Date.now())
           : undefined;
-        if (goal && opts.preparedGoalId) goal.id = opts.preparedGoalId;
+        if (goal && opts.preparedGoalId) {
+          goal.id = opts.preparedGoalId;
+        }
         const transactionVersion = version();
         for (const append of opts.messages) {
           if (!append.preparedMessage?.prepared) {
