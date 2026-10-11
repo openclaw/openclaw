@@ -477,7 +477,7 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
                 turn,
                 turnClaim,
                 runLocal,
-                assertRunCurrent: remoteExec ? assertRunCurrent : assertPreparationCurrent,
+                assertRunCurrent: remoteExec ? assertCurrent : assertPreparationCurrent,
               };
               return await withWorkerTurnTranscriptDatabase(
                 turn,

@@ -3,6 +3,7 @@ import path from "node:path";
 import { expect, it } from "vitest";
 import type { SessionSnapshotStore } from "../pages/chat/session-snapshot-store.ts";
 import {
+  chatSessionListResponse,
   controlUiSessionUrl,
   createChatFlowE2eSuite,
   installMockGateway,
@@ -31,6 +32,113 @@ declare global {
 const suite = createChatFlowE2eSuite();
 
 suite.define(() => {
+  it.each(["direct", "sidebar"])(
+    "opens uncached history at the end on its first visible frame (%s)",
+    async (navigation) => {
+      await suite.withPage({ viewport: { width: 1200, height: 900 } }, async ({ page }) => {
+        const sessionKey = "agent:main:dashboard:uncached-load";
+        const sourceKey = "agent:main:dashboard:starting-conversation";
+        const historyMessages = Array.from({ length: 40 }, (_, index) => ({
+          role: index % 2 ? "assistant" : "user",
+          content: "Synthetic message " + index + ": " + "Transcript detail. ".repeat(35),
+          timestamp: 1_800_000_000_000 + index * 1000,
+          __openclaw: { id: "uncached-" + index, seq: index + 1 },
+        }));
+        const responses = {
+          cases: [
+            {
+              match: { sessionKey },
+              response: { messages: historyMessages, sessionId: "uncached" },
+            },
+            {
+              match: { sessionKey: sourceKey },
+              response: {
+                messages: [{ role: "assistant", content: "Starting conversation." }],
+                sessionId: "starting",
+              },
+            },
+          ],
+        };
+        await installMockGateway(page, {
+          sessionKey: navigation === "direct" ? sessionKey : sourceKey,
+          methodResponses: {
+            "chat.history": responses,
+            "chat.startup": responses,
+            "sessions.list": chatSessionListResponse([
+              {
+                key: sourceKey,
+                sessionId: "starting",
+                kind: "direct",
+                label: "Starting conversation",
+                updatedAt: 2,
+              },
+              {
+                key: sessionKey,
+                sessionId: "uncached",
+                kind: "direct",
+                label: "Unvisited conversation",
+                updatedAt: 1,
+              },
+            ]),
+          },
+        });
+        await page.addInitScript(() => {
+          window.coldLoadSamples = [];
+          const sample = () => {
+            const thread = document.querySelector<HTMLElement>(
+              ".chat-pane-cache__pane--active .chat-thread",
+            );
+            if (
+              thread?.textContent?.includes("Synthetic message") &&
+              thread.clientHeight > 0 &&
+              getComputedStyle(thread.querySelector(".chat-thread-inner")!).visibility !== "hidden"
+            ) {
+              window.coldLoadSamples!.push({
+                top: thread.scrollTop,
+                max: thread.scrollHeight - thread.clientHeight,
+                duration: false,
+                reply: false,
+                progress: false,
+                threadTop: 0,
+                threadHeight: thread.clientHeight,
+                cardTop: null,
+                cardHeight: null,
+              });
+            }
+            if (window.coldLoadSamples!.length < 24) {
+              requestAnimationFrame(sample);
+            }
+          };
+          requestAnimationFrame(sample);
+        });
+        if (navigation === "sidebar") {
+          await page.goto(controlUiSessionUrl(suite.server.baseUrl, sourceKey));
+          await page.getByText("Starting conversation.", { exact: true }).waitFor();
+          await page
+            .locator(
+              '.sidebar-recent-session[data-session-key="' +
+                sessionKey +
+                '"] a.sidebar-recent-session__link',
+            )
+            .click();
+        } else {
+          await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+        }
+        await page.waitForFunction(() => (window.coldLoadSamples?.length ?? 0) >= 24);
+        const frames = await page.evaluate(() => window.coldLoadSamples!);
+        await writeFile(
+          path.join(suite.artifactDir, "uncached-load-" + navigation + "-frames.json"),
+          JSON.stringify(frames),
+        );
+        expect(frames[0]!.max).toBeGreaterThan(1000);
+        expect(
+          frames.every((frame) => Math.abs(frame.max - frame.top) <= 1),
+          JSON.stringify(frames),
+        ).toBe(true);
+      });
+    },
+  );
+
   it("paints the cached tail, reply metadata, and progress before hello and reconciles in place", async () => {
     await suite.withPage(
       {
@@ -136,7 +244,11 @@ suite.define(() => {
           const read = (): ColdLoadFrame | null => {
             const pane = document.querySelector(".chat-pane-cache__pane--active");
             const thread = pane?.querySelector<HTMLElement>(".chat-thread");
-            if (!thread?.querySelector(".chat-virtual-row") || thread.clientHeight === 0) {
+            if (
+              !thread?.querySelector(".chat-virtual-row") ||
+              thread.clientHeight === 0 ||
+              getComputedStyle(thread.querySelector(".chat-thread-inner")!).visibility === "hidden"
+            ) {
               return null;
             }
             const card = pane?.querySelector('[data-progress-card-placement="details"]');

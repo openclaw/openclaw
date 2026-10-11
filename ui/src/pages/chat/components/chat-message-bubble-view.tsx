@@ -18,7 +18,7 @@ import { resolveMessageDisplayMarkdown } from "../../../lib/chat/message-display
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { presentedContent } from "../../../lit/presentation-binding.ts";
 import { LitContent, solidContent } from "../../../lit/solid-content.tsx";
-import "../../../plugins/control-ui-view.runtime.ts";
+import "../../../plugins/control-ui-view.solid.tsx";
 import { assistantMessageIsInterrupted } from "../chat-assistant-reply.ts";
 import { renderAsyncQuestionSummary } from "./chat-async-question.ts";
 import "../../../components/person-reference.ts";
@@ -401,12 +401,7 @@ function MessageReasoning(props: Pick<ContentProps, "state" | "options">) {
   );
   return (
     <Show when={props.options.bubbleMode} fallback={content}>
-      <ChatBubbleActivity
-        label={t("chat.view.activityDetails")}
-        working={props.options.isStreaming}
-      >
-        {content}
-      </ChatBubbleActivity>
+      <ChatBubbleActivity label={t("chat.view.reasoning")}>{content}</ChatBubbleActivity>
     </Show>
   );
 }

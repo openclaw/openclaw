@@ -458,7 +458,6 @@ export type OpenClawStateReadResult =
       type: "subagents.runs";
       projection: "maintenance";
       runs: Map<string, SubagentRunMaintenanceRecord>;
-      maintenanceDigest: string;
     }
   | { type: "subagents.restore"; count: number }
   | {

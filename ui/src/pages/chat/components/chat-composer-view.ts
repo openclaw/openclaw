@@ -147,11 +147,10 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
     menuListboxId: slashMenuListboxId,
   } = menus;
   const activeSession = props.selectedSession;
-  const contextNotice = renderContextNotice(
-    activeSession,
-    props.sessions?.defaults?.contextTokens ?? null,
-    { messages: props.messages, providerUsage: props.providerUsage },
-  );
+  const contextNotice = renderContextNotice(activeSession, {
+    messages: props.messages,
+    providerUsage: props.providerUsage,
+  });
   const composerControls = props.composerControls ?? nothing;
   const composerLeadControl = props.permissionPicker
     ? renderChatPermissionPicker(props.permissionPicker)

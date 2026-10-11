@@ -19,7 +19,7 @@ import {
 import { submitEmbeddedAttemptPrompt } from "./embedded-agent-runner/run/attempt-prompt-submit.js";
 import {
   clearEmbeddedSessionPromptStates,
-  getEmbeddedSessionPromptState,
+  retainEmbeddedSessionPromptState,
 } from "./embedded-agent-runner/session-prompt-state.js";
 import { installToolResultContextGuard } from "./embedded-agent-runner/tool-result-context-guard.js";
 import { estimateToolResultTextChars } from "./embedded-agent-runner/tool-result-text-budget.js";
@@ -113,7 +113,8 @@ async function dispatch(
       return agent.state.messages;
     },
   };
-  const sessionPromptState = getEmbeddedSessionPromptState(sessionId);
+  using promptStateLease = retainEmbeddedSessionPromptState(sessionId);
+  const sessionPromptState = promptStateLease.state;
   try {
     await submitEmbeddedAttemptPrompt({
       attempt: { sessionId },

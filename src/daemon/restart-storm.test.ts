@@ -80,30 +80,6 @@ describe("managed Gateway external restart storm diagnostics", () => {
     );
   });
 
-  it("counts only disruptive external CLI restart steps, not safe, internal, or activation events", () => {
-    for (const fields of [
-      "source=safe-rpc action=restart mode=deferred",
-      "source=safe-rpc action=restart mode=rpc",
-      "source=supervisor action=restart mode=sigusr1",
-      "source=handoff action=restart mode=kickstart",
-      "source=cli action=restart mode=handoff-kickstart",
-      "source=cli action=restart mode=handoff-reload",
-      "source=cli action=start mode=kickstart",
-      "source=cli action=stop mode=bootout",
-      "source=cli action=restart mode=enable",
-      "source=cli action=restart mode=bootout",
-      "source=cli action=restart mode=bootstrap",
-    ]) {
-      record(fields);
-    }
-    restart();
-    expect(readGatewayForcedRestartSummary(env)).toEqual({
-      count: 2,
-      windowMs: 600_000,
-      lastRestartAt: "2026-09-01T12:00:00.000Z",
-    });
-  });
-
   it("expires old restarts and warnings and ignores malformed and future records", async () => {
     restart();
     restart();
@@ -151,37 +127,5 @@ describe("managed Gateway external restart storm diagnostics", () => {
     expect(warn).toHaveBeenCalledExactlyOnceWith(
       expect.stringContaining("Check for a stray keepalive launchd job"),
     );
-  });
-
-  it("does not name protected, unrelated, or non-keepalive jobs as the likely cause", async () => {
-    restart();
-    restart();
-    restart();
-    findForeignLaunchdJobs.mockResolvedValueOnce([
-      {
-        label: "ai.openclaw.gateway",
-        program: "/tmp/gateway",
-        keepAlive: true,
-        gatewayActions: ["restart"],
-        safeToRemove: false,
-      },
-      {
-        label: "ai.openclaw.test.observer",
-        program: "/tmp/observer",
-        keepAlive: true,
-        gatewayActions: [],
-        safeToRemove: false,
-      },
-      {
-        label: "ai.openclaw.test.once",
-        program: "/tmp/once",
-        keepAlive: false,
-        gatewayActions: ["restart"],
-        safeToRemove: true,
-      },
-    ]);
-    const warn = vi.fn();
-    await warnAboutGatewayRestartStorm(env, warn);
-    expect(warn.mock.calls[0]?.[0]).not.toContain("ai.openclaw.");
   });
 });

@@ -68,15 +68,9 @@ function latestAssistantProvider(messages: unknown[] | undefined): string | null
   return null;
 }
 
-function getContextNoticeViewModel(
-  session: GatewaySessionRow | undefined,
-  defaultContextTokens: number | null,
-) {
+function getContextNoticeViewModel(session: GatewaySessionRow | undefined) {
   const used = asNonNegativeFiniteNumber(session?.totalTokens);
-  const { tokens: limit, fromLastPrompt } = resolveSessionContextLimit(
-    session,
-    defaultContextTokens,
-  );
+  const { tokens: limit, fromLastPrompt } = resolveSessionContextLimit(session);
   if (used === undefined || !limit) {
     return null;
   }
@@ -241,10 +235,9 @@ function renderContextStat(label: string, value: string) {
 
 export function renderContextNotice(
   session: GatewaySessionRow | undefined,
-  defaultContextTokens: number | null,
   options: ContextNoticeOptions = {},
 ) {
-  const model = getContextNoticeViewModel(session, defaultContextTokens);
+  const model = getContextNoticeViewModel(session);
   const quotaGroups = options.providerUsage
     ? collectProviderQuotaGroups(
         options.providerUsage.modelAuthStatusResult ?? null,
